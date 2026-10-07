@@ -465,7 +465,7 @@ impl Report {
             }
         }
         let mut crates: Vec<_> = crates.into_iter().collect();
-        crates.sort_by(|a, b| b.1.cmp(&a.1));
+        crates.sort_by_key(|a| std::cmp::Reverse(a.1));
         let _ = writeln!(
             out,
             "\nMost frequently rebuilt crates (where output was visible)"
