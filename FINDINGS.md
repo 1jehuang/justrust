@@ -569,3 +569,76 @@ restarted. The ready change is in
 Cargo.toml, Cargo.lock, crates/jcode-desktop-ui/Cargo.toml,
 crates/jcode-desktop-api/src/lib.rs). Land it together with a planned host
 restart.
+
+## 10. Build slots follow-ups: refresh, GC, joining identical builds (2026-10-07, cow)
+
+### Refresh stale slots (commit 6725be0)
+
+Before a slot run, units the shared `target/<profile>` built since the
+slot's last refresh are reflink-copied in. A unit is the granule: its
+`.fingerprint/<name>-<hash>` dir, its `build/<name>-<hash>` dir, and every
+`deps/` file carrying the hash (checked on the Desktop: all 28k deps files
+and all build dirs map to a fingerprint hash). Artifacts are copied first,
+fingerprints last, with mtimes preserved, so cargo's fingerprints decide
+freshness exactly as for a seeded slot. Copied: units missing in the slot,
+and units whose newest fingerprint file is newer in shared AND whose hash
+files differ (identical state is skipped, copying it would only bump
+mtimes). A unit the slot built more recently is never touched. Runs only
+while a non-blocking shared flock on the shared dir's `.cargo-build-lock`
+succeeds (cargo holds it exclusively while building; verified that a
+running cargo blocks it and a reader holding it shared blocks cargo), and
+only when the shared dir mtimes moved since the last refresh. Scan cost on
+the Desktop: 0.15s for 9.4k fingerprint dirs (36k files).
+
+| case (Desktop, `justrust check -p jcode-desktop-ui --lib`) | time |
+|---|---|
+| slot missing all 210 gpui fingerprints, no refresh, depcache off (run 20261007-233515707-3342162) | 23.2s, gpui rebuilt 12.8s |
+| same, no refresh, depcache on (run -233601632-3346804) | 23.3s, depcache 0 hit / 6 miss |
+| same, with refresh (run -233544850-3345335) | 1.0s: 236 new + 1 rebuilt units (540 files) copied in 0.8s, 0 compiled |
+| real stale slot 2 (34 missing, 2 rebuilt units, run -233326676-3325406) | refresh 0.2s, then only the 4 local crates compiled |
+
+Scratch project (serde/regex, then rayon+syn added to Cargo.toml, a
+Cargo.lock-bump analog): stale slot 6.6s cold / 0.4s with depcache hits
+vs 0.0s after a 26-unit refresh in 0.1s. depcache and refresh are
+complementary: depcache needs the exact rustc invocation to have been
+cached; refresh also skips cargo and build-script work.
+
+### Automatic GC (commit 6bb60d4)
+
+After a slotted run, a detached `justrust slots --gc-root` runs at most
+hourly per workspace. Removes free (not flocked) slots idle over 7 days,
+then least recently used free slots until btrfs exclusive bytes fit 40 GB
+(`du -sb` off btrfs). Slots used in the last hour are never reaped for
+budget. `justrust slots` shows exclusive/total size and age.
+
+`btrfs filesystem du` costs 3.8s per 170 GB Desktop slot and does not
+parallelize (13.4s for 4 at load 33), so the listing uses sizes cached by
+the last GC (34 ms vs 13.4s); `--du` re-measures. Current Desktop: 4 slots,
+0.0 / 1.8 / 7.3 / 11.9 GB exclusive (21-31 GB total), well under budget.
+The hook adds nothing measurable to a run (93 ms no-op check with GC spawned).
+
+### Joining identical concurrent builds (commit 84dda77)
+
+Each slot records its current request key (cwd, cargo args before `--`,
+compile-relevant env) in `<n>.req`. A new run whose key matches a slot that
+is flocked right now waits for that flock (max 300s) and then runs cargo in
+that slot, so cargo still checks freshness and the joiner sees its own
+test output. The wait is shown as a `slot_join` finding.
+
+Desktop identical pair, one-line edit, `justrust test -p jcode-desktop-ui
+--lib -- fps_counter`, B starts 0.3s after A (bench
+~/.jcode/scratch/slotbench/join.sh), quiet machine (0 other rustc):
+
+| | pair wall | A+B CPU |
+|---|---|---|
+| parallel slots (JUSTRUST_JOIN=0) | 9.9 / 9.4s | 20.4 / 19.3s |
+| joined | 9.3 / 9.0 / 9.0s | 9.8 / 9.7 / 9.7s |
+
+Runs: parallel -235008527/-235008828, -235027474/-235027776; joined
+-234959162/-234959463, -235018471/-235018775, -235036897/-235037198.
+B finishes about 0.4s after A instead of compiling in parallel. On a quiet
+16-core machine the wall gain is small (0.4s) because one crate's codegen
+does not saturate the cores; the CPU halves, which matters on this shared,
+usually loaded machine (section 7 measured 15s vs 10-12s at load 20+).
+Conservative: only a held slot with the exact key, and the joiner still runs
+cargo, so a file edited in between is still rebuilt correctly.
