@@ -45,6 +45,14 @@ pub struct Unit {
     pub rmeta_secs: Option<f64>,
     pub exit: i32,
     pub passes: Vec<Pass>,
+    /// Shared dependency cache outcome: "hit", "miss" (compiled, stored when
+    /// it succeeded), or empty when the unit was not eligible (local,
+    /// incremental, disabled with `JUSTRUST_DEPCACHE=0`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub depcache: String,
+    /// On a hit, how long the original compile took.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depcache_saved_secs: Option<f64>,
 }
 
 #[derive(Debug, Serialize, serde::Deserialize, Clone)]
@@ -104,6 +112,31 @@ fn want_passes(args: &[OsString]) -> (bool, bool) {
 
 /// Returns `None` only if the compiler could not be spawned at all.
 fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Option<i32> {
+    let described = describe(args);
+    let plan = (!described.local && crate::depcache::enabled())
+        .then(|| {
+            let env: Vec<(String, String)> = std::env::vars().collect();
+            crate::depcache::plan(real, args, &env)
+        })
+        .flatten();
+    if let Some(plan) = &plan {
+        let start = paths::now();
+        let mut err = std::io::stderr();
+        if let Some(hit) = plan.restore(&mut err) {
+            let end = paths::now();
+            let mut unit = described;
+            unit.start = start;
+            unit.end = end;
+            unit.wall = end - start;
+            unit.rmeta_secs = Some(unit.wall);
+            unit.depcache = "hit".into();
+            unit.depcache_saved_secs = Some(hit.saved_secs);
+            if let Ok(line) = serde_json::to_string(&unit) {
+                let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
+            }
+            return Some(0);
+        }
+    }
     let (passes_on, force_bootstrap) = want_passes(args);
     let mut cmd = Command::new(real);
     cmd.args(args).stderr(Stdio::piped());
@@ -118,17 +151,28 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let stderr = child.stderr.take()?;
     let rmeta_at: Arc<Mutex<Option<f64>>> = Arc::default();
     let passes: Arc<Mutex<Vec<Pass>>> = Arc::default();
+    let captured: Option<Arc<Mutex<Vec<Vec<u8>>>>> = plan.as_ref().map(|_| Arc::default());
     let reader = {
         let rmeta_at = rmeta_at.clone();
         let passes = passes.clone();
-        std::thread::spawn(move || forward_stderr(stderr, passes_on, &rmeta_at, &passes))
+        let captured = captured.clone();
+        std::thread::spawn(move || {
+            forward_stderr(stderr, passes_on, &rmeta_at, &passes, captured.as_deref())
+        })
     };
 
     let (exit, user, sys, max_rss_mb) = wait4(child.id() as i32);
     let end = paths::now();
     let _ = reader.join();
 
-    let mut unit = describe(args);
+    let mut unit = described;
+    if let (Some(plan), Some(captured)) = (&plan, &captured) {
+        unit.depcache = "miss".into();
+        if exit == 0 && !passes_on {
+            let lines = std::mem::take(&mut *captured.lock().unwrap());
+            let _ = plan.store(start, end - start, &lines);
+        }
+    }
     unit.start = start;
     unit.end = end;
     unit.wall = end - start;
@@ -149,6 +193,7 @@ fn forward_stderr(
     passes_on: bool,
     rmeta_at: &Mutex<Option<f64>>,
     passes: &Mutex<Vec<Pass>>,
+    captured: Option<&Mutex<Vec<Vec<u8>>>>,
 ) {
     let mut reader = BufReader::new(stderr);
     let mut out = std::io::stderr();
@@ -182,6 +227,9 @@ fn forward_stderr(
         // Forward immediately: cargo relies on artifact notifications for pipelining.
         let _ = out.write_all(&line);
         let _ = out.flush();
+        if let Some(c) = captured {
+            c.lock().unwrap().push(line.clone());
+        }
     }
 }
 

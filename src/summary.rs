@@ -76,6 +76,18 @@ pub struct UnitStats {
     /// Sum of unit wall times (exceeds compile phase when units overlap).
     pub rustc_wall_sum: f64,
     pub with_pass_timings: usize,
+    /// Dependency units restored from the shared dependency cache.
+    #[serde(default)]
+    pub depcache_hits: usize,
+    /// Eligible dependency units that had to compile.
+    #[serde(default)]
+    pub depcache_misses: usize,
+    /// Compile time the hits would have cost (original compile wall time).
+    #[serde(default)]
+    pub depcache_saved_secs: f64,
+    /// Wall time spent compiling the misses.
+    #[serde(default)]
+    pub depcache_miss_secs: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -494,6 +506,14 @@ pub fn build(
         rustc_cpu_secs: units.iter().map(|u| u.user + u.sys).sum(),
         rustc_wall_sum: units.iter().map(|u| u.wall).sum(),
         with_pass_timings: units.iter().filter(|u| !u.passes.is_empty()).count(),
+        depcache_hits: units.iter().filter(|u| u.depcache == "hit").count(),
+        depcache_misses: units.iter().filter(|u| u.depcache == "miss").count(),
+        depcache_saved_secs: units.iter().filter_map(|u| u.depcache_saved_secs).sum(),
+        depcache_miss_secs: units
+            .iter()
+            .filter(|u| u.depcache == "miss")
+            .map(|u| u.wall)
+            .sum(),
     };
     stats.rustc_cpu_secs = (stats.rustc_cpu_secs * 100.0).round() / 100.0;
 
@@ -660,6 +680,24 @@ fn is_compile_error(t: &str) -> bool {
         || t.starts_with("error: Recipe"))
 }
 
+impl UnitStats {
+    /// `, depcache 40 hit/3 miss (saved ~12.3s)`, or empty when unused.
+    pub fn depcache_line(&self) -> String {
+        if self.depcache_hits + self.depcache_misses == 0 {
+            return String::new();
+        }
+        let saved = if self.depcache_hits > 0 {
+            format!(" (saved ~{:.1}s of rustc)", self.depcache_saved_secs)
+        } else {
+            String::new()
+        };
+        format!(
+            ", depcache {} hit/{} miss{saved}",
+            self.depcache_hits, self.depcache_misses
+        )
+    }
+}
+
 impl Summary {
     pub fn index_entry(&self) -> IndexEntry {
         IndexEntry {
@@ -764,12 +802,13 @@ impl Summary {
         let reasons = self.rebuild_summary();
         let _ = writeln!(
             o,
-            "  units   {} compiled ({} local, {} deps, {} build scripts), {} fresh{}",
+            "  units   {} compiled ({} local, {} deps, {} build scripts), {} fresh{}{}",
             u.compiled,
             u.local,
             u.dependencies,
             u.build_scripts,
             u.fresh,
+            u.depcache_line(),
             reasons
                 .map(|r| format!(". Rebuilt because: {r}"))
                 .unwrap_or_default()

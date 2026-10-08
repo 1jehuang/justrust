@@ -121,6 +121,23 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
         ));
     }
 
+    // Dependencies compiled because the shared dependency cache had no entry.
+    // The next build of the same dependency in any target dir will hit.
+    let u = &s.units;
+    if u.depcache_misses > 0 && u.depcache_miss_secs >= 5.0 {
+        let cost = u.depcache_miss_secs / ncpu.min(u.depcache_misses as f64).max(1.0);
+        out.push(Finding::new(
+            "depcache_miss",
+            cost,
+            format!(
+                "{} dependency units missed the shared dependency cache and compiled \
+                 ({:.1}s of rustc); they are cached now, so other target dirs, slots, \
+                 and checkouts reuse them",
+                u.depcache_misses, u.depcache_miss_secs
+            ),
+        ));
+    }
+
     // Memory pressure.
     if r.psi_mem_secs >= MIN_COST {
         out.push(Finding::new(
