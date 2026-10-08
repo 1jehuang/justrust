@@ -36,6 +36,8 @@
 //! into `--out-dir`. Only successful compiles are stored. Every error means
 //! "compile normally". Disable with `JUSTRUST_DEPCACHE=0`.
 //!
+//! Size cap and LRU eviction live in `depcache_gc.rs` (`justrust cache`).
+//!
 //! Known difference from a real compile: paths embedded in cached binaries
 //! (debuginfo, `file!()` in `OUT_DIR`-generated code) name the target dir of
 //! the build that first produced them.
@@ -505,6 +507,9 @@ impl Plan {
             .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
             .find(|e| self.matches(e, &mut memo))?;
         let dir = self.root.join("o").join(&entry.out);
+        // Mark the entry used before reading it, so a concurrent eviction
+        // that already picked it sees the touch and puts it back.
+        touch(&dir.join("meta.json"));
         let outs: Outputs =
             serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
         // Restore every file before replaying anything, so a partial restore
@@ -629,7 +634,9 @@ impl Plan {
         }
 
         let final_dir = self.root.join("o").join(&entry.out);
-        if !final_dir.exists() {
+        if final_dir.exists() {
+            touch(&final_dir.join("meta.json"));
+        } else {
             let tmp = self
                 .root
                 .join("o")
@@ -682,6 +689,18 @@ impl Plan {
         }
         std::fs::write(dir.join("meta.json"), serde_json::to_vec(&out).ok()?).ok()
     }
+}
+
+/// Set a file's mtime to now: the LRU clock for eviction (`depcache_gc`).
+fn touch(path: &Path) {
+    if let Ok(f) = std::fs::File::options().append(true).open(path) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// The output key a manifest line points at.
+pub fn entry_out(line: &str) -> Option<String> {
+    serde_json::from_str::<Entry>(line).ok().map(|e| e.out)
 }
 
 /// Source paths and env var names from a rustc dep-info file.

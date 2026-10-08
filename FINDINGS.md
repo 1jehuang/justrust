@@ -462,3 +462,40 @@ listing both target dirs). Its hash includes the absolute `-L dependency=`,
 - Build-script *execution* is not cached, only its compilation; cargo still
   runs every build script in a fresh target dir (the 8.9s of gaps in the hit
   run).
+
+### 8a. Size cap and LRU eviction (2026-10-07, dep cache worker)
+
+Code: `src/depcache_gc.rs`, `justrust cache [--prune|--clear]`.
+
+- LRU clock: a hit or a repeated store touches `o/<key>/meta.json`. After each
+  recorded run, at most once per 10 minutes (one `stat` of `gc.stamp`
+  otherwise), a detached, `nice 19` `justrust cache --auto` evicts the least
+  recently used entries until the cache is under 90% of the cap. Default cap
+  30 GB, `JUSTRUST_DEPCACHE_MAX=50G|800M|0` (0 = no cap). Evictions are logged
+  to `gc.jsonl`.
+- Concurrency: one collector at a time (`gc.lock` flock). Entries are renamed
+  into `trash/` before deletion, entries used in the last 10 minutes are never
+  evicted, and an entry touched between scan and rename is put back. Manifest
+  lines for evicted outputs are dropped. A restore that loses a race fails open
+  (compiles normally, overwriting partial outputs).
+- Stress test, worst case: a scratch copy of the cache with a loop moving 3
+  random entries to trash and deleting them every 0.1s (900 entries evicted)
+  during a fresh-dir Desktop check (run 20261007-234551593-3434267): exit 0,
+  774 hit / 51 miss, and a following `JUSTRUST_DEPCACHE=0 cargo check -v` on
+  that target dir reported 732 Fresh, only the desktop-ui unit Dirty (same as
+  without eviction). Same with `justrust cache --prune` at a 1.2 GB cap in a
+  0.4s loop (1569 evictions, grace 0): all units compiled, cargo fresh after.
+- Cost: `justrust cache` on the real 4.1 GB / 1643-entry cache: 0.2s.
+  `--prune` of a reflinked copy down to 2 GB evicted 1319 entries in 1.0s.
+- Hit runs (`bench/depcache-fresh.sh 3`, fresh `CARGO_TARGET_DIR`, warm cache,
+  825/825 hits every run):
+
+| | runs | walls | median | load | hit restore sum |
+|---|---|---|---|---|---|
+| before | 20261007-233243709-3309755, -233310202-3317914, -233338842-3327229 | 26.1, 28.3, 23.9s | 26.1s | 12.5-14.8 | 1.4-2.6s |
+| after | 20261007-234647588-3448800, -234726717-3459509, -234820383-3471186 | 38.8, 52.8, 31.7s | 38.8s | 21-30 | 2.1-10.0s |
+
+  The "after" runs ran at twice the machine load (4-6 other rustc), so the wall
+  difference is contention, not the change: the only per-hit addition is one
+  `utimensat`, and the median per-hit restore stayed at 1.1-1.7 ms. No speedup
+  is claimed for this step; it bounds disk use.

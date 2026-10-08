@@ -414,6 +414,7 @@ fn finish(
         &paths::index_file()?,
         &serde_json::to_string(&s.index_entry())?,
     )?;
+    crate::depcache_gc::maybe_spawn();
     if opts.agent {
         eprint!("{}", s.agent_footer(&hidden));
     } else if std::env::var_os("JUSTRUST_QUIET").is_none() {

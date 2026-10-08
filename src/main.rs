@@ -8,6 +8,7 @@
 
 mod agent_output;
 mod depcache;
+mod depcache_gc;
 mod findings;
 mod history;
 mod install;
@@ -115,6 +116,19 @@ enum Command {
         #[arg(long, hide = true)]
         gc_root: Option<PathBuf>,
     },
+    /// Show the shared dependency cache: size, entries, hit rate.
+    Cache {
+        /// Evict least recently used entries down to the size cap
+        /// (`JUSTRUST_DEPCACHE_MAX`, default 30G).
+        #[arg(long)]
+        prune: bool,
+        /// Remove every entry not used in the last 10 minutes.
+        #[arg(long)]
+        clear: bool,
+        /// Background collection after a run (internal).
+        #[arg(long, hide = true)]
+        auto: bool,
+    },
     /// Install a `cargo` proxy so every build is recorded automatically.
     Install {
         /// Directory for the proxy. Must come before the real cargo on PATH.
@@ -192,6 +206,7 @@ fn main() -> anyhow::Result<()> {
             du,
             gc_root,
         } => slots::command(clean, gc, du, gc_root)?,
+        Command::Cache { prune, clear, auto } => depcache_gc::command(prune, clear, auto)?,
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,
         Command::History {
