@@ -268,7 +268,7 @@ filesystem cannot reflink.
 
 First-use seed cost on the Desktop (load avg 20-39): 13.8s, 25.8s, 37.1s
 sequential cp (runs -224514294-2896271, -224733055-2917773); 6.4s with the
-parallel seeder (run -225143...: slot 3). Raw copy of the
+parallel seeder (run 20261007-225143060-2962538). Raw copy of the
 deps/.fingerprint/build trees: 8.8s with one cp, 5.0s with 6. Seeding is paid
 once per slot, then sticky reruns are free (0.8s no-op check).
 
