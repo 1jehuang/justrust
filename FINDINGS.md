@@ -318,3 +318,75 @@ Risks / follow-ups:
 - `target/debug/<bin>` from agent test/check runs no longer appear in the
   shared dir. Test binaries live under the slot. Builds and runs are not
   slotted, so the Desktop launcher and Ctrl+R are unaffected.
+
+## Splitting jcode-desktop-ui: harness crate pilot (2026-10-07, hibiscus)
+
+Desktop commit 751f1cd moves the GPUI-free harness cluster (harness*.rs,
+remote, managed_cloud, managed_cloud_parity, remote_targets, platform: 7.3k
+lines, 94 tests) from jcode-desktop-ui (142.5k lines, 1668 tests) into
+crates/jcode-desktop-harness. The UI re-exports the modules at their old
+paths. Hot reload: the new crate is an rlib linked into the UI cdylib, so the
+host/UI ABI is unchanged. Ctrl+R on the running host built and activated UI
+generations 3 and 4 (main) and 3 (single-panel).
+
+Module map (crate:: edges between the 70 top-level modules): workspace (48.6k
+lines with its #[path] children) and panel (42.8k) are a mutual hub that
+depends on almost everything. input (6.8k) has back-edges to panel/workspace.
+The clean leaves without gpui are harness+transports (5.5k plus 1.5k, used by
+12 modules, only out-edge was build_info::VERSION), diff_model (2.5k, 62 tests,
+no deps), learning (1.6k, 34 tests, no deps), diff (1.1k, 32 tests, no deps),
+updates (1.8k, deps harness+build_info), global_voice_input (1.2k),
+accounts (1.2k, deps harness+platform), remote_targets, pdf_render, todoist,
+preview_control, render_stats. Churn over two weeks (593 file-touches in
+ui/src): workspace 44, panel 40, input 19, harness cluster 44, voice files 50,
+login/account files 59.
+
+One-line edit benchmark (insert `let _probe = N;` in a test fn body, `justrust
+test`, restore from backup; median of 3; "others" = cores used by other
+processes during the run). The before runs used the shared target dir, the
+after runs justrust slot 1 (both warm incremental).
+
+| edit in | command | before compile / wall | after compile / wall |
+|---|---|---|---|
+| harness.rs | before `-p jcode-desktop-ui --lib -- harness::`, after `-p jcode-desktop-harness --lib -- harness::` | 9.99s / 13.5s (runs 19.7, 10.0, 8.9; others 14, 6.5, 3.2) | 1.25s / 4.2s (runs 1.69, 1.17, 1.25; others 5-7). 2.56s of the wall is the tests themselves |
+| fps_counter.rs (UI) | `-p jcode-desktop-ui --lib -- fps_counter` | 14.75s (runs 21.6, 14.8, 9.5; others 14, 11, 5) | 8.02s (runs 9.3, 8.0, 7.7; others 5, 2, 3) |
+| harness.rs, then UI test | `-p jcode-desktop-ui --lib -- fps_counter` | same as row 1 | 10.2s compile / 10.9s wall (harness 0.5-1.1s + UI 8.7-9.5s) |
+
+Run ids: before 20261007-223543659, -223606014, -223621987 (ui), -223648196,
+-223711646, -223725262 (harness); after -225722087, -225732166, -225740763
+(ui), -225751905, -225756538, -225800732 (harness crate), -225815555,
+-225826549, -225837526 (harness edit, UI test).
+
+Reading:
+- The win is for edits inside the extracted crate tested in that crate:
+  about 8x less compile (8.9-10s to 1.25s) and a 1.2 GB smaller rustc. The
+  harness test binary is small, so the frontend (0.3s) no longer pays the UI's
+  2.4s macro_expand and 1s incremental cache save.
+- Edits in the UI are not measurably faster. The UI lost 5% of its lines, so
+  the expected gain is ~0.3-0.4s, below the contention noise here (quiet runs
+  7.7-9.5s both before and after).
+- A harness edit followed by a UI test is not faster, and cannot be: the
+  harness rmeta changes, so the UI recompiles (the harness crate adds 0.5-1s).
+  Agents get the speedup only when they run the harness crate's own tests,
+  which hold all 94 harness tests.
+- Expected value: the harness cluster was 44 of 593 two-week file touches
+  (7%). Saving ~8s each is small in aggregate. The pattern is what matters.
+
+Recommended next splits (same recipe: move, re-export, test-support feature
+for cross-crate test helpers, inject UI-only constants through a setter):
+1. Pure-data leaves with no crate:: deps: diff_model + diff (3.6k lines, 94
+   tests), learning (1.6k, 34 tests), todoist, preview_control, pdf_render.
+   Trivial, but low churn, so mostly a UI frontend shrink.
+2. accounts + updates (3k lines, 57 tests) onto the harness crate once
+   build_info's VERSION is reachable (already via client_version()).
+3. The big lever is panel/workspace (91k lines, 1000+ tests, 84% of churn).
+   They depend on each other, so a split needs a trait or a shared state
+   crate first. Splitting gpui view code by feature (voice: ~6k lines across
+   panel_voice*/workspace_voice/global_voice*; login/accounts UI ~8k) into
+   crates that depend on a small `jcode-desktop-ui-core` (theme, render_stats,
+   text_selection, scrollbar, image_cache, config) would let the most-edited
+   features compile alone. Precondition: break the panel <-> workspace cycle
+   (workspace::* used from panel, panel::Panel from workspace).
+4. Cheapest per-edit win without any split: run the narrow test crate. A
+   `justrust test -p jcode-desktop-ui -- fps_counter` still builds a 1574-test
+   binary. justrust's waste line already says so.
