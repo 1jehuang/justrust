@@ -499,3 +499,73 @@ Code: `src/depcache_gc.rs`, `justrust cache [--prune|--clear]`.
   difference is contention, not the change: the only per-hit addition is one
   `utimensat`, and the median per-hit restore stayed at 1.1-1.7 ms. No speedup
   is claimed for this step; it bounds disk use.
+
+## 9. gpui `test-api`: one GPUI build for Desktop build and test (2026-10-07, rose)
+
+Follow-up to section 6. Fixed at the source in the gpui fork, commit
+`1cfbc5d` on github.com/1jehuang/gpui main: a new API-only feature `test-api`
+(TestAppContext, `#[gpui::test]`, TestPlatform, run_until_parked,
+debug_bounds, layout stats, FakeHttpClient, proptest re-export).
+`test-support` is now `test-api` + `leak-detection` + wayland/x11, so
+existing users are unchanged. gpui_apple, gpui_linux, gpui_macos,
+gpui_platform and gpui_windows forward `test-api`.
+
+cfg audit (131 `feature = "test-support"` sites in gpui, all moved to
+`test-api`): every one is either an API item that a real app never calls or a
+branch only reachable with a test dispatcher (`dispatcher.as_test()` returns
+None for real dispatchers, `GpuiMode::Test` is only set by test contexts).
+Executor branches: with a real dispatcher, `BackgroundExecutor::new` and
+`ForegroundExecutor::new` take the same PlatformScheduler path as before,
+including the profiler's foreground runnable counter. The one real per-frame
+cost, `debug_selector` recording into `debug_bounds`, now only records once a
+test app exists in the process (`fast::test_api`, an AtomicBool set by
+`GpuiMode::test()`). With `test-support` it always records, as before. Leak
+detection stays only in `leak-detection`/`test-support`. Platform crates'
+`test-support` sites (macOS `set_framebuffer_only(false)`, render_to_image)
+stay on `test-support` and are not reached by `test-api`. gpui's own 388 lib
+tests pass with `test-support`; `cargo check -p gpui` passes with no
+features, `test-api`, `test-support`, `bench-support`, `test-api,profiler`.
+`script/check-upstream`: only the 2 violations that predate this change.
+
+Desktop change (gpui rev 1cfbc5d with `features = ["profiler", "test-api"]`
+in `[workspace.dependencies]`, the `gpui` dev-deps drop `test-support`,
+`hdrhistogram` dev-dep `default-features = false`, `GPUI_REVISION` bumped).
+Unit graph (`__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS=nightly cargo
+build|test --unit-graph -Z unstable-options`, compared by package, features,
+profile minus name, and transitive deps): build 960 units, test 960, 958
+shared. gpui, gpui_linux, gpui_platform, gpui_wgpu, gpui_macros,
+gpui_thinking_orbs all identical. The only differences are jcode_desktop_ui
+(lib vs test) and jcode_desktop_harness (its own `test-support`, a small local
+crate, separate issue). Release unit graph: gpui has `test-api` and no
+`leak-detection`, i.e. no runtime change per the audit above. All Desktop
+workspace tests passed (1731/1732 on the first run; the one failure,
+`the_hint_chip_uses_only_spare_tab_space`, passed alone and in two full
+reruns of the 1404 UI tests, so it is flaky under load, not caused by this).
+
+Benchmark (scratch copies under ~/.jcode/scratch/gpuitestapi, separate target
+dirs, `JUSTRUST_DEPCACHE=0 JUSTRUST_SLOTS=0`: depcache otherwise restores gpui
+and hides the cost; delete `gpui-*` fingerprints, then `justrust build -p
+jcode-desktop -p jcode-desktop-ui --lib` and `justrust test -p jcode-desktop-ui
+--lib -- fps_counter`):
+
+| run | before build | before test | before total | after build | after test | after total |
+|---|---|---|---|---|---|---|
+| 1 | 45.3 | 50.4 | 95.7 | 58.1 | 9.8 | 67.9 |
+| 2 | 82.1 | 99.4 | 181.5 | 59.2 | 8.9 | 68.1 |
+| 3 | 59.3 | 85.3 | 144.5 | 68.8 | 10.2 | 79.0 |
+
+Medians: before 144.5s (test 85.3s), after 68.1s (test 9.8s), about 76s
+(53%) saved per gpui-invalidating build+test cycle. The test step drops from
+~85s to ~10s because it compiles 1 unit instead of 8. Other rustc on the
+machine at start: 0-2, but the build column varies 45-82s for identical work,
+so the totals are noisy; the test-step drop is far outside the noise.
+
+Status: the gpui commit is pushed. The Desktop pin bump is NOT landed: the
+running Desktop host (pid 2174267, built on gpui 424044a) refuses a UI plugin
+built against another GPUI ("plugin GPUI revision differs from host"), so
+landing it breaks Ctrl+R hot reload for every agent until the host is
+restarted. The ready change is in
+~/.jcode/scratch/gpuitestapi/desktop-test-api.diff (also the "after" copy's
+Cargo.toml, Cargo.lock, crates/jcode-desktop-ui/Cargo.toml,
+crates/jcode-desktop-api/src/lib.rs). Land it together with a planned host
+restart.
