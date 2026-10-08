@@ -7,6 +7,7 @@
 //!   interface agents should use. It takes the same arguments as cargo.
 
 mod agent_output;
+mod findings;
 mod history;
 mod install;
 mod paths;

@@ -283,6 +283,12 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         .env("JUSTRUST_RUN_ID", &id)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if opts.agent && std::env::var_os("CARGO_TERM_VERBOSE").is_none() {
+        // Makes cargo say why each unit was rebuilt ("Dirty foo: the file
+        // `src/lib.rs` has changed"). The agent filter hides the extra lines;
+        // the report uses them.
+        cmd.env("CARGO_TERM_VERBOSE", "true");
+    }
     if tty && !opts.agent {
         if std::env::var_os("CARGO_TERM_COLOR").is_none() {
             cmd.env("CARGO_TERM_COLOR", "always");

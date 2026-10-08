@@ -26,6 +26,18 @@ pub struct Summary {
     pub tests: TestStats,
     pub resources: Resources,
     pub diagnostics: Diagnostics,
+    /// Why cargo rebuilt each unit, from its `Dirty` lines.
+    #[serde(default)]
+    pub rebuild_reasons: Vec<RebuildReason>,
+    /// Every unit that ran, newest-first by share (`top_units` is the first 12).
+    #[serde(default)]
+    pub all_units: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RebuildReason {
+    pub package: String,
+    pub reason: String,
 }
 
 /// Non-overlapping split of wall time. Sums to `wall`.
@@ -362,10 +374,20 @@ pub fn build(
     let mut first_test_line: Option<f64> = None;
     for l in lines {
         let text = l.l.trim();
-        if let Some(rest) = text
-            .strip_prefix("Running ")
-            .or_else(|| text.strip_prefix("Doc-tests "))
-        {
+        // Test binaries appear as `Running unittests src/lib.rs (target/.../x-hash)`
+        // or, with verbose output, as "Running `/.../deps/x-hash args`". Verbose
+        // cargo also prints "Running `rustc ...`" for compiler invocations.
+        let running_test = text.strip_prefix("Running ").and_then(|r| {
+            if let Some(cmd) = r.strip_prefix('`') {
+                let exe = cmd.trim_end_matches('`').split_whitespace().next()?;
+                let is_test =
+                    exe.contains("/deps/") && !exe.ends_with("rustc") && !exe.contains("rustdoc");
+                is_test.then_some(exe)
+            } else {
+                r.ends_with(')').then_some(r)
+            }
+        });
+        if let Some(rest) = running_test.or_else(|| text.strip_prefix("Doc-tests ")) {
             close(current.take(), l.t, &mut tests);
             first_test_line.get_or_insert(rel(l.t));
             let name = rest
@@ -565,6 +587,11 @@ pub fn build(
     diagnostics.compile_failed = units.iter().any(|u| u.exit != 0)
         || lines.iter().any(|l| l.l.contains("could not compile"));
 
+    let rebuild_reasons = lines
+        .iter()
+        .filter_map(|l| parse_dirty(&l.l))
+        .collect::<Vec<_>>();
+
     Summary {
         id: meta.id.clone(),
         args: meta.args.clone(),
@@ -584,7 +611,25 @@ pub fn build(
         tests,
         resources,
         diagnostics,
+        rebuild_reasons,
+        all_units: units.len(),
     }
+}
+
+/// Parse cargo's `Dirty <pkg> v<ver> (...): <reason>` line.
+fn parse_dirty(line: &str) -> Option<RebuildReason> {
+    let rest = line.trim_start().strip_prefix("Dirty ")?;
+    let package = rest.split_whitespace().next()?.to_owned();
+    let (_, reason) = rest.split_once(": ")?;
+    // Drop the trailing "(1791435000.83s, 58ms after last build at ...)" detail.
+    let reason = match reason.find(" (") {
+        Some(i) if reason[i..].contains("after last build") => &reason[..i],
+        _ => reason,
+    };
+    Some(RebuildReason {
+        package,
+        reason: reason.to_owned(),
+    })
 }
 
 fn is_compile_error(t: &str) -> bool {
@@ -615,71 +660,6 @@ impl Summary {
             compile_failed: self.diagnostics.compile_failed,
             agent_session: self.agent_session.clone(),
         }
-    }
-
-    /// Seconds of wall time above which a run explains where the time went.
-    pub const SLOW_SECS: f64 = 5.0;
-
-    /// One-line explanation of the dominant cost in a slow run, or `None` when
-    /// the run was fast. Ordered by what an agent can act on.
-    pub fn slow_hint(&self) -> Option<String> {
-        if self.wall < Self::SLOW_SECS {
-            return None;
-        }
-        let pct = |v: f64| 100.0 * v / self.wall.max(1e-9);
-        let p = &self.phases;
-        let r = &self.resources;
-        if p.lock_wait > 0.25 * self.wall {
-            return Some(format!(
-                "{:.0}% waiting for another cargo to release the build directory",
-                pct(p.lock_wait)
-            ));
-        }
-        if r.avg_other_cores > 0.5 * self.ncpu as f64 && r.max_foreign_rustc > 0 {
-            return Some(format!(
-                "machine was busy: other builds used {:.0} of {} cores ({} other rustc processes)",
-                r.avg_other_cores, self.ncpu, r.max_foreign_rustc
-            ));
-        }
-        if p.test_run > 0.4 * self.wall {
-            let slowest = self
-                .tests
-                .binaries
-                .iter()
-                .max_by(|a, b| a.wall.total_cmp(&b.wall));
-            return Some(match slowest {
-                Some(b) => format!(
-                    "{:.0}% running tests, mostly {} ({:.1}s)",
-                    pct(p.test_run),
-                    b.name,
-                    b.wall
-                ),
-                None => format!("{:.0}% running tests", pct(p.test_run)),
-            });
-        }
-        if self.units.dependencies + self.units.build_scripts >= 5 {
-            return Some(format!(
-                "rebuilt {} dependencies and {} build scripts (flags, features, or target dir changed?)",
-                self.units.dependencies, self.units.build_scripts
-            ));
-        }
-        let u = self.top_units.first()?;
-        let mut s = format!("{} took {:.1}s", u.name, u.wall_share);
-        if let Some(sp) = &u.split {
-            let parts = [
-                ("type-checking/macros", sp.frontend),
-                ("codegen", sp.codegen),
-                ("linking", sp.link),
-                ("incremental cache", sp.incremental),
-            ];
-            if let Some((label, secs)) = parts.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
-                s.push_str(&format!(", mostly {label} {secs:.1}s"));
-            }
-            if let Some(pass) = u.top_passes.first() {
-                s.push_str(&format!(" (top pass {} {:.1}s)", pass.name, pass.secs));
-            }
-        }
-        Some(s)
     }
 
     /// Compact status block printed after agent-mode runs.
@@ -716,58 +696,210 @@ impl Summary {
         } else {
             "ok".to_owned()
         };
-        let mut timing = format!("{:.1}s", self.wall);
-        let mut parts = Vec::new();
-        if self.phases.lock_wait >= 0.5 {
-            parts.push(format!(
-                "{:.1}s waiting for another build",
-                self.phases.lock_wait
-            ));
-        }
-        if self.phases.compile >= 0.05 {
-            let mut c = format!("{:.1}s compiling", self.phases.compile);
-            if let Some(u) = self.top_units.first().filter(|u| u.wall_share >= 1.0) {
-                c.push_str(&format!(", mostly {}", u.name));
-            }
-            parts.push(c);
-        }
-        if self.phases.test_run >= 0.05 {
-            parts.push(format!("{:.1}s running tests", self.phases.test_run));
-        }
-        if !parts.is_empty() {
-            timing.push_str(&format!(" ({})", parts.join(", ")));
-        }
-        out.push_str(&format!("justrust: {verdict} in {timing}\n"));
-        if let Some(why) = self.slow_hint() {
-            out.push_str(&format!("justrust: slow: {why}\n"));
-        }
-        let mut notes = Vec::new();
-        if hidden.warnings_hidden > 0 {
-            notes.push(format!(
-                "{} more warning{} hidden",
-                hidden.warnings_hidden,
-                if hidden.warnings_hidden == 1 { "" } else { "s" }
-            ));
-        }
-        if self.tests.filtered_out > 0 && self.tests.passed + self.tests.failed > 0 {
-            notes.push(format!(
-                "{} test{} filtered out",
-                self.tests.filtered_out,
-                if self.tests.filtered_out == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ));
-        }
-        if !notes.is_empty() {
-            out.push_str(&format!("justrust: {}\n", notes.join(", ")));
-        }
-        out.push_str(&format!(
-            "justrust: full log `justrust log {}`, timing `justrust show {}`\n",
-            self.id, self.id
-        ));
+        out.push_str(&self.agent_report(&verdict, hidden));
         out
+    }
+
+    /// The detailed report shown after every agent-mode run: verdict, the full
+    /// wall-time breakdown, the slowest units with their compiler phases, test
+    /// and resource figures, and every detected inefficiency with its cost.
+    /// Bounded to roughly 20 lines. Set `JUSTRUST_REPORT=brief` for 2 lines.
+    fn agent_report(&self, verdict: &str, hidden: &crate::agent_output::Hidden) -> String {
+        use std::fmt::Write as _;
+        let mut o = String::new();
+        let findings = crate::findings::analyze(self);
+        let _ = writeln!(o, "justrust: {verdict} in {:.1}s", self.wall);
+        let brief = std::env::var("JUSTRUST_REPORT").as_deref() == Ok("brief");
+        if brief {
+            if let Some(f) = findings.first() {
+                let _ = writeln!(
+                    o,
+                    "justrust: slowest issue: {} (~{:.1}s)",
+                    f.message, f.cost_secs
+                );
+            }
+            let _ = writeln!(o, "justrust: details `justrust show {}`", self.id);
+            return o;
+        }
+
+        // Wall-time breakdown, always complete.
+        let p = &self.phases;
+        let mut parts = Vec::new();
+        for (label, v) in [
+            ("startup", p.startup),
+            ("lock wait", p.lock_wait),
+            ("compile", p.compile),
+            ("gaps", p.build_gaps),
+            ("tests", p.test_run),
+            ("after", p.tail),
+        ] {
+            if v >= 0.01 || label == "compile" {
+                parts.push(format!("{label} {v:.2}s"));
+            }
+        }
+        let _ = writeln!(o, "  time    {}", parts.join(" | "));
+
+        // Units.
+        let u = &self.units;
+        let reasons = self.rebuild_summary();
+        let _ = writeln!(
+            o,
+            "  units   {} compiled ({} local, {} deps, {} build scripts), {} fresh{}",
+            u.compiled,
+            u.local,
+            u.dependencies,
+            u.build_scripts,
+            u.fresh,
+            reasons
+                .map(|r| format!(". Rebuilt because: {r}"))
+                .unwrap_or_default()
+        );
+        for t in self
+            .top_units
+            .iter()
+            .filter(|t| t.wall_share >= 0.1)
+            .take(4)
+        {
+            let mut line = format!(
+                "          {:<32} {:>6.2}s  cpu {:>5.1}s  {:>5.0} MB",
+                trunc(&t.name, 32),
+                t.wall_share,
+                t.cpu,
+                t.max_rss_mb
+            );
+            if let Some(sp) = &t.split {
+                line.push_str(&format!(
+                    "  frontend {:.2} codegen {:.2} link {:.2} incr {:.2}",
+                    sp.frontend, sp.codegen, sp.link, sp.incremental
+                ));
+                if let Some(pass) = t.top_passes.first() {
+                    line.push_str(&format!("  top {} {:.2}s", pass.name, pass.secs));
+                }
+            }
+            let _ = writeln!(o, "{line}");
+        }
+
+        // Tests.
+        let t = &self.tests;
+        if !t.binaries.is_empty() {
+            let _ = writeln!(
+                o,
+                "  tests   {} passed, {} failed, {} ignored, {} filtered out, {} binar{} in {:.2}s",
+                t.passed,
+                t.failed,
+                t.ignored,
+                t.filtered_out,
+                t.binaries.len(),
+                if t.binaries.len() == 1 { "y" } else { "ies" },
+                p.test_run
+            );
+        }
+
+        // Resources.
+        let r = &self.resources;
+        let _ = writeln!(
+            o,
+            "  cpu     {:.1}s total, avg {:.1}/peak {:.1} of {} cores; others used {:.1} cores{}",
+            self.cpu_secs,
+            r.avg_build_cores,
+            r.peak_build_cores,
+            self.ncpu,
+            r.avg_other_cores,
+            if r.max_foreign_rustc > 0 {
+                format!(" ({} other rustc)", r.max_foreign_rustc)
+            } else {
+                String::new()
+            }
+        );
+        let _ = writeln!(
+            o,
+            "  memory  peak {:.0} MB build, {:.0} MB largest rustc, {:.1} GB free; stalls cpu {:.2}s mem {:.2}s io {:.2}s",
+            r.peak_build_rss_mb,
+            r.peak_unit_rss_mb,
+            r.min_mem_available_mb as f64 / 1024.0,
+            r.psi_cpu_secs,
+            r.psi_mem_secs,
+            r.psi_io_secs
+        );
+        if hidden.warnings_hidden > 0 || hidden.warnings_shown > 0 {
+            let _ = writeln!(
+                o,
+                "  output  {} warnings shown, {} hidden; {} progress and {} passing-test lines hidden",
+                hidden.warnings_shown,
+                hidden.warnings_hidden,
+                hidden.progress_lines,
+                hidden.passing_test_lines
+            );
+        }
+
+        // Inefficiencies.
+        if findings.is_empty() {
+            let _ = writeln!(o, "  waste   none detected");
+        } else {
+            let _ = writeln!(
+                o,
+                "  waste   {} issue{} (estimated cost each; they can overlap):",
+                findings.len(),
+                if findings.len() == 1 { "" } else { "s" }
+            );
+            for f in findings.iter().take(6) {
+                let _ = writeln!(o, "          ~{:>5.1}s  {}", f.cost_secs, f.message);
+            }
+            if findings.len() > 6 {
+                let _ = writeln!(
+                    o,
+                    "          ... {} more in `justrust show`",
+                    findings.len() - 6
+                );
+            }
+        }
+        let _ = writeln!(
+            o,
+            "  more    `justrust log {id}` full output, `justrust show {id}` full profile",
+            id = self.id
+        );
+        o
+    }
+
+    /// Short summary of why units were rebuilt, grouped by reason.
+    fn rebuild_summary(&self) -> Option<String> {
+        if self.rebuild_reasons.is_empty() {
+            return None;
+        }
+        let mut counts: std::collections::BTreeMap<String, Vec<&str>> = Default::default();
+        for r in &self.rebuild_reasons {
+            let key = if r.reason.starts_with("the dependency ") {
+                r.reason
+                    .split('`')
+                    .nth(1)
+                    .map(|d| format!("{d} changed"))
+                    .unwrap_or_else(|| r.reason.clone())
+            } else if r.reason.starts_with("the file ") {
+                r.reason
+                    .split('`')
+                    .nth(1)
+                    .map(|f| format!("edited {f}"))
+                    .unwrap_or_else(|| r.reason.clone())
+            } else {
+                r.reason.chars().take(60).collect()
+            };
+            counts.entry(key).or_default().push(&r.package);
+        }
+        let mut v: Vec<_> = counts.into_iter().collect();
+        v.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+        Some(
+            v.iter()
+                .take(3)
+                .map(|(reason, pkgs)| {
+                    if pkgs.len() == 1 {
+                        format!("{} ({})", reason, pkgs[0])
+                    } else {
+                        format!("{} ({} crates)", reason, pkgs.len())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
     }
 
     /// One-line footer printed after every recorded run.
@@ -865,53 +997,12 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod hint_tests {
-    use super::*;
-
-    fn slow(wall: f64) -> Summary {
-        Summary {
-            wall,
-            ncpu: 16,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn fast_runs_have_no_hint() {
-        assert!(slow(1.0).slow_hint().is_none());
-    }
-
-    #[test]
-    fn lock_wait_dominates() {
-        let mut s = slow(10.0);
-        s.phases.lock_wait = 6.0;
-        assert!(s.slow_hint().unwrap().contains("waiting for another cargo"));
-    }
-
-    #[test]
-    fn names_the_slow_unit_and_phase() {
-        let mut s = slow(10.0);
-        s.top_units.push(UnitBreakdown {
-            name: "big (test)".into(),
-            wall_share: 9.0,
-            split: Some(Split {
-                frontend: 5.0,
-                codegen: 2.0,
-                link: 1.0,
-                incremental: 1.0,
-                other: 0.0,
-            }),
-            top_passes: vec![Pass {
-                name: "macro_expand_crate".into(),
-                secs: 2.4,
-                rss_end_mb: 0.0,
-            }],
-            ..Default::default()
-        });
-        let h = s.slow_hint().unwrap();
-        assert!(h.contains("big (test) took 9.0s"), "{h}");
-        assert!(h.contains("type-checking/macros 5.0s"), "{h}");
-        assert!(h.contains("macro_expand_crate"), "{h}");
+fn trunc(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n - 1).collect();
+        t.push('…');
+        t
     }
 }
