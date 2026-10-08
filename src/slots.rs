@@ -70,6 +70,10 @@ pub struct SlotInfo {
     /// Units copied by that refresh.
     #[serde(default)]
     pub refreshed_units: usize,
+    /// Seconds waited for an identical run in another session to finish
+    /// (then this run reused its slot instead of compiling the same crates).
+    #[serde(default)]
+    pub join_wait_secs: f64,
 }
 
 impl SlotInfo {
@@ -84,6 +88,12 @@ impl SlotInfo {
                     s.push_str(&format!(
                         ", {} newer units from shared in {:.1}s",
                         self.refreshed_units, self.refresh_secs
+                    ));
+                }
+                if self.how == "joined" {
+                    s.push_str(&format!(
+                        ", waited {:.1}s for the identical build running there",
+                        self.join_wait_secs
                     ));
                 }
                 s
@@ -276,6 +286,8 @@ enum Pick {
     Sticky(usize),
     New(usize),
     Reused(usize),
+    /// Another run of the identical command held this slot; we waited for it.
+    Joined(usize),
 }
 
 /// Pick a slot: this session's own, else an unused number below the cap,
@@ -670,6 +682,92 @@ fn try_lock_shared(path: &Path) -> Option<File> {
     (r == 0).then_some(f)
 }
 
+/// Identity of a build request for joining: working dir, cargo arguments
+/// (before `--`: test filters do not change what is compiled), and the
+/// environment that changes compilation. Equal keys compile the same units
+/// from the same sources unless a file changes in between, and then cargo's
+/// own fingerprints still catch it, because the joiner runs cargo itself.
+fn request_key(args: &[OsString]) -> String {
+    let mut k = std::env::current_dir()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for a in args
+        .iter()
+        .map(|a| a.to_string_lossy())
+        .take_while(|a| a != "--")
+    {
+        k.push('\0');
+        k.push_str(&a);
+    }
+    let mut env: Vec<(String, String)> = std::env::vars()
+        .filter(|(n, _)| {
+            n.starts_with("CARGO_") && !n.starts_with("CARGO_TERM_") && n != "CARGO_HOME"
+                || [
+                    "RUSTFLAGS",
+                    "RUSTDOCFLAGS",
+                    "RUSTC_WRAPPER",
+                    "RUSTC",
+                    "RUSTUP_TOOLCHAIN",
+                ]
+                .contains(&n.as_str())
+        })
+        .collect();
+    env.sort();
+    for (n, v) in env {
+        k.push_str(&format!("\0{n}={v}"));
+    }
+    k
+}
+
+/// Longest wait for an identical run before compiling in parallel anyway.
+fn join_max_wait() -> Duration {
+    Duration::from_secs_f64(env_f64("JUSTRUST_JOIN_WAIT", 300.0).max(0.0))
+}
+
+/// If a slot is held right now by a run with the same request key, wait for
+/// it to finish and take that slot. Two identical builds in parallel compile
+/// the same crates twice and compete for the CPU (pair 15s vs 10-12s when
+/// the second waited on the shared dir's lock, FINDINGS section 7). Waiting
+/// and then running cargo in the finished slot costs one no-op cargo.
+fn join_identical(root: &Path, cap: usize, key: &str) -> (Option<(usize, File)>, f64) {
+    if std::env::var("JUSTRUST_JOIN").as_deref() == Ok("0") {
+        return (None, 0.0);
+    }
+    let Some(n) = (0..cap).find(|n| {
+        std::fs::read_to_string(root.join(format!("{n}.req"))).is_ok_and(|k| k == key)
+            && try_lock_probe(&root.join(format!("{n}.lock")))
+    }) else {
+        return (None, 0.0);
+    };
+    eprintln!(
+        "justrust: an identical build is running in slot {n}; waiting for it instead of \
+         compiling the same crates twice (JUSTRUST_JOIN=0 disables)"
+    );
+    let t = Instant::now();
+    let max = join_max_wait();
+    loop {
+        if let Some(f) = try_lock(&root.join(format!("{n}.lock"))) {
+            return (Some((n, f)), t.elapsed().as_secs_f64());
+        }
+        if t.elapsed() >= max {
+            eprintln!(
+                "justrust: still running after {:.0}s, building in parallel",
+                max.as_secs_f64()
+            );
+            return (None, t.elapsed().as_secs_f64());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// True when someone holds the lock (non-blocking probe, released at once).
+fn try_lock_probe(path: &Path) -> bool {
+    match try_lock(path) {
+        Some(_) => false,
+        None => path.exists(),
+    }
+}
+
 /// Choose and lock a slot for this run. None means "run exactly as before".
 pub fn acquire(args: &[OsString]) -> Option<Slot> {
     if !eligible(args) {
@@ -694,14 +792,22 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
 
     let cap = capacity();
     let me = session_key();
+    let key = request_key(args);
+    let (joined, join_wait) = join_identical(&root, cap, &key);
     let metas: Vec<Option<SlotMeta>> = (0..cap)
         .map(|i| read_meta(&root.join(format!("{i}.json"))))
         .collect();
     let mut locks: Vec<Option<File>> = (0..cap).map(|_| None).collect();
-    let (picked, busy) = pick(&metas, &me, |i| {
-        locks[i] = try_lock(&root.join(format!("{i}.lock")));
-        locks[i].is_some()
-    });
+    let (picked, busy) = match joined {
+        Some((n, lock)) => {
+            locks[n] = Some(lock);
+            (Some(Pick::Joined(n)), 0)
+        }
+        None => pick(&metas, &me, |i| {
+            locks[i] = try_lock(&root.join(format!("{i}.lock")));
+            locks[i].is_some()
+        }),
+    };
 
     let Some(picked) = picked else {
         return Some(Slot {
@@ -722,6 +828,7 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
         Pick::Sticky(n) => (n, "sticky"),
         Pick::New(n) => (n, "new"),
         Pick::Reused(n) => (n, "reused"),
+        Pick::Joined(n) => (n, "joined"),
     };
     let lock = locks[n].take();
     drop(locks);
@@ -787,11 +894,16 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
         }
     }
     drop(shared_guard);
-    meta.owner = me;
+    // A joined slot stays its owner's sticky slot.
+    if how != "joined" {
+        meta.owner = me;
+    }
     meta.last_used = paths::now();
     if let Ok(bytes) = serde_json::to_vec_pretty(&meta) {
         let _ = std::fs::write(&meta_path, bytes);
     }
+    // What this slot is building now, so an identical request can join it.
+    let _ = std::fs::write(root.join(format!("{n}.req")), &key);
 
     let mut new_args = args.to_vec();
     let at = subcommand_index(args).map_or(new_args.len(), |i| i + 1);
@@ -807,6 +919,7 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
             capacity: cap,
             refresh_secs,
             refreshed_units,
+            join_wait_secs: join_wait,
         },
         args: new_args,
         _lock: lock,
@@ -933,6 +1046,7 @@ fn remove_slot(root: &Path, n: usize) -> bool {
     let moved = !dir.exists() || std::fs::rename(&dir, &trash).is_ok();
     if moved {
         std::fs::remove_file(root.join(format!("{n}.json"))).ok();
+        std::fs::remove_file(root.join(format!("{n}.req"))).ok();
     }
     drop(lock);
     if trash.exists() {
@@ -1349,6 +1463,32 @@ mod tests {
         std::fs::write(root.join(".gc-stamp"), b"").unwrap();
         assert!(!gc_due(&root, SystemTime::now()));
         assert!(gc_due(&root, SystemTime::now() + GC_INTERVAL));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn join_waits_for_identical_running_build_only() {
+        let root = std::env::temp_dir().join(format!("justrust-join-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let key = request_key(&os(&["test", "-p", "x", "--", "filter"]));
+        // Test filters do not change what is compiled.
+        assert_eq!(key, request_key(&os(&["test", "-p", "x", "--", "other"])));
+        assert_ne!(key, request_key(&os(&["test", "-p", "y"])));
+        std::fs::write(root.join("1.req"), &key).unwrap();
+        // Slot 1 not running: nothing to join.
+        assert!(join_identical(&root, 4, &key).0.is_none());
+        let held = try_lock(&root.join("1.lock")).unwrap();
+        // Different request: no join even though slot 1 is running.
+        assert!(join_identical(&root, 4, "other").0.is_none());
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(held);
+        });
+        let (joined, waited) = join_identical(&root, 4, &key);
+        assert_eq!(joined.map(|j| j.0), Some(1));
+        assert!(waited >= 0.2, "waited {waited}");
+        t.join().unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 

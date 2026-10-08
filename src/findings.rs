@@ -82,6 +82,23 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
         ));
     }
 
+    // Waited for an identical build in another session, then reused its slot.
+    if let Some(i) = &s.slot
+        && i.how == "joined"
+    {
+        out.push(Finding::new(
+            "slot_join",
+            i.join_wait_secs,
+            format!(
+                "waited {:.1}s (before cargo started, not in the times above) for an \
+                 identical build another agent was running in slot {}, then reused its \
+                 result instead of compiling the same crates in parallel (JUSTRUST_JOIN=0 disables)",
+                i.join_wait_secs,
+                i.slot.unwrap_or(0)
+            ),
+        ));
+    }
+
     // All slots busy: this run shared the target dir and could block others.
     if let Some(i) = &s.slot
         && i.slot.is_none()
@@ -513,6 +530,16 @@ mod tests {
         let f = analyze(&s);
         assert!(f[0].message.contains("CARGO_HOME"), "{}", f[0].message);
         assert!(!f[0].message.contains("JUSTRUST_SLOTS"));
+        s.phases.lock_wait = 0.0;
+        s.slot = Some(crate::slots::SlotInfo {
+            slot: Some(2),
+            how: "joined".into(),
+            join_wait_secs: 8.4,
+            ..Default::default()
+        });
+        let f = analyze(&s);
+        assert_eq!(f[0].kind, "slot_join");
+        assert!(f[0].message.contains("8.4s"), "{}", f[0].message);
     }
 
     #[test]
