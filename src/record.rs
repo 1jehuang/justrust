@@ -9,7 +9,7 @@
 //!
 //! It fails open: if recording cannot be set up, it execs cargo unchanged.
 
-use crate::{agent_output, paths, procfs, summary};
+use crate::{agent_output, paths, procfs, slots, summary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -47,6 +47,9 @@ pub struct Meta {
     pub ncpu: usize,
     pub mem_total_mb: u64,
     pub env: HashMap<String, String>,
+    /// Per-agent build slot used for this run (see `slots`).
+    #[serde(default)]
+    pub slot: Option<slots::SlotInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -235,6 +238,10 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     let run_dir = paths::runs_dir()?.join(&id);
     std::fs::create_dir_all(&run_dir)?;
 
+    // Agent runs get a private target dir so parallel agents do not block.
+    let slot = opts.agent.then(|| slots::acquire(args)).flatten();
+    let cargo_args = slot.as_ref().map_or(args, |s| s.args.as_slice());
+
     let tty = isatty(2);
     let env_keys = [
         "CARGO_TARGET_DIR",
@@ -270,13 +277,14 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         ncpu: procfs::ncpu(),
         mem_total_mb: procfs::meminfo().map(|m| m.total_mb).unwrap_or(0),
         env,
+        slot: slot.as_ref().map(|s| s.info.clone()),
     };
     std::fs::write(run_dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
 
     let git = std::thread::spawn(git_info);
 
     let mut cmd = Command::new(&real_cargo);
-    cmd.args(args)
+    cmd.args(cargo_args)
         .env("RUSTC", &shim)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)
         .env("JUSTRUST_RUN_DIR", &run_dir)

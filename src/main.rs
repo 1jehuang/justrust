@@ -15,6 +15,7 @@ mod procfs;
 mod record;
 mod runs;
 mod shim;
+mod slots;
 mod summary;
 
 use clap::{Parser, Subcommand};
@@ -98,6 +99,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// List this workspace's per-agent build slots, or remove the free ones.
+    Slots {
+        /// Remove every slot that is not in use.
+        #[arg(long)]
+        clean: bool,
+    },
     /// Install a `cargo` proxy so every build is recorded automatically.
     Install {
         /// Directory for the proxy. Must come before the real cargo on PATH.
@@ -169,6 +176,7 @@ fn main() -> anyhow::Result<()> {
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
+        Command::Slots { clean } => slots::command(clean)?,
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,
         Command::History {

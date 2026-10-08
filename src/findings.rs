@@ -38,13 +38,61 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
 
     // Waiting on another cargo for the build directory.
     if p.lock_wait >= MIN_COST {
+        let on_dir =
+            s.locks_waited.is_empty() || s.locks_waited.iter().any(|l| l.contains("directory"));
+        let what = if s.locks_waited.is_empty() {
+            "the build directory".to_owned()
+        } else {
+            s.locks_waited.join(", ")
+        };
+        let slot_hint = match &s.slot {
+            Some(i) if i.slot.is_none() && on_dir => format!(
+                "; all {} justrust build slots were busy, raise JUSTRUST_SLOTS",
+                i.capacity
+            ),
+            Some(i) if i.slot.is_some() && on_dir => {
+                "; another process used this build slot".to_owned()
+            }
+            _ if !on_dir => "; cargo's shared CARGO_HOME lock, not the target dir".to_owned(),
+            _ => " (parallel builds in the same target dir serialize)".to_owned(),
+        };
         out.push(Finding::new(
             "lock_wait",
             p.lock_wait,
             format!(
-                "waited {:.1}s for another cargo to release the build directory \
-                 (parallel builds in the same target dir serialize)",
+                "waited {:.1}s for another cargo to release the lock on {what}{slot_hint}",
                 p.lock_wait
+            ),
+        ));
+    }
+
+    // Seeding a new build slot (reflink copy of the shared target dir).
+    if let Some(i) = &s.slot
+        && i.seed_secs >= MIN_COST
+    {
+        out.push(Finding::new(
+            "slot_seed",
+            i.seed_secs,
+            format!(
+                "seeded build slot {} from the shared target dir in {:.1}s \
+                 (once per slot, before cargo started)",
+                i.slot.unwrap_or(0),
+                i.seed_secs
+            ),
+        ));
+    }
+
+    // All slots busy: this run shared the target dir and could block others.
+    if let Some(i) = &s.slot
+        && i.slot.is_none()
+    {
+        out.push(Finding::new(
+            "slots_full",
+            MIN_COST,
+            format!(
+                "all {} build slots were busy, so this run used the shared target dir \
+                 and may have blocked or been blocked by other builds (JUSTRUST_SLOTS raises the cap)",
+                i.capacity
             ),
         ));
     }
@@ -418,6 +466,36 @@ mod tests {
         s.phases.lock_wait = 12.0;
         let f = analyze(&s);
         assert_eq!(f[0].kind, "lock_wait");
+    }
+
+    #[test]
+    fn reports_slot_seed_and_fallback() {
+        let mut s = base();
+        s.slot = Some(crate::slots::SlotInfo {
+            slot: Some(1),
+            how: "new".into(),
+            seed_secs: 9.0,
+            capacity: 4,
+            ..Default::default()
+        });
+        let f = analyze(&s);
+        assert_eq!(f[0].kind, "slot_seed");
+        s.slot = Some(crate::slots::SlotInfo {
+            slot: None,
+            how: "fallback".into(),
+            busy: 4,
+            capacity: 4,
+            ..Default::default()
+        });
+        s.phases.lock_wait = 5.0;
+        let f = analyze(&s);
+        let kinds: Vec<&str> = f.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(kinds, ["lock_wait", "slots_full"]);
+        assert!(f[0].message.contains("JUSTRUST_SLOTS"));
+        s.locks_waited = vec!["package cache".into()];
+        let f = analyze(&s);
+        assert!(f[0].message.contains("CARGO_HOME"), "{}", f[0].message);
+        assert!(!f[0].message.contains("JUSTRUST_SLOTS"));
     }
 
     #[test]

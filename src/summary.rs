@@ -32,6 +32,12 @@ pub struct Summary {
     /// Every unit that ran, newest-first by share (`top_units` is the first 12).
     #[serde(default)]
     pub all_units: usize,
+    /// Per-agent build slot (private target dir) used for this run.
+    #[serde(default)]
+    pub slot: Option<crate::slots::SlotInfo>,
+    /// Which cargo locks the run waited on ("build directory", "package cache", ...).
+    #[serde(default)]
+    pub locks_waited: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -350,9 +356,18 @@ pub fn build(
     let (shares, compile_covered) = share_time(&intervals, 0.0, wall);
 
     // Lock waits: from "Blocking waiting for file lock" to the next output line.
+    // Consecutive Blocking lines are one wait.
     let mut lock_wait = 0.0;
+    let mut locks_waited: Vec<String> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
-        if l.l.contains("Blocking waiting for file lock") {
+        if let Some(what) = l.l.split("Blocking waiting for file lock on ").nth(1) {
+            let what = what.trim().to_owned();
+            if !locks_waited.contains(&what) {
+                locks_waited.push(what);
+            }
+            if i > 0 && lines[i - 1].l.contains("Blocking waiting for file lock") {
+                continue;
+            }
             let next = lines[i + 1..]
                 .iter()
                 .find(|n| !n.l.contains("Blocking"))
@@ -613,6 +628,8 @@ pub fn build(
         diagnostics,
         rebuild_reasons,
         all_units: units.len(),
+        slot: meta.slot.clone(),
+        locks_waited,
     }
 }
 
@@ -738,6 +755,9 @@ impl Summary {
             }
         }
         let _ = writeln!(o, "  time    {}", parts.join(" | "));
+        if let Some(slot) = &self.slot {
+            let _ = writeln!(o, "  target  {}", slot.report_line());
+        }
 
         // Units.
         let u = &self.units;
