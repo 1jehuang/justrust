@@ -171,3 +171,71 @@ runtime change and the 32-unit split disappears. For justrust: a finding
 that detects "the same package compiled with different feature sets in check,
 build and test" (dev-dependency feature unification) and names the
 dev-dependency causing it would have found this immediately.
+
+## Cranelift backend for Desktop debug/test builds (2026-10-07)
+
+Availability: the system toolchain (Arch rust 1.98.1, no rustup) ships no
+`codegen-backends/` dir and no `rustc-dev`, so a cranelift backend cannot be
+built or loaded for it. The only practical route is a rustup nightly with
+`rustc-codegen-cranelift-preview`, installed user-local under
+`~/.jcode/scratch/cranelift/{rustup,cargo}` (rustc 1.101.0-nightly
+1d81eb4ad 2026-10-07). Implications: a different rustc means separate
+fingerprints and a separate cold dependency build (~3 min, ~4 GB per target
+dir), nightly drift, and `-Zcodegen-backend` needs nightly anyway.
+
+Setup: rsync copies of ~/jcode and ~/jcode-desktop in scratch, one
+CARGO_TARGET_DIR per variant, all on the same nightly so only the backend
+differs. Variants: `llvm`; `clif` (RUSTFLAGS=-Zcodegen-backend=cranelift for
+every crate, so gpui and the other opt-level 2 crates lose their
+optimization); `cliflocal` (wrapper adds the flag only for non-CARGO_HOME
+crates at opt-level 0, chained in front of Desktop's parallel-frontend
+wrapper). Scripts: `bench/cranelift/`. Command: `cargo test -p
+jcode-desktop-ui --lib`.
+
+Wall seconds (medians; machine shared, rustc counts from other agents 0-34):
+
+| step                                  | llvm | clif (all) | cliflocal |
+|---------------------------------------|------|------------|-----------|
+| cold `--no-run` (740 units)           | 182  | 203        | 195       |
+| one-line edit + fps_counter tests     | 7.0  | 7.5        | 7.3       |
+| one-line edit, recorded by justrust   | 8.8  | -          | 8.3       |
+| full desktop-ui codegen, quiet (x3)   | 20.0 | 16.8       | 16.8      |
+| full codegen, recorded, quiet         | 26.6-32.2 | -     | 23.9-24.7 |
+| full lib test suite run (1655 tests)  | 16-28 | 45-80     | 13-16     |
+
+Recorded run ids (full codegen = delete desktop-ui incremental dir in the
+scratch target and touch lib.rs): llvm 20261007-225541367-2992294 (32.2s,
+codegen 17.2s, cpu 113s) and 20261007-225637578-2998150 (26.6s, codegen
+14.9s, cpu 103s); cliflocal 20261007-225613624-2995425 (23.9s, codegen
+11.8s, cpu 81s) and 20261007-225704287-3001214 (24.7s, codegen 11.7s, cpu
+84s). Edit loop: llvm 20261007-225745049-3005459 / -225801786- /
+-225819136- (codegen 1.08-1.44s), cliflocal 20261007-225753010-3006812 /
+-225810648- / -225827972- (codegen 1.16-1.43s).
+
+Findings:
+- Codegen of jcode_desktop_ui drops about 25% (15-17s to 11.8s) and CPU
+  about 20% with Cranelift, peak RSS ~400 MB lower. That only matters when
+  the whole crate regenerates (upstream jcode crate changes, flag changes).
+- The small-edit loop is unchanged (codegen ~1.2s either way, inside noise):
+  the loop is dominated by frontend and macro expansion, not codegen.
+- An upstream body edit in jcode-sdk did not force full codegen in any
+  variant (8-17s, noisy), incremental reuse already covers it.
+- Cranelift for everything is a loss: gpui and friends lose opt-level 2, so
+  the test suite runs 2-4x slower (45-80s vs 16-28s) and cold builds are not
+  faster. Keep deps on LLVM.
+- Correctness: all variants pass the 1655 tests in most runs. The same
+  handful of timing/layout tests (bundled_github_applet_renders_valid_documents,
+  live_tabs_switch_rows_and_stay_detached_from_panels,
+  the_hint_chip_uses_only_spare_tab_space,
+  precise_horizontal_scroll_moves_rendered_panels_smoothly) fail
+  intermittently under load in all three variants including llvm, and pass
+  in isolation. Flaky, not miscompiles. Failures cluster under clif(all)
+  because its slow gpui makes timing tests slower.
+
+Recommendation: not worth it now. The win (about 4-8s on a full
+desktop-ui regeneration, nothing on the common edit loop) requires
+switching agents to a nightly toolchain, which costs a ~3 min cold rebuild,
+another ~4 GB target per variant, and nightly churn, and it conflicts with
+the "recording must never change build results or caches" rule if justrust
+toggled it. No justrust hook added. Revisit if Arch or stable ships the
+cranelift component, or if full-crate regenerations become frequent.
