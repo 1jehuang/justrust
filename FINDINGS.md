@@ -239,3 +239,82 @@ another ~4 GB target per variant, and nightly churn, and it conflicts with
 the "recording must never change build results or caches" rule if justrust
 toggled it. No justrust hook added. Revisit if Arch or stable ships the
 cranelift component, or if full-crate regenerations become frequent.
+
+## 7. Per-agent build slots (2026-10-07)
+
+Problem: cargo holds an exclusive flock on `target/<profile>/` for the whole
+build (`.cargo-lock`, `.cargo-build-lock`, `.cargo-artifact-lock`; all three
+block). Two agents in one checkout fully serialize. Cargo 1.98's
+`build.build-dir` does not help: with a separate build-dir per run but a
+shared target-dir, the second build still blocked on "artifact directory"
+(22.4s then 44.3s for two justrust builds).
+
+Design (src/slots.rs): agent-mode `check`/`test`/`clippy` get
+`--target-dir <target>/justrust-slots/<n>`. `build`/`run` and the plain
+`cargo` proxy keep the shared dir (scripts expect binaries there,
+`JUSTRUST_SLOTS_ALL=1` opts in). Skipped when CARGO_TARGET_DIR,
+CARGO_BUILD_TARGET_DIR, or a target-dir argument is set. `JUSTRUST_SLOTS=N`
+caps the pool (default 4), `JUSTRUST_SLOTS=0` disables. A session
+(JCODE_SESSION_ID, else Unix sid) sticks to its slot. A busy slot is skipped
+via a non-blocking flock. Pool full means the shared dir, never waiting.
+`justrust slots [--clean]` lists or removes free slots.
+
+Seeding: parallel reflink copy (6 `cp --reflink=always` workers) of
+`.fingerprint` first, then `build`, `deps`, `examples`, and `incremental`
+dirs modified in the last 3 days (129 of 1970 dirs, 11 of 181 GB on the
+Desktop). mtimes are preserved, so a seeded slot is fully fresh: 740 fresh
+units, 0 compiled, 1.6s (run 20261007-222839390-2662980). Disabled when the
+filesystem cannot reflink.
+
+First-use seed cost on the Desktop (load avg 20-39): 13.8s, 25.8s, 37.1s
+sequential cp (runs -224514294-2896271, -224733055-2917773); 6.4s with the
+parallel seeder (run -225143...: slot 3). Raw copy of the
+deps/.fingerprint/build trees: 8.8s with one cp, 5.0s with 6. Seeding is paid
+once per slot, then sticky reruns are free (0.8s no-op check).
+
+Disk: `btrfs filesystem du` per slot after some use: 0.26, 1.6, 1.7, 8.3 GB
+exclusive. About 125 GB is shared extents with target/debug, so 4 slots cost
+about 12 GB, not 4x150 GB. Exclusive use grows as the slot rebuilds crates
+the shared dir has not.
+
+Concurrency, two sessions, one-line edit in fps_counter.rs, warm slots
+(bench script ~/.jcode/scratch/slotbench/conc.sh):
+
+| pair | shared dir (JUSTRUST_SLOTS=0) | slots |
+|---|---|---|
+| A test + B test (same command) | pair wall 11.5 / 9.9 / 11.6s; B lock wait 11.0 / 9.1 / 11.2s | pair wall 15.4 / 14.7 / 15.0s; lock wait 0.3-0.9s (package cache) |
+| A test + B check -p desktop-ui --lib | B wall 17.7 / 13.6 / 12.4s (lock wait 8.7 / 10.8 / 9.0s), pair 18.0 / 13.9 / 12.7s | B wall 3.4 / 3.2 / 3.5s (no lock wait), pair 10.8 / 10.1 / 11.6s |
+
+Run ids: shared mixed -225747943 / -225748251, -225816867 / -225817168,
+-225840955 / -225841256; slots mixed -225805987 / -225806288,
+-225830853 / -225831154, -225853719 / -225854020; identical pairs
+-225606396 .. -225710013.
+
+Reading:
+- Different commands (the real multi-agent case): the second agent goes from
+  about 14s median to 3.4s, and the pair finishes in 10.8s instead of 13.9s
+  (median). Lock wait goes from about 9-11s to 0.
+- Identical commands at the same moment: the shared dir wins (10-12s vs
+  15s), because B waits and then finds A's work done, while with slots both
+  compile the same crate in parallel on a busy 16-core machine. That
+  case only arises when two agents run the exact same build at once. Each
+  agent still sees its own state, not one that another agent's edit just
+  churned.
+- The remaining 0.2-0.9s waits are cargo's CARGO_HOME "package cache" lock,
+  which slots cannot remove. The lock_wait finding now names the lock and
+  only suggests JUSTRUST_SLOTS when it was the build directory.
+- Live use: within minutes another agent (hibiscus, ui crate split) was
+  given slot 1 automatically. A plain `cargo check` through the proxy at the
+  same time still waited 11.4s on the shared dir (run -225913558-3020615),
+  which is exactly the cost slots remove for agent runs.
+
+Risks / follow-ups:
+- Stale slots: a slot seeded long ago does not get dependency rebuilds that
+  later happen in the shared dir (Cargo.lock bump, gpui rev). It rebuilds
+  them itself once. Re-seeding a slot when the shared dir has many newer
+  fingerprints would be cheap with reflinks and is not implemented yet.
+- Disk: exclusive bytes per slot grow with divergent rebuilds. No automatic
+  GC. `justrust slots --clean` removes free slots.
+- `target/debug/<bin>` from agent test/check runs no longer appear in the
+  shared dir. Test binaries live under the slot. Builds and runs are not
+  slotted, so the Desktop launcher and Ctrl+R are unaffected.
