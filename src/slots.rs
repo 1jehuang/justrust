@@ -63,6 +63,13 @@ pub struct SlotInfo {
     pub busy: usize,
     #[serde(default)]
     pub capacity: usize,
+    /// Seconds spent bringing units the shared dir built since the seed
+    /// into the slot (see `refresh`).
+    #[serde(default)]
+    pub refresh_secs: f64,
+    /// Units copied by that refresh.
+    #[serde(default)]
+    pub refreshed_units: usize,
 }
 
 impl SlotInfo {
@@ -72,6 +79,12 @@ impl SlotInfo {
                 let mut s = format!("slot {n} ({}) {}", self.how, self.target_dir);
                 if self.seed_secs > 0.0 {
                     s.push_str(&format!(", seeded in {:.1}s", self.seed_secs));
+                }
+                if self.refreshed_units > 0 {
+                    s.push_str(&format!(
+                        ", {} newer units from shared in {:.1}s",
+                        self.refreshed_units, self.refresh_secs
+                    ));
                 }
                 s
             }
@@ -101,6 +114,9 @@ struct SlotMeta {
     seed_secs: f64,
     #[serde(default)]
     seeded_from: String,
+    /// `shared_stamp` of the shared profile dir at the last seed or refresh.
+    #[serde(default)]
+    shared_stamp: f64,
 }
 
 fn subcommand_index(args: &[OsString]) -> Option<usize> {
@@ -321,7 +337,7 @@ fn reflink_supported(dir: &Path) -> bool {
     ok
 }
 
-fn cp_reflink(srcs: &[PathBuf], dst: &Path) -> bool {
+fn cp_reflink(srcs: &[PathBuf], dst: &Path, extra: &[&str]) -> bool {
     if srcs.is_empty() {
         return true;
     }
@@ -329,6 +345,7 @@ fn cp_reflink(srcs: &[PathBuf], dst: &Path) -> bool {
         Command::new("cp")
             .arg("-a")
             .arg("--reflink=always")
+            .args(extra)
             .args(chunk)
             .arg(dst)
             .stderr(Stdio::null())
@@ -342,7 +359,7 @@ fn cp_reflink(srcs: &[PathBuf], dst: &Path) -> bool {
 /// Desktop target (28k deps files) 6 processes took 5.0s vs 8.8s for one.
 const SEED_JOBS: usize = 6;
 
-fn cp_parallel(jobs: &[(PathBuf, PathBuf)]) -> bool {
+fn cp_parallel(jobs: &[(PathBuf, PathBuf)], extra: &[&str]) -> bool {
     use std::collections::BTreeMap;
     let mut by_dst: BTreeMap<&Path, Vec<PathBuf>> = BTreeMap::new();
     for (src, dst) in jobs {
@@ -366,7 +383,7 @@ fn cp_parallel(jobs: &[(PathBuf, PathBuf)]) -> bool {
                     if !ok.load(Relaxed) {
                         return;
                     }
-                    if !cp_reflink(srcs, dst) {
+                    if !cp_reflink(srcs, dst, extra) {
                         ok.store(false, Relaxed);
                     }
                 }
@@ -413,7 +430,7 @@ fn seed(shared: &Path, slot: &Path) -> bool {
                 jobs.push((src, dst.clone()));
             }
         }
-        cp_parallel(&jobs)
+        cp_parallel(&jobs, &[])
     };
     stage(&[(".fingerprint", None)])
         && stage(&[
@@ -422,6 +439,235 @@ fn seed(shared: &Path, slot: &Path) -> bool {
             ("examples", None),
             ("incremental", Some(INCREMENTAL_MAX_AGE)),
         ])
+}
+
+/// The unit hash in an artifact file name: `libfoo-<16 hex>.rlib`,
+/// `foo-<16 hex>.d`, `foo-<16 hex>` (test binary). Crate names in `deps/`
+/// use underscores, so the first `-<16 hex>` followed by `.` or the end is it.
+fn artifact_hash(name: &str) -> Option<&str> {
+    let b = name.as_bytes();
+    for (i, _) in name.match_indices('-') {
+        let h = name.get(i + 1..i + 17)?;
+        let end_ok = b.get(i + 17).is_none_or(|&c| c == b'.');
+        if end_ok
+            && h.bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        {
+            return Some(h);
+        }
+    }
+    None
+}
+
+/// The unit hash of a `.fingerprint/<name>-<hash>` or `build/<name>-<hash>` dir.
+fn dir_hash(name: &str) -> Option<&str> {
+    let (_, h) = name.rsplit_once('-')?;
+    (h.len() == 16 && h.bytes().all(|c| c.is_ascii_hexdigit())).then_some(h)
+}
+
+/// Unit dirs under `.fingerprint`, keyed by name, with the newest mtime of
+/// the files inside (cargo rewrites them in place, so the dir's own mtime
+/// does not move).
+fn fingerprint_units(profile: &Path) -> std::collections::HashMap<String, SystemTime> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(rd) = std::fs::read_dir(profile.join(".fingerprint")) else {
+        return out;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if dir_hash(&name).is_none() {
+            continue;
+        }
+        let newest = std::fs::read_dir(e.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|f| f.metadata().ok()?.modified().ok())
+            .max()
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        out.insert(name, newest);
+    }
+    out
+}
+
+/// Units to bring from the shared dir into a slot: those the slot lacks and
+/// those the shared dir rebuilt after the slot's copy. A unit the slot built
+/// itself more recently is never touched.
+fn stale_units(
+    shared: &std::collections::HashMap<String, SystemTime>,
+    slot: &std::collections::HashMap<String, SystemTime>,
+) -> (Vec<String>, Vec<String>) {
+    let mut missing = Vec::new();
+    let mut newer = Vec::new();
+    for (name, &t) in shared {
+        match slot.get(name) {
+            None => missing.push(name.clone()),
+            Some(&mine) if t > mine => newer.push(name.clone()),
+            Some(_) => {}
+        }
+    }
+    missing.sort();
+    newer.sort();
+    (missing, newer)
+}
+
+/// Mtime of the shared dirs cargo writes into whenever it builds anything.
+/// If unchanged since the last refresh there is nothing new to copy.
+fn shared_stamp(shared: &Path) -> f64 {
+    [".fingerprint", "deps", "build"]
+        .iter()
+        .filter_map(|d| std::fs::metadata(shared.join(d)).ok()?.modified().ok())
+        .filter_map(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .fold(0.0, f64::max)
+}
+
+/// Whether two copies of one unit's fingerprint dir record the same state:
+/// the hash files (no extension, not `dep-*` or `invoked.timestamp`) match.
+fn same_fingerprint(a: &Path, b: &Path) -> bool {
+    let hashes = |d: &Path| -> Option<Vec<(String, Vec<u8>)>> {
+        let mut v: Vec<(String, Vec<u8>)> = std::fs::read_dir(d)
+            .ok()?
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                (!n.contains('.') && !n.starts_with("dep-"))
+                    .then(|| Some((n, std::fs::read(e.path()).ok()?)))
+                    .flatten()
+            })
+            .collect();
+        v.sort();
+        Some(v)
+    };
+    matches!((hashes(a), hashes(b)), (Some(x), Some(y)) if !x.is_empty() && x == y)
+}
+
+/// What a refresh did.
+#[derive(Debug, Default, PartialEq)]
+struct Refresh {
+    missing: usize,
+    newer: usize,
+    files: usize,
+}
+
+/// Bring a slot up to date with units the shared dir built since the slot
+/// was seeded (Cargo.lock bump, gpui rev, an upstream crate rebuilt by
+/// `cargo build`). The unit is the safe granule: its fingerprint dir, its
+/// `build/` dir, and every `deps/` file carrying its hash, copied together
+/// with mtimes preserved. Cargo's fingerprints then decide freshness as
+/// usual: a copied unit whose inputs or dependencies differ in the slot is
+/// simply rebuilt.
+///
+/// The caller holds the slot's flock and a shared flock on the shared dir's
+/// build lock, so neither side is being written. Crash safety: a replaced
+/// unit's old fingerprint is deleted first and the new fingerprint is copied
+/// last, so an interrupted refresh leaves units without a fingerprint, which
+/// cargo always rebuilds.
+fn refresh(shared: &Path, slot: &Path) -> Option<Refresh> {
+    let (a, b) = std::thread::scope(|s| {
+        let a = s.spawn(|| fingerprint_units(shared));
+        let b = fingerprint_units(slot);
+        (a.join().unwrap_or_default(), b)
+    });
+    let (missing, mut newer) = stale_units(&a, &b);
+    // Same unit, rebuilt in both places to the same state: copying would only
+    // bump mtimes and make the slot's dependents look stale.
+    newer.retain(|u| {
+        !same_fingerprint(
+            &shared.join(".fingerprint").join(u),
+            &slot.join(".fingerprint").join(u),
+        )
+    });
+    let mut r = Refresh {
+        missing: missing.len(),
+        newer: newer.len(),
+        files: 0,
+    };
+    if missing.is_empty() && newer.is_empty() {
+        return Some(r);
+    }
+    let units: Vec<&String> = missing.iter().chain(&newer).collect();
+    let hashes: std::collections::HashSet<&str> =
+        units.iter().filter_map(|u| dir_hash(u)).collect();
+
+    // Drop the slot's older copies of units being replaced.
+    if !newer.is_empty() {
+        let replaced: std::collections::HashSet<&str> =
+            newer.iter().filter_map(|u| dir_hash(u)).collect();
+        for u in &newer {
+            std::fs::remove_dir_all(slot.join(".fingerprint").join(u)).ok();
+            std::fs::remove_dir_all(slot.join("build").join(u)).ok();
+        }
+        for f in std::fs::read_dir(slot.join("deps"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            if artifact_hash(&f.file_name().to_string_lossy()).is_some_and(|h| replaced.contains(h))
+            {
+                let p = f.path();
+                if p.is_dir() {
+                    std::fs::remove_dir_all(&p).ok();
+                } else {
+                    std::fs::remove_file(&p).ok();
+                }
+            }
+        }
+    }
+
+    // Artifacts first.
+    let mut jobs = Vec::new();
+    for sub in ["build", "deps"] {
+        let dst = slot.join(sub);
+        std::fs::create_dir_all(&dst).ok()?;
+        for e in std::fs::read_dir(shared.join(sub))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            let h = if sub == "build" {
+                dir_hash(&name)
+            } else {
+                artifact_hash(&name)
+            };
+            if h.is_some_and(|h| hashes.contains(h)) {
+                jobs.push((e.path(), dst.clone()));
+            }
+        }
+    }
+    r.files = jobs.len();
+    let fp_dst = slot.join(".fingerprint");
+    let fp_jobs: Vec<(PathBuf, PathBuf)> = units
+        .iter()
+        .map(|u| (shared.join(".fingerprint").join(u), fp_dst.clone()))
+        .collect();
+    // --remove-destination: never write through a hardlink (deps files are
+    // hardlinked to uplifted outputs) or into a mapped binary.
+    if !cp_parallel(&jobs, &["--remove-destination"]) {
+        return None;
+    }
+    // Then the fingerprints that vouch for them.
+    if !cp_parallel(&fp_jobs, &["--remove-destination"]) {
+        for u in &units {
+            std::fs::remove_dir_all(fp_dst.join(u)).ok();
+        }
+        return None;
+    }
+    Some(r)
+}
+
+fn try_lock_shared(path: &Path) -> Option<File> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .ok()?;
+    // SAFETY: flock on a valid fd.
+    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
+    (r == 0).then_some(f)
 }
 
 /// Choose and lock a slot for this run. None means "run exactly as before".
@@ -466,6 +712,7 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
                 seed_secs: 0.0,
                 busy,
                 capacity: cap,
+                ..Default::default()
             },
             args: args.to_vec(),
             _lock: None,
@@ -488,10 +735,18 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
             seeded: m.seeded,
             seed_secs: m.seed_secs,
             seeded_from: m.seeded_from.clone(),
+            shared_stamp: m.shared_stamp,
         });
 
     let mut seed_secs = 0.0;
+    let mut refresh_secs = 0.0;
+    let mut refreshed_units = 0;
     let slot_profile = slot_dir.join(&profile);
+    // Shared lock on the shared dir's build lock: cargo takes it exclusively
+    // while building, so holding it means the shared dir is not being written.
+    // Never wait for it: a busy shared dir means skip, the slot is still valid.
+    let shared_guard = try_lock_shared(&shared_profile.join(".cargo-build-lock"));
+    let stamp = shared_stamp(&shared_profile);
     if !meta.seeded || !slot_profile.join(".fingerprint").is_dir() {
         eprintln!(
             "justrust: seeding build slot {n} from {} (reflink copy, once per slot)",
@@ -507,7 +762,31 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
         meta.seeded = true;
         meta.seed_secs = seed_secs;
         meta.seeded_from = shared_profile.to_string_lossy().into_owned();
+        if shared_guard.is_some() {
+            meta.shared_stamp = stamp;
+        }
+    } else if shared_guard.is_some()
+        && stamp > meta.shared_stamp
+        && std::env::var("JUSTRUST_SLOT_REFRESH").as_deref() != Ok("0")
+    {
+        let t = Instant::now();
+        match refresh(&shared_profile, &slot_profile) {
+            Some(r) => {
+                refresh_secs = t.elapsed().as_secs_f64();
+                refreshed_units = r.missing + r.newer;
+                meta.shared_stamp = stamp;
+                if refreshed_units > 0 {
+                    eprintln!(
+                        "justrust: slot {n}: copied {} new and {} rebuilt units ({} files) \
+                         from the shared target dir in {refresh_secs:.1}s",
+                        r.missing, r.newer, r.files
+                    );
+                }
+            }
+            None => eprintln!("justrust: slot {n}: refresh from the shared dir failed, skipped"),
+        }
     }
+    drop(shared_guard);
     meta.owner = me;
     meta.last_used = paths::now();
     if let Ok(bytes) = serde_json::to_vec_pretty(&meta) {
@@ -526,6 +805,8 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
             seed_secs,
             busy,
             capacity: cap,
+            refresh_secs,
+            refreshed_units,
         },
         args: new_args,
         _lock: lock,
@@ -713,6 +994,113 @@ mod tests {
     }
 
     #[test]
+    fn unit_hashes_from_names() {
+        assert_eq!(
+            artifact_hash("libgpui-01e6fc7e6520e628.rlib"),
+            Some("01e6fc7e6520e628")
+        );
+        assert_eq!(
+            artifact_hash("jcode_desktop_ui-034d5c77386f7d52"),
+            Some("034d5c77386f7d52")
+        );
+        assert_eq!(
+            artifact_hash("libfoo_bar-0123456789abcdef.so"),
+            Some("0123456789abcdef")
+        );
+        assert_eq!(artifact_hash("jcode_desktop_ui.d"), None);
+        assert_eq!(artifact_hash("rmetaIfln9S"), None);
+        assert_eq!(dir_hash("gpui-01e6fc7e6520e628"), Some("01e6fc7e6520e628"));
+        assert_eq!(
+            dir_hash("jcode-desktop-ui-01be5818b91178de"),
+            Some("01be5818b91178de")
+        );
+        assert_eq!(dir_hash("serde"), None);
+    }
+
+    #[test]
+    fn stale_units_never_replace_newer_slot_units() {
+        use std::collections::HashMap;
+        let t = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
+        let shared: HashMap<String, SystemTime> = [
+            ("a-0000000000000001", t(10)),
+            ("b-0000000000000002", t(20)),
+            ("c-0000000000000003", t(30)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        let slot: HashMap<String, SystemTime> = [
+            ("b-0000000000000002", t(25)), // slot rebuilt it later: keep
+            ("c-0000000000000003", t(5)),  // shared rebuilt it later: take
+            ("d-0000000000000004", t(1)),  // slot only: keep
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        let (missing, newer) = stale_units(&shared, &slot);
+        assert_eq!(missing, ["a-0000000000000001"]);
+        assert_eq!(newer, ["c-0000000000000003"]);
+    }
+
+    #[test]
+    fn refresh_copies_whole_units_and_keeps_slot_work() {
+        let base =
+            std::env::temp_dir().join(format!("justrust-refresh-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        if !reflink_supported(&base) {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        let shared = base.join("shared/debug");
+        let slot = base.join("slot/debug");
+        let unit = |root: &Path, name: &str, hash: &str, body: &str| {
+            let fp = root.join(format!(".fingerprint/{name}-{hash}"));
+            std::fs::create_dir_all(&fp).unwrap();
+            std::fs::write(fp.join(format!("lib-{name}")), body).unwrap();
+            std::fs::create_dir_all(root.join("deps")).unwrap();
+            std::fs::write(root.join(format!("deps/lib{name}-{hash}.rlib")), body).unwrap();
+            std::fs::write(root.join(format!("deps/{name}-{hash}.d")), body).unwrap();
+        };
+        unit(&shared, "old", "1111111111111111", "shared");
+        unit(&slot, "old", "1111111111111111", "slot");
+        unit(&slot, "mine", "3333333333333333", "slot");
+        std::thread::sleep(Duration::from_millis(20));
+        unit(&shared, "new", "2222222222222222", "shared");
+        std::fs::create_dir_all(shared.join("build/new-2222222222222222")).unwrap();
+        std::fs::write(shared.join("build/new-2222222222222222/output"), "o").unwrap();
+        // Slot's copy of `old` is the newest: must survive.
+        std::thread::sleep(Duration::from_millis(20));
+        unit(&slot, "old", "1111111111111111", "slot2");
+
+        let r = refresh(&shared, &slot).unwrap();
+        assert_eq!((r.missing, r.newer, r.files), (1, 0, 3));
+        let read = |p: &str| std::fs::read_to_string(slot.join(p)).unwrap();
+        assert_eq!(read("deps/libnew-2222222222222222.rlib"), "shared");
+        assert_eq!(read("deps/new-2222222222222222.d"), "shared");
+        assert_eq!(read(".fingerprint/new-2222222222222222/lib-new"), "shared");
+        assert_eq!(read("build/new-2222222222222222/output"), "o");
+        assert_eq!(read("deps/libold-1111111111111111.rlib"), "slot2");
+        assert_eq!(read("deps/libmine-3333333333333333.rlib"), "slot");
+
+        // Shared rebuilds `old` later: the whole unit is replaced.
+        std::thread::sleep(Duration::from_millis(20));
+        unit(&shared, "old", "1111111111111111", "shared2");
+        let r = refresh(&shared, &slot).unwrap();
+        assert_eq!((r.missing, r.newer), (0, 1));
+        assert_eq!(read("deps/libold-1111111111111111.rlib"), "shared2");
+        assert_eq!(read(".fingerprint/old-1111111111111111/lib-old"), "shared2");
+        // Nothing left to do.
+        assert_eq!(refresh(&shared, &slot).unwrap(), Refresh::default());
+        // Shared rebuilt `mine` to the identical state: not copied (copying
+        // would only bump mtimes and dirty the slot's dependents).
+        std::thread::sleep(Duration::from_millis(20));
+        unit(&shared, "mine", "3333333333333333", "slot");
+        assert_eq!(refresh(&shared, &slot).unwrap(), Refresh::default());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn report_line_mentions_slot_and_seed() {
         let i = SlotInfo {
             slot: Some(2),
@@ -721,10 +1109,23 @@ mod tests {
             seed_secs: 12.5,
             busy: 1,
             capacity: 4,
+            ..Default::default()
         };
         assert_eq!(
             i.report_line(),
             "slot 2 (new) /w/target/justrust-slots/2, seeded in 12.5s"
+        );
+        let i = SlotInfo {
+            slot: Some(1),
+            target_dir: "/w/s/1".into(),
+            how: "sticky".into(),
+            refresh_secs: 0.4,
+            refreshed_units: 12,
+            ..Default::default()
+        };
+        assert_eq!(
+            i.report_line(),
+            "slot 1 (sticky) /w/s/1, 12 newer units from shared in 0.4s"
         );
     }
 }
