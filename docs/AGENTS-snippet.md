@@ -19,5 +19,9 @@ tests, builds, lints, and runs:
 - Need more? `justrust log --grep <text>` or `justrust log --tail 200` prints the
   full saved output of the last run. `justrust show` explains where the time went.
 - Prefer `justrust check` to find compile errors before running `justrust test`.
+- Runs over 5s print a `justrust: slow: ...` line naming the dominant cost
+  (lock wait, busy machine, a slow test binary, rebuilt dependencies, or the
+  slowest crate and compiler phase).
 - Other cargo commands (`cargo fmt`, `cargo metadata`, `cargo tree`, `cargo add`)
   stay as plain `cargo`.
+

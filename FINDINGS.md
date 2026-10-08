@@ -64,6 +64,20 @@ waited on full test or build pipelines just to learn about a type error that
 - `target/` in Jcode Desktop is 466 GB.
 - Test execution is rarely the bottleneck: p50 0.5 s, p90 about 20 s per call.
 
+## 5. Observed: a dependency edit forces a full rebuild of the downstream crate
+
+Run `20261007-214608994-2456373`. A one-line test-body edit in
+`jcode-desktop-ui` took **46.3s**, against 9.5s for the same edit earlier.
+`jcode_base` (a path dependency in `~/jcode`, edited by another agent at the
+same time) had changed and rebuilt in 10.5s. Because its metadata changed,
+`jcode_desktop_ui (test)` reused no codegen units: `codegen_crate` took 23.6s,
+monomorphization 9.4s, and LLVM 11.9s, using 118s of CPU.
+
+Implication: parallel agents editing shared upstream crates turn cheap
+incremental builds into near-full rebuilds for everyone downstream. Candidates
+are isolated per-agent build dirs pinned to a stable upstream snapshot, and
+sharing or avoiding codegen when only an upstream body (not its API) changed.
+
 ## Implications for justrust
 
 1. Optimize compile and link for test binaries, not test execution.

@@ -617,6 +617,71 @@ impl Summary {
         }
     }
 
+    /// Seconds of wall time above which a run explains where the time went.
+    pub const SLOW_SECS: f64 = 5.0;
+
+    /// One-line explanation of the dominant cost in a slow run, or `None` when
+    /// the run was fast. Ordered by what an agent can act on.
+    pub fn slow_hint(&self) -> Option<String> {
+        if self.wall < Self::SLOW_SECS {
+            return None;
+        }
+        let pct = |v: f64| 100.0 * v / self.wall.max(1e-9);
+        let p = &self.phases;
+        let r = &self.resources;
+        if p.lock_wait > 0.25 * self.wall {
+            return Some(format!(
+                "{:.0}% waiting for another cargo to release the build directory",
+                pct(p.lock_wait)
+            ));
+        }
+        if r.avg_other_cores > 0.5 * self.ncpu as f64 && r.max_foreign_rustc > 0 {
+            return Some(format!(
+                "machine was busy: other builds used {:.0} of {} cores ({} other rustc processes)",
+                r.avg_other_cores, self.ncpu, r.max_foreign_rustc
+            ));
+        }
+        if p.test_run > 0.4 * self.wall {
+            let slowest = self
+                .tests
+                .binaries
+                .iter()
+                .max_by(|a, b| a.wall.total_cmp(&b.wall));
+            return Some(match slowest {
+                Some(b) => format!(
+                    "{:.0}% running tests, mostly {} ({:.1}s)",
+                    pct(p.test_run),
+                    b.name,
+                    b.wall
+                ),
+                None => format!("{:.0}% running tests", pct(p.test_run)),
+            });
+        }
+        if self.units.dependencies + self.units.build_scripts >= 5 {
+            return Some(format!(
+                "rebuilt {} dependencies and {} build scripts (flags, features, or target dir changed?)",
+                self.units.dependencies, self.units.build_scripts
+            ));
+        }
+        let u = self.top_units.first()?;
+        let mut s = format!("{} took {:.1}s", u.name, u.wall_share);
+        if let Some(sp) = &u.split {
+            let parts = [
+                ("type-checking/macros", sp.frontend),
+                ("codegen", sp.codegen),
+                ("linking", sp.link),
+                ("incremental cache", sp.incremental),
+            ];
+            if let Some((label, secs)) = parts.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
+                s.push_str(&format!(", mostly {label} {secs:.1}s"));
+            }
+            if let Some(pass) = u.top_passes.first() {
+                s.push_str(&format!(" (top pass {} {:.1}s)", pass.name, pass.secs));
+            }
+        }
+        Some(s)
+    }
+
     /// Compact status block printed after agent-mode runs.
     pub fn agent_footer(&self, hidden: &crate::agent_output::Hidden) -> String {
         let mut out = String::from("\n");
@@ -673,6 +738,9 @@ impl Summary {
             timing.push_str(&format!(" ({})", parts.join(", ")));
         }
         out.push_str(&format!("justrust: {verdict} in {timing}\n"));
+        if let Some(why) = self.slow_hint() {
+            out.push_str(&format!("justrust: slow: {why}\n"));
+        }
         let mut notes = Vec::new();
         if hidden.warnings_hidden > 0 {
             notes.push(format!(
@@ -794,5 +862,56 @@ mod tests {
         assert!(is_compile_error(
             "error: cannot find value `x` in this scope"
         ));
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    fn slow(wall: f64) -> Summary {
+        Summary {
+            wall,
+            ncpu: 16,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fast_runs_have_no_hint() {
+        assert!(slow(1.0).slow_hint().is_none());
+    }
+
+    #[test]
+    fn lock_wait_dominates() {
+        let mut s = slow(10.0);
+        s.phases.lock_wait = 6.0;
+        assert!(s.slow_hint().unwrap().contains("waiting for another cargo"));
+    }
+
+    #[test]
+    fn names_the_slow_unit_and_phase() {
+        let mut s = slow(10.0);
+        s.top_units.push(UnitBreakdown {
+            name: "big (test)".into(),
+            wall_share: 9.0,
+            split: Some(Split {
+                frontend: 5.0,
+                codegen: 2.0,
+                link: 1.0,
+                incremental: 1.0,
+                other: 0.0,
+            }),
+            top_passes: vec![Pass {
+                name: "macro_expand_crate".into(),
+                secs: 2.4,
+                rss_end_mb: 0.0,
+            }],
+            ..Default::default()
+        });
+        let h = s.slow_hint().unwrap();
+        assert!(h.contains("big (test) took 9.0s"), "{h}");
+        assert!(h.contains("type-checking/macros 5.0s"), "{h}");
+        assert!(h.contains("macro_expand_crate"), "{h}");
     }
 }
