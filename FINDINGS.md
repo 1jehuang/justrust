@@ -642,3 +642,56 @@ does not saturate the cores; the CPU halves, which matters on this shared,
 usually loaded machine (section 7 measured 15s vs 10-12s at load 20+).
 Conservative: only a held slot with the exact key, and the joiner still runs
 cargo, so a file edited in between is still rebuilt correctly.
+
+### 8b. Embedded target paths in restored artifacts (2026-10-08, dep cache worker)
+
+Question: can a restored artifact behave differently from a fresh compile
+because it embeds the first producer's target dir?
+
+Evidence, scanning every cached output (2546 files, 1643 entries):
+- 41 of 2546 (15 rlib, 26 rmeta, 0 `.so`, 0 build-script executables) contain
+  a target-dir path at all. All 82 occurrences are the full path of an
+  `OUT_DIR` source file that the unit `include!`s (serde/serde_core
+  `private.rs`, thiserror, ref-cast, pulp `x86_64_asm.rs`, crunchy `lib.rs`,
+  mime_guess, aws-types `build_env.rs`, unicode-general-category, libsqlite3-sys
+  `bindgen.rs`). 0 occurrences are anything else (checked against each entry's
+  dep-info inputs).
+- Those file paths come from `SourceFile` names in rmeta and from panic
+  locations / line tables (`file!()`, `Location::caller`). Their content is in
+  the result key (dep-info inputs are content-hashed), so the restored code is
+  the same code. Only the *name* differs: a panic message or backtrace frame
+  inside, say, serde's generated `private.rs` names the other target dir. It
+  never reads that file at runtime. Desktop uses `debug = 0` for non-local
+  packages, but a test with `-C debuginfo=0/1/2` shows the same set (full file
+  paths only, never a bare dir).
+- What *would* change behavior: a dependency keeping `env!("OUT_DIR")` (or
+  another target path) as a runtime value, e.g. opening a generated file at
+  runtime. Then a restored artifact would read another build's directory,
+  which may have been deleted. None of the cached Desktop or justrust deps do
+  this, but nothing prevented it.
+- Tracked env with target paths: `OUT_DIR` (30 entries) and
+  `MIME_TYPES_GENERATED_PATH` (3). Both are normalized in the key, and the
+  above scan covers what they are compiled into.
+- `--remap-path-prefix` was considered and rejected: it changes the bytes of
+  every output and would have to be applied identically to uncached builds
+  (or every unit differs between cached and uncached builds), and it does not
+  remap `env!` values (verified: `env!("OUT_DIR")` stays absolute while
+  `file!()` is remapped), so it would not fix the dangerous case anyway.
+
+Fix (`target_refs_are_inputs` in `src/depcache.rs`): at store time, every
+occurrence of the target dir in a non-dep-info output must be immediately one
+of the unit's own input file paths (exact path, followed by a non-path byte).
+Otherwise the unit is not stored and always compiles normally.
+
+- Cold store into an empty cache with the guard (run
+  20261008-000652409-3638276, 159.9s at load ~30): 833 misses, 833 stored, 0
+  rejected, so the hit rate is unchanged on Desktop.
+- Guard cost: scanning all 927 MB of Desktop outputs takes 0.52s CPU in total
+  (release microbench), spread over the cold misses. Hits do no extra work.
+- Hit runs with the guarded cache (`JUSTRUST_DEPCACHE_DIR=<fresh cache>
+  bench/depcache-fresh.sh 3`): 44.3, 41.8, 30.8s (median 41.8s), 833/833
+  hits each, hit restore sum 1.9-2.6s, median 1.1-1.4 ms per hit (same as
+  8a). Runs 20261008-000941671-3672951, -001026422-3695394,
+  -001108803-3705552. Load average was 27-31 (vs 12-15 for the 26.1s
+  baseline), so wall times are contention-bound; the guard cannot affect hit
+  runs.

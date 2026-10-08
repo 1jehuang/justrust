@@ -38,9 +38,14 @@
 //!
 //! Size cap and LRU eviction live in `depcache_gc.rs` (`justrust cache`).
 //!
-//! Known difference from a real compile: paths embedded in cached binaries
-//! (debuginfo, `file!()` in `OUT_DIR`-generated code) name the target dir of
-//! the build that first produced them.
+//! Embedded target paths: a unit is only stored if every occurrence of the
+//! target dir in its outputs is the path of one of its own (content-hashed)
+//! input files, i.e. `OUT_DIR` sources pulled in with `include!`. Outputs that
+//! carry a target path as data (`env!("OUT_DIR")` read at runtime) are never
+//! cached. The remaining, accepted difference from a real compile: panic
+//! locations, debug line tables, and diagnostics in such `OUT_DIR` code name
+//! the target dir of the build that first produced them (same file content).
+//! Measured in FINDINGS.md section 8b.
 
 use crate::paths;
 use serde::{Deserialize, Serialize};
@@ -633,6 +638,20 @@ impl Plan {
             }
         }
 
+        // Never cache outputs that carry this target dir as data.
+        let input_paths: Vec<String> = entry
+            .inputs
+            .iter()
+            .map(|(p, _)| self.norm.denorm(p))
+            .filter(|p| p.starts_with(&self.norm.target))
+            .collect();
+        for name in files.iter().filter(|n| !n.ends_with(".d")) {
+            let bytes = std::fs::read(self.out_dir.join(name)).ok()?;
+            if !target_refs_are_inputs(&bytes, &self.norm.target, &input_paths) {
+                return None;
+            }
+        }
+
         let final_dir = self.root.join("o").join(&entry.out);
         if final_dir.exists() {
             touch(&final_dir.join("meta.json"));
@@ -689,6 +708,37 @@ impl Plan {
         }
         std::fs::write(dir.join("meta.json"), serde_json::to_vec(&out).ok()?).ok()
     }
+}
+
+/// True when every occurrence of the target dir in a compiled output is the
+/// start of one of the unit's own input files (an `OUT_DIR` file pulled in
+/// with `include!`). Those name a file whose content is part of the key, so
+/// a restored copy only differs in which target dir panic locations, debug
+/// line tables, and diagnostics name. Anything else (`env!("OUT_DIR")` kept
+/// as a runtime string, a proc macro embedding a target path) would make the
+/// restored artifact read another build's files, so the unit is not cached.
+fn target_refs_are_inputs(bytes: &[u8], target: &str, inputs: &[String]) -> bool {
+    let t = target.as_bytes();
+    let Some(&first) = t.first() else {
+        return true;
+    };
+    let mut i = 0;
+    while let Some(off) = bytes[i..].iter().position(|&b| b == first) {
+        let at = i + off;
+        let rest = &bytes[at..];
+        if rest.starts_with(t)
+            && !inputs.iter().any(|p| {
+                rest.starts_with(p.as_bytes())
+                    && !rest
+                        .get(p.len())
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || b"/._-+".contains(c))
+            })
+        {
+            return false;
+        }
+        i = at + 1;
+    }
+    true
 }
 
 /// Set a file's mtime to now: the LRU clock for eviction (`depcache_gc`).
@@ -878,6 +928,25 @@ mod tests {
         let (files, env) = parse_dep_info(d);
         assert_eq!(files, vec!["src/lib.rs", "/t/debug/build/x-2/out/gen x.rs"]);
         assert_eq!(env, vec!["CARGO_PKG_NAME", "FOO"]);
+    }
+
+    #[test]
+    fn target_paths_only_allowed_as_input_file_names() {
+        let inputs = vec!["/t/debug/build/x-1/out/gen.rs".to_string()];
+        let ok = b"\x00/t/debug/build/x-1/out/gen.rs\x01 and /home/src/lib.rs";
+        assert!(target_refs_are_inputs(ok, "/t", &inputs));
+        assert!(target_refs_are_inputs(
+            b"no paths /tmp/x",
+            "/t/debug-not",
+            &inputs
+        ));
+        // env!("OUT_DIR") as a value: the bare dir is not an input.
+        let bare = b"\x00/t/debug/build/x-1/out\x00";
+        assert!(!target_refs_are_inputs(bare, "/t", &inputs));
+        // A longer path that only shares the input's prefix.
+        let longer = b"/t/debug/build/x-1/out/gen.rs.bak";
+        assert!(!target_refs_are_inputs(longer, "/t", &inputs));
+        assert!(!target_refs_are_inputs(b"/t/debug/deps", "/t", &[]));
     }
 
     /// Store a fake compile from one target dir, restore into another, and
