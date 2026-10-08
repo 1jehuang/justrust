@@ -560,15 +560,17 @@ Medians: before 144.5s (test 85.3s), after 68.1s (test 9.8s), about 76s
 machine at start: 0-2, but the build column varies 45-82s for identical work,
 so the totals are noisy; the test-step drop is far outside the noise.
 
-Status: the gpui commit is pushed. The Desktop pin bump is NOT landed: the
-running Desktop host (pid 2174267, built on gpui 424044a) refuses a UI plugin
-built against another GPUI ("plugin GPUI revision differs from host"), so
-landing it breaks Ctrl+R hot reload for every agent until the host is
-restarted. The ready change is in
-~/.jcode/scratch/gpuitestapi/desktop-test-api.diff (also the "after" copy's
-Cargo.toml, Cargo.lock, crates/jcode-desktop-ui/Cargo.toml,
-crates/jcode-desktop-api/src/lib.rs). Land it together with a planned host
-restart.
+Status: landed in Desktop as d206de0 (2026-10-08). The running hosts were
+restarted onto gpui 1cfbc5d with Desktop's built-in `--restart-all-worker`
+(8 windows restored), and a Ctrl+R build-reload on the new host activated a
+fresh UI generation. Build and test now share every gpui unit (unit graph:
+961/961, 958 shared, the 3 differences are only the local crates' own test
+vs lib units). Workspace tests: 1731 of 1732 pass;
+`bundled_github_applet_renders_valid_documents` failed once under load and
+passes alone (also flaky under LLVM per the Cranelift section).
+
+Caveat: `test-api` pulls the optional `proptest` dependency into normal and
+release builds. It is compiled but not used at runtime.
 
 ## 10. Build slots follow-ups: refresh, GC, joining identical builds (2026-10-07, cow)
 
