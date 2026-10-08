@@ -813,8 +813,265 @@ pub fn acquire(args: &[OsString]) -> Option<Slot> {
     })
 }
 
+/// Default GC limits. Slots idle longer than this are removed.
+const GC_MAX_AGE_DAYS: f64 = 7.0;
+/// Default budget for the bytes slots do not share with the shared dir
+/// (btrfs exclusive). On the Desktop four slots used 0.3 to 8 GB each.
+const GC_MAX_GB: f64 = 40.0;
+/// Opportunistic GC runs at most this often per workspace.
+const GC_INTERVAL: Duration = Duration::from_secs(3600);
+
+/// Disk use of one slot: exclusive bytes (not shared with any other file)
+/// and total, from `btrfs filesystem du`, else apparent size from `du` for
+/// both (no sharing information off btrfs).
+fn slot_size(dir: &Path) -> Option<(u64, u64)> {
+    let out = Command::new("btrfs")
+        .args(["filesystem", "du", "-s", "--raw"])
+        .arg(dir)
+        .stderr(Stdio::null())
+        .output();
+    if let Ok(out) = out
+        && out.status.success()
+        && let Some(line) = String::from_utf8_lossy(&out.stdout).lines().last()
+    {
+        let f: Vec<u64> = line
+            .split_whitespace()
+            .take(2)
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        if let [total, excl] = f[..] {
+            return Some((excl, total));
+        }
+    }
+    let out = Command::new("du")
+        .arg("-sb")
+        .arg(dir)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let b: u64 = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    Some((b, b))
+}
+
+/// One slot as seen by GC.
+#[derive(Debug, Clone, PartialEq)]
+struct GcSlot {
+    n: usize,
+    idle_secs: f64,
+    exclusive: u64,
+    in_use: bool,
+}
+
+/// Which slots to remove: free slots idle past `max_age`, then free slots
+/// least recently used first until exclusive bytes fit `budget`. A slot in
+/// use is never chosen (it still counts toward the budget).
+fn gc_plan(slots: &[GcSlot], max_age_secs: f64, budget: u64) -> Vec<usize> {
+    let mut remove: Vec<usize> = slots
+        .iter()
+        .filter(|s| !s.in_use && s.idle_secs > max_age_secs)
+        .map(|s| s.n)
+        .collect();
+    let mut used: u64 = slots
+        .iter()
+        .filter(|s| !remove.contains(&s.n))
+        .map(|s| s.exclusive)
+        .sum();
+    // A slot used in the last hour is some agent's warm cache: over budget
+    // or not, leave it.
+    let mut lru: Vec<&GcSlot> = slots
+        .iter()
+        .filter(|s| !s.in_use && !remove.contains(&s.n) && s.idle_secs >= GC_INTERVAL.as_secs_f64())
+        .collect();
+    lru.sort_by(|a, b| b.idle_secs.total_cmp(&a.idle_secs));
+    for s in lru {
+        if used <= budget {
+            break;
+        }
+        used -= s.exclusive;
+        remove.push(s.n);
+    }
+    remove.sort_unstable();
+    remove
+}
+
+fn env_f64(k: &str, default: f64) -> f64 {
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Slot numbers present under `root` (dir or meta file).
+fn slot_numbers(root: &Path) -> Vec<usize> {
+    let mut v: Vec<usize> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.strip_suffix(".json").unwrap_or(&name).parse().ok()
+        })
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Remove a free slot. The slot's flock is held while its dir is renamed
+/// away and its meta deleted, so no agent can pick it half-removed; the
+/// slow delete of the renamed tree happens after.
+fn remove_slot(root: &Path, n: usize) -> bool {
+    let Some(lock) = try_lock(&root.join(format!("{n}.lock"))) else {
+        return false;
+    };
+    let trash = root.join(format!(".trash-{n}-{}", std::process::id()));
+    let dir = root.join(n.to_string());
+    let moved = !dir.exists() || std::fs::rename(&dir, &trash).is_ok();
+    if moved {
+        std::fs::remove_file(root.join(format!("{n}.json"))).ok();
+    }
+    drop(lock);
+    if trash.exists() {
+        std::fs::remove_dir_all(&trash).ok();
+    }
+    moved
+}
+
+/// Garbage-collect the slots under `root`. Returns the removed slot numbers
+/// and the exclusive bytes they held.
+pub fn gc(root: &Path) -> (Vec<usize>, u64) {
+    // Leftovers of an interrupted removal.
+    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        if e.file_name().to_string_lossy().starts_with(".trash-") {
+            std::fs::remove_dir_all(e.path()).ok();
+        }
+    }
+    let now = paths::now();
+    let ns = slot_numbers(root);
+    let sizes = slot_sizes(root, &ns);
+    let slots: Vec<GcSlot> = ns
+        .iter()
+        .zip(sizes)
+        .map(|(&n, size)| {
+            let in_use = try_lock(&root.join(format!("{n}.lock"))).is_none();
+            let meta = read_meta(&root.join(format!("{n}.json"))).unwrap_or_default();
+            let exclusive = size.map_or(0, |s| s.0);
+            GcSlot {
+                n,
+                idle_secs: (now - meta.last_used).max(0.0),
+                exclusive,
+                in_use,
+            }
+        })
+        .collect();
+    let max_age = env_f64("JUSTRUST_SLOTS_MAX_AGE_DAYS", GC_MAX_AGE_DAYS) * 86400.0;
+    let budget = (env_f64("JUSTRUST_SLOTS_MAX_GB", GC_MAX_GB) * 1e9) as u64;
+    let mut freed = 0;
+    let mut removed = Vec::new();
+    for n in gc_plan(&slots, max_age, budget) {
+        if remove_slot(root, n) {
+            freed += slots.iter().find(|s| s.n == n).map_or(0, |s| s.exclusive);
+            removed.push(n);
+        }
+    }
+    (removed, freed)
+}
+
+/// After a run: start a detached GC of this workspace's slots if none ran
+/// in the last hour. Never blocks or fails the build.
+pub fn maybe_gc_background(info: &SlotInfo) {
+    if std::env::var("JUSTRUST_SLOTS_GC").as_deref() == Ok("0") {
+        return;
+    }
+    let target = Path::new(&info.target_dir);
+    let root = match info.slot {
+        Some(_) => match target.parent() {
+            Some(p) => p.to_path_buf(),
+            None => return,
+        },
+        None => target.join("justrust-slots"),
+    };
+    if !gc_due(&root, SystemTime::now()) {
+        return;
+    }
+    // Claim the hour before spawning so concurrent runs start only one GC.
+    if std::fs::write(root.join(".gc-stamp"), b"").is_err() {
+        return;
+    }
+    let Ok(me) = std::env::current_exe() else {
+        return;
+    };
+    use std::os::unix::process::CommandExt;
+    let _ = Command::new(me)
+        .arg("slots")
+        .arg("--gc-root")
+        .arg(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+}
+
+fn gc_due(root: &Path, now: SystemTime) -> bool {
+    if !root.is_dir() {
+        return false;
+    }
+    match std::fs::metadata(root.join(".gc-stamp")).and_then(|m| m.modified()) {
+        Ok(t) => now.duration_since(t).is_ok_and(|d| d >= GC_INTERVAL),
+        Err(_) => true,
+    }
+}
+
+fn gb(b: u64) -> String {
+    format!("{:.1} GB", b as f64 / 1e9)
+}
+
+/// `slot_size` of several slots at once (each is a few seconds of btrfs
+/// metadata walking on a 170 GB slot; btrfs serializes them, so this mainly
+/// helps the `du` fallback). Results are cached in `.sizes.json` for listing.
+fn slot_sizes(root: &Path, ns: &[usize]) -> Vec<Option<(u64, u64)>> {
+    let sizes: Vec<Option<(u64, u64)>> = std::thread::scope(|s| {
+        let hs: Vec<_> = ns
+            .iter()
+            .map(|n| s.spawn(move || slot_size(&root.join(n.to_string()))))
+            .collect();
+        hs.into_iter().map(|h| h.join().ok().flatten()).collect()
+    });
+    let cache: SizeMap = ns
+        .iter()
+        .zip(&sizes)
+        .filter_map(|(n, s)| Some((n.to_string(), (*s)?)))
+        .collect();
+    if let Ok(b) = serde_json::to_vec(&(paths::now(), cache)) {
+        let _ = std::fs::write(root.join(".sizes.json"), b);
+    }
+    sizes
+}
+
+/// Per-slot `(exclusive, total)` bytes, keyed by slot number.
+type SizeMap = std::collections::BTreeMap<String, (u64, u64)>;
+
+/// Sizes from the last GC or listing, and when they were measured.
+fn cached_sizes(root: &Path) -> Option<(f64, SizeMap)> {
+    serde_json::from_slice(&std::fs::read(root.join(".sizes.json")).ok()?).ok()
+}
+
 /// `justrust slots`: list the slots of the current workspace, or remove them.
-pub fn command(clean: bool) -> anyhow::Result<()> {
+pub fn command(
+    clean: bool,
+    run_gc: bool,
+    du: bool,
+    gc_root: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    if let Some(root) = gc_root {
+        gc(&root);
+        return Ok(());
+    }
     let target = shared_target_dir(&[])
         .ok_or_else(|| anyhow::anyhow!("not in a cargo workspace (cargo metadata failed)"))?;
     let root = target.join("justrust-slots");
@@ -822,33 +1079,57 @@ pub fn command(clean: bool) -> anyhow::Result<()> {
         println!("no build slots under {}", target.display());
         return Ok(());
     }
+    if run_gc {
+        let (removed, freed) = gc(&root);
+        println!(
+            "gc: removed {} slot(s) {:?}, freed about {} exclusive",
+            removed.len(),
+            removed,
+            gb(freed)
+        );
+    }
     let mut n = 0;
-    for i in 0..64 {
+    let mut total_excl = 0;
+    let ns = slot_numbers(&root);
+    // Measuring is seconds per slot on btrfs: use the sizes the last GC
+    // recorded unless asked or there are none.
+    let cached = cached_sizes(&root).filter(|_| !du && !run_gc);
+    let sizes_age = cached.as_ref().map(|c| (paths::now() - c.0).max(0.0));
+    let sizes = if clean {
+        vec![None; ns.len()]
+    } else if let Some((_, c)) = &cached {
+        ns.iter().map(|n| c.get(&n.to_string()).copied()).collect()
+    } else {
+        slot_sizes(&root, &ns)
+    };
+    for (&i, size) in ns.iter().zip(sizes) {
         let dir = root.join(i.to_string());
         let meta_path = root.join(format!("{i}.json"));
-        if !dir.exists() && !meta_path.exists() {
-            continue;
-        }
         n += 1;
         let lock = try_lock(&root.join(format!("{i}.lock")));
         let in_use = lock.is_none();
         let meta = read_meta(&meta_path).unwrap_or_default();
         if clean {
-            if in_use {
+            drop(lock);
+            if remove_slot(&root, i) {
+                println!("slot {i}: removed");
+            } else {
                 println!("slot {i}: in use, kept");
-                continue;
             }
-            std::fs::remove_dir_all(&dir).ok();
-            std::fs::remove_file(&meta_path).ok();
-            println!("slot {i}: removed");
             continue;
         }
         let age = (paths::now() - meta.last_used).max(0.0);
+        total_excl += size.map_or(0, |s| s.0);
         println!(
-            "slot {i}: {}  owner {}  last used {} ago  seeded in {:.1}s  {}",
+            "slot {i}: {}  owner {}  last used {} ago  {}  seeded in {:.1}s  {}",
             if in_use { "IN USE" } else { "free  " },
             meta.owner,
             human_age(age),
+            size.map_or("size ?".to_owned(), |(e, t)| format!(
+                "{} exclusive of {}",
+                gb(e),
+                gb(t)
+            )),
             meta.seed_secs,
             dir.display()
         );
@@ -857,9 +1138,19 @@ pub fn command(clean: bool) -> anyhow::Result<()> {
         println!("no build slots under {}", target.display());
     } else if !clean {
         println!(
-            "slots share disk extents with {} until rebuilt (reflink copies). \
-             `justrust slots --clean` removes free slots.",
-            target.display()
+            "{} exclusive in total{}; the rest shares disk extents with {} (reflink copies).\n\
+             GC (hourly, after runs): free slots idle over {} days, then least recently used \
+             until exclusive use is under {} GB (JUSTRUST_SLOTS_MAX_AGE_DAYS, \
+             JUSTRUST_SLOTS_MAX_GB). `--gc` runs it now, `--du` re-measures sizes, \
+             `--clean` removes all free slots.",
+            gb(total_excl),
+            sizes_age.map_or(String::new(), |a| format!(
+                " (sizes measured {} ago)",
+                human_age(a)
+            )),
+            target.display(),
+            env_f64("JUSTRUST_SLOTS_MAX_AGE_DAYS", GC_MAX_AGE_DAYS),
+            env_f64("JUSTRUST_SLOTS_MAX_GB", GC_MAX_GB),
         );
     }
     Ok(())
@@ -991,6 +1282,74 @@ mod tests {
             mt(&slot.join("deps/liba-1.rlib"))
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn gc_plan_reaps_old_then_lru_over_budget() {
+        let h = 3600.0;
+        let s = |n, idle_h: f64, gb: u64, in_use| GcSlot {
+            n,
+            idle_secs: idle_h * h,
+            exclusive: gb * 1_000_000_000,
+            in_use,
+        };
+        let week = 7.0 * 24.0 * h;
+        let budget = 10_000_000_000;
+        // Old and free: removed. Old but in use: kept.
+        let slots = [
+            s(0, 200.0, 1, false),
+            s(1, 200.0, 1, true),
+            s(2, 1.5, 1, false),
+        ];
+        assert_eq!(gc_plan(&slots, week, budget), [0]);
+        // Over budget: least recently used free slots first, until it fits.
+        let slots = [
+            s(0, 5.0, 6, false),
+            s(1, 30.0, 4, false),
+            s(2, 2.0, 5, false),
+            s(3, 50.0, 3, true),
+        ];
+        // 18 GB > 10: drop slot 1 (30h idle) -> 14, then slot 0 (5h) -> 8.
+        assert_eq!(gc_plan(&slots, week, budget), [0, 1]);
+        // Slots used in the last hour are never reaped for budget.
+        let slots = [s(0, 0.2, 50, false), s(1, 0.5, 50, false)];
+        assert!(gc_plan(&slots, week, budget).is_empty());
+    }
+
+    #[test]
+    fn gc_removes_free_slots_and_keeps_locked_ones() {
+        let root = std::env::temp_dir().join(format!("justrust-gc-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let old = paths::now() - 30.0 * 86400.0;
+        for n in 0..3 {
+            std::fs::create_dir_all(root.join(format!("{n}/debug/deps"))).unwrap();
+            std::fs::write(root.join(format!("{n}/debug/deps/x")), b"x").unwrap();
+            let meta = SlotMeta {
+                owner: format!("s{n}"),
+                last_used: if n == 2 { paths::now() } else { old },
+                seeded: true,
+                ..Default::default()
+            };
+            std::fs::write(
+                root.join(format!("{n}.json")),
+                serde_json::to_vec(&meta).unwrap(),
+            )
+            .unwrap();
+        }
+        let held = try_lock(&root.join("1.lock")).unwrap();
+        let (removed, _) = gc(&root);
+        assert_eq!(removed, [0]);
+        assert!(!root.join("0").exists() && !root.join("0.json").exists());
+        assert!(root.join("1/debug/deps/x").exists());
+        assert!(root.join("2/debug/deps/x").exists());
+        drop(held);
+        assert_eq!(slot_numbers(&root), [1, 2]);
+        // Hourly gate.
+        assert!(gc_due(&root, SystemTime::now()));
+        std::fs::write(root.join(".gc-stamp"), b"").unwrap();
+        assert!(!gc_due(&root, SystemTime::now()));
+        assert!(gc_due(&root, SystemTime::now() + GC_INTERVAL));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

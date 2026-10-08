@@ -105,6 +105,15 @@ enum Command {
         /// Remove every slot that is not in use.
         #[arg(long)]
         clean: bool,
+        /// Run the slot GC now (idle age and exclusive-size budget).
+        #[arg(long)]
+        gc: bool,
+        /// Re-measure slot sizes instead of using the last GC's numbers.
+        #[arg(long)]
+        du: bool,
+        /// Internal: background GC of the slots under this dir.
+        #[arg(long, hide = true)]
+        gc_root: Option<PathBuf>,
     },
     /// Install a `cargo` proxy so every build is recorded automatically.
     Install {
@@ -177,7 +186,12 @@ fn main() -> anyhow::Result<()> {
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
-        Command::Slots { clean } => slots::command(clean)?,
+        Command::Slots {
+            clean,
+            gc,
+            du,
+            gc_root,
+        } => slots::command(clean, gc, du, gc_root)?,
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,
         Command::History {
