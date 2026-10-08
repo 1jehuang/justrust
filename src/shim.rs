@@ -161,7 +161,16 @@ fn forward_stderr(
         }
         if passes_on && line.starts_with(b"time: {") {
             if let Some(p) = parse_pass(&line[6..]) {
-                passes.lock().unwrap().push(p);
+                // Some passes (drop_ast) are reported once per item, tens of
+                // thousands of times. Merge repeats into one entry.
+                let mut v = passes.lock().unwrap();
+                match v.iter_mut().find(|q| q.name == p.name) {
+                    Some(q) => {
+                        q.secs += p.secs;
+                        q.rss_end_mb = p.rss_end_mb;
+                    }
+                    None => v.push(p),
+                }
             }
             continue;
         }

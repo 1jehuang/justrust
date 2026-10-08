@@ -9,7 +9,7 @@
 //!
 //! It fails open: if recording cannot be set up, it execs cargo unchanged.
 
-use crate::{paths, procfs, summary};
+use crate::{agent_output, paths, procfs, summary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -165,12 +165,35 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
     std::process::exit(127);
 }
 
+/// How a recorded run presents its output.
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    /// Filter output for coding agents (see `agent_output`) and end with a
+    /// compact status block instead of the one-line footer.
+    pub agent: bool,
+    pub max_warnings: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            agent: false,
+            max_warnings: agent_output::DEFAULT_MAX_WARNINGS,
+        }
+    }
+}
+
 /// Entry point for `justrust cargo ...` and the `cargo` proxy.
 pub fn main(args: Vec<OsString>) -> ! {
+    run(args, Options::default())
+}
+
+/// Record `cargo <args>` and exit with cargo's exit code.
+pub fn run(args: Vec<OsString>, opts: Options) -> ! {
     if !should_record(&args) {
         exec_cargo(&args);
     }
-    match record(&args) {
+    match record(&args, opts) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             eprintln!("justrust: recording disabled for this run: {e:#}");
@@ -197,7 +220,7 @@ fn term_width(fd: i32) -> Option<u16> {
     }
 }
 
-fn record(args: &[OsString]) -> Result<i32> {
+fn record(args: &[OsString], opts: Options) -> Result<i32> {
     let real_cargo = paths::real_cargo()?;
     let shim = paths::ensure_rustc_shim()?;
     let me = std::env::current_exe()?.canonicalize()?;
@@ -260,7 +283,7 @@ fn record(args: &[OsString]) -> Result<i32> {
         .env("JUSTRUST_RUN_ID", &id)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if tty {
+    if tty && !opts.agent {
         if std::env::var_os("CARGO_TERM_COLOR").is_none() {
             cmd.env("CARGO_TERM_COLOR", "always");
         }
@@ -283,8 +306,20 @@ fn record(args: &[OsString]) -> Result<i32> {
     let lines: Arc<Mutex<Vec<OutputLine>>> = Arc::default();
     let out = child.stdout.take().context("stdout")?;
     let err = child.stderr.take().context("stderr")?;
-    let t_out = spawn_tee(out, std::io::stdout(), "o", lines.clone());
-    let t_err = spawn_tee(err, std::io::stderr(), "e", lines.clone());
+    let is_test = matches!(meta.subcommand.as_str(), "test" | "t" | "bench" | "nextest");
+    let filter = |stdout: bool| {
+        opts.agent.then(|| {
+            Mutex::new(agent_output::Filter::new(
+                stdout,
+                is_test,
+                opts.max_warnings,
+            ))
+        })
+    };
+    let f_out = Arc::new(filter(true));
+    let f_err = Arc::new(filter(false));
+    let t_out = spawn_tee(out, std::io::stdout(), "o", lines.clone(), f_out.clone());
+    let t_err = spawn_tee(err, std::io::stderr(), "e", lines.clone(), f_err.clone());
 
     let done: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
     let sampler = {
@@ -306,7 +341,15 @@ fn record(args: &[OsString]) -> Result<i32> {
     let git = git.join().unwrap_or_default();
 
     let lines = std::mem::take(&mut *lines.lock().unwrap());
+    let mut hidden = agent_output::Hidden::default();
+    for f in [&f_out, &f_err] {
+        if let Some(f) = f.as_ref() {
+            hidden.merge(f.lock().unwrap().hidden);
+        }
+    }
     if let Err(e) = finish(
+        opts,
+        hidden,
         &run_dir,
         &meta,
         git,
@@ -325,6 +368,8 @@ fn record(args: &[OsString]) -> Result<i32> {
 
 #[allow(clippy::too_many_arguments)]
 fn finish(
+    opts: Options,
+    hidden: agent_output::Hidden,
     run_dir: &Path,
     meta: &Meta,
     git: GitInfo,
@@ -351,7 +396,9 @@ fn finish(
         &paths::index_file()?,
         &serde_json::to_string(&s.index_entry())?,
     )?;
-    if std::env::var_os("JUSTRUST_QUIET").is_none() {
+    if opts.agent {
+        eprint!("{}", s.agent_footer(&hidden));
+    } else if std::env::var_os("JUSTRUST_QUIET").is_none() {
         eprintln!("justrust: {}", s.one_line());
     }
     Ok(())
@@ -406,8 +453,12 @@ fn spawn_tee<R: Read + Send + 'static, W: Write + Send + 'static>(
     mut dst: W,
     stream: &'static str,
     lines: Arc<Mutex<Vec<OutputLine>>>,
+    filter: Arc<Option<Mutex<agent_output::Filter>>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        if let Some(filter) = filter.as_ref() {
+            return tee_filtered(src, dst, stream, &lines, filter);
+        }
         let mut buf = vec![0u8; 64 * 1024];
         let mut pending: Vec<u8> = Vec::new();
         loop {
@@ -430,6 +481,38 @@ fn spawn_tee<R: Read + Send + 'static, W: Write + Send + 'static>(
             push_line(&lines, paths::now(), stream, &pending);
         }
     })
+}
+
+/// Line-buffered tee that only forwards lines the agent filter keeps. Every
+/// line is still recorded.
+fn tee_filtered<R: Read, W: Write>(
+    src: R,
+    mut dst: W,
+    stream: &str,
+    lines: &Mutex<Vec<OutputLine>>,
+    filter: &Mutex<agent_output::Filter>,
+) {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(src);
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        match reader.read_until(b'\n', &mut raw) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+        let body = raw.strip_suffix(b"\n").unwrap_or(&raw);
+        let body = body.strip_suffix(b"\r").unwrap_or(body);
+        let text = strip_ansi(&String::from_utf8_lossy(body));
+        if filter.lock().unwrap().keep(&text) {
+            let _ = dst.write_all(text.as_bytes());
+            let _ = dst.write_all(b"\n");
+            let _ = dst.flush();
+        }
+        push_line(lines, paths::now(), stream, body);
+    }
 }
 
 fn push_line(lines: &Mutex<Vec<OutputLine>>, t: f64, stream: &str, raw: &[u8]) {

@@ -3,8 +3,10 @@
 //! One binary, three entry points chosen by the name it is run as:
 //! - `cargo` (via `justrust install`): records the build, then behaves like cargo.
 //! - `rustc` (the shim cargo uses during a recorded run): times each unit.
-//! - `justrust`: the CLI below.
+//! - `justrust`: the CLI below. `justrust check|test|build|clippy|run` is the
+//!   interface agents should use. It takes the same arguments as cargo.
 
+mod agent_output;
 mod history;
 mod install;
 mod paths;
@@ -18,20 +20,64 @@ use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+const AFTER_HELP: &str = "\
+Agents: use `justrust check`, `justrust test`, `justrust build`, `justrust clippy`,
+and `justrust run` instead of the matching cargo commands. They take exactly the
+same arguments as cargo, record a timing profile, and print compact output:
+errors and failing tests in full, the first few warnings, no progress noise,
+then a one-line verdict. The full output is always saved: `justrust log`.
+
+Examples:
+  justrust check -p my-crate
+  justrust test -p my-crate --lib some_module::
+  justrust test -p my-crate -- --nocapture
+  justrust log --grep warning      full output of the last run
+  justrust show                    where the time went in the last run";
+
 #[derive(Parser)]
-#[command(name = "justrust", version, about)]
+#[command(name = "justrust", version, about, after_help = AFTER_HELP)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 }
 
+/// Arguments passed through to cargo unchanged.
+#[derive(clap::Args)]
+struct Passthrough {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<OsString>,
+}
+
 #[derive(Subcommand)]
 enum Command {
-    /// Run cargo and record a full timing and resource profile of the build.
-    #[command(disable_help_flag = true, allow_hyphen_values = true)]
-    Cargo {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<OsString>,
+    /// `cargo check` with compact agent output and a timing profile.
+    #[command(disable_help_flag = true)]
+    Check(Passthrough),
+    /// `cargo test` with compact agent output and a timing profile.
+    #[command(disable_help_flag = true)]
+    Test(Passthrough),
+    /// `cargo build` with compact agent output and a timing profile.
+    #[command(disable_help_flag = true)]
+    Build(Passthrough),
+    /// `cargo clippy` with compact agent output and a timing profile.
+    #[command(disable_help_flag = true)]
+    Clippy(Passthrough),
+    /// `cargo run` with compact agent output and a timing profile.
+    #[command(disable_help_flag = true)]
+    Run(Passthrough),
+    /// Run any cargo command, recording it with normal cargo output.
+    #[command(disable_help_flag = true)]
+    Cargo(Passthrough),
+    /// Print the full saved output of a run (default: the latest).
+    Log {
+        /// Run id or prefix, or "last".
+        id: Option<String>,
+        /// Only lines containing this text.
+        #[arg(long)]
+        grep: Option<String>,
+        /// Only the last N lines.
+        #[arg(long)]
+        tail: Option<usize>,
     },
     /// List recorded runs.
     Runs {
@@ -82,6 +128,22 @@ enum Command {
     },
 }
 
+fn agent(sub: &str, args: Vec<OsString>) -> ! {
+    let mut full = vec![OsString::from(sub)];
+    full.extend(args);
+    let max_warnings = std::env::var("JUSTRUST_MAX_WARNINGS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(agent_output::DEFAULT_MAX_WARNINGS);
+    record::run(
+        full,
+        record::Options {
+            agent: true,
+            max_warnings,
+        },
+    )
+}
+
 fn main() -> anyhow::Result<()> {
     let argv0 = std::env::args_os().next().unwrap_or_default();
     let name = std::path::Path::new(&argv0)
@@ -97,7 +159,13 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Cargo { args } => record::main(args),
+        Command::Check(p) => agent("check", p.args),
+        Command::Test(p) => agent("test", p.args),
+        Command::Build(p) => agent("build", p.args),
+        Command::Clippy(p) => agent("clippy", p.args),
+        Command::Run(p) => agent("run", p.args),
+        Command::Cargo(p) => record::main(p.args),
+        Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
         Command::Install { dir } => install::install(dir)?,

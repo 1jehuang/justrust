@@ -103,6 +103,28 @@ fn resolve_id(id: Option<&str>) -> Result<String> {
     }
 }
 
+/// Print the full saved output of a run, optionally only lines matching `grep`.
+pub fn log(id: Option<&str>, grep: Option<&str>, tail: Option<usize>) -> Result<()> {
+    let id = resolve_id(id)?;
+    let path = paths::runs_dir()?.join(&id).join("output.jsonl");
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("run {id} has no saved output"))?;
+    let mut lines: Vec<String> = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str::<crate::record::OutputLine>(l).ok())
+        .map(|l| l.l)
+        .filter(|l| grep.is_none_or(|g| l.contains(g)))
+        .collect();
+    if let Some(n) = tail {
+        let skip = lines.len().saturating_sub(n);
+        lines.drain(..skip);
+    }
+    for l in lines {
+        println!("{l}");
+    }
+    Ok(())
+}
+
 pub fn show(id: Option<&str>, json: bool) -> Result<()> {
     let id = resolve_id(id)?;
     let dir = paths::runs_dir()?.join(&id);

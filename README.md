@@ -9,14 +9,45 @@ Every optimization has to be justified by measurements from real agent sessions.
 
 ## Status
 
-Early. Two tools exist so far:
+Early. What exists so far:
 
+- **Agent interface.** `justrust check|test|build|clippy|run` takes cargo's
+  arguments and prints only what an agent needs to act on, followed by a
+  one-line verdict. Every run is recorded.
 - **Build recorder.** Every recorded `cargo` invocation gets a full profile of
   where its time went: cargo startup, lock waits, each rustc unit (with
   frontend, codegen, link, and incremental-cache split), build gaps, test
   execution, CPU, memory, and machine-wide stalls.
 - **`justrust history`** mines past [Jcode](https://github.com/1jehuang/jcode)
   sessions for cargo calls. See [FINDINGS.md](FINDINGS.md).
+
+## Agent interface
+
+```sh
+justrust check -p my-crate
+justrust test -p my-crate --lib some_module::
+justrust log --grep warning     # full saved output of the last run
+justrust show                   # where the time went
+```
+
+Output keeps errors and failing tests in full and the first 3 warnings
+(`JUSTRUST_MAX_WARNINGS`). It drops `Compiling`/`Running`/`Finished` lines and
+passing `... ok` test lines, then ends with a verdict:
+
+```text
+justrust: ok: 3 tests passed in 0.5s
+justrust: 16 more warnings hidden, 1664 tests filtered out
+justrust: full log `justrust log 20261007-202534713-2006572`, timing `justrust show 20261007-202534713-2006572`
+```
+
+```text
+justrust: FAILED: 1 of 3 tests failed in 0.1s (0.1s compiling)
+justrust: FAILED to compile (1 error) in 0.0s
+```
+
+To make agents use it by default, add the snippet in
+[docs/AGENTS-snippet.md](docs/AGENTS-snippet.md) to your global or project
+`AGENTS.md`.
 
 ## Recording builds
 

@@ -86,12 +86,24 @@ pub fn find_on_path(name: &str, skip: &Path) -> Option<PathBuf> {
         if meta.permissions().mode() & 0o111 == 0 {
             continue;
         }
-        if candidate.canonicalize().ok().as_deref() == Some(skip) {
+        if candidate.canonicalize().ok().as_deref() == Some(skip) || is_justrust(&candidate) {
             continue;
         }
         return Some(candidate);
     }
     None
+}
+
+/// True if `path` resolves to a justrust binary (for example the `cargo` proxy
+/// installed by `justrust install`), so it is never mistaken for the real tool.
+pub fn is_justrust(path: &Path) -> bool {
+    path.canonicalize()
+        .ok()
+        .and_then(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with("justrust"))
+        })
+        .unwrap_or(false)
 }
 
 pub fn now() -> f64 {

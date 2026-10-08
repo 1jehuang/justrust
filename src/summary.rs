@@ -614,6 +614,91 @@ impl Summary {
         }
     }
 
+    /// Compact status block printed after agent-mode runs.
+    pub fn agent_footer(&self, hidden: &crate::agent_output::Hidden) -> String {
+        let mut out = String::from("\n");
+        let verdict = if self.diagnostics.compile_failed {
+            format!(
+                "FAILED to compile ({} error{})",
+                self.diagnostics.compile_errors,
+                if self.diagnostics.compile_errors == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            )
+        } else if self.tests.failed > 0 {
+            format!(
+                "FAILED: {} of {} tests failed",
+                self.tests.failed,
+                self.tests.passed + self.tests.failed
+            )
+        } else if self.exit != 0 {
+            format!("FAILED (exit {})", self.exit)
+        } else if !self.tests.binaries.is_empty() {
+            let mut v = format!(
+                "ok: {} test{} passed",
+                self.tests.passed,
+                if self.tests.passed == 1 { "" } else { "s" }
+            );
+            if self.tests.passed == 0 && self.tests.filtered_out > 0 {
+                v = "ok, but 0 tests matched the filter".to_owned();
+            }
+            v
+        } else {
+            "ok".to_owned()
+        };
+        let mut timing = format!("{:.1}s", self.wall);
+        let mut parts = Vec::new();
+        if self.phases.lock_wait >= 0.5 {
+            parts.push(format!(
+                "{:.1}s waiting for another build",
+                self.phases.lock_wait
+            ));
+        }
+        if self.phases.compile >= 0.05 {
+            let mut c = format!("{:.1}s compiling", self.phases.compile);
+            if let Some(u) = self.top_units.first().filter(|u| u.wall_share >= 1.0) {
+                c.push_str(&format!(", mostly {}", u.name));
+            }
+            parts.push(c);
+        }
+        if self.phases.test_run >= 0.05 {
+            parts.push(format!("{:.1}s running tests", self.phases.test_run));
+        }
+        if !parts.is_empty() {
+            timing.push_str(&format!(" ({})", parts.join(", ")));
+        }
+        out.push_str(&format!("justrust: {verdict} in {timing}\n"));
+        let mut notes = Vec::new();
+        if hidden.warnings_hidden > 0 {
+            notes.push(format!(
+                "{} more warning{} hidden",
+                hidden.warnings_hidden,
+                if hidden.warnings_hidden == 1 { "" } else { "s" }
+            ));
+        }
+        if self.tests.filtered_out > 0 && self.tests.passed + self.tests.failed > 0 {
+            notes.push(format!(
+                "{} test{} filtered out",
+                self.tests.filtered_out,
+                if self.tests.filtered_out == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        if !notes.is_empty() {
+            out.push_str(&format!("justrust: {}\n", notes.join(", ")));
+        }
+        out.push_str(&format!(
+            "justrust: full log `justrust log {}`, timing `justrust show {}`\n",
+            self.id, self.id
+        ));
+        out
+    }
+
     /// One-line footer printed after every recorded run.
     pub fn one_line(&self) -> String {
         let p = &self.phases;
