@@ -240,7 +240,7 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         );
         let _ = writeln!(
             o,
-            "\n  {:<34} {:>7} {:>7} {:>7} {:>7} {:>8}  SPLIT (frontend/codegen/link/incr)",
+            "\n  {:<34} {:>7} {:>7} {:>7} {:>7} {:>8}  SPLIT (frontend/codegen/link/incr/other)",
             "UNIT", "SHARE", "WALL", "CPU", "RMETA", "PEAK MB"
         );
         for t in s
@@ -253,8 +253,8 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
                 || "-".to_owned(),
                 |sp| {
                     format!(
-                        "{:.1} / {:.1} / {:.1} / {:.1}",
-                        sp.frontend, sp.codegen, sp.link, sp.incremental
+                        "{:.2} / {:.2} / {:.2} / {:.2} / {:.2}",
+                        sp.frontend, sp.codegen, sp.link, sp.incremental, sp.other
                     )
                 },
             );

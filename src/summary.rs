@@ -197,9 +197,10 @@ pub fn split_passes(passes: &[Pass]) -> Option<Split> {
             matches!(
                 p.name.as_str(),
                 "incr_comp_prepare_session_directory"
+                    // Wraps incr_comp_persist_dep_graph and
+                    // incr_comp_persist_result_cache, so those are not added.
+                    | "serialize_dep_graph"
                     | "incr_comp_garbage_collect_session_directories"
-                    | "incr_comp_persist_dep_graph"
-                    | "incr_comp_persist_result_cache"
                     | "incr_comp_finalize_session_directory"
                     | "load_dep_graph"
                     | "serialize_work_products"
@@ -222,6 +223,8 @@ pub fn split_passes(passes: &[Pass]) -> Option<Split> {
         "privacy_checking_modules",
         "misc_checking_3",
         "generate_crate_metadata",
+        "drop_ast",
+        "maybe_building_test_harness",
     ];
     let frontend: f64 = frontend_parts.iter().map(|n| get(n)).sum();
     let other = (total - frontend - codegen - link - incremental).max(0.0);
@@ -759,7 +762,8 @@ mod tests {
             p("finish_ongoing_codegen", 1.0),
             p("run_linker", 0.9),
             p("link", 1.0),
-            p("incr_comp_persist_dep_graph", 0.5),
+            p("serialize_dep_graph", 0.5),
+            p("incr_comp_persist_dep_graph", 0.3),
             p("total", 9.0),
         ];
         let s = split_passes(&passes).unwrap();
