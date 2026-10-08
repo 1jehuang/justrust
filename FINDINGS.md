@@ -697,3 +697,134 @@ Otherwise the unit is not stored and always compiles normally.
   -001108803-3705552. Load average was 27-31 (vs 12-15 for the 26.1s
   baseline), so wall times are contention-bound; the guard cannot affect hit
   runs.
+
+## 11. Splitting jcode-desktop-ui, part 2: leaf crates and the view cycle (2026-10-08, cricket)
+
+Follows the harness pilot above. Desktop commits, each verified separately
+(`justrust test --workspace` 1746 passed / 13 ignored every time, `justrust
+check --workspace --all-targets`, offline screenshot, Ctrl+R on the running
+host activated a new UI generation, release-desktop.py MANIFESTS updated):
+
+- 51adb8d: new `crates/jcode-desktop-model` (diff_model + its tool-result
+  parser, diff, learning, todoist, pdf_render: 6.1k lines, 160 tests, no
+  GPUI). `accounts` (1.2k) joins jcode-desktop-harness. `updates` stays in
+  the UI: its Linux path uses jcode-desktop-api's LaunchMode, and the api
+  crate depends on gpui, so moving it would put GPUI in the harness crate.
+- 12f4118: breaks the panel <-> workspace cycle (below). No crate change.
+- c3fd05c: AGENTS.md tells agents to test the smallest crate containing the
+  change and records the "panel/input must not use workspace" rule.
+- 3d6e312: new `crates/jcode-desktop-ui-core` (theme + palettes, config,
+  render_stats, text_selection, prompt_background, scrollbar, image_cache,
+  animation_clock, transition, pulse_text: 6.1k lines, 70 tests). Test-mode
+  `cfg(test)` behavior (config persistence stubs, user-config bypass, fixed
+  animation epoch, theme lock, render counters) moved behind a
+  `test-support` feature the UI enables only from dev-dependencies, the same
+  pattern as the harness crate. GPUI via `gpui.workspace = true`, so it
+  shares the test-api GPUI from section 9.
+
+jcode-desktop-ui is now 121.9k lines (from 142.5k before the pilot).
+
+### One-line edit benchmark (median of 3, `let _probe = N;` in a test fn)
+
+| edit in | before: `-p jcode-desktop-ui --lib -- <mod>` | after: `-p <new crate> --lib -- <mod>` |
+|---|---|---|
+| diff_model.rs | 8.60s compile / 9.2s wall (8.11, 8.60, 8.70; others ~2 cores) | 0.65s / 1.1s (0.57, 0.65, 0.74; others 5-10 cores) |
+| theme.rs | 8.01s / 8.5s (9.49, 8.01, 7.83; others ~2 cores) | 1.49s / 2.1s (1.10, 1.52, 1.49; others 6-12 cores, 2-15 other rustc) |
+| accounts.rs | (UI, same ~8s class) | 1.02s / 1.4s (1.02, 1.00, 1.03; quiet, others ~2 cores) |
+| fps_counter.rs (stays in UI) | 8.0s (hibiscus, quiet) | 8.36s / 8.9s (8.25, 8.61, 8.36; others 2-5 cores) |
+
+Run ids: diff before 20261007-230932200, -230940912, -230950204; diff after
+-232606302, -232607336, -232608528; theme before -235629590, -235639641,
+-235648217; theme after 20261008-001122633, -001124328, -001126488; accounts
+-235232963, -235234407, -235235782; fps_counter -235206178, -235214927,
+-235223983. A first run under heavy load (others 11-15 cores, 20-28 other
+rustc, load average ~25) measured 5.4-6.8s for accounts and 13-54s for
+fps_counter; those runs are discarded as contention.
+
+Reading: edits in an extracted crate, tested in that crate, are 6-13x
+faster to compile (0.6-1.5s vs ~8s). UI edits are unchanged within noise
+(8.0 -> 8.4s) even though the UI lost another 14% of its lines. The UI
+crate's per-edit cost is dominated by frontend + codegen of the crate as a
+whole, not by the extracted leaves. ui-core costs more than model (1.5 vs
+0.65s) because it is GPUI code, with gpui generics to monomorphize.
+
+### The panel <-> workspace cycle, concretely
+
+Module-graph SCC over the 70 top-level UI modules (each module with its
+`#[path]` children; edges are `crate::<module>` references outside
+`#[cfg(test)]` items). Before 12f4118, one SCC held 86.1k lines: workspace
+(40.6k), panel (36.5k), input (6.4k), applet_runtime, applet_view,
+applet_surface. Inside it the forward edges are large (workspace uses
+panel 34x and input 10x; panel uses input and the applet modules). The
+back-edges were few and small (~20 call sites):
+
+| back-edge | items | fix |
+|---|---|---|
+| panel -> workspace | actions OpenResume, OpenAppletShowcase, ToggleOnboardingSimulator, OpenChangelog, ClosePanel, PublishDesktop, OpenAccounts, change_review::{Open,Close}ChangeReview | moved to new leaf `ui_actions.rs`, names unchanged (`actions!(workspace, ...)` keeps the namespace), re-exported from workspace |
+| panel, input -> workspace | `resume::is_resume_command` | moved to `commands` |
+| panel -> workspace | `restart::spawn_worker` | new leaf `restart_spawn.rs` (spawner, detach, flags) |
+| panel, input -> workspace (test) | `panel_cache_tests::record_render` | `render_stats::test_renders` |
+| input -> panel | `shortcuts::background_tool_bindings` + its 3 actions | `ui_actions` |
+| input -> panel | `pretty_provider_name` (pure string fn) | `accounts` (harness crate) |
+| applet_runtime -> workspace | `applets::SHOWCASE_ID` | const moved into applet_runtime |
+
+After: no SCC contains workspace, panel or input. The only remaining
+cycles are theme <-> config (now inside ui-core) and markdown <-> diff_view
+<-> html_preview <-> diff_block (5.6k, rendering, one call site each way).
+Test code still uses `Workspace::for_test` from panel tests (69 sites);
+that is fine within one crate but must become a test-support helper when
+panel moves out.
+
+### Plan for the feature-crate split (not done: needs its own session)
+
+The big lever is still moving the most-edited view code out of the UI
+crate. Churn over two weeks: voice files 50 and login/account/usage files 67
+of 631 .rs touches in ui/src. Sizes (non-test): voice 7.8k lines in 11
+files, login/accounts/usage 9.1k in 11 files. The blocker is no longer the
+module cycle but Rust's crate rules:
+
+1. Almost all of that code is `impl Panel { ... }` or `impl Workspace
+   { ... }` blocks in `#[path]` child files (panel_voice*.rs, panel_login*.rs,
+   panel_usage.rs; workspace_voice.rs, workspace_global_voice*.rs,
+   workspace_account_sign_in.rs, sidebar_account*.rs). Inherent impls cannot
+   live in another crate, and they read private fields freely (panel_voice.rs
+   touches 41 distinct `self.` fields, workspace_account_sign_in.rs 47).
+2. So a feature crate must own its state and views: e.g. `VoiceState` (the
+   Panel's voice fields) with methods taking `&mut VoiceState` plus a small
+   trait the host implements for what it needs from the panel (bridge send,
+   session id, notify). Panel keeps a `voice: VoiceState` field and forwards.
+   Same for `AccountSignIn` on the workspace side.
+3. Order that keeps every step shippable:
+   a. Leaves first, no Panel/Workspace involvement: global_voice_input,
+      global_voice_overlay, global_voice_session, panel_voice_tag
+      (1.9k) and login_input, panel_login_catalog, panel_login_status (1.1k)
+      move into `jcode-desktop-voice` / `jcode-desktop-accounts-ui` crates
+      depending on ui-core and harness. Mechanical, like ui-core.
+   b. Extract the voice field group from Panel into `VoiceState` inside the
+      UI crate (pure refactor, tests unchanged), then move it and
+      panel_voice*.rs into the voice crate behind a `VoiceHost` trait.
+   c. Repeat for login (panel_login*.rs) and workspace_account_sign_in.
+   d. Before moving panel itself, turn `Workspace::for_test` uses in panel
+      tests into a test-support constructor or move those tests to the UI
+      crate's integration layer.
+4. Expected payoff: per-edit compile for voice/login work drops from ~8s to
+   the ~1.5s class (the ui-core number for GPUI code of that size), for
+   ~19% of UI churn. UI-only edits stay ~8s until panel/workspace
+   themselves shrink.
+5. Hot reload: every new crate is an rlib linked into the UI cdylib, so the
+   host/UI ABI is unaffected. Globals keyed by TypeId (Sounds, Runtime,
+   StatusAccounts, ...) stay in one crate instance per generation, so moving
+   them is safe as long as the host never holds one.
+
+Process notes: the shared tree had another agent's uncommitted gpui rev bump
+twice during this work. Ctrl+R then fails with "plugin GPUI revision differs
+from host" until the host restarts. Commits were staged by writing HEAD
+plus only my hunks into the index (`git hash-object` + `update-index`) so
+the other agent's in-flight Cargo.toml/Cargo.lock edits stayed out. The
+UI test suite has two pre-existing flaky tests
+(`workspace::tests::the_hint_chip_uses_only_spare_tab_space`,
+`applet_runtime::tests::bundled_github_applet_renders_valid_documents`),
+about 1 failure in 5 full UI runs, reproduced on a clean d206de0 worktree.
+The offline screenshot sometimes captures the 3s startup beta toast
+(same on d206de0 and after, 1 of 2 runs each); that is screenshot timing,
+not a layout change.
