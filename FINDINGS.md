@@ -390,3 +390,75 @@ for cross-crate test helpers, inject UI-only constants through a setter):
 4. Cheapest per-edit win without any split: run the narrow test crate. A
    `justrust test -p jcode-desktop-ui -- fps_counter` still builds a 1574-test
    binary. justrust's waste line already says so.
+
+## 8. Shared dependency cache (depcache, 2026-10-07, mushroom)
+
+Goal: fresh target dirs, scratch checkouts, and build slots stop recompiling
+the same registry/git dependencies. Code: `src/depcache.rs`, hooked into the
+shim (`src/shim.rs`). On by default for non-local units, `JUSTRUST_DEPCACHE=0`
+disables it. Store: `~/.justrust/cache/depcache/` (override with
+`JUSTRUST_DEPCACHE_DIR`).
+
+### sccache does not work across target dirs
+
+sccache 0.18 with `RUSTC_WRAPPER=sccache`, `cargo check` of justrust into two
+fresh target dirs: **0 hits / 86 misses** (also 0 with `SCCACHE_BASEDIRS`
+listing both target dirs). Its hash includes the absolute `-L dependency=`,
+`OUT_DIR`, and `CARGO_TARGET_DIR`, which differ per target dir. Rejected.
+
+### Design
+
+- Key, two levels: base key = rustc `-vV` + args with `<target>/<profile>`
+  replaced by a placeholder + content hash of every `--extern` file (memoized
+  in an xattr by inode/size/mtime) + linker content + native lib dirs inside the
+  target + `CARGO_*`/`RUSTC_*`/`OUT_DIR` env. Result key = base + content of
+  every dep-info source (including `OUT_DIR` generated files) + every
+  `env-dep` value.
+- Hit: reflink the outputs into `--out-dir`, rewrite `.d` paths, replay rustc's
+  stderr (artifact notifications keep pipelining working), exit 0. Miss: compile
+  normally, then store only if rustc exited 0.
+- Units with `-C incremental` (local crates), `--emit` paths, `-o`, or
+  `--print` are never cached. Any cache error compiles normally.
+
+### Measurements (jcode-desktop, `justrust check -p jcode-desktop-ui`, fresh CARGO_TARGET_DIR)
+
+| case | run id | wall | depcache |
+|---|---|---|---|
+| cache off | 20261007-231843110-3108683 | 181.7s | off |
+| cold, empty cache | 20261007-232144859-3139425 | 128.3s | 0 hit / 833 miss |
+| second fresh target dir | 20261007-232353322-3168951 | **35.8s** | 833 hit / 0 miss |
+| scratch checkout (pincheck), cache on | 20261007-232541361-3194212 | **29.2s** | 795 hit / 30 miss |
+| same checkout, cache off | 20261007-232610551-3208355 | 118.1s | off |
+
+- The machine was busy throughout (load 7 to 28, up to 38 other rustc during
+  the cold runs), so the off/cold numbers are noisy; the off vs cold1 gap is
+  contention, not the cache. The hit runs are dominated by the 49-51 local
+  crates (jcode_base 9.0s, desktop-ui 3.9s, jcode_protocol 4.3s): 833 hits took
+  2.4s of rustc wall in total, max 0.16s (aws_sdk_bedrock), versus ~1129s of
+  original rustc time.
+- justrust itself: deps-only cold check 5.1s -> 1.4s (52/52 hits); `build`
+  10.5s -> 4.3s, and the resulting binary and `justrust test` work.
+- Store and miss overhead: hashing and storing added nothing visible to the
+  cold run (it was faster than the cache-off run under lower contention).
+- Disk: 1.4 GB after the Desktop dependency set (check mode), 2.9 GB after the
+  pincheck checkout too (different features for 30 units plus its own path
+  crates are not cached; the growth is mostly rmeta for differently-featured
+  units). Reflinks on btrfs share extents with the target dirs. No eviction
+  yet.
+- Correctness: after a hit build, `JUSTRUST_DEPCACHE=0 cargo check` on the same
+  target dir is fresh (740 fresh, only the desktop-ui unit rebuilt for an
+  unrelated `.git/index` change), so restored artifacts do not dirty cargo.
+  `.d` files are byte-identical after path substitution. Restored rmeta are
+  identical to a fresh compile except for embedded absolute target paths
+  (240/762 rmeta mention `OUT_DIR` or target paths; the same 240 differ between
+  any two uncached target dirs, so this is not cache-induced).
+
+### Risks / follow-ups
+
+- Restored binaries embed the target-dir path of the build that produced them
+  (debuginfo, `include!(concat!(env!("OUT_DIR"), ...))` file names). Harmless
+  for check/test; panics and backtraces in deps may name another target dir.
+- No size cap or eviction yet (`rm -rf ~/.justrust/cache/depcache` is safe).
+- Build-script *execution* is not cached, only its compilation; cargo still
+  runs every build script in a fresh target dir (the 8.9s of gaps in the hit
+  run).
