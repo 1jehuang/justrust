@@ -1177,3 +1177,11 @@ plan in docs/toolchain.md and should track upstream RDR rather than
 duplicate it. Until then the levers that work today are the ones in 14 and
 15: fewer dependents per hot file (`justrust split`) and the threaded
 front-end for the rebuilds that remain.
+
+Real-project confirmation (jcode 04c7d2b04, scratch worktree, run
+20261009-011923788-1604530): a body-only edit (`&& 1 > 0` inside
+`can_prompt_for_external_auth`) rebuilt 16 dependent crates, every one with
+cargo reason "the dependency ... was rebuilt", 11.6s wall. The E0460 failure
+of a forced skip was reproduced only in the scratch workspace; forcing it on
+jcode would mean planting stale rmeta files in a target dir, which proves
+nothing more than the minimal case.
