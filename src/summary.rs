@@ -38,6 +38,9 @@ pub struct Summary {
     /// Which cargo locks the run waited on ("build directory", "package cache", ...).
     #[serde(default)]
     pub locks_waited: Vec<String>,
+    /// Machine-wide CPU priority scope the build ran in (see `sched`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sched: Option<crate::sched::SchedInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -650,6 +653,7 @@ pub fn build(
         all_units: units.len(),
         slot: meta.slot.clone(),
         locks_waited,
+        sched: None,
     }
 }
 
@@ -865,7 +869,14 @@ impl Summary {
             self.ncpu,
             r.avg_other_cores,
             if r.max_foreign_rustc > 0 {
-                format!(" ({} other rustc)", r.max_foreign_rustc)
+                format!(
+                    " ({} other rustc){}",
+                    r.max_foreign_rustc,
+                    self.sched
+                        .as_ref()
+                        .map(|s| format!(", priority weight 1000 -> {}", s.final_weight))
+                        .unwrap_or_default()
+                )
             } else {
                 String::new()
             }

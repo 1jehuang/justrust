@@ -17,6 +17,7 @@ mod paths;
 mod procfs;
 mod record;
 mod runs;
+mod sched;
 mod shim;
 mod slots;
 mod summary;

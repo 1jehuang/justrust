@@ -282,6 +282,8 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     std::fs::write(run_dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
 
     let git = std::thread::spawn(git_info);
+    // Before cargo starts, so it and everything it runs share the scope.
+    let scope = crate::sched::enter(&id);
 
     let mut cmd = Command::new(&real_cargo);
     cmd.args(cargo_args)
@@ -343,6 +345,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
 
     let (code, cpu_user, cpu_sys) = wait_child(pid);
     let end = paths::now();
+    let sched = scope.map(crate::sched::Scope::finish);
     CHILD_PID.store(0, Ordering::SeqCst);
     {
         let (lock, cv) = &*done;
@@ -364,6 +367,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     if let Err(e) = finish(
         opts,
         hidden,
+        sched,
         &run_dir,
         &meta,
         git,
@@ -388,6 +392,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
 fn finish(
     opts: Options,
     hidden: agent_output::Hidden,
+    sched: Option<crate::sched::SchedInfo>,
     run_dir: &Path,
     meta: &Meta,
     git: GitInfo,
@@ -406,9 +411,10 @@ fn finish(
         serde_json::to_vec_pretty(procs)?,
     )?;
     let units = summary::load_units(run_dir);
-    let s = summary::build(
+    let mut s = summary::build(
         meta, git, start, end, code, cpu_secs, lines, samples, procs, &units,
     );
+    s.sched = sched;
     std::fs::write(run_dir.join("summary.json"), serde_json::to_vec_pretty(&s)?)?;
     paths::append_line(
         &paths::index_file()?,
