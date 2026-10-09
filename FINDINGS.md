@@ -1097,3 +1097,56 @@ Takeaway: in this repo the cascade cost is dominated by small, widely used
 root files (config-types, build-support) and a build-script input, not by
 modules inside the giant crates. Splitting the giant crates still matters for
 their own incremental floor (section 14).
+
+## 16. Skipping downstream rebuilds after body-only edits: measured, not viable as a wrapper (2026-10-09)
+
+Question: can justrust skip rebuilding dependents when an upstream edit
+leaves the public interface unchanged, with a background full build as the
+correctness check?
+
+Size of the prize (~/jcode, 77 recorded runs with edits): 930s of 2199s wall
+(42%) was local units rebuilt only because a dependency rebuilt. Per crate,
+a cascade-only rebuild costs: jcode-base median 6.1s, jcode-app-core 4.1s,
+jcode-tui 3.1s, jcode-protocol 1.9s (check runs).
+
+What a wrapper can see. Scratch workspace `up -> down -> top`
+(`~/.jcode/scratch/rmeta-exp`), rustc 1.98.1, `cargo check`:
+
+| Edit in `up`                         | `up` rmeta bytes changed |
+|--------------------------------------|-------------------------:|
+| non-generic fn body                  | 32 (crate hash only)     |
+| private fn body                      | 32                       |
+| `#[inline]` fn body                  | 32                       |
+| generic fn body                      | 1106 (MIR is exported)   |
+| comment that shifts lines            | 1129 (spans)             |
+| pub field type                       | 34                       |
+
+The 32 bytes are the crate hash (SVH, `rustc -Z ls=root`), which covers
+private items too. So:
+
+1. A byte hash of the rmeta changes on every edit, and the SVH is not an
+   interface hash. A body-only edit and a pub field type change both differ
+   by just the SVH, so the wrapper cannot tell them apart from the outside.
+2. Skipping is not even mechanically possible: the downstream rmeta embeds
+   the upstream SVH. Keeping `down`'s old rmeta and compiling `top` against
+   the new `up` fails with E0460 ("found possibly newer version of crate `up`
+   which `down` depends on"). Rewriting SVHs would be required, and that is
+   exactly where upstream ran into ICEs and miscompilations: DefIds shift
+   when items are added, invalidating artifacts that were not rebuilt.
+3. rustc's own incremental cache already absorbs part of it: in the scratch
+   workspace a 9k-line dependent rechecks in 0.6s after an upstream body edit
+   vs 1.75s cold; in jcode a cascade recheck of jcode-tui is ~3s.
+
+Upstream status: this is the Rust project's "Relink, don't rebuild" (RDR)
+work (compiler-team MCP 790, project goal 2025h2, rust-lang/rust#143249 for
+comment-only changes). The 2025h2 goal was marked "will not complete"; it is
+listed again on the 2026 Fast Builds roadmap with a 5-10x target for
+body-only changes.
+
+Verdict: no-go as a justrust wrapper feature. A correct version needs a
+rustc change (an interface hash that excludes bodies, private items and
+spans, plus SVH-stable DefIds), which fits the vendored/forked toolchain
+plan in docs/toolchain.md and should track upstream RDR rather than
+duplicate it. Until then the levers that work today are the ones in 14 and
+15: fewer dependents per hot file (`justrust split`) and the threaded
+front-end for the rebuilds that remain.
