@@ -69,11 +69,26 @@ Each phase ships only after a measured win on the reference loop
 
 ## Infrastructure
 
-- Build host for rustc/LLVM (one full build is ~1 h on 16 threads; use a
-  bigger box for PGO/BOLT).
+justrust is one all-in-one solution: client, toolchain, and servers.
+
+- **Prebuilt artifact registry.** A cargo-like service that serves prebuilt
+  dependency artifacts (rlibs, rmeta, proc-macro dylibs, build-script
+  outputs) for popular crates and for our own projects, keyed exactly like
+  depcache (toolchain id, target, flags, features, source hash). Because we
+  ship the toolchain, keys match across every machine, so cold builds
+  download instead of compiling. Content-addressed, served over HTTP, local
+  depcache as the first tier.
+- **Remote compile service.** Server-grade CPUs (many cores, lots of RAM,
+  fast NVMe) running the same vendored toolchain, with warm incremental
+  state and the shared artifact cache. justrust decides per build whether
+  remote or local is faster, from measured cost: cold builds, full-crate
+  regenerations, and large test suites go remote, small incremental edits
+  stay local. Source sync is incremental (only changed files). Results are
+  pushed back to the cache so the next local build hits.
+- **Toolchain build farm.** Builds rustc/LLVM (one full build is ~1 h on 16
+  threads; PGO+BOLT needs more), the std variants, and the C sysroot.
 - Rebase cadence: follow nightly weekly, cut a justrust toolchain every 6
   weeks. CI runs the Jcode and Desktop test suites on every toolchain cut.
-- Artifact store: content-addressed, keyed like depcache, served over HTTP.
 
 ## Rules
 
