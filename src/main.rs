@@ -152,6 +152,10 @@ enum Command {
         /// Number of recommendations.
         #[arg(long, default_value_t = 8)]
         top: usize,
+        /// Replay these recorded run ids instead of this workspace's history
+        /// (for checking estimates against runs made in a scratch worktree).
+        #[arg(long, hide = true, num_args = 1..)]
+        runs: Vec<String>,
     },
     /// Analyze cargo invocations recorded in Jcode session history.
     History {
@@ -220,7 +224,7 @@ fn main() -> anyhow::Result<()> {
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
-        Command::Split { days, top } => split::command(days, top)?,
+        Command::Split { days, top, runs } => split::command(days, top, &runs)?,
         Command::Slots {
             clean,
             gc,

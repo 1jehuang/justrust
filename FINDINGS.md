@@ -1137,6 +1137,49 @@ three runs each:
   `jcode_base::storage::lock_test_env`, gated on jcode-base's `test-support`
   feature, so the new crate needs it as a dev-dependency feature.
 
+### 15b. Second real split (Desktop) and a calibrated saving model
+
+Split `jcode-desktop-ui-core::scrollbar` (481 lines) into
+`jcode-desktop-scrollbar` in a scratch worktree of jcode-desktop 400400d
+(sibling `jcode` symlink for the `../../../jcode` path deps). `check
+--workspace --all-targets` ok (one pre-existing `pulse_text` warning), the 4
+moved gpui tests pass. Same body-only edit, `check -p jcode-desktop-ui`, 3x:
+
+| | wall | rebuilt (cargo) |
+|---|---|---|
+| before (...144526866, ...144530399, ...144533461) | 3.0 / 2.9 / 3.2s | ui-core, voice, accounts-ui, ui |
+| after  (...144548605, ...144551673, ...144554725) | 2.6 / 2.9 / 2.7s | scrollbar, ui |
+
+Spared set predicted exactly again (ui-core, voice, accounts-ui). Measured
+saving ~0.3s/edit, i.e. not worth doing; the old report said ~3.5s/edit.
+
+Why the old estimate was 3-10x high: it replayed each historical run's own
+unit times. 2 of the 5 scrollbar runs were on a machine with 14 of 16 cores
+taken by other builds (60+ foreign rustc), where ui-core took 2.8-3.2s
+instead of ~0.5s, and test units (`ui_core (test)`) were counted as if a
+split would spare them.
+
+Model now: per package, the median over runs where the machine was quiet
+(other processes under a quarter of the cores), counting only lib/bin
+units of packages cargo marked dirty. Validation via the hidden
+`justrust split --runs <ids>` (replays given runs against the current
+checkout):
+
+| candidate | old estimate | new estimate | measured |
+|---|---:|---:|---:|
+| jcode-base::external_auth | ~12s/edit | 3.8s/edit | 4.1s/edit |
+| desktop ui-core::scrollbar | ~3.5s/edit | 0.5s/edit | 0.3s/edit |
+
+Also fixed: the root package's sources included every member crate under
+it (and `target-release/`), so `jcode-desktop` was listed as a user of
+anything any member used. Users are now exact on both splits (jcode:
+jcode, app-core, tui; Desktop: jcode-desktop-ui only).
+
+Remaining limits: the saving is still a per-package median, so a candidate
+seen in few quiet runs inherits whatever runs exist; and the moved share is
+by lines, which ignores that a small crate has fixed overhead (~0.1-0.2s
+per new crate in both splits).
+
 ## 16. Skipping downstream rebuilds after body-only edits: measured, not viable as a wrapper (2026-10-09)
 
 Question: can justrust skip rebuilding dependents when an upstream edit

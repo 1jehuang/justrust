@@ -39,10 +39,24 @@ use std::sync::OnceLock;
 /// Moving more than this share of a crate is not a split, it is a rename.
 const MAX_MOVE_SHARE: f64 = 0.35;
 
-pub fn command(days: f64, top: usize) -> Result<()> {
+pub fn command(days: f64, top: usize, run_ids: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let ws = Workspace::load(&cwd)?;
-    let runs = load_runs(&ws.root, days)?;
+    let runs = if run_ids.is_empty() {
+        load_runs(&ws.root, days)?
+    } else {
+        // Replay specific runs, for example ones made in a scratch worktree
+        // of this workspace. Cargo reports edited files relative to the
+        // workspace root, so they resolve against this checkout.
+        let dir = paths::runs_dir()?;
+        let mut v = Vec::new();
+        for id in run_ids {
+            let raw = std::fs::read(dir.join(id).join("summary.json"))
+                .with_context(|| format!("run {id} has no summary"))?;
+            v.push(serde_json::from_slice::<Summary>(&raw)?);
+        }
+        v
+    };
     print!("{}", report(&ws, &runs, days, top));
     Ok(())
 }
@@ -626,7 +640,9 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.path();
         let name = e.file_name();
         if p.is_dir() {
-            if name != "target" && !name.to_string_lossy().starts_with('.') {
+            let n = name.to_string_lossy();
+            // Build output (`target`, `target-release`, ...) and hidden dirs.
+            if !n.starts_with("target") && !n.starts_with('.') {
                 rust_files(&p, out);
             }
         } else if p.extension().is_some_and(|x| x == "rs") {
@@ -729,6 +745,8 @@ struct Edit {
     sites: Vec<Site>,
     /// Seconds per local package.
     secs: HashMap<String, f64>,
+    /// Other processes used under a quarter of the machine during the run.
+    quiet: bool,
 }
 
 impl Edit {
@@ -792,12 +810,24 @@ fn to_edits(ws: &Workspace, graphs: &HashMap<String, ModuleGraph>, runs: &[Summa
             continue;
         }
         let mut secs = HashMap::new();
-        for u in s.top_units.iter().filter(|u| u.local) {
-            if let Some(p) = ws.package_of_unit(&u.name) {
+        // Lib/bin units of packages cargo marked dirty in this run. Test
+        // units are excluded: they rebuild only for the package under test,
+        // and their size (a whole test harness) would inflate the cost of
+        // the library a split would spare.
+        let dirty: BTreeSet<&str> = s
+            .rebuild_reasons
+            .iter()
+            .map(|r| r.package.as_str())
+            .collect();
+        for u in s.top_units.iter().filter(|u| u.local && u.kind != "test") {
+            if let Some(p) = ws.package_of_unit(&u.name)
+                && dirty.contains(p)
+            {
                 *secs.entry(p.to_owned()).or_default() += u.wall_share;
             }
         }
-        out.push(Edit { sites, secs });
+        let quiet = s.resources.avg_other_cores < 0.25 * s.ncpu.max(1) as f64;
+        out.push(Edit { sites, secs, quiet });
     }
     out
 }
@@ -814,8 +844,17 @@ impl Sources {
         for k in ws.crates.values() {
             let mut files = Vec::new();
             rust_files(&k.dir, &mut files);
+            // A root package's directory contains the member crates; their
+            // files belong to them, not to it.
+            let nested: Vec<&Path> = ws
+                .crates
+                .values()
+                .filter(|o| o.dir != k.dir && o.dir.starts_with(&k.dir))
+                .map(|o| o.dir.as_path())
+                .collect();
             let texts = files
                 .iter()
+                .filter(|f| !nested.iter().any(|d| f.starts_with(d)))
                 .filter_map(|f| std::fs::read_to_string(f).ok())
                 .collect();
             m.insert(k.name.clone(), texts);
@@ -887,6 +926,7 @@ fn evaluate(
     krate: &str,
     root: usize,
     edits: &[Edit],
+    typical: &Typical,
 ) -> Candidate {
     let moved = g.closure(root);
     let moved_lines = g.lines_of(&moved);
@@ -940,15 +980,59 @@ fn evaluate(
         c.runs += 1;
         let other = e.others(ws, krate);
         if !other.contains(krate) {
-            c.saved += e.secs.get(krate).copied().unwrap_or(0.0) * (1.0 - share);
+            c.saved += typical.get(krate) * (1.0 - share);
         }
         for d in &c.spared {
-            if !other.contains(d) {
-                c.saved += e.secs.get(d).copied().unwrap_or(0.0);
+            if !other.contains(d) && e.secs.contains_key(d) {
+                c.saved += typical.get(d);
             }
         }
     }
     c
+}
+
+/// Typical seconds per package over the runs that rebuilt it: the median of
+/// runs where the machine was quiet (other processes under a quarter of the
+/// cores), else of all runs. Replaying each run's own unit times overstates
+/// savings: runs made while other builds held the machine (60+ foreign rustc)
+/// take 5-10x longer per unit.
+pub struct Typical(HashMap<String, f64>);
+
+impl Typical {
+    fn from(edits: &[Edit]) -> Typical {
+        let mut all: HashMap<String, (Vec<f64>, Vec<f64>)> = HashMap::new();
+        for e in edits {
+            for (p, s) in &e.secs {
+                let entry = all.entry(p.clone()).or_default();
+                entry.0.push(*s);
+                if e.quiet {
+                    entry.1.push(*s);
+                }
+            }
+        }
+        let median = |mut v: Vec<f64>| {
+            v.sort_by(f64::total_cmp);
+            v[v.len() / 2]
+        };
+        Typical(
+            all.into_iter()
+                .map(|(p, (any, quiet))| {
+                    (
+                        p,
+                        if quiet.is_empty() {
+                            median(any)
+                        } else {
+                            median(quiet)
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn get(&self, p: &str) -> f64 {
+        self.0.get(p).copied().unwrap_or(0.0)
+    }
 }
 
 /// Items of `file` changed most often in the last `days` (git hunk headers).
@@ -996,6 +1080,7 @@ pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String
         .filter_map(|k| Some((k.name.clone(), ModuleGraph::build(k.root_file.as_deref()?))))
         .collect();
     let edits = to_edits(ws, &graphs, runs);
+    let typical = Typical::from(&edits);
 
     // Cost per edit site, split evenly between a run's sites.
     #[derive(Default)]
@@ -1067,7 +1152,7 @@ pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String
     let mut seen: BTreeSet<(String, BTreeSet<usize>)> = BTreeSet::new();
     for (krate, n) in roots {
         let g = &graphs[&krate];
-        let c = evaluate(ws, &src, g, &krate, n, &edits);
+        let c = evaluate(ws, &src, g, &krate, n, &edits, &typical);
         if seen.insert((krate.clone(), c.moved.clone())) && c.saved >= 1.0 {
             cands.push(c);
         }
@@ -1390,14 +1475,25 @@ mod tests {
     }
 
     fn run(pkg: &str, file: &str, units: &[(&str, f64)]) -> Summary {
-        let mut s = Summary::default();
+        let mut s = Summary {
+            ncpu: 16,
+            ..Default::default()
+        };
         s.rebuild_reasons.push(RebuildReason {
             package: pkg.into(),
             reason: format!("the file `{file}` has changed"),
         });
         for (n, w) in units {
+            let base = n.split(" (").next().unwrap();
+            if base != pkg {
+                s.rebuild_reasons.push(RebuildReason {
+                    package: base.into(),
+                    reason: format!("the dependency `{pkg}` was rebuilt"),
+                });
+            }
             s.top_units.push(UnitBreakdown {
                 name: (*n).into(),
+                kind: if n.ends_with("(test)") { "test" } else { "lib" }.into(),
                 local: true,
                 wall_share: *w,
                 ..Default::default()
@@ -1472,17 +1568,26 @@ mod tests {
     #[test]
     fn recommends_leaf_module_and_estimates_saving() {
         let (root, ws) = fixture("leaf");
+        let mut busy = run(
+            "base",
+            "base/src/emails.rs",
+            &[("base", 90.0), ("mid", 80.0), ("app", 20.0)],
+        );
+        busy.resources.avg_other_cores = 14.0;
         let runs = vec![
             run(
                 "base",
                 "base/src/emails.rs",
                 &[("base", 10.0), ("mid", 8.0), ("app", 2.0)],
             ),
+            // The test unit is not part of what a split spares.
             run(
                 "base",
                 "base/src/emails.rs",
-                &[("base (test)", 6.0), ("base", 10.0), ("mid", 8.0)],
+                &[("base (test)", 6.0), ("base", 12.0), ("mid", 6.0)],
             ),
+            // A run on a contended machine: excluded from the typical cost.
+            busy,
         ];
         let out = report(&ws, &runs, 30.0, 5);
         assert!(out.contains("1. base::{emails}"), "{out}");
@@ -1492,11 +1597,15 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("re-exports or uses in crate root"), "{out}");
+        // Typical quiet costs (upper median of two): base 12s, mid 8s.
         let g = graph(&ws);
         let share = g.nodes[id(&g, "emails")].lines as f64 / g.total_lines as f64;
-        let expect = (10.0 + 16.0) * (1.0 - share) + 16.0;
+        let per_edit = 12.0 * (1.0 - share) + 8.0;
+        let total = 3.0 * per_edit;
         assert!(
-            out.contains(&format!("saved ~{expect:.0}s over 2 recorded runs")),
+            out.contains(&format!(
+                "saved ~{total:.0}s over 3 recorded runs (~{per_edit:.1}s per edit)"
+            )),
             "{out}"
         );
         let _ = std::fs::remove_dir_all(root);
@@ -1572,6 +1681,38 @@ mod tests {
         s.cwd = "/elsewhere".into();
         s.git.root = Some("/x/jcode".into());
         assert!(belongs(&s, Path::new("/x/jcode")));
+    }
+
+    #[test]
+    fn root_package_does_not_claim_member_crate_sources() {
+        let root = std::env::temp_dir().join(format!("jr-split-{}-nested", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        write(&root.join("src/main.rs"), "fn main() {}\n");
+        write(&root.join("crates/a/src/lib.rs"), "pub mod m;\n");
+        write(&root.join("crates/a/src/m.rs"), "pub fn f() {}\n");
+        write(&root.join("crates/b/src/lib.rs"), "fn g() { a::m::f() }\n");
+        write(&root.join("target-release/x.rs"), "fn h() { a::m::f() }\n");
+        let meta = serde_json::json!({
+            "workspace_root": root,
+            "packages": [
+                {"name": "app", "manifest_path": root.join("Cargo.toml"),
+                 "targets": [{"kind": ["bin"], "src_path": root.join("src/main.rs")}],
+                 "dependencies": [{"name": "a"}, {"name": "b"}]},
+                {"name": "a", "manifest_path": root.join("crates/a/Cargo.toml"),
+                 "targets": [{"kind": ["lib"], "src_path": root.join("crates/a/src/lib.rs")}],
+                 "dependencies": []},
+                {"name": "b", "manifest_path": root.join("crates/b/Cargo.toml"),
+                 "targets": [{"kind": ["lib"], "src_path": root.join("crates/b/src/lib.rs")}],
+                 "dependencies": [{"name": "a"}]},
+            ]
+        });
+        let ws = Workspace::from_metadata(&meta);
+        let src = Sources::read(&ws);
+        assert_eq!(
+            users_of(&ws, &src, "a", &["m".to_owned()]),
+            BTreeSet::from(["b".to_owned()])
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
