@@ -1159,16 +1159,28 @@ taken by other builds (60+ foreign rustc), where ui-core took 2.8-3.2s
 instead of ~0.5s, and test units (`ui_core (test)`) were counted as if a
 split would spare them.
 
-Model now: per package, the median over runs where the machine was quiet
-(other processes under a quarter of the cores), counting only lib/bin
-units of packages cargo marked dirty. Validation via the hidden
-`justrust split --runs <ids>` (replays given runs against the current
-checkout):
+Model now: per package, the median over quiet `check`/`clippy` runs (other
+processes under a quarter of the cores; check because it is the edit loop
+and test/build units do codegen, 2-3x the cost), counting only lib/bin units
+of packages cargo marked dirty. Validation via the hidden
+`justrust split --runs <ids>`, which replays given runs against the current
+checkout, with typical costs taken from the workspace's own history:
 
 | candidate | old estimate | new estimate | measured |
 |---|---:|---:|---:|
-| jcode-base::external_auth | ~12s/edit | 3.8s/edit | 4.1s/edit |
-| desktop ui-core::scrollbar | ~3.5s/edit | 0.5s/edit | 0.3s/edit |
+| jcode-base::external_auth | ~12s/edit | 7.7s/edit | 4.1s/edit |
+| desktop ui-core::scrollbar | ~3.5s/edit | 0.7s/edit | 0.3s/edit |
+
+Correction: a first version of this table showed 3.8s and 0.5s. That was
+circular: the typical costs were computed from the same benchmark runs the
+estimate was checked against. With costs from history only, the estimate is
+still about 2x high on both. Cause, from the per-run data: history mixes
+single-threaded and threaded-front-end runs (jcode-base check 2.5-15s across
+the switch in section 14), and the cascade crates (10 provider runtimes) have
+few quiet check samples, so their medians come from test/build runs.
+Restricting to threaded runs gives 6.0s, but then most of the provider crates
+have no samples at all. The estimate improves as history accumulates under
+the current toolchain; it is a ranking signal, not a forecast.
 
 Also fixed: the root package's sources included every member crate under
 it (and `target-release/`), so `jcode-desktop` was listed as a user of
@@ -1179,9 +1191,9 @@ split only app-core needed the dependency, and tui and jcode reached the
 module through app-core's `pub use jcode_external_auth as external_auth`.
 The report now says so.
 
-Remaining limits: two validation points only, and the Desktop one (0.5 vs
-0.3s) is inside the run-to-run spread (2.6-3.2s walls), so it shows the
-estimate is no longer inflated, not that it is precise at that scale. The
+Remaining limits: two validation points only, both overestimated about 2x
+(the Desktop one is also inside the run-to-run spread of 2.6-3.2s walls).
+Which crates stop rebuilding was exact both times; the seconds are not. The
 saving is a per-package median, so a candidate seen in few quiet runs
 inherits whatever runs exist; and the moved share is
 by lines, which ignores that a small crate has fixed overhead (~0.1-0.2s

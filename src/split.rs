@@ -42,8 +42,9 @@ const MAX_MOVE_SHARE: f64 = 0.35;
 pub fn command(days: f64, top: usize, run_ids: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let ws = Workspace::load(&cwd)?;
+    let history = load_runs(&ws.root, days)?;
     let runs = if run_ids.is_empty() {
-        load_runs(&ws.root, days)?
+        history.clone()
     } else {
         // Replay specific runs, for example ones made in a scratch worktree
         // of this workspace. Cargo reports edited files relative to the
@@ -57,7 +58,7 @@ pub fn command(days: f64, top: usize, run_ids: &[String]) -> Result<()> {
         }
         v
     };
-    print!("{}", report(&ws, &runs, days, top));
+    print!("{}", report_with(&ws, &runs, &history, days, top));
     Ok(())
 }
 
@@ -747,6 +748,8 @@ struct Edit {
     secs: HashMap<String, f64>,
     /// Other processes used under a quarter of the machine during the run.
     quiet: bool,
+    /// A `check`/`clippy` run (metadata only, no codegen).
+    check: bool,
 }
 
 impl Edit {
@@ -827,7 +830,13 @@ fn to_edits(ws: &Workspace, graphs: &HashMap<String, ModuleGraph>, runs: &[Summa
             }
         }
         let quiet = s.resources.avg_other_cores < 0.25 * s.ncpu.max(1) as f64;
-        out.push(Edit { sites, secs, quiet });
+        let check = matches!(s.subcommand.as_str(), "check" | "c" | "clippy");
+        out.push(Edit {
+            sites,
+            secs,
+            quiet,
+            check,
+        });
     }
     out
 }
@@ -992,21 +1001,28 @@ fn evaluate(
 }
 
 /// Typical seconds per package over the runs that rebuilt it: the median of
-/// runs where the machine was quiet (other processes under a quarter of the
-/// cores), else of all runs. Replaying each run's own unit times overstates
-/// savings: runs made while other builds held the machine (60+ foreign rustc)
-/// take 5-10x longer per unit.
+/// quiet `check`/`clippy` runs (other processes under a quarter of the cores),
+/// the agent's edit loop and what the estimate is calibrated against. Falls
+/// back to quiet runs of any kind, then to all runs. Two things inflate a
+/// naive replay: runs made while other builds held the machine (60+ foreign
+/// rustc) take 5-10x longer per unit, and `test`/`build` units do codegen,
+/// costing 2-3x a metadata-only check of the same crate.
 pub struct Typical(HashMap<String, f64>);
 
 impl Typical {
     fn from(edits: &[Edit]) -> Typical {
-        let mut all: HashMap<String, (Vec<f64>, Vec<f64>)> = HashMap::new();
+        // (all, quiet, quiet check)
+        type Samples = (Vec<f64>, Vec<f64>, Vec<f64>);
+        let mut all: HashMap<String, Samples> = HashMap::new();
         for e in edits {
             for (p, s) in &e.secs {
                 let entry = all.entry(p.clone()).or_default();
                 entry.0.push(*s);
                 if e.quiet {
                     entry.1.push(*s);
+                    if e.check {
+                        entry.2.push(*s);
+                    }
                 }
             }
         }
@@ -1016,15 +1032,12 @@ impl Typical {
         };
         Typical(
             all.into_iter()
-                .map(|(p, (any, quiet))| {
-                    (
-                        p,
-                        if quiet.is_empty() {
-                            median(any)
-                        } else {
-                            median(quiet)
-                        },
-                    )
+                .map(|(p, (any, quiet, check))| {
+                    let v = [check, quiet, any]
+                        .into_iter()
+                        .find(|v| !v.is_empty())
+                        .unwrap_or_default();
+                    (p, median(v))
                 })
                 .collect(),
         )
@@ -1073,14 +1086,29 @@ fn churned_items(repo: &Path, file: &Path, days: f64) -> Vec<(String, usize)> {
 // ---------------------------------------------------------------------------
 // Report.
 
+#[cfg(test)]
 pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String {
+    report_with(ws, runs, runs, days, top)
+}
+
+/// `runs` are the edits to rank; `history` supplies typical unit costs. They
+/// differ when replaying chosen runs (`--runs`) against the workspace's
+/// history, so an estimate is never calibrated on the runs it is checked
+/// against.
+pub fn report_with(
+    ws: &Workspace,
+    runs: &[Summary],
+    history: &[Summary],
+    days: f64,
+    top: usize,
+) -> String {
     let graphs: HashMap<String, ModuleGraph> = ws
         .crates
         .values()
         .filter_map(|k| Some((k.name.clone(), ModuleGraph::build(k.root_file.as_deref()?))))
         .collect();
     let edits = to_edits(ws, &graphs, runs);
-    let typical = Typical::from(&edits);
+    let typical = Typical::from(&to_edits(ws, &graphs, history));
 
     // Cost per edit site, split evenly between a run's sites.
     #[derive(Default)]
@@ -1143,7 +1171,11 @@ pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String
             let g = &graphs[krate];
             let mut n = Some(*node);
             while let Some(x) = n.filter(|x| *x != 0) {
-                roots.insert((krate.clone(), x));
+                // Test-only modules compile into the test harness, not the
+                // library dependents see: moving them spares nothing.
+                if !g.nodes[x].test {
+                    roots.insert((krate.clone(), x));
+                }
                 n = g.nodes[x].parent;
             }
         }
@@ -1392,11 +1424,11 @@ pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String
     }
     let _ = writeln!(
         o,
-        "\nSavings replay recorded runs whose edits in that crate all fall inside the moved \
-         code: the crate rebuilds only its moved share, and dependents that do not use the \
-         moved code no longer rebuild. They use the unit times recorded then, so they \
-         overstate the saving if builds have since become faster; which crates stop \
-         rebuilding is the reliable part (checked against a real split, FINDINGS 15). \
+        "\nSavings count the recorded runs whose edits in that crate all fall inside the \
+         moved code, priced at each crate's typical rebuild time (median of quiet `check` \
+         runs): the crate rebuilds only its moved share, and dependents that do not use the \
+         moved code no longer rebuild. Which crates stop rebuilding was exact in two real \
+         splits; the seconds came out about 2x high (FINDINGS 15b), so use them to rank. \
          The new crate needs the dependencies and test-support features its code uses."
     );
     o
@@ -1614,6 +1646,43 @@ mod tests {
             )),
             "{out}"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn typical_cost_prefers_quiet_check_runs() {
+        let mk = |sub: &str, quiet: bool, secs: f64| Edit {
+            sites: Vec::new(),
+            secs: HashMap::from([("base".to_owned(), secs)]),
+            quiet,
+            check: sub == "check",
+        };
+        let t = Typical::from(&[
+            mk("check", true, 3.0),
+            mk("test", true, 9.0),
+            mk("test", true, 10.0),
+            mk("check", false, 30.0),
+        ]);
+        assert_eq!(t.get("base"), 3.0);
+        let t = Typical::from(&[mk("test", true, 9.0), mk("check", false, 30.0)]);
+        assert_eq!(t.get("base"), 9.0);
+        let t = Typical::from(&[mk("check", false, 30.0)]);
+        assert_eq!(t.get("base"), 30.0);
+    }
+
+    #[test]
+    fn test_only_modules_are_not_candidates() {
+        let (root, ws) = fixture("testonly");
+        // lib_tests.rs is `#[cfg(test)] mod lib_tests;`: edits rebuild only
+        // the crate's own test unit.
+        let runs = vec![run(
+            "base",
+            "base/src/lib_tests.rs",
+            &[("base (test)", 9.0)],
+        )];
+        let out = report(&ws, &runs, 30.0, 5);
+        assert!(!out.contains("base::{lib_tests}"), "{out}");
+        assert!(out.contains("none: "), "{out}");
         let _ = std::fs::remove_dir_all(root);
     }
 
