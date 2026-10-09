@@ -461,7 +461,7 @@ listing both target dirs). Its hash includes the absolute `-L dependency=`,
 - No size cap or eviction yet (`rm -rf ~/.justrust/cache/depcache` is safe).
 - Build-script *execution* is not cached, only its compilation; cargo still
   runs every build script in a fresh target dir (the 8.9s of gaps in the hit
-  run).
+  run). Addressed in 8c.
 
 ### 8a. Size cap and LRU eviction (2026-10-07, dep cache worker)
 
@@ -499,6 +499,72 @@ Code: `src/depcache_gc.rs`, `justrust cache [--prune|--clear]`.
   difference is contention, not the change: the only per-hit addition is one
   `utimensat`, and the median per-hit restore stayed at 1.1-1.7 ms. No speedup
   is claimed for this step; it bounds disk use.
+
+### 8c. Cached build-script runs (2026-10-08, pig + depcache follow-up)
+
+Code: `src/buildscript.rs`. Follows c3c9903 (never store outputs that embed a
+foreign target path). This step caches build-script *runs* for registry/git
+packages. When the shim compiles or restores a build script, it moves the
+binary to `.jr-real-<name>` and puts a `/bin/sh` wrapper in its place. The
+wrapper runs `justrust __build-script`, or the real script directly when that
+justrust binary is gone. Cached runs replay stdout/stderr and restore
+`OUT_DIR`. They are only stored for scripts with `rerun-if-*` directives, exit
+0, inputs outside the target dir, and no binary `OUT_DIR` file naming the
+target dir. Off with `JUSTRUST_BUILD_SCRIPT_CACHE=0`.
+
+Review fixes before shipping: (1) the base key now includes a system stamp
+(mtime of `/etc/ld.so.cache` and the package database: pacman, dpkg, rpm,
+nix). A system upgrade misses, so pkg-config/cc probing scripts that only
+declare env vars re-probe in a fresh dir. (2) `rerun-if-changed` symlinks
+are signed by target content, not the link text. (3) A script killed by a
+signal now kills the wrapper with the same signal (it used to exit 128+n).
+The tests cover fail-open (wrapper with justrust missing or with a disabled
+justrust: same stdout, stderr, args, cwd, exit code), non-cacheable runs (missing
+input, input inside target, non-UTF-8 stdout, symlink in OUT_DIR), directory
+inputs, and the cross-target-dir round trip.
+
+Correctness on Desktop (`justrust check -p jcode-desktop-ui`, fresh dirs):
+- cold run 20261008-205843070-3935519: 74 scripts run, gaps 6.58s. Second
+  dir 20261008-205907582-3955347: 45 hit / 29 miss (the misses have no
+  `rerun-if` or are local), gaps 0.86s.
+- Fingerprints: on the cached dir, a second `justrust check` was 742 fresh /
+  0 compiled, and plain `/usr/bin/cargo check -v` (no shim, no depcache) was
+  742 Fresh, 0 Dirty. Swapping the binary does not dirty cargo, because cargo
+  fingerprints the build-script *source* and its `output`, not the binary.
+- OUT_DIR diff against an uncached dir (`JUSTRUST_BUILD_SCRIPT_CACHE=0`), with
+  target paths normalized: 76 out dirs, identical file lists. The one content
+  diff is local `jcode-desktop-ui/out/changelog.md` (embeds a build
+  timestamp, never cached). The `output` files of aws-lc-rs, aws-lc-sys, and
+  onig_sys differ only in line order (parallel cc output), and libm
+  in `CFG_CARGO_FEATURES` order (`["arch","default"]` vs reversed: HashMap
+  iteration order in the script's own run, not the replay: the cached
+  copy is a verbatim earlier run of the same script).
+- `justrust test -p jcode-desktop-model` in the cached dir: 140 passed.
+- `cargo clean -p aws-lc-sys` removes the whole `build/<pkg>-<hash>` dir
+  (wrapper and `.jr-real-`), and the next check rebuilds and re-wraps it.
+  Slots copy whole `build/<pkg>-<hash>` dirs (`cp -a`, hidden files
+  included), so wrapper and real binary always travel together. A wrapper
+  copied into another dir finds its real binary through `dirname "$0"`.
+  Eviction of a script entry only causes a miss (the real script runs).
+
+Hit runs, `bench/depcache-fresh.sh 1` alternated on/off, 833/833 rustc
+depcache hits each:
+
+| | runs | walls | median | gaps |
+|---|---|---|---|---|
+| script cache on | 20261008-210127927-4050724, -210205780-4063343, -210246936-4077015 | 14.8, 16.6, 16.2s | **16.2s** | 0.75-0.83s |
+| `JUSTRUST_BUILD_SCRIPT_CACHE=0` | 20261008-210143096-4056390, -210222703-4068925, -210303453-4082648 | 22.4, 23.9, 27.4s | 23.9s | 5.78-6.92s |
+
+Load rose from 5.7 to 10.2 during the series (0 to 2 other rustc), so each
+"off" run had equal or higher load than the "on" run before it. The gap
+seconds are the robust number: 5-6s of build-script time removed from every
+fresh-dir build (aws-lc-sys alone 10.8s CPU, onig_sys 2.6s). The wall
+median went from 23.9s to 16.2s (-32%).
+
+Remaining risk, accepted: a registry script that declares `rerun-if` inputs
+but also reads undeclared state (a system file not covered by the package
+stamp) replays stale output in a fresh dir. Cargo makes the same assumption
+in an existing target dir.
 
 ## 9. gpui `test-api`: one GPUI build for Desktop build and test (2026-10-07, rose)
 
