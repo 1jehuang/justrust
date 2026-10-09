@@ -131,6 +131,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             unit.rmeta_secs = Some(unit.wall);
             unit.depcache = "hit".into();
             unit.depcache_saved_secs = Some(hit.saved_secs);
+            let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
             if let Ok(line) = serde_json::to_string(&unit) {
                 let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
             }
@@ -171,6 +172,8 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         if exit == 0 && !passes_on {
             let lines = std::mem::take(&mut *captured.lock().unwrap());
             let _ = plan.store(start, end - start, &lines);
+            // After storing: the cache keeps the real binary, not the wrapper.
+            let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
         }
     }
     unit.start = start;

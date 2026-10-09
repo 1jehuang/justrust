@@ -80,21 +80,21 @@ pub fn cache_dir() -> Option<PathBuf> {
 /// 128-bit content hash from two independently keyed SipHash-2-4 streams.
 /// The algorithm is fixed (unlike `DefaultHasher`), so keys are stable
 /// across justrust builds.
-struct H128(
+pub(crate) struct H128(
     #[allow(deprecated)] std::hash::SipHasher,
     #[allow(deprecated)] std::hash::SipHasher,
 );
 
 impl H128 {
     #[allow(deprecated)]
-    fn new() -> H128 {
+    pub(crate) fn new() -> H128 {
         H128(
             std::hash::SipHasher::new_with_keys(0x6a75_7374, 0x7275_7374),
             std::hash::SipHasher::new_with_keys(0x6465_7063, 0x6163_6865),
         )
     }
     /// Length-prefixed, so ("ab","c") and ("a","bc") differ.
-    fn field(&mut self, b: &[u8]) {
+    pub(crate) fn field(&mut self, b: &[u8]) {
         self.0.write_u64(b.len() as u64);
         self.1.write_u64(b.len() as u64);
         self.raw(b);
@@ -103,7 +103,7 @@ impl H128 {
         self.0.write(b);
         self.1.write(b);
     }
-    fn hex(&self) -> String {
+    pub(crate) fn hex(&self) -> String {
         format!("{:016x}{:016x}", self.0.finish(), self.1.finish())
     }
 }
@@ -112,7 +112,7 @@ impl H128 {
 #[derive(Debug, Clone)]
 pub struct Norm {
     profile: String,
-    target: String,
+    pub(crate) target: String,
 }
 
 impl Norm {
@@ -258,7 +258,7 @@ fn keyed_env(name: &str) -> bool {
         )
 }
 
-fn rustc_version(real: &Path) -> Option<String> {
+pub(crate) fn rustc_version(real: &Path) -> Option<String> {
     let out = std::process::Command::new(real)
         .arg("-vV")
         .stdin(std::process::Stdio::null())
@@ -717,7 +717,7 @@ impl Plan {
 /// line tables, and diagnostics name. Anything else (`env!("OUT_DIR")` kept
 /// as a runtime string, a proc macro embedding a target path) would make the
 /// restored artifact read another build's files, so the unit is not cached.
-fn target_refs_are_inputs(bytes: &[u8], target: &str, inputs: &[String]) -> bool {
+pub(crate) fn target_refs_are_inputs(bytes: &[u8], target: &str, inputs: &[String]) -> bool {
     let t = target.as_bytes();
     let Some(&first) = t.first() else {
         return true;
@@ -742,7 +742,7 @@ fn target_refs_are_inputs(bytes: &[u8], target: &str, inputs: &[String]) -> bool
 }
 
 /// Set a file's mtime to now: the LRU clock for eviction (`depcache_gc`).
-fn touch(path: &Path) {
+pub(crate) fn touch(path: &Path) {
     if let Ok(f) = std::fs::File::options().append(true).open(path) {
         let _ = f.set_modified(std::time::SystemTime::now());
     }
@@ -812,7 +812,7 @@ fn split_escaped(s: &str) -> Vec<String> {
 
 /// Copy-on-write clone when the filesystem supports it (btrfs, xfs), else a
 /// plain copy. Keeps the source's permissions.
-fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
+pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
     use std::os::fd::AsRawFd;
     let _ = std::fs::remove_file(dst);
     if let (Ok(s), Ok(d)) = (std::fs::File::open(src), std::fs::File::create(dst)) {

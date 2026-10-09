@@ -81,14 +81,18 @@ fn mtime(m: &std::fs::Metadata) -> f64 {
     m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9
 }
 
-/// Disk blocks actually allocated (reflinked extents still count in full).
+/// Disk blocks actually allocated (reflinked extents still count in full),
+/// recursively (build-script entries keep `OUT_DIR` trees under `out/`).
 fn dir_bytes(dir: &Path) -> u64 {
     std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|e| e.metadata().ok())
-        .map(|m| m.blocks() * 512)
+        .filter_map(|e| Some((e.path(), e.metadata().ok()?)))
+        .map(|(p, m)| match m.is_dir() {
+            true => dir_bytes(&p),
+            false => m.blocks() * 512,
+        })
         .sum()
 }
 

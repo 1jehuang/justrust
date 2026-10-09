@@ -7,6 +7,7 @@
 //!   interface agents should use. It takes the same arguments as cargo.
 
 mod agent_output;
+mod buildscript;
 mod depcache;
 mod depcache_gc;
 mod findings;
@@ -182,6 +183,13 @@ fn main() -> anyhow::Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // `justrust __build-script <real> ...`: the build-script run wrapper.
+    let mut rest = std::env::args_os().skip(1);
+    if rest.next().as_deref() == Some(std::ffi::OsStr::new("__build-script"))
+        && let Some(real) = rest.next()
+    {
+        buildscript::main(PathBuf::from(real), rest.collect());
+    }
     if shim::invoked_as_shim(&argv0) {
         shim::main();
     }
