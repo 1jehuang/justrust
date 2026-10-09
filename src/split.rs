@@ -84,7 +84,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    fn load(cwd: &Path) -> Result<Workspace> {
+    pub(crate) fn load(cwd: &Path) -> Result<Workspace> {
         let cargo = paths::real_cargo()?;
         let out = Command::new(cargo)
             .args([
@@ -193,6 +193,8 @@ impl Workspace {
 pub struct Node {
     /// `a::b::c`, empty for the crate root.
     pub path: String,
+    /// The file this module's source starts in.
+    pub file: PathBuf,
     pub lines: usize,
     /// Under `#[cfg(test)]` or named like a test module.
     pub test: bool,
@@ -259,6 +261,7 @@ impl ModuleGraph {
         self.total_lines += lines;
         self.nodes.push(Node {
             path: path.clone(),
+            file: file.to_path_buf(),
             lines,
             test,
             parent,
@@ -398,6 +401,16 @@ impl ModuleGraph {
 
     pub fn node_of(&self, file: &Path) -> Option<usize> {
         self.by_file.get(file).copied()
+    }
+
+    pub fn node_at(&self, path: &str) -> Option<usize> {
+        self.by_path.get(path).copied()
+    }
+
+    pub fn subtree_of(&self, n: usize) -> BTreeSet<usize> {
+        let mut s = BTreeSet::new();
+        self.subtree(n, &mut s);
+        s
     }
 
     fn subtree(&self, n: usize, out: &mut BTreeSet<usize>) {
@@ -610,6 +623,10 @@ fn make_decl(name: &str, attrs: &str, path_attr: &Regex, dir: &Path, child_dir: 
     }
 }
 
+pub(crate) fn strip_test_tail_pub(src: &str) -> &str {
+    strip_test_tail(src)
+}
+
 /// Drop a trailing `#[cfg(test)] mod tests { ... }` block (by convention the
 /// last item in the file), so test-only references do not count as edges.
 fn strip_test_tail(src: &str) -> &str {
@@ -633,7 +650,7 @@ fn strip_test_tail(src: &str) -> &str {
 }
 
 /// All `.rs` files under `dir`.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+pub(crate) fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -845,10 +862,10 @@ fn to_edits(ws: &Workspace, graphs: &HashMap<String, ModuleGraph>, runs: &[Summa
 // Candidates.
 
 /// Source text of every workspace crate, read once.
-struct Sources(HashMap<String, Vec<String>>);
+pub(crate) struct Sources(HashMap<String, Vec<String>>);
 
 impl Sources {
-    fn read(ws: &Workspace) -> Sources {
+    pub(crate) fn read(ws: &Workspace) -> Sources {
         let mut m = HashMap::new();
         for k in ws.crates.values() {
             let mut files = Vec::new();
@@ -871,7 +888,7 @@ impl Sources {
         Sources(m)
     }
 
-    fn any(&self, krate: &str, re: &Regex) -> bool {
+    pub(crate) fn any(&self, krate: &str, re: &Regex) -> bool {
         self.0
             .get(krate)
             .is_some_and(|ts| ts.iter().any(|t| re.is_match(t)))
@@ -902,7 +919,12 @@ struct Candidate {
 /// Dependents of `krate` that mention a moved module path, either through
 /// the crate name or through `crate::` (glob re-exports such as
 /// `pub use jcode_base::*`).
-fn users_of(ws: &Workspace, src: &Sources, krate: &str, roots: &[String]) -> BTreeSet<String> {
+pub(crate) fn users_of(
+    ws: &Workspace,
+    src: &Sources,
+    krate: &str,
+    roots: &[String],
+) -> BTreeSet<String> {
     let crate_alts: Vec<String> = std::iter::once("crate".to_owned())
         .chain(ws.crates.values().map(|c| regex::escape(&c.ident)))
         .collect();
@@ -1292,6 +1314,14 @@ pub fn report_with(
         }
         if c.orphan_impls.len() > 4 {
             let _ = writeln!(o, "   +{} more such impls", c.orphan_impls.len() - 4);
+        }
+        if ready && c.roots.len() == 1 {
+            let _ = writeln!(
+                o,
+                "   apply: `justrust split --apply {}::{} --dry-run`, then without --dry-run \
+                 (needs a clean git tree; commits the result)",
+                c.krate, c.roots[0]
+            );
         }
     }
 

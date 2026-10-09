@@ -1259,3 +1259,79 @@ cargo reason "the dependency ... was rebuilt", 11.6s wall. The E0460 failure
 of a forced skip was reproduced only in the scratch workspace; forcing it on
 jcode would mean planting stale rmeta files in a target dir, which proves
 nothing more than the minimal case.
+
+## 17. `justrust split --apply`: deterministic splits in the user's own tree (2026-10-09)
+
+Why: AI agents split crates by hand, turn by turn. Two recorded Desktop
+split sessions: tigress (2 crates, 7 modules, ~2h) made 87 tool calls (71
+bash, 9 compiles), 7.9M prompt tokens processed (97% cache reads), 45k
+output, peak context 141k; cricket (74 min) made 192 tool calls, 30.5M prompt
+tokens, 161k output, peak 271k. Most turns were mechanical (grep users, read,
+sed paths and manifests, git). Each turn resends the growing context, so cost
+scales with turn count, not with judgment.
+
+What it does (`src/split_apply.rs`), in the working tree the user is in:
+
+- Refuses unless `git status --porcelain` is empty (untracked included), so
+  HEAD is the pre-split state. One commit afterwards, with the user's git
+  identity, naming the pre-split commit; undo is `git revert` or
+  `git reset --hard <pre>`.
+- Refuses what it cannot do safely: modules other modules reference (the
+  closure from section 15), inherent impls of types that stay, crate-root
+  uses, test-only modules, feature-gated code, optional deps, glob
+  re-exports of the module, and crate-identity macros (`include_*!`,
+  `CARGO_MANIFEST_DIR`, `CARGO_PKG_NAME`, `CARGO_CRATE_NAME`,
+  `module_path!`), whose values silently change with the crate. Warns
+  when log/tracing macros will change target.
+- Rewrites: moved files (`crate::` -> old crate, `super::` chains that leave
+  the subtree, tracking inline `mod {}` blocks and skipping strings and
+  comments; top-level `pub(super)` -> `pub`); users (`old::m` paths, `use
+  old::m;` -> `use new as m;`, multi-line `use old::{..}` groups, names the old
+  root re-exported from the module); glob re-exporters (`pub use old::*`) get
+  `pub use new as m;` so `crate::m` keeps resolving.
+- Manifests with toml_edit: package fields, lints and dependency specs
+  copied from the old crate (only crates the moved code names), the old crate
+  by the spec its users use, workspace members and
+  `[workspace.dependencies]`, user deps in their existing style.
+- Verifies: `check -p new --all-targets` with two rule-based fixes (missing
+  dependency of the old crate; old crate's `test-support` feature for moved
+  tests), formats only touched files that were rustfmt-clean at HEAD (stdin,
+  so `mod` declarations are not followed), `check --workspace
+  --all-targets`, and `test -p new`, which must run at least as many tests
+  as the moved files declared. Any failure restores every touched path from
+  HEAD and removes the new crate dir.
+
+Checks:
+
+- `bench/split-apply-e2e.sh` (fixture workspace, real cargo and git, 15
+  checks): success path (clean tree, one commit on the pre-split commit,
+  tests and app output unchanged, emptied dir removed), dirty-tree refusal
+  (tree untouched), root re-exported name rewritten in a dependent, a
+  behavior change caught by tests (tree byte-identical by sha256, HEAD
+  unchanged), refusals for an entangled module and `CARGO_PKG_NAME`.
+- Real jcode (local clone at 04c7d2b04): `--apply
+  jcode-base::external_auth` succeeded unattended in 4.5 min (cold clone
+  build), 10/10 moved tests, 24 caller tests in `jcode` pass. Same edit,
+  `check --workspace`, 3x: 10.9/11.0/10.5s before, 8.6/7.2/7.6s after (the
+  hand split in section 15 measured 11.9 -> 7.8s).
+- Real Desktop (clone at 400400d with a committed sibling jcode): `--apply
+  jcode-desktop-ui-core::scrollbar --name jcode-desktop-scrollbar`
+  succeeded unattended in 1.7 min, 4/4 gpui tests, diff of 7 files and
+  rustfmt-clean (the 6 files `cargo fmt --check` flags were already
+  unformatted before). `check -p jcode-desktop-ui`: 2.8/2.7/2.9s before,
+  2.2/2.3/2.7s after.
+- Refusal on the user's real ~/jcode-desktop, which has 3 uncommitted files:
+  refused with the list, tree untouched.
+
+Bugs the real runs found and fixed before this commit: `super::` inside
+inline test modules was rewritten as if it escaped (scope tracking added);
+module depth was taken from file paths instead of the module tree; users
+reached only through a glob re-exporter got a needless dependency (and
+`add_user_dependency` failed on them); `use old::{.., m, ..}` became `use
+new;`, losing the name `m`; whole-directory rustfmt reformatted files the
+split never touched.
+
+What an agent now does for a ready candidate: `justrust split` shows
+`apply: justrust split --apply <crate>::<module> --dry-run`, the agent
+commits its work, runs it, and reads one result line. The report's `apply:`
+hint appears only for candidates with no blockers.

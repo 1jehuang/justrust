@@ -21,6 +21,7 @@ mod sched;
 mod shim;
 mod slots;
 mod split;
+mod split_apply;
 mod summary;
 
 use clap::{Parser, Subcommand};
@@ -156,6 +157,18 @@ enum Command {
         /// (for checking estimates against runs made in a scratch worktree).
         #[arg(long, hide = true, num_args = 1..)]
         runs: Vec<String>,
+        /// Do the split: move <crate>::<module> into a new crate in this
+        /// working tree. Requires a clean git tree (the pre-split commit),
+        /// verifies with cargo, and commits the result; on failure restores
+        /// the tree.
+        #[arg(long, value_name = "CRATE::MODULE")]
+        apply: Option<String>,
+        /// Name of the new crate (default: <crate>-<module>).
+        #[arg(long, requires = "apply")]
+        name: Option<String>,
+        /// With --apply: print the plan and change nothing.
+        #[arg(long, requires = "apply")]
+        dry_run: bool,
     },
     /// Analyze cargo invocations recorded in Jcode session history.
     History {
@@ -224,7 +237,17 @@ fn main() -> anyhow::Result<()> {
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
-        Command::Split { days, top, runs } => split::command(days, top, &runs)?,
+        Command::Split {
+            days,
+            top,
+            runs,
+            apply,
+            name,
+            dry_run,
+        } => match apply {
+            Some(target) => split_apply::command(&target, name.as_deref(), dry_run)?,
+            None => split::command(days, top, &runs)?,
+        },
         Command::Slots {
             clean,
             gc,
