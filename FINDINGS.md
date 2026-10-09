@@ -1098,6 +1098,13 @@ root files (config-types, build-support) and a build-script input, not by
 modules inside the giant crates. Splitting the giant crates still matters for
 their own incremental floor (section 14).
 
+Caveat: the savings are a model, not a measurement. The skipped dependents
+follow from cargo's rules, but the new crate's cost is assumed to equal its
+share of the old crate's lines, and users are found by word search. They have
+not been checked against a real split yet. The cheapest check is
+`jcode-base::external_auth` (predicted ~24s over 2 runs): split it, replay
+an edit, and compare with `justrust show`.
+
 ## 16. Skipping downstream rebuilds after body-only edits: measured, not viable as a wrapper (2026-10-09)
 
 Question: can justrust skip rebuilding dependents when an upstream edit
