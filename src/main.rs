@@ -13,6 +13,7 @@ mod depcache_gc;
 mod findings;
 mod history;
 mod install;
+mod live;
 mod paths;
 mod procfs;
 mod record;
@@ -22,6 +23,7 @@ mod shim;
 mod slots;
 mod split;
 mod split_apply;
+mod status;
 mod summary;
 
 use clap::{Parser, Subcommand};
@@ -97,6 +99,17 @@ enum Command {
         here: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// What is compiling right now, how far along, and the estimated time left.
+    Status {
+        #[arg(long)]
+        json: bool,
+        /// One line of Waybar custom-module JSON.
+        #[arg(long)]
+        waybar: bool,
+        /// Print again every N seconds (for Waybar's continuous `exec`).
+        #[arg(long, value_name = "SECS")]
+        watch: Option<f64>,
     },
     /// Show where the time went in a recorded run (default: the latest).
     Show {
@@ -237,6 +250,11 @@ fn main() -> anyhow::Result<()> {
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
+        Command::Status {
+            json,
+            waybar,
+            watch,
+        } => status::command(json, waybar, watch)?,
         Command::Split {
             days,
             top,

@@ -285,8 +285,19 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     // Before cargo starts, so it and everything it runs share the scope.
     let scope = crate::sched::enter(&id);
 
+    // The progress bar feeds `live.json` (`justrust status`). When the user
+    // would not have seen it, ask for it with `--config` (unlike the env var,
+    // that does not leak into test binaries that run cargo) and strip it again.
+    let user_progress = tty && !opts.agent;
+    let strip_progress = !user_progress && std::env::var_os("CARGO_TERM_PROGRESS_WHEN").is_none();
+    let cargo_args = if strip_progress {
+        with_progress_config(cargo_args)
+    } else {
+        cargo_args.to_vec()
+    };
+
     let mut cmd = Command::new(&real_cargo);
-    cmd.args(cargo_args)
+    cmd.args(&cargo_args)
         .env("RUSTC", &shim)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)
         .env("JUSTRUST_RUN_DIR", &run_dir)
@@ -299,7 +310,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         // the report uses them.
         cmd.env("CARGO_TERM_VERBOSE", "true");
     }
-    if tty && !opts.agent {
+    if user_progress {
         if std::env::var_os("CARGO_TERM_COLOR").is_none() {
             cmd.env("CARGO_TERM_COLOR", "always");
         }
@@ -321,7 +332,10 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
 
     let lines: Arc<Mutex<Vec<OutputLine>>> = Arc::default();
     let out = child.stdout.take().context("stdout")?;
-    let err = child.stderr.take().context("stderr")?;
+    let err = crate::live::SniffReader::new(
+        child.stderr.take().context("stderr")?,
+        crate::live::Sniffer::new(Some(&run_dir), strip_progress),
+    );
     let is_test = matches!(meta.subcommand.as_str(), "test" | "t" | "bench" | "nextest");
     let filter = |stdout: bool| {
         opts.agent.then(|| {
@@ -579,6 +593,21 @@ pub fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// `args` with cargo's progress bar forced on, placed after a `+toolchain`.
+fn with_progress_config(args: &[OsString]) -> Vec<OsString> {
+    let at = usize::from(
+        args.first()
+            .is_some_and(|a| a.to_string_lossy().starts_with('+')),
+    );
+    let mut out = args[..at].to_vec();
+    for c in ["term.progress.when=\"always\"", "term.progress.width=200"] {
+        out.push("--config".into());
+        out.push(c.into());
+    }
+    out.extend_from_slice(&args[at..]);
+    out
+}
+
 fn classify_proc(comm: &str, cmdline: &str) -> &'static str {
     let exe = cmdline.split_whitespace().next().unwrap_or("");
     match comm {
@@ -801,6 +830,15 @@ mod tests {
         assert!(RECORDED.contains(&"test"));
         assert!(!RECORDED.contains(&"metadata"));
         assert!(!RECORDED.contains(&"fmt"));
+    }
+
+    #[test]
+    fn progress_config_goes_after_toolchain() {
+        let a = with_progress_config(&os(&["+nightly", "test"]));
+        assert_eq!(a[0], "+nightly");
+        assert_eq!(a[1], "--config");
+        assert_eq!(a.last().unwrap(), "test");
+        assert_eq!(with_progress_config(&os(&["check"]))[0], "--config");
     }
 
     #[test]
