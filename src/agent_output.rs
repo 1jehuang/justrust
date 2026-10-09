@@ -147,6 +147,25 @@ impl Filter {
             self.block = Block::Show;
             return true;
         }
+        // After a failed rustc, cargo appends `Caused by:` and `process didn't
+        // exit successfully: <the entire rustc command line>`, often several
+        // KB of `--extern` flags. The diagnostics above already say what
+        // failed; the command line only burns agent context.
+        if trimmed == "Caused by:" {
+            self.block = Block::Hide;
+            self.hidden.progress_lines += 1;
+            return false;
+        }
+        if trimmed.starts_with("process didn't exit successfully:") {
+            let rustc = trimmed.contains("rustc") && trimmed.contains("--crate-name");
+            if rustc {
+                self.hidden.progress_lines += 1;
+                return false;
+            }
+            // A non-rustc process (build script, test binary) is useful info.
+            self.block = Block::Show;
+            return true;
+        }
         if line.starts_with("warning") {
             // "warning: `crate` (lib) generated 12 warnings" repeats the count.
             if line.contains(" generated ") && line.contains(" warning") {
@@ -198,6 +217,38 @@ mod tests {
         assert!(out.last().unwrap().starts_with("error: could not compile"));
         assert!(!out.iter().any(|l| l.contains("Compiling")));
         assert_eq!(f.hidden.progress_lines, 1);
+    }
+
+    #[test]
+    fn hides_cargo_rustc_command_line_after_a_failed_compile() {
+        let mut f = Filter::new(false, false, 3);
+        let out = run(
+            &mut f,
+            "error[E0063]: missing field `x`\n \
+             --> src/lib.rs:1:5\n\
+             \n\
+             error: could not compile `foo` (lib) due to 1 previous error\n\
+             \n\
+             Caused by:\n  \
+             process didn't exit successfully: `/usr/bin/rustc --crate-name foo --edition=2024 src/lib.rs --extern a=/x/liba.rmeta --extern b=/x/libb.rmeta` (exit status: 1)\n",
+        );
+        assert!(out.iter().any(|l| l.starts_with("error[E0063]")));
+        assert!(out.iter().any(|l| l.starts_with("error: could not compile")));
+        assert!(!out.iter().any(|l| l.contains("Caused by")));
+        assert!(!out.iter().any(|l| l.contains("--crate-name")));
+    }
+
+    #[test]
+    fn keeps_non_rustc_process_failures() {
+        let mut f = Filter::new(false, false, 3);
+        let out = run(
+            &mut f,
+            "error: test failed, to rerun pass `--lib`\n\
+             \n\
+             Caused by:\n  \
+             process didn't exit successfully: `/x/target/debug/deps/foo-123` (signal: 11, SIGSEGV: invalid memory reference)\n",
+        );
+        assert!(out.iter().any(|l| l.contains("SIGSEGV")));
     }
 
     #[test]
