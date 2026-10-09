@@ -341,6 +341,8 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
         ));
     }
 
+    out.extend(giant_crates(s));
+
     // Build gaps: no rustc running inside the build window.
     if p.build_gaps >= 1.0 {
         out.push(Finding::new(
@@ -386,6 +388,89 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
 
     out.sort_by(|a, b| b.cost_secs.total_cmp(&a.cost_secs));
     out
+}
+
+/// Crates at least this big (lines under `src/`) are flagged as split candidates.
+const GIANT_CRATE_LINES: u64 = 40_000;
+/// Only when they cost at least this much of the run.
+const GIANT_CRATE_SECS: f64 = 5.0;
+/// Size a split-out crate is assumed to end up at when estimating savings.
+const SPLIT_TARGET_LINES: f64 = 20_000.0;
+
+/// Local crates so large that recompiling them dominates the run. rustc
+/// redoes most of a crate's front-end after any edit to it, so per-edit cost
+/// scales with crate size, and every downstream crate rebuilds too. No flag
+/// fixes that; splitting the crate does. On Jcode Desktop, edits in crates
+/// split out of a 143k-line UI crate compiled 6-13x faster (FINDINGS.md 2).
+fn giant_crates(s: &Summary) -> Option<Finding> {
+    // One entry per crate: `foo` and `foo (test)` are the same source.
+    let mut by_crate: Vec<(String, u64, f64, bool, Option<u32>)> = Vec::new();
+    for u in s.top_units.iter().filter(|u| u.local) {
+        let Some(lines) = u.source_lines.filter(|&l| l >= GIANT_CRATE_LINES) else {
+            continue;
+        };
+        let krate = u.name.split(" (").next().unwrap_or(&u.name).to_owned();
+        match by_crate.iter_mut().find(|e| e.0 == krate) {
+            Some(e) => {
+                e.2 += u.wall_share;
+                e.4 = e.4.or(u.frontend_threads);
+            }
+            None => {
+                let pkg_dirty = s.rebuild_reasons.iter().any(|r| {
+                    unit_matches(&krate, &r.package)
+                        && r.reason.starts_with("the dependency ")
+                        && r.reason.ends_with(" was rebuilt")
+                });
+                by_crate.push((krate, lines, u.wall_share, pkg_dirty, u.frontend_threads));
+            }
+        }
+    }
+    by_crate.retain(|e| e.2 >= GIANT_CRATE_SECS);
+    if by_crate.is_empty() {
+        return None;
+    }
+    by_crate.sort_by(|a, b| b.2.total_cmp(&a.2));
+    // Rough model: compile time scales with lines, so an edit landing in a
+    // split-out crate of SPLIT_TARGET_LINES costs that fraction of today's.
+    let cost: f64 = by_crate
+        .iter()
+        .map(|(_, lines, secs, ..)| secs * (1.0 - SPLIT_TARGET_LINES / *lines as f64).max(0.0))
+        .sum();
+    let list: Vec<String> = by_crate
+        .iter()
+        .map(|(k, lines, secs, cascade, _)| {
+            format!(
+                "{k} ({}k lines, {secs:.1}s{})",
+                lines / 1000,
+                if *cascade {
+                    ", rebuilt for an upstream change"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect();
+    let single_threaded = by_crate.iter().any(|e| e.4.is_none());
+    let total: f64 = by_crate.iter().map(|e| e.2).sum();
+    Some(Finding::new(
+        "giant_crate",
+        cost,
+        format!(
+            "{total:.1}s went to recompiling oversized crates: {}. rustc redoes most of a crate \
+             after any edit to it and rebuilds everything downstream, so per-edit cost grows \
+             with crate size and no compiler flag removes it. Split them: move the modules \
+             that change often (the ones you are editing) into new leaf crates that depend on \
+             the big crate rather than the other way round, and keep their tests there. Edits \
+             in split-out crates measured 6-13x faster{}",
+            list.join(", "),
+            if single_threaded {
+                ". Also, these units ran rustc's front-end single-threaded; a -Zthreads \
+                 rustc wrapper typically halves a full rebuild"
+            } else {
+                ""
+            }
+        ),
+    ))
 }
 
 /// Summarize rebuild reasons for local (`local=true`) or non-local units.
@@ -753,6 +838,99 @@ mod tests {
         let f = analyze(&s);
         assert_eq!(f[0].kind, "slot_join");
         assert!(f[0].message.contains("8.4s"), "{}", f[0].message);
+    }
+
+    fn giant_unit(name: &str, kind: &str, share: f64, lines: Option<u64>) -> UnitBreakdown {
+        UnitBreakdown {
+            name: name.into(),
+            kind: kind.into(),
+            local: true,
+            wall: share,
+            wall_share: share,
+            source_lines: lines,
+            ..Default::default()
+        }
+    }
+
+    /// Fixture from run 20261009-000724334-1218993 (jcode-tui onboarding tests).
+    #[test]
+    fn flags_giant_crates_and_merges_test_units() {
+        let mut s = base();
+        s.top_units = vec![
+            giant_unit("jcode_tui (test)", "test", 47.1, Some(220_975)),
+            giant_unit("jcode_app_core", "lib", 32.2, Some(159_692)),
+            giant_unit("jcode_base", "lib", 21.6, Some(138_891)),
+            giant_unit("jcode_protocol", "lib", 3.5, Some(12_000)),
+        ];
+        s.rebuild_reasons.push(RebuildReason {
+            package: "jcode-app-core".into(),
+            reason: "the dependency `jcode-base` was rebuilt".into(),
+        });
+        let f = analyze(&s);
+        let g = f
+            .iter()
+            .find(|f| f.kind == "giant_crate")
+            .expect("giant_crate");
+        assert!(g.message.starts_with("100.9s went to"), "{}", g.message);
+        assert!(
+            g.message.contains("jcode_tui (220k lines, 47.1s)"),
+            "{}",
+            g.message
+        );
+        assert!(
+            g.message
+                .contains("jcode_app_core (159k lines, 32.2s, rebuilt for an upstream change)"),
+            "{}",
+            g.message
+        );
+        assert!(!g.message.contains("jcode_protocol"));
+        assert!(g.message.contains("single-threaded"));
+        // 47.1*(1-20/221) + 32.2*(1-20/160) + 21.6*(1-20/139)
+        assert!((g.cost_secs - 89.2).abs() < 0.5, "{}", g.cost_secs);
+
+        // Test and lib units of one crate count once, and threaded units
+        // do not get the -Zthreads hint.
+        s.top_units = vec![
+            giant_unit("jcode_base (test)", "test", 4.0, Some(138_891)),
+            giant_unit("jcode_base", "lib", 3.0, Some(138_891)),
+        ];
+        for u in &mut s.top_units {
+            u.frontend_threads = Some(8);
+        }
+        s.rebuild_reasons.clear();
+        let f = analyze(&s);
+        let g = f.iter().find(|f| f.kind == "giant_crate").expect("merged");
+        assert!(
+            g.message.contains("jcode_base (138k lines, 7.0s)"),
+            "{}",
+            g.message
+        );
+        assert!(!g.message.contains("single-threaded"));
+    }
+
+    #[test]
+    fn no_giant_crate_for_small_or_cheap_crates() {
+        let mut s = base();
+        s.top_units = vec![
+            giant_unit("small", "lib", 30.0, Some(39_000)),
+            giant_unit("big_but_fast", "lib", 4.0, Some(200_000)),
+            giant_unit("unknown", "lib", 30.0, None),
+        ];
+        assert!(analyze(&s).iter().all(|f| f.kind != "giant_crate"));
+    }
+
+    #[test]
+    fn counts_rust_lines() {
+        let dir = std::env::temp_dir().join(format!("justrust-lines-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("a/b")).unwrap();
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join("lib.rs"), "a\nb\n").unwrap();
+        std::fs::write(dir.join("a/b/m.rs"), "x\ny\nz\n").unwrap();
+        std::fs::write(dir.join("a/notes.txt"), "1\n2\n").unwrap();
+        std::fs::write(dir.join("target/gen.rs"), "1\n2\n").unwrap();
+        assert_eq!(crate::summary::count_rust_lines(&dir), Some(5));
+        assert_eq!(crate::summary::count_rust_lines(&dir.join("missing")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

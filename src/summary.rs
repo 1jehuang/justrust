@@ -110,6 +110,45 @@ pub struct UnitBreakdown {
     /// Present when rustc pass timings were captured.
     pub split: Option<Split>,
     pub top_passes: Vec<Pass>,
+    /// Lines of Rust under the crate's `src/`, counted for slow local units
+    /// only (see `GIANT_UNIT_SECS`). Feeds the `giant_crate` finding.
+    #[serde(default)]
+    pub source_lines: Option<u64>,
+}
+
+/// Local units slower than this get their source lines counted.
+pub const GIANT_UNIT_SECS: f64 = 3.0;
+
+/// Count lines in every `.rs` file under `dir`. Skips hidden directories and
+/// `target`. Bounded so a pathological tree cannot stall the report.
+pub fn count_rust_lines(dir: &Path) -> Option<u64> {
+    let mut lines = 0u64;
+    let mut files = 0usize;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                if !name.starts_with('.') && name != "target" {
+                    stack.push(e.path());
+                }
+            } else if ft.is_file() && name.ends_with(".rs") {
+                files += 1;
+                if files > 20_000 {
+                    return None;
+                }
+                if let Ok(b) = std::fs::read(e.path()) {
+                    lines += b.iter().filter(|&&c| c == b'\n').count() as u64;
+                }
+            }
+        }
+    }
+    (files > 0).then_some(lines)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -554,6 +593,9 @@ pub fn build(
                 rmeta_secs: u.rmeta_secs,
                 split: split_passes(&u.passes),
                 top_passes: passes,
+                source_lines: (u.local && u.wall >= GIANT_UNIT_SECS && !u.build_script)
+                    .then(|| count_rust_lines(&Path::new(&u.manifest_dir).join("src")))
+                    .flatten(),
             }
         })
         .collect();

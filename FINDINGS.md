@@ -1021,3 +1021,31 @@ Open: the threshold (200 CPU-s) and the half split are guesses that fit
 this machine. A per-build jobserver (fewer rustc threads for old builds)
 would also cut the 50+ runnable threads that make even the reserved cores
 contended under the fair scheduler.
+
+## 14. Jcode TUI repo: parallel front-end was bypassed, giant crates (2026-10-09)
+
+The Jcode TUI repo (`~/jcode`) had `scripts/rustc-parallel-frontend`, but
+only `scripts/dev_cargo.sh` exported it as `RUSTC_WRAPPER`. Agents call
+`justrust` (and plain `cargo`), which skip dev_cargo.sh, so jcode-base
+(139k lines), jcode-app-core (160k) and jcode-tui (221k) compiled with a
+single-threaded front-end. Fixed in jcode 04c7d2b04 by setting
+`build.rustc-wrapper` in `.cargo/config.toml` (CI and Windows set
+`CARGO_BUILD_RUSTC_WRAPPER=""`).
+
+Measured on the XPS (16 threads, others using 2-4 cores):
+
+| Scenario (`check -p jcode-tui`)                  | 1 thread | -Zthreads=8 |
+|--------------------------------------------------|---------:|------------:|
+| Non-incremental after an upstream edit (x2)      | 44.0 / 45.3s | 24.0 / 23.3s |
+| Incremental, new pub fn in jcode-base (x3)       | 9.2-10.1s | 10.5-11.0s |
+| `test -p jcode-base --lib --no-run`, same edit (x2) | 13.9 / 15.5s | 13.3 / 13.5s |
+
+So the threaded front-end halves full rebuilds of a big crate (app-core
+18 -> 10s, base 11 -> 6s, tui 10 -> 5s) but does nothing for warm
+incremental edits, which stay at ~3s per giant crate in the chain. That
+floor is crate size, not flags. New finding `giant_crate` (local crate
+>= 40k lines in `src/` costing >= 5s of the run) tells the agent to split,
+with the crate's line count and seconds; it also flags single-threaded
+front-ends. Cost estimate assumes split-out crates of ~20k lines.
+First real report: run 20261009-005101282-1501305, jcode_base 138k lines,
+41.0s, ~35s attributable.
