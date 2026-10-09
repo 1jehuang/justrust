@@ -18,6 +18,9 @@ Early. What exists so far:
   where its time went: cargo startup, lock waits, each rustc unit (with
   frontend, codegen, link, and incremental-cache split), build gaps, test
   execution, CPU, memory, and machine-wide stalls.
+- **`justrust split`** says which code to move into its own crate to stop
+  rebuild cascades, from the recorded edits in this workspace and its module
+  graph, with the estimated saving and the references or impls to fix first.
 - **`justrust history`** mines past [Jcode](https://github.com/1jehuang/jcode)
   sessions for cargo calls. See [FINDINGS.md](FINDINGS.md).
 

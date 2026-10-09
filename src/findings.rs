@@ -219,12 +219,28 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            // The files whose edits started the cascade.
+            let edited: Vec<&str> = s
+                .rebuild_reasons
+                .iter()
+                .filter_map(|r| {
+                    r.reason
+                        .strip_prefix("the file `")
+                        .and_then(|x| x.strip_suffix("` has changed"))
+                })
+                .collect();
+            let origin = match edited.as_slice() {
+                [] => String::new(),
+                [one] => format!(" (edited {one})"),
+                [one, rest @ ..] => format!(" (edited {one} and {} more)", rest.len()),
+            };
             out.push(Finding::new(
                 "upstream_cascade",
                 cost,
                 format!(
-                    "{} rebuilt only because {} changed ({:.1}s). Edits to shared upstream \
-                     crates force downstream recompiles",
+                    "{} rebuilt only because {} changed{origin} ({:.1}s). Edits to shared upstream \
+                     crates force downstream recompiles; `justrust split` shows which code to \
+                     move out to stop this",
                     names.join(", "),
                     upstream.join(", "),
                     cost
@@ -461,7 +477,8 @@ fn giant_crates(s: &Summary) -> Option<Finding> {
              with crate size and no compiler flag removes it. Split them: move the modules \
              that change often (the ones you are editing) into new leaf crates that depend on \
              the big crate rather than the other way round, and keep their tests there. Edits \
-             in split-out crates measured 6-13x faster{}",
+             in split-out crates measured 6-13x faster. `justrust split` names the modules to \
+             move, from this workspace's recorded edits{}",
             list.join(", "),
             if single_threaded {
                 ". Also, these units ran rustc's front-end single-threaded; a -Zthreads \
@@ -785,11 +802,22 @@ mod tests {
             package: "jcode-desktop-ui".into(),
             reason: "the dependency `jcode_base` was rebuilt".into(),
         });
+        s.rebuild_reasons.push(RebuildReason {
+            package: "jcode-base".into(),
+            reason: "the file `crates/jcode-base/src/auth.rs` has changed".into(),
+        });
         let f = analyze(&s);
         let kinds: Vec<&str> = f.iter().map(|f| f.kind.as_str()).collect();
         assert!(kinds.contains(&"upstream_cascade"), "{kinds:?}");
         assert!(kinds.contains(&"heavy_codegen"), "{kinds:?}");
         assert!(f.iter().any(|f| f.message.contains("jcode_base")));
+        let c = f.iter().find(|f| f.kind == "upstream_cascade").unwrap();
+        assert!(
+            c.message.contains("(edited crates/jcode-base/src/auth.rs)"),
+            "{}",
+            c.message
+        );
+        assert!(c.message.contains("justrust split"), "{}", c.message);
     }
 
     #[test]

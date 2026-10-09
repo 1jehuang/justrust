@@ -20,6 +20,7 @@ mod runs;
 mod sched;
 mod shim;
 mod slots;
+mod split;
 mod summary;
 
 use clap::{Parser, Subcommand};
@@ -142,6 +143,16 @@ enum Command {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+    /// Which code to move into its own crate to stop rebuild cascades,
+    /// from recorded runs in this workspace and its module graph.
+    Split {
+        /// Only runs from the last N days.
+        #[arg(long, default_value_t = 30.0)]
+        days: f64,
+        /// Number of recommendations.
+        #[arg(long, default_value_t = 8)]
+        top: usize,
+    },
     /// Analyze cargo invocations recorded in Jcode session history.
     History {
         /// Session directory. Defaults to ~/.jcode/sessions.
@@ -209,6 +220,7 @@ fn main() -> anyhow::Result<()> {
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
         Command::Show { id, json } => runs::show(id.as_deref(), json)?,
+        Command::Split { days, top } => split::command(days, top)?,
         Command::Slots {
             clean,
             gc,

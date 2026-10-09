@@ -1049,3 +1049,51 @@ with the crate's line count and seconds; it also flags single-threaded
 front-ends. Cost estimate assumes split-out crates of ~20k lines.
 First real report: run 20261009-005101282-1501305, jcode_base 138k lines,
 41.0s, ~35s attributable.
+
+## 15. `justrust split`: which code to move out, from recorded edits (2026-10-09)
+
+`giant_crate` and `upstream_cascade` said "split", not what. `justrust split`
+answers that from this workspace's recorded runs plus a regex module graph:
+
+1. Each run's `Dirty <pkg>: the file X has changed` lines locate the edit
+   (module file, crate root, or build-script input) and the run's cost is the
+   edited crates plus their dependents' unit time (dev-dependency edges are
+   ignored: they only affect the crate's own tests and otherwise create false
+   cycles such as jcode-base -> openrouter-runtime -> jcode-base).
+2. Every crate's module tree is parsed from `mod` items (with `#[path]`), and
+   `crate::`/`super::`/`self::`/child paths resolve to the deepest module they
+   name. `pub use` re-exports are not edges. Moving module M forces out every
+   module that references it, transitively; above 35% of the crate it is
+   reported as entangled with the references to cut.
+3. Inherent `impl T { .. }` blocks for a type defined in a module that stays
+   are a hard blocker (Rust only allows them in the defining crate), so those
+   candidates are marked "needs prep".
+4. The saving replays the runs whose edits in that crate all fall inside the
+   moved code: the crate costs only its moved share of lines, dependents that
+   do not use the moved code (word search, including `crate::` through glob
+   re-exports like `pub use jcode_base::*`) drop out.
+
+First run on ~/jcode (96 runs with edits, 2105s in edited crates and
+dependents, last 30 days), 0.5s wall:
+
+- Biggest costs are not modules at all: jcode-config-types' single 1.7k-line
+  lib.rs (39 runs, 566s cascade into 17 dependents), jcode-base's root file
+  (127s), jcode-build-support (180s), and `docs/` as a build-script input of
+  jcode-app-core (169s). Git hunk headers name the churned items in a root
+  file (AgentsConfig 10 edits, WebSearchConfig 7, DiffDisplayMode 6) and which
+  dependents use them; for config-types nearly every dependent uses them, so
+  moving items does not help, the fix there is fewer dependents per item.
+- Ready module split: `jcode-base::external_auth` (1030 lines, nothing else
+  in jcode-base references it, checked by hand): ~24s over 2 runs, spares 10
+  provider/runtime crates.
+- Needs prep: `config::config_file` (~31s), `provider::startup` (~16s), and
+  three `tui::app::*` files (13-19s each) are all `impl Config`/`impl
+  MultiProvider`/`impl App` blocks split across files, so moving them first
+  needs free functions or an extension trait.
+- Entangled: `session::persistence`, `provider::openrouter`, `auth::cursor`
+  drag along 83% of jcode-base; the report lists the referencing modules.
+
+Takeaway: in this repo the cascade cost is dominated by small, widely used
+root files (config-types, build-support) and a build-script input, not by
+modules inside the giant crates. Splitting the giant crates still matters for
+their own incremental floor (section 14).
