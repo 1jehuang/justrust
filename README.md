@@ -125,18 +125,88 @@ Environment: `JUSTRUST_DISABLE=1` turns recording off, `JUSTRUST_QUIET=1`
 hides the summary line, and `JUSTRUST_PASSES=off|always` controls pass timings.
 Linux only for now.
 
-## Direction
+## Direction: all in
 
-1. **Measure.** Record every agent build (this), then build a replay benchmark
-   of real agent edit loops.
-2. **Check before test.** Report errors from a fast `check` instead of waiting
-   on test-binary codegen and linking.
-3. **Run only the affected tests.** Avoid rebuilding and linking huge test
-   binaries for a handful of tests.
-4. **Keep the compiler warm.** Use a persistent build daemon so incremental
-   state and metadata do not restart from zero on every call.
-5. **Share artifacts.** Use a content-addressed cache across checkouts,
-   worktrees, agents, and machines.
+justrust is going all in on optimal compile times. It will become one
+all-in-one solution that owns the whole path from source to test result, and
+we will do whatever it takes to get there: vendor and fork the toolchain, and
+run our own servers. Maintenance cost is accepted. An idea is dropped only
+when measurements show it is not faster. Detailed plan:
+[docs/toolchain.md](docs/toolchain.md).
+
+What justrust will own:
+
+- **A vendored toolchain.** rustc (a pinned nightly, then our own fork),
+  LLVM, cargo, the standard library, Cranelift, a linker (wild, mold), the C
+  toolchain and the system libraries that `-sys` crates link against,
+  rust-analyzer, and the test runner. One exact toolchain on every machine
+  means we control every flag, and cache keys match everywhere.
+- **Prebuilt artifact servers.** A cargo-like registry that serves compiled
+  dependencies (rlibs, proc macros, build-script outputs) for that exact
+  toolchain, so a fresh checkout downloads its dependencies instead of
+  compiling them.
+- **A remote compile service.** Server-grade CPUs with warm incremental state
+  and the shared cache. justrust picks remote or local for each build,
+  whichever its measurements say is faster: remote for cold builds, full-crate
+  rebuilds, and big test suites, local for small edits.
+- **A resident compiler.** A rustc that stays running between edits and
+  keeps its incremental state in memory, recompiling only the items that
+  changed.
+- **Hot patching.** When an edit only changes function bodies, patch the
+  running test binary instead of relinking it.
+
+### Theorized end-state gains
+
+These are estimates, not measurements. Each phase gets measured before and
+after, and the results go in [FINDINGS.md](FINDINGS.md).
+
+The reference loop is a one-line body edit in `jcode-desktop-ui` (122k
+lines), then running 3 tests (run 20261007-235214927-3498261):
+
+| phase | today | end state | how |
+|---|---:|---:|---|
+| cargo startup, fingerprints | 0.33 s | 0.02 s | daemon keeps the build graph in memory, file watcher instead of a rescan |
+| macro expansion | 2.70 s | 0.05 s | resident compiler re-expands only the edited item |
+| resolve, typeck, borrowck | 1.96 s | 0.10 s | only the edited body and its dependents are checked again |
+| incremental load and save | 0.85 s | 0 s | state stays in memory, written to disk in the background |
+| codegen | 1.45 s | 0.10 s | one small codegen unit, Cranelift |
+| link | 0.63 s | 0.05 s | hot patch, or incremental linking (wild) |
+| other | 1.06 s | 0.05 s | |
+| **total** | **9.0 s** | **~0.4 s** | **about 20x** |
+
+Time to the first type error drops from a full build to about 0.1 to 0.2 s,
+because diagnostics stream out before codegen starts.
+
+Other scenarios:
+
+| scenario | today | end state | how |
+|---|---:|---:|---|
+| edit in a shared upstream crate (finding 5) | 46 s | ~1 s | a body-only change upstream does not invalidate downstream codegen |
+| fresh checkout or new agent target dir | 182 s cold, 16 s with the local depcache | ~5 s | prebuilt dependencies downloaded, local crates from the remote cache |
+| full rebuild of the UI crate | 20 to 32 s | ~5 s | remote server with many cores, Cranelift for local crates |
+| full Desktop test suite (1,655 tests) | 16 to 28 s run time | ~3 s | sharded across remote cores |
+
+Taken together: in the measured history, agents in Jcode Desktop were
+blocked on cargo for 41 h over about six weeks, with a median call of 18 s.
+If the median call becomes about 1 s and the slow tail mostly moves to fast
+remote machines, that waiting drops by about 90 to 95%, to roughly 2 to 4 h.
+It also removes the indirect costs: agents stop batching edits to avoid
+builds, parallel agents stop slowing each other down, and a fifth of build
+time no longer goes to learning about a type error.
+
+### Order
+
+1. **Measure.** Record every agent build (done), then replay real agent edit
+   loops as a benchmark.
+2. **Pinned toolchain, managed by justrust**, plus nightly flag experiments
+   (`-Zcache-proc-macros`, `-Zshare-generics`, dependencies as one dylib,
+   Cranelift for local crates, wild).
+3. **Share artifacts.** Local depcache (done), then prebuilt artifact servers
+   and a hermetic C sysroot.
+4. **Remote compile service** that is chosen per build when it is faster.
+5. **Our rustc fork**: resident compiler, streamed diagnostics, body-only
+   upstream invalidation.
+6. **Hot patching** of test binaries.
 
 ## License
 
