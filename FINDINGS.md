@@ -966,3 +966,58 @@ Process notes: during this work another agent released Desktop 0.5.1
 picked up on its own) and the main Desktop instance exited. The 5bf7aff
 reload was verified on the single-panel host (generation 3), and 1430ed1
 on both hosts (main generation 4, single-panel generation 2).
+
+## 13. Machine-wide build priority (src/sched.rs, 2026-10-08, jaguar)
+
+Problem (index.jsonl, 477 runs over 48h): runs over 60s were 12% of calls
+but 59% of wait time. The 30-200s tail of one-unit `test -p
+jcode-desktop-ui` runs was mostly contention: other agents' builds used
+9-15 of 16 cores, up to 58 foreign rustc, and the edit build got 0.5-1 core.
+
+Mechanism: every recorded run moves itself (over the user bus, `busctl
+StartTransientUnit`, ~40ms) into `app-justrust.slice/justrust-<id>.scope`
+before starting cargo, so everything cargo starts is inside it.
+
+1. v1, cgroup `cpu.weight` = 1000 * 60 / (60 + CPU-s used) (least attained
+   service). **No effect.** This machine runs sched_ext `scx_lavd`, which
+   ignores cgroup weights, nice and `cpu.max`. Synthetic check: a 4-thread
+   probe next to a 48-thread hog got 4.4s of CPU at weight 10 and 4.9s at
+   weight 1000; a 200% quota let a 16-thread hog use 67 CPU-s in 6s. Desktop
+   probe runs 20261008-231039903 .. -231731304 vs off runs: the same.
+   The weights stay in (they work under the normal fair scheduler).
+2. v2 (c068015), affinity. lavd honors `sched_setaffinity`: the same probe
+   got 13.3s of CPU when the hog was pinned to 8 CPUs, versus 3.6s. So while
+   another justrust build is young (< 200 CPU-s) and actively running, a
+   build that has used more than 200 CPU-s pins all its threads to the
+   slower half of the CPUs (by `cpuinfo_max_freq`: here E and LP-E cores
+   8-15, keeping P cores 0-3 and E cores 4-7 free). It gets every CPU back
+   within 0.5s once no young build runs. Idle young scopes (a `justrust run`
+   server) do not count.
+
+Benchmark `PROBE=desktop bench/sched-contention.sh 4 2 "off on off on off on"`:
+two cold `justrust check -p jcode-desktop-ui` loops (fresh target dirs,
+depcache and build-script cache off) as other "agents", and as the probe a
+one-line test-fn edit in fps_counter.rs + `justrust test -p jcode-desktop-ui
+--lib -- fps_counter` in a scratch copy. Same load in each mode, alternated.
+
+| probe wall, 12 runs each | median | mean | max |
+|---|---|---|---|
+| `JUSTRUST_SCHED=0` | 24.5s | 25.4s | 53.2s |
+| sched on (affinity) | **12.9s** | **12.9s** | **16.0s** |
+
+Off: 9.3, 9.6, 11.2, 12.9, 14.1, 22.5, 26.4, 32.8, 33.9, 37.0, 41.5, 53.2.
+On: 10.3, 10.8, 11.3, 11.5, 11.9, 12.9, 12.9, 13.3, 13.7, 14.3, 15.4, 16.0.
+Run ids 20261008-234357414 .. -235809675. The quiet-machine number is
+about 9s, so contention cost drops from about +15s median / +44s worst to
+about +4s / +7s.
+
+Cost to the long builds: the loads yielded 47-55s each while probes ran.
+No clean wall comparison (the bench kills loads at mode switches), but
+loads in "on" rounds reached 867-879 of 887 units in 115-122s, while "off"
+loads finished all 887 in 121-147s: no visible slowdown, because the
+probe only needs 1-4 cores and the loads keep 8.
+
+Open: the threshold (200 CPU-s) and the half split are guesses that fit
+this machine. A per-build jobserver (fewer rustc threads for old builds)
+would also cut the 50+ runnable threads that make even the reserved cores
+contended under the fair scheduler.
