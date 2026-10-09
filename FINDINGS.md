@@ -1100,10 +1100,30 @@ their own incremental floor (section 14).
 
 Caveat: the savings are a model, not a measurement. The skipped dependents
 follow from cargo's rules, but the new crate's cost is assumed to equal its
-share of the old crate's lines, and users are found by word search. They have
-not been checked against a real split yet. The cheapest check is
-`jcode-base::external_auth` (predicted ~24s over 2 runs): split it, replay
-an edit, and compare with `justrust show`.
+share of the old crate's lines, and users are found by word search.
+
+Validated on `jcode-base::external_auth` in a scratch worktree at jcode
+04c7d2b04 (moved to `crates/jcode-external-auth`, `crate::` -> `jcode_base::`,
+`pub(crate)` -> `pub`, app-core re-exports it under the old path, workspace
+checks, the 10 moved tests pass). Same body-only edit, `check --workspace`,
+three runs each:
+
+| | wall | units rebuilt | jcode_base | provider/runtime crates |
+|---|---|---|---|---|
+| before (runs ...011923788, ...011935867, ...011948463) | 11.6 / 12.5 / 11.5s | 17 | 3.0-3.5s | 10 rebuilt |
+| after  (runs ...012002880, ...012011969, ...012019539) | 8.8 / 7.1 / 7.4s | 7 | not rebuilt | none rebuilt |
+
+- The predicted set of spared crates was exact: jcode-base and the 10
+  provider/runtime crates stopped rebuilding; app-core, tui and jcode (the
+  users) still rebuild. The new crate costs 0.1s.
+- Saving: ~4.1s per edit (35%). The report said ~24s over 2 recorded runs
+  (~12s each) because those runs predate the threaded front-end (section 14),
+  when a jcode-base cascade cost 6.1s median. The estimate replays old unit
+  times, so it overstates savings after the toolchain gets faster; the
+  structure (what stops rebuilding) is what to trust.
+- One manual step the report does not mention: the moved tests used
+  `jcode_base::storage::lock_test_env`, gated on jcode-base's `test-support`
+  feature, so the new crate needs it as a dev-dependency feature.
 
 ## 16. Skipping downstream rebuilds after body-only edits: measured, not viable as a wrapper (2026-10-09)
 

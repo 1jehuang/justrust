@@ -1100,12 +1100,13 @@ pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String
         let ready = c.orphan_impls.is_empty();
         let _ = writeln!(
             o,
-            "\n{}. {}::{{{}}}  saves ~{:.0}s over {} runs{}",
+            "\n{}. {}::{{{}}}  saved ~{:.0}s over {} recorded runs (~{:.1}s per edit){}",
             i + 1,
             c.krate,
             c.roots.join(", "),
             c.saved,
             c.runs,
+            c.saved / c.runs.max(1) as f64,
             if ready { "" } else { "  (needs prep)" }
         );
         let _ = writeln!(
@@ -1298,7 +1299,10 @@ pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String
         o,
         "\nSavings replay recorded runs whose edits in that crate all fall inside the moved \
          code: the crate rebuilds only its moved share, and dependents that do not use the \
-         moved code no longer rebuild."
+         moved code no longer rebuild. They use the unit times recorded then, so they \
+         overstate the saving if builds have since become faster; which crates stop \
+         rebuilding is the reliable part (checked against a real split, FINDINGS 15). \
+         The new crate needs the dependencies and test-support features its code uses."
     );
     o
 }
@@ -1488,7 +1492,7 @@ mod tests {
         let share = g.nodes[id(&g, "emails")].lines as f64 / g.total_lines as f64;
         let expect = (10.0 + 16.0) * (1.0 - share) + 16.0;
         assert!(
-            out.contains(&format!("saves ~{expect:.0}s over 2 runs")),
+            out.contains(&format!("saved ~{expect:.0}s over 2 recorded runs")),
             "{out}"
         );
         let _ = std::fs::remove_dir_all(root);
