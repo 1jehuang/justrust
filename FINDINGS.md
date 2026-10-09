@@ -1074,7 +1074,12 @@ answers that from this workspace's recorded runs plus a regex module graph:
    re-exports like `pub use jcode_base::*`) drop out.
 
 First run on ~/jcode (96 runs with edits, 2105s in edited crates and
-dependents, last 30 days), 0.5s wall:
+dependents, last 30 days), 0.5s wall. Correction: 19 of those runs (and
+more in other sections of the report) were jcode-desktop runs, because the
+run filter matched `/home/jeremy/jcode` as a string prefix of
+`/home/jeremy/jcode-desktop`. Fixed to a path-component match; with it the
+report has 77 runs and 1918s. Numbers below are from the first run unless
+marked.
 
 - Biggest costs are not modules at all: jcode-config-types' single 1.7k-line
   lib.rs (39 runs, 566s cascade into 17 dependents), jcode-base's root file
@@ -1083,9 +1088,12 @@ dependents, last 30 days), 0.5s wall:
   file (AgentsConfig 10 edits, WebSearchConfig 7, DiffDisplayMode 6) and which
   dependents use them; for config-types nearly every dependent uses them, so
   moving items does not help, the fix there is fewer dependents per item.
-- Ready module split: `jcode-base::external_auth` (1030 lines, nothing else
-  in jcode-base references it, checked by hand): ~24s over 2 runs, spares 10
-  provider/runtime crates.
+- `jcode-base::external_auth` (1030 lines, nothing else in jcode-base
+  references it, checked by hand) was ranked first at ~24s over 2 runs,
+  sparing 10 provider/runtime crates. Both of those runs were jcode-desktop
+  runs (`check -p jcode-desktop-ui` at 31.8s and 17.7s, Desktop building
+  jcode-base as a path dependency), so the ranking came from the prefix bug.
+  After the fix no jcode run edited it and it is no longer listed.
 - Needs prep: `config::config_file` (~31s), `provider::startup` (~16s), and
   three `tui::app::*` files (13-19s each) are all `impl Config`/`impl
   MultiProvider`/`impl App` blocks split across files, so moving them first
@@ -1113,14 +1121,18 @@ three runs each:
 | before (runs ...011923788, ...011935867, ...011948463) | 11.6 / 12.5 / 11.5s | 17 | 3.0-3.5s | 10 rebuilt |
 | after  (runs ...012002880, ...012011969, ...012019539) | 8.8 / 7.1 / 7.4s | 7 | not rebuilt | none rebuilt |
 
-- The predicted set of spared crates was exact: jcode-base and the 10
-  provider/runtime crates stopped rebuilding; app-core, tui and jcode (the
-  users) still rebuild. The new crate costs 0.1s.
-- Saving: ~4.1s per edit (35%). The report said ~24s over 2 recorded runs
-  (~12s each) because those runs predate the threaded front-end (section 14),
-  when a jcode-base cascade cost 6.1s median. The estimate replays old unit
-  times, so it overstates savings after the toolchain gets faster; the
-  structure (what stops rebuilding) is what to trust.
+- The predicted set of spared crates was exact. Cargo's rebuild reasons
+  before: jcode-base, the 10 provider/runtime crates (anthropic, antigravity,
+  copilot, cursor, gemini, grok-build, openai, openrouter, doctor) plus
+  tui-permissions, then app-core, tui, jcode. After: only jcode-external-auth,
+  app-core, tui, jcode, the crates the report listed as users. The new crate
+  costs 0.1s.
+- Saving: ~4.1s per edit (35%), measured. The report's ~24s over 2 runs
+  (~12s each) is not comparable: those were Desktop runs (see the
+  correction above), so the per-edit figure was replayed from a different
+  workspace's unit times. The estimate replays old unit times in any case,
+  so it overstates savings after the toolchain gets faster; the structure
+  (what stops rebuilding) is what to trust.
 - One manual step the report does not mention: the moved tests used
   `jcode_base::storage::lock_test_env`, gated on jcode-base's `test-support`
   feature, so the new crate needs it as a dev-dependency feature.

@@ -655,7 +655,6 @@ fn normalize(p: &Path) -> PathBuf {
 
 fn load_runs(root: &Path, days: f64) -> Result<Vec<Summary>> {
     let cutoff = paths::now() - days * 86400.0;
-    let root_s = root.to_string_lossy();
     let mut out = Vec::new();
     for e in std::fs::read_dir(paths::runs_dir()?)?.flatten() {
         let Ok(raw) = std::fs::read(e.path().join("summary.json")) else {
@@ -664,13 +663,18 @@ fn load_runs(root: &Path, days: f64) -> Result<Vec<Summary>> {
         let Ok(s) = serde_json::from_slice::<Summary>(&raw) else {
             continue;
         };
-        let here = s.git.root.as_deref() == Some(&*root_s) || s.cwd.starts_with(&*root_s);
-        if here && s.start >= cutoff {
+        if belongs(&s, root) && s.start >= cutoff {
             out.push(s);
         }
     }
     out.sort_by(|a, b| a.start.total_cmp(&b.start));
     Ok(out)
+}
+
+/// Whether a recorded run was made in the workspace at `root`. Matches path
+/// components, so `/x/jcode` does not claim runs from `/x/jcode-desktop`.
+fn belongs(s: &Summary, root: &Path) -> bool {
+    s.git.root.as_deref().map(Path::new) == Some(root) || Path::new(&s.cwd).starts_with(root)
 }
 
 /// (package, file) pairs cargo reported as changed in a run. Files are
@@ -1554,6 +1558,20 @@ mod tests {
         assert!(out.contains("docs (build-script input of mid)"), "{out}");
         assert!(out.contains("build script reruns"), "{out}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runs_from_sibling_dirs_with_a_shared_prefix_do_not_belong() {
+        let mut s = Summary {
+            cwd: "/x/jcode-desktop".into(),
+            ..Default::default()
+        };
+        assert!(!belongs(&s, Path::new("/x/jcode")));
+        s.cwd = "/x/jcode/crates/a".into();
+        assert!(belongs(&s, Path::new("/x/jcode")));
+        s.cwd = "/elsewhere".into();
+        s.git.root = Some("/x/jcode".into());
+        assert!(belongs(&s, Path::new("/x/jcode")));
     }
 
     #[test]
