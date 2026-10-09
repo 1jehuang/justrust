@@ -1172,11 +1172,18 @@ checkout):
 
 Also fixed: the root package's sources included every member crate under
 it (and `target-release/`), so `jcode-desktop` was listed as a user of
-anything any member used. Users are now exact on both splits (jcode:
-jcode, app-core, tui; Desktop: jcode-desktop-ui only).
+anything any member used. The predicted users now match the crates that
+still rebuilt in both splits (jcode: jcode, app-core, tui; Desktop:
+jcode-desktop-ui). They are not the set of manifests to edit: in the jcode
+split only app-core needed the dependency, and tui and jcode reached the
+module through app-core's `pub use jcode_external_auth as external_auth`.
+The report now says so.
 
-Remaining limits: the saving is still a per-package median, so a candidate
-seen in few quiet runs inherits whatever runs exist; and the moved share is
+Remaining limits: two validation points only, and the Desktop one (0.5 vs
+0.3s) is inside the run-to-run spread (2.6-3.2s walls), so it shows the
+estimate is no longer inflated, not that it is precise at that scale. The
+saving is a per-package median, so a candidate seen in few quiet runs
+inherits whatever runs exist; and the moved share is
 by lines, which ignores that a small crate has fixed overhead (~0.1-0.2s
 per new crate in both splits).
 

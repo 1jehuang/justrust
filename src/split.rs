@@ -1213,8 +1213,14 @@ pub fn report(ws: &Workspace, runs: &[Summary], days: f64, top: usize) -> String
                 "no other workspace crate uses this code".to_owned()
             } else {
                 format!(
-                    "{} use it and would depend on the new crate",
-                    c.users.iter().cloned().collect::<Vec<_>>().join(", ")
+                    "{} use it, so they still rebuild on these edits and need the new crate as a \
+                     dependency or through a re-export (e.g. `pub use new_crate as {}` in a crate \
+                     they already use)",
+                    c.users.iter().cloned().collect::<Vec<_>>().join(", "),
+                    c.roots
+                        .first()
+                        .and_then(|r| r.rsplit("::").next())
+                        .unwrap_or("module")
                 )
             }
         );
