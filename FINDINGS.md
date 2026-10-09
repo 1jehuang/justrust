@@ -894,3 +894,75 @@ about 1 failure in 5 full UI runs, reproduced on a clean d206de0 worktree.
 The offline screenshot sometimes captures the 3s startup beta toast
 (same on d206de0 and after, 1 of 2 runs each); that is screenshot timing,
 not a layout change.
+
+## 12. Splitting jcode-desktop-ui, part 3: voice and login leaves (2026-10-08, cricket)
+
+Step 3a of the plan in section 11, plus the first slice of 3b. Desktop
+commits, each verified with `justrust test --workspace` (1746, then 1747
+passed / 13 ignored), `justrust check --workspace --all-targets`, an offline
+screenshot, and a Ctrl+R reload that activated a new UI generation
+(release-desktop.py MANIFESTS and AGENTS.md's narrow-crate list updated):
+
+- 1430ed1: new `crates/jcode-desktop-voice` (global_voice_input,
+  global_voice_overlay, global_voice_session, panel_voice_tag -> `tag`:
+  1.9k lines, 27 tests) and `crates/jcode-desktop-accounts-ui`
+  (login_input, panel_login_catalog -> `catalog`, panel_login_status ->
+  `connection`: 1.1k lines, 10 tests). All seven were real leaves: their
+  only crate deps were `theme`/`render_stats` (ui-core), `harness`/`platform`
+  (harness crate) and catalog -> connection (moved together). The UI
+  re-exports them at their old paths (`crate::global_voice_*`,
+  `crate::login_input`, `panel::voice::tag`, `panel::login::{catalog,
+  connection}`), so no caller changed. Neither crate needs a
+  `test-support` feature: the moved code has no `cfg(test)` behavior beyond
+  its own tests. gpui via `gpui.workspace = true`, libc/zbus/async-io only on
+  Linux, with the UI's libc features.
+- 5bf7aff (3b, first slice): Panel's voice fields were already grouped
+  in `voice: VoiceState` (panel_voice.rs), so the "extract VoiceState"
+  half of 3b had already been done. What remains is moving the logic behind a
+  `VoiceHost` trait. This commit moves the parts with no panel state into
+  `jcode-desktop-voice::chrome`: shortcut keycap and tooltip, pill status
+  labels (`short_voice_status`, `global_pill_*`), and the idle
+  microphone/shortcut crossfade view `VoiceSwap` with its 2 tests.
+  panel_voice.rs: 2085 -> 1840 lines.
+
+### One-line edit benchmark (median of 3 after one warmup, `let _probe = N;` in a test fn)
+
+| edit in | compile (median) | wall | runs (compile s) |
+|---|---|---|---|
+| UI `panel_voice.rs`, `-p jcode-desktop-ui --lib -- panel::voice` (old home of tag.rs) | 9.41s | 10.2s | 8.66, 21.08 (8 other rustc), 9.41 |
+| voice `tag.rs`, `-p jcode-desktop-voice --lib -- tag` | 1.39s | 2.0s | 1.63, 1.39, 1.19 |
+| accounts-ui `catalog.rs`, `-p jcode-desktop-accounts-ui --lib -- catalog` | 0.97s | 1.5s | 0.97, 1.02, 0.84 |
+| voice `chrome.rs` (GPUI views), `-p jcode-desktop-voice --lib -- chrome` | 3.9s, contended | 5.2-6.8s | 4.89, 3.19, 4.02 (others 15.3 of 16 cores, 56-64 other rustc; own CPU 2.3-2.4s) |
+
+Run ids (all 20261008-): UI 225901370-402380, 225910853-403300,
+225932795-406079; tag 225654565-372432, 225656959-372833,
+225659035-373219; catalog 225804731-391461, 225806260-393194,
+225807855-394959; chrome 231001940-579130, 231009186-581497,
+231014935-583831 (earlier contended set 230724158, 230731419, 230737731:
+3.91, 3.24, 3.20).
+
+Reading: edits in the new crates are 7-10x faster to compile than the same
+code in the UI (about 1.0-1.4s vs 9.4s), the same class as ui-core and
+model in section 11. The chrome number is inflated by contention (CPU use
+of the build itself was about 2.4s, versus 11-12s of CPU for a quiet UI
+edit). justrust startup was also 1.8-2.6s under that load, versus 0.45s
+quiet. jcode-desktop-ui is now about 119k lines.
+
+### Left for step 3b and later
+
+- The rest of panel_voice.rs (1.8k), panel_voice_overlay.rs (0.9k) and
+  panel_voice_pills.rs (0.7k) are `impl Panel` blocks. They read
+  `self.voice.*` plus a few panel members (`input`, `session_id`,
+  `status_line`, `submit_or_queue`, `supports_voice`, `terminal`,
+  `todoist`, `orchestration`, `preview_state`, `is_side_document`,
+  `is_pending_session`). That is a small, explicit surface for a
+  `VoiceHost` trait. `Phase`, `VoiceTrace` and `VoiceState` can move as
+  soon as their private-field access from Panel tests (`panel.voice.error
+  = ...` in panel_voice_overlay.rs tests) goes through methods.
+- Login (3c) and `Workspace::for_test` in panel tests (3d) are unchanged.
+
+Process notes: during this work another agent released Desktop 0.5.1
+(version bump in every manifest, including the two new ones, which it
+picked up on its own) and the main Desktop instance exited. The 5bf7aff
+reload was verified on the single-panel host (generation 3), and 1430ed1
+on both hosts (main generation 4, single-panel generation 2).
