@@ -319,25 +319,26 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
     }
 
     // The build used few cores for a long time: a serial bottleneck.
-    if p.compile >= 5.0 && r.avg_build_cores < 0.25 * ncpu && r.avg_other_cores < 0.5 * ncpu {
-        if let Some(u) = s
+    if p.compile >= 5.0
+        && r.avg_build_cores < 0.25 * ncpu
+        && r.avg_other_cores < 0.5 * ncpu
+        && let Some(u) = s
             .top_units
             .first()
             .filter(|u| u.wall_share >= 0.6 * p.compile)
-        {
-            let threads = u
-                .frontend_threads
-                .map(|t| format!(" (frontend threads {t})"))
-                .unwrap_or_else(|| " (single-threaded frontend)".to_owned());
-            out.push(Finding::new(
-                "serial_bottleneck",
-                u.wall_share * 0.3,
-                format!(
-                    "build averaged {:.1} of {} cores: {} ran {:.1}s mostly alone{}",
-                    r.avg_build_cores, s.ncpu, u.name, u.wall_share, threads
-                ),
-            ));
-        }
+    {
+        let threads = u
+            .frontend_threads
+            .map(|t| format!(" (frontend threads {t})"))
+            .unwrap_or_else(|| " (single-threaded frontend)".to_owned());
+        out.push(Finding::new(
+            "serial_bottleneck",
+            u.wall_share * 0.3,
+            format!(
+                "build averaged {:.1} of {} cores: {} ran {:.1}s mostly alone{}",
+                r.avg_build_cores, s.ncpu, u.name, u.wall_share, threads
+            ),
+        ));
     }
 
     // Build gaps: no rustc running inside the build window.
@@ -381,6 +382,8 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
     }
 
     out.retain(|f| f.cost_secs >= MIN_COST);
+    out.extend(avoidable_test_targets(s));
+
     out.sort_by(|a, b| b.cost_secs.total_cmp(&a.cost_secs));
     out
 }
@@ -402,7 +405,7 @@ fn summarize_reasons(s: &Summary, local: bool) -> Option<String> {
         return None;
     }
     let mut v: Vec<_> = counts.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v.sort_by_key(|e| std::cmp::Reverse(e.1));
     Some(
         v.into_iter()
             .take(3)
@@ -444,6 +447,146 @@ fn unit_matches(unit_name: &str, package: &str) -> bool {
     base == package.replace('-', "_") || base == package
 }
 
+/// Cargo flags that take a value, so the next arg is not a test filter.
+const VALUE_FLAGS: &[&str] = &[
+    "-p",
+    "--package",
+    "-F",
+    "--features",
+    "--target",
+    "--profile",
+    "-j",
+    "--jobs",
+    "--manifest-path",
+    "--target-dir",
+    "--config",
+    "-Z",
+    "--color",
+    "--message-format",
+    "--exclude",
+    "--bin",
+    "--test",
+    "--example",
+    "--bench",
+    "--lockfile-path",
+];
+
+/// Flags that already select targets: the user chose what to build.
+const TARGET_SELECTORS: &[&str] = &[
+    "--lib",
+    "--bins",
+    "--bin",
+    "--test",
+    "--tests",
+    "--examples",
+    "--example",
+    "--benches",
+    "--bench",
+    "--all-targets",
+    "--doc",
+];
+
+/// `test -p X [filter]` without a target selector builds X's plain lib (and
+/// bins, integration tests, doctests) even when only the lib's unit tests
+/// matter. Suggest `--lib` with the time those extra targets cost.
+fn avoidable_test_targets(s: &Summary) -> Option<Finding> {
+    if s.subcommand != "test" {
+        return None;
+    }
+    let args: Vec<&str> = s.args.iter().map(String::as_str).skip(1).collect();
+    let cargo_args = match args.iter().position(|a| *a == "--") {
+        Some(i) => &args[..i],
+        None => &args[..],
+    };
+    let mut packages = Vec::new();
+    let mut i = 0;
+    while i < cargo_args.len() {
+        let a = cargo_args[i];
+        let flag = a.split('=').next().unwrap_or(a);
+        if TARGET_SELECTORS.contains(&flag) || a == "--workspace" || a == "--all" {
+            return None;
+        }
+        if a == "-p" || a == "--package" {
+            packages.extend(cargo_args.get(i + 1).copied());
+            i += 2;
+            continue;
+        }
+        if let Some(p) = a.strip_prefix("--package=") {
+            packages.push(p);
+        } else if VALUE_FLAGS.contains(&a) {
+            i += 1;
+        }
+        i += 1;
+    }
+    let [pkg] = packages[..] else { return None };
+    if pkg.contains(['*', '?', '@', ':']) {
+        return None;
+    }
+    let krate = pkg.replace('-', "_");
+    let lib_test_name = format!("{krate} (test)");
+    // Lib unit tests must exist in this run, or `--lib` would skip everything.
+    if !s.top_units.iter().any(|u| u.name == lib_test_name) {
+        return None;
+    }
+    // Test binaries other than the lib's: integration tests, bin tests, doctests.
+    let lib_bin_prefix = format!("{krate}-");
+    let is_lib_bin = |n: &str| {
+        n.strip_prefix(&lib_bin_prefix)
+            .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    let others: Vec<_> = s
+        .tests
+        .binaries
+        .iter()
+        .filter(|b| !is_lib_bin(&b.name))
+        .collect();
+    let others_ran_tests = others.iter().any(|b| b.passed + b.failed > 0);
+    let lib_ran_tests = s
+        .tests
+        .binaries
+        .iter()
+        .any(|b| is_lib_bin(&b.name) && b.passed + b.failed > 0);
+    // Fire only when the lib's unit tests were the only tests that ran
+    // (with or without a filter): `--lib` would then run exactly the same tests.
+    if !lib_ran_tests || others_ran_tests {
+        return None;
+    }
+    // Units `--lib` would not build: the non-test lib/bin of this package and
+    // its other test targets. Only this package's targets are tested, so every
+    // local test unit other than the lib's belongs to it.
+    let mut extra = Vec::new();
+    let mut secs = 0.0;
+    for u in s.top_units.iter().filter(|u| u.local) {
+        let plain = u.name == krate && u.kind != "test";
+        if plain || (u.kind == "test" && u.name != lib_test_name) {
+            secs += u.wall_share;
+            extra.push(format!("{} {:.1}s", u.name, u.wall_share));
+        }
+    }
+    let run_secs: f64 = others.iter().map(|b| b.wall).sum();
+    if run_secs > 0.0 {
+        extra.push(format!(
+            "{} other test binaries/doctests {:.1}s",
+            others.len(),
+            run_secs
+        ));
+    }
+    let cost = secs + run_secs;
+    if cost < MIN_COST {
+        return None;
+    }
+    let cmd = s.args.join(" ").replacen("test", "test --lib", 1);
+    Some(Finding::new(
+        "avoidable_targets",
+        cost,
+        format!(
+            "only {pkg}'s lib unit tests ran, but the command also built its other targets \
+             ({}); `cargo {cmd}` would skip them, saving ~{cost:.1}s",
+            extra.join(", ")
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +598,76 @@ mod tests {
             ncpu: 16,
             ..Default::default()
         }
+    }
+
+    /// Fixture from run 20261008-210412035-4101929.
+    fn desktop_ui_test_run(args: &[&str]) -> Summary {
+        use crate::summary::TestBinary;
+        let mut s = base();
+        s.subcommand = args[0].into();
+        s.args = args.iter().map(|a| a.to_string()).collect();
+        for (name, kind, share) in [
+            ("jcode_desktop_ui (test)", "test", 25.3),
+            ("jcode_desktop_ui", "lib", 9.0),
+            ("jcode_desktop_ui_core", "lib", 1.8),
+            ("build_version (test)", "test", 0.2),
+        ] {
+            s.top_units.push(UnitBreakdown {
+                name: name.into(),
+                kind: kind.into(),
+                local: true,
+                wall_share: share,
+                ..Default::default()
+            });
+        }
+        s.tests.binaries.push(TestBinary {
+            name: "jcode_desktop_ui-c27361aede4d4dda".into(),
+            wall: 5.6,
+            passed: 70,
+            failed: 3,
+            filtered_out: 1271,
+            ..Default::default()
+        });
+        s.tests.binaries.push(TestBinary {
+            name: "build_version-0123456789abcdef".into(),
+            wall: 0.1,
+            filtered_out: 4,
+            ..Default::default()
+        });
+        s
+    }
+
+    #[test]
+    fn suggests_lib_when_only_lib_tests_ran() {
+        let s = desktop_ui_test_run(&["test", "-p", "jcode-desktop-ui", "--", "composer"]);
+        let f = analyze(&s);
+        let f = f.iter().find(|f| f.kind == "avoidable_targets").unwrap();
+        assert!((f.cost_secs - 9.3).abs() < 0.01, "{f:?}");
+        assert!(
+            f.message
+                .contains("cargo test --lib -p jcode-desktop-ui -- composer")
+        );
+        assert!(f.message.contains("jcode_desktop_ui 9.0s"));
+    }
+
+    #[test]
+    fn no_lib_hint_when_selected_or_other_tests_ran() {
+        for args in [
+            &["test", "-p", "jcode-desktop-ui", "--lib"][..],
+            &["test", "-p", "jcode-desktop-ui", "--test", "x"],
+            &["test", "--workspace"],
+            &["test", "-p", "a", "-p", "jcode-desktop-ui"],
+            &["check", "-p", "jcode-desktop-ui"],
+        ] {
+            let s = desktop_ui_test_run(args);
+            assert!(
+                analyze(&s).iter().all(|f| f.kind != "avoidable_targets"),
+                "{args:?}"
+            );
+        }
+        let mut s = desktop_ui_test_run(&["test", "-p", "jcode-desktop-ui"]);
+        s.tests.binaries[1].passed = 1;
+        assert!(analyze(&s).iter().all(|f| f.kind != "avoidable_targets"));
     }
 
     #[test]

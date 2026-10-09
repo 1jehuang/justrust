@@ -345,6 +345,13 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     if let Some(e) = &s.diagnostics.first_error {
         let _ = writeln!(o, "\nFirst error: {e}");
     }
+    let findings = crate::findings::analyze(s);
+    if !findings.is_empty() {
+        let _ = writeln!(o, "\nWaste");
+        for f in &findings {
+            let _ = writeln!(o, "  ~{:.1}s {}", f.cost_secs, f.message);
+        }
+    }
     let _ = writeln!(o, "\nRaw data: {}", dir.display());
     o
 }

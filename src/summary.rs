@@ -945,7 +945,7 @@ impl Summary {
             counts.entry(key).or_default().push(&r.package);
         }
         let mut v: Vec<_> = counts.into_iter().collect();
-        v.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+        v.sort_by_key(|e| std::cmp::Reverse(e.1.len()));
         Some(
             v.iter()
                 .take(3)
@@ -991,6 +991,16 @@ impl Summary {
             self.cpu_secs, self.resources.avg_build_cores, self.id
         ));
         s
+    }
+}
+
+fn trunc(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n - 1).collect();
+        t.push('…');
+        t
     }
 }
 
@@ -1053,15 +1063,5 @@ mod tests {
         assert!(is_compile_error(
             "error: cannot find value `x` in this scope"
         ));
-    }
-}
-
-fn trunc(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_owned()
-    } else {
-        let mut t: String = s.chars().take(n - 1).collect();
-        t.push('…');
-        t
     }
 }
