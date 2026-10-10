@@ -25,6 +25,7 @@ mod remote_daemon;
 mod remote_proto;
 mod remote_sync;
 mod remote_watch;
+mod route;
 mod runs;
 mod sched;
 mod shim;
@@ -291,6 +292,9 @@ struct RemoteArgs {
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
+    // check, clippy and test may run on the remote machine when that is
+    // predicted faster. Returns when the build should run here.
+    route::maybe_remote(&full);
     let max_warnings = std::env::var("JUSTRUST_MAX_WARNINGS")
         .ok()
         .and_then(|v| v.parse().ok())
