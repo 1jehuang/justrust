@@ -438,7 +438,8 @@ fn finish(
         run_dir.join("processes.json"),
         serde_json::to_vec_pretty(procs)?,
     )?;
-    let units = summary::load_units(run_dir);
+    let mut units = summary::load_units(run_dir);
+    units.extend(summary::units_from_wrapper_procs(procs));
     let mut s = summary::build(
         meta, git, start, end, code, cpu_secs, lines, samples, procs, &units,
     );

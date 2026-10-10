@@ -1629,3 +1629,17 @@ shared units (registry and members). The next `justrust check` refreshed
 9 units in 0.2s, all registry crates (azure_core, reqwest, ...), and none
 of the members (jcode-base, jcode-tui-permissions stayed slot-built). It
 then compiled 0 units.
+
+## 2026-10-10: `justrust clippy` reported 0 compiled units
+
+cargo runs workspace members under clippy as `$RUSTC_WORKSPACE_WRAPPER
+$RUSTC <args>`, and clippy-driver compiles in-process, so the shim never ran
+and the report said "0 compiled, compile 0.00s, startup 1.36s" while cargo
+printed `Checking justrust` (run 20261010-061717076-2544870). Pointing the
+wrapper at the shim is not an option: cargo hashes the wrapper path into
+unit hashes (two wrapper paths gave different `.fingerprint` names in a
+scratch workspace), which would stop sharing artifacts with plain `cargo
+clippy`. The summary now reconstructs these units from the sampled
+clippy-driver processes (200 ms resolution, no pass timings). Same edit
+after the fix: "3 compiled (3 local), compile 1.99s" (run
+20261010-062530043-2617015).

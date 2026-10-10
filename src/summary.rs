@@ -274,6 +274,54 @@ pub fn load_units(run_dir: &Path) -> Vec<Unit> {
         .collect()
 }
 
+/// Units the shim never sees: cargo runs workspace members as
+/// `$RUSTC_WORKSPACE_WRAPPER $RUSTC <args>`, and clippy-driver compiles
+/// in-process instead of running `$RUSTC`, so `justrust clippy` recorded no
+/// workspace units and reported "0 compiled". Pointing the wrapper at the
+/// shim would change the units' hashes (cargo hashes the wrapper path) and
+/// stop sharing artifacts with plain `cargo clippy`, so these units are
+/// reconstructed from the sampled process tree instead: timing at sample
+/// resolution, no pass timings.
+pub fn units_from_wrapper_procs(procs: &[ProcRecord]) -> Vec<Unit> {
+    procs
+        .iter()
+        .filter(|p| p.comm == "clippy-driver")
+        .filter_map(|p| {
+            let args: Vec<&str> = p.cmdline.split_whitespace().collect();
+            let after = |flag: &str| {
+                args.iter()
+                    .position(|a| *a == flag)
+                    .and_then(|i| args.get(i + 1))
+                    .map(|s| s.to_string())
+            };
+            let crate_name = after("--crate-name")?;
+            let emit = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--emit="))
+                .unwrap_or_default()
+                .to_owned();
+            let wall = (p.last_seen - p.first_seen).max(0.0);
+            Some(Unit {
+                package: crate_name.replace('_', "-"),
+                build_script: crate_name.starts_with("build_script_"),
+                crate_name,
+                crate_types: after("--crate-type").into_iter().collect(),
+                test: args.contains(&"--test"),
+                // The workspace wrapper only runs for workspace members.
+                local: true,
+                emit,
+                opt_level: "0".into(),
+                start: p.first_seen,
+                end: p.last_seen,
+                wall,
+                user: p.cpu_secs,
+                max_rss_mb: p.max_rss_mb,
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
 /// Map rustc `-Ztime-passes` output onto frontend/codegen/link/incremental.
 ///
 /// Passes nest, so only passes that run directly on the main thread and do not
@@ -1094,6 +1142,39 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clippy_driver_processes_become_units() {
+        let p = |comm: &str, cmd: &str| ProcRecord {
+            pid: 1,
+            comm: comm.into(),
+            cmdline: cmd.into(),
+            kind: "rustc".into(),
+            first_seen: 10.0,
+            last_seen: 12.5,
+            cpu_secs: 4.0,
+            max_rss_mb: 700.0,
+        };
+        let units = units_from_wrapper_procs(&[
+            p("cargo", "/usr/bin/cargo check"),
+            p(
+                "clippy-driver",
+                "/usr/bin/clippy-driver /h/.justrust/bin/shim/rustc --crate-name my_app \
+                 --edition=2024 src/lib.rs --crate-type lib --emit=dep-info,metadata --test",
+            ),
+            p("rustc", "/h/.justrust/bin/shim/rustc --crate-name serde"),
+        ]);
+        assert_eq!(units.len(), 1);
+        let u = &units[0];
+        assert_eq!(
+            (u.crate_name.as_str(), u.package.as_str()),
+            ("my_app", "my-app")
+        );
+        assert_eq!(u.emit, "dep-info,metadata");
+        assert_eq!(u.crate_types, ["lib"]);
+        assert!(u.local && u.test && !u.build_script);
+        assert_eq!((u.wall, u.user), (2.5, 4.0));
+    }
 
     #[test]
     fn shares_overlapping_time() {
