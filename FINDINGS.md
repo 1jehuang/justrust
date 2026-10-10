@@ -1410,3 +1410,67 @@ so mixing them in one target dir rebuilds the differing dependencies.
 Note: in this repo, `justrust build --release` goes through a build slot,
 so `target/release/justrust` is not updated. Use `JUSTRUST_SLOTS=0` when the
 binary itself is the output.
+
+## 19. Split recommendations at build time, from incrementally stored evidence (2026-10-09)
+
+`giant_crate` and `upstream_cascade` told the agent "split, run `justrust
+split`" without saying what. The specific answer needs the workspace's edit
+history, a module graph and, for root files, git churn, and `justrust split`
+recomputed all of it per call: 1.37s on ~/jcode (re-reading 1,370 run
+summaries, re-parsing ~1,100 source files, 4 `git log`s).
+
+Every piece is now stored by whatever already has it (`src/split_index.rs`):
+
+| Piece | Written by | Store |
+|---|---|---|
+| Edit record: changed files, local unit times, quiet/check | every recorded run, local and remote, when its summary is written | `split/edits.jsonl` (append; old runs back-filled once from `summary.json`) |
+| Per-file parse facts: lines, `mod` items, written module paths, types, inherent impls | any module-graph build; only files whose size/mtime changed are re-parsed | `split/facts-<ws>.json` |
+| Root-file churn (git hunk headers) | report/refresh, keyed by HEAD and day | `split/churn-<ws>.json` |
+| Per-file hint: the concrete recommendation for edits to that file | niced, detached `justrust split --refresh-hints` after builds with edits (at most once a minute per workspace, flock'd), and every `justrust split` | `split/hints-<ws>.json` |
+
+A finishing build reads only the hints file and attaches the hints for the
+files it edited (14 us measured), and the costliest of `giant_crate` /
+`upstream_cascade` shows it instead of the generic text. Path resolution
+was split from extraction (`written_paths` stores paths as written,
+resolution runs against the module tree), so facts are cacheable per file.
+
+Measurements on ~/jcode (release build):
+
+| | before | after |
+|---|---:|---:|
+| `justrust split`, warm | 1368 ms | 196-274 ms |
+| `justrust split`, empty `split/` (back-fill + parse) | 1368 ms | 587-967 ms |
+| `--refresh-hints` (background, niced) | n/a | 156 ms |
+| hint lookup at the end of a build | n/a | 14 us |
+
+Regression: on a frozen copy of the run history (1,402 summaries), the
+`justrust split --days 365` report is byte-identical before and after for
+both ~/jcode (161 lines) and ~/jcode-desktop (63 lines), cold and warm.
+
+End to end, in ~/jcode: appending a comment to
+`crates/jcode-base/src/config/config_file.rs` and running `justrust check -p
+jcode-app-core` (6.8s, run 20261009-213927583-3383129) printed:
+
+> jcode-app-core rebuilt only because jcode-base changed (edited
+> crates/jcode-base/src/config/config_file.rs) (3.2s). Specifically, edits to
+> jcode-base::config::config_file cost ~17.3s each here (2 recorded runs).
+> Moving jcode-base::config::config_file (863 of 134594 lines) into its own
+> crate that depends on jcode-base would stop them rebuilding jcode-base and
+> 13 dependents, saving ~15.8s per edit. First turn its `impl Config` blocks
+> (the type stays in config) into free functions or an extension trait ...
+
+The same build appended its edit record and triggered the background
+refresh (hints file rewritten 0s after the run).
+
+Hint kinds: a movable module (saving, moved lines, spared dependents,
+remaining users, and either the `--apply` command or the blocker to fix
+first), an entangled module (share of the crate it would drag along and
+the references to cut), a crate root file (most edited items and how many
+dependents use each; says when moving them would not help), a build-script
+input (embed in a leaf crate or load at runtime).
+
+Limits: hints are as fresh as the last refresh (at most a minute behind the
+latest build plus the refresh time); the first build in a workspace with no
+`split/` state shows the generic advice and starts the refresh. The savings
+model is unchanged from 15b (ranking signal, about 2x high in two
+validations).

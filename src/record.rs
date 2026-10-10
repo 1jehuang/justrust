@@ -440,11 +440,14 @@ fn finish(
         meta, git, start, end, code, cpu_secs, lines, samples, procs, &units,
     );
     s.sched = sched;
+    crate::split_index::attach(&mut s);
     std::fs::write(run_dir.join("summary.json"), serde_json::to_vec_pretty(&s)?)?;
     paths::append_line(
         &paths::index_file()?,
         &serde_json::to_string(&s.index_entry())?,
     )?;
+    crate::split_index::record(&s);
+    crate::split_index::maybe_refresh(&s);
     crate::depcache_gc::maybe_spawn();
     if opts.agent {
         eprint!("{}", s.agent_footer(&hidden));

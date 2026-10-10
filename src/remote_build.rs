@@ -359,6 +359,9 @@ fn record_remote(run_id: &str, summary: &[u8], machine: &str, sync_ms: f64, wall
         sync_ms,
         client_wall: wall,
     });
+    // Hints are local state: attach them here, not on the remote machine
+    // (which mirrors the workspace at the same absolute path).
+    crate::split_index::attach(&mut s);
     let _ = std::fs::write(
         dir.join("summary.json"),
         serde_json::to_vec_pretty(&s).unwrap_or_default(),
@@ -369,6 +372,8 @@ fn record_remote(run_id: &str, summary: &[u8], machine: &str, sync_ms: f64, wall
     ) {
         let _ = crate::paths::append_line(&idx, &line);
     }
+    crate::split_index::record(&s);
+    crate::split_index::maybe_refresh(&s);
 }
 
 /// `justrust remote check|test|...`: always remote (starting the machine if

@@ -238,12 +238,15 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
                 "upstream_cascade",
                 cost,
                 format!(
-                    "{} rebuilt only because {} changed{origin} ({:.1}s). Edits to shared upstream \
-                     crates force downstream recompiles; `justrust split` shows which code to \
-                     move out to stop this",
+                    "{} rebuilt only because {} changed{origin} ({:.1}s). {}",
                     names.join(", "),
                     upstream.join(", "),
-                    cost
+                    cost,
+                    split_advice(
+                        s,
+                        "Edits to shared upstream crates force downstream recompiles; \
+                         `justrust split` shows which code to move out to stop this"
+                    )
                 ),
             ));
         }
@@ -403,6 +406,22 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
     out.extend(avoidable_test_targets(s));
 
     out.sort_by(|a, b| b.cost_secs.total_cmp(&a.cost_secs));
+    // The split recommendation is shown once, on the costliest finding that
+    // carries it.
+    if !s.split_hints.is_empty() {
+        let advice = split_advice(s, "");
+        let mut shown = false;
+        for f in &mut out {
+            if f.message.contains(&advice) {
+                if shown {
+                    f.message = f
+                        .message
+                        .replace(&advice, "See the split recommendation above");
+                }
+                shown = true;
+            }
+        }
+    }
     out
 }
 
@@ -472,14 +491,18 @@ fn giant_crates(s: &Summary) -> Option<Finding> {
         "giant_crate",
         cost,
         format!(
-            "{total:.1}s went to recompiling oversized crates: {}. rustc redoes most of a crate \
-             after any edit to it and rebuilds everything downstream, so per-edit cost grows \
-             with crate size and no compiler flag removes it. Split them: move the modules \
-             that change often (the ones you are editing) into new leaf crates that depend on \
-             the big crate rather than the other way round, and keep their tests there. Edits \
-             in split-out crates measured 6-13x faster. `justrust split` names the modules to \
-             move, from this workspace's recorded edits{}",
+            "{total:.1}s went to recompiling oversized crates: {}. {}{}",
             list.join(", "),
+            split_advice(
+                s,
+                "rustc redoes most of a crate after any edit to it and rebuilds everything \
+                 downstream, so per-edit cost grows with crate size and no compiler flag \
+                 removes it. Split them: move the modules that change often (the ones you are \
+                 editing) into new leaf crates that depend on the big crate rather than the \
+                 other way round, and keep their tests there. Edits in split-out crates \
+                 measured 6-13x faster. `justrust split` names the modules to move, from this \
+                 workspace's recorded edits"
+            ),
             if single_threaded {
                 ". Also, these units ran rustc's front-end single-threaded; a -Zthreads \
                  rustc wrapper typically halves a full rebuild"
@@ -488,6 +511,22 @@ fn giant_crates(s: &Summary) -> Option<Finding> {
             }
         ),
     ))
+}
+
+/// The specific recommendation for what this run edited, from the
+/// workspace's stored split hints, or `generic` when there is none yet.
+fn split_advice(s: &Summary, generic: &str) -> String {
+    match s.split_hints.first() {
+        Some(h) => {
+            let mut t = format!("Specifically, {}", h.text);
+            if let Some(h2) = s.split_hints.get(1) {
+                t.push_str(&format!(". Also, {}", h2.text));
+            }
+            t.push_str(" (`justrust split` for all candidates)");
+            t
+        }
+        None => generic.to_owned(),
+    }
 }
 
 /// Summarize rebuild reasons for local (`local=true`) or non-local units.
@@ -934,6 +973,53 @@ mod tests {
             g.message
         );
         assert!(!g.message.contains("single-threaded"));
+    }
+
+    #[test]
+    fn stored_split_hint_replaces_generic_advice_once() {
+        let mut s = base();
+        s.top_units = vec![
+            giant_unit("jcode_app_core", "lib", 32.2, Some(159_692)),
+            giant_unit("jcode_base", "lib", 21.6, Some(138_891)),
+        ];
+        s.rebuild_reasons.push(RebuildReason {
+            package: "jcode-app-core".into(),
+            reason: "the dependency `jcode-base` was rebuilt".into(),
+        });
+        // Without a hint: generic advice.
+        let f = analyze(&s);
+        assert!(
+            f.iter()
+                .any(|f| f.message.contains("`justrust split` names the modules"))
+        );
+        s.split_hints.push(crate::summary::SplitHint {
+            file: "crates/jcode-base/src/config/config_file.rs".into(),
+            secs: 15.8,
+            text: "edits to jcode-base::config::config_file cost ~16.0s each here".into(),
+            age_secs: 3.0,
+        });
+        let f = analyze(&s);
+        let with: Vec<&Finding> = f
+            .iter()
+            .filter(|f| {
+                f.message
+                    .contains("Specifically, edits to jcode-base::config::config_file")
+            })
+            .collect();
+        assert_eq!(with.len(), 1, "{f:#?}");
+        assert!(
+            with[0]
+                .message
+                .contains("(`justrust split` for all candidates)")
+        );
+        assert!(
+            !f.iter()
+                .any(|f| f.message.contains("names the modules to move"))
+        );
+        assert!(
+            f.iter()
+                .any(|f| f.message.contains("See the split recommendation above"))
+        );
     }
 
     #[test]

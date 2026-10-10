@@ -33,6 +33,7 @@ mod shim;
 mod slots;
 mod split;
 mod split_apply;
+mod split_index;
 mod status;
 mod summary;
 
@@ -192,6 +193,10 @@ enum Command {
         /// With --apply: print the plan and change nothing.
         #[arg(long, requires = "apply")]
         dry_run: bool,
+        /// Recompute the per-file split hints builds show (normally run in
+        /// the background after builds that edited files).
+        #[arg(long, hide = true, conflicts_with = "apply")]
+        refresh_hints: bool,
     },
     /// The remote compile machine: create, start, stop, status, ssh.
     Remote {
@@ -363,8 +368,10 @@ fn main() -> anyhow::Result<()> {
             apply,
             name,
             dry_run,
+            refresh_hints,
         } => match apply {
             Some(target) => split_apply::command(&target, name.as_deref(), dry_run)?,
+            None if refresh_hints => split::refresh_hints(days)?,
             None => split::command(days, top, &runs)?,
         },
         Command::Slots {

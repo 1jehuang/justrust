@@ -44,6 +44,22 @@ pub struct Summary {
     /// Set when the build ran on the remote machine (copied back locally).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteInfo>,
+    /// Specific split recommendations for the files this run edited, from
+    /// the workspace's background-computed hints (`split_index`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub split_hints: Vec<SplitHint>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct SplitHint {
+    /// The edited file, as cargo reported it.
+    pub file: String,
+    /// Estimated seconds saved per edit of this file.
+    pub secs: f64,
+    pub text: String,
+    /// Age of the hint when attached.
+    #[serde(default)]
+    pub age_secs: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -712,6 +728,7 @@ pub fn build(
         locks_waited,
         sched: None,
         remote: None,
+        split_hints: Vec::new(),
     }
 }
 

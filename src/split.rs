@@ -27,6 +27,7 @@
 //! names the edges to cut. It does not perform the move.
 
 use crate::paths;
+use crate::split_index;
 use crate::summary::Summary;
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -42,7 +43,7 @@ const MAX_MOVE_SHARE: f64 = 0.35;
 pub fn command(days: f64, top: usize, run_ids: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let ws = Workspace::load(&cwd)?;
-    let history = load_runs(&ws.root, days)?;
+    let history = split_index::load(&ws.root, days)?;
     let runs = if run_ids.is_empty() {
         history.clone()
     } else {
@@ -59,6 +60,13 @@ pub fn command(days: f64, top: usize, run_ids: &[String]) -> Result<()> {
         v
     };
     print!("{}", report_with(&ws, &runs, &history, days, top));
+    if run_ids.is_empty() {
+        // The full report has done the expensive parts (index, facts,
+        // churn); refreshing the build hints now is cheap and keeps them
+        // in step with what was just shown.
+        let h = hints_from(&ws, &history, days, None);
+        split_index::save_hints(&ws.root, &h, history.len());
+    }
     Ok(())
 }
 
@@ -219,22 +227,66 @@ pub struct ModuleGraph {
     pub total_lines: usize,
 }
 
+/// Module graphs of every workspace crate, from the per-file facts cache.
+pub(crate) fn graphs(ws: &Workspace) -> HashMap<String, ModuleGraph> {
+    let mut facts = split_index::Facts::open(&ws.root);
+    let g = ws
+        .crates
+        .values()
+        .filter_map(|k| {
+            Some((
+                k.name.clone(),
+                ModuleGraph::build_with(k.root_file.as_deref()?, &mut facts),
+            ))
+        })
+        .collect();
+    facts.save();
+    g
+}
+
+/// Everything the graph needs from one file, extracted without knowing the
+/// rest of the module tree, so it can be cached per file (`split_index`).
+pub fn parse_file(src: &str, file: &Path, is_root: bool) -> split_index::FileFacts {
+    let body = strip_test_tail(src);
+    let (defines, impls) = type_items(body);
+    split_index::FileFacts {
+        lines: src.lines().count(),
+        decls: mod_decls(src, file, is_root)
+            .into_iter()
+            .map(|d| (d.name, d.candidates, d.test))
+            .collect(),
+        paths: written_paths(body),
+        defines: defines.into_iter().collect(),
+        impls: impls.into_iter().collect(),
+    }
+}
+
 impl ModuleGraph {
     pub fn build(root_file: &Path) -> ModuleGraph {
+        Self::build_with(root_file, &mut split_index::Facts::ephemeral())
+    }
+
+    /// Build from cached per-file facts; only files that changed are read.
+    pub fn build_with(root_file: &Path, facts: &mut split_index::Facts) -> ModuleGraph {
         let mut g = ModuleGraph::default();
-        let mut srcs: Vec<String> = Vec::new();
-        g.add(root_file, String::new(), None, false, true, &mut srcs, 0);
-        for (i, full) in srcs.iter().enumerate() {
+        let mut paths: Vec<Vec<(bool, Vec<String>)>> = Vec::new();
+        g.add(
+            root_file,
+            String::new(),
+            None,
+            false,
+            true,
+            facts,
+            &mut paths,
+            0,
+        );
+        for (i, written) in paths.iter().enumerate() {
             if g.nodes[i].test {
                 continue;
             }
-            let src = strip_test_tail(full);
-            let (refs, reexports) = g.resolve_refs(i, src);
+            let (refs, reexports) = g.resolve_refs(i, written);
             g.nodes[i].refs = refs;
             g.nodes[i].reexports = reexports;
-            let (defines, impls) = type_items(src);
-            g.nodes[i].defines = defines;
-            g.nodes[i].inherent_impls = impls;
         }
         g
     }
@@ -247,24 +299,37 @@ impl ModuleGraph {
         parent: Option<usize>,
         test: bool,
         is_root: bool,
-        srcs: &mut Vec<String>,
+        facts: &mut split_index::Facts,
+        paths: &mut Vec<Vec<(bool, Vec<String>)>>,
         depth: usize,
     ) {
         if depth > 64 || self.by_file.contains_key(file) {
             return;
         }
-        let Ok(src) = std::fs::read_to_string(file) else {
+        let Some(f) = facts
+            .get(file, is_root, |src| parse_file(src, file, is_root))
+            .cloned()
+        else {
             return;
         };
         let id = self.nodes.len();
-        let lines = src.lines().count();
-        self.total_lines += lines;
+        self.total_lines += f.lines;
         self.nodes.push(Node {
             path: path.clone(),
             file: file.to_path_buf(),
-            lines,
+            lines: f.lines,
             test,
             parent,
+            defines: if test {
+                BTreeSet::new()
+            } else {
+                f.defines.iter().cloned().collect()
+            },
+            inherent_impls: if test {
+                BTreeSet::new()
+            } else {
+                f.impls.iter().cloned().collect()
+            },
             ..Default::default()
         });
         self.by_path.insert(path.clone(), id);
@@ -272,18 +337,26 @@ impl ModuleGraph {
         if let Some(p) = parent {
             self.nodes[p].children.push(id);
         }
-        let decls = mod_decls(&src, file, is_root);
-        srcs.push(src);
-        for d in decls {
-            let Some(f) = d.candidates.iter().find(|c| c.is_file()) else {
+        paths.push(f.paths);
+        for (name, candidates, dtest) in f.decls {
+            let Some(cf) = candidates.iter().find(|c| c.is_file()) else {
                 continue;
             };
             let child = if path.is_empty() {
-                d.name.clone()
+                name.clone()
             } else {
-                format!("{path}::{}", d.name)
+                format!("{path}::{name}")
             };
-            self.add(f, child, Some(id), test || d.test, false, srcs, depth + 1);
+            self.add(
+                cf,
+                child,
+                Some(id),
+                test || dtest,
+                false,
+                facts,
+                paths,
+                depth + 1,
+            );
         }
     }
 
@@ -305,17 +378,12 @@ impl ModuleGraph {
         best
     }
 
-    fn resolve_refs(&self, i: usize, src: &str) -> (BTreeMap<usize, usize>, BTreeSet<usize>) {
-        static RE: OnceLock<(Regex, Regex, Regex)> = OnceLock::new();
-        let (path_re, group_re, line_re) = RE.get_or_init(|| {
-            (
-                // `crate::a::b`, `super::super::x`, `self::x`, `child::x`.
-                Regex::new(r"(^|[^\w:])((?:crate|self|super|[a-z_][a-z0-9_]*)(?:::[A-Za-z_][A-Za-z0-9_]*)+)").unwrap(),
-                // `prefix::{a, b::c}` (one level of braces).
-                Regex::new(r"(^|[^\w:])((?:crate|self|super|[a-z_][a-z0-9_]*)(?:::[A-Za-z_][A-Za-z0-9_]*)*)::\{([^{}]*)\}").unwrap(),
-                Regex::new(r"^\s*pub(?:\([^)]*\))?\s+use\b").unwrap(),
-            )
-        });
+    /// Resolve the paths `written` in module `i` to the nodes they name.
+    fn resolve_refs(
+        &self,
+        i: usize,
+        written: &[(bool, Vec<String>)],
+    ) -> (BTreeMap<usize, usize>, BTreeSet<usize>) {
         let node = &self.nodes[i];
         let own: Vec<&str> = if node.path.is_empty() {
             Vec::new()
@@ -368,31 +436,10 @@ impl ModuleGraph {
                 }
             }
         };
-        // Statements, so a multi-line `pub use x::{...};` is one unit.
-        for stmt in statements(src) {
-            let reexport = line_re.is_match(stmt);
-            for c in group_re.captures_iter(stmt) {
-                let Some(prefix) = absolute(&format!("{}::_", &c[2])) else {
-                    continue;
-                };
-                let prefix = &prefix[..prefix.len() - 1];
-                for item in c[3].split(',') {
-                    let item = item.trim();
-                    let item = item.split(" as ").next().unwrap_or(item).trim();
-                    if item.is_empty() || item == "self" || item == "*" {
-                        if item == "self" || item == "*" {
-                            note(prefix.to_vec(), reexport);
-                        }
-                        continue;
-                    }
-                    let mut segs = prefix.to_vec();
-                    segs.extend(item.split("::").map(str::to_owned));
-                    note(segs, reexport);
-                }
-            }
-            for c in path_re.captures_iter(stmt) {
-                if let Some(segs) = absolute(&c[2]) {
-                    note(segs, reexport);
+        for (reexport, paths) in written {
+            for p in paths {
+                if let Some(segs) = absolute(p) {
+                    note(segs, *reexport);
                 }
             }
         }
@@ -504,6 +551,48 @@ impl ModuleGraph {
         }
         out.into_iter().map(|(t, (d, v))| (t, d, v)).collect()
     }
+}
+
+/// Module paths written in `src`, per statement, with whether the statement
+/// is a `pub use`. `prefix::{a, b::c}` groups expand to `prefix::a` and
+/// `prefix::b::c`; `prefix::{self}` and `prefix::*` to `prefix`. Resolution
+/// against the module tree happens later, so this is cacheable per file.
+fn written_paths(src: &str) -> Vec<(bool, Vec<String>)> {
+    static RE: OnceLock<(Regex, Regex, Regex)> = OnceLock::new();
+    let (path_re, group_re, line_re) = RE.get_or_init(|| {
+        (
+            // `crate::a::b`, `super::super::x`, `self::x`, `child::x`.
+            Regex::new(r"(^|[^\w:])((?:crate|self|super|[a-z_][a-z0-9_]*)(?:::[A-Za-z_][A-Za-z0-9_]*)+)").unwrap(),
+            // `prefix::{a, b::c}` (one level of braces).
+            Regex::new(r"(^|[^\w:])((?:crate|self|super|[a-z_][a-z0-9_]*)(?:::[A-Za-z_][A-Za-z0-9_]*)*)::\{([^{}]*)\}").unwrap(),
+            Regex::new(r"^\s*pub(?:\([^)]*\))?\s+use\b").unwrap(),
+        )
+    });
+    let mut out = Vec::new();
+    // Statements, so a multi-line `pub use x::{...};` is one unit.
+    for stmt in statements(src) {
+        let reexport = line_re.is_match(stmt);
+        let mut v = Vec::new();
+        for c in group_re.captures_iter(stmt) {
+            let prefix = &c[2];
+            for item in c[3].split(',') {
+                let item = item.trim();
+                let item = item.split(" as ").next().unwrap_or(item).trim();
+                match item {
+                    "" => {}
+                    "self" | "*" => v.push(prefix.to_owned()),
+                    _ => v.push(format!("{prefix}::{item}")),
+                }
+            }
+        }
+        for c in path_re.captures_iter(stmt) {
+            v.push(c[2].to_owned());
+        }
+        if !v.is_empty() {
+            out.push((reexport, v));
+        }
+    }
+    out
 }
 
 /// Types defined in `src` and types it has inherent impl blocks for.
@@ -669,6 +758,10 @@ pub(crate) fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+pub(crate) fn normalize_pub(p: &Path) -> PathBuf {
+    normalize(p)
+}
+
 /// Collapse `a/b/../c` without touching the filesystem.
 fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -685,29 +778,11 @@ fn normalize(p: &Path) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// History.
-
-fn load_runs(root: &Path, days: f64) -> Result<Vec<Summary>> {
-    let cutoff = paths::now() - days * 86400.0;
-    let mut out = Vec::new();
-    for e in std::fs::read_dir(paths::runs_dir()?)?.flatten() {
-        let Ok(raw) = std::fs::read(e.path().join("summary.json")) else {
-            continue;
-        };
-        let Ok(s) = serde_json::from_slice::<Summary>(&raw) else {
-            continue;
-        };
-        if belongs(&s, root) && s.start >= cutoff {
-            out.push(s);
-        }
-    }
-    out.sort_by(|a, b| a.start.total_cmp(&b.start));
-    Ok(out)
-}
+// History (loaded through `split_index::load`).
 
 /// Whether a recorded run was made in the workspace at `root`. Matches path
 /// components, so `/x/jcode` does not claim runs from `/x/jcode-desktop`.
-fn belongs(s: &Summary, root: &Path) -> bool {
+pub(crate) fn belongs(s: &Summary, root: &Path) -> bool {
     s.git.root.as_deref().map(Path::new) == Some(root) || Path::new(&s.cwd).starts_with(root)
 }
 
@@ -1105,6 +1180,318 @@ fn churned_items(repo: &Path, file: &Path, days: f64) -> Vec<(String, usize)> {
     v
 }
 
+/// Per edit site: runs, seconds, and cascade seconds, a run's cost split
+/// evenly between its sites.
+#[derive(Default)]
+struct St {
+    runs: usize,
+    secs: f64,
+    cascade: f64,
+}
+
+fn site_stats(ws: &Workspace, edits: &[Edit]) -> BTreeMap<Site, St> {
+    let mut stats: BTreeMap<Site, St> = BTreeMap::new();
+    for e in edits {
+        let (t, c) = e.cost(ws);
+        let share = 1.0 / e.sites.len() as f64;
+        for s in &e.sites {
+            let st = stats.entry(s.clone()).or_default();
+            st.runs += 1;
+            st.secs += t * share;
+            st.cascade += c * share;
+        }
+    }
+    stats
+}
+
+/// A one-paragraph, specific split recommendation for one edited file,
+/// shown in the build report when that file's edits are expensive.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct Hint {
+    /// Seconds per edit of this file the hint is about: the estimated saving
+    /// for a module move, the cascade cost for root files and build inputs.
+    /// Used to rank hints and to skip trivial ones.
+    pub secs: f64,
+    pub text: String,
+}
+
+/// Hints for the edit sites in `history`, keyed by the edited file. `only`
+/// limits the work to these files; `None` computes every site.
+pub(crate) fn hints_from(
+    ws: &Workspace,
+    history: &[Summary],
+    days: f64,
+    only: Option<&[PathBuf]>,
+) -> BTreeMap<PathBuf, Hint> {
+    let graphs = graphs(ws);
+    let edits = to_edits(ws, &graphs, history);
+    let typical = Typical::from(&edits);
+    let stats = site_stats(ws, &edits);
+    let file_of = |s: &Site| -> Option<PathBuf> {
+        match s {
+            Site::Module { krate, node } => Some(graphs[krate].nodes[*node].file.clone()),
+            Site::CrateRoot { krate } => ws.crates[krate].root_file.clone(),
+            Site::BuildInput { path, .. } => Some(normalize(&ws.root.join(path))),
+        }
+    };
+    let wanted: Vec<(&Site, &St, PathBuf)> = stats
+        .iter()
+        .filter(|(_, st)| st.cascade >= 1.0 || st.secs >= 3.0)
+        .filter_map(|(s, st)| Some((s, st, file_of(s)?)))
+        .filter(|(_, _, f)| only.is_none_or(|o| o.contains(f)))
+        .collect();
+    let mut out = BTreeMap::new();
+    if wanted.is_empty() {
+        return out;
+    }
+    let src = Sources::read(ws);
+    for (site, st, file) in wanted {
+        let per = st.secs / st.runs.max(1) as f64;
+        let hint = match site {
+            Site::Module { krate, node } => {
+                module_hint(ws, &src, &graphs, krate, *node, st, &edits, &typical)
+            }
+            Site::CrateRoot { krate } => {
+                root_hint(ws, &src, krate, file.as_path(), st, days).map(|text| Hint {
+                    secs: st.cascade / st.runs.max(1) as f64,
+                    text,
+                })
+            }
+            Site::BuildInput { krate, path } => Some(Hint {
+                secs: per,
+                text: format!(
+                    "{path} is an input of {krate}'s build script, so each edit reruns it and \
+                     recompiles {krate} and its {} dependents (~{per:.1}s per edit over {} \
+                     recorded runs). Embed it in a small leaf crate used only where it is read, \
+                     or load it at runtime",
+                    ws.dependents(krate).len(),
+                    st.runs
+                ),
+            }),
+        };
+        if let Some(h) = hint {
+            out.insert(file, h);
+        }
+    }
+    out
+}
+
+/// `justrust split --refresh-hints` (spawned in the background after runs
+/// with edits): recompute every hint for the workspace at the cwd.
+pub fn refresh_hints(days: f64) -> Result<()> {
+    // SAFETY: plain syscall on the current process.
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+    }
+    let ws = Workspace::load(&std::env::current_dir()?)?;
+    let Some(_lock) = split_index::refresh_lock(&ws.root) else {
+        return Ok(()); // another refresh of this workspace is running
+    };
+    let history = split_index::load(&ws.root, days)?;
+    let h = hints_from(&ws, &history, days, None);
+    split_index::save_hints(&ws.root, &h, history.len());
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn module_hint(
+    ws: &Workspace,
+    src: &Sources,
+    graphs: &HashMap<String, ModuleGraph>,
+    krate: &str,
+    node: usize,
+    st: &St,
+    edits: &[Edit],
+    typical: &Typical,
+) -> Option<Hint> {
+    let g = &graphs[krate];
+    let label = format!("{krate}::{}", g.nodes[node].path);
+    let per = st.secs / st.runs.max(1) as f64;
+    let cands = best_candidates(ws, src, graphs, &[(krate.to_owned(), node)], edits, typical);
+    if let Some(c) = cands.iter().find(|c| c.moved.contains(&node)) {
+        let saved = c.saved / c.runs.max(1) as f64;
+        let what = format!("{krate}::{}", c.roots.join(", "));
+        let spared = if c.spared.is_empty() {
+            String::new()
+        } else {
+            format!(" and {} dependents", c.spared.len())
+        };
+        let next = if !c.orphan_impls.is_empty() {
+            let (ty, def, _) = &c.orphan_impls[0];
+            format!(
+                "First turn its `impl {ty}` blocks (the type stays in {def}) into free functions \
+                 or an extension trait, since inherent impls must live in the defining crate{}",
+                if c.orphan_impls.len() > 1 {
+                    format!(" ({} such types)", c.orphan_impls.len())
+                } else {
+                    String::new()
+                }
+            )
+        } else if c.roots.len() == 1 {
+            format!(
+                "Ready to move: `justrust split --apply {krate}::{} --dry-run`, then without \
+                 --dry-run (clean git tree; verifies and commits)",
+                c.roots[0]
+            )
+        } else {
+            "Move those modules together".to_owned()
+        };
+        return Some(Hint {
+            secs: saved,
+            text: format!(
+                "edits to {label} cost ~{per:.1}s each here ({} recorded runs). Moving {what} \
+                 ({} of {} lines) into its own crate that depends on {krate} would stop them \
+                 rebuilding {krate}{spared}, saving ~{saved:.1}s per edit{}. {next}",
+                st.runs,
+                c.moved_lines,
+                c.crate_lines,
+                if c.users.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " ({} still use it and keep rebuilding)",
+                        short_list(&c.users.iter().cloned().collect::<Vec<_>>(), 3)
+                    )
+                }
+            ),
+        });
+    }
+    // No movable candidate: say what ties it in.
+    if st.cascade < 1.0 {
+        return None;
+    }
+    let moved = g.closure(node);
+    let users = g.direct_users(node);
+    Some(Hint {
+        secs: st.cascade / st.runs.max(1) as f64,
+        text: format!(
+            "edits to {label} cost ~{per:.1}s each here ({} recorded runs), mostly rebuilding \
+             {krate}'s dependents, but it cannot move out as is: moving it drags along {:.0}% \
+             of {krate}. Cut these references to it first: {}",
+            st.runs,
+            100.0 * g.lines_of(&moved) as f64 / g.total_lines.max(1) as f64,
+            if users.is_empty() {
+                "none found".to_owned()
+            } else {
+                short_list(
+                    &users
+                        .iter()
+                        .map(|(u, n)| format!("{u} ({n})"))
+                        .collect::<Vec<_>>(),
+                    4,
+                )
+            }
+        ),
+    })
+}
+
+fn root_hint(
+    ws: &Workspace,
+    src: &Sources,
+    krate: &str,
+    file: &Path,
+    st: &St,
+    days: f64,
+) -> Option<String> {
+    if st.cascade < 1.0 {
+        return None;
+    }
+    let deps = ws.dependents(krate);
+    let per = st.cascade / st.runs.max(1) as f64;
+    let items = split_index::churn(&ws.root, file, days, || churned_items(&ws.root, file, days));
+    let mut users_all: BTreeSet<String> = BTreeSet::new();
+    let mut parts = Vec::new();
+    for (item, n) in items.iter().take(3) {
+        let Ok(re) = Regex::new(&format!(r"\b{}\b", regex::escape(item))) else {
+            continue;
+        };
+        let users: Vec<String> = deps.iter().filter(|d| src.any(d, &re)).cloned().collect();
+        users_all.extend(users.iter().cloned());
+        parts.push(format!(
+            "{item} ({n} edits, used by {} dependents)",
+            users.len()
+        ));
+    }
+    let affected = ws.with_dependents(&users_all);
+    let spared = deps.iter().filter(|d| !affected.contains(*d)).count();
+    Some(format!(
+        "edits to {krate}'s root file rebuild its {} dependents (~{per:.1}s per edit over {} \
+         recorded runs){}",
+        deps.len(),
+        st.runs,
+        if parts.is_empty() {
+            ". Move the items that change often out of the root file into a crate only \
+             their users depend on"
+                .to_owned()
+        } else if spared == 0 {
+            format!(
+                ". Most edited: {}. Nearly every dependent uses them, so moving them does not \
+                 help; give each item fewer dependents instead (split by consumer)",
+                parts.join(", ")
+            )
+        } else {
+            format!(
+                ". Most edited: {}. Moving them to a crate only their users depend on would \
+                 spare {spared} of {} dependents on those edits",
+                parts.join(", "),
+                deps.len()
+            )
+        }
+    ))
+}
+
+/// Candidate moves for the edited modules `edited` (every non-test
+/// ancestor of each), priced against `edits`. Overlapping candidates in one
+/// crate keep the best, ready moves before ones that need prep.
+fn best_candidates(
+    ws: &Workspace,
+    src: &Sources,
+    graphs: &HashMap<String, ModuleGraph>,
+    edited: &[(String, usize)],
+    edits: &[Edit],
+    typical: &Typical,
+) -> Vec<Candidate> {
+    let mut roots: BTreeSet<(String, usize)> = BTreeSet::new();
+    for (krate, node) in edited {
+        let g = &graphs[krate];
+        let mut n = Some(*node);
+        while let Some(x) = n.filter(|x| *x != 0) {
+            // Test-only modules compile into the test harness, not the
+            // library dependents see: moving them spares nothing.
+            if !g.nodes[x].test {
+                roots.insert((krate.clone(), x));
+            }
+            n = g.nodes[x].parent;
+        }
+    }
+    let mut cands: Vec<Candidate> = Vec::new();
+    let mut seen: BTreeSet<(String, BTreeSet<usize>)> = BTreeSet::new();
+    for (krate, n) in roots {
+        let g = &graphs[&krate];
+        let c = evaluate(ws, src, g, &krate, n, edits, typical);
+        if seen.insert((krate.clone(), c.moved.clone())) && c.saved >= 1.0 {
+            cands.push(c);
+        }
+    }
+    cands.sort_by(|a, b| {
+        a.orphan_impls
+            .is_empty()
+            .cmp(&b.orphan_impls.is_empty())
+            .reverse()
+            .then(b.saved.total_cmp(&a.saved))
+    });
+    let mut shown: Vec<Candidate> = Vec::new();
+    for c in cands {
+        if !shown
+            .iter()
+            .any(|s| s.krate == c.krate && !s.moved.is_disjoint(&c.moved))
+        {
+            shown.push(c);
+        }
+    }
+    shown
+}
+
 // ---------------------------------------------------------------------------
 // Report.
 
@@ -1124,34 +1511,11 @@ pub fn report_with(
     days: f64,
     top: usize,
 ) -> String {
-    let graphs: HashMap<String, ModuleGraph> = ws
-        .crates
-        .values()
-        .filter_map(|k| Some((k.name.clone(), ModuleGraph::build(k.root_file.as_deref()?))))
-        .collect();
+    let graphs = graphs(ws);
     let edits = to_edits(ws, &graphs, runs);
     let typical = Typical::from(&to_edits(ws, &graphs, history));
-
-    // Cost per edit site, split evenly between a run's sites.
-    #[derive(Default)]
-    struct St {
-        runs: usize,
-        secs: f64,
-        cascade: f64,
-    }
-    let mut stats: BTreeMap<Site, St> = BTreeMap::new();
-    let mut total = 0.0;
-    for e in &edits {
-        let (t, c) = e.cost(ws);
-        total += t;
-        let share = 1.0 / e.sites.len() as f64;
-        for s in &e.sites {
-            let st = stats.entry(s.clone()).or_default();
-            st.runs += 1;
-            st.secs += t * share;
-            st.cascade += c * share;
-        }
-    }
+    let stats = site_stats(ws, &edits);
+    let total: f64 = edits.iter().map(|e| e.cost(ws).0).sum();
     let site_label = |s: &Site| match s {
         Site::Module { krate, node } => format!("{krate}::{}", graphs[krate].nodes[*node].path),
         Site::CrateRoot { krate } => format!("{krate} (crate root file)"),
@@ -1187,47 +1551,14 @@ pub fn report_with(
 
     // Module candidates: every ancestor of every edited module.
     let src = Sources::read(ws);
-    let mut roots: BTreeSet<(String, usize)> = BTreeSet::new();
-    for (site, _) in &ranked {
-        if let Site::Module { krate, node } = site {
-            let g = &graphs[krate];
-            let mut n = Some(*node);
-            while let Some(x) = n.filter(|x| *x != 0) {
-                // Test-only modules compile into the test harness, not the
-                // library dependents see: moving them spares nothing.
-                if !g.nodes[x].test {
-                    roots.insert((krate.clone(), x));
-                }
-                n = g.nodes[x].parent;
-            }
-        }
-    }
-    let mut cands: Vec<Candidate> = Vec::new();
-    let mut seen: BTreeSet<(String, BTreeSet<usize>)> = BTreeSet::new();
-    for (krate, n) in roots {
-        let g = &graphs[&krate];
-        let c = evaluate(ws, &src, g, &krate, n, &edits, &typical);
-        if seen.insert((krate.clone(), c.moved.clone())) && c.saved >= 1.0 {
-            cands.push(c);
-        }
-    }
-    // Keep the best of overlapping candidates in one crate, ready moves first.
-    cands.sort_by(|a, b| {
-        a.orphan_impls
-            .is_empty()
-            .cmp(&b.orphan_impls.is_empty())
-            .reverse()
-            .then(b.saved.total_cmp(&a.saved))
-    });
-    let mut shown: Vec<Candidate> = Vec::new();
-    for c in cands {
-        if !shown
-            .iter()
-            .any(|s| s.krate == c.krate && !s.moved.is_disjoint(&c.moved))
-        {
-            shown.push(c);
-        }
-    }
+    let edited: Vec<(String, usize)> = ranked
+        .iter()
+        .filter_map(|(site, _)| match site {
+            Site::Module { krate, node } => Some((krate.clone(), *node)),
+            _ => None,
+        })
+        .collect();
+    let shown = best_candidates(ws, &src, &graphs, &edited, &edits, &typical);
 
     let _ = writeln!(
         o,
@@ -1398,7 +1729,9 @@ pub fn report_with(
                     st.cascade,
                     deps.len()
                 );
-                let items = churned_items(&ws.root, file, days);
+                let items = split_index::churn(&ws.root, file, days, || {
+                    churned_items(&ws.root, file, days)
+                });
                 if items.is_empty() {
                     continue;
                 }
@@ -1677,6 +2010,116 @@ mod tests {
             "{out}"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hints_name_the_move_for_the_edited_file() {
+        let (root, ws) = fixture("hints");
+        let runs: Vec<Summary> = (0..3)
+            .map(|_| {
+                run(
+                    "base",
+                    "base/src/emails.rs",
+                    &[("base", 10.0), ("mid", 8.0), ("app", 2.0)],
+                )
+            })
+            .collect();
+        let all = hints_from(&ws, &runs, 30.0, None);
+        let emails = root.join("base/src/emails.rs");
+        let h = all.get(&emails).expect("hint for emails.rs");
+        assert!(
+            h.text.starts_with("edits to base::emails cost ~20.0s each"),
+            "{}",
+            h.text
+        );
+        assert!(h.text.contains("Moving base::emails"), "{}", h.text);
+        assert!(
+            h.text.contains("rebuilding base and 1 dependents"),
+            "{}",
+            h.text
+        );
+        assert!(h.text.contains("(app still use it"), "{}", h.text);
+        assert!(
+            h.text
+                .contains("`justrust split --apply base::emails --dry-run`"),
+            "{}",
+            h.text
+        );
+        // The hint's saving matches the full report's per-edit estimate.
+        let out = report(&ws, &runs, 30.0, 5);
+        assert!(
+            out.contains(&format!("(~{:.1}s per edit)", h.secs)),
+            "{out}\n{h:?}"
+        );
+        // Limited to other files: nothing computed.
+        let none = hints_from(&ws, &runs, 30.0, Some(&[root.join("base/src/auth.rs")]));
+        assert!(none.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hints_for_entangled_modules_and_build_inputs() {
+        let (root, ws) = fixture("hints2");
+        let mut runs: Vec<Summary> = (0..2)
+            .map(|_| {
+                run(
+                    "base",
+                    "base/src/logging.rs",
+                    &[("base", 10.0), ("mid", 8.0), ("app", 2.0)],
+                )
+            })
+            .collect();
+        runs.push(run(
+            "base",
+            "docs/guide.md",
+            &[("base", 10.0), ("mid", 8.0)],
+        ));
+        let all = hints_from(&ws, &runs, 30.0, None);
+        let h = &all[&root.join("base/src/logging.rs")];
+        assert!(h.text.contains("cannot move out as is"), "{}", h.text);
+        assert!(
+            h.text.contains("Cut these references to it first: auth"),
+            "{}",
+            h.text
+        );
+        let b = &all[&root.join("docs/guide.md")];
+        assert!(
+            b.text
+                .starts_with("docs/guide.md is an input of base's build script"),
+            "{}",
+            b.text
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn written_paths_expand_groups_and_mark_reexports() {
+        let p = written_paths(
+            "use crate::{a::b, c as d, self};\npub use super::e::{self, f::*};\nfn g() { x::y(); }\n",
+        );
+        assert_eq!(
+            p,
+            vec![
+                (
+                    false,
+                    vec![
+                        "crate::a::b".into(),
+                        "crate::c".into(),
+                        "crate".into(),
+                        "a::b".into()
+                    ]
+                ),
+                (
+                    true,
+                    vec![
+                        "super::e".into(),
+                        "super::e::f::*".into(),
+                        "super::e".into()
+                    ]
+                ),
+                (false, vec!["x::y".into()]),
+            ]
+        );
     }
 
     #[test]

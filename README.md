@@ -21,6 +21,10 @@ Early. What exists so far:
 - **`justrust split`** says which code to move into its own crate to stop
   rebuild cascades, from the recorded edits in this workspace and its module
   graph, with the estimated saving and the references or impls to fix first.
+  The same analysis runs incrementally: every build appends what it saw to
+  `~/.justrust/split/`, a niced background refresh keeps per-file hints
+  current, and a build that edits an expensive file names the specific move
+  in its waste report (`JUSTRUST_SPLIT_HINTS=0` disables the refresh).
 - **`justrust history`** mines past [Jcode](https://github.com/1jehuang/jcode)
   sessions for cargo calls. See [FINDINGS.md](FINDINGS.md).
 
