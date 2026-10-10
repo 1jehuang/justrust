@@ -3,7 +3,8 @@
 Phase 4 of [toolchain.md](toolchain.md) starts with one dedicated build
 machine per user that justrust creates and controls. The build routing
 (sync, remote cargo, artifacts back, local or remote chosen per build) comes
-next. This page covers the machine itself.
+next. This page covers the machine itself. Why remote, the shared cache, and
+licensing are in [remote-strategy.md](remote-strategy.md).
 
 ```text
 justrust remote up        create the machine, or start it if stopped
