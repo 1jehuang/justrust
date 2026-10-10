@@ -99,6 +99,9 @@ pub struct Status {
     pub daemon: Option<DaemonState>,
     /// JUSTRUST_REMOTE when set (auto, 0, 1).
     pub routing: Option<String>,
+    /// hosted backend: account, credits, server-side host state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosted: Option<crate::remote_hosted::HostedStatus>,
 }
 
 pub(crate) fn dir() -> Result<PathBuf> {
@@ -262,13 +265,7 @@ pub fn collect(probe: bool) -> Status {
         },
         Some(Backend::Aws) => collect_aws(probe),
         Some(b @ Backend::Ssh { .. }) => collect_ssh(&b, probe),
-        Some(Backend::Hosted) => Status {
-            configured: true,
-            backend: "hosted".into(),
-            state: "unavailable".into(),
-            error: Some(crate::remote_backend::HOSTED_UNAVAILABLE.into()),
-            ..Default::default()
-        },
+        Some(Backend::Hosted) => collect_hosted(probe),
     };
     out.daemon = daemon_state();
     out.routing = std::env::var("JUSTRUST_REMOTE")
@@ -285,6 +282,35 @@ fn daemon_state() -> Option<DaemonState> {
         roots,
         files_pushed,
     })
+}
+
+fn collect_hosted(probe: bool) -> Status {
+    let h = crate::remote_hosted::status_cached(probe);
+    let mut out = Status {
+        configured: true,
+        backend: "hosted".into(),
+        host: h.address.clone(),
+        state: h
+            .host_state
+            .clone()
+            .unwrap_or_else(|| if h.connected { "running" } else { "unknown" }.into()),
+        error: h.error.clone(),
+        ..Default::default()
+    };
+    if probe
+        && h.connected
+        && let Some(t) = crate::remote_hosted::cached_target()
+    {
+        let cached = cached_probe_file(HOSTED_PROBE)
+            .filter(|p| p.dest.as_deref() == Some(&t.dest) && now() - p.at < PROBE_TTL);
+        out.probe = Some(cached.unwrap_or_else(|| {
+            let p = run_probe_ssh(&t);
+            save_probe(HOSTED_PROBE, &p);
+            p
+        }));
+    }
+    out.hosted = Some(h);
+    out
 }
 
 fn collect_ssh(b: &Backend, probe: bool) -> Status {
@@ -392,6 +418,7 @@ fn first_line(s: &str) -> String {
 
 const AWS_PROBE: &str = "probe.json";
 const SSH_PROBE: &str = "probe-ssh.json";
+const HOSTED_PROBE: &str = "probe-hosted.json";
 
 fn cached_probe() -> Option<Probe> {
     cached_probe_file(AWS_PROBE)
@@ -648,14 +675,7 @@ pub fn render_text(s: &Status) -> String {
                 }
             );
         }
-        "hosted" => {
-            let _ = writeln!(o, "remote builds: hosted (Jcode subscription)");
-            let _ = writeln!(o, "  not available yet: every build runs locally");
-            let _ = writeln!(
-                o,
-                "  switch with: justrust remote up, or justrust remote use ssh user@host"
-            );
-        }
+        "hosted" => render_hosted(&mut o, s),
         _ if !s.configured => {
             let _ = writeln!(o, "remote builds: not set up (every build runs locally)");
             let _ = writeln!(
@@ -666,22 +686,51 @@ pub fn render_text(s: &Status) -> String {
                 o,
                 "  justrust remote use ssh user@host   a machine you already have"
             );
-            let _ = writeln!(o, "  hosted builds with a Jcode subscription are coming");
+            let _ = writeln!(
+                o,
+                "  justrust remote use hosted          a Jcode subscription build machine"
+            );
         }
         _ => render_aws_header(&mut o, s),
     }
     if let Some(p) = &s.probe
-        && (s.state == "running" || s.backend == "ssh")
+        && (s.state == "running" || s.backend == "ssh" || s.backend == "hosted")
     {
         render_probe(&mut o, s, p);
     }
-    if let Some(e) = &s.error
-        && s.backend != "hosted"
-    {
+    if let Some(e) = &s.error {
         let _ = writeln!(o, "  error: {e}");
     }
     render_daemon(&mut o, s);
     o
+}
+
+fn render_hosted(o: &mut String, s: &Status) {
+    let h = s.hosted.clone().unwrap_or_default();
+    let _ = writeln!(
+        o,
+        "remote builds: hosted (Jcode subscription), machine {}{}",
+        s.state,
+        if h.connected { ", session open" } else { "" }
+    );
+    if let Some(m) = &h.me {
+        let _ = writeln!(
+            o,
+            "  account: {} ({}{})",
+            m.email.as_deref().unwrap_or("?"),
+            m.tier.as_deref().unwrap_or("?"),
+            m.status
+                .as_deref()
+                .map(|st| format!(", {st}"))
+                .unwrap_or_default()
+        );
+    }
+    if let Some(hrs) = h.hours_left {
+        let _ = writeln!(o, "  credits: {hrs:.1} h of build-machine runtime left");
+    }
+    if let Some(a) = &s.host {
+        let _ = writeln!(o, "  address: {a}");
+    }
 }
 
 fn render_daemon(o: &mut String, s: &Status) {
@@ -701,7 +750,7 @@ fn render_daemon(o: &mut String, s: &Status) {
                 let _ = writeln!(o, "  {r}");
             }
         }
-        None if s.configured && s.backend != "hosted" => {
+        None if s.configured => {
             let _ = writeln!(
                 o,
                 "sync daemon: not running (starts with the next remote build)"
@@ -838,7 +887,24 @@ pub fn render_waybar(s: &Status) -> String {
     let (mut text, class) = if !s.configured {
         (String::new(), "unconfigured")
     } else if s.backend == "hosted" {
-        (format!("{icon} hosted soon"), "stopped")
+        let hrs = s
+            .hosted
+            .as_ref()
+            .and_then(|h| h.hours_left)
+            .map(|h| format!(" {h:.0}h"))
+            .unwrap_or_default();
+        match (&s.probe, s.state.as_str()) {
+            _ if s.error.is_some() => (format!("{icon} hosted ?"), "error"),
+            (Some(p), _) if p.ok => (
+                format!("{icon} hosted {}{hrs}", metrics_line(p, None, now())),
+                busy_class(p),
+            ),
+            (_, "running") => (format!("{icon} hosted on{hrs}"), "running"),
+            (_, "provisioning" | "starting" | "booting") => {
+                (format!("{icon} hosted starting"), "pending")
+            }
+            _ => (format!("{icon} hosted off{hrs}"), "stopped"),
+        }
     } else if s.backend == "ssh" {
         match &s.probe {
             Some(p) if p.ok => (
@@ -1109,9 +1175,7 @@ pub fn up(opts: UpOptions) -> Result<()> {
             "remote builds use ssh {}. `up` creates or starts the machine in your AWS account: run `justrust remote use aws` first",
             b.label()
         ),
-        Some(Backend::Hosted) => bail!(
-            "remote builds are set to hosted (not available yet). `up` creates or starts the machine in your AWS account: run `justrust remote use aws` first"
-        ),
+        Some(Backend::Hosted) => return crate::remote_hosted::up(),
         _ => {}
     }
     if let Some(st) = load_state()? {
@@ -1254,12 +1318,16 @@ fn not_aws_note(cmd: &str) -> Option<String> {
             b.label()
         )),
         Backend::Hosted => Some(format!(
-            "`remote {cmd}` applies to the AWS machine (`justrust remote up`). The hosted backend is not available yet, every build runs locally"
+            "`remote {cmd}` applies to the AWS machine (`justrust remote up`). Remote builds use the hosted machine: `justrust remote down` stops it, and it is never destroyed from here"
         )),
     }
 }
 
 pub fn down() -> Result<()> {
+    if crate::remote_backend::load() == Some(Backend::Hosted) {
+        crate::remote_daemon::stop();
+        return crate::remote_hosted::down();
+    }
     let note = not_aws_note("down");
     let Some(st) = load_state()? else {
         match note {
@@ -1349,7 +1417,7 @@ pub fn ssh(cmd: Vec<String>) -> Result<()> {
             .target_no_start()?
             .context("ssh backend has no destination")?
             .command(),
-        Some(Backend::Hosted) => bail!(crate::remote_backend::HOSTED_UNAVAILABLE),
+        Some(Backend::Hosted) => crate::remote_hosted::ensure_ready()?.command(),
         _ => aws_ssh_command()?,
     };
     if cmd.is_empty() {
@@ -1475,7 +1543,7 @@ mod tests {
         assert!(t.contains("not set up"), "{t}");
         assert!(t.contains("justrust remote up"), "{t}");
         assert!(t.contains("remote use ssh user@host"), "{t}");
-        assert!(t.contains("Jcode subscription are coming"), "{t}");
+        assert!(t.contains("remote use hosted"), "{t}");
         assert!(!t.contains("sync daemon"), "{t}");
     }
 
@@ -1525,19 +1593,40 @@ mod tests {
     }
 
     #[test]
-    fn text_hosted_is_not_available() {
+    fn text_hosted_shows_account_and_credits() {
         let s = Status {
             configured: true,
             backend: "hosted".into(),
-            state: "unavailable".into(),
-            error: Some(crate::remote_backend::HOSTED_UNAVAILABLE.into()),
+            state: "running".into(),
+            host: Some("203.0.113.7".into()),
+            hosted: Some(crate::remote_hosted::HostedStatus {
+                me: Some(crate::remote_hosted::Me {
+                    email: Some("a@b.c".into()),
+                    tier: Some("pro".into()),
+                    status: Some("active".into()),
+                    build_hosts: true,
+                }),
+                hours_left: Some(12.5),
+                connected: true,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let t = render_text(&s);
-        assert!(t.contains("hosted (Jcode subscription)"), "{t}");
-        assert!(t.contains("not available yet"), "{t}");
-        assert!(!t.contains("error:"), "{t}");
-        assert!(render_waybar(&s).contains("hosted soon"));
+        assert!(
+            t.contains("hosted (Jcode subscription), machine running, session open"),
+            "{t}"
+        );
+        assert!(t.contains("a@b.c (pro, active)"), "{t}");
+        assert!(t.contains("12.5 h"), "{t}");
+        assert!(t.contains("sync daemon: not running"), "{t}");
+        assert!(render_waybar(&s).contains("hosted on 12h"));
+        let e = Status {
+            error: Some(crate::remote_hosted::SIGNED_OUT.into()),
+            ..s
+        };
+        assert!(render_text(&e).contains("error: not signed in"));
+        assert!(render_waybar(&e).contains("hosted ?"));
     }
 
     #[test]

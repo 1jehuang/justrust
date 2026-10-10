@@ -22,6 +22,7 @@ mod remote_agent;
 mod remote_backend;
 mod remote_build;
 mod remote_daemon;
+mod remote_hosted;
 mod remote_proto;
 mod remote_sync;
 mod remote_watch;

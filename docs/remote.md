@@ -49,12 +49,46 @@ routing) only needs an ssh-reachable machine with a shell.
 |---|---|---|---|
 | `aws` | one machine in your own AWS account, created and controlled through the `aws` CLI | `justrust remote up` | built |
 | `ssh` | any machine you already have. Needs a shell, a C toolchain, and rustup. justrust installs itself there | `justrust remote use ssh user@host` | built |
-| `hosted` | justrust's own build fleet with a shared cache, tied to a Jcode subscription | `justrust remote use hosted` | planned, not built. `use hosted` reports that and changes nothing |
+| `hosted` | justrust's own build fleet, paid from a Jcode subscription's cloud-compute credits (`src/remote_hosted.rs`) | `jcode account login`, then `justrust remote use hosted` | client built against the API contract below, server not deployed yet |
 | none | every build is local | `justrust remote use off` | |
 
 A machine created before `backend.json` existed counts as `aws`.
 
-`up`, `down`, and `destroy` manage the AWS machine only. With an `ssh`
+### Hosted
+
+Credentials are the ones `jcode account login` writes: `JCODE_API_KEY` and
+`JCODE_API_BASE` (default `https://api.jcode.sh/v1`) from the environment,
+else `~/.config/jcode/jcode-subscription.env`. HTTP goes through curl with
+the key on stdin (`--config -`), never in argv or a URL. Only https, or http
+on loopback for tests.
+
+```text
+GET  /v1/me                  capabilities.build_hosts, tier, status, email
+POST /v1/build/host/connect  {"public_key"}: 202 {state, message} while starting,
+                             200 {address, port, user, host_keys, credits} when ready
+GET  /v1/build/host          {state, credits}
+POST /v1/build/host/stop     {state}
+errors {error:{code,message}}: 401 sign in, 402 build_not_entitled or
+insufficient_compute_credits, 429, 503 build_unavailable
+```
+
+- `remote use hosted` checks the sign-in and the `build_hosts` capability,
+  then saves the backend.
+- Each connect (`remote up`, or the first remote build) generates a fresh
+  ed25519 key, polls connect every 2 s (up to 6 min for a first creation),
+  pins exactly the returned host keys in `hosted/known_hosts`
+  (StrictHostKeyChecking=yes), and opens the ssh ControlMaster at once: the
+  key is accepted for only 60 s, the master then carries every ssh and rsync
+  for 10 minutes after last use. A host key mismatch fails immediately.
+- Routing treats hosted as up only while that master is alive (a local
+  `ssh -O check`) or within 60 s of a ready. It never calls the API.
+- `remote status` shows account, tier, credits as hours of runtime at the
+  current rate, and the server-side host state, cached 30 s.
+- `remote down` asks the server to stop the machine and closes the master.
+  The user there is `ubuntu`, mirrored paths are created with
+  `sudo -n install -d`.
+
+`up` and `down` work for `aws` and `hosted`. `destroy` manages the AWS machine only. With an `ssh`
 backend they say so and change nothing (`up` refuses, `down` and
 `destroy` only act on an AWS machine that still exists). justrust never
 powers an ssh host on or off. `remote ssh` and `remote status` work for
@@ -196,6 +230,9 @@ Local is always the safe answer.
   ip              AWS: last known IP of the running machine (cleared on down)
   probe.json      AWS: last ssh probe, reused by status for 30 s
   probe-ssh.json  ssh backend: last probe, reused by status for 30 s
+  probe-hosted.json  hosted: last probe of the hosted machine
+  hosted/         hosted: id_ed25519 (fresh per connect), known_hosts (pinned),
+                  state.json {address, user, port, ready_at}, status.json (30 s)
   price.json      AWS: hourly price, cached for an hour
   daemon.sock     sync daemon socket (daemon.log, daemon.lock beside it)
   roots.json      source roots per lockfile

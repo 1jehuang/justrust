@@ -10,8 +10,9 @@
 //! - `ssh`: any machine the user already has (`justrust remote use ssh
 //!   user@host`). Needs a shell, a C toolchain, and rustup. justrust installs
 //!   itself there.
-//! - `hosted`: justrust's own build fleet, tied to a Jcode subscription.
-//!   Reserved: selecting it reports that it is not available yet.
+//! - `hosted`: justrust's own build fleet, tied to a Jcode subscription
+//!   (see `remote_hosted`). The user there is `ubuntu`, mirrored paths are
+//!   created with `sudo -n install -d`.
 //!
 //! With no backend configured nothing remote ever happens: the router costs
 //! one failed `stat`.
@@ -66,8 +67,6 @@ pub fn clear() -> Result<()> {
     }
 }
 
-pub const HOSTED_UNAVAILABLE: &str = "hosted remote builds (Jcode subscription) are not available yet. Use `justrust remote up` (your AWS account) or `justrust remote use ssh user@host`";
-
 impl Backend {
     pub fn label(&self) -> String {
         match self {
@@ -109,7 +108,7 @@ impl Backend {
                 }
                 Ok(t)
             }
-            Backend::Hosted => bail!(HOSTED_UNAVAILABLE),
+            Backend::Hosted => crate::remote_hosted::ensure_ready(),
         }
     }
 
@@ -124,7 +123,7 @@ impl Backend {
 
     /// The ssh destination without connecting or starting anything: the
     /// configured host for `ssh`, the last known IP for `aws` (None when the
-    /// machine is not known to be running), None for `hosted`.
+    /// machine is not known to be running), the cached session for `hosted`.
     pub fn target_no_start(&self) -> Result<Option<Target>> {
         match self {
             Backend::Aws => match remote::cached_ip() {
@@ -139,7 +138,7 @@ impl Backend {
                 port,
                 identity,
             } => Ok(Some(ssh_target(host, *port, identity.as_deref())?)),
-            Backend::Hosted => Ok(None),
+            Backend::Hosted => Ok(crate::remote_hosted::cached_target()),
         }
     }
 
@@ -148,7 +147,7 @@ impl Backend {
         match self {
             Backend::Aws => remote::cached_ip().is_some(),
             Backend::Ssh { .. } => true,
-            Backend::Hosted => false,
+            Backend::Hosted => crate::remote_hosted::probably_up(),
         }
     }
 }
@@ -179,11 +178,13 @@ impl Target {
 }
 
 /// ssh ControlPath for connections from justrust. `%C` expands to 40 hex
-/// characters and a Unix socket path must stay under 108 bytes, so a long
-/// JUSTRUST_HOME falls back to the per-user runtime dir (then /tmp).
+/// characters, ssh binds the master first at the path plus a 17-character
+/// random suffix (`.XXXXXXXXXXXXXXXX`), and a Unix socket path must stay
+/// under 108 bytes, so a long JUSTRUST_HOME falls back to the per-user
+/// runtime dir (then /tmp).
 pub(crate) fn control_path(dir: &std::path::Path) -> String {
     let p = format!("{}/cm-%C", dir.display());
-    if p.len() + 40 < 104 {
+    if p.len() - 2 + 40 + 17 < 108 {
         return p;
     }
     // SAFETY: getuid has no preconditions.
@@ -247,7 +248,10 @@ pub fn use_command(
             port,
             identity,
         },
-        "hosted" => bail!(HOSTED_UNAVAILABLE),
+        "hosted" => {
+            crate::remote_hosted::check_use()?;
+            Backend::Hosted
+        }
         "off" | "none" => {
             crate::remote_daemon::stop();
             clear()?;
@@ -282,6 +286,6 @@ mod tests {
         let b: Backend = serde_json::from_str(r#"{"kind":"aws"}"#).unwrap();
         assert_eq!(b, Backend::Aws);
         let b: Backend = serde_json::from_str(r#"{"kind":"hosted"}"#).unwrap();
-        assert!(b.ensure_ready().is_err());
+        assert_eq!(b, Backend::Hosted);
     }
 }

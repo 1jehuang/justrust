@@ -211,7 +211,8 @@ time no longer goes to learning about a type error.
    measured faster (a machine in your AWS account via `justrust remote up`,
    or any ssh host via `justrust remote use ssh`), with a sync daemon that
    pushes edits on save. Cold Jcode Desktop `check` 44 s vs ~180 s local.
-   Hosted builds with a Jcode subscription are planned
+   Hosted builds with a Jcode subscription (`justrust remote use hosted`)
+   are built client side, waiting on the server
    ([docs/remote.md](docs/remote.md)).
 5. **Our rustc fork**: resident compiler, streamed diagnostics, body-only
    upstream invalidation.
