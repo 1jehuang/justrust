@@ -289,9 +289,19 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
     key_args(&args, &norm, &cwd, &mut h)?;
     let mut env: Vec<&(String, String)> = env.iter().filter(|(k, _)| keyed_env(k)).collect();
     env.sort();
-    for (k, v) in env {
+    for (k, v) in &env {
         h.field(k.as_bytes());
         h.field(norm.norm(v).as_bytes());
+    }
+    // Diagnosis: `JUSTRUST_DEPCACHE_EXPLAIN=<dir>` writes the normalized key
+    // inputs of every unit, so two misses of the same crate can be diffed.
+    if let Some(dir) = std::env::var_os("JUSTRUST_DEPCACHE_EXPLAIN") {
+        let mut lines = vec![format!("cwd {}", norm.norm(cwd.to_str()?))];
+        lines.extend(args.iter().map(|a| format!("arg {}", norm.norm(a))));
+        lines.extend(env.iter().map(|(k, v)| format!("env {k}={}", norm.norm(v))));
+        let name = format!("{}-{}.txt", s.crate_name, h.hex());
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(Path::new(&dir).join(name), lines.join("\n"));
     }
     Some(Plan {
         base: h.hex(),

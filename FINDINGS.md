@@ -1335,3 +1335,78 @@ What an agent now does for a ready candidate: `justrust split` shows
 `apply: justrust split --apply <crate>::<module> --dry-run`, the agent
 commits its work, runs it, and reads one result line. The report's `apply:`
 hint appears only for candidates with no blockers.
+
+## 18. One feature set per workspace: no dependency rebuilds when switching packages (2026-10-09)
+
+Code: `unify_features` in `src/record.rs`. Bench: `bench/feature-switch.sh`.
+
+### Why the depcache held so many variants
+
+`justrust cache` showed 21.8 GB in 9,106 entries. Grouping entries by cargo's
+own output file name (which already encodes version, features, profile, and
+dependencies), 9.7 GB were extra entries for the same output under different
+keys, and most of the rest were genuine feature variants (`aws_sdk_bedrock`
+11 builds, `gpui` 17, `reqwest` 32, `syn` 29).
+
+The cache key itself is stable. With `JUSTRUST_DEPCACHE_EXPLAIN=<dir>` (dumps
+the normalized key inputs of every unit), two fresh target dirs and a
+separate checkout of Desktop produced identical keys for all 643 crates and
+833/833 hits. The duplicates came from builds that really were different:
+cargo resolves features per command, so `check -p jcode-desktop-model` builds
+`subtle` with no features and `mio` without `log`, while `-p
+jcode-desktop-ui` builds them with `default,i128,std` and `log`. Each
+different set means a different `-C metadata`, different `--extern` hashes
+for everything downstream, and new entries.
+
+### Fix
+
+Every recorded cargo run sets `CARGO_RESOLVER_FEATURE_UNIFICATION=workspace`
+(cargo's `-Zfeature-unification`): features are resolved once for the
+whole workspace, so every `-p` selection compiles the same build of each
+dependency. The nightly gate is opened with cargo's channel override, not
+`RUSTC_BOOTSTRAP`: rustc reads `RUSTC_BOOTSTRAP`, so cargo fingerprints it,
+and setting it rebuilt 304 units of desktop-ui once (measured). The override
+is read only by cargo. Off with `JUSTRUST_UNIFY_FEATURES=0`, and an explicit
+`CARGO_RESOLVER_FEATURE_UNIFICATION` (for example `selected`, cargo's
+default) wins.
+
+### Measurements
+
+`bench/feature-switch.sh`: fresh target dir, private depcache, `check -p`
+each package twice through the list. Machine busy (other agents building).
+
+Jcode Desktop (`model, harness, ui, desktop`):
+
+| | pass 1 compiled / deps | pass 1 wall | pass 2 |
+|---|---|---|---|
+| unify on | 166+329+392+8 = **895** / 764 | 91s | 0 compiled |
+| unify off | 114+395+642+8 = **1,159** / 971 | 121s | 0 compiled |
+
+Jcode (`jcode-base, jcode-tui, jcode-app-core, jcode-protocol`):
+
+| | pass 1 compiled / deps | pass 1 wall | pass 2 |
+|---|---|---|---|
+| unify on | 418+230+0+0 = **648** / 525 | 110s | 0 compiled |
+| unify off | 412+354+85+85 = **936** / 737 | 179s | 0 compiled |
+
+With unification, once any package is built the others need no further
+dependency work (jcode-app-core and jcode-protocol: 0 compiled, 0.3s,
+instead of 85 units and 34s/14s). That is 23% and 31% fewer units compiled
+for the same four commands, and one depcache entry per dependency instead of
+one per feature combination.
+
+On the warm main checkout, switching `model -> harness -> ui -> desktop ->
+model -> harness -> ui` compiled 0 units on every step (0.4-0.5s each).
+Before, `check -p jcode-desktop-model` after `-p jcode-desktop-harness`
+rebuilt 27 units and the reverse 131.
+
+Correctness: `justrust test -p jcode-desktop-model` (140 passed) and
+`justrust test -p jcode-protocol` (89 passed) with unification on. The
+first unified run in an existing target dir rebuilds dependencies whose
+feature set grows (one time, up to ~130 units in Desktop); after that,
+plain cargo without unification and justrust with it disagree on features,
+so mixing them in one target dir rebuilds the differing dependencies.
+
+Note: in this repo, `justrust build --release` goes through a build slot,
+so `target/release/justrust` is not updated. Use `JUSTRUST_SLOTS=0` when the
+binary itself is the output.
