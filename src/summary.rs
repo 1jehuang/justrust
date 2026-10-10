@@ -41,6 +41,18 @@ pub struct Summary {
     /// Machine-wide CPU priority scope the build ran in (see `sched`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sched: Option<crate::sched::SchedInfo>,
+    /// Set when the build ran on the remote machine (copied back locally).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RemoteInfo {
+    pub machine: String,
+    /// Sync left on the critical path when the build asked (ms).
+    pub sync_ms: f64,
+    /// Wall time the local client waited, start to exit.
+    pub client_wall: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -232,6 +244,9 @@ pub struct IndexEntry {
     pub top_unit: Option<String>,
     pub compile_failed: bool,
     pub agent_session: Option<String>,
+    /// Machine label when the run was remote. Absent for local runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 pub fn load_units(run_dir: &Path) -> Vec<Unit> {
@@ -696,6 +711,7 @@ pub fn build(
         slot: meta.slot.clone(),
         locks_waited,
         sched: None,
+        remote: None,
     }
 }
 
@@ -760,6 +776,7 @@ impl Summary {
             top_unit: self.top_units.first().map(|u| u.name.clone()),
             compile_failed: self.diagnostics.compile_failed,
             agent_session: self.agent_session.clone(),
+            remote: self.remote.as_ref().map(|r| r.machine.clone()),
         }
     }
 

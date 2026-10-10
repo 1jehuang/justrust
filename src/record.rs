@@ -205,7 +205,17 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
     }
 }
 
-fn new_run_id() -> String {
+pub fn new_run_id() -> String {
+    // The remote agent records under the id the client chose, so the run
+    // has the same id on both machines.
+    if let Ok(id) = std::env::var("JUSTRUST_RUN_ID_OVERRIDE")
+        && !id.is_empty()
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        // SAFETY: single-threaded at this point; keeps it out of cargo's env.
+        unsafe { std::env::remove_var("JUSTRUST_RUN_ID_OVERRIDE") };
+        return id;
+    }
     let now = chrono::Local::now();
     format!("{}-{}", now.format("%Y%m%d-%H%M%S%.3f"), std::process::id()).replace('.', "")
 }

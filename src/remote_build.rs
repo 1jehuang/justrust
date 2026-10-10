@@ -1,39 +1,31 @@
-//! Run a cargo command on the remote compile machine.
-//!
-//! `justrust remote check|test|build|clippy|run <cargo args>`:
+//! Client side of remote builds: `justrust remote check|test|...` and the
+//! automatic routing in `justrust check|test|...`.
 //!
 //! 1. Find every source root the build reads: the workspace plus each path
 //!    dependency outside it (for Jcode Desktop, the sibling `~/jcode`), each
-//!    widened to its git repository root. Cached per workspace and lockfile.
-//! 2. rsync those roots to the *same absolute paths* on the machine, so
-//!    relative path dependencies resolve and every diagnostic path matches
-//!    the local tree. `.git`, `target/`, gitignored files, and files over
-//!    8 MB (demo videos) are skipped. One persistent ssh connection is shared
-//!    by every call.
-//! 3. Keep justrust itself in sync on the machine and run
-//!    `justrust <sub> <args>` there, streaming its compact output back.
-//!
-//! Target dirs and the cargo registry stay warm on the machine's disk
-//! between builds and across stops.
+//!    widened to its git repository root. Cached per lockfile.
+//! 2. Hand the run to the sync daemon (`remote_daemon`). It keeps those
+//!    roots mirrored at the *same absolute paths* on the machine, pushing
+//!    edits as they are saved, so by the time a build asks there is usually
+//!    nothing left to send.
+//! 3. The machine runs `justrust <sub> <args>` and its compact output
+//!    streams back. The run is recorded locally too (`justrust runs`,
+//!    `justrust show`), marked as remote, so routing can learn from it.
 
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use crate::remote;
+use crate::remote_backend::{self, Target};
+use crate::remote_proto::{Msg, read_frame, write_frame};
 
-/// Where this binary's own source lives, so the machine can build the same
-/// justrust. Compile-time path of the checkout `cargo install` used.
-const JUSTRUST_SRC: &str = env!("CARGO_MANIFEST_DIR");
-const MAX_FILE: &str = "8M";
-
-/// Every directory rsync must mirror for a build started in `cwd`.
+/// Every directory the machine must mirror for a build started in `cwd`.
 pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
     let cache_key = roots_cache_key(cwd);
-    let cache = remote::dir()?.join("roots.json");
+    let cache = crate::remote::dir()?.join("roots.json");
     if let Some(key) = &cache_key
         && let Ok(b) = std::fs::read(&cache)
         && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b)
@@ -48,7 +40,7 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     let metadata = |offline: bool| {
-        let mut c = Command::new("cargo");
+        let mut c = Command::new(crate::paths::real_cargo().unwrap_or_else(|_| "cargo".into()));
         c.args(["metadata", "--format-version", "1"]);
         if offline {
             c.arg("--offline");
@@ -93,9 +85,21 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
-/// Workspace root + lockfile mtime: path dependencies only change when the
-/// lockfile does.
+/// Lockfile path + mtime: path dependencies only change with the lockfile.
 fn roots_cache_key(cwd: &Path) -> Option<String> {
+    let lock = lockfile(cwd)?;
+    let mtime = std::fs::metadata(&lock)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(format!("{}@{mtime}", lock.display()))
+}
+
+/// The outermost Cargo.lock at or above `cwd` (the workspace's).
+pub fn lockfile(cwd: &Path) -> Option<PathBuf> {
     let mut d = Some(cwd);
     let mut lock = None;
     while let Some(dir) = d {
@@ -105,15 +109,7 @@ fn roots_cache_key(cwd: &Path) -> Option<String> {
         }
         d = dir.parent();
     }
-    let lock = lock?;
-    let mtime = std::fs::metadata(&lock)
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    Some(format!("{}@{mtime}", lock.display()))
+    lock
 }
 
 fn repo_root(d: &Path) -> PathBuf {
@@ -139,102 +135,6 @@ fn outermost(dirs: BTreeSet<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-pub struct SyncResult {
-    pub files: usize,
-    pub bytes: u64,
-    pub names: Vec<PathBuf>,
-}
-
-fn rsync(ip: &str, root: &Path) -> Result<SyncResult> {
-    let ssh = remote::ssh_command_line(ip)?;
-    let src = format!("{}/", root.display());
-    let dst = format!("{}@{ip}:{}/", remote::SSH_USER, root.display());
-    let out = Command::new("rsync")
-        .args([
-            "-a",
-            // Remove files deleted locally, but never the machine's own
-            // build output (excluded paths are left alone without
-            // --delete-excluded, and target dirs are also protected).
-            "--delete",
-            "-z",
-            "--out-format=%i %l %n",
-            &format!("--max-size={MAX_FILE}"),
-            "--filter=P target/",
-            "--filter=P .justrust/",
-            "--exclude=.git",
-            "--exclude=target/",
-            "--exclude=.justrust/",
-            "--filter=:- .gitignore",
-            "-e",
-            &ssh,
-            &src,
-            &dst,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .context("rsync (is it installed?)")?;
-    if !out.status.success() {
-        bail!(
-            "rsync {} failed: {}",
-            root.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let mut r = SyncResult {
-        files: 0,
-        bytes: 0,
-        names: Vec::new(),
-    };
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let mut parts = line.splitn(3, ' ');
-        let (Some(flags), Some(len), Some(name)) = (parts.next(), parts.next(), parts.next())
-        else {
-            continue;
-        };
-        if flags.starts_with("<f") {
-            r.files += 1;
-            r.bytes += len.parse::<u64>().unwrap_or(0);
-            r.names.push(root.join(name));
-        }
-    }
-    Ok(r)
-}
-
-/// Make each root's parent exist and belong to the ssh user (once per root).
-fn prepare_roots(ip: &str, roots: &[PathBuf]) -> Result<()> {
-    let stamp = remote::dir()?.join("prepared.json");
-    let mut done: BTreeSet<String> = std::fs::read(&stamp)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
-    let instance = remote::instance_id().unwrap_or_default();
-    let todo: Vec<String> = roots
-        .iter()
-        .map(|r| r.display().to_string())
-        .filter(|r| !done.contains(&format!("{instance}:{r}")))
-        .collect();
-    if todo.is_empty() {
-        return Ok(());
-    }
-    let mut script = String::new();
-    for r in &todo {
-        script.push_str(&format!(
-            "sudo install -d -o {u} -g {u} {q} && ",
-            u = remote::SSH_USER,
-            q = shell_quote(r)
-        ));
-    }
-    script.push_str("true");
-    let st = remote::ssh_base(ip)?.arg(script).status()?;
-    if !st.success() {
-        bail!("could not create source dirs on the remote machine");
-    }
-    done.extend(todo.into_iter().map(|r| format!("{instance}:{r}")));
-    std::fs::write(&stamp, serde_json::to_vec(&done)?)?;
-    Ok(())
-}
-
 pub fn shell_quote(s: &str) -> String {
     if !s.is_empty()
         && s.bytes()
@@ -246,188 +146,235 @@ pub fn shell_quote(s: &str) -> String {
     }
 }
 
-/// Identity of the running binary: reinstall remotely only when it changes,
-/// not whenever justrust's source tree (maybe the workspace being built) is
-/// edited.
-fn local_binary_id() -> String {
-    std::env::current_exe()
-        .and_then(std::fs::metadata)
-        .map(|m| {
-            let mtime = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            format!("{}-{mtime}", m.len())
-        })
-        .unwrap_or_default()
-}
-
-/// Make sure the machine runs the same justrust as this one, building it
-/// from the synced source when the local binary changed.
-fn ensure_remote_justrust(ip: &str) -> Result<()> {
-    let id = local_binary_id();
-    let stamp = remote::dir()?.join("remote-justrust");
-    let instance = remote::instance_id().unwrap_or_default();
-    let want = format!("{instance} {id}");
+/// Make sure the machine runs this exact justrust binary. Same OS and
+/// architecture (the common case): copy it. Otherwise build it there from
+/// crates.io at this version.
+pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
+    let id = crate::remote_daemon::build_id();
+    let stamp = crate::remote::dir()?.join("remote-justrust");
+    let want = format!("{} {id}", t.dest);
     if std::fs::read_to_string(&stamp).ok().as_deref() == Some(want.as_str()) {
         return Ok(());
     }
-    let src = PathBuf::from(JUSTRUST_SRC);
-    if !src.join("Cargo.toml").exists() {
-        bail!("justrust source not found at {JUSTRUST_SRC}");
-    }
-    prepare_roots(ip, std::slice::from_ref(&src))?;
-    rsync(ip, &src)?;
-    eprintln!("justrust remote: installing justrust on the machine...");
-    let t = Instant::now();
-    let cmd = format!(
-        ". ~/.cargo/env; cd {q} && CARGO_TARGET_DIR=~/.justrust-install-target cargo install --path . --locked -q",
-        q = shell_quote(JUSTRUST_SRC)
+    let arch = t
+        .command()
+        .arg("uname -sm")
+        .stdin(Stdio::null())
+        .output()
+        .context("ssh uname")?;
+    let remote_arch = String::from_utf8_lossy(&arch.stdout).trim().to_string();
+    let local_arch = format!(
+        "{} {}",
+        if cfg!(target_os = "linux") {
+            "Linux"
+        } else {
+            std::env::consts::OS
+        },
+        std::env::consts::ARCH
     );
-    let st = remote::ssh_base(ip)?.arg(cmd).status()?;
-    if !st.success() {
-        bail!("installing justrust on the remote machine failed");
+    let t0 = Instant::now();
+    if remote_arch == local_arch {
+        let exe = std::env::current_exe()?;
+        let tmp = ".cargo/bin/.justrust.upload";
+        let ok = Command::new("rsync")
+            .args(["-z", "-e", &t.rsync_shell()])
+            .arg(&exe)
+            .arg(format!("{}:{tmp}", t.dest))
+            .stdin(Stdio::null())
+            .status()?
+            .success()
+            && t.command()
+                .arg(format!(
+                    "mkdir -p ~/.cargo/bin && chmod +x ~/{tmp} && mv ~/{tmp} ~/.cargo/bin/justrust"
+                ))
+                .stdin(Stdio::null())
+                .status()?
+                .success();
+        if !ok {
+            bail!("copying justrust to the remote machine failed");
+        }
+    } else {
+        eprintln!("justrust remote: building justrust on the machine ({remote_arch})...");
+        let st = t
+            .command()
+            .arg(format!(
+                ". ~/.cargo/env; cargo install justrust --version {} --locked -q",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .status()?;
+        if !st.success() {
+            bail!("installing justrust on the remote machine failed");
+        }
     }
     std::fs::write(&stamp, want)?;
-    eprintln!(
-        "justrust remote: installed in {:.1}s",
-        t.elapsed().as_secs_f64()
-    );
+    crate::remote::log_event(&format!(
+        "installed justrust on {} in {:.1}s",
+        t.dest,
+        t0.elapsed().as_secs_f64()
+    ));
     Ok(())
 }
 
-pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
-    let total = Instant::now();
-    let cwd = std::env::current_dir()?;
-    let ip = remote::ensure_running()?;
+/// Why a remote attempt did not produce a build result. The router falls
+/// back to a local build on any of these.
+#[derive(Debug)]
+pub struct Infra(pub String);
 
-    let t = Instant::now();
-    let roots = source_roots(&cwd)?;
-    if !roots.iter().any(|r| cwd.starts_with(r)) {
-        bail!("{} is not inside a synced source root", cwd.display());
-    }
-    let t_roots = t.elapsed().as_secs_f64();
-
-    let t = Instant::now();
-    prepare_roots(&ip, &roots)?;
-    // Sync every root in parallel, plus justrust itself.
-    let results: Vec<Result<SyncResult>> = std::thread::scope(|s| {
-        let handles: Vec<_> = roots
-            .iter()
-            .map(|r| {
-                let ip = ip.clone();
-                s.spawn(move || rsync(&ip, r))
-            })
-            .collect();
-        let js = s.spawn(|| ensure_remote_justrust(&ip));
-        let out = handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| bail!("rsync thread panicked")))
-            .collect();
-        js.join()
-            .unwrap_or_else(|_| bail!("install thread panicked"))
-            .map(|_| out)
-    })?;
-    let mut files = 0;
-    let mut bytes = 0;
-    let mut names = Vec::new();
-    for r in results {
-        let r = r?;
-        files += r.files;
-        bytes += r.bytes;
-        names.extend(r.names);
-    }
-    let t_sync = t.elapsed().as_secs_f64();
-    let shown: Vec<String> = names
-        .iter()
-        .take(3)
-        .map(|n| n.strip_prefix(&cwd).unwrap_or(n).display().to_string())
-        .collect();
-    eprintln!(
-        "justrust remote: synced {} root{} ({files} file{} changed, {}{}) in {:.2}s{}",
-        roots.len(),
-        if roots.len() == 1 { "" } else { "s" },
-        if files == 1 { "" } else { "s" },
-        human_bytes(bytes),
-        if shown.is_empty() {
-            String::new()
-        } else {
-            format!(
-                ": {}{}",
-                shown.join(", "),
-                if names.len() > 3 { ", ..." } else { "" }
-            )
-        },
-        t_sync,
-        if t_roots > 0.05 {
-            format!(", found roots in {t_roots:.2}s")
-        } else {
-            String::new()
-        }
-    );
-
-    let mut cmd = format!(
-        ". ~/.cargo/env; cd {} && ",
-        shell_quote(&cwd.to_string_lossy())
-    );
-    for var in ["JUSTRUST_MAX_WARNINGS", "RUST_BACKTRACE", "RUST_LOG"] {
-        if let Ok(v) = std::env::var(var) {
-            cmd.push_str(&format!("{var}={} ", shell_quote(&v)));
-        }
-    }
-    cmd.push_str("exec justrust ");
-    cmd.push_str(sub);
-    for a in &args {
-        cmd.push(' ');
-        cmd.push_str(&shell_quote(a));
-    }
-    let t = Instant::now();
-    // A tty makes Ctrl+C reach the remote cargo. Only when we have one.
-    let interactive = unsafe { libc::isatty(1) == 1 && libc::isatty(0) == 1 };
-    let mut c = remote::ssh_base(&ip)?;
-    if interactive {
-        c.arg("-t");
-    }
-    let mut child = c
-        .arg(cmd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-    // Stream line by line (agents read our stdout).
-    if let Some(out) = child.stdout.take() {
-        use std::io::Write;
-        let mut so = std::io::stdout().lock();
-        for line in BufReader::new(out).split(b'\n') {
-            let mut line = line?;
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            so.write_all(&line)?;
-            so.write_all(b"\n")?;
-            so.flush()?;
-        }
-    }
-    let st = child.wait()?;
-    eprintln!(
-        "justrust remote: {} on {} in {:.1}s (sync {:.2}s, remote {:.1}s)",
-        if st.success() { "ok" } else { "failed" },
-        remote::describe_short().unwrap_or_else(|| ip.clone()),
-        total.elapsed().as_secs_f64(),
-        t_sync + t_roots,
-        t.elapsed().as_secs_f64()
-    );
-    std::process::exit(st.code().unwrap_or(1));
+pub struct Outcome {
+    pub code: i32,
+    #[allow(dead_code)] // used by the router (in progress)
+    pub run_id: String,
 }
 
-fn human_bytes(b: u64) -> String {
-    if b < 1024 {
-        format!("{b} B")
-    } else if b < 1024 * 1024 {
-        format!("{:.1} KB", b as f64 / 1024.0)
-    } else {
-        format!("{:.1} MB", b as f64 / 1048576.0)
+/// Run `justrust <sub> <args>` remotely. `Ok(Err(Infra))` means nothing was
+/// built and the caller may build locally instead. Output is streamed to
+/// our stdout/stderr as it arrives.
+pub fn run_remote(
+    sub: &str,
+    args: &[String],
+    start: bool,
+) -> Result<std::result::Result<Outcome, Infra>> {
+    let total = Instant::now();
+    let cwd = std::env::current_dir()?;
+    let infra = |m: String| Ok(Err(Infra(m)));
+    let roots = match source_roots(&cwd) {
+        Ok(r) => r,
+        Err(e) => return infra(format!("{e:#}")),
+    };
+    if !roots.iter().any(|r| cwd.starts_with(r)) {
+        return infra(format!("{} is not inside a synced root", cwd.display()));
+    }
+    let sock = match crate::remote_daemon::connect() {
+        Ok(s) => s,
+        Err(e) => return infra(format!("{e:#}")),
+    };
+    let run_id = crate::record::new_run_id();
+    let mut env = Vec::new();
+    for var in [
+        "JUSTRUST_MAX_WARNINGS",
+        "RUST_BACKTRACE",
+        "RUST_LOG",
+        "JCODE_SESSION_ID",
+        "CARGO_TERM_COLOR",
+    ] {
+        if let Ok(v) = std::env::var(var) {
+            env.push((var.to_string(), v));
+        }
+    }
+    let mut w = BufWriter::new(sock.try_clone()?);
+    let mut r = BufReader::new(sock);
+    let mut full = vec![sub.to_string()];
+    full.extend(args.iter().cloned());
+    write_frame(
+        &mut w,
+        &Msg::Run {
+            id: 0,
+            cwd: cwd.display().to_string(),
+            args: full,
+            env,
+            roots: roots.iter().map(|r| r.display().to_string()).collect(),
+            start,
+            run_id: run_id.clone(),
+        },
+        &[],
+    )?;
+    let mut sync = None;
+    let mut so = std::io::stdout();
+    let mut se = std::io::stderr();
+    loop {
+        let frame = match read_frame(&mut r) {
+            Ok(Some(f)) => f,
+            Ok(None) | Err(_) if sync.is_none() => {
+                return infra("sync daemon closed the connection".into());
+            }
+            Ok(None) | Err(_) => {
+                // Output already started: a local rerun would duplicate it.
+                bail!("lost the remote build mid-run (see ~/.justrust/remote/daemon.log)");
+            }
+        };
+        match frame {
+            (
+                Msg::Flushed {
+                    files, ms, machine, ..
+                },
+                _,
+            ) => {
+                sync = Some((files, ms, machine));
+            }
+            (Msg::Out { stream, .. }, data) => {
+                if stream == 1 {
+                    so.write_all(&data)?;
+                    so.flush()?;
+                } else {
+                    se.write_all(&data)?;
+                    se.flush()?;
+                }
+            }
+            (Msg::Exit { code, .. }, summary) => {
+                let (files, ms, machine) = sync.unwrap_or((0, 0.0, String::new()));
+                record_remote(
+                    &run_id,
+                    &summary,
+                    &machine,
+                    ms,
+                    total.elapsed().as_secs_f64(),
+                );
+                eprintln!(
+                    "justrust remote: {} on {machine} in {:.1}s (sync {:.0} ms, {files} file{} at build time)",
+                    if code == 0 { "ok" } else { "failed" },
+                    total.elapsed().as_secs_f64(),
+                    ms,
+                    if files == 1 { "" } else { "s" },
+                );
+                return Ok(Ok(Outcome { code, run_id }));
+            }
+            (Msg::Error { msg, .. }, _) if sync.is_none() => return infra(msg),
+            (Msg::Error { msg, .. }, _) => bail!("remote build failed mid-run: {msg}"),
+            _ => {}
+        }
+    }
+}
+
+/// Keep a local copy of the remote run so `justrust runs/show` and the
+/// router see it. Marked `remote` in the index.
+fn record_remote(run_id: &str, summary: &[u8], machine: &str, sync_ms: f64, wall: f64) {
+    let Ok(mut s) = serde_json::from_slice::<crate::summary::Summary>(summary) else {
+        return;
+    };
+    let Ok(dir) = crate::paths::runs_dir().map(|d| d.join(run_id)) else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    s.remote = Some(crate::summary::RemoteInfo {
+        machine: machine.to_string(),
+        sync_ms,
+        client_wall: wall,
+    });
+    let _ = std::fs::write(
+        dir.join("summary.json"),
+        serde_json::to_vec_pretty(&s).unwrap_or_default(),
+    );
+    if let (Ok(idx), Ok(line)) = (
+        crate::paths::index_file(),
+        serde_json::to_string(&s.index_entry()),
+    ) {
+        let _ = crate::paths::append_line(&idx, &line);
+    }
+}
+
+/// `justrust remote check|test|...`: always remote (starting the machine if
+/// it is stopped). Infrastructure failures are errors here, not fallbacks.
+pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
+    if remote_backend::load().is_none() {
+        bail!(
+            "no remote machine configured. Create one with `justrust remote up`, or use one you have: `justrust remote use ssh user@host`"
+        );
+    }
+    match run_remote(sub, &args, true)? {
+        Ok(o) => std::process::exit(o.code),
+        Err(Infra(m)) => bail!("remote build unavailable: {m}"),
     }
 }
 

@@ -303,7 +303,7 @@ fn cached_probe() -> Option<Probe> {
 /// ssh options shared by every connection to the machine. ControlMaster
 /// keeps one authenticated connection open for 10 minutes, so each later
 /// ssh or rsync costs one round trip instead of a full handshake.
-fn ssh_opts() -> Result<Vec<String>> {
+pub(crate) fn ssh_opts() -> Result<Vec<String>> {
     let d = dir()?;
     Ok(vec![
         "-i".into(),
@@ -335,14 +335,21 @@ pub(crate) fn ssh_base(ip: &str) -> Result<Command> {
     Ok(c)
 }
 
-/// The `ssh ...` command line for `rsync -e`.
-pub(crate) fn ssh_command_line(_ip: &str) -> Result<String> {
-    let mut s = String::from("ssh");
-    for o in ssh_opts()? {
-        s.push(' ');
-        s.push_str(&crate::remote_build::shell_quote(&o));
+/// Last known IP of a running machine (no network). Cleared on stop.
+pub(crate) fn cached_ip() -> Option<String> {
+    let ip = std::fs::read_to_string(dir().ok()?.join("ip")).ok()?;
+    let ip = ip.trim();
+    (!ip.is_empty()).then(|| ip.to_string())
+}
+
+/// Append a line to ~/.justrust/remote/events.log.
+pub(crate) fn log_event(msg: &str) {
+    if let Ok(d) = dir() {
+        let _ = crate::paths::append_line(
+            &d.join("events.log"),
+            &format!("{} {msg}", chrono::Local::now().format("%F %T")),
+        );
     }
-    Ok(s)
 }
 
 pub(crate) fn instance_id() -> Option<String> {
@@ -963,6 +970,9 @@ pub fn down() -> Result<()> {
         &["ec2", "stop-instances", "--instance-ids", &st.instance_id],
     )?;
     println!("stopping {}", st.instance_id);
+    // Routing must not think a stopped machine is up.
+    let _ = std::fs::remove_file(dir()?.join("ip"));
+    crate::remote_daemon::stop();
     Ok(())
 }
 

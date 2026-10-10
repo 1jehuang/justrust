@@ -18,7 +18,13 @@ mod paths;
 mod procfs;
 mod record;
 mod remote;
+mod remote_agent;
+mod remote_backend;
 mod remote_build;
+mod remote_daemon;
+mod remote_proto;
+mod remote_sync;
+mod remote_watch;
 mod runs;
 mod sched;
 mod shim;
@@ -262,6 +268,18 @@ enum RemoteCmd {
     /// `justrust clippy` on the machine.
     #[command(disable_help_flag = true)]
     Clippy(RemoteArgs),
+    /// Choose where remote builds run: aws (the machine `remote up`
+    /// creates), ssh HOST (a machine you already have), hosted (Jcode
+    /// subscription, not available yet), or off.
+    Use {
+        kind: String,
+        host: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// ssh private key for the host.
+        #[arg(long)]
+        identity: Option<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -298,6 +316,17 @@ fn main() -> anyhow::Result<()> {
         && let Some(real) = rest.next()
     {
         buildscript::main(PathBuf::from(real), rest.collect());
+    }
+    // Remote build plumbing: the local sync daemon and the agent it starts
+    // on the remote machine. Internal, not part of the CLI.
+    match std::env::args_os()
+        .nth(1)
+        .as_deref()
+        .and_then(|a| a.to_str())
+    {
+        Some("__daemon") => remote_daemon::main(),
+        Some("__agent") => remote_agent::main(std::env::args().nth(2)),
+        _ => {}
     }
     if shim::invoked_as_shim(&argv0) {
         shim::main();
@@ -371,6 +400,12 @@ fn main() -> anyhow::Result<()> {
             RemoteCmd::Test(a) => remote_build::run("test", a.args)?,
             RemoteCmd::Build(a) => remote_build::run("build", a.args)?,
             RemoteCmd::Clippy(a) => remote_build::run("clippy", a.args)?,
+            RemoteCmd::Use {
+                kind,
+                host,
+                port,
+                identity,
+            } => remote_backend::use_command(&kind, host, port, identity)?,
         },
         Command::History {
             sessions,
