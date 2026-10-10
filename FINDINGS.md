@@ -1643,3 +1643,24 @@ clippy`. The summary now reconstructs these units from the sampled
 clippy-driver processes (200 ms resolution, no pass timings). Same edit
 after the fix: "3 compiled (3 local), compile 1.99s" (run
 20261010-062530043-2617015).
+
+## Remote vs local on uv, for the /rust landing page (2026-10-10)
+
+uv at 44b2e58 (674 units, 758 lockfile crates). Local: this laptop, 16
+threads, load 7 to 13 from other agents. Remote: hosted dev build host
+(c7i.4xlarge, 16 vCPU, us-east-1) through local justrust-cloud and backend.
+
+| case | local | remote (client wall) |
+|---|---:|---:|
+| cold `check --workspace`, no depcache | 70.3 s, peak 3.4 GB RSS, 563 CPU-s, target 1.8 GB | 52.2 s incl. 4.5 s first sync |
+| fresh target dir, depcache warm on that machine | 77.7 s (local depcache cold for uv: 5/574 hits) | 22.9 s (574/574 hits, saved ~171 s rustc) |
+| `test -p uv-resolver --no-run` | 73.6 s, peak 4.1 GB, target grows to 4.2 GB | 38.5 s |
+| one-line edit, `check -p uv-resolver` | | 1.0 s |
+
+Local footprint of remote builds: 0 bytes of target, no local rustc. The
+remote numbers are on a 16 vCPU machine; production default is c7i.8xlarge
+(32 vCPU) once the quota increase lands.
+
+Over 272 recorded Jcode Desktop builds over 20 s on this laptop: median peak
+build RSS 4.3 GB (p90 5.9, max 8.5), median peak 11 cores, median 237 CPU-s.
+Local target dirs here: jcode 744 GB, jcode-desktop 1.1 TB.
