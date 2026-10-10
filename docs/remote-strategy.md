@@ -144,7 +144,10 @@ Reasoning:
   Lake, and MLflow, closed Photon and managed platform), Turborepo with Vercel
   Remote Cache, Nx with Nx Cloud, Bazel with BuildBuddy or EngFlow, and Sentry
   (FSL).
-- Contributions use a DCO sign-off, not a CLA, to keep contributing easy.
+- Contributing has no friction: no CLA, bot, or sign-off. Contributions to
+  `server/` come in under Apache 2.0 (stated in CONTRIBUTING.md and the pull
+  request template), so the maintainer can relicense them and use them in the
+  hosted service. Switch to a click-through CLA if legal review requires it.
 
 Share versus total: open source captures a smaller share of the value created
 but likely a larger total. Local build speedups were never chargeable. Hosted

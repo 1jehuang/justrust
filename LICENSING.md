@@ -26,12 +26,20 @@ and set `license-file = "LICENSE"` in its `Cargo.toml`.
 
 ## Contributing
 
-Sign off each commit to certify the
-[Developer Certificate of Origin](https://developercertificate.org):
+Contributing is a normal pull request. There is no CLA, bot, or required
+sign-off.
 
-```text
-git commit -s
-```
+| Contribution to | Licensed to the project under |
+|---|---|
+| Anything outside `server/` | MIT |
+| `server/` | Apache License 2.0 |
 
-Contributions are licensed under the license of the directory they change.
-No CLA is required.
+`server/` contributions come in under Apache 2.0 even though `server/` goes
+out under FSL. Apache 2.0 lets the maintainer relicense that code, including
+for the hosted service, and carries a patent grant. Contributors keep their
+copyright. The terms are in [CONTRIBUTING.md](CONTRIBUTING.md) and repeated
+in the pull request template, so they appear in every pull request.
+
+If the server becomes commercially important, or legal review finds the
+notice insufficient, switch `server/` to a click-through CLA. That change
+applies only to new contributions.
