@@ -85,8 +85,11 @@ insufficient_compute_credits, 429, 503 build_unavailable
 - `remote status` shows account, tier, credits as hours of runtime at the
   current rate, and the server-side host state, cached 30 s.
 - `remote down` asks the server to stop the machine and closes the master.
-  The user there is `ubuntu`, mirrored paths are created with
-  `sudo -n install -d`.
+- The user there is `ubuntu`, with no general sudo. Mirrored paths under
+  `/home` and `/Users` are plain `mkdir -p` (an ACL and ownership allow it).
+  Other absolute paths go through `sudo -n /usr/local/sbin/jcode-mkdir
+  <path>`, which creates only missing components, owned by `ubuntu`, and
+  refuses system trees.
 
 `up` and `down` work for `aws` and `hosted`. `destroy` manages the AWS machine only. With an `ssh`
 backend they say so and change nothing (`up` refuses, `down` and

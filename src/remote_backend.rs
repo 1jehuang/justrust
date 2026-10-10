@@ -11,8 +11,9 @@
 //!   user@host`). Needs a shell, a C toolchain, and rustup. justrust installs
 //!   itself there.
 //! - `hosted`: justrust's own build fleet, tied to a Jcode subscription
-//!   (see `remote_hosted`). The user there is `ubuntu`, mirrored paths are
-//!   created with `sudo -n install -d`.
+//!   (see `remote_hosted`). The user there is `ubuntu` without general
+//!   sudo: mirrored paths outside /home and /Users are created with
+//!   `sudo -n /usr/local/sbin/jcode-mkdir`.
 //!
 //! With no backend configured nothing remote ever happens: the router costs
 //! one failed `stat`.
