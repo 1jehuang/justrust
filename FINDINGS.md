@@ -1474,3 +1474,28 @@ latest build plus the refresh time); the first build in a workspace with no
 `split/` state shows the generic advice and starts the refresh. The savings
 model is unchanged from 15b (ranking signal, about 2x high in two
 validations).
+
+## Remote sync daemon protocol v2 (ed048bb): sync cost unchanged, remote post-build tail found
+
+Warm `justrust remote check` on c7i.8xlarge us-west-2, same machine, before
+(v1 daemon) and after (v2):
+
+| workload | v1 | v2 |
+|---|---|---|
+| ~/justrust no-op | 0.6s (sync 30-33 ms) | 0.6s (sync 29-31 ms) |
+| ~/justrust one-line edit | 0.6-0.8s (sync 32-49 ms) | 1.1s (sync 30-31 ms) |
+| jcode-desktop-model no-op | 0.6-0.7s (sync 47-49 ms) | 0.6-0.7s (sync 46-50 ms) |
+| jcode-desktop-model one-line edit | 0.6-0.7s (sync 79-81 ms) | 0.7-0.9s (sync 79-86 ms) |
+
+Sync is unchanged. The ~/justrust edit total moved because of the machine,
+not the daemon: run on the machine directly, a `justrust check` after
+`touch src/remote_watch.rs` takes 1.04s with the v1 binary (213cd03^), with
+213cd03 and with v2 alike, while plain `cargo check` takes 0.50-0.55s. An
+strace (run 20261010-044440144-6736 on the machine) shows the last rustc
+exit at +0.82s and justrust exiting at +1.11s: about 0.29s after the build
+plus ~0.06s before cargo starts, in the remote justrust wrapper, not in sync.
+Since all three binaries show it today, something on the machine changed
+since the v1 measurement (cause not identified yet). Worth chasing next.
+
+Daemon ping during a 2,102-file cold mirror of a jcode clone: 0.2-0.4 ms
+(previously it shared the one state lock with rsync and pushes).
