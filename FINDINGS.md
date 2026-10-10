@@ -1521,3 +1521,31 @@ the 16 vCPU on-demand quota (503, client guidance correct), a readiness
 marker broken by systemd `$(...)` expansion (wake stuck at booting, client
 timed out cleanly at 360 s), and systemd-tmpfiles resetting /home's ACL mask
 (fixed with jcode-mkdir creating /home/<u>).
+
+## 20. Benchmark suite on pinned snapshots, and 0.5s lost at every build exit (2026-10-10)
+
+`bench/suite.py` replaces ad-hoc single-scenario scripts as the basis for
+speed claims: pinned `git archive` snapshots (jcode-desktop 7d38fb7 + jcode
+abff94eeb, justrust f97fcc2), private target dirs, a unique edit per
+iteration, 1 warmup + 5 measured runs, phases read from each run's
+summary.json, JSON results in `bench/results/`. See `bench/README.md`.
+
+Baseline (f97fcc2, `bench/results/20261010-005520-f97fcc2d7490.json`),
+median wall as the agent sees it: reference loop `desktop-test-edit` 8.06s,
+body-edit test 8.05s, body-edit check 2.54s, first type error 2.04s, no-op
+test 0.53s, upstream ui-core body 9.54s, ui-core new pub fn (check) 3.04s,
+jcode-core body 15.05s, justrust small-crate test 3.03s.
+
+The first run showed every agent-visible wall time on a 0.5s grid (x.03 /
+x.53). Agent-visible wall minus recorded wall was median 0.27s, max 0.52s:
+`sched::Scope::finish` joined the cgroup weight thread, which slept
+`UPDATE_EVERY` (0.5s) between checks. Fixed in c219b49 (the thread waits on a
+channel with a timeout and wakes on drop). After
+(`bench/results/20261010-010147-c219b496046c.json`): overhead median 0.034s,
+max 0.082s. desktop-body-check 2.54 -> 2.27s, desktop-type-error 2.04 ->
+1.78s, no-op 0.53 -> 0.47s (all with non-overlapping ranges); the long
+scenarios moved by about -0.4s, within their run-to-run spread.
+
+Where the reference loop goes now (7.59s): startup 0.48, frontend 3.83,
+codegen 1.11, incremental persist 0.77, link 0.47. jcode-core body edit:
+16 units, frontend 10.6s, the worst warm case.
