@@ -1570,3 +1570,24 @@ the direct measure of that fix: 0.271/0.515s med/max before, 0.034/0.082s
 after, 0.036/0.069s on the A/A rerun. The rerun also exposed a flaky
 justrust test (ETXTBSY exec race in buildscript tests, fixed ba5914b); the
 suite now records a failing test instead of aborting.
+
+## 2026-10-10: slot refresh copied a half-written shared target (jcode)
+
+Symptom: `justrust test -p jcode-tui --lib -- <filter>` in ~/jcode failed with
+197 errors starting `E0463 can't find crate for jcode_app_core` /
+`jcode_tui_permissions`, three runs in a row, while `cargo test` on the same
+tree passed. Each run printed `slot 0: copied 0 new and 8 rebuilt units (21
+files) from the shared target dir`.
+
+Context: a second justrust run in a `git worktree` of the same repo was using
+`CARGO_TARGET_DIR=~/jcode/target` (the shared target) at the same time, and
+another agent session owned slot 1. The slot refresh copied a partial set of
+rlibs/rmetas from the shared target mid-rebuild, leaving slot 0 with metadata
+for crates whose artifacts were missing.
+
+Recovery: one plain `cargo test` rebuilt the shared target; the next justrust
+run copied 47 new + 10 rebuilt units and passed.
+
+Fix idea: refresh only from a shared target that is not locked by a running
+cargo (respect `target/debug/.cargo-lock`), or verify copied rmeta/rlib pairs
+exist before trusting a refreshed slot and fall back to a rebuild.
