@@ -49,47 +49,62 @@ routing) only needs an ssh-reachable machine with a shell.
 |---|---|---|---|
 | `aws` | one machine in your own AWS account, created and controlled through the `aws` CLI | `justrust remote up` | built |
 | `ssh` | any machine you already have. Needs a shell, a C toolchain, and rustup. justrust installs itself there | `justrust remote use ssh user@host` | built |
-| `hosted` | justrust's own build fleet, paid from a Jcode subscription's cloud-compute credits (`src/remote_hosted.rs`) | `jcode account login`, then `justrust remote use hosted` | client built against the API contract below, server not deployed yet |
+| `hosted` | justrust's own build fleet, billed per build (25 free, then $10/mo for 500) (`src/remote_hosted.rs`, `src/account.rs`) | `justrust login` | client built against HOSTED_BUILDS.md |
 | none | every build is local | `justrust remote use off` | |
 
 A machine created before `backend.json` existed counts as `aws`.
 
 ### Hosted
 
-Credentials are the ones `jcode account login` writes: `JCODE_API_KEY` and
-`JCODE_API_BASE` (default `https://api.jcode.sh/v1`) from the environment,
-else `~/.config/jcode/jcode-subscription.env`. HTTP goes through curl with
-the key on stdin (`--config -`), never in argv or a URL. Only https, or http
-on loopback for tests.
+Funnel: `justrust login` (device flow, `client_name: justrust-cli`, opens the
+browser and prints the URL; without a TTY it prints "Ask your user to open"),
+which writes `JCODE_API_KEY`, `JCODE_ACCOUNT_ID`, `JCODE_ACCOUNT_EMAIL`,
+`JCODE_TIER` to `~/.config/jcode/jcode-subscription.env` (0600, shared with
+Jcode, other lines kept), selects `hosted` when no backend is set, and prints
+builds left. `justrust login --no-wait` saves the flow in
+`hosted/pending-login.json` (0600) and exits. Every later justrust command
+sends at most one token poll per interval and completes the login once
+approved (`src/account.rs`). `justrust logout` removes only the key lines.
+`justrust upgrade [--plan 10] [--no-wait]` opens Stripe Checkout and waits
+(up to 10 min) for `builds.can_build`.
+
+Account calls go to `JCODE_API_BASE` (default `https://api.jcode.sh/v1`),
+fleet calls (`build/...`) to `JUSTRUST_BUILD_BASE` (default
+`https://build.jcode.sh/v1`). HTTP goes through curl with the key on stdin
+(`--config -`), never in argv or a URL. Only https, or http on loopback for
+tests.
 
 ```text
-GET  /v1/me                  capabilities.build_hosts, tier, status, email
-POST /v1/build/host/connect  {"public_key"}: 202 {state, message} while starting,
-                             200 {address, port, user, host_keys, credits} when ready
-GET  /v1/build/host          {state, credits}
-POST /v1/build/host/stop     {state}
-errors {error:{code,message}}: 401 sign in, 402 build_not_entitled or
-insufficient_compute_credits, 429, 503 build_unavailable
+api   POST /auth/device {client_name}  POST /auth/token {device_code} (428 pending, 429 slow_down)
+api   GET  /me                         builds {trial_remaining, included, included_used, can_build, next_step}
+api   POST /billing/subscribe {plan_usd} -> {url}
+build POST /build/runs {run_id}        200 charged | 402 {error:{next_step: subscribe|raise_limit}}
+build POST /build/host/connect  {"public_key"}: 202 while starting, 200 {address, port, user, host_keys, builds}
+build GET  /build/host          {state, builds}
+build POST /build/host/stop     {state}
 ```
 
-- `remote use hosted` checks the sign-in and the `build_hosts` capability,
-  then saves the backend.
-- Each connect (`remote up`, or the first remote build) generates a fresh
-  ed25519 key, polls connect every 2 s (up to 6 min for a first creation),
-  pins exactly the returned host keys in `hosted/known_hosts`
+- Every hosted remote run first POSTs `build/runs` with the run's id (the
+  same id it is recorded under, so retries are free). Any non-200 means no
+  remote run: a 402 prints one line for the agent to relay (`free builds
+  used up. Subscribe ($10/mo, 500 builds): justrust upgrade ...` or
+  `monthly usage limit reached: ... https://jcode.sh/account`), the build
+  runs locally, and auto routing stays local for the 10 minute backoff.
+- Routing may start a stopped hosted machine when signed in and the local
+  build is predicted over 20 s, or there is no local sample and the
+  workspace has no `target/debug`. Otherwise hosted counts as up only while
+  the ssh master is alive or within 60 s of a ready.
+- Each connect generates a fresh ed25519 key, polls connect every 2 s (up to
+  6 min for a first creation), pins exactly the returned host keys
   (StrictHostKeyChecking=yes), and opens the ssh ControlMaster at once: the
   key is accepted for only 60 s, the master then carries every ssh and rsync
-  for 10 minutes after last use. A host key mismatch fails immediately.
-- Routing treats hosted as up only while that master is alive (a local
-  `ssh -O check`) or within 60 s of a ready. It never calls the API.
-- `remote status` shows account, tier, credits as hours of runtime at the
-  current rate, and the server-side host state, cached 30 s.
+  for 10 minutes after last use.
+- `remote status` shows account and builds left (cached 30 s). `--json` adds
+  `signed_in`, `pending_login_url`, `builds`, `next_step`.
 - `remote down` asks the server to stop the machine and closes the master.
 - The user there is `ubuntu`, with no general sudo. Mirrored paths under
-  `/home` and `/Users` are plain `mkdir -p` (an ACL and ownership allow it).
-  Other absolute paths go through `sudo -n /usr/local/sbin/jcode-mkdir
-  <path>`, which creates only missing components, owned by `ubuntu`, and
-  refuses system trees.
+  `/home` and `/Users` are plain `mkdir -p`. Other absolute paths go through
+  `sudo -n /usr/local/sbin/jcode-mkdir <path>`.
 
 `up` and `down` work for `aws` and `hosted`. `destroy` manages the AWS machine only. With an `ssh`
 backend they say so and change nothing (`up` refuses, `down` and

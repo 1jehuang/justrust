@@ -26,3 +26,21 @@ tests, builds, lints, and runs:
 - Other cargo commands (`cargo fmt`, `cargo metadata`, `cargo tree`, `cargo add`)
   stay as plain `cargo`.
 
+
+### Remote builds (optional, hosted)
+
+You can set this up yourself. The only human steps are opening a sign-in
+link and, after the free builds, paying.
+
+1. Install if missing: `curl -fsSL https://jcode.sh/rust.sh | sh`
+2. `justrust login --no-wait`. It prints a URL. Tell your user: "Please open
+   this link to approve justrust remote builds: <url>". Do not wait for them.
+3. Keep working. Builds stay local until the link is approved, then any
+   justrust command finishes the sign-in and slow builds go remote by
+   themselves.
+4. If a build prints `free builds used up` or `monthly usage limit reached`,
+   relay that line (and the URL from `justrust upgrade --no-wait`) to your
+   user. The build itself already ran locally.
+5. `justrust remote status --json` shows `signed_in`, `pending_login_url`,
+   `builds`, and `next_step`. `--local` / `--remote` on a build force where it
+   runs.

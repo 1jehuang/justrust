@@ -36,6 +36,20 @@ Or from a checkout: `cargo install --path . --locked`. Requires Rust 1.91 or
 newer (edition 2024). Then point your agents at it with the snippet in
 [docs/AGENTS-snippet.md](docs/AGENTS-snippet.md).
 
+## Quickstart: remote builds in 3 steps
+
+```sh
+curl -fsSL https://jcode.sh/rust.sh | sh   # install (runs `justrust login`)
+justrust login                             # approve in the browser: 25 free builds
+justrust check                             # slow builds now go to a build machine
+```
+
+Agents without a browser: `justrust login --no-wait` prints the link for the
+user and returns at once. Builds stay local until it is approved. After the
+free builds, `justrust upgrade` ($10/mo, 500 builds). Out of builds, offline,
+or signed out: every build runs locally, with one line saying why.
+`--local` / `--remote` (or `JUSTRUST_REMOTE=off|force`) override routing.
+
 ## What exists so far
 
 - **Agent interface.** `justrust check|test|build|clippy|run` takes cargo's
