@@ -113,6 +113,36 @@ impl Backend {
         }
     }
 
+    /// Short backend name for status output and JSON.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Backend::Aws => "aws",
+            Backend::Ssh { .. } => "ssh",
+            Backend::Hosted => "hosted",
+        }
+    }
+
+    /// The ssh destination without connecting or starting anything: the
+    /// configured host for `ssh`, the last known IP for `aws` (None when the
+    /// machine is not known to be running), None for `hosted`.
+    pub fn target_no_start(&self) -> Result<Option<Target>> {
+        match self {
+            Backend::Aws => match remote::cached_ip() {
+                Some(ip) => Ok(Some(Target {
+                    dest: format!("{}@{ip}", remote::SSH_USER),
+                    opts: remote::ssh_opts()?,
+                })),
+                None => Ok(None),
+            },
+            Backend::Ssh {
+                host,
+                port,
+                identity,
+            } => Ok(Some(ssh_target(host, *port, identity.as_deref())?)),
+            Backend::Hosted => Ok(None),
+        }
+    }
+
     /// Reachable right now without starting anything (for auto routing).
     pub fn probably_up(&self) -> bool {
         match self {
@@ -148,6 +178,25 @@ impl Target {
     }
 }
 
+/// ssh ControlPath for connections from justrust. `%C` expands to 40 hex
+/// characters and a Unix socket path must stay under 108 bytes, so a long
+/// JUSTRUST_HOME falls back to the per-user runtime dir (then /tmp).
+pub(crate) fn control_path(dir: &std::path::Path) -> String {
+    let p = format!("{}/cm-%C", dir.display());
+    if p.len() + 40 < 104 {
+        return p;
+    }
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| PathBuf::from(format!("/tmp/justrust-{uid}")));
+    let short = base.join("justrust-cm");
+    let _ = std::fs::create_dir_all(&short);
+    format!("{}/%C", short.display())
+}
+
 fn ssh_target(host: &str, port: Option<u16>, identity: Option<&str>) -> Result<Target> {
     let d = remote::dir()?;
     let mut opts: Vec<String> = vec![
@@ -160,7 +209,7 @@ fn ssh_target(host: &str, port: Option<u16>, identity: Option<&str>) -> Result<T
         "-o".into(),
         "ControlMaster=auto".into(),
         "-o".into(),
-        format!("ControlPath={}/cm-%C", d.display()),
+        format!("ControlPath={}", control_path(&d)),
         "-o".into(),
         "ControlPersist=600".into(),
         "-o".into(),
