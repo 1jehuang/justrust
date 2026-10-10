@@ -18,6 +18,16 @@ experimental and off unless you configure a machine. See
 
 ## Install
 
+Prebuilt binary (Linux and macOS, x86_64 and aarch64), no compile:
+
+```sh
+curl -fsSL https://jcode.sh/rust.sh | sh
+```
+
+It installs to `~/.local/bin` (override with `JUSTRUST_INSTALL_DIR`), verifies
+the sha256, and runs `justrust login` when interactive (`JUSTRUST_NO_LOGIN=1`
+skips it). From source:
+
 ```sh
 cargo install justrust --locked
 ```
