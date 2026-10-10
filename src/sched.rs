@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub const SLICE: &str = "app-justrust.slice";
@@ -78,7 +78,9 @@ pub struct SchedInfo {
 pub struct Scope {
     unit: String,
     setup_secs: f64,
-    stop: Arc<AtomicBool>,
+    /// Dropping this wakes the update thread and stops it at once (it would
+    /// otherwise finish its 0.5 s sleep, which every build paid at exit).
+    stop: Option<std::sync::mpsc::Sender<()>>,
     min_weight: Arc<AtomicU64>,
     yielded_ms: Arc<AtomicU64>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -86,7 +88,7 @@ pub struct Scope {
 
 impl Scope {
     pub fn finish(mut self) -> SchedInfo {
-        self.stop.store(true, Ordering::SeqCst);
+        self.stop.take();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -101,7 +103,7 @@ impl Scope {
 
 impl Drop for Scope {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        self.stop.take();
     }
 }
 
@@ -182,18 +184,20 @@ pub fn enter(run_id: &str) -> Option<Scope> {
         }
     };
     let cgroup = PathBuf::from(format!("/sys/fs/cgroup{cg}"));
-    let stop = Arc::new(AtomicBool::new(false));
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
     let min_weight = Arc::new(AtomicU64::new(MAX_WEIGHT));
     let yielded_ms = Arc::new(AtomicU64::new(0));
     let thread = {
-        let (stop, min, yielded_ms) = (stop.clone(), min_weight.clone(), yielded_ms.clone());
+        let (min, yielded_ms) = (min_weight.clone(), yielded_ms.clone());
         std::thread::spawn(move || {
             let cpus = Cpus::detect();
             let mut seen = HashMap::new();
             let mut last = MAX_WEIGHT;
             let mut confined = false;
-            while !stop.load(Ordering::SeqCst) {
-                std::thread::sleep(UPDATE_EVERY);
+            // Sleep UPDATE_EVERY, waking early when the scope is dropped.
+            while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                stopped.recv_timeout(UPDATE_EVERY)
+            {
                 let Some(used) = std::fs::read_to_string(cgroup.join("cpu.stat"))
                     .ok()
                     .as_deref()
@@ -229,7 +233,7 @@ pub fn enter(run_id: &str) -> Option<Scope> {
     Some(Scope {
         unit,
         setup_secs: t0.elapsed().as_secs_f64(),
-        stop,
+        stop: Some(stop),
         min_weight,
         yielded_ms,
         thread: Some(thread),
