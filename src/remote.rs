@@ -647,7 +647,7 @@ cat >/usr/local/bin/justrust-idle-check <<'EOF'
 # load. Status probes are short non-tty ssh commands, so they do not count.
 IDLE={idle}
 f=/var/lib/justrust/last-active
-[ -f $f ] || date +%s >$f
+[[ "$(cat $f 2>/dev/null)" =~ ^[0-9]+$ ]] || date +%s >$f
 load=$(cut -d' ' -f1 /proc/loadavg)
 if who | grep -q . || awk "BEGIN{{exit !($load > 1.0)}}"; then
   date +%s >$f
@@ -675,7 +675,7 @@ cat >/etc/systemd/system/justrust-boot.service <<'EOF'
 Before=justrust-idle.timer
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'date +%s >/var/lib/justrust/last-active'
+ExecStart=/bin/sh -c 'date +%%s >/var/lib/justrust/last-active'
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -940,5 +940,17 @@ mod tests {
     #[test]
     fn user_data_has_idle_minutes() {
         assert!(user_data(17).contains("IDLE=17"));
+    }
+
+    /// systemd expands `%s` in unit files to the user's shell.
+    #[test]
+    fn unit_files_escape_percent() {
+        let ud = user_data(30);
+        let unit = ud
+            .split("justrust-boot.service <<'EOF'")
+            .nth(1)
+            .and_then(|r| r.split("\nEOF").next())
+            .unwrap();
+        assert!(unit.contains("%%s") && !unit.replace("%%", "").contains('%'));
     }
 }
