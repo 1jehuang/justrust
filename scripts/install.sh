@@ -84,7 +84,10 @@ main() {
             say "installed $BIN"
             case ":$PATH:" in
                 *":$INSTALL_DIR:"*) ;;
-                *) say "add it to your PATH: export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
+                *)
+                    say "$INSTALL_DIR is not on PATH. Run it as $BIN"
+                    say "or add it: export PATH=\"$INSTALL_DIR:\$PATH\""
+                    ;;
             esac
         else
             cargo_fallback "$target"
@@ -93,10 +96,30 @@ main() {
         cargo_fallback "$(uname -s)/$(uname -m)"
     fi
 
-    if [ -z "${JUSTRUST_NO_LOGIN:-}" ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+    if [ -n "${JUSTRUST_NO_LOGIN:-}" ]; then
+        say "Next: justrust login"
+    elif [ -t 0 ] || { [ -t 1 ] && (: </dev/tty) 2>/dev/null; }; then
+        # A human is at a terminal: run the interactive login.
         "$BIN" login </dev/tty || say "login skipped. Next: justrust login"
     else
-        say "Next: justrust login"
+        # No TTY (coding agent): never block on input.
+        if "$BIN" login --help </dev/null 2>&1 | grep -q -- '--no-wait'; then
+            out=$("$BIN" login --no-wait </dev/null 2>&1) || true
+            printf '%s\n' "$out"
+            url=$(printf '%s\n' "$out" | grep -o 'https\{0,1\}://[^[:space:]"<>]*' | head -n 1)
+            echo
+            echo "Installed: $BIN"
+            if [ -n "$url" ]; then
+                echo "Ask your user to open $url to enable remote builds (25 free)"
+            else
+                echo "Ask your user to run: $BIN login (to enable remote builds, 25 free)"
+            fi
+            echo "Then just use justrust check/test"
+        else
+            echo
+            echo "Installed: $BIN"
+            echo "Next: justrust login"
+        fi
     fi
 }
 
