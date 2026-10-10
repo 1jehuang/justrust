@@ -1499,3 +1499,25 @@ since the v1 measurement (cause not identified yet). Worth chasing next.
 
 Daemon ping during a 2,102-file cold mirror of a jcode clone: 0.2-0.4 ms
 (previously it shared the one state lock with rsync and pushes).
+
+## Hosted backend end to end (2026-10-09, local wrangler dev + real AWS dev stack, c7i.4xlarge 16 vCPU us-east-1)
+
+Client `src/remote_hosted.rs` against the build-host API (`/v1/build/host*`).
+146 ms round trip from the laptop (us-east-1, vs 29 ms to the us-west-2 aws
+backend), so small edits cost more than on aws.
+
+| step | time |
+|---|---:|
+| first `remote up`, server creating the machine | ~75 s (server: 84-119 s launch to ready) |
+| `remote up` with the host running (fresh key + connect + new master) | 4.6-4.7 s |
+| `remote down`, then `remote up` (wake, new public IP pinned) | 43-46 s |
+| `remote check` ~/justrust, cold machine | 11.9-12.5 s (sync 2.9-5.7 s) |
+| `remote check` ~/justrust, warm no-op | 0.7 s (sync 71 ms) |
+| `remote test` ~/justrust, 157 tests | 10.3-11.5 s |
+| `remote check -p jcode-desktop-model`, cold, two roots | 25.4-25.6 s |
+
+Server bugs found by the run and fixed by the server side: c7i.8xlarge over
+the 16 vCPU on-demand quota (503, client guidance correct), a readiness
+marker broken by systemd `$(...)` expansion (wake stuck at booting, client
+timed out cleanly at 360 s), and systemd-tmpfiles resetting /home's ACL mask
+(fixed with jcode-mkdir creating /home/<u>).
