@@ -22,7 +22,7 @@ experimental and off unless you configure a machine. See
 cargo install justrust --locked
 ```
 
-Or from a checkout: `cargo install --path . --locked`. Requires Rust 1.88 or
+Or from a checkout: `cargo install --path . --locked`. Requires Rust 1.91 or
 newer (edition 2024). Then point your agents at it with the snippet in
 [docs/AGENTS-snippet.md](docs/AGENTS-snippet.md).
 

@@ -2,7 +2,7 @@
 name = "justrust"
 version = "0.1.0-alpha.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.91"
 readme = "README.md"
 keywords = ["cargo", "build", "compile", "agents", "profiling"]
 categories = ["development-tools", "development-tools::build-utils"]
