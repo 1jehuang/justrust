@@ -37,7 +37,16 @@ How it works:
   or if other processes averaged more than `BENCH_NOISY_CORES` (default 4)
   cores. The table shows the median of all samples and of the quiet ones.
   `--quiet-wait 120` waits for a quiet machine before each sample.
-  `compare` only says faster/slower when the min..max ranges do not overlap.
+  `compare` only says faster/slower when the min..max ranges do not overlap
+  and the median moved more than `--floor` (default 10%: an A/A rerun of
+  the same build drifted up to 9%). It also prints justrust's exit
+  overhead (agent-visible wall minus recorded wall), which has no compile
+  noise.
+- **Interpretation choices** (guesses, revisit if wrong): the scenarios are
+  the edit shapes agents make most in Jcode Desktop (test body, non-test
+  body, dependency body, new pub item, deep sibling-repo edit, type error),
+  timed as wall clock seen by the agent. The suite does not cover
+  concurrent agents (`sched-contention.sh` does) or remote builds.
 - **Results** go to `bench/results/<time>-<rev>.json` with machine,
   toolchain, and pin info, plus the run id of every sample. Commit them.
 
