@@ -20,6 +20,18 @@ pub fn ncpu() -> usize {
         .unwrap_or(1)
 }
 
+/// Contents of /proc/<pid>/cgroup.
+pub fn cgroup(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()
+}
+
+/// System boot time in seconds since the epoch (`btime` in /proc/stat).
+pub fn boot_time() -> Option<f64> {
+    let s = std::fs::read_to_string("/proc/stat").ok()?;
+    s.lines()
+        .find_map(|l| l.strip_prefix("btime ")?.trim().parse::<f64>().ok())
+}
+
 /// Aggregate CPU jiffies from the first line of /proc/stat.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CpuTimes {

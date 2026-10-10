@@ -815,6 +815,36 @@ fn git_info() -> GitInfo {
     }
 }
 
+/// Resolve dependency features once for the whole workspace instead of per
+/// command, so `-p a`, `-p b`, and `--workspace` compile the same build of
+/// each dependency. Without it, switching packages rebuilds dependencies
+/// with different feature sets (27 dirty units going from `-p
+/// jcode-desktop-harness` to `-p jcode-desktop-model`), and every variant
+/// is a separate depcache entry. Measured in FINDINGS.md section 18.
+///
+/// Uses cargo's `-Zfeature-unification` (`resolver.feature-unification =
+/// "workspace"`). The nightly gate is opened with cargo's channel override
+/// rather than `RUSTC_BOOTSTRAP`, because rustc sees `RUSTC_BOOTSTRAP`, so
+/// cargo fingerprints it and setting it would rebuild everything once.
+/// The override only affects cargo, not rustc.
+///
+/// Off with `JUSTRUST_UNIFY_FEATURES=0`. Respects an explicit
+/// `CARGO_RESOLVER_FEATURE_UNIFICATION` (`selected` restores cargo's default).
+fn unify_features(cmd: &mut Command) {
+    if matches!(
+        std::env::var("JUSTRUST_UNIFY_FEATURES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    ) || std::env::var_os("CARGO_RESOLVER_FEATURE_UNIFICATION").is_some()
+    {
+        return;
+    }
+    cmd.env("CARGO_RESOLVER_FEATURE_UNIFICATION", "workspace")
+        .env("CARGO_UNSTABLE_FEATURE_UNIFICATION", "true");
+    if std::env::var_os("RUSTC_BOOTSTRAP").is_none() {
+        cmd.env("__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS", "nightly");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -881,35 +911,5 @@ mod tests {
             classify_proc("build-script-bu", "/t/debug/build/x-1/build-script-build"),
             "build-script"
         );
-    }
-}
-
-/// Resolve dependency features once for the whole workspace instead of per
-/// command, so `-p a`, `-p b`, and `--workspace` compile the same build of
-/// each dependency. Without it, switching packages rebuilds dependencies
-/// with different feature sets (27 dirty units going from `-p
-/// jcode-desktop-harness` to `-p jcode-desktop-model`), and every variant
-/// is a separate depcache entry. Measured in FINDINGS.md section 18.
-///
-/// Uses cargo's `-Zfeature-unification` (`resolver.feature-unification =
-/// "workspace"`). The nightly gate is opened with cargo's channel override
-/// rather than `RUSTC_BOOTSTRAP`, because rustc sees `RUSTC_BOOTSTRAP`, so
-/// cargo fingerprints it and setting it would rebuild everything once.
-/// The override only affects cargo, not rustc.
-///
-/// Off with `JUSTRUST_UNIFY_FEATURES=0`. Respects an explicit
-/// `CARGO_RESOLVER_FEATURE_UNIFICATION` (`selected` restores cargo's default).
-fn unify_features(cmd: &mut Command) {
-    if matches!(
-        std::env::var("JUSTRUST_UNIFY_FEATURES").as_deref(),
-        Ok("0") | Ok("off") | Ok("false") | Ok("no")
-    ) || std::env::var_os("CARGO_RESOLVER_FEATURE_UNIFICATION").is_some()
-    {
-        return;
-    }
-    cmd.env("CARGO_RESOLVER_FEATURE_UNIFICATION", "workspace")
-        .env("CARGO_UNSTABLE_FEATURE_UNIFICATION", "true");
-    if std::env::var_os("RUSTC_BOOTSTRAP").is_none() {
-        cmd.env("__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS", "nightly");
     }
 }

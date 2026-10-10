@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  linux:
+    name: Linux (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked
+      - run: cargo test --locked
+      # Dogfood: the freshly built binary checks and tests a scratch crate.
+      - name: Smoke test the binary
+        run: |
+          cargo build --locked
+          bin="$PWD/target/debug/justrust"
+          cargo new -q "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke"
+          "$bin" check
+          "$bin" test
+          echo 'fn main() { let _x: u32 = "a"; }' > src/main.rs
+          if "$bin" check; then echo "expected a compile error"; exit 1; fi
+      - run: cargo package --locked
+
+  passthrough:
+    name: ${{ matrix.os }} (passthrough build)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --locked
+      - run: cargo build --locked
+      - name: Passthrough runs plain cargo
+        shell: bash
+        run: |
+          bin="$PWD/target/debug/justrust"
+          cargo new -q "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke"
+          "$bin" check
+          "$bin" --version

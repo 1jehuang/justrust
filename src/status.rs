@@ -75,13 +75,7 @@ fn pid_alive(pid: u32, since: f64) -> bool {
         return false;
     };
     // Rule out a reused pid: the process must have started before the run.
-    let boot = std::fs::read_to_string("/proc/stat")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("btime ")?.trim().parse::<f64>().ok())
-        })
-        .unwrap_or(0.0);
+    let boot = crate::procfs::boot_time().unwrap_or(0.0);
     let started = boot + st.start_ticks as f64 / crate::procfs::clk_tck();
     boot == 0.0 || started <= since + 2.0
 }

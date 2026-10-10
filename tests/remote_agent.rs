@@ -4,6 +4,8 @@
 //! The agent gets a prefix, so every absolute path it is sent lands under a
 //! scratch directory.
 
+#![cfg(target_os = "linux")]
+
 #[allow(dead_code)]
 #[path = "../src/remote_proto.rs"]
 mod remote_proto;

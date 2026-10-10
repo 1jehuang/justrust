@@ -106,8 +106,7 @@ impl Drop for Scope {
 }
 
 fn cgroup_of(pid: u32) -> Option<String> {
-    let s = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
-    parse_cgroup(&s)
+    parse_cgroup(&crate::procfs::cgroup(pid)?)
 }
 
 fn parse_cgroup(s: &str) -> Option<String> {
