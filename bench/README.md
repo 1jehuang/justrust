@@ -30,7 +30,9 @@ How it works:
   suite reads `~/.justrust/runs/<id>/summary.json` for phases (startup,
   compile, tests), the per-pass split of local crates (frontend, codegen,
   incremental, link), units, and CPU. `JUSTRUST_PASSES=always` is set so
-  every crate has the split.
+  every crate has the split, except in cold scenarios: units built with
+  `-Ztime-passes` are never stored in the depcache. Cold scenarios with the
+  depcache on run one warmup first so the cache is filled.
 - **Noise.** A sample is `noisy` if another rustc was running at its start,
   or if other processes averaged more than `BENCH_NOISY_CORES` (default 4)
   cores. The table shows the median of all samples and of the quiet ones.

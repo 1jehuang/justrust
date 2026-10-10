@@ -7,8 +7,11 @@ fastest possible edit -> check -> test loop for agents.
 ## Target
 
 The reference loop is a one-line body edit in `jcode-desktop-ui` followed by
-`justrust test -p jcode-desktop-ui --lib -- <filter>`. Today (run
-20261007-235214927-3498261):
+`justrust test -p jcode-desktop-ui --lib -- <filter>`. It is measured by
+`bench/suite.py run desktop-test-edit` on pinned sources; the latest is
+7.59s median (`bench/results/20261010-010147-c219b496046c.json`: startup
+0.48, frontend 3.83, codegen 1.11, incr persist 0.77, link 0.47). The older
+breakdown below (run 20261007-235214927-3498261, unpinned):
 
 | phase | seconds | notes |
 |---|---:|---|
