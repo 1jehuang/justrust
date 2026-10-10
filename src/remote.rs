@@ -24,7 +24,7 @@ const DEFAULT_REGION: &str = "us-west-2";
 const DEFAULT_TYPE: &str = "c7i.8xlarge";
 const DEFAULT_IDLE_MINUTES: u32 = 30;
 const DISK_GB: u32 = 200;
-const SSH_USER: &str = "ubuntu";
+pub(crate) const SSH_USER: &str = "ubuntu";
 /// How long a cached probe is reused by `status` before re-probing over ssh.
 const PROBE_TTL: f64 = 30.0;
 
@@ -73,7 +73,7 @@ pub struct Status {
     pub error: Option<String>,
 }
 
-fn dir() -> Result<PathBuf> {
+pub(crate) fn dir() -> Result<PathBuf> {
     let d = crate::paths::home()?.join("remote");
     std::fs::create_dir_all(&d)?;
     Ok(d)
@@ -285,27 +285,107 @@ fn cached_probe() -> Option<Probe> {
     serde_json::from_slice(&b).ok()
 }
 
-fn ssh_base(ip: &str) -> Result<Command> {
+/// ssh options shared by every connection to the machine. ControlMaster
+/// keeps one authenticated connection open for 10 minutes, so each later
+/// ssh or rsync costs one round trip instead of a full handshake.
+fn ssh_opts() -> Result<Vec<String>> {
+    let d = dir()?;
+    Ok(vec![
+        "-i".into(),
+        key_path()?.display().to_string(),
+        "-o".into(),
+        "StrictHostKeyChecking=accept-new".into(),
+        "-o".into(),
+        format!("UserKnownHostsFile={}", d.join("known_hosts").display()),
+        "-o".into(),
+        "ConnectTimeout=5".into(),
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
+        "-o".into(),
+        "ControlMaster=auto".into(),
+        "-o".into(),
+        format!("ControlPath={}/cm-%C", d.display()),
+        "-o".into(),
+        "ControlPersist=600".into(),
+        "-o".into(),
+        "ServerAliveInterval=15".into(),
+    ])
+}
+
+pub(crate) fn ssh_base(ip: &str) -> Result<Command> {
     let mut c = Command::new("ssh");
-    c.args([
-        "-i",
-        key_path()?.to_str().unwrap_or_default(),
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        &format!(
-            "UserKnownHostsFile={}",
-            dir()?.join("known_hosts").display()
-        ),
-        "-o",
-        "ConnectTimeout=5",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "LogLevel=ERROR",
-        &format!("{SSH_USER}@{ip}"),
-    ]);
+    c.args(ssh_opts()?).arg(format!("{SSH_USER}@{ip}"));
     Ok(c)
+}
+
+/// The `ssh ...` command line for `rsync -e`.
+pub(crate) fn ssh_command_line(_ip: &str) -> Result<String> {
+    let mut s = String::from("ssh");
+    for o in ssh_opts()? {
+        s.push(' ');
+        s.push_str(&crate::remote_build::shell_quote(&o));
+    }
+    Ok(s)
+}
+
+pub(crate) fn instance_id() -> Option<String> {
+    load_state().ok().flatten().map(|s| s.instance_id)
+}
+
+pub(crate) fn describe_short() -> Option<String> {
+    let st = load_state().ok().flatten()?;
+    Some(format!("{} {}", st.instance_type, st.region))
+}
+
+/// The machine's IP, starting it first if it is stopped. Fast path: the
+/// last known IP answers over the shared ssh connection (no aws call).
+pub(crate) fn ensure_running() -> Result<String> {
+    let ip_file = dir()?.join("ip");
+    if let Ok(ip) = std::fs::read_to_string(&ip_file) {
+        let ip = ip.trim().to_string();
+        if !ip.is_empty() && ssh_ready(&ip) {
+            return Ok(ip);
+        }
+    }
+    let st = load_state()?.context("no remote machine yet: run `justrust remote up`")?;
+    let mut d = describe(&st)?;
+    if d.state != "running" || d.ip.is_none() {
+        eprintln!("justrust remote: machine is {}, starting it...", d.state);
+        up(UpOptions {
+            region: None,
+            instance_type: None,
+            on_demand: false,
+            idle_minutes: None,
+        })?;
+        d = describe(&st)?;
+    }
+    let ip = d.ip.context("machine has no public IP")?;
+    // Wait for sshd and first-boot setup.
+    for i in 0..100 {
+        if ssh_ready(&ip) {
+            std::fs::write(&ip_file, &ip)?;
+            return Ok(ip);
+        }
+        if i == 0 {
+            eprintln!("justrust remote: waiting for the machine to be ready...");
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    bail!("remote machine at {ip} did not become ready")
+}
+
+fn ssh_ready(ip: &str) -> bool {
+    ssh_base(ip)
+        .and_then(|mut c| {
+            Ok(c.arg("test -f /var/lib/justrust/ready")
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?)
+        })
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn tcp_rtt(ip: &str) -> Option<f64> {

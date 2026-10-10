@@ -18,6 +18,7 @@ mod paths;
 mod procfs;
 mod record;
 mod remote;
+mod remote_build;
 mod runs;
 mod sched;
 mod shim;
@@ -249,6 +250,24 @@ enum RemoteCmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
     },
+    /// `justrust check` on the machine (syncs the source first).
+    #[command(disable_help_flag = true)]
+    Check(RemoteArgs),
+    /// `justrust test` on the machine.
+    #[command(disable_help_flag = true)]
+    Test(RemoteArgs),
+    /// `justrust build` on the machine.
+    #[command(disable_help_flag = true)]
+    Build(RemoteArgs),
+    /// `justrust clippy` on the machine.
+    #[command(disable_help_flag = true)]
+    Clippy(RemoteArgs),
+}
+
+#[derive(clap::Args)]
+struct RemoteArgs {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
 }
 
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
@@ -348,6 +367,10 @@ fn main() -> anyhow::Result<()> {
                 watch,
             } => remote::status(json, waybar, watch)?,
             RemoteCmd::Ssh { cmd } => remote::ssh(cmd)?,
+            RemoteCmd::Check(a) => remote_build::run("check", a.args)?,
+            RemoteCmd::Test(a) => remote_build::run("test", a.args)?,
+            RemoteCmd::Build(a) => remote_build::run("build", a.args)?,
+            RemoteCmd::Clippy(a) => remote_build::run("clippy", a.args)?,
         },
         Command::History {
             sessions,
