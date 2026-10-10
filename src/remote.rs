@@ -52,6 +52,9 @@ pub struct Probe {
     pub ready: bool,
     pub idle_left_min: Option<f64>,
     pub uptime_s: Option<f64>,
+    /// Hottest plausible sensor in degrees C. EC2 VMs expose none.
+    #[serde(default)]
+    pub temp_c: Option<f64>,
     pub error: Option<String>,
 }
 
@@ -410,6 +413,7 @@ df --output=pcent / | tail -1 | tr -dc 0-9; echo
 test -f /var/lib/justrust/ready && echo ready || echo setup
 cat /var/lib/justrust/idle-left 2>/dev/null || echo -
 cut -d' ' -f1 /proc/uptime
+cat /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input 2>/dev/null | awk '$1>1000&&$1<150000{if($1>m)m=$1}END{if(m)printf "%.1f\n",m/1000; else print "-"}'
 "#;
 
 fn run_probe(ip: &str) -> Probe {
@@ -440,6 +444,7 @@ fn run_probe(ip: &str) -> Probe {
             p.ready = get(5) == "ready";
             p.idle_left_min = get(6).parse().ok();
             p.uptime_s = get(7).parse().ok();
+            p.temp_c = get(8).parse().ok();
         }
         Ok(o) => p.error = Some(first_line(&String::from_utf8_lossy(&o.stderr))),
         Err(e) => p.error = Some(first_line(&e.to_string())),
@@ -516,6 +521,14 @@ pub fn render_text(s: &Status) -> String {
             if let Some(d) = p.disk_used_pct {
                 let _ = writeln!(o, "  disk {d:.0}% used");
             }
+            match p.temp_c {
+                Some(t) => {
+                    let _ = writeln!(o, "  temperature {t:.0}°C");
+                }
+                None => {
+                    let _ = writeln!(o, "  temperature not exposed by the VM");
+                }
+            }
             let _ = writeln!(
                 o,
                 "  toolchain {}",
@@ -539,6 +552,36 @@ pub fn render_text(s: &Status) -> String {
     o
 }
 
+/// Compact bar text: latency, temperature, cpu, ram, disk, uptime, probe age.
+/// Temperature is left out when the machine exposes no sensor (EC2 VMs).
+fn metrics_line(p: &Probe, running_s: Option<f64>, at: f64) -> String {
+    let mut parts = Vec::new();
+    if let Some(r) = p.rtt_ms {
+        parts.push(format!("{r:.0}ms"));
+    }
+    if let Some(t) = p.temp_c {
+        parts.push(format!("{t:.0}°C"));
+    }
+    if let (Some(l), Some(c)) = (p.load1, p.cores)
+        && c > 0
+    {
+        parts.push(format!("cpu {:.0}%", l / c as f64 * 100.0));
+    }
+    if let (Some(u), Some(t)) = (p.mem_used_gb, p.mem_total_gb)
+        && t > 0.0
+    {
+        parts.push(format!("ram {:.0}%", u / t * 100.0));
+    }
+    if let Some(d) = p.disk_used_pct {
+        parts.push(format!("disk {d:.0}%"));
+    }
+    if let Some(r) = running_s.or(p.uptime_s) {
+        parts.push(format!("up {}", dur(r)));
+    }
+    parts.push(format!("{} ago", dur(at - p.at)));
+    parts.join(" · ")
+}
+
 pub fn render_waybar(s: &Status) -> String {
     let icon = "\u{f233}"; // server
     let (text, class) = if !s.configured {
@@ -552,12 +595,8 @@ pub fn render_waybar(s: &Status) -> String {
                         (Some(l), Some(c)) if c > 0 => (l / c as f64 * 100.0).round(),
                         _ => 0.0,
                     };
-                    let rtt = p.rtt_ms.map(|r| format!(" {r:.0}ms")).unwrap_or_default();
-                    if busy >= 10.0 {
-                        (format!("{icon} {busy:.0}%{rtt}"), "busy")
-                    } else {
-                        (format!("{icon} up{rtt}"), "running")
-                    }
+                    let text = format!("{icon} {}", metrics_line(p, s.running_s, now()));
+                    (text, if busy >= 10.0 { "busy" } else { "running" })
                 }
                 _ => (format!("{icon} booting"), "pending"),
             },
@@ -1004,8 +1043,30 @@ mod tests {
             ..Default::default()
         };
         let w = render_waybar(&s);
-        assert!(w.contains("50% 42ms"), "{w}");
+        assert!(w.contains("42ms") && w.contains("cpu 50%"), "{w}");
         assert!(w.contains("\"busy\""));
+    }
+
+    #[test]
+    fn metrics_line_shows_every_field() {
+        let p = Probe {
+            at: 100.0,
+            ok: true,
+            rtt_ms: Some(29.0),
+            temp_c: Some(54.4),
+            cores: Some(32),
+            load1: Some(8.0),
+            mem_total_gb: Some(64.0),
+            mem_used_gb: Some(16.0),
+            disk_used_pct: Some(7.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            metrics_line(&p, Some(2280.0), 118.0),
+            "29ms · 54°C · cpu 25% · ram 25% · disk 7% · up 38m · 18s ago"
+        );
+        let no_temp = Probe { temp_c: None, ..p };
+        assert!(!metrics_line(&no_temp, None, 118.0).contains('°'));
     }
 
     #[test]
