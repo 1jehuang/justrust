@@ -17,6 +17,7 @@ mod live;
 mod paths;
 mod procfs;
 mod record;
+mod remote;
 mod runs;
 mod sched;
 mod shim;
@@ -183,6 +184,11 @@ enum Command {
         #[arg(long, requires = "apply")]
         dry_run: bool,
     },
+    /// The remote compile machine: create, start, stop, status, ssh.
+    Remote {
+        #[command(subcommand)]
+        cmd: RemoteCmd,
+    },
     /// Analyze cargo invocations recorded in Jcode session history.
     History {
         /// Session directory. Defaults to ~/.jcode/sessions.
@@ -200,6 +206,48 @@ enum Command {
         /// Number of command patterns to list.
         #[arg(long, default_value_t = 15)]
         top: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum RemoteCmd {
+    /// Create the machine, or start it if it is stopped.
+    Up {
+        /// AWS region (default us-west-2).
+        #[arg(long)]
+        region: Option<String>,
+        /// EC2 instance type (default c7i.8xlarge, 32 vCPUs).
+        #[arg(long = "type")]
+        instance_type: Option<String>,
+        /// On-demand instead of spot.
+        #[arg(long)]
+        on_demand: bool,
+        /// Minutes without load or a login before it stops itself (default 30).
+        #[arg(long)]
+        idle_minutes: Option<u32>,
+    },
+    /// Stop the machine (the disk and its caches are kept).
+    Down,
+    /// Terminate the machine and delete its disk.
+    Destroy {
+        #[arg(long)]
+        yes: bool,
+    },
+    /// State, cost, round trip, load, and toolchain of the machine.
+    Status {
+        #[arg(long)]
+        json: bool,
+        /// One line of Waybar custom-module JSON.
+        #[arg(long)]
+        waybar: bool,
+        /// Print again every N seconds.
+        #[arg(long, value_name = "SECS")]
+        watch: Option<f64>,
+    },
+    /// Open a shell on the machine, or run a command there.
+    Ssh {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        cmd: Vec<String>,
     },
 }
 
@@ -275,6 +323,32 @@ fn main() -> anyhow::Result<()> {
         Command::Cache { prune, clear, auto } => depcache_gc::command(prune, clear, auto)?,
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,
+        Command::Remote { cmd } => match cmd {
+            RemoteCmd::Up {
+                region,
+                instance_type,
+                on_demand,
+                idle_minutes,
+            } => remote::up(remote::UpOptions {
+                region,
+                instance_type,
+                on_demand,
+                idle_minutes,
+            })?,
+            RemoteCmd::Down => remote::down()?,
+            RemoteCmd::Destroy { yes } => {
+                if !yes {
+                    anyhow::bail!("this terminates the machine and deletes its disk. Pass --yes");
+                }
+                remote::destroy()?
+            }
+            RemoteCmd::Status {
+                json,
+                waybar,
+                watch,
+            } => remote::status(json, waybar, watch)?,
+            RemoteCmd::Ssh { cmd } => remote::ssh(cmd)?,
+        },
         Command::History {
             sessions,
             repo,

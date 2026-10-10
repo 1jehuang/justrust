@@ -207,6 +207,8 @@ time no longer goes to learning about a type error.
 3. **Share artifacts.** Local depcache (done), then prebuilt artifact servers
    and a hermetic C sysroot.
 4. **Remote compile service** that is chosen per build when it is faster.
+   Started: `justrust remote` manages the build machine
+   ([docs/remote.md](docs/remote.md)).
 5. **Our rustc fork**: resident compiler, streamed diagnostics, body-only
    upstream invalidation.
 6. **Hot patching** of test binaries.
