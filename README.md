@@ -215,5 +215,5 @@ time no longer goes to learning about a type error.
 
 ## License
 
-MIT, except a future self-hostable server under FSL. See
+MIT, except the self-hostable server in `server/` under FSL. See
 [LICENSING.md](LICENSING.md).

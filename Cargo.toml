@@ -5,6 +5,8 @@ edition = "2024"
 description = "Fast Rust compile for coding agents"
 license = "MIT"
 repository = "https://github.com/1jehuang/justrust"
+# server/ is FSL-licensed and must never ship inside the MIT crate.
+exclude = ["server/"]
 
 [dependencies]
 anyhow = "1"
