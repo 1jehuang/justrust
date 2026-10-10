@@ -227,17 +227,34 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
 /// Turn a non-2xx response into user guidance.
 pub fn api_error(r: &Resp) -> anyhow::Error {
     let code = r.body["error"]["code"].as_str().unwrap_or("");
-    let msg = r.body["error"]["message"].as_str().unwrap_or("");
-    let g = match (r.code, code) {
+    // Bounded and on one line so a hostile body cannot flood the terminal.
+    let msg: String = r.body["error"]["message"]
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(200)
+        .collect();
+    let code: String = code
+        .chars()
+        .filter(|c| c.is_ascii_graphic())
+        .take(64)
+        .collect();
+    let g = match (r.code, code.as_str()) {
         (401, _) => "the Jcode sign-in is missing or expired. Run `jcode account login` (subscribe at https://jcode.sh/pricing first if needed).".into(),
         (402, "insufficient_compute_credits") => NO_CREDITS.into(),
         (402, _) | (403, "build_not_entitled") => SUBSCRIBE.into(),
         (429, _) => RATE_LIMITED.into(),
         (503, _) | (_, "build_unavailable") => UNAVAILABLE.into(),
-        _ if !msg.is_empty() => format!("Jcode API error {} ({code}): {msg}", r.code),
+        _ if !msg.is_empty() => return anyhow!("Jcode API error {} ({code}): {msg}", r.code),
         _ => format!("Jcode API error {}", r.code),
     };
-    anyhow!(g)
+    // The server's own words help when its state is unusual.
+    if msg.is_empty() || g.contains(&msg) {
+        anyhow!(g)
+    } else {
+        anyhow!("{g} (server: {msg})")
+    }
 }
 
 fn ok(r: Resp) -> Result<Value> {
