@@ -56,8 +56,10 @@ component) would be measurably faster.
 
 ## Measuring
 
-- Do not claim a speedup without before and after numbers from `justrust show`
-  or `bench/edit-loop.sh`.
+- Do not claim a speedup without before and after numbers from
+  `bench/suite.py` (pinned snapshots, see `bench/README.md`): run it before
+  and after, commit both result files, and quote `bench/suite.py compare`.
+  `justrust show` explains a single run.
 - Record notable observations in `FINDINGS.md` with the run id.
 - `justrust history` mines past Jcode sessions; `justrust runs` lists recorded
   builds.
