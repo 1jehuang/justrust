@@ -207,7 +207,11 @@ time no longer goes to learning about a type error.
 3. **Share artifacts.** Local depcache (done), then prebuilt artifact servers
    and a hermetic C sysroot.
 4. **Remote compile service** that is chosen per build when it is faster.
-   Started: `justrust remote` manages the build machine
+   Working: `check`, `clippy`, and `test` route to a remote machine when
+   measured faster (a machine in your AWS account via `justrust remote up`,
+   or any ssh host via `justrust remote use ssh`), with a sync daemon that
+   pushes edits on save. Cold Jcode Desktop `check` 44 s vs ~180 s local.
+   Hosted builds with a Jcode subscription are planned
    ([docs/remote.md](docs/remote.md)).
 5. **Our rustc fork**: resident compiler, streamed diagnostics, body-only
    upstream invalidation.
