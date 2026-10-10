@@ -407,6 +407,9 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         eprintln!("justrust: failed to write run summary: {e:#}");
     }
     if let Some(s) = &slot {
+        if code != 0 {
+            slots::heal_after_failure(&s.info, args, lines.iter().map(|l| l.l.as_str()));
+        }
         // Detached and at most hourly; never delays or fails this run.
         slots::maybe_gc_background(&s.info);
     }

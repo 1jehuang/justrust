@@ -581,7 +581,17 @@ fn refresh(shared: &Path, slot: &Path) -> Option<Refresh> {
         let b = fingerprint_units(slot);
         (a.join().unwrap_or_default(), b)
     });
-    let (missing, mut newer) = stale_units(&a, &b);
+    let (mut missing, mut newer) = stale_units(&a, &b);
+    // Workspace-local units are never taken from the shared dir: their unit
+    // hash does not depend on the checkout, so a `git worktree` building with
+    // CARGO_TARGET_DIR=<this target> writes its own sources' artifacts under
+    // the same names. Copied in, they carry fresh mtimes and look up to date
+    // for this checkout's sources (wrong code, or E0463/E0460 when the
+    // rmeta/rlib set is mixed; FINDINGS 2026-10-10). The slot builds its own
+    // local crates; refresh exists for dependency changes.
+    let local = LocalUnits::new(shared);
+    missing.retain(|u| !local.is_local(u));
+    newer.retain(|u| !local.is_local(u));
     // Same unit, rebuilt in both places to the same state: copying would only
     // bump mtimes and make the slot's dependents look stale.
     newer.retain(|u| {
@@ -668,6 +678,142 @@ fn refresh(shared: &Path, slot: &Path) -> Option<Refresh> {
         return None;
     }
     Some(r)
+}
+
+/// Decides whether a unit belongs to a workspace member: rustc writes
+/// workspace sources into dep-info as relative paths and everything else
+/// (registry, git, path deps outside the workspace) as absolute ones. Decided
+/// per package, so run-build-script units (no dep-info of their own) follow
+/// their package's lib. Only the dep-info files of the packages asked about
+/// are read.
+struct LocalUnits {
+    /// `.d` file names in `deps/`, by crate-name prefix.
+    dinfo: std::collections::HashMap<String, Vec<PathBuf>>,
+    cache: std::cell::RefCell<std::collections::HashMap<String, bool>>,
+}
+
+impl LocalUnits {
+    fn new(shared: &Path) -> Self {
+        let mut dinfo: std::collections::HashMap<String, Vec<PathBuf>> = Default::default();
+        for e in std::fs::read_dir(shared.join("deps"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if let Some(stem) = name.strip_suffix(".d")
+                && let Some((krate, h)) = stem.rsplit_once('-')
+                && dir_hash(stem) == Some(h)
+            {
+                dinfo.entry(krate.to_owned()).or_default().push(e.path());
+            }
+        }
+        LocalUnits {
+            dinfo,
+            cache: Default::default(),
+        }
+    }
+
+    fn is_local(&self, unit: &str) -> bool {
+        let Some((pkg, _)) = unit.rsplit_once('-') else {
+            return false;
+        };
+        if let Some(&v) = self.cache.borrow().get(pkg) {
+            return v;
+        }
+        let krate = pkg.replace('-', "_");
+        let v = self
+            .dinfo
+            .get(&krate)
+            .into_iter()
+            .flatten()
+            .find_map(|p| {
+                use std::io::Read;
+                // The first source is near the start; .d files run to MBs.
+                let mut head = Vec::with_capacity(4096);
+                File::open(p).ok()?.take(4096).read_to_end(&mut head).ok()?;
+                dep_info_is_local(&String::from_utf8_lossy(&head))
+            })
+            .unwrap_or(false);
+        self.cache.borrow_mut().insert(pkg.to_owned(), v);
+        v
+    }
+}
+
+/// Whether a dep-info file's first source is relative (a workspace member).
+/// None when it lists no sources.
+fn dep_info_is_local(text: &str) -> Option<bool> {
+    let line = text.lines().next()?;
+    // `<target>: <src> <src> ...`; the target is absolute and may contain ':'
+    // only in exotic paths, so split at the first ": ".
+    let (_, srcs) = line.split_once(": ")?;
+    let first = srcs.split_whitespace().next()?;
+    Some(!first.starts_with('/'))
+}
+
+/// Crates rustc could not load from a slot: `E0463 can't find crate for
+/// `x`` (the extern file is unreadable or inconsistent) and `E0460 found
+/// possibly newer version of crate `x` which `y` depends on` (an rmeta/rlib
+/// set mixing two builds). Both mean the slot's artifacts disagree with its
+/// fingerprints, which cargo cannot detect by itself.
+fn unloadable_crates<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut out = Vec::new();
+    let tick =
+        |s: &str| -> Vec<String> { s.split('`').skip(1).step_by(2).map(str::to_owned).collect() };
+    for l in lines {
+        if let Some(rest) = l.strip_prefix("error[E0463]: can't find crate for ") {
+            out.extend(tick(rest).into_iter().take(1));
+        } else if let Some(rest) =
+            l.strip_prefix("error[E0460]: found possibly newer version of crate ")
+        {
+            out.extend(tick(rest).into_iter().take(2));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// After a failed slot run: if rustc could not load crates that the slot
+/// claims are fresh, delete those crates' fingerprints in the slot so the
+/// next run rebuilds them, and say so. A crate that is genuinely missing
+/// (a typo in `use`) has no units in the slot and is left alone.
+pub fn heal_after_failure<'a>(
+    info: &SlotInfo,
+    args: &[OsString],
+    lines: impl Iterator<Item = &'a str>,
+) {
+    if info.slot.is_none() {
+        return;
+    }
+    let crates = unloadable_crates(lines);
+    if crates.is_empty() {
+        return;
+    }
+    let fp = Path::new(&info.target_dir)
+        .join(profile_dir(args))
+        .join(".fingerprint");
+    let mut removed = 0;
+    for e in std::fs::read_dir(&fp).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some((pkg, _)) = name.rsplit_once('-') else {
+            continue;
+        };
+        if dir_hash(&name).is_some() && crates.iter().any(|c| *c == pkg.replace('-', "_")) {
+            std::fs::remove_dir_all(e.path()).ok();
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        eprintln!(
+            "justrust: slot {}: rustc could not load {} although cargo considered them fresh \
+             (inconsistent artifacts in the slot). Invalidated {removed} units; the next run \
+             rebuilds them.",
+            info.slot.unwrap_or_default(),
+            crates.join(", ")
+        );
+    }
 }
 
 fn try_lock_shared(path: &Path) -> Option<File> {
@@ -1596,6 +1742,85 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         unit(&shared, "mine", "3333333333333333", "slot");
         assert_eq!(refresh(&shared, &slot).unwrap(), Refresh::default());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unloadable_crates_from_rustc_errors() {
+        let out = [
+            "error[E0463]: can't find crate for `jcode_app_core`",
+            "error[E0463]: can't find crate for `jcode_tui_permissions`",
+            "error[E0460]: found possibly newer version of crate `x` which `y` depends on",
+            "error[E0432]: unresolved import `crate::bus`",
+            "error[E0463]: can't find crate for `jcode_app_core`",
+        ];
+        assert_eq!(
+            unloadable_crates(out.into_iter()),
+            ["jcode_app_core", "jcode_tui_permissions", "x", "y"]
+        );
+    }
+
+    #[test]
+    fn dep_info_locality() {
+        assert_eq!(
+            dep_info_is_local(
+                "/w/target/debug/deps/a-1.d: crates/a/src/lib.rs crates/a/src/m.rs\n"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            dep_info_is_local(
+                "/w/target/debug/deps/serde-1.d: /home/u/.cargo/registry/src/x/serde/src/lib.rs\n"
+            ),
+            Some(false)
+        );
+        assert_eq!(dep_info_is_local("garbage"), None);
+    }
+
+    #[test]
+    fn refresh_never_takes_workspace_local_units() {
+        let base = std::env::temp_dir().join(format!(
+            "justrust-refresh-local-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        if !reflink_supported(&base) {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        let shared = base.join("shared/debug");
+        let slot = base.join("slot/debug");
+        std::fs::create_dir_all(slot.join(".fingerprint")).unwrap();
+        let unit = |name: &str, hash: &str, src: &str| {
+            let fp = shared.join(format!(".fingerprint/{name}-{hash}"));
+            std::fs::create_dir_all(&fp).unwrap();
+            std::fs::write(fp.join(format!("lib-{name}")), "h").unwrap();
+            std::fs::create_dir_all(shared.join("deps")).unwrap();
+            let krate = name.replace('-', "_");
+            std::fs::write(shared.join(format!("deps/lib{krate}-{hash}.rlib")), "r").unwrap();
+            std::fs::write(
+                shared.join(format!("deps/{krate}-{hash}.d")),
+                format!("/t/debug/deps/{krate}-{hash}.d: {src}\n"),
+            )
+            .unwrap();
+        };
+        // A worktree built its own copy of a member into the shared dir.
+        unit("my-app", "1111111111111111", "crates/my-app/src/lib.rs");
+        unit("serde", "2222222222222222", "/r/serde/src/lib.rs");
+        // The member's build-script run unit follows its package.
+        std::fs::create_dir_all(shared.join(".fingerprint/my-app-3333333333333333")).unwrap();
+        std::fs::write(
+            shared.join(".fingerprint/my-app-3333333333333333/run-build-script-build-script-build"),
+            "h",
+        )
+        .unwrap();
+        let r = refresh(&shared, &slot).unwrap();
+        assert_eq!((r.missing, r.newer), (1, 0));
+        assert!(slot.join("deps/libserde-2222222222222222.rlib").exists());
+        assert!(!slot.join("deps/libmy_app-1111111111111111.rlib").exists());
+        assert!(!slot.join(".fingerprint/my-app-1111111111111111").exists());
+        assert!(!slot.join(".fingerprint/my-app-3333333333333333").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 

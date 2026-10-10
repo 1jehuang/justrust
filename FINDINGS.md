@@ -1591,3 +1591,41 @@ run copied 47 new + 10 rebuilt units and passed.
 Fix idea: refresh only from a shared target that is not locked by a running
 cargo (respect `target/debug/.cargo-lock`), or verify copied rmeta/rlib pairs
 exist before trusting a refreshed slot and fall back to a rebuild.
+
+### Root cause and fix (2026-10-10)
+
+Not a half-written copy. The lock check was already right: cargo 1.98 holds
+`.cargo-build-lock` exclusively for the whole build (seen with `lslocks`),
+so the refresh's shared flock cannot be taken during a build. The real
+cause is that **unit hashes do not depend on the checkout path**: two
+copies of a workspace in different directories produce identical
+`.fingerprint/<pkg>-<hash>` names (verified with a 2-crate workspace copied
+to two dirs). The worktree at `~/.jcode/scratch/base2-wt` built with
+`CARGO_TARGET_DIR=~/jcode/target`, so its `jcode-app-core-463b...` and
+`jcode-tui-permissions-d481...` (different sources) landed in the shared
+dir under the same names as ~/jcode's. Refresh saw them as newer and copied
+them into slot 0 with fresh mtimes, and cargo then trusted them for ~/jcode's
+sources. The extern rlibs loaded fine on their own (checked with rustc),
+but the set came from another source tree, so `jcode_tui` failed with E0463
+at the crates' first use. Six runs in a row failed in slots 0 and 1
+(runs 20261010-025433901-1482017 .. -025705623-1502688).
+
+Fix (src/slots.rs):
+
+- Refresh never copies workspace-local units. Locality comes from the
+  unit's dep-info: rustc writes workspace sources as relative paths and
+  everything else as absolute ones. It is decided per package, so a
+  member's run-build-script units are skipped too, and only the first 4 KB
+  of one `.d` per package is read. Refresh exists for dependency changes.
+  The slot always builds its own members, which cargo's fingerprints
+  handle correctly.
+- Safety net: after a failed slot run whose output has E0463/E0460 for
+  crates the slot has units for, those units' fingerprints are deleted and
+  justrust says so, so the next run rebuilds them instead of failing the
+  same way again.
+
+Checked on ~/jcode: plain `cargo check -p jcode-tui-permissions` rebuilt 25
+shared units (registry and members). The next `justrust check` refreshed
+9 units in 0.2s, all registry crates (azure_core, reqwest, ...), and none
+of the members (jcode-base, jcode-tui-permissions stayed slot-built). It
+then compiled 0 units.
