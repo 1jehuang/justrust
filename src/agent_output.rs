@@ -233,7 +233,10 @@ mod tests {
              process didn't exit successfully: `/usr/bin/rustc --crate-name foo --edition=2024 src/lib.rs --extern a=/x/liba.rmeta --extern b=/x/libb.rmeta` (exit status: 1)\n",
         );
         assert!(out.iter().any(|l| l.starts_with("error[E0063]")));
-        assert!(out.iter().any(|l| l.starts_with("error: could not compile")));
+        assert!(
+            out.iter()
+                .any(|l| l.starts_with("error: could not compile"))
+        );
         assert!(!out.iter().any(|l| l.contains("Caused by")));
         assert!(!out.iter().any(|l| l.contains("--crate-name")));
     }
