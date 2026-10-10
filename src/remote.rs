@@ -765,7 +765,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y build-essential clang lld mold pkg-config libssl-dev cmake git rsync \
   libwayland-dev libxkbcommon-dev libasound2-dev libfontconfig1-dev libfreetype-dev \
-  libxcb1-dev libx11-dev libvulkan-dev protobuf-compiler
+  libxcb1-dev libx11-dev libvulkan-dev protobuf-compiler \
+  poppler-utils xvfb
 sudo -u {SSH_USER} -H bash -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable -c clippy,rustfmt'
 touch /var/lib/justrust/ready
 "#
