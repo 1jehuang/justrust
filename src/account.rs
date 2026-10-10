@@ -383,7 +383,14 @@ pub fn upgrade(plan: u32, no_wait: bool) -> Result<()> {
         Some(&json!({ "plan_usd": plan })),
     )?;
     if !(200..300).contains(&r.code) {
-        return Err(hosted::api_error(&r));
+        if r.code == 409 {
+            // Already subscribed: nothing to buy, the limit is what to raise.
+            return Err(hosted::api_error(&r));
+        }
+        let e = hosted::api_error(&r);
+        bail!(
+            "{e}\njustrust: checkout could not start here. Ask your user to subscribe at https://jcode.sh/pricing#builds (same account), then keep working: builds go remote once it is active."
+        );
     }
     let url = r.body["url"].as_str().unwrap_or("");
     if !url.starts_with("https://") {
