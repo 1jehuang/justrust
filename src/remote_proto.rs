@@ -10,8 +10,12 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
-/// Bumped when frames change incompatibly. The agent refuses other versions.
-pub const VERSION: u32 = 1;
+/// Bumped when frames change incompatibly. The daemon requires an agent
+/// that answers in this version.
+pub const VERSION: u32 = 2;
+/// Oldest daemon protocol the agent still serves (v1 is v2 without
+/// `Synced` and without write-failure reports).
+pub const MIN_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "t")]
@@ -32,12 +36,22 @@ pub enum Msg {
     Mkdir {
         path: String,
     },
+    /// Everything under `path` was just mirrored out of band (rsync):
+    /// forget earlier write failures there.
+    Synced {
+        path: String,
+    },
     /// Answered with `BarrierAck` once every earlier frame is applied.
     Barrier {
         id: u64,
     },
+    /// `failed` lists every path whose last `Write`/`Delete` failed on the
+    /// agent (cleared by a later successful one). Non-empty means the tree
+    /// is not what the daemon sent: the daemon must not build on it.
     BarrierAck {
         id: u64,
+        #[serde(default)]
+        failed: Vec<String>,
     },
     /// Run `justrust <args>` in `cwd`. Client -> daemon also carries the
     /// source roots that must be synced first.
@@ -71,6 +85,10 @@ pub enum Msg {
         /// when the machine mirrors the same paths).
         #[serde(default)]
         prefix: String,
+        /// Something the user should know about the mirror (files too
+        /// large to sync), shown before the build output.
+        #[serde(default)]
+        note: String,
     },
     /// The run ended. Payload: the remote run's summary.json, if recorded.
     Exit {
@@ -94,6 +112,12 @@ pub enum Msg {
         connected: bool,
         /// Identity of the daemon's binary; clients restart a stale daemon.
         build: String,
+        /// Runs relayed right now.
+        #[serde(default)]
+        active: u64,
+        /// Files not mirrored because they exceed the size limit.
+        #[serde(default)]
+        skipped: u64,
     },
     /// Client -> daemon: exit now.
     Shutdown,

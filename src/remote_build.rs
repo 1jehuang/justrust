@@ -295,10 +295,17 @@ pub fn run_remote(
         match frame {
             (
                 Msg::Flushed {
-                    files, ms, machine, ..
+                    files,
+                    ms,
+                    machine,
+                    note,
+                    ..
                 },
                 _,
             ) => {
+                if !note.is_empty() {
+                    eprintln!("justrust remote: {note}");
+                }
                 sync = Some((files, ms, machine));
             }
             (Msg::Out { stream, .. }, data) => {

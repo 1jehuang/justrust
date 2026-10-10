@@ -31,11 +31,20 @@ pub struct Stamp {
 /// Relative path -> stamp of every mirrored regular file in a root.
 pub type Manifest = BTreeMap<PathBuf, Stamp>;
 
+/// What a scan found: the files to mirror, and those too large to mirror.
+#[derive(Debug, Default)]
+pub struct Scan {
+    pub files: Manifest,
+    /// Files over `MAX_FILE`. Never mirrored, and removed from the machine
+    /// if an older, smaller version was, so the machine never builds a
+    /// stale copy.
+    pub oversized: Vec<PathBuf>,
+}
+
 /// Every regular file the build may read under `root`: tracked and untracked
-/// files that are not gitignored (or a plain walk outside git), at most
-/// `MAX_FILE` bytes.
-pub fn scan(root: &Path) -> Result<Manifest> {
-    let mut m = Manifest::new();
+/// files that are not gitignored (or a plain walk outside git).
+pub fn scan(root: &Path) -> Result<Scan> {
+    let mut out = Scan::default();
     let listed = Command::new("git")
         .args(["ls-files", "-co", "--exclude-standard", "-z"])
         .current_dir(root)
@@ -58,10 +67,14 @@ pub fn scan(root: &Path) -> Result<Manifest> {
         let Ok(md) = std::fs::symlink_metadata(root.join(&rel)) else {
             continue;
         };
-        if !md.file_type().is_file() || md.len() > MAX_FILE {
+        if !md.file_type().is_file() {
             continue;
         }
-        m.insert(
+        if md.len() > MAX_FILE {
+            out.oversized.push(rel);
+            continue;
+        }
+        out.files.insert(
             rel,
             Stamp {
                 mtime_ns: md.mtime() as i128 * 1_000_000_000 + md.mtime_nsec() as i128,
@@ -70,8 +83,25 @@ pub fn scan(root: &Path) -> Result<Manifest> {
             },
         );
     }
-    Ok(m)
+    Ok(out)
 }
+
+/// Whether a file not reaching the machine certainly breaks the build
+/// there (as opposed to assets that only matter if `include_bytes!`ed).
+pub fn is_build_source(rel: &Path) -> bool {
+    matches!(
+        rel.extension().and_then(|e| e.to_str()),
+        Some("rs" | "toml" | "lock")
+    )
+}
+
+/// A stamp that never equals a real one: marks a file whose last push
+/// failed, so the next diff sends it again (or deletes it).
+pub const UNKNOWN: Stamp = Stamp {
+    mtime_ns: -1,
+    size: u64::MAX,
+    mode: 0,
+};
 
 fn skip(rel: &Path) -> bool {
     rel.components().any(|c| {
@@ -146,30 +176,75 @@ pub fn dirs(root: &Path, m: &Manifest) -> BTreeSet<PathBuf> {
     out
 }
 
-/// Create `remote` (the remote path of a root) owned by the ssh user.
-pub fn prepare_dir(t: &Target, remote: &str) -> Result<bool> {
-    let q = shell_quote(remote);
-    let script = format!(
-        "mkdir -p {q} 2>/dev/null && test -w {q} || sudo -n install -d -o \"$(id -un)\" -g \"$(id -gn)\" {q} 2>/dev/null"
-    );
-    Ok(t.command()
-        .arg(script)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?
-        .success())
+/// The jcode-mkdir wrapper on hosted build machines: the only sudo command
+/// allowed there. Creates missing components owned by the ssh user and
+/// refuses system trees.
+pub const JCODE_MKDIR: &str = "/usr/local/sbin/jcode-mkdir";
+
+/// Shell script that creates `remote` writable by the ssh user: a plain
+/// `mkdir -p` (paths under the user's reach), then the hosted machines'
+/// `jcode-mkdir` wrapper if present, then general sudo (aws and ssh
+/// machines, where the user may sudo).
+pub fn prepare_script(remote: &str) -> String {
+    prepare_script_with(remote, JCODE_MKDIR)
 }
 
-/// Mirror `root` to `remote` with rsync. The machine's own `target/` dirs
-/// are protected from deletion so they stay warm.
-pub fn rsync(t: &Target, root: &Path, remote: &str) -> Result<usize> {
-    let src = format!("{}/", root.display());
-    let dst = format!("{}:{}/", t.dest, remote);
-    let out = Command::new("rsync")
-        .args([
+fn prepare_script_with(remote: &str, wrapper: &str) -> String {
+    let q = shell_quote(remote);
+    let wq = shell_quote(wrapper);
+    format!(
+        "{{ mkdir -p {q} && test -w {q}; }} 2>/dev/null \
+         || {{ test -x {wq} && sudo -n {wq} {q} && test -w {q}; }} 2>/dev/null \
+         || sudo -n install -d -o \"$(id -un)\" -g \"$(id -gn)\" {q} 2>/dev/null"
+    )
+}
+
+/// Where roots are mirrored: an ssh target (or, in tests, this machine)
+/// plus the prefix every remote path gets.
+#[derive(Clone, Debug)]
+pub struct Mirror {
+    pub target: Option<Target>,
+    pub prefix: String,
+}
+
+impl Mirror {
+    pub fn remote(&self, p: &Path) -> String {
+        if self.prefix.is_empty() {
+            p.display().to_string()
+        } else {
+            format!("{}{}", self.prefix, p.display())
+        }
+    }
+
+    /// Create the remote directory of `root`, owned by the ssh user.
+    pub fn prepare(&self, root: &Path) -> Result<()> {
+        let remote = self.remote(root);
+        let Some(t) = &self.target else {
+            return Ok(std::fs::create_dir_all(&remote)?);
+        };
+        if !t
+            .command()
+            .arg(prepare_script(&remote))
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?
+            .success()
+        {
+            bail!("cannot create {remote} on the remote machine");
+        }
+        Ok(())
+    }
+
+    /// Mirror `root` with rsync. Returns files sent. The machine's own
+    /// `target/` dirs are protected from deletion so they stay warm.
+    /// Oversized files are skipped here: the caller deletes them remotely.
+    pub fn rsync(&self, root: &Path) -> Result<usize> {
+        let src = format!("{}/", root.display());
+        let remote = self.remote(root);
+        let mut c = Command::new("rsync");
+        c.args([
             "-a",
             "--delete",
-            "-z",
             "--out-format=%i",
             &format!("--max-size={MAX_FILE}"),
             "--filter=P target/",
@@ -178,26 +253,33 @@ pub fn rsync(t: &Target, root: &Path, remote: &str) -> Result<usize> {
             "--exclude=target/",
             "--exclude=.justrust/",
             "--filter=:- .gitignore",
-            "-e",
-            &t.rsync_shell(),
-            &src,
-            &dst,
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .context("rsync (is it installed?)")?;
-    if !out.status.success() {
-        bail!(
-            "rsync {} failed: {}",
-            root.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        ]);
+        let dst = match &self.target {
+            Some(t) => {
+                c.args(["-z", "-e", &t.rsync_shell()]);
+                format!("{}:{remote}/", t.dest)
+            }
+            None => format!("{remote}/"),
+        };
+        let out = c
+            .arg(&src)
+            .arg(&dst)
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .context("rsync (is it installed?)")?;
+        if !out.status.success() {
+            bail!(
+                "rsync {} failed: {}",
+                root.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with(">f") || l.starts_with("<f"))
+            .count())
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| l.starts_with("<f"))
-        .count())
 }
 
 #[cfg(test)]
@@ -223,6 +305,91 @@ mod tests {
     }
 
     #[test]
+    fn prepare_script_fallback_chain() {
+        let d = std::env::temp_dir().join(format!("jr-prep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let bin = d.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = d.join("log");
+        // A fake sudo that records what it was asked and runs it, and a
+        // fake jcode-mkdir that creates the directory.
+        let script = |name: &str, body: &str| {
+            let p = bin.join(name);
+            std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            p
+        };
+        script(
+            "sudo",
+            &format!(
+                "[ \"$1\" = -n ] && shift; echo \"sudo $*\" >> {}; exec \"$@\"",
+                log.display()
+            ),
+        );
+        let wrapper = script("jcode-mkdir", "mkdir -p \"$1\"");
+        let run = |target: &Path, wrapper: &Path| {
+            let _ = std::fs::remove_file(&log);
+            let ok = Command::new("sh")
+                .arg("-c")
+                .arg(prepare_script_with(
+                    &target.display().to_string(),
+                    &wrapper.display().to_string(),
+                ))
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .status()
+                .unwrap()
+                .success();
+            (ok, std::fs::read_to_string(&log).unwrap_or_default())
+        };
+        // Writable parent: plain mkdir, no sudo. Spaces and quotes survive.
+        let plain = d.join("it's a dir/x");
+        assert_eq!(run(&plain, &wrapper), (true, String::new()));
+        assert!(plain.is_dir());
+        // Read-only parent: mkdir fails, the wrapper runs under sudo.
+        let ro = d.join("ro");
+        std::fs::create_dir_all(&ro).unwrap();
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let target = ro.join("proj");
+        // As root (CI containers) mkdir succeeds anyway: nothing to check.
+        if Command::new("mkdir")
+            .arg(&target)
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            std::fs::remove_dir(&target).unwrap();
+        } else {
+            let (ok, log1) = run(&target, &bin.join("missing"));
+            // No wrapper: the general sudo install fallback runs (and fails
+            // here since the fake sudo is not root).
+            assert!(!ok);
+            assert!(log1.contains("sudo install -d"), "{log1}");
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // With the wrapper present it is tried first. Make the parent
+            // writable only for the wrapper by letting it chmod.
+            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let wrapper2 = script(
+                "jcode-mkdir2",
+                "chmod 755 \"$(dirname \"$1\")\" && mkdir -p \"$1\"",
+            );
+            let (ok, log2) = run(&target, &wrapper2);
+            assert!(ok, "{log2}");
+            assert!(
+                log2.starts_with(&format!("sudo {}", wrapper2.display())),
+                "{log2}"
+            );
+            assert!(!log2.contains("install -d"), "{log2}");
+            assert!(target.is_dir());
+        }
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
     fn scan_skips_target_and_big_files() {
         let d = std::env::temp_dir().join(format!("jr-scan-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -231,9 +398,13 @@ mod tests {
         std::fs::write(d.join("src/lib.rs"), "x").unwrap();
         std::fs::write(d.join("target/debug/out"), "x").unwrap();
         std::fs::write(d.join("big.bin"), vec![0u8; (MAX_FILE + 1) as usize]).unwrap();
-        let m = scan(&d).unwrap();
+        let s = scan(&d).unwrap();
+        let m = s.files;
         let keys: Vec<_> = m.keys().cloned().collect();
         assert_eq!(keys, vec![PathBuf::from("src/lib.rs")]);
+        assert_eq!(s.oversized, vec![PathBuf::from("big.bin")]);
+        assert!(is_build_source(Path::new("src/lib.rs")));
+        assert!(!is_build_source(Path::new("big.bin")));
         let ds = dirs(&d, &m);
         assert!(ds.contains(&d) && ds.contains(&d.join("src")));
         std::fs::remove_dir_all(&d).unwrap();
