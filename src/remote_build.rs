@@ -142,6 +142,7 @@ fn outermost(dirs: BTreeSet<PathBuf>) -> Vec<PathBuf> {
 pub struct SyncResult {
     pub files: usize,
     pub bytes: u64,
+    pub names: Vec<PathBuf>,
 }
 
 fn rsync(ip: &str, root: &Path) -> Result<SyncResult> {
@@ -151,11 +152,15 @@ fn rsync(ip: &str, root: &Path) -> Result<SyncResult> {
     let out = Command::new("rsync")
         .args([
             "-a",
+            // Remove files deleted locally, but never the machine's own
+            // build output (excluded paths are left alone without
+            // --delete-excluded, and target dirs are also protected).
             "--delete",
-            "--delete-excluded",
             "-z",
-            "--out-format=%i %l",
+            "--out-format=%i %l %n",
             &format!("--max-size={MAX_FILE}"),
+            "--filter=P target/",
+            "--filter=P .justrust/",
             "--exclude=.git",
             "--exclude=target/",
             "--exclude=.justrust/",
@@ -176,15 +181,21 @@ fn rsync(ip: &str, root: &Path) -> Result<SyncResult> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    let mut r = SyncResult { files: 0, bytes: 0 };
+    let mut r = SyncResult {
+        files: 0,
+        bytes: 0,
+        names: Vec::new(),
+    };
     for line in String::from_utf8_lossy(&out.stdout).lines() {
-        if line.starts_with("<f") {
+        let mut parts = line.splitn(3, ' ');
+        let (Some(flags), Some(len), Some(name)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if flags.starts_with("<f") {
             r.files += 1;
-            r.bytes += line
-                .rsplit(' ')
-                .next()
-                .and_then(|n| n.parse::<u64>().ok())
-                .unwrap_or(0);
+            r.bytes += len.parse::<u64>().unwrap_or(0);
+            r.names.push(root.join(name));
         }
     }
     Ok(r)
@@ -321,18 +332,34 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
     })?;
     let mut files = 0;
     let mut bytes = 0;
+    let mut names = Vec::new();
     for r in results {
         let r = r?;
         files += r.files;
         bytes += r.bytes;
+        names.extend(r.names);
     }
     let t_sync = t.elapsed().as_secs_f64();
+    let shown: Vec<String> = names
+        .iter()
+        .take(3)
+        .map(|n| n.strip_prefix(&cwd).unwrap_or(n).display().to_string())
+        .collect();
     eprintln!(
-        "justrust remote: synced {} root{} ({files} file{} changed, {}) in {:.2}s{}",
+        "justrust remote: synced {} root{} ({files} file{} changed, {}{}) in {:.2}s{}",
         roots.len(),
         if roots.len() == 1 { "" } else { "s" },
         if files == 1 { "" } else { "s" },
         human_bytes(bytes),
+        if shown.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ": {}{}",
+                shown.join(", "),
+                if names.len() > 3 { ", ..." } else { "" }
+            )
+        },
         t_sync,
         if t_roots > 0.05 {
             format!(", found roots in {t_roots:.2}s")
