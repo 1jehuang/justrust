@@ -1549,3 +1549,11 @@ scenarios moved by about -0.4s, within their run-to-run spread.
 Where the reference loop goes now (7.59s): startup 0.48, frontend 3.83,
 codegen 1.11, incremental persist 0.77, link 0.47. jcode-core body edit:
 16 units, frontend 10.6s, the worst warm case.
+
+Cold baseline (`bench/results/20261010-011659-cold.json`, 1 warmup + 3
+runs, fresh target dir each, check -p jcode-desktop-ui, 887 units):
+depcache on 16.1s (15.8-16.4), every cache off 70.4s (70.2-70.9). The
+desktop app itself kept 7-8 other cores busy, so all samples are flagged
+noisy. A first attempt measured 0 depcache hits: the suite forced
+`JUSTRUST_PASSES=always`, and units compiled with -Ztime-passes are never
+stored. The suite no longer forces pass timings for cold scenarios.

@@ -313,8 +313,10 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
             "JUSTRUST_REMOTE": "0",
             "JUSTRUST_QUIET": "1",
             # Per-pass split for every crate. Safe here: the bench owns its
-            # target dirs, so the mode never flips under a warm cache.
-            "JUSTRUST_PASSES": "always",
+            # target dirs, so the mode never flips under a warm cache. Not for
+            # cold runs: units compiled with -Ztime-passes are never stored
+            # in the depcache, so forcing it would keep the cache empty.
+            **({} if s.cold else {"JUSTRUST_PASSES": "always"}),
         }
     )
     env.pop("JUSTRUST_DISABLE", None)
@@ -391,7 +393,10 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     # Unique edit numbers per invocation, so a re-run never lands on a state
     # the incremental cache has already seen.
     base = int(time.time()) % 100000 * 100
-    total = (0 if s.cold else warmup) + n
+    # Cold runs still get a warmup: it fills the shared depcache, so measured
+    # runs see the state a second fresh checkout sees.
+    warm = warmup if (not s.cold or s.env.get("JUSTRUST_DEPCACHE") != "0") else 0
+    total = warm + n
     try:
         for i in range(total):
             if s.cold:
@@ -402,7 +407,7 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
             if quiet_wait:
                 wait_quiet(quiet_wait)
             r = run_once(s, root, target)
-            measured = s.cold or i >= warmup
+            measured = i >= warm
             tag = "" if measured else " (warmup)"
             flag = " noisy" if r["noisy"] else ""
             print(
