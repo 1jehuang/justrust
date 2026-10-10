@@ -331,11 +331,17 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         sys.exit(f"bench: {s.name}: no summary for run {rid} (exit {p.returncode})\n{p.stderr[-3000:]}")
     sm = json.loads(summ_path.read_text())
     failed = p.returncode != 0
-    if failed != s.expect_fail:
+    compile_failed = sm.get("diagnostics", {}).get("compile_failed", False)
+    tests_failed = sm.get("tests", {}).get("failed", 0)
+    if s.expect_fail != compile_failed or (failed and not compile_failed and not tests_failed):
         sys.exit(
             f"bench: {s.name}: exit {p.returncode}, expected {'failure' if s.expect_fail else 'success'}"
             f" (justrust log {rid})\n{p.stderr[-3000:]}"
         )
+    if tests_failed:
+        # The timing is still valid; a flaky test in a pinned snapshot must
+        # not abort an hour of benchmarking. Recorded per sample.
+        print(f"  note {s.name}: {tests_failed} test(s) failed (justrust log {rid})", file=sys.stderr)
     local = [u for u in sm.get("top_units", []) if u.get("local")]
     split = {"frontend": 0.0, "codegen": 0.0, "link": 0.0, "incremental": 0.0, "other": 0.0}
     for u in local:
@@ -356,6 +362,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         "split": {k: round(v, 3) for k, v in split.items()},
         "link_secs": round(sm.get("link", {}).get("link_pass_secs", 0.0), 3),
         "tests_passed": sm.get("tests", {}).get("passed", 0),
+        "tests_failed": tests_failed,
         "other_cores": round(res.get("avg_other_cores", 0.0), 2),
         "foreign_rustc_before": rustc,
         "load_before": load,
@@ -530,14 +537,27 @@ def cmd_compare(args) -> None:
         sa, sb = a["scenarios"][name]["stats"], b["scenarios"][name]["stats"]
         d = sb["median"] - sa["median"]
         pct = 100 * d / sa["median"] if sa["median"] else 0.0
-        # Conservative: only call it when the sample ranges do not overlap.
-        if sb["max"] < sa["min"]:
+        # Conservative: the sample ranges must not overlap AND the median must
+        # move by more than the noise floor. Re-running the same binary in a
+        # later session moved medians by up to 9% with disjoint ranges
+        # (FINDINGS.md section 20), so range separation alone is not enough.
+        big = abs(pct) > args.floor
+        if sb["max"] < sa["min"] and big:
             verdict = "faster"
-        elif sb["min"] > sa["max"]:
+        elif sb["min"] > sa["max"] and big:
             verdict = "slower"
         else:
             verdict = "within noise"
         print(f"{name:28s} {sa['median']:7.2f} {sb['median']:7.2f} {d:+7.2f} {pct:+5.0f}%  {verdict}")
+
+    # Overhead justrust adds around cargo: agent-visible wall minus the wall
+    # justrust recorded. Independent of compile noise, so small changes show.
+    def overhead(r):
+        g = sorted(x["wall"] - x["recorded_wall"] for s in r["scenarios"].values() for x in s["samples"])
+        return (g[len(g) // 2], g[-1]) if g else (0.0, 0.0)
+
+    (ma, xa), (mb, xb) = overhead(a), overhead(b)
+    print(f"{'exit overhead (med/max)':28s} {ma:.3f}/{xa:.3f}s -> {mb:.3f}/{xb:.3f}s")
 
 
 def main() -> None:
@@ -559,6 +579,8 @@ def main() -> None:
     c = sub.add_parser("compare")
     c.add_argument("a")
     c.add_argument("b")
+    c.add_argument("--floor", type=float, default=10.0, metavar="PCT",
+                   help="minimum median change to call a difference (default 10%%)")
     c.set_defaults(fn=cmd_compare)
     args = ap.parse_args()
     args.fn(args)

@@ -1557,3 +1557,16 @@ desktop app itself kept 7-8 other cores busy, so all samples are flagged
 noisy. A first attempt measured 0 depcache hits: the suite forced
 `JUSTRUST_PASSES=always`, and units compiled with -Ztime-passes are never
 stored. The suite no longer forces pass timings for cold scenarios.
+
+Suite noise check (A/A): re-running six warm scenarios on the unchanged
+build (`bench/results/20261010-012107-ba5914b-repro.json` vs
+`20261010-010147-c219b496046c.json`, about 20 min apart) moved medians by
+-9% to +2%, and one scenario (desktop-upstream-sig, -8%) had disjoint
+ranges. So `compare` now also needs the median to move more than
+`--floor` (default 10%). With it, the A/A pair reads all "within noise"
+and the sched fix still reads faster on body-check (-11%), type-error
+(-13%) and no-op (-11%). Exit overhead (agent wall minus recorded wall),
+the direct measure of that fix: 0.271/0.515s med/max before, 0.034/0.082s
+after, 0.036/0.069s on the A/A rerun. The rerun also exposed a flaky
+justrust test (ETXTBSY exec race in buildscript tests, fixed ba5914b); the
+suite now records a failing test instead of aborting.
