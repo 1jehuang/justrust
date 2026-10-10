@@ -160,6 +160,51 @@ pub fn decide(
     }
 }
 
+/// Local median above which a signed-in hosted user may start the machine.
+const HOSTED_START_LOCAL_SECS: f64 = 20.0;
+
+/// Median local wall for exactly these args in `cwd`, recent samples only.
+fn local_median(args: &[String], cwd: &str, entries: &[IndexEntry], now: f64) -> Option<f64> {
+    let mut v: Vec<&IndexEntry> = entries
+        .iter()
+        .filter(|e| e.cwd == cwd && e.args == args && e.wall > 0.0 && e.remote.is_none())
+        .filter(|e| !matches!(e.exit, 130 | 137 | 143) && now - e.start <= LOCAL_MAX_AGE)
+        .collect();
+    v.sort_by(|a, b| b.start.total_cmp(&a.start));
+    v.truncate(RECENT);
+    median(v.iter().map(|e| e.wall).collect())
+}
+
+/// Hosted, machine not up: worth starting it for this build? Only when
+/// the local build is predicted slow, or there is no local sample and the
+/// workspace has never been built here.
+pub fn hosted_start_worth_it(local: Option<f64>, cold_target: bool) -> Option<String> {
+    match local {
+        Some(l) if l > HOSTED_START_LOCAL_SECS => {
+            Some(format!("local ~{l:.0}s, starting the hosted build machine"))
+        }
+        None if cold_target => {
+            Some("cold target dir, no local sample: starting the hosted build machine".into())
+        }
+        _ => None,
+    }
+}
+
+/// No `target/` with build output next to the workspace's Cargo.lock.
+fn cold_target(cwd: &Path) -> bool {
+    if let Some(t) = std::env::var_os("CARGO_TARGET_DIR") {
+        return !Path::new(&t).join("debug").exists();
+    }
+    let Some(root) = cwd
+        .ancestors()
+        .find(|d| d.join("Cargo.lock").exists())
+        .or_else(|| cwd.ancestors().find(|d| d.join("Cargo.toml").exists()))
+    else {
+        return false;
+    };
+    !root.join("target/debug").exists()
+}
+
 /// Index entries for `cwd` only. Lines for other directories are skipped
 /// before parsing, so this stays cheap on a large index.
 fn load_entries(cwd: &str) -> Vec<IndexEntry> {
@@ -303,17 +348,26 @@ pub fn maybe_remote(full: &[OsString]) {
     let reason = if m == Mode::Force {
         "JUSTRUST_REMOTE=force".to_string()
     } else {
-        if !backend.probably_up() {
-            return say_local("remote machine not running");
-        }
         if recently_failed(now) {
             return say_local("remote failed in the last 10 minutes");
         }
-        let Ok(cwd) = std::env::current_dir() else {
+        let Ok(cwd_path) = std::env::current_dir() else {
             return;
         };
-        let cwd = cwd.to_string_lossy().into_owned();
+        let cwd = cwd_path.to_string_lossy().into_owned();
         let entries = load_entries(&cwd);
+        let mut start_reason = None;
+        if !backend.probably_up() {
+            if backend == Backend::Hosted && crate::remote_hosted::signed_in() {
+                start_reason = hosted_start_worth_it(
+                    local_median(&args, &cwd, &entries, now),
+                    cold_target(&cwd_path),
+                );
+            }
+            if start_reason.is_none() {
+                return say_local("remote machine not running");
+            }
+        }
         if backend == Backend::Aws {
             let last_remote = entries
                 .iter()
@@ -324,19 +378,28 @@ pub fn maybe_remote(full: &[OsString]) {
                 return say_local("remote machine probably stopped itself (idle)");
             }
         }
-        match decide(&args, &cwd, &entries, &remote_client_wall, now) {
-            Choice::Local(why) => return say_local(&why),
-            Choice::Remote(why) => why,
+        match (
+            start_reason,
+            decide(&args, &cwd, &entries, &remote_client_wall, now),
+        ) {
+            (Some(why), _) => why,
+            (None, Choice::Local(why)) => return say_local(&why),
+            (None, Choice::Remote(why)) => why,
         }
     };
     eprintln!("justrust: remote ({reason})");
-    match remote_build::run_remote(sub, &args[1..], m == Mode::Force) {
+    let start = m == Mode::Force || backend == Backend::Hosted;
+    match remote_build::run_remote(sub, &args[1..], start) {
         Ok(Ok(o)) => std::process::exit(o.code),
         Ok(Err(Infra(msg))) => {
             if let Some(f) = fail_file() {
                 let _ = std::fs::write(f, format!("{now} {msg}\n"));
             }
-            eprintln!("justrust: remote unavailable ({msg}), building locally");
+            if Infra(msg.clone()).is_billing() {
+                eprintln!("{msg}");
+            } else {
+                eprintln!("justrust: remote unavailable ({msg}), building locally");
+            }
         }
         Err(e) => {
             // Output may already have been shown: a local rerun would
@@ -390,6 +453,14 @@ mod tests {
 
     fn is_remote(c: &Choice) -> bool {
         matches!(c, Choice::Remote(_))
+    }
+
+    #[test]
+    fn hosted_start_rule() {
+        assert!(hosted_start_worth_it(Some(25.0), false).is_some());
+        assert!(hosted_start_worth_it(Some(10.0), true).is_none());
+        assert!(hosted_start_worth_it(None, true).is_some());
+        assert!(hosted_start_worth_it(None, false).is_none());
     }
 
     #[test]

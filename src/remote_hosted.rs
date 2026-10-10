@@ -1,5 +1,5 @@
 //! The `hosted` remote backend: a build machine from justrust's own fleet,
-//! paid for by a Jcode subscription's cloud-compute credits.
+//! paid per build (`builds` on /me), with a Jcode account.
 //!
 //! ```text
 //! GET  /v1/me                  capabilities.build_hosts, tier, status, email
@@ -36,6 +36,8 @@ use std::time::{Duration, Instant};
 use crate::remote_backend::Target;
 
 pub const DEFAULT_API_BASE: &str = "https://api.jcode.sh/v1";
+/// The build fleet (justrust-cloud). Every `build/...` path goes here.
+pub const DEFAULT_BUILD_BASE: &str = "https://build.jcode.sh/v1";
 const ENV_FILE: &str = "jcode-subscription.env";
 const POLL: Duration = Duration::from_secs(2);
 /// First creation of a machine: boot plus cloud-init.
@@ -43,8 +45,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 /// A ready this recent counts as up for routing even before the master check.
 const RECENT_READY_S: u64 = 60;
 
-pub const SIGNED_OUT: &str = "not signed in to Jcode. Subscribe at https://jcode.sh/pricing, then run `jcode account login`.";
-pub const SUBSCRIBE: &str = "hosted remote builds need a Jcode subscription that includes build hosts. Subscribe at https://jcode.sh/pricing, then run `jcode account login`.";
+pub const SIGNED_OUT: &str = "not signed in for hosted builds. Run `justrust login --no-wait` and ask your user to open the URL it prints (builds stay local until then).";
+pub const SUBSCRIBE: &str = "free builds used up. Subscribe ($10/mo, 500 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
+pub const RAISE_LIMIT: &str = "monthly usage limit reached: ask your user to raise it at https://jcode.sh/account. Builds run locally until then.";
 pub const NO_CREDITS: &str = "out of Jcode cloud-compute credits (shared with cloud agents). Builds run locally until credits renew. There are no automatic top-ups.";
 pub const UNAVAILABLE: &str = "the hosted build service is unavailable right now. This is not a problem with your subscription. Builds run locally, retry later.";
 pub const RATE_LIMITED: &str = "the Jcode API is rate limiting requests. Retry in a moment.";
@@ -54,6 +57,8 @@ pub const RATE_LIMITED: &str = "the Jcode API is rate limiting requests. Retry i
 #[derive(Clone)]
 pub struct Creds {
     pub base: String,
+    /// Base for `build/...` paths (JUSTRUST_BUILD_BASE).
+    pub build_base: String,
     key: String,
 }
 
@@ -61,6 +66,7 @@ impl std::fmt::Debug for Creds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Creds")
             .field("base", &self.base)
+            .field("build_base", &self.build_base)
             .field("key", &"<redacted>")
             .finish()
     }
@@ -105,9 +111,35 @@ fn resolve(name: &str, file: Option<&str>) -> Option<String> {
 pub fn creds() -> Result<Creds> {
     let file = config_dir().and_then(|d| std::fs::read_to_string(d.join(ENV_FILE)).ok());
     let key = resolve("JCODE_API_KEY", file.as_deref()).ok_or_else(|| anyhow!(SIGNED_OUT))?;
-    let base =
-        resolve("JCODE_API_BASE", file.as_deref()).unwrap_or_else(|| DEFAULT_API_BASE.into());
-    Creds::new(base, key)
+    let mut c = Creds::new(api_base(), key)?;
+    c.set_build_base(build_base())?;
+    Ok(c)
+}
+
+fn env_file_text() -> Option<String> {
+    config_dir().and_then(|d| std::fs::read_to_string(d.join(ENV_FILE)).ok())
+}
+
+/// The credentials file Jcode and `justrust login` share.
+pub fn env_file_path() -> Option<PathBuf> {
+    Some(config_dir()?.join(ENV_FILE))
+}
+
+/// A key is present (env or file). No network.
+pub fn signed_in() -> bool {
+    resolve("JCODE_API_KEY", env_file_text().as_deref()).is_some()
+}
+
+pub fn api_base() -> String {
+    resolve("JCODE_API_BASE", env_file_text().as_deref()).unwrap_or_else(|| DEFAULT_API_BASE.into())
+}
+
+pub fn build_base() -> String {
+    std::env::var("JUSTRUST_BUILD_BASE")
+        .ok()
+        .as_deref()
+        .and_then(clean)
+        .unwrap_or_else(|| DEFAULT_BUILD_BASE.into())
 }
 
 impl Creds {
@@ -118,14 +150,39 @@ impl Creds {
             );
         }
         check_base(&base)?;
+        let base = base.trim_end_matches('/').to_string();
         Ok(Creds {
-            base: base.trim_end_matches('/').to_string(),
+            build_base: base.clone(),
+            base,
             key,
         })
     }
 
+    /// No key: only for the device flow, which is how a key is obtained.
+    pub fn anonymous(base: String) -> Result<Self> {
+        check_base(&base)?;
+        let base = base.trim_end_matches('/').to_string();
+        Ok(Creds {
+            build_base: base.clone(),
+            base,
+            key: String::new(),
+        })
+    }
+
+    pub fn set_build_base(&mut self, b: String) -> Result<()> {
+        check_base(&b)?;
+        self.build_base = b.trim_end_matches('/').to_string();
+        Ok(())
+    }
+
     fn url(&self, suffix: &str) -> String {
-        format!("{}/{}", self.base, suffix.trim_start_matches('/'))
+        let suffix = suffix.trim_start_matches('/');
+        let base = if suffix.starts_with("build/") {
+            &self.build_base
+        } else {
+            &self.base
+        };
+        format!("{base}/{suffix}")
     }
 }
 
@@ -190,6 +247,9 @@ fn curl(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> (Command, 
     cmd.arg(c.url(path));
     // Creds::new rejects quotes' neighbours (control chars, spaces); escape
     // the rest of curl's quoted-string syntax anyway.
+    if c.key.is_empty() {
+        return (cmd, String::new());
+    }
     let k = c.key.replace('\\', "\\\\").replace('"', "\\\"");
     (cmd, format!("header = \"Authorization: Bearer {k}\"\n"))
 }
@@ -241,9 +301,12 @@ pub fn api_error(r: &Resp) -> anyhow::Error {
         .take(64)
         .collect();
     let g = match (r.code, code.as_str()) {
-        (401, _) => "the Jcode sign-in is missing or expired. Run `jcode account login` (subscribe at https://jcode.sh/pricing first if needed).".into(),
+        (401, _) => "the Jcode sign-in is missing or expired. Run `justrust login --no-wait` and ask your user to open the URL it prints.".into(),
         (402, "insufficient_compute_credits") => NO_CREDITS.into(),
-        (402, _) | (403, "build_not_entitled") => SUBSCRIBE.into(),
+        (402, _) if r.body["error"]["next_step"].as_str() == Some("raise_limit") => {
+            return anyhow!(RAISE_LIMIT);
+        }
+        (402, _) | (403, "build_not_entitled") => return anyhow!(SUBSCRIBE),
         (429, _) => RATE_LIMITED.into(),
         (503, _) | (_, "build_unavailable") => UNAVAILABLE.into(),
         _ if !msg.is_empty() => return anyhow!("Jcode API error {} ({code}): {msg}", r.code),
@@ -273,6 +336,59 @@ pub struct Me {
     pub tier: Option<String>,
     pub status: Option<String>,
     pub build_hosts: bool,
+    #[serde(default)]
+    pub builds: Option<Builds>,
+}
+
+/// The `builds` object of /me and of build fleet responses.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Builds {
+    #[serde(default)]
+    pub trial_remaining: Option<i64>,
+    #[serde(default)]
+    pub included: Option<i64>,
+    #[serde(default)]
+    pub included_used: Option<i64>,
+    #[serde(default)]
+    pub overage_used: Option<i64>,
+    #[serde(default)]
+    pub overage_price_usd: Option<f64>,
+    #[serde(default)]
+    pub resets_at: Option<String>,
+    #[serde(default)]
+    pub can_build: bool,
+    #[serde(default)]
+    pub next_step: Option<String>,
+}
+
+impl Builds {
+    pub fn from(v: &Value) -> Option<Self> {
+        v.is_object()
+            .then(|| serde_json::from_value(v.clone()).ok())
+            .flatten()
+    }
+
+    /// Prepaid builds left: trial plus the unused monthly bundle.
+    pub fn left(&self) -> i64 {
+        let bundle = (self.included.unwrap_or(0) - self.included_used.unwrap_or(0)).max(0);
+        self.trial_remaining.unwrap_or(0).max(0) + bundle
+    }
+
+    /// "12 builds left", plus overage or the next step.
+    pub fn describe(&self) -> String {
+        let n = self.left();
+        let mut s = format!("{n} build{} left", if n == 1 { "" } else { "s" });
+        if n == 0 && self.can_build {
+            let p = self.overage_price_usd.unwrap_or(0.10);
+            s.push_str(&format!(", then ${p:.2} per build"));
+        }
+        match self.next_step.as_deref() {
+            Some("subscribe") => s.push_str(". Subscribe: `justrust upgrade`"),
+            Some("raise_limit") => s.push_str(". Raise the limit at https://jcode.sh/account"),
+            _ => {}
+        }
+        s
+    }
 }
 
 pub fn me(c: &Creds) -> Result<Me> {
@@ -282,7 +398,12 @@ pub fn me(c: &Creds) -> Result<Me> {
         email: s("email"),
         tier: s("tier"),
         status: s("status"),
-        build_hosts: b["capabilities"]["build_hosts"].as_bool().unwrap_or(false),
+        build_hosts: b["capabilities"]["build_hosts"].as_bool().unwrap_or(false)
+            || b["capabilities"]["hosted_builds"]
+                .as_bool()
+                .unwrap_or(false)
+            || b["builds"].is_object(),
+        builds: Builds::from(&b["builds"]),
     })
 }
 
@@ -293,6 +414,18 @@ pub fn check_access(c: &Creds) -> Result<Me> {
         bail!(SUBSCRIBE);
     }
     Ok(m)
+}
+
+/// `POST {build}/build/runs {run_id}` before a remote run. `Err` holds the
+/// one line to show (the run must then not go remote).
+pub fn charge_run(c: &Creds, run_id: &str) -> std::result::Result<Option<Builds>, String> {
+    let r = request(c, "POST", "build/runs", Some(&json!({ "run_id": run_id })))
+        .map_err(|e| e.to_string())?;
+    if r.code == 200 {
+        Ok(Builds::from(&r.body["builds"]))
+    } else {
+        Err(api_error(&r).to_string())
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -330,6 +463,8 @@ pub struct HostedStatus {
     pub host_state: Option<String>,
     pub credits: Credits,
     pub hours_left: Option<f64>,
+    #[serde(default)]
+    pub builds: Option<Builds>,
     /// The cached ssh destination, when a session was opened before.
     pub address: Option<String>,
     /// The local ControlMaster is alive.
@@ -383,6 +518,7 @@ pub fn status() -> HostedStatus {
         s.host_state = h["state"].as_str().map(str::to_string);
         s.credits = Credits::from(&h["credits"]);
         s.hours_left = s.credits.hours_left();
+        s.builds = Builds::from(&h["builds"]).or_else(|| s.me.as_ref()?.builds.clone());
         Ok(())
     })();
     s.error = r.err().map(|e| e.to_string());
@@ -398,6 +534,7 @@ pub struct Ready {
     pub user: String,
     pub host_keys: Vec<String>,
     pub credits: Credits,
+    pub builds: Option<Builds>,
 }
 
 fn safe_host(s: &str) -> bool {
@@ -445,6 +582,7 @@ fn parse_ready(b: &Value) -> Result<Ready> {
         user,
         host_keys,
         credits: Credits::from(&b["credits"]),
+        builds: Builds::from(&b["builds"]),
     })
 }
 
@@ -723,7 +861,9 @@ pub fn ensure_ready() -> Result<Target> {
         ready_at: now(),
     };
     write_private(&d.join("state.json"), &serde_json::to_vec_pretty(&st)?)?;
-    if let Some(h) = r.credits.hours_left() {
+    if let Some(b) = &r.builds {
+        eprintln!("hosted: ready at {} ({})", t.dest, b.describe());
+    } else if let Some(h) = r.credits.hours_left() {
         eprintln!("hosted: ready at {} ({h:.1} h of credits left)", t.dest);
     } else {
         eprintln!("hosted: ready at {}", t.dest);
@@ -774,6 +914,9 @@ pub fn check_use() -> Result<Me> {
         .filter(|r| r.code == 200)
         .and_then(|r| Credits::from(&r.body["credits"]).hours_left());
     match credits {
+        _ if m.builds.is_some() => {
+            println!("{who} ({tier}): {}", m.builds.as_ref().unwrap().describe())
+        }
         Some(h) => println!("{who} ({tier}): {h:.1} h of build-machine credits"),
         None => println!("{who} ({tier})"),
     }
@@ -916,9 +1059,9 @@ mod tests {
             ),
         ]);
         let e = |r: Result<Me>| r.unwrap_err().to_string();
-        assert!(e(me(&c)).contains("jcode account login"));
+        assert!(e(me(&c)).contains("justrust login"));
         let s = e(me(&c));
-        assert!(s.contains("https://jcode.sh/pricing"), "{s}");
+        assert!(s.contains("justrust upgrade"), "{s}");
         assert!(e(me(&c)).contains("credits"));
         let s = e(me(&c));
         assert!(
@@ -926,7 +1069,7 @@ mod tests {
             "{s}"
         );
         assert!(e(me(&c)).contains("rate limiting"));
-        assert!(e(check_access(&c)).contains("https://jcode.sh/pricing"));
+        assert!(e(check_access(&c)).contains("justrust upgrade"));
     }
 
     #[test]
@@ -938,6 +1081,53 @@ mod tests {
         let m = check_access(&c).unwrap();
         assert_eq!(m.email.as_deref(), Some("a@b"));
         assert!(m.build_hosts);
+    }
+
+    #[test]
+    fn charge_run_and_402_lines() {
+        let (mut c, seen) = mock(vec![
+            (
+                200,
+                r#"{"charged":"trial","builds":{"trial_remaining":24,"can_build":true}}"#,
+            ),
+            (
+                402,
+                r#"{"error":{"code":"builds_exhausted","message":"no","next_step":"subscribe"}}"#,
+            ),
+            (
+                402,
+                r#"{"error":{"code":"builds_exhausted","message":"no","next_step":"raise_limit"}}"#,
+            ),
+        ]);
+        let api = c.base.clone();
+        // Fleet paths use the build base, account paths stay on the API.
+        c.set_build_base(format!("{api}/fleet")).unwrap();
+        assert_eq!(charge_run(&c, "r1").unwrap().unwrap().left(), 24);
+        let sub = charge_run(&c, "r2").unwrap_err();
+        assert!(sub.starts_with("free builds used up. Subscribe ($10/mo, 500 builds)"));
+        assert!(
+            sub.contains("justrust upgrade") && !sub.contains('\n'),
+            "{sub}"
+        );
+        let lim = charge_run(&c, "r3").unwrap_err();
+        assert!(lim.contains("https://jcode.sh/account"), "{lim}");
+        let s = seen.lock().unwrap();
+        assert_eq!(s[0].path, "/v1/fleet/build/runs");
+        assert_eq!(s[0].body, r#"{"run_id":"r1"}"#);
+        assert!(s[0].auth.as_deref() == Some("Bearer sk-secret-123"));
+        assert_eq!(c.url("me"), format!("{api}/me"));
+    }
+
+    #[test]
+    fn builds_describe() {
+        let b = Builds {
+            trial_remaining: Some(3),
+            included: Some(500),
+            included_used: Some(100),
+            can_build: true,
+            ..Default::default()
+        };
+        assert_eq!(b.describe(), "403 builds left");
     }
 
     #[test]

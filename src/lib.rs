@@ -9,6 +9,7 @@
 //! Linux only. On other platforms `src/main.rs` runs cargo unchanged.
 #![cfg(target_os = "linux")]
 
+mod account;
 mod agent_output;
 mod buildscript;
 mod depcache;
@@ -201,6 +202,26 @@ enum Command {
         #[arg(long, hide = true, conflicts_with = "apply")]
         refresh_hints: bool,
     },
+    /// Sign in to Jcode for hosted remote builds (device flow in the
+    /// browser). Works without a TTY: prints the URL to relay to the user.
+    Login {
+        /// Print the URL and exit. Later justrust commands finish the
+        /// sign-in once it is approved.
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// Remove the Jcode API key (keeps other settings in the file).
+    Logout,
+    /// Subscribe for more hosted builds ($10/mo per plan unit, 500 builds).
+    Upgrade {
+        /// Plan in USD per month.
+        #[arg(long, default_value_t = 10)]
+        plan: u32,
+        /// Print the checkout URL and exit. Remote builds resume by
+        /// themselves once paid.
+        #[arg(long)]
+        no_wait: bool,
+    },
     /// Experimental: the remote compile machine (create, start, stop, status, ssh).
     Remote {
         #[command(subcommand)]
@@ -280,7 +301,7 @@ enum RemoteCmd {
     Clippy(RemoteArgs),
     /// Choose where remote builds run: aws (the machine `remote up`
     /// creates), ssh HOST (a machine you already have), hosted (Jcode
-    /// subscription, not available yet), or off.
+    /// account, see `justrust login`), or off.
     Use {
         kind: String,
         host: Option<String>,
@@ -298,7 +319,28 @@ struct RemoteArgs {
     args: Vec<String>,
 }
 
+/// `--local` / `--remote` before any `--`: aliases for JUSTRUST_REMOTE=off|force.
+fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>) {
+    let mut mode = None;
+    let mut out = Vec::with_capacity(args.len());
+    let mut passed = false;
+    for a in args {
+        passed |= a == "--";
+        match a.to_str() {
+            Some("--local") if !passed => mode = Some("off"),
+            Some("--remote") if !passed => mode = Some("force"),
+            _ => out.push(a),
+        }
+    }
+    (out, mode)
+}
+
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
+    let (args, route_mode) = take_route_flags(args);
+    if let Some(m) = route_mode {
+        // SAFETY: single-threaded here, before any build starts.
+        unsafe { std::env::set_var("JUSTRUST_REMOTE", m) };
+    }
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
     // check, clippy and test may run on the remote machine when that is
@@ -349,6 +391,9 @@ pub fn main() -> anyhow::Result<()> {
     }
 
     let cli = Cli::parse();
+    if !matches!(cli.command, Command::Login { .. } | Command::Logout) {
+        account::poll_pending();
+    }
     match cli.command {
         Command::Check(p) => agent("check", p.args),
         Command::Test(p) => agent("test", p.args),
@@ -386,6 +431,9 @@ pub fn main() -> anyhow::Result<()> {
         Command::Cache { prune, clear, auto } => depcache_gc::command(prune, clear, auto)?,
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,
+        Command::Login { no_wait } => account::login(no_wait)?,
+        Command::Logout => account::logout()?,
+        Command::Upgrade { plan, no_wait } => account::upgrade(plan, no_wait)?,
         Command::Remote { cmd } => match cmd {
             RemoteCmd::Up {
                 region,

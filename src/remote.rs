@@ -102,6 +102,16 @@ pub struct Status {
     /// hosted backend: account, credits, server-side host state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosted: Option<crate::remote_hosted::HostedStatus>,
+    /// A Jcode API key is present.
+    pub signed_in: bool,
+    /// `justrust login --no-wait` waiting for the user to open this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_login_url: Option<String>,
+    /// Hosted builds left and the next step, from /me.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builds: Option<crate::remote_hosted::Builds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
 }
 
 pub(crate) fn dir() -> Result<PathBuf> {
@@ -268,6 +278,14 @@ pub fn collect(probe: bool) -> Status {
         Some(Backend::Hosted) => collect_hosted(probe),
     };
     out.daemon = daemon_state();
+    out.signed_in = crate::remote_hosted::signed_in();
+    out.pending_login_url = crate::account::load_pending().map(|p| p.url);
+    out.builds = out.hosted.as_ref().and_then(|h| h.builds.clone());
+    out.next_step = out
+        .builds
+        .as_ref()
+        .and_then(|b| b.next_step.clone())
+        .or_else(|| (!out.signed_in).then(|| "login".into()));
     out.routing = std::env::var("JUSTRUST_REMOTE")
         .ok()
         .filter(|v| !v.is_empty());
@@ -662,6 +680,12 @@ fn dur(s: f64) -> String {
 
 pub fn render_text(s: &Status) -> String {
     let mut o = String::new();
+    if let Some(u) = &s.pending_login_url {
+        let _ = writeln!(
+            o,
+            "sign-in pending: ask your user to open this link, builds go remote once approved:\n  {u}"
+        );
+    }
     match s.backend.as_str() {
         "ssh" => {
             let _ = writeln!(
@@ -725,7 +749,9 @@ fn render_hosted(o: &mut String, s: &Status) {
                 .unwrap_or_default()
         );
     }
-    if let Some(hrs) = h.hours_left {
+    if let Some(b) = &h.builds {
+        let _ = writeln!(o, "  builds: {}", b.describe());
+    } else if let Some(hrs) = h.hours_left {
         let _ = writeln!(o, "  credits: {hrs:.1} h of build-machine runtime left");
     }
     if let Some(a) = &s.host {
@@ -1605,6 +1631,7 @@ mod tests {
                     tier: Some("pro".into()),
                     status: Some("active".into()),
                     build_hosts: true,
+                    builds: None,
                 }),
                 hours_left: Some(12.5),
                 connected: true,

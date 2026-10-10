@@ -220,6 +220,37 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
 #[derive(Debug)]
 pub struct Infra(pub String);
 
+impl Infra {
+    /// Billing refusals (402, signed out) are complete one-line
+    /// instructions, shown as they are.
+    pub fn is_billing(&self) -> bool {
+        self.0.starts_with(BILLING)
+    }
+}
+
+/// Marks an [`Infra`] whose text is a billing instruction.
+pub const BILLING: &str = "justrust: ";
+
+/// Hosted only: charge this run before anything runs remotely. Err holds
+/// the line to show; the build then runs locally.
+fn charge_hosted(run_id: &str) -> std::result::Result<(), String> {
+    if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
+        return Ok(());
+    }
+    let c = crate::remote_hosted::creds().map_err(|e| format!("{BILLING}{e}"))?;
+    match crate::remote_hosted::charge_run(&c, run_id) {
+        Ok(_) => Ok(()),
+        Err(e)
+            if e.contains("justrust upgrade")
+                || e.contains("jcode.sh/account")
+                || e.contains("justrust login") =>
+        {
+            Err(format!("{BILLING}{e}"))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub struct Outcome {
     pub code: i32,
     #[allow(dead_code)] // used by the router (in progress)
@@ -244,11 +275,14 @@ pub fn run_remote(
     if !roots.iter().any(|r| cwd.starts_with(r)) {
         return infra(format!("{} is not inside a synced root", cwd.display()));
     }
+    let run_id = crate::record::new_run_id();
+    if let Err(m) = charge_hosted(&run_id) {
+        return infra(m);
+    }
     let sock = match crate::remote_daemon::connect() {
         Ok(s) => s,
         Err(e) => return infra(format!("{e:#}")),
     };
-    let run_id = crate::record::new_run_id();
     let mut env = Vec::new();
     for var in [
         "JUSTRUST_MAX_WARNINGS",
