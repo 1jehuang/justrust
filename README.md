@@ -1,6 +1,6 @@
 # justrust
 
-An attempt at a faster all-in-one Rust compiling solution for coding agents.
+Fast Rust compile for coding agents.
 
 Coding agents run `cargo check` and `cargo test` hundreds of times a day, and
 spend most of that time waiting on the compiler rather than running tests.
