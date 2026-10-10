@@ -754,11 +754,12 @@ mod tests {
             "#!/bin/sh\necho \"cargo:rustc-cfg=a$1\"\necho err >&2\npwd\nexit 7\n",
         )
         .unwrap();
-        let out = Command::new(&bin)
-            .arg("X")
-            .current_dir(dir.join("cwd"))
-            .output()
-            .unwrap();
+        let out = retry_busy(|| {
+            Command::new(&bin)
+                .arg("X")
+                .current_dir(dir.join("cwd"))
+                .output()
+        });
         assert_eq!(out.status.code(), Some(7));
         let so = String::from_utf8(out.stdout).unwrap();
         assert!(so.starts_with("cargo:rustc-cfg=aX\n"), "{so}");
@@ -774,10 +775,26 @@ mod tests {
         std::fs::remove_file(&real).unwrap();
         wrap_with(&dir, "build_script_build", "-abc", &jr).unwrap();
         std::fs::write(&real, "#!/bin/sh\necho \"$1 $2\"\nexit 3\n").unwrap();
-        let out = Command::new(&bin).args(["a b", "c"]).output().unwrap();
+        let out = retry_busy(|| Command::new(&bin).args(["a b", "c"]).output());
         assert_eq!(out.status.code(), Some(3));
         assert_eq!(out.stdout, b"a b c\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Exec a file this test just wrote. A test forking concurrently can
+    /// briefly inherit our write fd, which makes exec fail with ETXTBSY.
+    fn retry_busy(
+        mut f: impl FnMut() -> std::io::Result<std::process::Output>,
+    ) -> std::process::Output {
+        for _ in 0..50 {
+            match f() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                r => return r.unwrap(),
+            }
+        }
+        f().unwrap()
     }
 
     #[test]
