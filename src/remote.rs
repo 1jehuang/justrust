@@ -265,7 +265,19 @@ pub fn collect(probe: bool) -> Status {
         if let Some(ip) = &d.ip {
             out.probe = match cached_probe() {
                 Some(p) if !probe || now() - p.at < PROBE_TTL => Some(p),
-                _ if probe => Some(run_probe(ip)),
+                _ if probe => {
+                    let p = run_probe(ip);
+                    // A timeout usually means our public IP changed (new
+                    // network) and the security group no longer admits it.
+                    if !p.ok
+                        && p.error.as_deref().is_some_and(|e| e.contains("timed out"))
+                        && ensure_security_group(&st.region).is_ok()
+                    {
+                        Some(run_probe(ip))
+                    } else {
+                        Some(p)
+                    }
+                }
                 other => other,
             };
         }
