@@ -122,36 +122,36 @@ info, and duplicate slots to measure what a zero-target-dir mode saves.
 
 ## Open source and licensing
 
-Decision: open core.
+Decision: open core, licensed by layer. The exact rules and file layout are in
+[LICENSING.md](../LICENSING.md).
 
-**Open source:**
-
-- The justrust client and local tool. It drives adoption and earns trust.
-- The wire protocol and cache key format.
-- A self-hostable, single-tenant server: remote executor plus artifact cache.
-  Users send source code to it, so it must be auditable. Teams that self-host
-  are future customers.
-
-**Closed, at least for now:**
-
-- The multi-tenant control plane: the global shared cache, the prebuild
-  fleet, poisoning defenses, tenant isolation, scheduling, and billing.
+| Layer | License | Why |
+|---|---|---|
+| Client and local tool (today's crate) | MIT | Adoption. Companies avoid restrictive licenses on build tools, and it is already public under MIT |
+| Wire protocol and cache key format | MIT | Third-party clients and integrations (CI, sccache or Bazel bridges) make justrust the standard |
+| Self-hostable single-tenant server (`server/`, future) | FSL-1.1-ALv2 | Readable, self-hostable, modifiable. Nobody may sell it as a competing service. Each release becomes Apache 2.0 after two years |
+| Multi-tenant cloud: global shared cache, prebuild fleet, isolation, poisoning defenses, scheduling, billing | Closed, separate private repo | Unproven security surface, and it is the revenue layer. Revisit FSL once it is hardened |
 
 Reasoning:
 
 - The value is in operations and in the network effect of the cache, not in
   the code. A self-hosted copy starts empty.
+- FSL on the server blocks the one real threat: someone hosting our server as
+  a competing paid service.
 - Opening the poisoning and isolation layer before it is proven publishes the
-  attack surface.
-- Comparable products follow this split: Turborepo with Vercel Remote Cache,
-  Nx with Nx Cloud, Bazel with BuildBuddy or EngFlow, and sccache's open
-  storage backends.
-- If more is opened later, use FSL or AGPL so cloud providers cannot resell
-  it as a competing service.
+  attack surface. Closing it is for security, not secrecy.
+- Comparable products follow this split: Databricks (Apache 2.0 Spark, Delta
+  Lake, and MLflow, closed Photon and managed platform), Turborepo with Vercel
+  Remote Cache, Nx with Nx Cloud, Bazel with BuildBuddy or EngFlow, and Sentry
+  (FSL).
+- Contributions use a DCO sign-off, not a CLA, to keep contributing easy.
 
 Share versus total: open source captures a smaller share of the value created
 but likely a larger total. Local build speedups were never chargeable. Hosted
 cache, compute, and team features are.
+
+Before launching the paid service, have a lawyer review the FSL text and its
+interaction with the MIT parts.
 
 ## Next steps
 
