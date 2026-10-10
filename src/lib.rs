@@ -201,7 +201,7 @@ enum Command {
         #[arg(long, hide = true, conflicts_with = "apply")]
         refresh_hints: bool,
     },
-    /// The remote compile machine: create, start, stop, status, ssh.
+    /// Experimental: the remote compile machine (create, start, stop, status, ssh).
     Remote {
         #[command(subcommand)]
         cmd: RemoteCmd,

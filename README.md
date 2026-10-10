@@ -9,7 +9,24 @@ Every optimization has to be justified by measurements from real agent sessions.
 
 ## Status
 
-Early. What exists so far:
+Alpha (0.1.0-alpha). Linux only: on macOS and Windows the binary builds and
+`justrust check|test|build|clippy|run` fall back to plain cargo without
+recording. Output formats, the data layout under `~/.justrust`, and
+environment variables may change between releases. Remote builds are
+experimental and off unless you configure a machine. See
+[CHANGELOG.md](CHANGELOG.md).
+
+## Install
+
+```sh
+cargo install justrust --locked
+```
+
+Or from a checkout: `cargo install --path . --locked`. Requires Rust 1.88 or
+newer (edition 2024). Then point your agents at it with the snippet in
+[docs/AGENTS-snippet.md](docs/AGENTS-snippet.md).
+
+## What exists so far
 
 - **Agent interface.** `justrust check|test|build|clippy|run` takes cargo's
   arguments and prints only what an agent needs to act on, followed by a
@@ -59,7 +76,6 @@ To make agents use it by default, add the snippet in
 ## Recording builds
 
 ```sh
-cargo install --path .
 justrust install          # puts a `cargo` proxy in ~/.local/bin (must precede the real cargo on PATH)
 cargo test -p my-crate    # runs exactly as before, then prints one summary line
 justrust runs             # list recorded runs
@@ -211,7 +227,7 @@ time no longer goes to learning about a type error.
 3. **Share artifacts.** Local depcache (done), then prebuilt artifact servers
    and a hermetic C sysroot.
 4. **Remote compile service** that is chosen per build when it is faster.
-   Working: `check`, `clippy`, and `test` route to a remote machine when
+   Experimental. Working: `check`, `clippy`, and `test` route to a remote machine when
    measured faster (a machine in your AWS account via `justrust remote up`,
    or any ssh host via `justrust remote use ssh`), with a sync daemon that
    pushes edits on save. Cold Jcode Desktop `check` 44 s vs ~180 s local.
