@@ -859,7 +859,9 @@ fn render_probe(o: &mut String, s: &Status, p: &Probe) {
                     "not installed yet"
                 })
             );
-            if let Some(m) = p.idle_left_min {
+            // idle-left can be stale right after a wake (written before the
+            // last shutdown, before the first timer tick of this boot).
+            if let Some(m) = p.idle_left_min.filter(|m| *m >= 0.0) {
                 let _ = writeln!(o, "  stops itself in {m:.0} min if idle");
             }
             let _ = writeln!(o, "  probed {} ago", dur(now() - p.at));
@@ -1177,7 +1179,7 @@ cat >/etc/systemd/system/justrust-boot.service <<'EOF'
 Before=justrust-idle.timer
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'date +%%s >/var/lib/justrust/last-active'
+ExecStart=/bin/sh -c 'date +%%s >/var/lib/justrust/last-active; rm -f /var/lib/justrust/idle-left'
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -1747,5 +1749,17 @@ mod tests {
             .and_then(|r| r.split("\nEOF").next())
             .unwrap();
         assert!(unit.contains("%%s") && !unit.replace("%%", "").contains('%'));
+    }
+
+    /// The boot unit must clear the previous boot's idle countdown.
+    #[test]
+    fn boot_unit_resets_idle_left() {
+        let ud = user_data(30);
+        let unit = ud
+            .split("justrust-boot.service <<'EOF'")
+            .nth(1)
+            .and_then(|r| r.split("\nEOF").next())
+            .unwrap();
+        assert!(unit.contains("rm -f /var/lib/justrust/idle-left"), "{unit}");
     }
 }
