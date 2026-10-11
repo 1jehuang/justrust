@@ -1,0 +1,6 @@
+[submodule "jr-rustc"]
+	path = toolchain/rustc
+	url = https://github.com/1jehuang/jr-rustc.git
+	branch = justrust
+	update = none
+	shallow = true

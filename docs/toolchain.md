@@ -33,7 +33,7 @@ from a cache.
 
 | component | how we own it | why |
 |---|---|---|
-| rustc | pinned nightly first, then fork `jr-rustc` | unstable flags, resident compiler, body-only invalidation |
+| rustc | forked: `jr-rustc` (github.com/1jehuang/jr-rustc, branch `justrust`, based on the pinned nightly's commit), submodule pointer at `toolchain/rustc` (opt-in checkout: `git submodule update --init --checkout toolchain/rustc`), built with `./build-jr.sh` (stage 1, CI LLVM, ~9.5 min cold) | unstable flags, resident compiler, body-only invalidation (`docs/integrations.md`) |
 | LLVM | prebuilt from rust CI first, built ourselves with PGO+BOLT later | faster codegen of dependencies |
 | std / sysroot | rebuilt with `-Zbuild-std` flags we choose (share-generics, dylib) | dylib test binaries, fewer monomorphizations |
 | cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp (shipped), next: in-process fingerprints, no rescan, daemon mode |
