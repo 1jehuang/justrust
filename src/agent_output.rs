@@ -116,7 +116,8 @@ impl Filter {
         if t.starts_with("test ")
             && (t.ends_with(" ... ok")
                 || t.ends_with(" ... ignored")
-                || t.contains(" ... ignored, "))
+                || t.contains(" ... ignored, ")
+                || crate::test_runner::parse_timed_line(t).is_some_and(|(_, _, ok)| ok))
         {
             self.hidden.passing_test_lines += 1;
             return false;
@@ -281,6 +282,7 @@ mod tests {
              test a ... ok\n\
              test b ... FAILED\n\
              test c ... ignored\n\
+             test d ... ok <0.012s>\n\
              \n\
              failures:\n\
              \n\
@@ -293,7 +295,7 @@ mod tests {
         assert_eq!(out[0], "test b ... FAILED");
         assert!(out.iter().any(|l| l.contains("panicked")));
         assert!(out.last().unwrap().starts_with("test result: FAILED"));
-        assert_eq!(f.hidden.passing_test_lines, 2);
+        assert_eq!(f.hidden.passing_test_lines, 3);
     }
 
     #[test]

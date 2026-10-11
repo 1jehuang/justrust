@@ -219,6 +219,9 @@ fn redact(obj: &mut Map<String, Value>) {
             }
         }
     }
+    if let Some(t) = obj.get_mut("tests").and_then(Value::as_object_mut) {
+        t.remove("slowest");
+    }
     if let Some(Value::Array(bins)) = obj.get_mut("tests").and_then(|t| t.get_mut("binaries")) {
         for (i, b) in bins.iter_mut().enumerate() {
             if let Some(b) = b.as_object_mut() {
@@ -244,6 +247,9 @@ pub fn slim(mut v: Value, home: &Path, machine: &str, public: &HashSet<String>) 
         return v;
     };
     obj.remove("split_hints");
+    if let Some(Value::Array(slow)) = obj.get_mut("tests").and_then(|t| t.get_mut("slowest")) {
+        slow.truncate(5);
+    }
     if let Some(Value::Array(units)) = obj.get_mut("top_units") {
         units.truncate(TOP_UNITS);
         for u in units.iter_mut() {

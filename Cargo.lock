@@ -329,6 +329,7 @@ dependencies = [
  "dirs",
  "flate2",
  "libc",
+ "memchr",
  "regex",
  "serde",
  "serde_json",

@@ -313,6 +313,22 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
                 b.filtered_out
             );
         }
+        if !t.slowest.is_empty() {
+            let _ = writeln!(
+                o,
+                "  slowest of {} timed tests ({:.1}s summed):",
+                t.timed, t.timed_secs
+            );
+            for x in t.slowest.iter().take(10) {
+                let _ = writeln!(
+                    o,
+                    "    {:>7.2}s  {}{}",
+                    x.secs,
+                    x.name,
+                    if x.passed { "" } else { " (FAILED)" }
+                );
+            }
+        }
     }
 
     let r = &s.resources;

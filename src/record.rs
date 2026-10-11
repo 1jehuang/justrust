@@ -350,11 +350,18 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     // that does not leak into test binaries that run cargo) and strip it again.
     let user_progress = tty && !opts.agent;
     let strip_progress = !user_progress && std::env::var_os("CARGO_TERM_PROGRESS_WHEN").is_none();
-    let cargo_args = if strip_progress {
+    let mut cargo_args = if strip_progress {
         with_progress_config(cargo_args)
     } else {
         cargo_args.to_vec()
     };
+    // Per-test durations (see `test_runner`). Runner config is not part of
+    // any fingerprint, so artifacts stay shared with unrecorded builds.
+    if crate::test_runner::wanted(&meta.subcommand, &cargo_args)
+        && let Some(c) = crate::test_runner::cargo_config(&me)
+    {
+        cargo_args = insert_config(&cargo_args, &c);
+    }
 
     let mut cmd = Command::new(&real_cargo);
     if let Some(tc) = &pinned {
@@ -672,15 +679,19 @@ pub fn strip_ansi(s: &str) -> String {
 
 /// `args` with cargo's progress bar forced on, placed after a `+toolchain`.
 fn with_progress_config(args: &[OsString]) -> Vec<OsString> {
+    let args = insert_config(args, "term.progress.width=200");
+    insert_config(&args, "term.progress.when=\"always\"")
+}
+
+/// `args` with `--config <c>` placed first, after a `+toolchain`.
+fn insert_config(args: &[OsString], c: &str) -> Vec<OsString> {
     let at = usize::from(
         args.first()
             .is_some_and(|a| a.to_string_lossy().starts_with('+')),
     );
     let mut out = args[..at].to_vec();
-    for c in ["term.progress.when=\"always\"", "term.progress.width=200"] {
-        out.push("--config".into());
-        out.push(c.into());
-    }
+    out.push("--config".into());
+    out.push(c.into());
     out.extend_from_slice(&args[at..]);
     out
 }

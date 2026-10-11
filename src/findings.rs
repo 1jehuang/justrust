@@ -395,11 +395,17 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
         .max_by(|a, b| a.wall.total_cmp(&b.wall))
         && b.wall >= 3.0
     {
-        out.push(Finding::new(
-            "slow_tests",
-            b.wall,
-            format!("tests in {} took {:.1}s to run", b.name, b.wall),
-        ));
+        let slowest = s.tests.slowest.first().filter(|t| t.secs >= 1.0);
+        let msg = match slowest {
+            // The longest single test bounds the binary's wall time.
+            Some(t) => format!(
+                "tests in {} took {:.1}s to run; the slowest test alone took {:.1}s ({}). \
+                 Speed it up or split it, or filter to the tests you changed",
+                b.name, b.wall, t.secs, t.name
+            ),
+            None => format!("tests in {} took {:.1}s to run", b.name, b.wall),
+        };
+        out.push(Finding::new("slow_tests", b.wall, msg));
     }
 
     out.retain(|f| f.cost_secs >= MIN_COST);

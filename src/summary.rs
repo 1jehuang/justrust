@@ -215,7 +215,28 @@ pub struct TestStats {
     pub filtered_out: u64,
     /// libtest's own "finished in" total.
     pub libtest_secs: f64,
+    /// The slowest individual tests, slowest first (needs per-test times from
+    /// `test_runner`). Wall time of a suite is bounded below by its slowest test.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slowest: Vec<TestTime>,
+    /// Sum of all per-test durations, and how many tests had one.
+    #[serde(default)]
+    pub timed_secs: f64,
+    #[serde(default)]
+    pub timed: u64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TestTime {
+    pub name: String,
+    /// Test binary (`TestBinary::name`).
+    pub binary: String,
+    pub secs: f64,
+    pub passed: bool,
+}
+
+/// How many slow tests a summary keeps.
+const SLOWEST_KEPT: usize = 20;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TestBinary {
@@ -449,6 +470,39 @@ fn share_time(intervals: &[(f64, f64)], lo: f64, hi: f64) -> (Vec<f64>, f64) {
     (share, covered)
 }
 
+/// Report lines naming the slowest tests, when one test is a notable part of
+/// the run: at least 1s and 10% of the test phase. Empty otherwise.
+pub fn slow_test_lines(t: &TestStats, test_run: f64) -> Vec<String> {
+    let notable = |s: f64| s >= 1.0 && s >= 0.1 * test_run;
+    let shown: Vec<&TestTime> = t
+        .slowest
+        .iter()
+        .filter(|x| notable(x.secs))
+        .take(5)
+        .collect();
+    if shown.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!(
+        "slowest tests ({} timed, {:.1}s summed; a suite cannot finish before its slowest test):",
+        t.timed, t.timed_secs
+    )];
+    for x in shown {
+        out.push(format!(
+            "  {:>6.2}s  {}{}",
+            x.secs,
+            x.name,
+            if x.passed { "" } else { " (FAILED)" }
+        ));
+    }
+    out
+}
+
+fn keep_slowest(v: &mut Vec<TestTime>) {
+    v.sort_by(|a, b| b.secs.total_cmp(&a.secs));
+    v.truncate(SLOWEST_KEPT);
+}
+
 fn parse_test_result(l: &str) -> Option<(u64, u64, u64, u64, f64)> {
     let rest = l.trim().strip_prefix("test result: ")?;
     let num = |key: &str| -> u64 {
@@ -534,7 +588,15 @@ pub fn build(
         // cargo also prints "Running `rustc ...`" for compiler invocations.
         let running_test = text.strip_prefix("Running ").and_then(|r| {
             if let Some(cmd) = r.strip_prefix('`') {
-                let exe = cmd.trim_end_matches('`').split_whitespace().next()?;
+                let mut words = cmd.trim_end_matches('`').split_whitespace();
+                let mut exe = words.next()?;
+                // Through `test_runner`: `justrust __test-runner <binary> ...`.
+                if exe.ends_with("justrust") {
+                    if words.next()? != crate::test_runner::SUBCOMMAND {
+                        return None;
+                    }
+                    exe = words.next()?;
+                }
                 let is_test =
                     exe.contains("/deps/") && !exe.ends_with("rustc") && !exe.contains("rustdoc");
                 is_test.then_some(exe)
@@ -562,6 +624,18 @@ pub fn build(
                 start: rel(l.t),
                 ..Default::default()
             });
+        } else if let Some((name, secs, passed)) = crate::test_runner::parse_timed_line(text) {
+            tests.timed += 1;
+            tests.timed_secs += secs;
+            tests.slowest.push(TestTime {
+                name: name.to_owned(),
+                binary: current.as_ref().map(|b| b.name.clone()).unwrap_or_default(),
+                secs,
+                passed,
+            });
+            if tests.slowest.len() >= 4 * SLOWEST_KEPT {
+                keep_slowest(&mut tests.slowest);
+            }
         } else if let Some((p, f, ig, fo, secs)) = parse_test_result(text) {
             tests.passed += p;
             tests.failed += f;
@@ -578,6 +652,7 @@ pub fn build(
         }
     }
     close(current.take(), end, &mut tests);
+    keep_slowest(&mut tests.slowest);
 
     // Phases.
     let build_end = if units.is_empty() {
@@ -1000,6 +1075,9 @@ impl Summary {
                 if t.binaries.len() == 1 { "y" } else { "ies" },
                 p.test_run
             );
+            for line in slow_test_lines(t, p.test_run) {
+                let _ = writeln!(o, "          {line}");
+            }
         }
 
         // Resources.
@@ -1163,6 +1241,61 @@ fn trunc(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn timed_test_lines_become_the_slowest_tests() {
+        let line = |t: f64, s: &str, l: &str| OutputLine {
+            t,
+            s: s.into(),
+            l: l.into(),
+        };
+        let lines = [
+            line(
+                1.0,
+                "e",
+                "     Running `/h/.cargo/bin/justrust __test-runner /w/target/debug/deps/app-abc filter`",
+            ),
+            line(1.1, "o", "test fast ... ok <0.010s>"),
+            line(4.0, "o", "test slow::one ... ok <2.900s>"),
+            line(4.2, "o", "test broken ... FAILED <1.500s>"),
+            line(4.3, "o", "test skipped ... ignored"),
+            line(
+                4.4,
+                "o",
+                "test result: FAILED. 2 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.30s",
+            ),
+        ];
+        let meta = Meta {
+            subcommand: "test".into(),
+            ..Default::default()
+        };
+        let s = build(
+            &meta,
+            GitInfo::default(),
+            0.0,
+            5.0,
+            101,
+            1.0,
+            &lines,
+            &[],
+            &[],
+            &[],
+        );
+        let t = &s.tests;
+        assert_eq!(t.timed, 3);
+        assert!((t.timed_secs - 4.41).abs() < 1e-9);
+        let names: Vec<_> = t.slowest.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, ["slow::one", "broken", "fast"]);
+        assert_eq!(t.slowest[0].binary, "app-abc");
+        assert!(!t.slowest[1].passed);
+        assert_eq!((t.passed, t.failed), (2, 1));
+        let shown = slow_test_lines(t, 3.4);
+        assert_eq!(shown.len(), 3, "{shown:?}");
+        assert!(shown[1].contains("slow::one") && shown[2].contains("(FAILED)"));
+        assert!(
+            slow_test_lines(t, 60.0).is_empty(),
+            "not notable in a long run"
+        );
+    }
     #[test]
     fn clippy_driver_processes_become_units() {
         let p = |comm: &str, cmd: &str| ProcRecord {

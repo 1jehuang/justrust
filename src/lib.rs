@@ -42,6 +42,7 @@ mod split_apply;
 mod split_index;
 mod status;
 mod summary;
+mod test_runner;
 mod toolchain;
 
 use clap::{Parser, Subcommand};
@@ -420,6 +421,11 @@ pub fn main() -> anyhow::Result<()> {
         && let Some(real) = rest.next()
     {
         buildscript::main(PathBuf::from(real), rest.collect());
+    }
+    // `justrust __test-runner <binary> ...`: cargo's runner during `test`.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(test_runner::SUBCOMMAND))
+    {
+        test_runner::main(std::env::args_os().skip(2));
     }
     // Remote build plumbing: the local sync daemon and the agent it starts
     // on the remote machine. Internal, not part of the CLI.

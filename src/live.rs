@@ -105,7 +105,7 @@ impl LiveState {
                 self.phase = "finishing".into();
             }
             "Running" if self.finished_build => {
-                if t.starts_with("Running `") {
+                if t.starts_with("Running `") && !t.contains(crate::test_runner::SUBCOMMAND) {
                     self.phase = "running".into();
                 } else {
                     self.test_binaries += 1;
