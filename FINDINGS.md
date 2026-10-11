@@ -1869,6 +1869,31 @@ Readings:
   their C builds hermetic (one vendored C toolchain, toolchain.md step 3)
   would close it.
 
+### Verification: paired A/B, cache filled only by the background sync
+
+Clean protocol (`peer-ab2.sh`): wipe the machine's cache, build there once
+through a fresh private home, wait for that home's daemon to sync, then
+alternate cold (empty cache) and synced (a copy of the sync-filled cache)
+local builds in fresh target dirs, peer fetching off. The sync pulled all
+376 entries (350 MB) in about 30 s.
+
+| pair | cold | synced | synced hits | load |
+|---|---:|---:|---|---|
+| 1 | 78.0 s | 60.9 s | 290/376 | 12 / 15 |
+| 2 | 75.4 s | 43.8 s | 349/376 | 12 / 10 |
+| 3 | 66.1 s | 45.1 s | 349/376 | 10 / 9 |
+
+Median 75.4 s -> 45.1 s (-40%), every pair faster. Pair 1 got fewer hits
+because the private home's daemon was still syncing while it was copied.
+The cache directory had grown to 487 keys by then, so the copy caught part
+of an in-flight install.
+
+Two earlier runs of this A/B found real bugs, now fixed: a remote build
+with `JUSTRUST_PEER_CACHE=0` journaled nothing, so the sync had nothing to
+offer (1db6bb4-era code, 0 entries pulled). The sync also dropped journal
+entries beyond the first 400 of a window instead of deferring them
+(1fd90a2).
+
 Bugs found and fixed on the way: a stale peer key set ruled out every
 entry the machine compiled after the daemon connected (0/376 hits). The
 daemon inherited `JUSTRUST_PEER_CACHE=0` from the build that started it.
