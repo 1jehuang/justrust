@@ -105,11 +105,79 @@ pub struct EarlyInfo {
     pub rustc_only: usize,
 }
 
-pub fn enabled() -> bool {
+/// `JUSTRUST_EARLY`: unset or `0` = off, `auto` = query a running daemon
+/// and start one for workspaces with recent agent builds (`maybe_autostart`),
+/// anything else = on (query, and start the daemon on first use).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    Off,
+    Auto,
+    On,
+}
+
+pub fn mode() -> Mode {
     match std::env::var("JUSTRUST_EARLY").as_deref() {
-        Ok("0") | Ok("off") | Ok("no") | Ok("false") => false,
-        Ok(_) => true,
-        Err(_) => false,
+        Ok("0") | Ok("off") | Ok("no") | Ok("false") | Err(_) => Mode::Off,
+        Ok("auto") => Mode::Auto,
+        Ok(_) => Mode::On,
+    }
+}
+
+pub fn enabled() -> bool {
+    mode() != Mode::Off
+}
+
+/// Auto mode starts a daemon after this many agent builds in the workspace
+/// within `AUTO_WINDOW_SECS`, if `AUTO_MIN_AVAILABLE_MB` of memory is free
+/// (the Desktop workspace's rust-analyzer holds 4.7 GB).
+const AUTO_MIN_BUILDS: usize = 3;
+const AUTO_WINDOW_SECS: f64 = 3600.0;
+const AUTO_MIN_AVAILABLE_MB: u64 = 8 * 1024;
+
+/// Recent agent builds per workspace root, from the tail of the run index.
+fn recent_agent_builds(index: &str, root: &Path, now: f64) -> usize {
+    index
+        .lines()
+        .rev()
+        .take(400)
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .take_while(|e| {
+            e["start"]
+                .as_f64()
+                .is_some_and(|t| now - t < AUTO_WINDOW_SECS)
+        })
+        .filter(|e| !e["agent_session"].is_null())
+        .filter(|e| {
+            e["cwd"]
+                .as_str()
+                .and_then(|c| workspace_root(Path::new(c)))
+                .is_some_and(|r| r == root)
+        })
+        .count()
+}
+
+/// Auto mode, after an agent build of `cwd` finished: start the workspace's
+/// daemon in the background when it has had several agent builds lately.
+/// Never blocks, never fails the build.
+pub fn maybe_autostart(cwd: &Path, sub: &str) {
+    if mode() != Mode::Auto || !wanted_for(sub) {
+        return;
+    }
+    let Some(root) = workspace_root(cwd) else {
+        return;
+    };
+    let Ok(dir) = state_dir(&root) else { return };
+    if UnixStream::connect(dir.join("sock")).is_ok() {
+        return;
+    }
+    if crate::procfs::meminfo().is_none_or(|m| m.available_mb < AUTO_MIN_AVAILABLE_MB) {
+        return;
+    }
+    let Ok(index) = crate::paths::index_file().and_then(|p| Ok(std::fs::read_to_string(p)?)) else {
+        return;
+    };
+    if recent_agent_builds(&index, &root, crate::paths::now()) >= AUTO_MIN_BUILDS {
+        let _ = spawn_daemon(&root, &dir);
     }
 }
 
@@ -164,7 +232,7 @@ fn query_op(cwd: &Path, timeout: Duration, op: &str) -> Option<Reply> {
     let s = match UnixStream::connect(&sock) {
         Ok(s) => s,
         Err(_) => {
-            if op != "diagnostics" {
+            if op != "diagnostics" || mode() == Mode::Auto {
                 return None;
             }
             if let Err(e) = spawn_daemon(&root, &dir) {
@@ -232,19 +300,22 @@ fn early_for_build(
         // when the edited files themselves are clean (otherwise the agent
         // already has an error to fix, and the pulls would hold the daemon
         // for seconds).
-        if info.ready && r.callers > 0 && info.diags.is_empty() && !done() {
-            if let Some(c) = query_op(&cwd, Duration::from_secs(5), "callers") {
-                let secs = crate::paths::now() - start;
-                info.callers_secs = Some(secs);
-                info.files.extend(c.files);
-                if !c.diags.is_empty() && !done() {
-                    let text =
-                        format_block(&c.diags, &cwd, secs, " in files using a changed signature");
-                    let _ = std::io::stderr().lock().write_all(text.as_bytes());
-                    info.shown = true;
-                }
-                info.diags.extend(c.diags);
+        if info.ready
+            && r.callers > 0
+            && info.diags.is_empty()
+            && !done()
+            && let Some(c) = query_op(&cwd, Duration::from_secs(5), "callers")
+        {
+            let secs = crate::paths::now() - start;
+            info.callers_secs = Some(secs);
+            info.files.extend(c.files);
+            if !c.diags.is_empty() && !done() {
+                let text =
+                    format_block(&c.diags, &cwd, secs, " in files using a changed signature");
+                let _ = std::io::stderr().lock().write_all(text.as_bytes());
+                info.shown = true;
             }
+            info.diags.extend(c.diags);
         }
         Some(info)
     }
@@ -1458,6 +1529,28 @@ mod tests {
             vec![PathBuf::from("/w/b/z.rs"), PathBuf::from("/w/a/x.rs")]
         );
         assert_eq!(mentioning(&texts, &names, &[], 1).len(), 1);
+    }
+
+    #[test]
+    fn counts_recent_agent_builds_of_a_workspace() {
+        let d = std::env::temp_dir().join(format!("jr-early-auto-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("ws/src")).unwrap();
+        std::fs::write(d.join("ws/Cargo.toml"), "[workspace]\n").unwrap();
+        let ws = d.join("ws");
+        let line = |t: f64, cwd: &Path, agent: bool| {
+            json!({"start": t, "cwd": cwd, "agent_session": if agent { json!("s") } else { Value::Null }})
+                .to_string()
+        };
+        let index = [
+            line(100.0, &ws, true), // too old
+            line(5000.0, &ws, true),
+            line(5100.0, &d, true), // other dir
+            line(5200.0, &ws.join("src"), true),
+            line(5300.0, &ws, false), // not an agent
+        ]
+        .join("\n");
+        assert_eq!(recent_agent_builds(&index, &ws, 5400.0), 2);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

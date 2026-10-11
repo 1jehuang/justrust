@@ -528,6 +528,11 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     ) {
         eprintln!("justrust: failed to write run summary: {e:#}");
     }
+    // Early diagnostics, auto mode: warm a daemon for busy workspaces,
+    // in the background, after the build.
+    if opts.agent {
+        crate::early::maybe_autostart(Path::new(&meta.cwd), &meta.subcommand);
+    }
     if let Some(s) = &slot {
         if code != 0 {
             slots::heal_after_failure(&s.info, args, lines.iter().map(|l| l.l.as_str()));
