@@ -16,8 +16,9 @@
 #   local-cold     local build, peer off, local cache empty (baseline here)
 #   local-pull     local build, local cache empty, machine cache warm
 #   remote-pull    remote build, machine cache empty, local cache warm
-#   synced         the background sync after remote-cold: local build with
-#                  only what the daemon pulled in the background
+#   synced         after a remote build: local build with the peer off,
+#                  using only what the daemon's background sync pulled
+# Old target dirs are left in the scratch dir: delete peer-bench/t-* after.
 set -euo pipefail
 snap=${1:?usage: bench/peer-cache.sh <snapshot-dir>}
 scratch=${JCODE_SCRATCH_DIR:-/tmp}/peer-bench
@@ -52,25 +53,28 @@ run() {
     printf '%-12s %6.1fs  %s\n' "$name" "$(echo "$t1 - $t0" | python3 -c 'print(eval(input()))')" "$line" | tee -a "$out"
 }
 
-# 1. remote-cold, then let the background sync pull, then measure synced.
+# Each local case gets a target dir no earlier case used.
+tdir() { echo "$scratch/t-$$-$1"; }
+
+# 1. Baselines, both caches empty.
 fresh_home; wipe_remote
-run remote-cold JUSTRUST_REMOTE=force
-sleep 20
-run synced JUSTRUST_REMOTE=off CARGO_TARGET_DIR="$scratch/t-synced"
-
-# 2. local-cold baseline.
+run remote-cold JUSTRUST_REMOTE=force JUSTRUST_PEER_CACHE=0
 fresh_home
-run local-cold JUSTRUST_REMOTE=off JUSTRUST_PEER_CACHE=0 CARGO_TARGET_DIR="$scratch/t-cold"
+run local-cold JUSTRUST_REMOTE=off JUSTRUST_PEER_CACHE=0 CARGO_TARGET_DIR="$(tdir cold)"
 
-# 3. local-pull: machine warm (from step 1's remote build is gone with the
-#    wipe, so warm it again with the peer off), local empty.
-fresh_home; wipe_remote
-run remote-warm JUSTRUST_REMOTE=force JUSTRUST_PEER_CACHE=0
+# 2. local-pull: machine warm (step 1), local cache empty, fetched on miss.
 fresh_home
-run local-pull JUSTRUST_REMOTE=off CARGO_TARGET_DIR="$scratch/t-pull"
+run local-pull JUSTRUST_REMOTE=off CARGO_TARGET_DIR="$(tdir pull)"
 
-# 4. remote-pull: local warm (from step 3), machine empty.
+# 3. remote-pull: local cache warm (step 2), machine cache empty.
 wipe_remote
 run remote-pull JUSTRUST_REMOTE=force
+
+# 4. synced: after a remote build, no build-time fetch, only what the
+#    daemon's background sync pulled into the (empty) local cache.
+fresh_home; wipe_remote
+run remote-cold2 JUSTRUST_REMOTE=force
+sleep 60
+run synced JUSTRUST_REMOTE=off JUSTRUST_PEER_CACHE=0 CARGO_TARGET_DIR="$(tdir synced)"
 
 echo "results in $out"

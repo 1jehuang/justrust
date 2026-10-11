@@ -177,6 +177,22 @@ const NO_HISTORY: &str = "no history for this command";
 /// Ask the sync daemon to connect to the machine in the background (never
 /// starts a stopped one), so this build's rustc shims can fetch dependency
 /// entries from it. Costs a socket write when the daemon runs.
+/// `warm` for a local-only build: only when a backend is configured and
+/// its machine is known to be up (no network, never starts it), and only
+/// for commands that compile.
+fn warm_if_up(full: &[OsString]) {
+    let compiles = full
+        .first()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| matches!(s, "check" | "clippy" | "test" | "build" | "run"));
+    if compiles
+        && let Some(b) = remote_backend::load()
+        && b.probably_up()
+    {
+        warm();
+    }
+}
+
 fn warm() {
     if !crate::peercache::enabled() {
         return;
@@ -345,12 +361,15 @@ fn say_local(why: &str) {
 /// otherwise runs it remotely and exits with its code.
 pub fn maybe_remote(full: &[OsString]) {
     let m = mode();
-    if m == Mode::Off {
-        return say_local("JUSTRUST_REMOTE=off");
-    }
     // The remote agent runs this same binary: never route from there.
     if std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some() {
         return;
+    }
+    if m == Mode::Off {
+        // Building here was asked for, but this build's dependencies may
+        // still come from the machine's cache.
+        warm_if_up(full);
+        return say_local("JUSTRUST_REMOTE=off");
     }
     let Some(args) = full
         .iter()
@@ -361,6 +380,9 @@ pub fn maybe_remote(full: &[OsString]) {
     };
     let Some(sub) = args.first() else { return };
     if !routable(sub) {
+        // `build` and `run` stay here, but their dependencies may come from
+        // the machine's cache.
+        warm_if_up(full);
         return say_local(&format!("`{sub}` always runs locally"));
     }
     let Some(backend) = remote_backend::load() else {

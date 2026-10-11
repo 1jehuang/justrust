@@ -522,10 +522,13 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                 // the peer cache. Never starts a stopped machine.
                 let d = d.clone();
                 std::thread::spawn(move || {
-                    let Ok(mut st) = d.sync.lock() else { return };
-                    if let Err(e) = ensure_link(&d, &mut st, false) {
+                    peercache::CONNECTING.store(true, Ordering::SeqCst);
+                    if let Ok(mut st) = d.sync.lock()
+                        && let Err(e) = ensure_link(&d, &mut st, false)
+                    {
                         log(&format!("warm: {e:#}"));
                     }
+                    peercache::CONNECTING.store(false, Ordering::SeqCst);
                 });
                 return Ok(());
             }

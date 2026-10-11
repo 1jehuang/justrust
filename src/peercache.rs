@@ -59,6 +59,8 @@ use std::time::{Duration, Instant};
 const CHUNK: usize = 256 << 10;
 /// How long a shim waits for the peer's manifest lines.
 const QUERY_TIMEOUT: Duration = Duration::from_millis(1500);
+/// How long a shim query waits for a link that is not up yet.
+const LINK_WAIT: Duration = Duration::from_millis(3000);
 /// Throughput assumed before any bundle was measured (compressed bytes/s).
 /// Conservative: a slow home uplink.
 const DEFAULT_BW: f64 = 4e6;
@@ -905,6 +907,10 @@ impl Relay {
 /// reconnects, so it asks this on every request.
 pub type Current = Arc<Mutex<Option<Arc<Relay>>>>;
 
+/// Set while the daemon is connecting on a build's behalf (`Warm`): shim
+/// queries then wait briefly for the link instead of missing at once.
+pub static CONNECTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Serve this machine's rustc shims on `sock` (until the process exits),
 /// through whichever relay is current.
 pub fn listen(sock: &Path, current: Current) -> std::io::Result<()> {
@@ -929,7 +935,14 @@ fn serve_shim(current: &Current, s: UnixStream) {
     let mut r = BufReader::new(r);
     let mut w = BufWriter::new(w);
     while let Ok(Some((msg, _))) = read_frame(&mut r) {
-        let relay = current.lock().ok().and_then(|c| c.clone());
+        // The daemon may still be connecting (a build asked it to warm up a
+        // moment ago): give the link a short while rather than missing.
+        let mut relay = current.lock().ok().and_then(|c| c.clone());
+        let t = Instant::now();
+        while relay.is_none() && CONNECTING.load(Ordering::SeqCst) && t.elapsed() < LINK_WAIT {
+            std::thread::sleep(Duration::from_millis(50));
+            relay = current.lock().ok().and_then(|c| c.clone());
+        }
         match msg {
             Msg::CacheQuery { id, base } => {
                 let (lines, outs) = relay.as_ref().map(|r| r.query(&base)).unwrap_or_default();
