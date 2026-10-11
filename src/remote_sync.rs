@@ -232,10 +232,16 @@ pub fn prepare_script(remote: &str) -> String {
 fn prepare_script_with(remote: &str, wrapper: &str) -> String {
     let q = shell_quote(remote);
     let wq = shell_quote(wrapper);
+    // Last resort, also for a root that already exists but is not ours: an
+    // earlier, narrower root created it as root (only its leaf was chowned),
+    // and widening the root to it made every later sync fail. Directories
+    // inside it that root created on the way are taken over too.
     format!(
-        "{{ mkdir -p {q} && test -w {q}; }} 2>/dev/null \
-         || {{ test -x {wq} && sudo -n {wq} {q} && test -w {q}; }} 2>/dev/null \
-         || sudo -n install -d -o \"$(id -un)\" -g \"$(id -gn)\" {q} 2>/dev/null"
+        "{{ mkdir -p {q} && test -w {q} && ! find {q} -maxdepth 4 -type d ! -user \"$(id -un)\" | grep -q .; }} 2>/dev/null \
+         || {{ test -x {wq} && sudo -n {wq} {q} && test -w {q} && ! find {q} -maxdepth 4 -type d ! -user \"$(id -un)\" | grep -q .; }} 2>/dev/null \
+         || {{ sudo -n install -d -o \"$(id -un)\" -g \"$(id -gn)\" {q} \
+               && sudo -n find {q} -maxdepth 4 -type d ! -user \"$(id -un)\" -exec chown \"$(id -un):$(id -gn)\" {{}} + \
+               && test -w {q}; }} 2>/dev/null"
     )
 }
 

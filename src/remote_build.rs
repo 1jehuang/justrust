@@ -70,7 +70,15 @@ pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
             && let Some(manifest) = p["manifest_path"].as_str()
             && let Some(d) = Path::new(manifest).parent()
         {
-            dirs.insert(repo_root(d));
+            let root = repo_root(d);
+            // Outside git (a tarball, a benchmark snapshot) the crate dir
+            // alone misses its workspace's root manifest and lockfile, which
+            // build scripts and cargo read: mirror the whole workspace.
+            dirs.insert(if root.join(".git").exists() {
+                root
+            } else {
+                workspace_dir(d)
+            });
         }
     }
     let roots = outermost(dirs);
@@ -110,6 +118,21 @@ pub fn lockfile(cwd: &Path) -> Option<PathBuf> {
         d = dir.parent();
     }
     lock
+}
+
+/// The nearest ancestor of `d` (itself included) whose Cargo.toml declares
+/// a `[workspace]`: the package's workspace root. `d` when there is none.
+fn workspace_dir(d: &Path) -> PathBuf {
+    let mut cur = Some(d);
+    while let Some(c) = cur {
+        if std::fs::read_to_string(c.join("Cargo.toml"))
+            .is_ok_and(|s| s.lines().any(|l| l.trim() == "[workspace]"))
+        {
+            return c.to_path_buf();
+        }
+        cur = c.parent();
+    }
+    d.to_path_buf()
 }
 
 fn repo_root(d: &Path) -> PathBuf {
@@ -458,6 +481,26 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_dir_finds_the_enclosing_workspace() {
+        let t = std::env::temp_dir().join(format!("jr-wsdir-{}", std::process::id()));
+        let ws = t.join("ws");
+        let c = ws.join("crates/a");
+        std::fs::create_dir_all(&c).unwrap();
+        std::fs::write(
+            ws.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\"]\n",
+        )
+        .unwrap();
+        std::fs::write(c.join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        assert_eq!(workspace_dir(&c), ws);
+        let lone = t.join("lone");
+        std::fs::create_dir_all(&lone).unwrap();
+        std::fs::write(lone.join("Cargo.toml"), "[package]\nname = \"b\"\n").unwrap();
+        assert_eq!(workspace_dir(&lone), lone);
+        let _ = std::fs::remove_dir_all(&t);
+    }
 
     #[test]
     fn outermost_drops_nested() {
