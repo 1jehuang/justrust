@@ -58,15 +58,19 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Bump to invalidate every entry when the key scheme changes.
+/// 3: `--extern` keyed by crate metadata only, `CARGO_HOME` not keyed, and
+/// the C library checked for compatibility at restore instead of keyed.
 /// 2: the cargo home is a placeholder (portable across machines), and
 /// proc macros and bins key the C library they link against.
-const SCHEME: &str = "justrust-depcache-2";
+const SCHEME: &str = "justrust-depcache-3";
 const PROFILE_TOKEN: &str = "@@JUSTRUST_PROFILE_DIR@@";
 const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// The cargo home (registry sources, git checkouts), so keys and manifest
 /// lines are the same on every machine and can be shared remotely.
 const CARGO_HOME_TOKEN: &str = "@@JUSTRUST_CARGO_HOME@@";
 const XATTR: &str = "user.justrust.h";
+/// Memoized `extern_hash` (metadata only), same `<stamp>|<hash>` format.
+const XATTR_META: &str = "user.justrust.m";
 
 pub fn enabled() -> bool {
     !matches!(
@@ -333,9 +337,16 @@ fn is_unit_out_dir(out_dir: &Path) -> bool {
 /// Env vars that are part of the base key. `CARGO_MAKEFLAGS` carries
 /// jobserver fds, which differ every run.
 fn keyed_env(name: &str) -> bool {
+    // CARGO_HOME: its value is always the cargo home placeholder, but cargo
+    // passes it to rustc only when it was set, so keying it would split
+    // machines that set it from machines that do not.
     if matches!(
         name,
-        "CARGO_MAKEFLAGS" | "RUSTC_WRAPPER" | "RUSTC_WORKSPACE_WRAPPER" | "CARGO_TERM_VERBOSE"
+        "CARGO_MAKEFLAGS"
+            | "RUSTC_WRAPPER"
+            | "RUSTC_WORKSPACE_WRAPPER"
+            | "CARGO_TERM_VERBOSE"
+            | "CARGO_HOME"
     ) || name.starts_with("CARGO_TERM_")
     {
         return false;
@@ -348,8 +359,8 @@ fn keyed_env(name: &str) -> bool {
         )
 }
 
-/// The C library version, e.g. `glibc 2.41`, or empty.
-fn libc_version() -> String {
+/// The host's glibc version as (major, minor), `None` on other C libraries.
+fn host_glibc() -> Option<(u32, u32)> {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
         // SAFETY: returns a pointer to a static NUL-terminated string.
@@ -357,10 +368,65 @@ fn libc_version() -> String {
         if !p.is_null() {
             // SAFETY: non-null static C string.
             let v = unsafe { std::ffi::CStr::from_ptr(p) };
-            return format!("glibc {}", v.to_string_lossy());
+            return parse_glibc(&v.to_string_lossy());
         }
     }
-    String::new()
+    None
+}
+
+/// `2.39` (or `2.39.9000`) as (2, 39).
+fn parse_glibc(v: &str) -> Option<(u32, u32)> {
+    let mut it = v.split('.');
+    Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+}
+
+/// C library family the host uses: part of the key for dynamically linked
+/// outputs (a musl host cannot load a glibc proc macro at any version).
+fn libc_family() -> &'static str {
+    if cfg!(target_env = "gnu") {
+        "glibc"
+    } else if cfg!(target_env = "musl") {
+        "musl"
+    } else {
+        "other"
+    }
+}
+
+/// Newest `GLIBC_x.y` symbol version a dynamically linked ELF file
+/// requires. `Some((0, 0))` when it needs none (not ELF, static), `None`
+/// if an ELF file cannot be parsed. Only the dynamic string table is
+/// scanned: version names live there, and only when referenced, while the
+/// same bytes in ordinary data (`.rodata`) mean nothing.
+pub(crate) fn needed_glibc(path: &Path) -> Option<(u32, u32)> {
+    let mut head = [0u8; 4];
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path).ok()?;
+        if f.read_exact(&mut head).is_err() || &head != b"\x7fELF" {
+            return Some((0, 0));
+        }
+    }
+    let Some(b) = elf_section(path, ".dynstr") else {
+        return Some((0, 0));
+    };
+    let mut best = (0, 0);
+    let pat = b"GLIBC_";
+    let mut i = 0;
+    while let Some(off) = b[i..].windows(pat.len()).position(|w| w == pat) {
+        let start = i + off + pat.len();
+        let end = b[start..]
+            .iter()
+            .position(|c| !(c.is_ascii_digit() || *c == b'.'))
+            .map_or(b.len(), |n| start + n);
+        if let Some(v) = std::str::from_utf8(&b[start..end])
+            .ok()
+            .and_then(parse_glibc)
+        {
+            best = best.max(v);
+        }
+        i = end.max(start);
+    }
+    Some(best)
 }
 
 pub(crate) fn rustc_version(real: &Path) -> Option<String> {
@@ -392,12 +458,14 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
     h.field(rustc_version(real)?.as_bytes());
     h.field(norm.norm(cwd.to_str()?).as_bytes());
     key_args(&args, &norm, &cwd, &mut h)?;
-    // Proc macros and bins are dynamically linked: one built against a newer
-    // glibc must not be restored where it cannot load.
+    // Proc macros and bins are dynamically linked against the C library.
+    // Only its family is keyed: the version an output needs is recorded
+    // when it is stored and checked against this host on restore, so a
+    // build machine with an older glibc can still use them when they load.
     if args.iter().any(|a| {
         a == "proc-macro" || a == "bin" || a.ends_with("=proc-macro") || a.ends_with("=bin")
     }) {
-        h.field(libc_version().as_bytes());
+        h.field(libc_family().as_bytes());
     }
     let mut env: Vec<&(String, String)> = env.iter().filter(|(k, _)| keyed_env(k)).collect();
     env.sort();
@@ -463,11 +531,148 @@ fn key_extern(v: &str, cwd: &Path, h: &mut H128) -> Option<()> {
     match v.split_once('=') {
         Some((name, path)) => {
             h.field(name.as_bytes());
-            h.field(file_hash(&cwd.join(path), true)?.as_bytes());
+            h.field(extern_hash(&cwd.join(path))?.as_bytes());
         }
         None => h.field(v.as_bytes()),
     }
     Some(())
+}
+
+/// Key of an `--extern` artifact: its crate metadata, which is all a
+/// dependent reads from it. Object code (debuginfo naming the sysroot) and
+/// linker or C runtime differences (another host's gcc) then stop cascading
+/// through dependents' keys, while any metadata change (SVH, spans) still
+/// changes them, so mismatched artifacts can never meet (E0460).
+/// - `.rmeta`: the whole file;
+/// - `.rlib`: the `lib.rmeta` archive member;
+/// - `.so` (proc macro, dylib): the ELF `.rustc` section.
+///
+/// Anything unparsable falls back to the whole-file content hash. Memoized
+/// in the `user.justrust.m` xattr, validated like `file_hash`.
+pub(crate) fn extern_hash(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let st = stamp(&meta);
+    if let Some(v) = xattr_get(path, XATTR_META)
+        && let Some((s, hash)) = v.rsplit_once('|')
+        && s == st
+    {
+        return Some(hash.to_owned());
+    }
+    let hash = match metadata_bytes(path) {
+        Some(b) => {
+            let mut h = H128::new();
+            h.field(b"meta");
+            h.field(&b);
+            h.hex()
+        }
+        None => format!("f{}", hash_file_content(path)?),
+    };
+    xattr_set(path, XATTR_META, &format!("{st}|{hash}"));
+    Some(hash)
+}
+
+/// The crate metadata embedded in a compiled artifact, or `None` if the
+/// container cannot be parsed.
+fn metadata_bytes(path: &Path) -> Option<Vec<u8>> {
+    let ext = path.extension()?.to_str()?;
+    match ext {
+        "rmeta" => {
+            let b = std::fs::read(path).ok()?;
+            b.starts_with(b"rust").then_some(b)
+        }
+        "rlib" => ar_member(path, "lib.rmeta"),
+        "so" | "dylib" => elf_section(path, ".rustc"),
+        _ => None,
+    }
+}
+
+/// Content of a named member of an `ar` archive (GNU or BSD short names).
+fn ar_member(path: &Path, want: &str) -> Option<Vec<u8>> {
+    use std::os::unix::fs::FileExt;
+    let f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut magic = [0u8; 8];
+    f.read_exact_at(&mut magic, 0).ok()?;
+    if &magic != b"!<arch>\n" {
+        return None;
+    }
+    let mut off = 8u64;
+    while off + 60 <= len {
+        let mut hdr = [0u8; 60];
+        f.read_exact_at(&mut hdr, off).ok()?;
+        if &hdr[58..60] != b"`\n" {
+            return None;
+        }
+        let name = std::str::from_utf8(&hdr[..16]).ok()?.trim_end();
+        let size: u64 = std::str::from_utf8(&hdr[48..58])
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        let data = off + 60;
+        if data + size > len {
+            return None;
+        }
+        if name.trim_end_matches('/') == want {
+            let mut buf = vec![0u8; usize::try_from(size).ok()?];
+            f.read_exact_at(&mut buf, data).ok()?;
+            return Some(buf);
+        }
+        off = data + size + (size & 1);
+    }
+    None
+}
+
+/// Content of a named section of a 64-bit little-endian ELF file.
+fn elf_section(path: &Path, want: &str) -> Option<Vec<u8>> {
+    use std::os::unix::fs::FileExt;
+    let f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut eh = [0u8; 64];
+    f.read_exact_at(&mut eh, 0).ok()?;
+    // ELF magic, ELFCLASS64, little endian.
+    if &eh[..4] != b"\x7fELF" || eh[4] != 2 || eh[5] != 1 {
+        return None;
+    }
+    let u16_at = |b: &[u8], o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
+    let u32_at = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let u64_at = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
+    let shoff = u64_at(&eh, 0x28);
+    let shentsize = u64::from(u16_at(&eh, 0x3a));
+    let shnum = u64::from(u16_at(&eh, 0x3c));
+    let shstrndx = u64::from(u16_at(&eh, 0x3e));
+    if shentsize < 64 || shnum == 0 || shstrndx >= shnum || shoff + shnum * shentsize > len {
+        return None;
+    }
+    let mut shdrs = vec![0u8; usize::try_from(shnum * shentsize).ok()?];
+    f.read_exact_at(&mut shdrs, shoff).ok()?;
+    let sh = |i: u64| {
+        let o = usize::try_from(i * shentsize).unwrap();
+        (
+            u32_at(&shdrs, o),
+            u64_at(&shdrs, o + 0x18),
+            u64_at(&shdrs, o + 0x20),
+        )
+    };
+    let read = |off: u64, size: u64| -> Option<Vec<u8>> {
+        if off.checked_add(size)? > len {
+            return None;
+        }
+        let mut buf = vec![0u8; usize::try_from(size).ok()?];
+        f.read_exact_at(&mut buf, off).ok()?;
+        Some(buf)
+    };
+    let (_, str_off, str_size) = sh(shstrndx);
+    let names = read(str_off, str_size)?;
+    for i in 0..shnum {
+        let (name, off, size) = sh(i);
+        let name = names.get(name as usize..)?;
+        let end = name.iter().position(|&c| c == 0)?;
+        if &name[..end] == want.as_bytes() {
+            return read(off, size);
+        }
+    }
+    None
 }
 
 fn key_codegen(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
@@ -511,9 +716,9 @@ fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
     Some(())
 }
 
-fn xattr_get(path: &Path) -> Option<String> {
+fn xattr_get(path: &Path, attr: &str) -> Option<String> {
     let p = CString::new(path.as_os_str().as_bytes()).ok()?;
-    let name = CString::new(XATTR).ok()?;
+    let name = CString::new(attr).ok()?;
     let mut buf = [0u8; 128];
     // SAFETY: valid NUL-terminated strings and a buffer of the stated length.
     let n = unsafe {
@@ -527,10 +732,10 @@ fn xattr_get(path: &Path) -> Option<String> {
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
 }
 
-fn xattr_set(path: &Path, value: &str) {
+fn xattr_set(path: &Path, attr: &str, value: &str) {
     let (Ok(p), Ok(name)) = (
         CString::new(path.as_os_str().as_bytes()),
-        CString::new(XATTR),
+        CString::new(attr),
     ) else {
         return;
     };
@@ -556,7 +761,7 @@ pub fn file_hash(path: &Path, memo: bool) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     let st = stamp(&meta);
     if memo
-        && let Some(v) = xattr_get(path)
+        && let Some(v) = xattr_get(path, XATTR)
         && let Some((s, hash)) = v.rsplit_once('|')
         && s == st
     {
@@ -564,7 +769,7 @@ pub fn file_hash(path: &Path, memo: bool) -> Option<String> {
     }
     let hash = hash_file_content(path)?;
     if memo {
-        xattr_set(path, &format!("{st}|{hash}"));
+        xattr_set(path, XATTR, &format!("{st}|{hash}"));
     }
     Some(hash)
 }
@@ -612,11 +817,16 @@ pub(crate) struct Outputs {
     stderr: Vec<String>,
     /// Wall seconds the original compile took.
     wall: f64,
+    /// Newest glibc any output needs (dynamically linked proc macros and
+    /// bins), e.g. `[2, 39]`. Restored only where the host has at least it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    glibc: Option<(u32, u32)>,
 }
 
 pub struct Hit {
     pub saved_secs: f64,
     /// Result key (`o/<out>`) of the restored entry.
+    #[allow(dead_code)] // read by tests; the line carries it too
     pub out: String,
     /// The matched manifest line, exactly as stored.
     pub line: String,
@@ -664,6 +874,12 @@ impl Plan {
         touch(&dir.join("meta.json"));
         let outs: Outputs =
             serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
+        // Built against a newer glibc than this host has: it would not load.
+        if let Some(need) = outs.glibc
+            && host_glibc().is_some_and(|have| have < need)
+        {
+            return None;
+        }
         // Check every file first, so a broken entry leaves the out dir alone.
         if outs.files.iter().any(|f| {
             f.name.contains('/') || f.name.starts_with('.') || !dir.join(&f.name).is_file()
@@ -693,7 +909,7 @@ impl Plan {
             if !f.text
                 && let Ok(m) = std::fs::metadata(&dst)
             {
-                xattr_set(&dst, &format!("{}|{}", stamp(&m), f.hash));
+                xattr_set(&dst, XATTR, &format!("{}|{}", stamp(&m), f.hash));
             }
         }
         for l in &outs.stderr {
@@ -839,6 +1055,7 @@ impl Plan {
             files: Vec::new(),
             stderr,
             wall,
+            glibc: None,
         };
         for name in files {
             let src = self.out_dir.join(name);
@@ -850,6 +1067,12 @@ impl Plan {
                 return None;
             }
             let hash = file_hash(&src, !text)?;
+            if !text && !name.ends_with(".rlib") && !name.ends_with(".rmeta") {
+                let need = needed_glibc(&src)?;
+                if need > (0, 0) {
+                    out.glibc = Some(out.glibc.map_or(need, |g| g.max(need)));
+                }
+            }
             out.files.push(OutFile {
                 name: name.clone(),
                 hash,
@@ -981,6 +1204,82 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glibc_needs_are_read_from_the_dynamic_string_table() {
+        let d = std::env::temp_dir().join(format!("jr-glibc-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("x.so");
+        // Not ELF: needs nothing, even if the bytes look like a version.
+        std::fs::write(&f, b"not elf GLIBC_9.99").unwrap();
+        assert_eq!(needed_glibc(&f), Some((0, 0)));
+        assert_eq!(parse_glibc("2.39.9000"), Some((2, 39)));
+        assert!(parse_glibc("x").is_none());
+        // The test binary has "GLIBC_9.99" in its data (above) but needs at
+        // most the host's glibc, and at least 2.2.5 on x86_64.
+        if let (Some(have), Ok(me)) = (host_glibc(), std::env::current_exe()) {
+            let need = needed_glibc(&me).unwrap();
+            assert!(need >= (2, 2) && need <= have, "{need:?} vs {have:?}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn extern_keys_use_only_the_crate_metadata() {
+        let d = std::env::temp_dir().join(format!("jr-extern-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // An ar archive with a lib.rmeta member and an object file.
+        let ar = |obj: &[u8], meta: &[u8]| {
+            let mut v = b"!<arch>\n".to_vec();
+            for (name, data) in [("x.o/", obj), ("lib.rmeta/", meta)] {
+                v.extend(
+                    format!(
+                        "{name:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
+                        0,
+                        0,
+                        0,
+                        644,
+                        data.len()
+                    )
+                    .as_bytes(),
+                );
+                v.extend_from_slice(data);
+                if data.len() % 2 == 1 {
+                    v.push(b'\n');
+                }
+            }
+            v
+        };
+        let a = d.join("liba.rlib");
+        let b = d.join("libb.rlib");
+        std::fs::write(&a, ar(b"object code /home/alice/sysroot", b"rust-meta-1")).unwrap();
+        std::fs::write(&b, ar(b"other object code, other paths!", b"rust-meta-1")).unwrap();
+        assert_eq!(ar_member(&a, "lib.rmeta").unwrap(), b"rust-meta-1");
+        // Same metadata, different object code: same key.
+        assert_eq!(extern_hash(&a), extern_hash(&b));
+        // Different metadata: different key (and the memo follows the file).
+        std::fs::write(&b, ar(b"other object code, other paths!", b"rust-meta-2")).unwrap();
+        assert_ne!(extern_hash(&a), extern_hash(&b));
+        // Unparsable: whole-content fallback, still distinct.
+        let c = d.join("libc.rlib");
+        std::fs::write(&c, b"garbage").unwrap();
+        assert!(extern_hash(&c).unwrap().starts_with('f'));
+        // A real ELF with a .rustc section: this test binary has none, the
+        // parser must say so rather than misread.
+        if let Ok(me) = std::env::current_exe() {
+            assert!(elf_section(&me, ".text").is_some());
+            assert!(elf_section(&me, ".rustc").is_none());
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cargo_home_is_not_keyed() {
+        assert!(!keyed_env("CARGO_HOME"));
+        assert!(keyed_env("CARGO_PKG_NAME"));
+        assert!(keyed_env("CARGO_ENCODED_RUSTFLAGS"));
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
@@ -1239,6 +1538,20 @@ mod tests {
         assert!(d2.starts_with(&format!("{}/x-abc.d", deps2.display())));
         let err = String::from_utf8(err).unwrap();
         assert!(err.contains(&format!("{}/libx-abc.rmeta", deps2.display())));
+
+        // An entry needing a newer glibc than this host has is skipped.
+        if host_glibc().is_some() {
+            let mp = p2.root.join("o").join(&hit.out).join("meta.json");
+            let orig = std::fs::read(&mp).unwrap();
+            let mut v: serde_json::Value = serde_json::from_slice(&orig).unwrap();
+            v["glibc"] = serde_json::json!([99, 0]);
+            std::fs::write(&mp, v.to_string()).unwrap();
+            assert!(p2.restore(&mut Vec::new()).is_none());
+            v["glibc"] = serde_json::json!([2, 2]);
+            std::fs::write(&mp, v.to_string()).unwrap();
+            assert!(p2.restore(&mut Vec::new()).is_some());
+            std::fs::write(&mp, orig).unwrap();
+        }
 
         // Changed source: miss.
         std::fs::write(&src, "pub fn g() {}").unwrap();

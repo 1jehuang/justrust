@@ -140,6 +140,14 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
                 crate::peercache::fetch(plan, &mut err)
             });
         if let Some(hit) = found {
+            // Downloaded from the account or shared cache: the peer
+            // machine likely lacks it too, so offer it on the next sync.
+            if tier == "remote"
+                && let Some(vv) = crate::depcache::rustc_version(real)
+            {
+                let tc = crate::peercache::toolchain_tag(&vv);
+                crate::peercache::record_store(plan, &hit.line, hit.saved_secs, &tc);
+            }
             let end = paths::now();
             let mut unit = described;
             unit.start = start;
