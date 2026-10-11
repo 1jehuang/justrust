@@ -257,8 +257,11 @@ pub fn known_toolchains(root: &Path) -> HashSet<String> {
 }
 
 /// After a successful store by the shim: remember it for push and pull.
+/// Runs even when this build opted out of the peer cache
+/// (`JUSTRUST_PEER_CACHE=0` only stops it fetching): the journal is how the
+/// other machine gets the entry later, and appending a line is cheap.
 pub fn record_store(plan: &Plan, line: &str, wall: f64, tc: &str) {
-    if !enabled() {
+    if !depcache::enabled() {
         return;
     }
     let root = &plan.root;

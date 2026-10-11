@@ -201,7 +201,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             let lines = std::mem::take(&mut *captured.lock().unwrap());
             if let Some(line) = plan.store(start, end - start, &lines) {
                 crate::depcache_remote::enqueue(plan, &line);
-                if crate::peercache::enabled()
+                if crate::depcache::enabled()
                     && let Some(vv) = crate::depcache::rustc_version(real)
                 {
                     let tc = crate::peercache::toolchain_tag(&vv);
