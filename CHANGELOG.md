@@ -3,6 +3,15 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.5
+
+- **Prebuilt store hits from release binaries.** The static musl release
+  keyed proc macros (and every crate depending on one) by its own C
+  library, musl, instead of the host's, so on glibc hosts those units
+  never matched the store. The host's C library and glibc version are now
+  detected at runtime. Cache keys of proc macros change once for release
+  users.
+
 ## 0.1.0-alpha.4
 
 - **Public prebuilt dependency store, on by default.** After a local miss,
