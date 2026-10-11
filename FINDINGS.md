@@ -2703,3 +2703,47 @@ same as the floor.
 
 Remaining: a real network store (S3 deploy pending the user), the two
 ratex keys, and other projects' seed sets.
+
+## 38. Where a no-op cargo run goes, and jr-cargo with mimalloc (2026-10-11)
+
+Workload: `desktop-noop-test` (Desktop pinned snapshot, warm, 0 units
+rebuilt), jr-cargo at c400320c3 (resolve stamp). `CARGO_LOG_PROFILE`
+traces of 4 runs through justrust, plus samply at 8 kHz on cargo.
+
+| phase (cargo tracing span) | ms | notes |
+|---|---:|---|
+| total cargo `main` | 660-790 | busy machine; ~0.3-0.5 s when quiet |
+| `resolve_with_previous` (targeted resolve) | 250-300 | ~half is registry index summaries: read `.cache` files (~7% of samples) and parse them |
+| `download_accessible` | 180-290 | not downloads: `read_manifest` of 721 unpacked registry crates, one thread (TOML parse 45, deserialize 50, normalize 90, to_real_manifest 55) |
+| `compile` (fingerprints, job queue, output replay) | 110-150 | `fingerprint::calculate` ~120 ms incl. mtime stat of dep-info files |
+| `load_pkg_lockfile`, workspace, init | ~40 | |
+| rustc -vV probes | ~0 | already cached by cargo (`.rustc_info.json`) |
+
+Samples by library: **48% of cargo's samples were in libc**, mostly
+glibc malloc/free (manifest, summary and unit-graph allocations) plus
+`read`/`statx`. The in-process upper bound for a resident cargo was also
+checked: running `cli::main` 8 times in one process (`JR_REPEAT`
+experiment, no caches kept between iterations) took the same 0.15-0.55 s
+per iteration as a fresh process, so process startup itself is negligible
+(`cargo -V` 15 ms). A daemon only wins if it keeps parsed manifests,
+index summaries and fingerprints across runs; the state that costs time is
+the parsing, not the exec.
+
+Change 1 (jr-cargo 7ad6b3cf8): mimalloc as cargo's global allocator.
+Raw cargo `test -p jcode-desktop-ui --lib --no-run`, 10 alternating runs
+each under the bench lock (`jr/noop-bench.sh` in jr-cargo):
+
+| binary | median | min-max |
+|---|---:|---:|
+| stock cargo (nightly-2026-10-08) | 0.366 s | 0.261-0.430 |
+| jr-cargo c400320c3 (resolve stamp) | 0.298 s | 0.234-0.591 |
+| jr-cargo + mimalloc | **0.257 s** | 0.179-0.343 |
+
+-14% vs the previous fork, -30% vs stock, 0 units rebuilt in any run,
+identical output (Fresh lines sorted). Installed as the pinned
+toolchain's `jr-cargo`; submodule `toolchain/cargo` bumped to 6f30c42ee.
+
+Next (in progress): parse the 721 registry manifests in parallel while
+`Downloads` holds the package cache lock (`download_accessible` 250 ms ->
+~70 ms in traces), then cache index summaries / parsed manifests across
+runs.
