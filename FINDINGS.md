@@ -1697,3 +1697,55 @@ needs: one exact nightly on every machine, unstable flags without
 `RUSTC_BOOTSTRAP` (the shim now gets per-pass timings for every local crate
 on a pinned nightly), Cranelift, and rustc-dev. The wins come from the
 phase 2 flag experiments on this toolchain.
+
+## 21. Two benchmark systems: rolling agent log and one-factor-at-a-time (2026-10-10)
+
+**System 1, `bench/trend.py`** (committed log in `bench/trend/`): every
+foreground check/test/build an agent ran in Jcode, Desktop, and justrust,
+from Jcode session history (September onward, so it includes the time
+before justrust) plus justrust run records. `justrust history` had two
+bugs that made early weeks look like 0.1s medians: queued self-dev builds
+and reload acknowledgements counted as blocking calls, and `justrust ...`
+commands were dropped (fixed 6987dbd, with a test). Median blocked wall,
+baseline (before 2026-10-07) vs 2026-10-04..10: Desktop 26.6s -> 21.8s
+(-18%), Jcode 35.3s -> 25.5s (-28%), justrust 8.5s -> 6.3s (-26%); `check`
+-47 to -54% in all three. Not uniformly better: same-command
+`test -p jcode-desktop-ui --lib` 24.2s -> 31.6s (653 vs 54 calls, not
+controlled). Reuse ledger for W41: 86% (Desktop) to 95% (Jcode, justrust)
+of units were not recompiled; Desktop depcache hits replaced about 727 min
+of rustc. Raw agent data: the work mix changes, so it shows the trend,
+not causes.
+
+**System 2, `bench/factors.py`**: each factor switched off alone on the
+pinned suite snapshots, on/off interleaved ABBA, private target dirs and
+caches, reuse ledger per sample. First run
+`bench/results/factors-20261010-194503-f7c1b3e840c7-dirty.json` (the
+"dirty" is another agent's uncommitted depcache work in the tree, not the
+bench). Machine busy with other agents, so the cold rows are flagged noisy.
+
+| factor | workload | on | off | saved |
+|---|---|---:|---:|---:|
+| depcache (+script cache) | fresh target dir, `check -p jcode-desktop-ui` | 20.1, 27.0s | 85.5-110.8s | ~70s, 833 units restored (1302s of original rustc) |
+| build-script cache | same, depcache warm in both | 19.6s | 27.7s | 8.1s (-29%), 45 scripts replayed |
+| feature unification | fresh dir, `check -p` model, harness, ui | 97.9s, 887 units | 122.8s, 1151 units | 24.9s (-20%), 264 fewer units |
+| slots | agent B's reference loop while agent A builds | 10.6s | 13.8s | 3.3s (-24%): 4.2-4.8s lock wait gone |
+| parallel front-end | reference loop | 8.67s | 8.71s | none |
+| parallel front-end | jcode-core body edit, 16 crates | 16.3s | 16.5s | none |
+| mold vs lld | reference loop | 9.26s | 9.37s | none (link pass 0.8 vs 1.4s) |
+
+Notes:
+- The depcache `on` row lost one sample: justrust was reinstalled mid-run
+  with a new depcache key scheme (ab89431/0ab7874), so sample 3 was 833
+  misses (103.7s). The median of the two valid samples is about 23.5s.
+  `factors.py` now aborts a factor when the justrust binary changes; the
+  depcache factor is being rerun.
+- Parallel front-end: switch verified (frontend_threads 8 vs none), and
+  it does not help the warm incremental loop: the edited crate's frontend
+  is mostly incremental query reuse. Its measured win is on full
+  re-checks (FINDINGS 14: 44s -> 24s). So it matters for cold or
+  upstream-cascade builds, not the reference loop.
+- mold: switch verified (ld.mold vs collect2+ld.lld). The link pass is
+  0.65s shorter but within the loop's noise. The system default here is
+  already lld, not GNU ld.
+- incremental, pinned nightly, cranelift: run interrupted by a server
+  reload; rerunning detached.
