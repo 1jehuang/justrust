@@ -4,3 +4,9 @@
 	branch = justrust
 	update = none
 	shallow = true
+[submodule "jr-cargo"]
+	path = toolchain/cargo
+	url = https://github.com/1jehuang/jr-cargo.git
+	branch = justrust
+	update = none
+	shallow = true

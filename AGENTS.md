@@ -42,7 +42,7 @@ component) would be measurably faster.
 | Self-hostable single-tenant server (FSL) | `server/` here |
 | **Multitenant cloud**: hosted build hosts, global shared dependency cache (R2), prebuild publish, tenant isolation, poisoning defenses | `~/justrust-cloud` (private, github.com/1jehuang/justrust-cloud, `build.jcode.sh`) |
 | Accounts, billing, API keys, `/internal/builds/*` | `~/solosystems-backend` (`api.jcode.sh`) |
-| cargo fork (`jr-cargo`): build, install, rebase steps in its `JUSTRUST.md` | `~/jr-cargo` (private, github.com/1jehuang/jr-cargo, branch `justrust`) |
+| cargo fork (`jr-cargo`): build, install, rebase steps in its `JUSTRUST.md`. Submodule pointer `toolchain/cargo` here pins the commit justrust expects | `~/jr-cargo` (private, github.com/1jehuang/jr-cargo, branch `justrust`) |
 | rustc fork (`jr-rustc`): `./build-jr.sh`, rebase steps in its `JUSTRUST.md`. Submodule pointer `toolchain/rustc` here pins the commit justrust expects | `~/jr-rustc` (private, github.com/1jehuang/jr-rustc, branch `justrust`) |
 
 Anything multitenant goes in `~/justrust-cloud`, never here (see

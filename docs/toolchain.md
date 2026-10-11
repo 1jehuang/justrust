@@ -36,7 +36,7 @@ from a cache.
 | rustc | forked: `jr-rustc` (github.com/1jehuang/jr-rustc, branch `justrust`, based on the pinned nightly's commit), submodule pointer at `toolchain/rustc` (opt-in checkout: `git submodule update --init --checkout toolchain/rustc`), built with `./build-jr.sh` (stage 1, CI LLVM, ~9.5 min cold) | unstable flags, resident compiler, body-only invalidation (`docs/integrations.md`) |
 | LLVM | prebuilt from rust CI first, built ourselves with PGO+BOLT later | faster codegen of dependencies |
 | std / sysroot | rebuilt with `-Zbuild-std` flags we choose (share-generics, dylib) | dylib test binaries, fewer monomorphizations |
-| cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp (shipped), next: in-process fingerprints, no rescan, daemon mode |
+| cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), pinned as submodule `toolchain/cargo` (opt-in checkout: `git submodule update --init --checkout toolchain/cargo`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp (shipped), next: in-process fingerprints, no rescan, daemon mode |
 | codegen backends | cranelift for local opt-level 0 crates | faster full-crate regeneration (-25%) |
 | linker | wild (incremental linking), mold as fallback | relinking a 670 MB binary on every edit |
 | C toolchain | clang, lld, ar, a sysroot of pinned libs/headers | build scripts become hermetic, so their cache keys need no system stamp |
