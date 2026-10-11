@@ -564,10 +564,25 @@ fn input_sig(path: &Path, cargo_home: &Path) -> Option<String> {
         }
         return Some(h.hex());
     }
-    if path.starts_with(cargo_home) && !std::fs::symlink_metadata(path).ok()?.is_symlink() {
+    if in_cargo_home(path, cargo_home) && !std::fs::symlink_metadata(path).ok()?.is_symlink() {
         return Some(format!("m:{}:{}.{}", m.len(), m.mtime(), m.mtime_nsec()));
     }
     depcache::file_hash(path, false)
+}
+
+/// Inside the cargo home, including its `registry`/`git` dirs by their
+/// resolved path: build scripts run in the resolved package dir, so with
+/// a symlinked registry the same file was signed by content on one machine
+/// and by size+mtime on another, and no entry ever matched across them
+/// (FINDINGS 30: ring, aws-lc-sys, libsqlite3-sys missed the store).
+fn in_cargo_home(path: &Path, cargo_home: &Path) -> bool {
+    path.starts_with(cargo_home)
+        || ["registry", "git"].iter().any(|sub| {
+            cargo_home
+                .join(sub)
+                .canonicalize()
+                .is_ok_and(|real| path.starts_with(real))
+        })
 }
 
 impl Plan {
