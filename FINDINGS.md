@@ -1804,3 +1804,71 @@ Remaining, measured alone after the fixes (load 16): pending_editor 2.6s
 remove it and the other 2x-duration sleeps in workspace.rs), tail_glide
 tests 1.9-2.7s (rendering plus ~1s of 8ms frame sleeps the glide relies
 on), everything else under 1.7s. tall_preview went 1.16s -> 0.07s.
+
+## 23. Local and remote dependency caches combined (peer cache, 2026-10-10)
+
+Code: `src/peercache.rs` (dfae1ad and follow-ups), depcache schemes 3 to
+5, `docs/remote.md` "Peer dependency cache". Bench: `bench/peer-cache.sh`
+on a pinned Jcode snapshot (abff94eeb, `check -p jcode-base`, 376
+dependency units, nightly-2026-10-08), laptop (16 threads, load 5 to 15
+from other agents) and the AWS c7i.8xlarge in us-west-2 (29 ms, ssh
+throughput 15 to 20 MB/s down, 6 to 25 MB/s up).
+
+### Why the two caches could not be combined before
+
+Measured by building the same snapshot on both machines with
+`JUSTRUST_DEPCACHE_EXPLAIN` and diffing the key inputs, then fixing each
+cause and measuring again:
+
+| cause | effect | fix |
+|---|---|---|
+| gitignored `Cargo.lock` (Jcode ignores it) was not mirrored | the machine resolved newer versions (itoa 1.0.18 vs 1.0.17): **remote builds compiled different code than local ones** | mirror `Cargo.lock` even when ignored (remote_sync) |
+| system rustc differs (Arch 1.98.1 vs rustup 1.99.0) | no key can match | pinned toolchain (`justrust.toml`) on both sides |
+| `--extern` keyed by whole-file content | rlib object code (sysroot paths in debuginfo) and proc-macro `.so` (gcc 16 vs 13, CRT) differ per host and cascaded up the graph: 24/56 keys equal | key `--extern` by crate metadata only (rmeta, rlib `lib.rmeta` member, `.rustc` section), scheme 3 |
+| exact host glibc in proc-macro/bin keys | 2.44 vs 2.39: no proc macro shared | key the libc family, record the needed `GLIBC_x.y` (from `.dynstr`) and refuse to restore where the host is older |
+| registry source paths in metadata (`/home/ubuntu/.cargo` vs `/home/jeremy/.cargo`) | rmeta differs, SVH differs | agent builds with `CARGO_HOME` at the client's path (registry/git symlinked to its own) |
+| `CARGO_HOME`, `CARGO_TARGET_DIR` keyed | cargo passes them to rustc only when set: one side set them | not keyed (values are placeholders anyway), scheme 4 |
+| generated `OUT_DIR` sources `include!`d (serde, serde_json, toml, ring, aws-lc) | the absolute target dir is in the metadata: 58 of 314 crates differed **even between two local target dirs** | compile dependency units with `--remap-path-prefix=<target>=/justrust-target`, scheme 5: 314/314 equal across target dirs |
+
+After the fixes, keys of independently built caches: two local target
+dirs 314/314 crates equal. Laptop vs machine 288/314: the 26 left are the
+aws-lc/ring/sqlite `-sys` chain. Their build scripts compile C with the
+host gcc, and the static archives are keyed by content.
+
+A test binary for `jcode-protocol` linked from 28 rlibs fetched from the
+machine (other gcc, other glibc) builds and passes 89/89 tests.
+
+### Results (wall as the agent sees it, bench/peer-cache.sh)
+
+| case | wall | dependency units |
+|---|---:|---|
+| remote-cold (both caches empty) | 61.5 to 64.5 s | 0 hit / 376 miss |
+| local-cold (peer off) | 62 to 72 s | 0 / 376 |
+| local-pull (local empty, machine warm, fetch on miss) | 66.3 s | 63 peer / 313 miss |
+| remote-pull (machine empty, laptop warm) | 54.2 to 60.0 s | 88 to 101 peer |
+| synced (after a remote build, background sync only, peer off at build time) | 41.1 to 57.9 s | 349 hit / 27 miss |
+| floor: fresh target dir, local cache fully warm | 14.5 to 18.2 s | 376 / 0 |
+
+Readings:
+
+- **Background sync is what works.** After one remote build, the daemon
+  pulled 376 entries (350 MB) in about 90 s, and the next cold local build
+  hit 349/376 (-30 to -40% wall here). That is about as good as the
+  cross-machine key overlap allows. The 27 misses are the `-sys` chain plus
+  `aws_sdk_bedrock` (15 s alone), which keeps the wall well above the 15 s
+  floor.
+- **Fetch on miss is about break-even on this link** (local-pull 66 s vs
+  62 to 72 s cold). The cost model declined 170 to 296 entries: the median
+  declined unit is 480 KB and compiles in 0.09 s, which loses to a 5.8 MB/s
+  measured single-stream link. The big ones that won were fetched.
+  Fetching into a busy laptop also competes with the rustc processes it
+  replaces for the link and the disk.
+- **remote-pull saves 5 to 10 s** (88 to 101 entries) on a machine with 32
+  cores, where compiling is already cheap.
+- The remaining gap to the floor is the 26 `-sys`-chain crates. Making
+  their C builds hermetic (one vendored C toolchain, toolchain.md step 3)
+  would close it.
+
+Bugs found and fixed on the way: a stale peer key set ruled out every
+entry the machine compiled after the daemon connected (0/376 hits). The
+daemon inherited `JUSTRUST_PEER_CACHE=0` from the build that started it.
