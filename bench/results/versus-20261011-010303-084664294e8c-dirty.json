@@ -1,0 +1,1704 @@
+{
+ "started": "2026-10-11T00:16:49-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.2",
+  "justrust_rev": "084664294e8c",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 5,
+ "warmup": 1,
+ "stacks": [
+  "stock",
+  "jr-nocache",
+  "justrust"
+ ],
+ "stack_defs": [
+  {
+   "name": "stock",
+   "what": "plain cargo + system rustc, no justrust",
+   "env": {},
+   "justrust": false
+  },
+  {
+   "name": "jr-nocache",
+   "what": "justrust, every cache off: toolchain, forks, integration only",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0"
+   },
+   "justrust": true
+  },
+  {
+   "name": "justrust",
+   "what": "justrust defaults, private depcache warmed by the warmup round",
+   "env": {},
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "reference-loop": {
+   "what": "edit a #[test] fn in the 118k-line UI crate, run its tests",
+   "scenario": "desktop-test-edit",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 10.279,
+      "exit": 0,
+      "cpu": 10.78,
+      "max_rss_mb": 2064.7,
+      "instructions": 49037719545,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 19.43,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 14.697,
+      "exit": 0,
+      "cpu": 13.69,
+      "max_rss_mb": 2029.8,
+      "instructions": 48989703292,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 19.42,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 9.918,
+      "exit": 0,
+      "cpu": 10.68,
+      "max_rss_mb": 1994.8,
+      "instructions": 48945824957,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 18.79,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 10.478,
+      "exit": 0,
+      "cpu": 10.98,
+      "max_rss_mb": 2011.4,
+      "instructions": 49038261460,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.26,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 9.655,
+      "exit": 0,
+      "cpu": 10.47,
+      "max_rss_mb": 2034.1,
+      "instructions": 49046414061,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.11,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 10.236,
+      "exit": 0,
+      "cpu": 11.86,
+      "max_rss_mb": 2088.3,
+      "instructions": 50467723107,
+      "id": "20261011-002927981-3971125497",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 22.4,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 11.896,
+      "exit": 0,
+      "cpu": 13.08,
+      "max_rss_mb": 2070.0,
+      "instructions": 50536293760,
+      "id": "20261011-003027687-3971125120",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.3,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 10.402,
+      "exit": 0,
+      "cpu": 11.88,
+      "max_rss_mb": 2085.4,
+      "instructions": 50486679713,
+      "id": "20261011-003049623-3971125110",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 17.84,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 13.354,
+      "exit": 0,
+      "cpu": 15.07,
+      "max_rss_mb": 2030.1,
+      "instructions": 50721810752,
+      "id": "20261011-003112521-3971125922",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.95,
+      "foreign_rustc_before": 16
+     },
+     {
+      "wall": 10.308,
+      "exit": 0,
+      "cpu": 12.05,
+      "max_rss_mb": 2056.6,
+      "instructions": 50425400607,
+      "id": "20261011-003208655-3971125843",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 14.63,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 10.142,
+      "exit": 0,
+      "cpu": 11.84,
+      "max_rss_mb": 2059.3,
+      "instructions": 50386139279,
+      "id": "20261011-002938280-3971125422",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 21.78,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 14.073,
+      "exit": 0,
+      "cpu": 14.92,
+      "max_rss_mb": 2062.3,
+      "instructions": 50893323658,
+      "id": "20261011-002958810-3971125557",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 17.68,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 12.385,
+      "exit": 0,
+      "cpu": 13.07,
+      "max_rss_mb": 2051.1,
+      "instructions": 50551157727,
+      "id": "20261011-003100079-3971125290",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.19,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 11.557,
+      "exit": 0,
+      "cpu": 13.01,
+      "max_rss_mb": 2047.4,
+      "instructions": 50683251935,
+      "id": "20261011-003125969-3971125905",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 17.66,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 10.762,
+      "exit": 0,
+      "cpu": 12.65,
+      "max_rss_mb": 2078.2,
+      "instructions": 50504471184,
+      "id": "20261011-003148119-3971125170",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 17.24,
+      "foreign_rustc_before": 2
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 5,
+     "median": 10.279,
+     "min": 9.655,
+     "max": 14.697,
+     "quiet_median": 0,
+     "cpu": 10.78,
+     "max_rss_mb": 2029.8,
+     "instructions": 49037719545,
+     "instructions_spread": 0.0021
+    },
+    "jr-nocache": {
+     "n": 5,
+     "median": 10.402,
+     "min": 10.236,
+     "max": 13.354,
+     "quiet_median": 0,
+     "cpu": 12.05,
+     "max_rss_mb": 2070.0,
+     "instructions": 50486679713,
+     "instructions_spread": 0.0059
+    },
+    "justrust": {
+     "n": 5,
+     "median": 11.557,
+     "min": 10.142,
+     "max": 14.073,
+     "quiet_median": 0,
+     "cpu": 13.01,
+     "max_rss_mb": 2059.3,
+     "instructions": 50551157727,
+     "instructions_spread": 0.01
+    }
+   }
+  },
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 2.853,
+      "exit": 0,
+      "cpu": 3.01,
+      "max_rss_mb": 748.1,
+      "instructions": 10129799938,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 20.18,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.759,
+      "exit": 0,
+      "cpu": 2.95,
+      "max_rss_mb": 748.0,
+      "instructions": 10131017485,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.04,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.568,
+      "exit": 0,
+      "cpu": 2.74,
+      "max_rss_mb": 748.1,
+      "instructions": 10129885237,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.0,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.444,
+      "exit": 0,
+      "cpu": 2.62,
+      "max_rss_mb": 747.3,
+      "instructions": 10129525473,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.58,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.608,
+      "exit": 0,
+      "cpu": 2.79,
+      "max_rss_mb": 747.9,
+      "instructions": 10130911081,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.89,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 2.977,
+      "exit": 0,
+      "cpu": 3.45,
+      "max_rss_mb": 752.4,
+      "instructions": 10683747529,
+      "id": "20261011-003551916-3971125993",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 22.48,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.096,
+      "exit": 0,
+      "cpu": 3.66,
+      "max_rss_mb": 752.0,
+      "instructions": 10699567029,
+      "id": "20261011-003606632-3971125345",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.04,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.92,
+      "exit": 0,
+      "cpu": 3.47,
+      "max_rss_mb": 752.1,
+      "instructions": 10678538664,
+      "id": "20261011-003612397-3971125438",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.0,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.022,
+      "exit": 0,
+      "cpu": 3.53,
+      "max_rss_mb": 751.3,
+      "instructions": 10681176796,
+      "id": "20261011-003618505-3971125207",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.24,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.089,
+      "exit": 0,
+      "cpu": 3.62,
+      "max_rss_mb": 751.4,
+      "instructions": 10700893650,
+      "id": "20261011-003633125-3971125755",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.1,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 2.955,
+      "exit": 0,
+      "cpu": 3.44,
+      "max_rss_mb": 760.0,
+      "instructions": 10680502237,
+      "id": "20261011-003554942-3971125893",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 21.24,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.93,
+      "exit": 0,
+      "cpu": 3.44,
+      "max_rss_mb": 759.4,
+      "instructions": 10679437269,
+      "id": "20261011-003600845-3971125992",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 20.18,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.091,
+      "exit": 0,
+      "cpu": 3.59,
+      "max_rss_mb": 760.3,
+      "instructions": 10699486315,
+      "id": "20261011-003615363-3971125383",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.96,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.048,
+      "exit": 0,
+      "cpu": 3.59,
+      "max_rss_mb": 760.4,
+      "instructions": 10700888729,
+      "id": "20261011-003621575-3971125460",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.24,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.253,
+      "exit": 0,
+      "cpu": 3.86,
+      "max_rss_mb": 760.2,
+      "instructions": 10700153083,
+      "id": "20261011-003627166-3971125943",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.58,
+      "foreign_rustc_before": 1
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 5,
+     "median": 2.608,
+     "min": 2.444,
+     "max": 2.853,
+     "quiet_median": 0,
+     "cpu": 2.79,
+     "max_rss_mb": 748.0,
+     "instructions": 10129885237,
+     "instructions_spread": 0.0001
+    },
+    "jr-nocache": {
+     "n": 5,
+     "median": 3.022,
+     "min": 2.92,
+     "max": 3.096,
+     "quiet_median": 0,
+     "cpu": 3.53,
+     "max_rss_mb": 752.0,
+     "instructions": 10683747529,
+     "instructions_spread": 0.0021
+    },
+    "justrust": {
+     "n": 5,
+     "median": 3.048,
+     "min": 2.93,
+     "max": 3.253,
+     "quiet_median": 0,
+     "cpu": 3.59,
+     "max_rss_mb": 760.2,
+     "instructions": 10699486315,
+     "instructions_spread": 0.002
+    }
+   }
+  },
+  "first-error": {
+   "what": "time to the first type error after an edit",
+   "scenario": "desktop-type-error",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 1.949,
+      "exit": 101,
+      "cpu": 2.08,
+      "max_rss_mb": 764.6,
+      "instructions": 8774803655,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.82,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.123,
+      "exit": 101,
+      "cpu": 2.23,
+      "max_rss_mb": 777.7,
+      "instructions": 8775678075,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.82,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 4.946,
+      "exit": 101,
+      "cpu": 3.4,
+      "max_rss_mb": 763.4,
+      "instructions": 8772680776,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.32,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.373,
+      "exit": 101,
+      "cpu": 2.5,
+      "max_rss_mb": 763.5,
+      "instructions": 8774580172,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.73,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.052,
+      "exit": 101,
+      "cpu": 2.18,
+      "max_rss_mb": 763.9,
+      "instructions": 8774838958,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.27,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 2.381,
+      "exit": 101,
+      "cpu": 2.79,
+      "max_rss_mb": 768.7,
+      "instructions": 9263039544,
+      "id": "20261011-003643569-3971125564",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.24,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 4.468,
+      "exit": 101,
+      "cpu": 3.93,
+      "max_rss_mb": 768.6,
+      "instructions": 9431316453,
+      "id": "20261011-003654694-3971125656",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.52,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 3.538,
+      "exit": 101,
+      "cpu": 3.4,
+      "max_rss_mb": 769.0,
+      "instructions": 9357315538,
+      "id": "20261011-003704336-3971125128",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.13,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.397,
+      "exit": 101,
+      "cpu": 2.8,
+      "max_rss_mb": 768.5,
+      "instructions": 9281340738,
+      "id": "20261011-003710362-3971125601",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.4,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.6,
+      "exit": 101,
+      "cpu": 3.07,
+      "max_rss_mb": 768.2,
+      "instructions": 9279382965,
+      "id": "20261011-003722351-3971125175",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.27,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 2.396,
+      "exit": 101,
+      "cpu": 2.84,
+      "max_rss_mb": 776.1,
+      "instructions": 9275769898,
+      "id": "20261011-003645998-3971125161",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.24,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.041,
+      "exit": 101,
+      "cpu": 2.4,
+      "max_rss_mb": 776.9,
+      "instructions": 9238085048,
+      "id": "20261011-003650439-3971125880",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.82,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.37,
+      "exit": 101,
+      "cpu": 2.83,
+      "max_rss_mb": 776.4,
+      "instructions": 9258211480,
+      "id": "20261011-003707944-3971125271",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.4,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.384,
+      "exit": 101,
+      "cpu": 2.8,
+      "max_rss_mb": 775.5,
+      "instructions": 9258322697,
+      "id": "20261011-003712810-3971125324",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.73,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.539,
+      "exit": 101,
+      "cpu": 2.98,
+      "max_rss_mb": 777.2,
+      "instructions": 9282050296,
+      "id": "20261011-003717654-3971125978",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.27,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 5,
+     "median": 2.123,
+     "min": 1.949,
+     "max": 4.946,
+     "quiet_median": 0,
+     "cpu": 2.23,
+     "max_rss_mb": 763.9,
+     "instructions": 8774803655,
+     "instructions_spread": 0.0003
+    },
+    "jr-nocache": {
+     "n": 5,
+     "median": 2.6,
+     "min": 2.381,
+     "max": 4.468,
+     "quiet_median": 0,
+     "cpu": 3.07,
+     "max_rss_mb": 768.6,
+     "instructions": 9281340738,
+     "instructions_spread": 0.0181
+    },
+    "justrust": {
+     "n": 5,
+     "median": 2.384,
+     "min": 2.041,
+     "max": 2.539,
+     "quiet_median": 0,
+     "cpu": 2.83,
+     "max_rss_mb": 776.4,
+     "instructions": 9258322697,
+     "instructions_spread": 0.0047
+    }
+   }
+  },
+  "deep-edit": {
+   "what": "body edit deep in the graph (16 crates rebuild), run tests",
+   "scenario": "desktop-jcode-core-body",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 27.473,
+      "exit": 0,
+      "cpu": 34.18,
+      "max_rss_mb": 2044.1,
+      "instructions": 88097573709,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.77,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 16.329,
+      "exit": 0,
+      "cpu": 23.72,
+      "max_rss_mb": 2029.8,
+      "instructions": 86832762272,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 14.67,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 15.391,
+      "exit": 0,
+      "cpu": 22.37,
+      "max_rss_mb": 1992.7,
+      "instructions": 86939324402,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.54,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 21.61,
+      "exit": 0,
+      "cpu": 28.02,
+      "max_rss_mb": 2027.0,
+      "instructions": 87206351560,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.6,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 16.501,
+      "exit": 0,
+      "cpu": 23.81,
+      "max_rss_mb": 2025.8,
+      "instructions": 87051359477,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 14.13,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 20.188,
+      "exit": 0,
+      "cpu": 29.29,
+      "max_rss_mb": 2062.0,
+      "instructions": 91362777368,
+      "id": "20261011-003835103-3971125803",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.79,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 16.456,
+      "exit": 0,
+      "cpu": 25.51,
+      "max_rss_mb": 2030.3,
+      "instructions": 90262384117,
+      "id": "20261011-004028445-3971125286",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.54,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 17.13,
+      "exit": 0,
+      "cpu": 26.19,
+      "max_rss_mb": 2057.7,
+      "instructions": 90215002868,
+      "id": "20261011-004100389-3971125331",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.95,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 20.653,
+      "exit": 0,
+      "cpu": 30.41,
+      "max_rss_mb": 2053.1,
+      "instructions": 90475179017,
+      "id": "20261011-004145281-3971125603",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.29,
+      "foreign_rustc_before": 3
+     },
+     {
+      "wall": 19.26,
+      "exit": 0,
+      "cpu": 28.76,
+      "max_rss_mb": 2052.8,
+      "instructions": 89991427721,
+      "id": "20261011-004325657-3971125413",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.8,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 26.793,
+      "exit": 0,
+      "cpu": 37.78,
+      "max_rss_mb": 2054.2,
+      "instructions": 91711178725,
+      "id": "20261011-003855345-3971125752",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.67,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 22.255,
+      "exit": 0,
+      "cpu": 31.47,
+      "max_rss_mb": 2038.0,
+      "instructions": 90581545663,
+      "id": "20261011-003949746-3971125668",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 15.98,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 27.663,
+      "exit": 0,
+      "cpu": 33.33,
+      "max_rss_mb": 2035.3,
+      "instructions": 90085357216,
+      "id": "20261011-004117567-3971125666",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.35,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 23.99,
+      "exit": 0,
+      "cpu": 31.96,
+      "max_rss_mb": 2043.8,
+      "instructions": 90470459068,
+      "id": "20261011-004205986-3971125370",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 14.65,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 17.327,
+      "exit": 0,
+      "cpu": 26.95,
+      "max_rss_mb": 2072.6,
+      "instructions": 91407969090,
+      "id": "20261011-004251723-3971125157",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.02,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 5,
+     "median": 16.501,
+     "min": 15.391,
+     "max": 27.473,
+     "quiet_median": 0,
+     "cpu": 23.81,
+     "max_rss_mb": 2027.0,
+     "instructions": 87051359477,
+     "instructions_spread": 0.0145
+    },
+    "jr-nocache": {
+     "n": 5,
+     "median": 19.26,
+     "min": 16.456,
+     "max": 20.653,
+     "quiet_median": 0,
+     "cpu": 28.76,
+     "max_rss_mb": 2053.1,
+     "instructions": 90262384117,
+     "instructions_spread": 0.0152
+    },
+    "justrust": {
+     "n": 5,
+     "median": 23.99,
+     "min": 17.327,
+     "max": 27.663,
+     "quiet_median": 0,
+     "cpu": 31.96,
+     "max_rss_mb": 2043.8,
+     "instructions": 90581545663,
+     "instructions_spread": 0.0179
+    }
+   }
+  },
+  "noop-test": {
+   "what": "no edit: fixed cost of a `test` call",
+   "scenario": "desktop-noop-test",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 0.487,
+      "exit": 0,
+      "cpu": 0.51,
+      "max_rss_mb": 177.1,
+      "instructions": 2229850477,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.522,
+      "exit": 0,
+      "cpu": 0.54,
+      "max_rss_mb": 177.1,
+      "instructions": 2229545887,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.548,
+      "exit": 0,
+      "cpu": 0.57,
+      "max_rss_mb": 177.1,
+      "instructions": 2229472186,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.493,
+      "exit": 0,
+      "cpu": 0.51,
+      "max_rss_mb": 176.9,
+      "instructions": 2229467281,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.65,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.624,
+      "exit": 0,
+      "cpu": 0.64,
+      "max_rss_mb": 176.8,
+      "instructions": 2228959372,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.65,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 0.536,
+      "exit": 0,
+      "cpu": 0.6,
+      "max_rss_mb": 177.7,
+      "instructions": 2355976984,
+      "id": "20261011-004346768-3971125415",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.59,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.547,
+      "exit": 0,
+      "cpu": 0.6,
+      "max_rss_mb": 177.9,
+      "instructions": 2358098743,
+      "id": "20261011-004349609-3971125110",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.587,
+      "exit": 0,
+      "cpu": 0.65,
+      "max_rss_mb": 177.7,
+      "instructions": 2358264370,
+      "id": "20261011-004350794-3971125331",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.547,
+      "exit": 0,
+      "cpu": 0.6,
+      "max_rss_mb": 177.4,
+      "instructions": 2356567737,
+      "id": "20261011-004352038-3971125963",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.644,
+      "exit": 0,
+      "cpu": 0.68,
+      "max_rss_mb": 177.1,
+      "instructions": 2356996882,
+      "id": "20261011-004355116-3971125517",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.65,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 0.537,
+      "exit": 0,
+      "cpu": 0.59,
+      "max_rss_mb": 178.1,
+      "instructions": 2355265498,
+      "id": "20261011-004347350-3971125542",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.59,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.537,
+      "exit": 0,
+      "cpu": 0.6,
+      "max_rss_mb": 177.6,
+      "instructions": 2354908497,
+      "id": "20261011-004348461-3971125579",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.559,
+      "exit": 0,
+      "cpu": 0.61,
+      "max_rss_mb": 177.8,
+      "instructions": 2355497528,
+      "id": "20261011-004351430-3971125208",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.568,
+      "exit": 0,
+      "cpu": 0.62,
+      "max_rss_mb": 177.7,
+      "instructions": 2356674261,
+      "id": "20261011-004352632-3971125930",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.14,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.607,
+      "exit": 0,
+      "cpu": 0.66,
+      "max_rss_mb": 177.8,
+      "instructions": 2355952129,
+      "id": "20261011-004353795-3971125282",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.65,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 5,
+     "median": 0.522,
+     "min": 0.487,
+     "max": 0.624,
+     "quiet_median": 0,
+     "cpu": 0.54,
+     "max_rss_mb": 177.1,
+     "instructions": 2229472186,
+     "instructions_spread": 0.0004
+    },
+    "jr-nocache": {
+     "n": 5,
+     "median": 0.547,
+     "min": 0.536,
+     "max": 0.644,
+     "quiet_median": 0,
+     "cpu": 0.6,
+     "max_rss_mb": 177.7,
+     "instructions": 2356996882,
+     "instructions_spread": 0.001
+    },
+    "justrust": {
+     "n": 5,
+     "median": 0.559,
+     "min": 0.537,
+     "max": 0.607,
+     "quiet_median": 0,
+     "cpu": 0.61,
+     "max_rss_mb": 177.8,
+     "instructions": 2355497528,
+     "instructions_spread": 0.0007
+    }
+   }
+  },
+  "small-crate": {
+   "what": "body edit in a small crate (justrust), `test` (all binaries)",
+   "scenario": "justrust-body-test",
+   "cmd": [
+    "test",
+    "--",
+    "summary::"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 2.105,
+      "exit": 0,
+      "cpu": 4.6,
+      "max_rss_mb": 435.6,
+      "instructions": 15633735427,
+      "id": null,
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 12.11,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.148,
+      "exit": 0,
+      "cpu": 4.88,
+      "max_rss_mb": 433.1,
+      "instructions": 15632485890,
+      "id": null,
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 11.78,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.125,
+      "exit": 0,
+      "cpu": 4.76,
+      "max_rss_mb": 435.9,
+      "instructions": 15632396647,
+      "id": null,
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 11.31,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.24,
+      "exit": 0,
+      "cpu": 4.84,
+      "max_rss_mb": 435.3,
+      "instructions": 15632246782,
+      "id": null,
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 10.87,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.229,
+      "exit": 0,
+      "cpu": 5.1,
+      "max_rss_mb": 435.6,
+      "instructions": 15631664347,
+      "id": null,
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 10.87,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 2.218,
+      "exit": 0,
+      "cpu": 5.07,
+      "max_rss_mb": 435.3,
+      "instructions": 15886709521,
+      "id": "20261011-004402700-3971125345",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 12.11,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.31,
+      "exit": 0,
+      "cpu": 5.05,
+      "max_rss_mb": 434.2,
+      "instructions": 15885683788,
+      "id": "20261011-004413732-3971125523",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 11.31,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.278,
+      "exit": 0,
+      "cpu": 5.29,
+      "max_rss_mb": 432.1,
+      "instructions": 15885435161,
+      "id": "20261011-004418248-3971125141",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 11.29,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.249,
+      "exit": 0,
+      "cpu": 5.0,
+      "max_rss_mb": 433.2,
+      "instructions": 15886249382,
+      "id": "20261011-004423189-3971125228",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 10.95,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.117,
+      "exit": 0,
+      "cpu": 4.84,
+      "max_rss_mb": 433.9,
+      "instructions": 15866562600,
+      "id": "20261011-004434823-3971125826",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 10.4,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 2.275,
+      "exit": 0,
+      "cpu": 4.9,
+      "max_rss_mb": 434.9,
+      "instructions": 15885671291,
+      "id": "20261011-004404970-3971125646",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 12.11,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.054,
+      "exit": 0,
+      "cpu": 4.78,
+      "max_rss_mb": 434.6,
+      "instructions": 15867967069,
+      "id": "20261011-004409443-3971125994",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 11.78,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.569,
+      "exit": 0,
+      "cpu": 5.69,
+      "max_rss_mb": 432.1,
+      "instructions": 15906670819,
+      "id": "20261011-004420571-3971125118",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 11.29,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.233,
+      "exit": 0,
+      "cpu": 5.0,
+      "max_rss_mb": 432.5,
+      "instructions": 15885298801,
+      "id": "20261011-004425485-3971125554",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 10.95,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.429,
+      "exit": 0,
+      "cpu": 5.45,
+      "max_rss_mb": 432.3,
+      "instructions": 15906473863,
+      "id": "20261011-004430061-3971125736",
+      "tests_passed": 4,
+      "noisy": true,
+      "load_before": 10.87,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 5,
+     "median": 2.148,
+     "min": 2.105,
+     "max": 2.24,
+     "quiet_median": 0,
+     "cpu": 4.84,
+     "max_rss_mb": 435.6,
+     "instructions": 15632396647,
+     "instructions_spread": 0.0001
+    },
+    "jr-nocache": {
+     "n": 5,
+     "median": 2.249,
+     "min": 2.117,
+     "max": 2.31,
+     "quiet_median": 0,
+     "cpu": 5.05,
+     "max_rss_mb": 433.9,
+     "instructions": 15885683788,
+     "instructions_spread": 0.0013
+    },
+    "justrust": {
+     "n": 5,
+     "median": 2.275,
+     "min": 2.054,
+     "max": 2.569,
+     "quiet_median": 0,
+     "cpu": 5.0,
+     "max_rss_mb": 432.5,
+     "instructions": 15885671291,
+     "instructions_spread": 0.0024
+    }
+   }
+  },
+  "cold-check": {
+   "what": "fresh target dir (new checkout, worktree): `check`",
+   "scenario": "desktop-cold-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": true,
+   "samples": {
+    "stock": [
+     {
+      "wall": 75.116,
+      "exit": 0,
+      "cpu": 661.45,
+      "max_rss_mb": 1277.7,
+      "instructions": 1625579532800,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.75,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 80.256,
+      "exit": 0,
+      "cpu": 680.01,
+      "max_rss_mb": 1277.8,
+      "instructions": 1625550844347,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.86,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 79.046,
+      "exit": 0,
+      "cpu": 679.12,
+      "max_rss_mb": 1279.3,
+      "instructions": 1625569457745,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.05,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 83.814,
+      "exit": 0,
+      "cpu": 699.46,
+      "max_rss_mb": 1278.5,
+      "instructions": 1625617067850,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 17.18,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 76.918,
+      "exit": 0,
+      "cpu": 678.64,
+      "max_rss_mb": 1277.2,
+      "instructions": 1625619432724,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.27,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 73.984,
+      "exit": 0,
+      "cpu": 668.32,
+      "max_rss_mb": 1275.0,
+      "instructions": 1635085948804,
+      "id": "20261011-004811570-3971125892",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.6,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 82.225,
+      "exit": 0,
+      "cpu": 688.98,
+      "max_rss_mb": 1276.9,
+      "instructions": 1635536079884,
+      "id": "20261011-005238460-3971125575",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.67,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 81.708,
+      "exit": 0,
+      "cpu": 696.96,
+      "max_rss_mb": 1275.6,
+      "instructions": 1635502321445,
+      "id": "20261011-005520505-3971125757",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.61,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 82.882,
+      "exit": 0,
+      "cpu": 696.87,
+      "max_rss_mb": 1276.5,
+      "instructions": 1635651561803,
+      "id": "20261011-005702147-3971125149",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.21,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 75.654,
+      "exit": 0,
+      "cpu": 680.6,
+      "max_rss_mb": 1274.2,
+      "instructions": 1635102425378,
+      "id": "20261011-010147432-3971125611",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.1,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 17.389,
+      "exit": 0,
+      "cpu": 106.59,
+      "max_rss_mb": 1264.3,
+      "instructions": 207916240736,
+      "id": "20261011-004925888-3971125602",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.51,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 18.361,
+      "exit": 0,
+      "cpu": 112.23,
+      "max_rss_mb": 1264.0,
+      "instructions": 208043311049,
+      "id": "20261011-005059081-3971125466",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.06,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 19.169,
+      "exit": 0,
+      "cpu": 116.94,
+      "max_rss_mb": 1266.2,
+      "instructions": 208283076194,
+      "id": "20261011-005642567-3971125623",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 20.12,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 20.245,
+      "exit": 0,
+      "cpu": 119.62,
+      "max_rss_mb": 1266.4,
+      "instructions": 208111137885,
+      "id": "20261011-005825440-3971125235",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 17.98,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 19.489,
+      "exit": 0,
+      "cpu": 117.59,
+      "max_rss_mb": 1264.8,
+      "instructions": 208197982206,
+      "id": "20261011-010010280-3971125802",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.02,
+      "foreign_rustc_before": 1
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 5,
+     "median": 79.046,
+     "min": 75.116,
+     "max": 83.814,
+     "quiet_median": 0,
+     "cpu": 679.12,
+     "max_rss_mb": 1277.8,
+     "instructions": 1625579532800,
+     "instructions_spread": 0.0
+    },
+    "jr-nocache": {
+     "n": 5,
+     "median": 81.708,
+     "min": 73.984,
+     "max": 82.882,
+     "quiet_median": 0,
+     "cpu": 688.98,
+     "max_rss_mb": 1275.6,
+     "instructions": 1635502321445,
+     "instructions_spread": 0.0003
+    },
+    "justrust": {
+     "n": 5,
+     "median": 19.169,
+     "min": 17.389,
+     "max": 20.245,
+     "quiet_median": 0,
+     "cpu": 116.94,
+     "max_rss_mb": 1264.8,
+     "instructions": 208111137885,
+     "instructions_spread": 0.0018
+    }
+   }
+  }
+ },
+ "finished": "2026-10-11T01:03:03-0700"
+}
