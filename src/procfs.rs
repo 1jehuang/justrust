@@ -225,10 +225,17 @@ mod tests {
         leaky.kill().unwrap();
         leaky.wait().unwrap();
         let mut clean = spawn_sleeper(true);
-        assert!(
-            lock(&std::fs::File::open(&p).unwrap()),
-            "lock leaked into the daemon"
-        );
+        // Another test thread that forks shares our descriptor until its
+        // child execs, so the lock can look held for a moment. A leak into
+        // the sleeper holds it for its whole 5 s: poll for up to 1 s.
+        let freed = (0..100).any(|_| {
+            let ok = lock(&std::fs::File::open(&p).unwrap());
+            if !ok {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            ok
+        });
+        assert!(freed, "lock leaked into the daemon");
         clean.kill().unwrap();
         clean.wait().unwrap();
         let _ = std::fs::remove_file(&p);
