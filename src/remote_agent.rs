@@ -293,6 +293,37 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
     res
 }
 
+/// Workspaces cap `build.jobs` for their contributors' laptops (Jcode sets
+/// `jobs = 4` for ~15 GB machines), which left 28 of the build machine's 32
+/// cores idle. This machine runs only justrust builds, so size jobs for it:
+/// every core, bounded by memory at ~2 GiB per job. Job count is not part
+/// of any fingerprint. An explicit `-j`/`--jobs` or a client-sent
+/// `CARGO_BUILD_JOBS` wins.
+fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
+    if env.iter().any(|(k, _)| k == "CARGO_BUILD_JOBS")
+        || args
+            .iter()
+            .take_while(|a| *a != "--")
+            .any(|a| a == "-j" || a == "--jobs" || a.starts_with("--jobs=") || a.starts_with("-j"))
+    {
+        return None;
+    }
+    let cpus = std::thread::available_parallelism().ok()?.get();
+    let mem_gib = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+        })
+        .map(|kb| (kb >> 20) as usize);
+    Some(jobs_for(cpus, mem_gib))
+}
+
+fn jobs_for(cpus: usize, mem_gib: Option<usize>) -> usize {
+    mem_gib.map_or(cpus, |m| cpus.min(m / 2)).max(1)
+}
+
 fn run_dir(run_id: &str) -> Option<PathBuf> {
     if run_id.is_empty() || run_id.contains(['/', '.']) {
         return None;
@@ -396,6 +427,9 @@ fn start_run(
     if !run_id.is_empty() {
         c.env("JUSTRUST_RUN_ID_OVERRIDE", run_id);
     }
+    if let Some(j) = machine_jobs(args, env) {
+        c.env("CARGO_BUILD_JOBS", j.to_string());
+    }
     // cargo and rustup live in ~/.cargo/bin, which a non-login ssh shell
     // may not have on PATH.
     if let Some(home) = dirs::home_dir() {
@@ -447,4 +481,29 @@ fn start_run(
     untrack_pgid(child.id() as i32);
     use std::os::unix::process::ExitStatusExt;
     Ok(st.code().unwrap_or_else(|| 128 + st.signal().unwrap_or(0)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jobs_use_the_whole_machine_within_memory() {
+        assert_eq!(jobs_for(32, Some(61)), 30);
+        assert_eq!(jobs_for(32, Some(124)), 32);
+        assert_eq!(jobs_for(8, None), 8);
+        assert_eq!(jobs_for(4, Some(1)), 1);
+    }
+
+    #[test]
+    fn explicit_jobs_win() {
+        let s = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(machine_jobs(&s(&["test", "-j", "2"]), &[]).is_none());
+        assert!(machine_jobs(&s(&["test", "-j2"]), &[]).is_none());
+        assert!(machine_jobs(&s(&["test", "--jobs=2"]), &[]).is_none());
+        let env = [("CARGO_BUILD_JOBS".to_string(), "3".to_string())];
+        assert!(machine_jobs(&s(&["test"]), &env).is_none());
+        // Test-binary args after `--` are not cargo's.
+        assert!(machine_jobs(&s(&["test", "--", "-j"]), &[]).is_some());
+    }
 }

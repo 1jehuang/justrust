@@ -1957,3 +1957,21 @@ cargo and rustc are both nightly). That changes every unit's fingerprint
 ("the config settings changed"), so switching between stock and fork
 rebuilt all 887 units each time. `build-jr.sh` builds with the stock
 cargo's release and channel; after that, switching rebuilds 0 units.
+
+## 25. Remote builds ran on 4 of 32 cores (2026-10-11)
+
+Of 1225 runs in 24 h, 42 ran remote (952 s of 26,000 s wall), and the
+remote shared dependency cache served 0 hits (it is off by default,
+`JUSTRUST_REMOTE_CACHE`, while the backend moves to AWS; the cloud worker
+has `CACHE_ENABLED=false`). The first routed `test -p jcode-tui --lib` on
+the c7i.8xlarge (run 20261011-003340339-57893, 194 s) never had more than 4
+rustc units at once and averaged 3.0 of 32 cores: Jcode's
+`.cargo/config.toml` sets `build.jobs = 4` for 15 GB laptops, and the remote
+agent inherited it. That run was only observable because remote runs now
+ship their run directory back (protocol v4 `RunFiles`).
+
+The agent now sets `CARGO_BUILD_JOBS` to the machine's cores, capped at
+one job per 2 GiB (30 on the c7i.8xlarge) unless the client passed `-j` or
+`CARGO_BUILD_JOBS`. Cold `check -p jcode-tui` on the machine, fresh target
+dir, all caches off: `-j4` 85.8 s (20261011-074216045-122932), `-j30`
+40.6 s (20261011-074341880-137389), 2.1x.
