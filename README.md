@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/justrust-icon.svg" alt="justrust halftone gear icon" width="160"></p>
+
 # justrust
 
 Fast Rust compile for coding agents.
