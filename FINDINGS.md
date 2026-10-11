@@ -2145,3 +2145,57 @@ Next: pull reverse dependencies of a changed signature (callers), map
 rust-analyzer's syntax errors onto a code, and start the daemon
 automatically for workspaces with recent agent builds. A resident rustc
 (phase 4) would cover borrowck and give rustc's exact diagnostics.
+
+## 29. Early diagnostics: callers, syntax errors, auto-start; recall 13 -> 14 of 19 (2026-10-11)
+
+Follow-ups to finding 28 (`src/early.rs`), measured with
+`bench/early_accuracy.py` on a private copy of the pinned Desktop
+snapshot (`EARLY_ACCURACY_ROOT`, so the shared snapshot lock stays free;
+same commits and fixup as `bench/suite.py`).
+
+- **Callers of a changed signature.** The daemon keeps the text of every
+  source file. On each query it diffs the changed files: a changed line
+  that declares an item (`fn`, `struct`, `enum`, `trait`, `type`,
+  `const`, `static`), or a changed parameter line of a multi-line `fn`
+  signature, marks that item's name. Body edits mark nothing, so they cost
+  no extra pulls. Files that mention a marked name as a whole word are
+  queued, module-qualified mentions first (`effort::label` for a change in
+  `effort.rs`), then by path proximity, 24 at most. If the edited files
+  themselves are clean, the client asks for them in a second `callers`
+  query, 4 files per round, stopping at the first round with errors. The
+  agent sees a second early block (`in files using a changed signature`).
+  - First version: every file mentioning `label` (81 files), nearest first,
+    all at once: 4.3-5.1 s, and the right file was not in the first 24
+    (`early-accuracy-20261011-065632.json`). Module-qualified ranking plus
+    batches: the caller's E0061 at **0.59 s** (`...-070028.json`).
+  - rust-analyzer reports `fn label(&str, u8): FnOnce<(&str,)>` not
+    satisfied (E0277) on the line before rustc's E0593. It was the only
+    false positive this added and is now filtered.
+- **Syntax errors.** rust-analyzer's `syntax-error` diagnostics (no rustc
+  code) are now reported as plain `error:` lines, the first per line only.
+  When a file does not parse, its type errors are dropped (they are
+  artifacts of the parser's recovery).
+- **Auto-start** (`JUSTRUST_EARLY=auto`): after an agent build, start the
+  workspace's daemon in the background when it had 3 or more agent builds
+  in the last hour and at least 8 GB of memory is available. Auto mode only
+  queries running daemons and never starts one on the critical path.
+  Checked end to end on a scratch crate in a scratch `JUSTRUST_HOME`: no
+  daemon after builds 1-2, started after build 3, the next failing build
+  printed `early errors ... after 0.01s`, confirmed by rustc. Still opt-in.
+
+| corpus (19 mutations) | first error found | false positives | clean sweep FP (278 files) | result |
+|---|---:|---:|---:|---|
+| finding 28 (shipped) | 13/19 | 0 | 0 | `early-accuracy-20261011-052951.json` |
+| + callers + syntax errors | **14/19** | **0** | **0** | `early-accuracy-20261011-070028.json` |
+
+The remaining five misses are not reported by rust-analyzer at all
+(checked with `bench/early_probe.py` and `rust-analyzer diagnostics` on a
+3-line crate): use after move (E0382), two `&mut` borrows (E0499),
+assigning an immutable binding (E0384), a `match` on `&str` missing its
+catch-all (E0004; rust-analyzer only checks exhaustiveness for enums and
+bools), and `format!("{}")` with no argument. This rust-analyzer build
+runs no MIR borrow check diagnostics, even with experimental diagnostics
+on. So 17/19 is out of reach with rust-analyzer alone. Borrowck and these
+lints need rustc itself: a resident rustc (phase 4, jr-rustc), or a fast
+`rustc -Zno-codegen` of the one edited crate, which is about 1.3 s on the
+UI crate today (finding 28's `front` column). Auto stays opt-in.
