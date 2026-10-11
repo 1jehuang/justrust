@@ -66,7 +66,7 @@ fn is_executable(p: &Path) -> bool {
 /// Empty (link as configured) when disabled, not installed, the unit does
 /// not link, or the `-B` dir cannot be set up.
 pub fn rustc_args(args: &[OsString], local: bool, nightly: bool) -> Vec<OsString> {
-    if !local || !enabled() || !links(args) || installed().is_none() {
+    if !local || !enabled() || !links(args) || !host_like_target(args) || installed().is_none() {
         return Vec::new();
     }
     let Ok(dir) = ensure_ld_dir() else {
@@ -88,6 +88,24 @@ pub fn rustc_args(args: &[OsString], local: bool, nightly: bool) -> Vec<OsString
             OsString::from(format!("link-arg={b}")),
         ]
     }
+}
+
+/// wild links Linux ELF only, and `-B` is a gcc/clang driver flag: rust-lld
+/// in wasm or other flavors rejects it outright (`unknown argument: -B`).
+/// No `--target` means the host, which is Linux here.
+fn host_like_target(args: &[OsString]) -> bool {
+    let s: Vec<String> = args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let target = s.iter().enumerate().find_map(|(i, a)| {
+        if a == "--target" {
+            s.get(i + 1).cloned()
+        } else {
+            a.strip_prefix("--target=").map(str::to_owned)
+        }
+    });
+    target.is_none_or(|t| t.contains("-linux"))
 }
 
 /// Does this rustc invocation run a linker? (`--emit` with `link` and a
@@ -316,5 +334,31 @@ mod tests {
         assert!(rustc_args(&bin, false, false).is_empty());
         let lib = a(&["--crate-type", "lib", "--emit=dep-info,metadata,link"]);
         assert!(rustc_args(&lib, true, false).is_empty());
+        let wasm = a(&[
+            "--crate-type",
+            "bin",
+            "--emit=dep-info,link",
+            "--target",
+            "wasm32-unknown-unknown",
+        ]);
+        assert!(rustc_args(&wasm, true, false).is_empty());
+    }
+
+    #[test]
+    fn only_linux_targets_use_wild() {
+        assert!(host_like_target(&a(&["--crate-type", "bin"])));
+        assert!(host_like_target(&a(&[
+            "--target",
+            "x86_64-unknown-linux-gnu"
+        ])));
+        assert!(host_like_target(&a(&[
+            "--target=aarch64-unknown-linux-musl"
+        ])));
+        assert!(!host_like_target(&a(&[
+            "--target",
+            "wasm32-unknown-unknown"
+        ])));
+        assert!(!host_like_target(&a(&["--target=x86_64-pc-windows-msvc"])));
+        assert!(!host_like_target(&a(&["--target", "aarch64-apple-darwin"])));
     }
 }
