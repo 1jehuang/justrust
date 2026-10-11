@@ -77,6 +77,12 @@ Use this for any speed claim. It runs the agent edit loop on **pinned source
 snapshots**, so numbers taken on different days and justrust versions can be
 compared.
 
+Only one benchmark runs at a time: suite, factors and versus all edit the
+same extracted snapshots, so each takes an exclusive lock
+(`~/.justrust/bench/work/.bench.lock`) before touching them and a second
+run waits ("another benchmark holds the snapshot lock"). Do not bypass it
+with `BENCH_NO_LOCK=1` unless the runs use different snapshots.
+
 ```sh
 bench/suite.py list                    # scenarios
 bench/suite.py run                     # every warm scenario, 1 warmup + 5 runs each

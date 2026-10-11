@@ -30,6 +30,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -147,6 +148,19 @@ SCENARIOS = [
         expect_fail=True,
     ),
     Scenario(
+        "desktop-type-error-early",
+        "desktop",
+        DESKTOP_CHECK,
+        Edit(
+            FPS,
+            "    ) -> String {\n        if self",
+            '    ) -> String {\n        let _: u32 = "type error {n}";\n        if self',
+        ),
+        "desktop-type-error with early diagnostics (JUSTRUST_EARLY=1, warm rust-analyzer daemon started untimed)",
+        expect_fail=True,
+        env={"JUSTRUST_EARLY": "1"},
+    ),
+    Scenario(
         "desktop-noop-test",
         "desktop",
         DESKTOP_TEST,
@@ -230,8 +244,36 @@ def snapshot_dir(name: str) -> Path:
     return WORK / name / key
 
 
+_BENCH_LOCK = None
+
+
+def bench_lock() -> None:
+    """Hold an exclusive lock on the pinned snapshots for this process's life.
+
+    suite.py, factors.py and versus.py edit the same extracted sources and
+    restore them per run, so two concurrent runs corrupt each other (one
+    sees the other's injected type error) and skew each other's wall times.
+    Taken in prepare(), which every runner calls before touching a snapshot;
+    blocks until the other run exits. BENCH_NO_LOCK=1 skips it.
+    """
+    global _BENCH_LOCK
+    if _BENCH_LOCK is not None or os.environ.get("BENCH_NO_LOCK") == "1":
+        return
+    import fcntl
+
+    WORK.mkdir(parents=True, exist_ok=True)
+    f = open(WORK / ".bench.lock", "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("bench: another benchmark holds the snapshot lock, waiting", file=sys.stderr)
+        fcntl.flock(f, fcntl.LOCK_EX)
+    _BENCH_LOCK = f
+
+
 def prepare(name: str) -> Path:
     """Extract the pinned snapshot once. Source files are restored per run."""
+    bench_lock()
     root = snapshot_dir(name)
     for repo, (src, rev) in SNAPSHOTS[name]["repos"].items():
         dst = root / repo
@@ -361,8 +403,21 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     cwd = root / SNAPSHOTS[s.snapshot]["cwd"]
     load, rustc = foreign_load()
     t0 = time.monotonic()
-    p = subprocess.run([J, *s.cmd], cwd=cwd, env=env, capture_output=True, text=True)
+    # Stream stderr to timestamp the first error line the agent sees (early
+    # rust-analyzer errors or rustc's), not only the exit.
+    p = subprocess.Popen([J, *s.cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    first_error = None
+    err_lines = []
+    out_reader = threading.Thread(target=p.stdout.read, daemon=True)
+    out_reader.start()
+    for line in p.stderr:
+        if first_error is None and line.startswith("error"):
+            first_error = time.monotonic() - t0
+        err_lines.append(line)
+    out_reader.join()
+    p.wait()
     wall = time.monotonic() - t0
+    p.stderr = "".join(err_lines)
     summ_path = JR_HOME / "runs" / rid / "summary.json"
     if not summ_path.exists():
         sys.exit(f"bench: {s.name}: no summary for run {rid} (exit {p.returncode})\n{p.stderr[-3000:]}")
@@ -385,9 +440,14 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         for k, v in (u.get("split") or {}).items():
             split[k] = split.get(k, 0.0) + v
     res = sm.get("resources", {})
+    early = sm.get("early") or {}
     return {
         "id": rid,
         "wall": round(wall, 3),
+        # Seconds until the first `error` line on stderr (None: no error).
+        "first_error": None if first_error is None else round(first_error, 3),
+        "early": {k: early.get(k) for k in ("secs", "ready", "shown", "matched", "early_only", "rustc_only")}
+        if early else None,
         "recorded_wall": round(sm["wall"], 3),
         "cpu": round(sm.get("cpu_secs", 0.0), 2),
         "startup": round(sm["phases"]["startup"], 3),
@@ -416,8 +476,12 @@ def med(xs: list[float]) -> float:
 def stats(samples: list[dict]) -> dict:
     walls = [x["wall"] for x in samples]
     quiet = [x["wall"] for x in samples if not x["noisy"]]
+    fe = [x["first_error"] for x in samples if x.get("first_error") is not None]
     return {
         "n": len(walls),
+        "first_error": med(fe) if fe else None,
+        "first_error_min": round(min(fe), 3) if fe else None,
+        "first_error_max": round(max(fe), 3) if fe else None,
         "median": med(walls),
         "min": round(min(walls), 3),
         "max": round(max(walls), 3),
@@ -444,6 +508,11 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     # Cold runs still get a warmup: it fills the shared depcache, so measured
     # runs see the state a second fresh checkout sees.
     warm = warmup if (not s.cold or s.env.get("JUSTRUST_DEPCACHE") != "0") else 0
+    if s.env.get("JUSTRUST_EARLY") == "1":
+        # The resident daemon is the point: start it and wait until it has
+        # loaded the workspace, outside the timing.
+        restore(root, s.edit)
+        subprocess.run([J, "early", "start"], cwd=root / SNAPSHOTS[s.snapshot]["cwd"], check=True)
     total = warm + n
     try:
         for i in range(total):
@@ -508,15 +577,16 @@ def env_info() -> dict:
 def table(result: dict) -> str:
     rows = [
         f"{'scenario':28s} {'median':>7s} {'min':>7s} {'max':>7s} {'n':>3s} {'quiet':>7s}"
-        f" {'start':>6s} {'compile':>7s} {'tests':>6s} {'front':>6s} {'codegen':>7s} {'incr':>6s} {'link':>6s} {'units':>5s}"
+        f" {'1st err':>7s} {'start':>6s} {'compile':>7s} {'tests':>6s} {'front':>6s} {'codegen':>7s} {'incr':>6s} {'link':>6s} {'units':>5s}"
     ]
     for name, sc in result["scenarios"].items():
         st = sc["stats"]
         ph, sp = st["phases"], st["split"]
         q = f"{st['quiet_median']:.2f}" if st["quiet_n"] else "-"
+        fe = f"{st['first_error']:.2f}" if st.get("first_error") is not None else "-"
         rows.append(
             f"{name:28s} {st['median']:7.2f} {st['min']:7.2f} {st['max']:7.2f} {st['n']:3d} {q:>7s}"
-            f" {ph['startup']:6.2f} {ph['compile']:7.2f} {ph['test_run']:6.2f}"
+            f" {fe:>7s} {ph['startup']:6.2f} {ph['compile']:7.2f} {ph['test_run']:6.2f}"
             f" {sp['frontend']:6.2f} {sp['codegen']:7.2f} {sp['incremental']:6.2f} {sp['link']:6.2f} {st['units']:5.0f}"
         )
     return "\n".join(rows)
@@ -598,6 +668,11 @@ def cmd_compare(args) -> None:
         else:
             verdict = "within noise"
         print(f"{name:28s} {sa['median']:7.2f} {sb['median']:7.2f} {d:+7.2f} {pct:+5.0f}%  {verdict}")
+        if sa.get("first_error") is not None and sb.get("first_error") is not None:
+            print(f"{'  first error':28s} {sa['first_error']:7.2f} {sb['first_error']:7.2f}"
+                  f" {sb['first_error'] - sa['first_error']:+7.2f}"
+                  f" (ranges {sa['first_error_min']:.2f}-{sa['first_error_max']:.2f}"
+                  f" / {sb['first_error_min']:.2f}-{sb['first_error_max']:.2f})")
 
     # Overhead justrust adds around cargo: agent-visible wall minus the wall
     # justrust recorded. Independent of compile noise, so small changes show.
