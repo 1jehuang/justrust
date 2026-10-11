@@ -40,6 +40,9 @@ JR_HOME = Path(os.environ.get("JUSTRUST_HOME", HOME / ".justrust"))
 WORK = Path(os.environ.get("JUSTRUST_BENCH_WORK", JR_HOME / "bench" / "work"))
 RESULTS = ROOT / "bench" / "results"
 J = os.environ.get("JUSTRUST", "justrust")
+# `run --toolchain SPEC`: build with a justrust-pinned toolchain
+# (JUSTRUST_TOOLCHAIN) in its own target dir. "system" = the system rustc.
+TOOLCHAIN = "system"
 # A sample is noisy when other processes averaged more than this many cores
 # or another rustc was running when it started.
 NOISY_CORES = float(os.environ.get("BENCH_NOISY_CORES", "4"))
@@ -320,6 +323,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         }
     )
     env.pop("JUSTRUST_DISABLE", None)
+    env["JUSTRUST_TOOLCHAIN"] = TOOLCHAIN
     env.update(s.env)
     cwd = root / SNAPSHOTS[s.snapshot]["cwd"]
     load, rustc = foreign_load()
@@ -395,7 +399,10 @@ def stats(samples: list[dict]) -> dict:
 
 def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     root = prepare(s.snapshot)
-    target = root / "target"
+    # Each toolchain keeps its own warm target dir: switching rustc in one
+    # dir would rebuild everything on every switch.
+    tdir = "target" if TOOLCHAIN == "system" else f"target-{TOOLCHAIN}"
+    target = root / tdir
     samples = []
     # Unique edit numbers per invocation, so a re-run never lands on a state
     # the incremental cache has already seen.
@@ -407,7 +414,7 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     try:
         for i in range(total):
             if s.cold:
-                target = root / f"target-cold-{os.getpid()}-{i}"
+                target = root / f"{tdir}-cold-{os.getpid()}-{i}"
                 restore(root, s.edit)
             elif s.edit:
                 apply_edit(root, s.edit, base + i)
@@ -454,7 +461,9 @@ def env_info() -> dict:
         "justrust": tryrun([J, "-V"]),
         "justrust_rev": tryrun(["git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"]),
         "justrust_dirty": bool(tryrun(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"])),
-        "rustc": tryrun(["rustc", "-V"]),
+        "rustc": tryrun(["rustc", "-V"]) if TOOLCHAIN == "system" else tryrun(
+            [str(JR_HOME / "toolchains" / TOOLCHAIN / "bin" / "rustc"), "-V"]),
+        "toolchain": TOOLCHAIN,
         "cargo": tryrun(["cargo", "-V"]),
         "governor": tryrun(["cat", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]),
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
@@ -486,6 +495,11 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
+    global TOOLCHAIN
+    TOOLCHAIN = args.toolchain
+    if TOOLCHAIN != "system":
+        # Install up front so the first sample does not include the download.
+        subprocess.run([J, "toolchain", "install", TOOLCHAIN], check=True, stdout=subprocess.DEVNULL)
     names = args.scenarios or [s.name for s in SCENARIOS if not s.cold]
     if args.cold:
         names += [s.name for s in SCENARIOS if s.cold and s.name not in names]
@@ -508,7 +522,8 @@ def cmd_run(args) -> None:
         result["scenarios"][name] = run_scenario(BY_NAME[name], args.n, args.warmup, args.quiet_wait)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
-        time.strftime("%Y%m%d-%H%M%S") + f"-{info['justrust_rev']}{'-dirty' if info['justrust_dirty'] else ''}.json"
+        time.strftime("%Y%m%d-%H%M%S") + f"-{info['justrust_rev']}{'-dirty' if info['justrust_dirty'] else ''}"
+        + ("" if TOOLCHAIN == "system" else f"-{TOOLCHAIN}") + ".json"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=1) + "\n")
@@ -572,6 +587,9 @@ def main() -> None:
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
                    help="before each run wait up to SECS for no foreign rustc and load < 2")
     r.add_argument("-o", "--out", help="result file (default bench/results/<time>-<rev>.json)")
+    r.add_argument("--toolchain", default="system", metavar="SPEC",
+                   help="pinned toolchain (nightly-YYYY-MM-DD) via JUSTRUST_TOOLCHAIN, own target dir; "
+                        "default: the system rustc")
     r.set_defaults(fn=cmd_run)
     s = sub.add_parser("show")
     s.add_argument("file")
