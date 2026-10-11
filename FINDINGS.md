@@ -2815,3 +2815,27 @@ summaries from `~/.cargo/registry/index/*/.cache`, then the resolver),
 fingerprints ~120 ms. Next: a per-workspace cache of the targeted resolve
 result keyed like the resolve stamp, which would skip the index entirely
 on a no-op.
+
+Fork change (jr-rustc `attr_macro_expansion` query: attribute proc-macro
+outputs cached in the incremental session like upstream's derive cache,
+under `-Zcache-proc-macros`, `JUSTRUST_RUSTC_ATTR_CACHE=0` to disable).
+Correctness on the pinned Desktop snapshot (`bench/attr-cache-check.py`):
+an edited `#[gpui::test]` body runs (the test panics as edited), a type
+error inside it is reported, restore passes, and a one-line edit expands
+`#[gpui::test]` once instead of 724 times.
+
+Effect, same jr-rustc build (stage 2 PGO+BOLT) on every side, caches off,
+run `versus-20261011-111710-07262f4deb42-dirty.json`, 8 rounds:
+
+| | reference-loop | instr vs stock | body-check | instr |
+|---|---:|---:|---:|---:|
+| no proc-macro cache | 5.58 s | 0.93 | 1.93 s | 1.06 |
+| upstream derive cache only | 5.74 s | 0.93 | 1.94 s | 1.03 |
+| + attribute cache (jr-rustc) | 4.75 s | **0.74** | 1.87 s | 1.03 |
+
+20% fewer instructions on the reference loop (0.93 -> 0.74), wall median
+-15% (ranges overlap; the factor run `factors-20261011-105626-07262f4deb42.json`
+agrees: 5.42 -> 4.39 s, -19%). Check is unchanged because `check -p`
+does not compile the tests. First fork change that moves the loop.
+Caveat inherited from the derive cache: a proc macro that reads files or
+the environment is not re-run when only those change.
