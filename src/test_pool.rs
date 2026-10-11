@@ -538,11 +538,12 @@ fn adjust_filtered(line: &[u8], n: u64) -> Vec<u8> {
     format!("{}{}{}", &text[..start], v.saturating_sub(n), &text[end..]).into_bytes()
 }
 
-/// A process failed while other test processes ran. With no other test
-/// process running, rerun its failed tests by exact name: if they fail
-/// again, the first result stands (reported right away). If they pass, or
-/// the process failed without naming a test, run the same process alone and
-/// report that, with a note.
+/// A process failed while other test processes ran. Rerun its failed
+/// tests by exact name, one at a time (some tests fail only next to another
+/// test of the same process): if every one fails again, the first result
+/// stands and is reported at once. Otherwise, with no other test process
+/// running, the same process runs again alone and that result is reported,
+/// with a note naming the tests that failed only in parallel.
 fn confirm_alone(
     inner: &Inner,
     req: &Request,
@@ -550,45 +551,34 @@ fn confirm_alone(
     args: &[String],
     first: Finished,
 ) -> Finished {
-    let _alone = inner.gate.exclusive();
-    let failed: Vec<&str> = first
-        .outcomes
-        .iter()
-        .filter(|o| !o.passed)
-        .map(|o| o.name.as_str())
-        .collect();
-    if !failed.is_empty()
-        && let Some(mut again) = strip_filters(args)
-    {
+    let failed: Vec<&str> = failed_names(&first);
+    let rerun_failed = |exclusive: bool| -> Option<HashSet<String>> {
+        let mut again = strip_filters(args)?;
         again.push("--exact".into());
-        // One at a time: some tests fail only next to other tests in the
-        // same process (Desktop's applet test next to a selection test).
         if !again.iter().any(|a| a.starts_with("--test-threads")) {
             again.push("--test-threads=1".into());
         }
         again.extend(failed.iter().map(|s| s.to_string()));
-        let rerun = execute(inner, req, &again, stem);
-        // Every failure reproduced alone: the first result is what one
-        // plain run reports. Otherwise some failed only next to other
-        // processes, and a run alone decides.
-        let still: HashSet<&str> = rerun
-            .outcomes
-            .iter()
-            .filter(|o| !o.passed)
-            .map(|o| o.name.as_str())
-            .collect();
-        if rerun.exit != 0 && failed.iter().all(|f| still.contains(f)) {
+        let _g = if exclusive {
+            inner.gate.exclusive()
+        } else {
+            inner.gate.shared()
+        };
+        let r = execute(inner, req, &again, stem);
+        Some(failed_names(&r).into_iter().map(str::to_owned).collect())
+    };
+    let reproduced = |still: &HashSet<String>| failed.iter().all(|f| still.contains(*f));
+    if !failed.is_empty() {
+        // Quick check, next to whatever else runs: a real failure does not
+        // wait for the pool to drain.
+        if rerun_failed(false).is_some_and(|s| reproduced(&s)) {
             return first;
         }
     }
+    let _alone = inner.gate.exclusive();
     let mut alone = execute(inner, req, args, stem);
     alone.hide_filtered = first.hide_filtered;
-    let alone_failed: HashSet<&str> = alone
-        .outcomes
-        .iter()
-        .filter(|o| !o.passed)
-        .map(|o| o.name.as_str())
-        .collect();
+    let alone_failed: HashSet<&str> = failed_names(&alone).into_iter().collect();
     let flaky: Vec<&str> = failed
         .iter()
         .copied()
@@ -606,6 +596,14 @@ fn confirm_alone(
         alone.lines.push((paths::now(), "e", note.into_bytes()));
     }
     alone
+}
+
+fn failed_names(f: &Finished) -> Vec<&str> {
+    f.outcomes
+        .iter()
+        .filter(|o| !o.passed)
+        .map(|o| o.name.as_str())
+        .collect()
 }
 
 /// Lets test processes run together (shared) or one alone (exclusive). A
