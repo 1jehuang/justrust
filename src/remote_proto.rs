@@ -12,13 +12,88 @@ use std::io::{Read, Write};
 
 /// Bumped when frames change incompatibly. The daemon requires an agent
 /// that answers in this version.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 /// Oldest daemon protocol the agent still serves (v1 is v2 without
 /// `Synced` and without write-failure reports, v2 is v3 without the
-/// `Cache*` frames).
+/// `Cache*` frames, v3 is v4 without `RunFiles`).
 pub const MIN_VERSION: u32 = 1;
 /// First version with the peer dependency cache (`Cache*` frames).
 pub const CACHE_VERSION: u32 = 3;
+/// First version whose agent sends `RunFiles` before `Exit`.
+pub const RUN_FILES_VERSION: u32 = 4;
+
+/// Run directory files a remote run ships back, so `justrust log`, `show`,
+/// and every per-unit statistic work for remote runs as for local ones.
+/// `summary.json` travels in `Exit` (it is rewritten locally).
+pub const RUN_FILES: &[&str] = &[
+    "meta.json",
+    "output.jsonl",
+    "units.jsonl",
+    "samples.jsonl",
+    "processes.json",
+    "scripts.jsonl",
+];
+/// Per-file cap: a run log larger than this is truncated, not dropped.
+const MAX_RUN_FILE: u64 = 64 << 20;
+
+/// Pack the [`RUN_FILES`] present in `dir` as gzip of
+/// `[u32 name len][name][u32 len][bytes]...`. Empty when none exist.
+pub fn pack_run_files(dir: &std::path::Path) -> Vec<u8> {
+    let mut raw = Vec::new();
+    for name in RUN_FILES {
+        let Ok(f) = std::fs::File::open(dir.join(name)) else {
+            continue;
+        };
+        let mut data = Vec::new();
+        if f.take(MAX_RUN_FILE).read_to_end(&mut data).is_err() {
+            continue;
+        }
+        raw.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        raw.extend_from_slice(name.as_bytes());
+        raw.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        raw.extend_from_slice(&data);
+    }
+    if raw.is_empty() {
+        return raw;
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    if gz.write_all(&raw).is_err() {
+        return Vec::new();
+    }
+    gz.finish().unwrap_or_default()
+}
+
+/// Write files packed by [`pack_run_files`] into `dir`. Only names in
+/// [`RUN_FILES`] are accepted: the payload comes from another machine.
+pub fn unpack_run_files(payload: &[u8], dir: &std::path::Path) -> Result<usize> {
+    let mut raw = Vec::new();
+    flate2::read::GzDecoder::new(payload)
+        .take(RUN_FILES.len() as u64 * (MAX_RUN_FILE + 1024))
+        .read_to_end(&mut raw)?;
+    let mut r = &raw[..];
+    let mut n = 0;
+    let take = |r: &mut &[u8]| -> Result<Vec<u8>> {
+        let mut len = [0u8; 4];
+        r.read_exact(&mut len)?;
+        let len = u32::from_be_bytes(len) as usize;
+        if len > r.len() {
+            bail!("truncated run files");
+        }
+        let (a, b) = r.split_at(len);
+        *r = b;
+        Ok(a.to_vec())
+    };
+    while !r.is_empty() {
+        let name = String::from_utf8(take(&mut r)?)?;
+        let data = take(&mut r)?;
+        if !RUN_FILES.contains(&name.as_str()) {
+            bail!("unexpected run file {name:?}");
+        }
+        std::fs::write(dir.join(&name), data)?;
+        n += 1;
+    }
+    Ok(n)
+}
 
 /// One cache entry a peer has: enough to decide whether fetching it beats
 /// compiling.
@@ -118,6 +193,11 @@ pub enum Msg {
         /// large to sync), shown before the build output.
         #[serde(default)]
         note: String,
+    },
+    /// Sent just before `Exit` (v4+). Payload: [`pack_run_files`] of the
+    /// remote run directory.
+    RunFiles {
+        id: u64,
     },
     /// The run ended. Payload: the remote run's summary.json, if recorded.
     Exit {
@@ -282,6 +362,36 @@ mod tests {
         assert_eq!(b, Msg::Barrier { id: 7 });
         assert!(p.is_empty());
         assert!(read_frame(&mut r).unwrap().is_none());
+    }
+
+    #[test]
+    fn run_files_roundtrip_and_reject_foreign_names() {
+        let base = std::env::temp_dir().join(format!("jr-runfiles-{}", std::process::id()));
+        let (src, dst) = (base.join("src"), base.join("dst"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("output.jsonl"), b"{\"l\":\"error\"}\n").unwrap();
+        std::fs::write(src.join("units.jsonl"), b"{}\n").unwrap();
+        std::fs::write(src.join("secret"), b"no").unwrap();
+        let p = pack_run_files(&src);
+        assert_eq!(unpack_run_files(&p, &dst).unwrap(), 2);
+        assert_eq!(
+            std::fs::read(dst.join("output.jsonl")).unwrap(),
+            b"{\"l\":\"error\"}\n"
+        );
+        assert!(!dst.join("secret").exists());
+        assert!(pack_run_files(&base.join("none")).is_empty());
+
+        // A hostile payload naming a path outside the allow-list is refused.
+        let mut raw = Vec::new();
+        for part in [&b"../x"[..], b"data"] {
+            raw.extend_from_slice(&(part.len() as u32).to_be_bytes());
+            raw.extend_from_slice(part);
+        }
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&raw).unwrap();
+        assert!(unpack_run_files(&gz.finish().unwrap(), &dst).is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

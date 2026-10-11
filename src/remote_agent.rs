@@ -23,7 +23,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::remote_proto::{CACHE_VERSION, MIN_VERSION, Msg, VERSION, read_frame, write_frame};
+use crate::remote_proto::{
+    CACHE_VERSION, MIN_VERSION, Msg, RUN_FILES_VERSION, VERSION, read_frame, write_frame,
+};
 
 type Out = Arc<Mutex<Box<dyn Write + Send>>>;
 
@@ -244,6 +246,14 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         }
                     };
                     let summary = summary_for(&run_id).unwrap_or_default();
+                    if version >= RUN_FILES_VERSION
+                        && let Some(dir) = run_dir(&run_id)
+                    {
+                        let files = crate::remote_proto::pack_run_files(&dir);
+                        if !files.is_empty() {
+                            send(&out, &Msg::RunFiles { id }, &files);
+                        }
+                    }
                     send(&out, &Msg::Exit { id, code }, &summary);
                 });
             }
@@ -283,17 +293,15 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
     res
 }
 
-fn summary_for(run_id: &str) -> Option<Vec<u8>> {
-    if run_id.is_empty() {
+fn run_dir(run_id: &str) -> Option<PathBuf> {
+    if run_id.is_empty() || run_id.contains(['/', '.']) {
         return None;
     }
-    std::fs::read(
-        crate::paths::runs_dir()
-            .ok()?
-            .join(run_id)
-            .join("summary.json"),
-    )
-    .ok()
+    Some(crate::paths::runs_dir().ok()?.join(run_id))
+}
+
+fn summary_for(run_id: &str) -> Option<Vec<u8>> {
+    std::fs::read(run_dir(run_id)?.join("summary.json")).ok()
 }
 
 /// Env var a client sends with a run: its cargo home.

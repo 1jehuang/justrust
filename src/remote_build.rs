@@ -328,6 +328,7 @@ pub fn run_remote(
         &[],
     )?;
     let mut sync = None;
+    let mut run_files: Vec<u8> = Vec::new();
     let mut so = std::io::stdout();
     let mut se = std::io::stderr();
     loop {
@@ -366,11 +367,13 @@ pub fn run_remote(
                     se.flush()?;
                 }
             }
+            (Msg::RunFiles { .. }, data) => run_files = data,
             (Msg::Exit { code, .. }, summary) => {
                 let (files, ms, machine) = sync.unwrap_or((0, 0.0, String::new()));
                 record_remote(
                     &run_id,
                     &summary,
+                    &run_files,
                     &machine,
                     ms,
                     total.elapsed().as_secs_f64(),
@@ -391,9 +394,17 @@ pub fn run_remote(
     }
 }
 
-/// Keep a local copy of the remote run so `justrust runs/show` and the
-/// router see it. Marked `remote` in the index.
-fn record_remote(run_id: &str, summary: &[u8], machine: &str, sync_ms: f64, wall: f64) {
+/// Keep a local copy of the remote run so `justrust runs/show/log` and the
+/// router see it. Marked `remote` in the index. `run_files` (from a v4+
+/// agent) carries the output log, units, and samples.
+fn record_remote(
+    run_id: &str,
+    summary: &[u8],
+    run_files: &[u8],
+    machine: &str,
+    sync_ms: f64,
+    wall: f64,
+) {
     let Ok(mut s) = serde_json::from_slice::<crate::summary::Summary>(summary) else {
         return;
     };
@@ -402,6 +413,11 @@ fn record_remote(run_id: &str, summary: &[u8], machine: &str, sync_ms: f64, wall
     };
     if std::fs::create_dir_all(&dir).is_err() {
         return;
+    }
+    if !run_files.is_empty()
+        && let Err(e) = crate::remote_proto::unpack_run_files(run_files, &dir)
+    {
+        crate::remote::log_event(&format!("run {run_id}: remote run files: {e:#}"));
     }
     s.remote = Some(crate::summary::RemoteInfo {
         machine: machine.to_string(),

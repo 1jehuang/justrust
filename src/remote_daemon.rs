@@ -680,7 +680,12 @@ fn read_agent(link: &Link, mut stdout: BufReader<std::process::ChildStdout>) {
                     let _ = tx.send(failed);
                 }
             }
-            Msg::Out { id, .. } | Msg::Exit { id, .. } | Msg::Error { id, .. } if id != 0 => {
+            Msg::Out { id, .. }
+            | Msg::RunFiles { id }
+            | Msg::Exit { id, .. }
+            | Msg::Error { id, .. }
+                if id != 0 =>
+            {
                 let done = matches!(msg, Msg::Exit { .. } | Msg::Error { .. });
                 if let Some(tx) = r.runs.get(&id) {
                     let _ = tx.send((msg, payload));
