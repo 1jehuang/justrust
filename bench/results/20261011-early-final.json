@@ -1,0 +1,613 @@
+{
+ "started": "2026-10-11T06:31:28-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "7a10e0d35fa5",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  }
+ },
+ "runs_per_scenario": 6,
+ "scenarios": {
+  "desktop-type-error": {
+   "what": "time to the first type error after an edit (the check must fail)",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261011-063134525-1787539374",
+     "wall": 2.22,
+     "first_error": 2.037,
+     "early": null,
+     "recorded_wall": 2.204,
+     "cpu": 2.62,
+     "startup": 0.43,
+     "compile": 1.716,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.511,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.175
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.42,
+     "foreign_rustc_before": 0,
+     "load_before": 5.1,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063136758-1787539473",
+     "wall": 1.952,
+     "first_error": 1.83,
+     "early": null,
+     "recorded_wall": 1.914,
+     "cpu": 2.33,
+     "startup": 0.268,
+     "compile": 1.617,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.346,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.25
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.65,
+     "foreign_rustc_before": 0,
+     "load_before": 5.1,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063138722-1787539345",
+     "wall": 2.184,
+     "first_error": 2.017,
+     "early": null,
+     "recorded_wall": 2.152,
+     "cpu": 2.55,
+     "startup": 0.465,
+     "compile": 1.639,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.33,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.279
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.53,
+     "foreign_rustc_before": 0,
+     "load_before": 5.1,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063140918-1787539597",
+     "wall": 1.959,
+     "first_error": 1.828,
+     "early": null,
+     "recorded_wall": 1.915,
+     "cpu": 2.33,
+     "startup": 0.264,
+     "compile": 1.619,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.545,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.058
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.89,
+     "foreign_rustc_before": 0,
+     "load_before": 4.85,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063142890-1787539298",
+     "wall": 1.733,
+     "first_error": 1.571,
+     "early": null,
+     "recorded_wall": 1.696,
+     "cpu": 2.07,
+     "startup": 0.37,
+     "compile": 1.269,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.222,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.003,
+      "other": 0.022
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 1.31,
+     "foreign_rustc_before": 0,
+     "load_before": 4.85,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063144640-1787539421",
+     "wall": 1.937,
+     "first_error": 1.79,
+     "early": null,
+     "recorded_wall": 1.902,
+     "cpu": 2.33,
+     "startup": 0.365,
+     "compile": 1.497,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.391,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.002,
+      "other": 0.079
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 1.49,
+     "foreign_rustc_before": 0,
+     "load_before": 4.54,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    }
+   ],
+   "stats": {
+    "n": 6,
+    "first_error": 1.829,
+    "first_error_min": 1.571,
+    "first_error_max": 2.037,
+    "median": 1.956,
+    "min": 1.733,
+    "max": 2.22,
+    "quiet_n": 6,
+    "quiet_median": 1.956,
+    "phases": {
+     "startup": 0.367,
+     "compile": 1.618,
+     "test_run": 0.0,
+     "cpu": 2.33,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 1.369,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.127
+    },
+    "units": 1.0
+   }
+  },
+  "desktop-type-error-early": {
+   "what": "desktop-type-error with early diagnostics (JUSTRUST_EARLY=1, warm rust-analyzer daemon started untimed)",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261011-063200247-1787539672",
+     "wall": 1.899,
+     "first_error": 0.09,
+     "early": {
+      "secs": 0.05704045295715332,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 1.861,
+     "cpu": 2.22,
+     "startup": 0.442,
+     "compile": 1.369,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.391,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.63,
+     "foreign_rustc_before": 0,
+     "load_before": 4.19,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063202165-1787539404",
+     "wall": 1.391,
+     "first_error": 0.083,
+     "early": {
+      "secs": 0.06137394905090332,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 1.362,
+     "cpu": 1.73,
+     "startup": 0.259,
+     "compile": 1.067,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 0.967,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.08
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.48,
+     "foreign_rustc_before": 0,
+     "load_before": 4.19,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063203575-1787539315",
+     "wall": 1.962,
+     "first_error": 0.086,
+     "early": {
+      "secs": 0.06074333190917969,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 1.932,
+     "cpu": 2.32,
+     "startup": 0.272,
+     "compile": 1.632,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.322,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.287
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.48,
+     "foreign_rustc_before": 0,
+     "load_before": 4.19,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063205551-1787539184",
+     "wall": 2.075,
+     "first_error": 0.119,
+     "early": {
+      "secs": 0.07965564727783203,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.03,
+     "cpu": 2.42,
+     "startup": 0.44,
+     "compile": 1.539,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.246,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.269
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.9,
+     "foreign_rustc_before": 0,
+     "load_before": 3.93,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063207638-1787539968",
+     "wall": 2.11,
+     "first_error": 0.083,
+     "early": {
+      "secs": 0.04650712013244629,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.061,
+     "cpu": 2.44,
+     "startup": 0.445,
+     "compile": 1.562,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.267,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.267
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.61,
+     "foreign_rustc_before": 0,
+     "load_before": 3.93,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-063209764-1787539279",
+     "wall": 2.283,
+     "first_error": 0.083,
+     "early": {
+      "secs": 0.043908119201660156,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.239,
+     "cpu": 2.66,
+     "startup": 0.428,
+     "compile": 1.76,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.661,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.003,
+      "other": 0.076
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.59,
+     "foreign_rustc_before": 0,
+     "load_before": 3.94,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    }
+   ],
+   "stats": {
+    "n": 6,
+    "first_error": 0.084,
+    "first_error_min": 0.083,
+    "first_error_max": 0.119,
+    "median": 2.018,
+    "min": 1.391,
+    "max": 2.283,
+    "quiet_n": 6,
+    "quiet_median": 2.018,
+    "phases": {
+     "startup": 0.434,
+     "compile": 1.55,
+     "test_run": 0.0,
+     "cpu": 2.37,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 1.294,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.174
+    },
+    "units": 1.0
+   }
+  }
+ },
+ "finished": "2026-10-11T06:32:12-0700"
+}

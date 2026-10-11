@@ -2075,6 +2075,11 @@ samples noisy):
 | desktop-type-error (rustc) | 3.08 s | 2.96 s | 1.76-4.04 s |
 | desktop-type-error-early | 2.46 s | **0.09 s** | 0.08-0.11 s |
 
+Confirmation on a quiet machine with the final defaults (experimental
+diagnostics on, inference-limit filter), `20261011-early-final.json`, n=6,
+all samples quiet: first error **1.83 s -> 0.08 s** (0.07-0.09), wall
+1.96 s vs 2.02 s (within noise: early adds no wall time).
+
 Of the 0.09 s, the daemon's answer arrives 0.06-0.085 s after the run
 starts (`summary.early.secs`). The rest is justrust startup and the
 toolchain pin. The spike (`bench/ra_spike.py`) measured a didChange plus
