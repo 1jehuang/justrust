@@ -2199,3 +2199,81 @@ on. So 17/19 is out of reach with rust-analyzer alone. Borrowck and these
 lints need rustc itself: a resident rustc (phase 4, jr-rustc), or a fast
 `rustc -Zno-codegen` of the one edited crate, which is about 1.3 s on the
 UI crate today (finding 28's `front` column). Auto stays opt-in.
+
+## 30. Prebuilt dependency store: portable keys and a cold Desktop check from an empty cache (2026-10-11)
+
+Code: depcache schemes 6 and 7 (3d48354, 3c5ac34), `src/depcache_prebuilt.rs`
+(`JUSTRUST_PREBUILT`, `justrust cache --publish`), suite scenario
+`desktop-cold-check-prebuilt`, S3 store infra and the prebuild script in
+justrust-cloud (96e266f). Docs: `docs/c-sysroot.md`.
+
+### Keys were not portable across users
+
+`bench/prebuilt-portability.sh` builds the same snapshot under two cargo
+home paths (same registry, private depcaches) and compares per-crate base
+keys from `JUSTRUST_DEPCACHE_EXPLAIN`:
+
+| scheme | justrust snapshot f97fcc2, 56 dep units | why |
+|---|---:|---|
+| 5 | 32/56 equal | registry source paths are written into rmeta, so every crate with a dependency got a different extern hash per cargo home |
+| 6: `--remap-path-prefix=<cargo home>=/justrust-cargo-home` | 56/56, outputs byte-identical, no-op rebuild 0 compiled | |
+| 6, Desktop, publisher with a symlinked registry | **0/833** | rustc's cwd is the resolved registry path, normalized as a literal path in the key |
+| 7: resolved registry/git paths normalized like the cargo home | 808/833 hit (below) | |
+
+### desktop-cold-check from an empty local cache
+
+`bench/suite.py run desktop-cold-check-prebuilt desktop-cold-check
+desktop-cold-check-nocache -n 3 --toolchain nightly-2026-10-08`, private
+snapshot copy (`JUSTRUST_BENCH_WORK`), under the bench lock, laptop busy
+(other processes 6 to 10 cores). Result
+`bench/results/20261011-074513-86681282a9a0-dirty-nightly-2026-10-08.json`.
+The prebuilt store was published once (865 bundles, 0.30 GB) from a
+different cargo home path and target dir, and served over local HTTP. Each
+measured run starts with a fresh target dir and an **empty** local depcache.
+
+| scenario | median (min-max) | rust units compiled | dep hits | build scripts replayed |
+|---|---:|---:|---:|---:|
+| nocache (every justrust cache off) | 65.6 s (64.8-66.8) | 887 | 0 | 0 |
+| **prebuilt, empty local cache** | **50.8 s (50.5-60.7)** | 79 | 808 (prebuilt) | 0 |
+| warm local depcache (the floor) | 14.6 s (14.3-15.3) | 54 | 833 | 45 |
+
+Run 20261011-073713067-2892610404 (prebuilt): the 808 hits took 57 s of
+summed restore wall (max 1.1 s, fetch + verify + unpack), saving 882 s of
+rustc. What is left:
+
+- **Build scripts: none replayed.** `publish` skips build-script entries
+  because their key includes the host package-db stamp. aws-lc-sys 12.8 s,
+  libsqlite3-sys 7.6 s, ring 4.8 s, onig_sys 2.3 s ran in this build and
+  sit on the critical path.
+- **25 Rust units missed**, all downstream of the C chain (aws-lc-rs,
+  ring, rustls, aws-sdk-*, reqwest, azure_*): 30 s of rustc, aws_sdk_bedrock
+  alone 11 s. Their keys depend on build-script outputs (aws-lc/ring static
+  libs) that differed between the publisher's and the consumer's runs.
+- The local crates (jcode_base 10.5 s, jcode_desktop_ui 5.5 s) are in
+  both the floor and this run.
+
+Readings: the Rust half of a store works across cargo homes (808/833
+restored, -23% wall versus nocache). Closing the remaining 36 s to the 14.6
+s floor needs the store to carry build-script runs and those runs to be
+host-independent, which is the vendored C toolchain (`docs/c-sysroot.md`,
+layers 1 and 2). Not measured yet: a real network store (S3 over the
+internet), and other seed sets than the Desktop lockfile.
+
+## 28. jr-rustc stage 2 vs stage 1 (2026-10-11)
+
+Same release config (thin LTO, cgu 1, no PGO/BOLT, frame pointers off),
+compiler compiled by stage 0 (1.100 beta) vs by our own stage 1 (as the
+official dist is). Instructions relative to stock, run
+`versus-20261011-074900-608b369adb66-dirty.json` (walls are noisy in this
+run: other sessions' benchmarks queued on the lock and load was high, so
+only the instruction column is usable):
+
+| compiler | reference-loop | body-check | first-error |
+|---|---:|---:|---:|
+| official nightly | 0.86 | 0.94 | 0.93 |
+| release, stage 1 | 0.97 | 1.11 | 1.10 |
+| release, stage 2 | 0.93 | 1.05 | 1.05 |
+
+Stage 2 removes 4-6 points, about as much as PGO did on stage 1. The build
+takes 24 min instead of 6.5. Next: PGO+BOLT on stage 2 (`JR_STAGE=2` in
+jr-rustc's build-jr.sh, pgo-train.sh, bolt.sh).
