@@ -85,6 +85,15 @@ Concretely, three layers, cheapest first:
 | 2. toolchain-keyed build-script entries + publish them | buildscript.rs key change, `publish` handles script entries, store layout `v1/s/` | per entry, aws-lc 20 MB | ~52 s of build-script time on the first cold build of a new machine (39 + 8.3 + 4.4) |
 | 3. pkg-config sysroot for wayland, xkbcommon, fontconfig, freetype, alsa, openssl | headers + .pc + stub .so per lib, built once per toolchain cut | ~20 MB | builds on hosts without -dev packages; no measurable time on this laptop |
 
+Status (FINDINGS 37): layer 2 shipped without layer 1, for the four
+vendored-C packages. Their runs are keyed by the host's C toolchain
+(`cc`/`ar` content and version) instead of the package database, so they
+are portable across machines with the same compiler (the pinned build
+fleet and hosted build hosts) and published to the prebuilt store. A cold
+Desktop check from an empty cache went 53.3 s -> 14.8 s (floor 12.7 s).
+Layer 1 (a vendored clang + glibc sysroot) is what extends the same
+sharing to machines with a different host compiler.
+
 Recommendation: do layer 1 and 2 together (they are useless apart: 1 makes
 outputs portable, 2 lets the store carry them). Defer layer 3 until a CI
 image or hosted build host lacks the dev packages.
