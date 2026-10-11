@@ -60,9 +60,10 @@ use std::path::{Path, PathBuf};
 /// Bump to invalidate every entry when the key scheme changes.
 /// 3: `--extern` keyed by crate metadata only, `CARGO_HOME` not keyed, and
 /// the C library checked for compatibility at restore instead of keyed.
+/// 4: `CARGO_TARGET_DIR` not keyed.
 /// 2: the cargo home is a placeholder (portable across machines), and
 /// proc macros and bins key the C library they link against.
-const SCHEME: &str = "justrust-depcache-3";
+const SCHEME: &str = "justrust-depcache-4";
 const PROFILE_TOKEN: &str = "@@JUSTRUST_PROFILE_DIR@@";
 const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// The cargo home (registry sources, git checkouts), so keys and manifest
@@ -337,9 +338,9 @@ fn is_unit_out_dir(out_dir: &Path) -> bool {
 /// Env vars that are part of the base key. `CARGO_MAKEFLAGS` carries
 /// jobserver fds, which differ every run.
 fn keyed_env(name: &str) -> bool {
-    // CARGO_HOME: its value is always the cargo home placeholder, but cargo
-    // passes it to rustc only when it was set, so keying it would split
-    // machines that set it from machines that do not.
+    // CARGO_HOME and the target dir: their values are always placeholders,
+    // but they reach rustc only when the user (or a build slot) set them, so
+    // keying them would split builds that set them from builds that do not.
     if matches!(
         name,
         "CARGO_MAKEFLAGS"
@@ -347,6 +348,8 @@ fn keyed_env(name: &str) -> bool {
             | "RUSTC_WORKSPACE_WRAPPER"
             | "CARGO_TERM_VERBOSE"
             | "CARGO_HOME"
+            | "CARGO_TARGET_DIR"
+            | "CARGO_BUILD_TARGET_DIR"
     ) || name.starts_with("CARGO_TERM_")
     {
         return false;
@@ -1277,6 +1280,7 @@ mod tests {
     #[test]
     fn cargo_home_is_not_keyed() {
         assert!(!keyed_env("CARGO_HOME"));
+        assert!(!keyed_env("CARGO_TARGET_DIR"));
         assert!(keyed_env("CARGO_PKG_NAME"));
         assert!(keyed_env("CARGO_ENCODED_RUSTFLAGS"));
     }

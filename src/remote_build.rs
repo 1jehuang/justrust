@@ -290,6 +290,10 @@ pub fn run_remote(
         "RUST_LOG",
         "JCODE_SESSION_ID",
         "CARGO_TERM_COLOR",
+        // Diagnostics and opt-outs behave the same remotely.
+        "JUSTRUST_DEPCACHE_EXPLAIN",
+        "JUSTRUST_DEPCACHE",
+        "JUSTRUST_PEER_CACHE",
     ] {
         if let Ok(v) = std::env::var(var) {
             env.push((var.to_string(), v));
