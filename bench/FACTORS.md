@@ -26,6 +26,7 @@ replaced.
 | cranelift | desktop-test-edit | 8.25s (7.2-12.4) | 8.05s (7.4-13.0) | -0.21s (-3%) | 1/1 | 743/743 | 0s | within noise |
 | cargo-fork | desktop-noop-test | 0.49s (0.3-0.6) | 0.52s (0.4-0.6) | +0.03s (+5%) | 0/0 | 744/744 | 0s | within noise |
 | cargo-fork-loop | desktop-test-edit | 7.77s (6.8-8.8) | 7.64s (7.0-14.2) | -0.13s (-2%) | 1/1 | 743/743 | 0s | within noise |
+| jr-rustc | desktop-test-edit | 9.84s (9.0-12.6) | 7.53s (6.9-7.6) | -2.31s (-31%) | 1/1 | 743/743 | 0s | hurts |
 
 ## Factors and workloads
 
@@ -41,6 +42,7 @@ replaced.
 - **cranelift**: cranelift codegen backend for every crate (pinned nightly in both variants). Workload `desktop-test-edit` (loop). Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08'}`. Result: `factors-20261010-204006-c3c63f0156d5-dirty.json` (justrust c3c63f0156d5).
 - **cargo-fork**: jr-cargo (justrust's cargo fork, resolve stamp) instead of the toolchain's stock cargo. Workload `desktop-noop-test` (loop): no edit, so the wall is cargo + justrust overhead; needs `justrust toolchain cargo-fork` first. Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08', 'JUSTRUST_CARGO_FORK': '0'}`. Result: `factors-20261010-234515-fb4b860a68dd-dirty.json` (justrust fb4b860a68dd).
 - **cargo-fork-loop**: same, on the reference edit loop. Workload `desktop-test-edit` (loop). Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08', 'JUSTRUST_CARGO_FORK': '0'}`. Result: `factors-20261010-234515-fb4b860a68dd-dirty.json` (justrust fb4b860a68dd).
+- **jr-rustc**: justrust's rustc fork (stage 1, ~/jr-rustc) vs the official nightly at the same commit. Workload `desktop-test-edit` (loop): same rustc commit both sides; shows the cost of our build config (no PGO/BOLT) before any fork change. Off: `{'JUSTRUST_TOOLCHAIN': 'system', 'RUSTC': '/home/jeremy/.justrust/toolchains/nightly-2026-10-08/bin/rustc'}`. Result: `factors-20261010-235335-08abd41faf6a-dirty.json` (justrust 08abd41faf6a).
 
 Not here: the scheduler under contention (`bench/sched-contention.sh`),
 remote builds, crate splits (`bench/split-*.sh`, they change the source).
