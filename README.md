@@ -217,6 +217,26 @@ build). If that fails the build runs on the system toolchain, says so, and
 does not retry for 10 minutes. On a pinned nightly, every local crate gets
 rustc's per-pass timings (no `RUSTC_BOOTSTRAP` cache flip needed).
 
+## wild linker
+
+```sh
+justrust toolchain wild     # download wild (pinned release, sha256 checked) into ~/.justrust/toolchains/linkers
+```
+
+Once installed, every local crate that links (test binaries, bins, cdylibs)
+links with [wild](https://github.com/wild-linker/wild) instead of the
+project's linker. Measured on the Desktop UI test binary (FINDINGS 35): the
+link itself 0.92 s with mold, 0.35 s with wild. The shim adds
+`-B ~/.justrust/bin/ld` to those rustc runs. gcc and clang take `ld`,
+`ld.mold`, `ld.lld`, ... from a `-B` directory before their own, whatever
+`-fuse-ld` says, so it works with `cc`, `clang -fuse-ld=mold` wrappers and
+rustc's bundled lld alike. Link args are untracked by rustc and cargo, so
+switching it on or off rebuilds nothing. Dependencies are untouched.
+If wild fails, the linker the driver asked for runs with the same
+arguments (logged in `~/.justrust/linker-fallbacks.jsonl`), so a wild bug
+costs one extra link, never a failed build. `JUSTRUST_LINKER=off` disables
+it.
+
 ## Direction: all in
 
 justrust is going all in on optimal compile times. It will become one

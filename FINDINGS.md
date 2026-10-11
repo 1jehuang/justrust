@@ -2510,3 +2510,77 @@ this is where we stop chasing parity: fork changes are measured as
 `jr-rustc stage 2 PGO+BOLT` with and without the change, never against the
 official nightly. `bench/factors.py` factor `jr-rustc` defaults to
 `build/jr/pgo-bolt-stage2`.
+
+## 35. Linking: wild for local crates, dependencies as one dylib (2026-10-11)
+
+The link of the Desktop UI test binary (283 MB, 582 rlibs) runs after
+every edit on the reference loop. Two ways to make it cheaper, measured on
+the pinned snapshot.
+
+**Link alone, replayed.** The exact link command of one reference-loop
+build (args, object files, rustc temp dir) captured and replayed 7 times
+per linker on the same inputs (`~/.jcode/scratch/linkcap/replay.py`
+method: capture via a `clang` on PATH, relink with `-fuse-ld=mold` or
+`--ld-path=wild`):
+
+| layout | mold 2.42 | wild 0.10 | output |
+|---|---:|---:|---:|
+| stock (all deps static) | 0.92 s (0.60-1.24) | 0.35 s (0.34-0.41) | 283 / 242 MB |
+| deps as one dylib | 0.54 s (0.39-0.93) | 0.20 s (0.18-0.23) | 101 / 99 MB |
+
+wild links the same inputs 2.6x faster than mold, and its variance is
+far smaller. Both binaries pass the UI suite (1303 tests, 2 runs each,
+no failures; one earlier run under load had 1-2 flaky failures with
+either linker).
+
+**Shipped: wild for local crates** (commit 7a10e0d, `src/linker.rs`).
+`justrust toolchain wild` downloads the pinned release (sha256 checked).
+The shim adds `-B ~/.justrust/bin/ld` to local linking units only. gcc
+and clang take `ld`/`ld.mold`/`ld.lld` from `-B` before their own,
+whatever `-fuse-ld` says, so it covers `cc`, Desktop's
+`clang -fuse-ld=mold` wrapper, and rustc's self-contained lld (via
+`-Zpre-link-arg` on a pinned nightly). Those names are justrust, which
+runs wild and on failure runs the linker that was asked for, with the
+same args (fallback tested with a failing stub: lld and mold picked up,
+logged to `~/.justrust/linker-fallbacks.jsonl`). Link args are untracked:
+toggling `JUSTRUST_LINKER=off` on/off/on over a warm Desktop target dir
+compiled 0 units (744 fresh). Dependency units are never touched, so
+depcache keys do not move.
+
+On the reference loop (`bench/factors.py run wild mold -n 6`, ABBA,
+frozen binary, quiet: 0 noisy samples,
+`bench/results/factors-20261011-linker.json`):
+
+| factor | on | off | link pass on/off |
+|---|---:|---:|---:|
+| wild (vs Desktop's mold) | 7.03 s (6.1-7.8) | 7.03 s (6.3-7.9) | 0.23 / 0.44 s, disjoint |
+| mold (vs lld via cc, wild off) | 7.21 s (6.2-7.6) | 8.14 s (6.7-8.4) | 0.46 / 1.26 s |
+
+Suite runs, `JUSTRUST_LINKER=off` then on (sequential, not interleaved,
+`bench/results/20261011-linker-{off,wild}.json`): 9.86 s -> 6.96 s
+median, `compare` says within noise (off had 4 of 6 noisy samples);
+link 0.71 -> 0.22 s.
+
+So wild halves the link pass (-0.2 s, -3% of the loop), which is real
+but below what wall time resolves at n=6. It ships because it is free
+(no rebuild, fail open) and the link share grows as the rest of the loop
+gets faster (hot patching, resident compiler). wild's incremental mode
+is not implemented in 0.10 (its README: the end goal, not yet
+available), so there is no incremental variant to measure.
+
+**Prototype: deps as one dylib** (not shipped). A generated
+`jcode-desktop-deps` crate (`crate-type = ["dylib"]`, `pub extern crate`
+of every UI dependency), a dev-dependency of the UI crate, referenced by
+`#[cfg(test)] extern crate`. rustc then links the test binary against
+`libjcode_desktop_deps.so` (680 MB) instead of 582 rlibs: binary 283 ->
+101 MB, link 0.92 -> 0.54 s (mold) and 0.35 -> 0.20 s (wild). On the
+loop (ABBA n=5, very noisy machine, 10-15 other cores): wall 14.0 s
+stock vs 12.6 s dylib, ranges overlap, link pass 1.11 -> 0.48 s,
+codegen 2.40 -> 1.64 s. The saving on top of wild is ~0.15 s per edit,
+and it costs a 3.3 s dylib link whenever any dependency changes, a
+second copy of every dependency, a manifest change in the project
+(or cargo fork work to do it transparently), and `LD_LIBRARY_PATH`
+plumbing for running the binary outside cargo. Not worth it at this
+size. Worth revisiting only if the link pass becomes a big share again
+(for example after hot patching removes codegen), and then in jr-cargo,
+not in project manifests.

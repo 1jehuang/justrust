@@ -38,7 +38,7 @@ from a cache.
 | std / sysroot | rebuilt with `-Zbuild-std` flags we choose (share-generics, dylib) | dylib test binaries, fewer monomorphizations |
 | cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), pinned as submodule `toolchain/cargo` (opt-in checkout: `git submodule update --init --checkout toolchain/cargo`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp (shipped), next: in-process fingerprints, no rescan, daemon mode |
 | codegen backends | cranelift for local opt-level 0 crates | faster full-crate regeneration (-25%) |
-| linker | wild (incremental linking), mold as fallback | relinking a 670 MB binary on every edit |
+| linker | wild for local crates, shipped (`justrust toolchain wild`, fail open to the project's linker; FINDINGS 35: link pass 0.44 -> 0.23 s). Incremental wild when it exists. Deps-as-dylib prototyped, not worth it yet | relinking a 283 MB test binary on every edit |
 | C toolchain | clang, lld, ar, a sysroot of pinned libs/headers | build scripts become hermetic, so their cache keys need no system stamp |
 | pkg-config + -sys libraries | vendored sysroot (wayland, xkbcommon, alsa, fontconfig, openssl...) | same output on every machine |
 | registry sources | local mirror / `cargo vendor` | offline, no index updates, stable paths |
