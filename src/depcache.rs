@@ -64,9 +64,11 @@ use std::path::{Path, PathBuf};
 /// 5: dependency units compile with the target dir remapped.
 /// 6: dependency units compile with the cargo home remapped too, so keys
 /// match across users whose cargo homes live at different paths.
+/// 7: a symlinked registry/git dir's resolved path is normalized like the
+/// cargo home (rustc's cwd is the resolved source dir).
 /// 2: the cargo home is a placeholder (portable across machines), and
 /// proc macros and bins key the C library they link against.
-const SCHEME: &str = "justrust-depcache-6";
+const SCHEME: &str = "justrust-depcache-7";
 const PROFILE_TOKEN: &str = "@@JUSTRUST_PROFILE_DIR@@";
 const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// The cargo home (registry sources, git checkouts), so keys and manifest
@@ -137,6 +139,10 @@ pub struct Norm {
     profile: String,
     pub(crate) target: String,
     pub(crate) cargo: Option<String>,
+    /// Resolved paths of a symlinked `registry` or `git` dir in the cargo
+    /// home, with their placeholder. rustc runs in the resolved source
+    /// dir, so paths reach the key through both spellings.
+    aliases: Vec<(String, String)>,
 }
 
 impl Norm {
@@ -154,11 +160,27 @@ impl Norm {
             .map(|c| c.trim_end_matches('/').to_owned())
             // A target dir inside the cargo home would be rewritten twice.
             .filter(|c| c.len() >= 2 && !target.starts_with(c.as_str()));
+        let aliases = cargo
+            .iter()
+            .flat_map(|c| ["registry", "git"].map(|sub| (c, sub)))
+            .filter_map(|(c, sub)| {
+                let p = Path::new(c).join(sub);
+                let real = p.canonicalize().ok()?;
+                let r = real.to_str()?.to_owned();
+                (real != p && r.len() >= 2 && !target.starts_with(&r))
+                    .then(|| (r, format!("{CARGO_HOME_TOKEN}/{sub}")))
+            })
+            .collect();
         Some(Norm {
             profile,
             target,
             cargo,
+            aliases,
         })
+    }
+    /// Resolved registry/git dirs that differ from their cargo home path.
+    pub(crate) fn alias_dirs(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.aliases.iter().map(|(r, t)| (r.as_str(), t.as_str()))
     }
     pub fn norm(&self, s: &str) -> String {
         let mut s = if s.contains(&self.target) {
@@ -167,6 +189,12 @@ impl Norm {
         } else {
             s.to_owned()
         };
+        // Resolved aliases first: they may live under the cargo home path.
+        for (real, token) in &self.aliases {
+            if s.contains(real.as_str()) {
+                s = s.replace(real.as_str(), token);
+            }
+        }
         if let Some(c) = &self.cargo
             && s.contains(c.as_str())
         {
@@ -535,16 +563,11 @@ fn remap_args(args: &[String], norm: &Norm) -> Vec<String> {
         // A symlinked registry or git dir (the remote agent links the
         // client's cargo home path to its own): rustc's working dir is the
         // resolved path, so map that too.
-        for sub in ["registry", "git"] {
-            let p = Path::new(c).join(sub);
-            if let Ok(real) = p.canonicalize()
-                && real != p
-                && let Some(r) = real.to_str()
-            {
-                v.push(format!(
-                    "--remap-path-prefix={r}={REMAPPED_CARGO_HOME}/{sub}"
-                ));
-            }
+        for (real, token) in norm.alias_dirs() {
+            let sub = token.rsplit('/').next().unwrap_or_default();
+            v.push(format!(
+                "--remap-path-prefix={real}={REMAPPED_CARGO_HOME}/{sub}"
+            ));
         }
     }
     // Last: rustc lets the last matching remapping win.
@@ -1564,6 +1587,17 @@ mod tests {
             h.hex()
         };
         assert_eq!(key(&ra), key(&rb));
+        // The resolved registry path normalizes to the same placeholder.
+        let nb = Norm::with_cargo_home(&dir.join("t2/debug"), &dir.join("b/.cargo")).unwrap();
+        let na = Norm::with_cargo_home(&dir.join("t1/debug"), &dir.join("a/.cargo")).unwrap();
+        let real = real_registry.canonicalize().unwrap();
+        assert_eq!(
+            nb.norm(&format!("{}/src/x", real.display())),
+            na.norm(&format!(
+                "{}/registry/src/x",
+                dir.join("a/.cargo").display()
+            ))
+        );
         // The caller remaps itself: nothing added.
         let own = s(&["--remap-path-prefix=/x=/y"]);
         let n = Norm::new(&dir.join("t1/debug")).unwrap();

@@ -95,6 +95,9 @@ class Scenario:
     expect_fail: bool = False
     cold: bool = False  # fresh target dir every iteration; opt-in
     env: dict[str, str] = field(default_factory=dict)
+    # Cold, with an empty local depcache every iteration and a prebuilt
+    # store (JUSTRUST_PREBUILT) published once from another cargo home.
+    prebuilt: bool = False
 
 
 FPS = "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs"
@@ -227,6 +230,16 @@ SCENARIOS = [
         "fresh target dir, every justrust cache off: the from-scratch floor",
         cold=True,
         env={"JUSTRUST_DEPCACHE": "0", "JUSTRUST_BUILD_SCRIPT_CACHE": "0"},
+    ),
+    Scenario(
+        "desktop-cold-check-prebuilt",
+        "desktop",
+        DESKTOP_CHECK,
+        None,
+        "fresh target dir and empty local depcache, dependencies from a prebuilt store "
+        "(published once from another cargo home, served over local HTTP): a new machine",
+        cold=True,
+        prebuilt=True,
     ),
 ]
 BY_NAME = {s.name: s for s in SCENARIOS}
@@ -381,6 +394,59 @@ def reuse_ledger(sm: dict, run_dir: Path) -> dict:
     }
 
 
+# Set by `prebuilt_store()` for prebuilt scenarios.
+PREBUILT_URL = ""
+
+
+def prebuilt_store(s: Scenario, root: Path) -> None:
+    """Publish the snapshot's dependencies to a store once (untimed), from a
+    different cargo home path and target dir than the measured runs, and
+    serve it over local HTTP. `BENCH_PREBUILT_URL` uses an existing store."""
+    global PREBUILT_URL
+    if os.environ.get("BENCH_PREBUILT_URL"):
+        PREBUILT_URL = os.environ["BENCH_PREBUILT_URL"]
+        return
+    tag = f"{root.name}-{TOOLCHAIN}-{'-'.join(s.cmd)}"
+    pub = WORK / "prebuilt" / tag
+    store = pub / "store"
+    if not (store / "v1" / "index").exists():
+        home = pub / "publisher-home" / "cargo"
+        home.mkdir(parents=True, exist_ok=True)
+        cargo = Path(os.environ.get("CARGO_HOME", HOME / ".cargo"))
+        for sub in ("registry", "git"):
+            link = home / sub
+            if (cargo / sub).exists() and not link.exists():
+                link.symlink_to(cargo / sub)
+        env = dict(os.environ)
+        env.update({
+            "CARGO_HOME": str(home),
+            "CARGO_TARGET_DIR": str(pub / "target"),
+            "JUSTRUST_DEPCACHE_DIR": str(pub / "depcache"),
+            "JUSTRUST_REMOTE": "0",
+            "JUSTRUST_QUIET": "1",
+            "JUSTRUST_TOOLCHAIN": TOOLCHAIN,
+        })
+        env.pop("JUSTRUST_PREBUILT", None)
+        print(f"bench: publishing {s.name} dependencies to {store}", file=sys.stderr)
+        cwd = root / SNAPSHOTS[s.snapshot]["cwd"]
+        subprocess.run([J, *s.cmd], cwd=cwd, env=env, check=True, capture_output=True)
+        out = subprocess.run([J, "cache", "--publish", str(store)], env=env, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        print(f"bench: {out}", file=sys.stderr)
+        shutil.rmtree(pub / "target", ignore_errors=True)
+    import http.server
+    import functools
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), functools.partial(Quiet, directory=str(store)))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    PREBUILT_URL = f"http://127.0.0.1:{srv.server_address[1]}"
+
+
 def run_once(s: Scenario, root: Path, target: Path) -> dict:
     rid = new_id()
     env = dict(os.environ)
@@ -400,6 +466,12 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     env.pop("JUSTRUST_DISABLE", None)
     env["JUSTRUST_TOOLCHAIN"] = TOOLCHAIN
     env.update(s.env)
+    if s.prebuilt:
+        # A new machine: nothing in the local depcache, the store has it.
+        cache = target.with_name(target.name + "-depcache")
+        shutil.rmtree(cache, ignore_errors=True)
+        env["JUSTRUST_DEPCACHE_DIR"] = str(cache)
+        env["JUSTRUST_PREBUILT"] = PREBUILT_URL
     cwd = root / SNAPSHOTS[s.snapshot]["cwd"]
     load, rustc = foreign_load()
     t0 = time.monotonic()
@@ -497,6 +569,8 @@ def stats(samples: list[dict]) -> dict:
 
 def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     root = prepare(s.snapshot)
+    if s.prebuilt:
+        prebuilt_store(s, root)
     # Each toolchain keeps its own warm target dir: switching rustc in one
     # dir would rebuild everything on every switch.
     tdir = "target" if TOOLCHAIN == "system" else f"target-{TOOLCHAIN}"
@@ -536,6 +610,7 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
                 samples.append(r)
             if s.cold:
                 shutil.rmtree(target, ignore_errors=True)
+                shutil.rmtree(target.with_name(target.name + "-depcache"), ignore_errors=True)
     finally:
         restore(root, s.edit)
     if s.edit is None and not s.cold and any(x["units"] for x in samples):
