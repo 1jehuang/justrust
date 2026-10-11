@@ -64,6 +64,9 @@ pub struct Reply {
     /// Time spent inside the daemon.
     #[serde(default)]
     pub ms: f64,
+    /// Every rust-analyzer diagnostic, unfiltered (`pull` with `raw`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw: Vec<Value>,
 }
 
 /// What the run records about early diagnostics (`summary.early`).
@@ -519,6 +522,17 @@ fn read_msg(r: &mut impl BufRead) -> Option<Value> {
     serde_json::from_slice(&buf).ok()
 }
 
+/// rust-analyzer's experimental diagnostics (unresolved methods, fields,
+/// names, trait bounds...): they find 13 of 19 typical agent errors instead
+/// of 7 (FINDINGS 28). `JUSTRUST_EARLY_EXPERIMENTAL=0` turns them off; read
+/// by the daemon when it starts.
+fn experimental() -> bool {
+    !matches!(
+        std::env::var("JUSTRUST_EARLY_EXPERIMENTAL").as_deref(),
+        Ok("0") | Ok("off") | Ok("no") | Ok("false")
+    )
+}
+
 fn ra_config(target: &Path) -> Value {
     json!({
         "checkOnSave": false,
@@ -529,7 +543,7 @@ fn ra_config(target: &Path) -> Value {
             "allTargets": true,
         },
         "procMacro": {"enable": true},
-        "diagnostics": {"enable": true, "experimental": {"enable": false}},
+        "diagnostics": {"enable": true, "experimental": {"enable": experimental()}},
         "cachePriming": {"enable": true},
         "files": {"watcher": "server"},
         "lens": {"enable": false},
@@ -809,7 +823,7 @@ impl State {
 
     /// `extra`: files to pull besides the changed ones (`pull` op, used by
     /// the accuracy sweep to ask about every file of a crate).
-    fn diagnostics(&mut self, extra: &[PathBuf], timeout: Duration) -> Reply {
+    fn diagnostics(&mut self, extra: &[PathBuf], timeout: Duration, raw: bool) -> Reply {
         let t = Instant::now();
         self.queries += 1;
         let changed = self.sync();
@@ -840,6 +854,7 @@ impl State {
         let deadline = Instant::now() + timeout;
         let mut diags = Vec::new();
         let mut pulled = Vec::new();
+        let mut raws = Vec::new();
         for (f, rx) in rxs {
             let left = deadline.saturating_duration_since(Instant::now());
             let Ok(m) = rx.recv_timeout(left) else {
@@ -847,6 +862,13 @@ impl State {
             };
             let items = m["result"]["items"].as_array().cloned().unwrap_or_default();
             pulled.push(f.display().to_string());
+            if raw {
+                raws.extend(items.iter().map(|d| {
+                    json!({"file": f, "severity": d["severity"], "code": d["code"],
+                           "line": d["range"]["start"]["line"].as_u64().map(|l| l + 1),
+                           "message": d["message"]})
+                }));
+            }
             let errs: Vec<Diag> = items.iter().filter_map(|d| to_diag(&f, d)).collect();
             if errs.is_empty() {
                 self.erroring.remove(&f);
@@ -861,6 +883,7 @@ impl State {
             files: pulled,
             diags,
             ms: t.elapsed().as_secs_f64() * 1000.0,
+            raw: raws,
         }
     }
 }
@@ -877,13 +900,21 @@ fn to_diag(file: &Path, d: &Value) -> Option<Diag> {
     if !(b.len() == 5 && b[0] == b'E' && b[1..].iter().all(u8::is_ascii_digit)) {
         return None;
     }
+    let message = d["message"].as_str().unwrap_or_default();
+    // Where rust-analyzer's own inference gave up, not the program's:
+    // "type annotations needed" (E0282) and anything mentioning a type it
+    // could not compute. On the Desktop snapshot these were the only
+    // errors it reported on sources rustc accepts (FINDINGS 28).
+    if code == "E0282" || message.contains("{unknown}") {
+        return None;
+    }
     let start = &d["range"]["start"];
     Some(Diag {
         file: file.display().to_string(),
         line: start["line"].as_u64()? as u32 + 1,
         col: start["character"].as_u64()? as u32 + 1,
         code: code.to_owned(),
-        message: d["message"].as_str().unwrap_or_default().to_owned(),
+        message: message.to_owned(),
     })
 }
 
@@ -978,10 +1009,11 @@ fn daemon(root: &Path) -> Result<()> {
             let req: Value = serde_json::from_str(&line).unwrap_or_default();
             match req["op"].as_str() {
                 Some("diagnostics") => {
-                    let r = state
-                        .lock()
-                        .unwrap()
-                        .diagnostics(&[], Duration::from_secs(4));
+                    let r = state.lock().unwrap().diagnostics(
+                        &[],
+                        Duration::from_secs(4),
+                        req["raw"].as_bool() == Some(true),
+                    );
                     let _ = writeln!(w, "{}", serde_json::to_string(&r).unwrap_or_default());
                 }
                 Some("pull") => {
@@ -991,10 +1023,11 @@ fn daemon(root: &Path) -> Result<()> {
                         .flatten()
                         .filter_map(|f| f.as_str().map(PathBuf::from))
                         .collect();
-                    let r = state
-                        .lock()
-                        .unwrap()
-                        .diagnostics(&files, Duration::from_secs(300));
+                    let r = state.lock().unwrap().diagnostics(
+                        &files,
+                        Duration::from_secs(300),
+                        req["raw"].as_bool() == Some(true),
+                    );
                     let _ = writeln!(w, "{}", serde_json::to_string(&r).unwrap_or_default());
                 }
                 Some("stop") => {
@@ -1089,6 +1122,10 @@ mod tests {
         assert_eq!(to_diag(f, &mk(1, "E0308")).unwrap().line, 5);
         assert!(to_diag(f, &mk(1, "unresolved-proc-macro")).is_none());
         assert!(to_diag(f, &mk(2, "E0308")).is_none());
+        assert!(to_diag(f, &mk(1, "E0282")).is_none());
+        let unknown = json!({"severity": 1, "code": "E0308", "message": "expected {unknown}",
+                             "range": {"start": {"line": 1, "character": 1}}});
+        assert!(to_diag(f, &unknown).is_none());
     }
 
     #[test]

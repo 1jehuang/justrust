@@ -124,13 +124,17 @@ def sweep() -> dict:
     files = sorted(str(p) for p in (WS / "crates").rglob("*.rs") if "target" not in p.parts)
     files += sorted(str(p) for p in (WS / "src").rglob("*.rs"))
     t = time.monotonic()
-    r = daemon({"op": "pull", "files": files})
+    r = daemon({"op": "pull", "files": files, "raw": True})
     secs = time.monotonic() - t
     print(f"clean sweep: {len(r['files'])}/{len(files)} files pulled in {secs:.1f}s, "
           f"{len(r['diags'])} early errors (all false positives)", flush=True)
     for d in r["diags"]:
         print(f"  FP {d['code']} {d['file'].replace(str(ROOT) + '/', '')}:{d['line']} {d['message'][:100]}")
-    return {"files": len(files), "pulled": len(r["files"]), "secs": round(secs, 1), "false_positives": r["diags"]}
+    sev1 = [d for d in r.get("raw", []) if d["severity"] == 1]
+    print(f"  raw severity-1 diagnostics from rust-analyzer (all codes): {len(sev1)}")
+    for d in sev1[:30]:
+        print(f"    {d['code']} {d['file'].replace(str(ROOT) + '/', '')}:{d['line']} {str(d['message'])[:90]}")
+    return {"raw_errors": sev1, "files": len(files), "pulled": len(r["files"]), "secs": round(secs, 1), "false_positives": r["diags"]}
 
 
 def mutations() -> list[dict]:
@@ -145,7 +149,7 @@ def mutations() -> list[dict]:
         try:
             path.write_text(orig.replace(anchor, repl, 1))
             t = time.monotonic()
-            early = daemon({"op": "diagnostics"}, timeout=30)
+            early = daemon({"op": "diagnostics", "raw": True}, timeout=30)
             early_ms = (time.monotonic() - t) * 1000
             env = {**os.environ, "CARGO_TARGET_DIR": str(target), "JUSTRUST_REMOTE": "0", "JUSTRUST_TOOLCHAIN": "system"}
             env.pop("JUSTRUST_EARLY", None)
@@ -163,20 +167,23 @@ def mutations() -> list[dict]:
         row = {
             "name": name, "file": rel, "line": line, "want": want,
             "early_ready": early.get("ready"), "early_ms": round(early_ms, 1),
-            "early": ed, "rustc": rerr, "tp": tp, "fp": fp, "fn": fn,
+            "early": ed, "rustc": rerr, "ra_raw": early.get("raw", []), "tp": tp, "fp": fp, "fn": fn,
             "first_rustc_error_found": first_ok,
         }
         rows.append(row)
         verdict = "HIT" if first_ok and fp == 0 else ("MISS" if not ed else ("PARTIAL" if tp else "WRONG"))
         print(f"{verdict:8s} {name:38s} rustc {[c for *_, c in rerr]} early {[c for *_, c in ed]} "
               f"tp {tp} fp {fp} fn {fn} ({early_ms:.0f} ms)", flush=True)
+        if verdict != "HIT":
+            for d in early.get("raw", []):
+                print(f"           ra: sev {d['severity']} {d['code']} line {d['line']}: {str(d['message'])[:90]}")
     # Back to pristine in the daemon too.
     daemon({"op": "diagnostics"}, timeout=30)
     return rows
 
 
 def main():
-    res = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "snapshot": suite.SNAPSHOTS["desktop"]["repos"].__repr__()}
+    res = {"experimental": os.environ.get("JUSTRUST_EARLY_EXPERIMENTAL", "1") != "0", "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "snapshot": suite.SNAPSHOTS["desktop"]["repos"].__repr__()}
     daemon({"op": "diagnostics"}, timeout=30)
     res["sweep"] = sweep()
     if "--sweep-only" not in sys.argv:
@@ -190,7 +197,8 @@ def main():
               f"false positives in mutations: {fp}, clean-sweep false positives: {len(res['sweep']['false_positives'])}")
         res["totals"] = {"n": n, "first_found": hit, "clean": clean, "fp": fp,
                          "tp": sum(r["tp"] for r in rows), "fn": sum(r["fn"] for r in rows)}
-    out = suite.RESULTS / f"early-accuracy-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    tag = "" if res["experimental"] else "-stable-only"
+    out = suite.RESULTS / f"early-accuracy-{time.strftime('%Y%m%d-%H%M%S')}{tag}.json"
     out.write_text(json.dumps(res, indent=1) + "\n")
     print(f"saved {out}")
 

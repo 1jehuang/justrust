@@ -1,0 +1,452 @@
+{
+ "started": "2026-10-11T05:11:00-0700",
+ "snapshot": "{'jcode-desktop': (PosixPath('/home/jeremy/jcode-desktop'), '7d38fb7'), 'jcode': (PosixPath('/home/jeremy/jcode'), 'abff94eeb')}",
+ "sweep": {
+  "files": 278,
+  "pulled": 278,
+  "secs": 0.1,
+  "false_positives": []
+ },
+ "mutations": [
+  {
+   "name": "type mismatch",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 19,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 503.0,
+   "early": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0308"
+    ]
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "unknown method",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 19,
+   "want": "E0599",
+   "early_ready": true,
+   "early_ms": 73.3,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0599"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "unresolved name",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 19,
+   "want": "E0425",
+   "early_ready": true,
+   "early_ms": 91.7,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0425"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "use after move",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 25,
+   "want": "E0382",
+   "early_ready": true,
+   "early_ms": 88.2,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     26,
+     "E0382"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "wrong return type",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 68,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 121.5,
+   "early": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     68,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     68,
+     "E0308"
+    ]
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "integer type mix",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 58,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 61.0,
+   "early": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0308"
+    ],
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0277"
+    ]
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "unresolved import",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 10,
+   "want": "E0432",
+   "early_ready": true,
+   "early_ms": 226.6,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     10,
+     "E0432"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "non-exhaustive match",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 76,
+   "want": "E0004",
+   "early_ready": true,
+   "early_ms": 132.3,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     67,
+     "E0004"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "unknown field",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 43,
+   "want": "E0609",
+   "early_ready": true,
+   "early_ms": 200.5,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     44,
+     "E0609"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "wrong arg count",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 83,
+   "want": "E0061",
+   "early_ready": true,
+   "early_ms": 95.5,
+   "early": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     83,
+     "E0061"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     83,
+     "E0061"
+    ]
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "missing struct field",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 59,
+   "want": "E0063",
+   "early_ready": true,
+   "early_ms": 104.5,
+   "early": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     58,
+     "E0063"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     58,
+     "E0063"
+    ]
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "borrow conflict",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 62,
+   "want": "E0499",
+   "early_ready": true,
+   "early_ms": 64.5,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     64,
+     "E0499"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "tuple arity",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 11,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 93.5,
+   "early": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     11,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     11,
+     "E0308"
+    ]
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "trait bound",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 13,
+   "want": "E0277",
+   "early_ready": true,
+   "early_ms": 72.7,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     13,
+     "E0277"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "assign immutable",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 14,
+   "want": "E0384",
+   "early_ready": true,
+   "early_ms": 57.0,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     15,
+     "E0384"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "format args",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 14,
+   "want": "",
+   "early_ready": true,
+   "early_ms": 85.4,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     15,
+     ""
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "syntax error",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 14,
+   "want": "",
+   "early_ready": true,
+   "early_ms": 87.0,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     14,
+     ""
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "signature change (callers elsewhere)",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 66,
+   "want": "E0061",
+   "early_ready": true,
+   "early_ms": 150.0,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     83,
+     "E0061"
+    ],
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     90,
+     "E0593"
+    ]
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 2,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "dependency crate (jcode-core)",
+   "file": "jcode/crates/jcode-core/src/id.rs",
+   "line": 201,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 246.7,
+   "early": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-core/src/id.rs",
+     202,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-core/src/id.rs",
+     202,
+     "E0308"
+    ]
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  }
+ ],
+ "totals": {
+  "n": 19,
+  "first_found": 7,
+  "clean": 7,
+  "fp": 0,
+  "tp": 7,
+  "fn": 13
+ }
+}
