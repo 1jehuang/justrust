@@ -2881,3 +2881,30 @@ same test set on `--workspace`, and fix finding 33's Desktop wrapper bug
 so points 2 and 28 count. Also: one run per point (`-n 1`) on a spot VM,
 so single points are noisy; the per-command means over 7 to 10 points are
 the reliable rows.
+
+Acceptance through the real agent path (`justrust test`):
+
+- `bench/attr-cache-accept.py` on the pinned snapshot, jr-rustc stage 2
+  PGO+BOLT: the full jcode-desktop-ui lib suite (1313 tests) has the same
+  test set with the cache on and off. The only outcome difference in the
+  suite run (`changelog_panel::...hot_reload_keeps_position...` in one run,
+  `workspace::...the_hint_chip_uses_only_spare_tab_space` in another) also
+  fails intermittently with the cache off and passes alone on both sides
+  (3 full-suite runs per side: one flaky failure on each side). Edge cases,
+  all PASS: a new `#[gpui::test]` appears and passes; a renamed test runs
+  under its new name and the old one is gone; edit A, edit B, revert to A
+  runs A, B, A; changing only the attribute (`#[gpui::test]` ->
+  `#[gpui::test(iterations = 3)]`) re-expands (body runs 1 -> 3 times); an
+  invalid attribute argument is reported, and fixing it builds and passes.
+- Reference loop on the real `~/jcode-desktop` checkout (AGENTS.md target,
+  `justrust test -p jcode-desktop-ui --lib -- fps_counter` after a one-line
+  edit in fps_counter.rs, file restored from a backup copy), 8 paired runs,
+  alternating order: cache off 5.90 s median (5.08-6.52), on 4.56 s
+  (3.60-5.24), **-23%, faster in 8 of 8 pairs**. The UI crate's frontend
+  went from 2.69 s to 1.30 s (runs 20261011-120719442-2276316 off,
+  20261011-120724754-2276848 on). Every run exited 0.
+
+Pitfall: a shell `exec 9>lock; flock 9` leaks fd 9 into children; an
+orphaned `wl-copy` inherited it and held the bench lock for 30 minutes.
+`suite.bench_lock` now names the holders when it waits, and jr-rustc's
+pgo-train.sh uses `flock -o`.
