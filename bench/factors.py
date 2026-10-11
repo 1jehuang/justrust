@@ -49,6 +49,10 @@ NIGHTLY = "nightly-2026-10-08"  # the pinned toolchain (docs/toolchain.md)
 # these unstable features (the pinned nightly's cargo accepts them).
 UNSTABLE_PROFILE = {"CARGO_UNSTABLE_PROFILE_RUSTFLAGS": "true",
                     "CARGO_UNSTABLE_PROFILE_HINT_MOSTLY_UNUSED": "true"}
+# The jr-rustc build fork-change factors run on both sides
+# (JR_RUSTC_MODE picks another saved mode under ~/jr-rustc/build/jr).
+JR_RUSTC_ENV = {"JUSTRUST_TOOLCHAIN": "system",
+                "RUSTC": str(Path.home() / "jr-rustc/build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-bolt-stage2") / "bin/rustc")}
 # The slowest dependencies of a cold Desktop UI test build (run
 # 20261011-043427013-426230: gpui 115 s, aws-sdk-bedrock 68 s, wgpu-core 67 s, ...).
 BIG_DEPS = ["gpui", "aws-sdk-bedrock", "wgpu-core", "gpui_linux", "read-fonts", "wgpu-hal",
@@ -178,6 +182,17 @@ FACTORS = [
         on={"JUSTRUST_TOOLCHAIN": NIGHTLY},
         off={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JUSTRUST_CARGO_FORK": "0"}, n=8,
     ),
+    # jr-rustc fork changes: both sides run the same jr-rustc build, `on`
+    # enables the change.
+    *[Factor(
+        name, what, "loop", scenario,
+        on={**JR_RUSTC_ENV, **UNSTABLE_PROFILE}, off={**JR_RUSTC_ENV, **UNSTABLE_PROFILE},
+        on_args=ui_rustflags("-Zcache-proc-macros"), n=6, slow=True, note=note,
+    ) for name, what, scenario, note in [
+        ("jr-attr-cache", "jr-rustc caches attribute proc-macro expansions (#[gpui::test]) under -Zcache-proc-macros",
+         "desktop-test-edit", "FINDINGS 29: 724 #[gpui::test] expansions per edit, 0.96 s; on runs 1"),
+        ("jr-attr-cache-check", "same, on the check-only loop", "desktop-body-check", ""),
+    ]],
     Factor(
         "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-bolt-stage2) vs the official nightly at the same commit",
         "loop", "desktop-test-edit",
