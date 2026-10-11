@@ -182,6 +182,13 @@ fn spawn() -> Result<()> {
         .open(crate::remote::dir()?.join("daemon.log"))?;
     let mut c = Command::new(std::env::current_exe()?);
     c.arg("__daemon")
+        // Long-lived and shared by every build: per-build switches of the
+        // build that happened to start it must not stick. Builds still opt
+        // out on their own (their shims check `JUSTRUST_PEER_CACHE`).
+        .env_remove("JUSTRUST_PEER_CACHE")
+        .env_remove("JUSTRUST_DEPCACHE")
+        .env_remove("JUSTRUST_DEPCACHE_DIR")
+        .env_remove("JUSTRUST_DEPCACHE_EXPLAIN")
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -269,6 +276,8 @@ struct Daemon {
     draining: AtomicBool,
     /// The relay of the current link, for this machine's rustc shims.
     peer: peercache::Current,
+    /// Our `peer.sock` (path, device, inode), removed on exit if still ours.
+    peer_sock: Mutex<Option<(PathBuf, u64, u64)>>,
 }
 
 impl Daemon {
@@ -288,6 +297,11 @@ impl Daemon {
         let (p, dev, ino) = &self.sock;
         if std::fs::metadata(p).is_ok_and(|m| m.dev() == *dev && m.ino() == *ino) {
             let _ = std::fs::remove_file(p);
+        }
+        if let Some((p, dev, ino)) = self.peer_sock.lock().ok().and_then(|mut s| s.take())
+            && std::fs::metadata(&p).is_ok_and(|m| m.dev() == dev && m.ino() == ino)
+        {
+            let _ = std::fs::remove_file(&p);
         }
         if let Ok(mut l) = self.lock.lock() {
             l.take();
@@ -386,12 +400,21 @@ fn daemon() -> Result<()> {
         lock: Mutex::new(Some(lock)),
         draining: AtomicBool::new(false),
         peer: Arc::default(),
+        peer_sock: Mutex::default(),
     });
     if peercache::enabled()
         && let Some(p) = peercache::sock_path()
-        && let Err(e) = peercache::listen(&p, d.peer.clone())
     {
-        log(&format!("peer cache socket {}: {e}", p.display()));
+        match peercache::listen(&p, d.peer.clone()) {
+            Ok(()) => {
+                if let (Ok(m), Ok(mut s)) = (std::fs::metadata(&p), d.peer_sock.lock()) {
+                    *s = Some((p, m.dev(), m.ino()));
+                }
+            }
+            Err(e) => log(&format!("peer cache socket {}: {e}", p.display())),
+        }
+    } else {
+        log("peer cache off (JUSTRUST_PEER_CACHE=0 or JUSTRUST_DEPCACHE=0)");
     }
     {
         let d = d.clone();
