@@ -910,10 +910,10 @@ impl Plan {
         let text = std::fs::read_to_string(&m).unwrap_or_default();
         let _ = std::fs::remove_file(&m);
         match got {
-            pb::Got::Ok => {}
+            pb::Got::Ok => pb::note_success(root),
             pb::Got::Missing => return None,
             pb::Got::Failed(why) => {
-                let _ = std::fs::write(pb::breaker(root), format!("script manifest: {why}"));
+                pb::note_failure(root, &format!("script manifest: {why}"));
                 return None;
             }
         }

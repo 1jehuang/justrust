@@ -2921,3 +2921,39 @@ bench lock: stock 11.5 / 11.7 s; justrust before 22.7 / 22.6 s; after
 11.3 / 11.5 s, same 3 real failures as stock. `JUSTRUST_TEST_PARALLEL=0`
 and `JUSTRUST_TEST_TIMES=0` were already at stock speed (11.0 to 11.5 s),
 which isolated the pool.
+
+## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
+
+Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
+`jcode-justrust-prebuilt-production`, us-east-1. Client URL:
+`JUSTRUST_PREBUILT=https://jcode-justrust-prebuilt-production-280196252242.s3.us-east-1.amazonaws.com`.
+Checked from outside with curl: anonymous GET under `v1/` 200, outside
+`v1/` 403, listing 403, anonymous PUT 403, plain http 403. Filled with
+`prebuild/run.sh` (43 seed crates, check/build/test --no-run): 576
+bundles, 0.47 GB, 6 build-script runs.
+
+First end-to-end cold `check` of the seed project from another directory,
+empty depcache: **18 of 313** dependency units from the store. Every one of
+the 313 base keys and manifest entries matched the store, so keys were
+fine. The breaker file said `manifest: HTTP 0`: one curl with a 3 s connect
+timeout failed while dozens of shims connected at once on a loaded laptop,
+and the first failure paused the store for 10 minutes, i.e. the rest of
+the build. 200 parallel manifest GETs from the same machine afterwards: all
+200, connect up to 2.1 s.
+
+Fix (src/depcache_prebuilt.rs): connect timeout 10 s, one retry for
+connection failures and 5xx, and the breaker trips after 5 consecutive
+failures (a success resets the count) instead of on the first.
+
+Result, interleaved, fresh target dir and empty depcache each run, machine
+busy (load 39-49, other agents' builds):
+
+| run | S3 store | no store |
+|---|---:|---:|
+| 1 | 43.0 s, 313/313 prebuilt | 70.2 s, 0/313 |
+| 2 | 38.6 s, 313/313 prebuilt | 60.1 s, 0/313 |
+
+-38% wall on a cold build of 43 popular crates over the public internet
+path to S3, with the CPU mostly taken by other builds (the store run's own
+CPU was 32.5 s, it waited 33.9 s for CPU). On a quiet machine the floor is
+the restore time; not measured yet.

@@ -43,6 +43,33 @@ use std::process::{Command, Stdio};
 pub(crate) const BREAKER_SECS: f64 = 600.0;
 const INDEX_SECS: f64 = 600.0;
 const MAX_INDEX: u64 = 64 * 1024 * 1024;
+/// Consecutive failed requests (across this machine's shims) before the
+/// store is paused for `BREAKER_SECS`. One timeout in a cold build, where
+/// dozens of shims connect at once, used to pause it for the whole build
+/// (18 of 313 units fetched from a healthy S3 store).
+const BREAKER_TRIPS: usize = 5;
+
+/// Record a failed store request; pause the store once `BREAKER_TRIPS`
+/// failures arrived without a success in between.
+pub(crate) fn note_failure(root: &Path, why: &str) {
+    let strikes = root.join("prebuilt.strikes");
+    let _ = paths::append_line(&strikes, why);
+    let n = std::fs::read_to_string(&strikes)
+        .map(|s| s.lines().count())
+        .unwrap_or(0);
+    if n >= BREAKER_TRIPS {
+        let _ = std::fs::write(breaker(root), format!("{n} failures in a row, last: {why}"));
+        let _ = std::fs::remove_file(&strikes);
+    }
+}
+
+/// A request succeeded: forget earlier failures.
+pub(crate) fn note_success(root: &Path) {
+    let strikes = root.join("prebuilt.strikes");
+    if strikes.exists() {
+        let _ = std::fs::remove_file(strikes);
+    }
+}
 
 /// The store base, without a trailing slash, or `None` when off.
 pub fn base() -> Option<String> {
@@ -71,6 +98,16 @@ pub(crate) enum Got {
 
 /// Fetch `<base>/v1/<rel>` into `dst`.
 pub(crate) fn get(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) -> Got {
+    match get_once(base, rel, dst, max_time, max_bytes) {
+        // A connection that did not finish (code 0) or a 5xx: once more.
+        Got::Failed(_) if !base.starts_with("file://") => {
+            get_once(base, rel, dst, max_time, max_bytes)
+        }
+        g => g,
+    }
+}
+
+fn get_once(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) -> Got {
     if let Some(dir) = base.strip_prefix("file://") {
         let src = Path::new(dir).join("v1").join(rel);
         return match std::fs::metadata(&src) {
@@ -90,7 +127,7 @@ pub(crate) fn get(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u
             "--max-redirs",
             "2",
             "--connect-timeout",
-            "3",
+            "10",
         ])
         .args(["--max-time", &max_time.to_string()])
         .args(["--max-filesize", &max_bytes.to_string()])
@@ -170,7 +207,7 @@ fn may_have(root: &Path, base: &str, key: &str) -> bool {
             }
             Got::Failed(why) => {
                 let _ = std::fs::remove_file(&t);
-                let _ = std::fs::write(breaker(root), format!("index: {why}"));
+                note_failure(root, &format!("index: {why}"));
                 return false;
             }
         }
@@ -218,10 +255,10 @@ fn fetch_from(base: &str, plan: &Plan, err: &mut dyn Write) -> Option<depcache::
     let text = std::fs::read_to_string(&m).unwrap_or_default();
     let _ = std::fs::remove_file(&m);
     match got {
-        Got::Ok => {}
+        Got::Ok => note_success(root),
         Got::Missing => return None,
         Got::Failed(why) => {
-            let _ = std::fs::write(breaker(root), format!("manifest: {why}"));
+            note_failure(root, &format!("manifest: {why}"));
             return None;
         }
     }
@@ -484,6 +521,28 @@ mod tests {
         assert!(fetch_from(&base, &p5, &mut Vec::new()).is_none());
         assert!(p5.restore(&mut Vec::new()).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn breaker_needs_consecutive_failures() {
+        let root = std::env::temp_dir().join(format!("jr-breaker-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paused = || fresh_file(&breaker(&root), BREAKER_SECS);
+        for _ in 0..BREAKER_TRIPS - 1 {
+            note_failure(&root, "HTTP 0");
+        }
+        assert!(
+            !paused(),
+            "a few timeouts in a cold build must not pause the store"
+        );
+        note_success(&root);
+        for _ in 0..BREAKER_TRIPS - 1 {
+            note_failure(&root, "HTTP 0");
+        }
+        assert!(!paused(), "a success resets the count");
+        note_failure(&root, "HTTP 0");
+        assert!(paused(), "a store that keeps failing is paused");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
