@@ -93,7 +93,7 @@ fn exec(real: &PathBuf, args: &[OsString]) -> ! {
     std::process::exit(127);
 }
 
-fn want_passes(args: &[OsString]) -> (bool, bool) {
+fn want_passes(args: &[OsString], local: bool) -> (bool, bool) {
     let has = args
         .iter()
         .any(|a| a.to_string_lossy().starts_with("-Ztime-passes"));
@@ -104,7 +104,11 @@ fn want_passes(args: &[OsString]) -> (bool, bool) {
         Ok("0") | Ok("off") | Ok("never") => (false, false),
         Ok("always") => (true, true),
         _ => (
-            std::env::var("RUSTC_BOOTSTRAP").as_deref() == Ok("1"),
+            std::env::var("RUSTC_BOOTSTRAP").as_deref() == Ok("1")
+                // A pinned nightly accepts -Z without RUSTC_BOOTSTRAP, so
+                // the cache key does not move. Local crates only: units
+                // timed with -Ztime-passes are not stored in the depcache.
+                || (local && std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some()),
             false,
         ),
     }
@@ -138,7 +142,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             return Some(0);
         }
     }
-    let (passes_on, force_bootstrap) = want_passes(args);
+    let (passes_on, force_bootstrap) = want_passes(args, described.local);
     let mut cmd = Command::new(real);
     cmd.args(args).stderr(Stdio::piped());
     if passes_on {

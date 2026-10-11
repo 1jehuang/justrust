@@ -48,6 +48,9 @@ pub struct Summary {
     /// the workspace's background-computed hints (`split_index`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub split_hints: Vec<SplitHint>,
+    /// Pinned toolchain id the build used (`justrust.toml`), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -777,6 +780,7 @@ pub fn build(
         sched: None,
         remote: None,
         split_hints: Vec::new(),
+        toolchain: meta.toolchain.clone(),
     }
 }
 
@@ -923,6 +927,9 @@ impl Summary {
         let _ = writeln!(o, "  time    {}", parts.join(" | "));
         if let Some(slot) = &self.slot {
             let _ = writeln!(o, "  target  {}", slot.report_line());
+        }
+        if let Some(tc) = &self.toolchain {
+            let _ = writeln!(o, "  rustc   pinned toolchain {tc}");
         }
 
         // Units.

@@ -50,6 +50,9 @@ pub struct Meta {
     /// Per-agent build slot used for this run (see `slots`).
     #[serde(default)]
     pub slot: Option<slots::SlotInfo>,
+    /// Pinned toolchain id (`justrust.toml`), `None` for the system one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -162,8 +165,26 @@ pub fn should_record(args: &[OsString]) -> bool {
 }
 
 pub fn exec_cargo(args: &[OsString]) -> ! {
-    let cargo = paths::real_cargo().unwrap_or_else(|_| PathBuf::from("/usr/bin/cargo"));
-    let err = Command::new(&cargo).args(args).exec();
+    // Unrecorded commands (fmt, metadata, tree) use a pinned toolchain only
+    // when it is already installed: they never trigger a download.
+    let pinned = std::env::current_dir()
+        .ok()
+        .and_then(|d| crate::toolchain::resolve(&d).ok().flatten())
+        .and_then(|p| crate::toolchain::installed(&p.spec).ok().flatten());
+    let mut cmd;
+    match &pinned {
+        Some(tc) => {
+            cmd = Command::new(tc.bin("cargo"));
+            apply_toolchain_env(&mut cmd, tc);
+        }
+        None => {
+            cmd = Command::new(
+                paths::real_cargo().unwrap_or_else(|_| PathBuf::from("/usr/bin/cargo")),
+            );
+        }
+    }
+    let cargo = PathBuf::from(cmd.get_program());
+    let err = cmd.args(args).exec();
     eprintln!("justrust: failed to exec {}: {err}", cargo.display());
     std::process::exit(127);
 }
@@ -233,16 +254,44 @@ fn term_width(fd: i32) -> Option<u16> {
     }
 }
 
+/// Run cargo from a pinned toolchain: its `bin/` goes first on `PATH`, so
+/// cargo finds the matching rustc, rustdoc, cargo-clippy, clippy-driver and
+/// rustfmt, and so does anything cargo runs.
+pub fn apply_toolchain_env(cmd: &mut Command, tc: &crate::toolchain::Toolchain) {
+    let bin = tc.dir.join("bin");
+    let mut dirs = vec![bin.clone()];
+    if let Some(p) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&p).filter(|d| d != &bin));
+    }
+    if let Ok(p) = std::env::join_paths(dirs) {
+        cmd.env("PATH", p);
+    }
+    cmd.env("RUSTC", tc.bin("rustc"))
+        .env("RUSTDOC", tc.bin("rustdoc"))
+        .env("JUSTRUST_TOOLCHAIN_ACTIVE", &tc.id);
+    // A rustup-managed environment must not redirect the pinned binaries.
+    cmd.env_remove("RUSTUP_TOOLCHAIN");
+}
+
 fn record(args: &[OsString], opts: Options) -> Result<i32> {
-    let real_cargo = paths::real_cargo()?;
+    // A pinned toolchain (`justrust.toml`) replaces the system cargo and
+    // rustc. Installed on first use. Fails open to the system toolchain.
+    let pinned = crate::toolchain::for_build();
+    let real_cargo = match &pinned {
+        Some(tc) => tc.bin("cargo"),
+        None => paths::real_cargo()?,
+    };
     let shim = paths::ensure_rustc_shim()?;
     let me = std::env::current_exe()?.canonicalize()?;
     // Respect an existing RUSTC unless it already points at us.
-    let real_rustc = std::env::var_os("RUSTC")
-        .map(PathBuf::from)
-        .filter(|p| p.canonicalize().ok().as_deref() != Some(me.as_path()))
-        .or_else(|| paths::find_on_path("rustc", &me))
-        .context("could not find rustc")?;
+    let real_rustc = match &pinned {
+        Some(tc) => tc.bin("rustc"),
+        None => std::env::var_os("RUSTC")
+            .map(PathBuf::from)
+            .filter(|p| p.canonicalize().ok().as_deref() != Some(me.as_path()))
+            .or_else(|| paths::find_on_path("rustc", &me))
+            .context("could not find rustc")?,
+    };
 
     let id = new_run_id();
     let run_dir = paths::runs_dir()?.join(&id);
@@ -288,6 +337,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         mem_total_mb: procfs::meminfo().map(|m| m.total_mb).unwrap_or(0),
         env,
         slot: slot.as_ref().map(|s| s.info.clone()),
+        toolchain: pinned.as_ref().map(|tc| tc.id.clone()),
     };
     std::fs::write(run_dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
 
@@ -307,6 +357,14 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     };
 
     let mut cmd = Command::new(&real_cargo);
+    if let Some(tc) = &pinned {
+        apply_toolchain_env(&mut cmd, tc);
+        if tc.nightly {
+            // Lets the shim time passes of local crates: on nightly, unstable
+            // options never change the incremental cache key.
+            cmd.env("JUSTRUST_TOOLCHAIN_NIGHTLY", "1");
+        }
+    }
     cmd.args(&cargo_args)
         .env("RUSTC", &shim)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)

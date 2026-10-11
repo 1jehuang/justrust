@@ -40,6 +40,7 @@ mod split_apply;
 mod split_index;
 mod status;
 mod summary;
+mod toolchain;
 
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
@@ -161,6 +162,12 @@ enum Command {
         #[arg(long, hide = true)]
         auto: bool,
     },
+    /// Pinned Rust toolchain (justrust.toml `[toolchain] channel`):
+    /// status, install, pin, unpin, remove.
+    Toolchain {
+        #[command(subcommand)]
+        cmd: Option<ToolchainCmd>,
+    },
     /// Install a `cargo` proxy so every build is recorded automatically.
     Install {
         /// Directory for the proxy. Must come before the real cargo on PATH.
@@ -245,6 +252,30 @@ enum Command {
         #[arg(long, default_value_t = 15)]
         top: usize,
     },
+}
+
+#[derive(Subcommand)]
+enum ToolchainCmd {
+    /// Which toolchain builds here use, and what is installed (default).
+    Status,
+    /// Download a toolchain (default: the one pinned here) from
+    /// static.rust-lang.org into ~/.justrust/toolchains.
+    Install {
+        /// nightly-YYYY-MM-DD, beta-YYYY-MM-DD, X.Y.Z, or `nightly` (latest
+        /// complete).
+        spec: Option<String>,
+    },
+    /// Pin this project (writes justrust.toml) and install it.
+    Pin {
+        /// nightly-YYYY-MM-DD, X.Y.Z, or `nightly` (latest complete).
+        spec: String,
+        #[arg(long)]
+        no_install: bool,
+    },
+    /// Remove the pin: builds here use the system toolchain again.
+    Unpin,
+    /// Delete an installed toolchain.
+    Remove { spec: String },
 }
 
 #[derive(Subcommand)]
@@ -429,6 +460,13 @@ pub fn main() -> anyhow::Result<()> {
             gc_root,
         } => slots::command(clean, gc, du, gc_root)?,
         Command::Cache { prune, clear, auto } => depcache_gc::command(prune, clear, auto)?,
+        Command::Toolchain { cmd } => match cmd.unwrap_or(ToolchainCmd::Status) {
+            ToolchainCmd::Status => toolchain::status()?,
+            ToolchainCmd::Install { spec } => toolchain::install_command(spec)?,
+            ToolchainCmd::Pin { spec, no_install } => toolchain::pin_command(&spec, no_install)?,
+            ToolchainCmd::Unpin => toolchain::unpin_command()?,
+            ToolchainCmd::Remove { spec } => toolchain::remove_command(&spec)?,
+        },
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,
         Command::Login { no_wait } => account::login(no_wait)?,
