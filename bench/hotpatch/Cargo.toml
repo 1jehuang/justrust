@@ -1,0 +1,13 @@
+[package]
+name = "jr-hot"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Prototype: hot patching of Rust test binaries (FINDINGS 28)"
+
+[dependencies]
+object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "std"] }
+memmap2 = "=0.9.11"
+libc = "0.2.190"
+
+[workspace]
