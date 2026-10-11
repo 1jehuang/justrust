@@ -2957,3 +2957,18 @@ busy (load 39-49, other agents' builds):
 path to S3, with the CPU mostly taken by other builds (the store run's own
 CPU was 32.5 s, it waited 33.9 s for CPU). On a quiet machine the floor is
 the restore time; not measured yet.
+
+## 2026-10-11: remote sync dominated a cold `justrust check` (run 20261011-154955613-3707337)
+
+jcode-website fresh worktree, `justrust check` auto-picked remote (cold target, no history).
+Remote total 282.1s, of which sync 250.1s; compile itself was 31.1s. Two files over 8 MB were
+skipped, so the cost is the long tail of small files (public/benchmarks/data trials, thousands of
+JSON transcripts). Local cold check would likely have been ~60-90s. Ideas: send only files the
+cargo build can read (crate dirs + build-script inputs), or count the file total before choosing
+remote for a cold run.
+
+## 2026-10-11: wild `-B` broke wasm32 links (fixed in 290bded)
+
+`trunk build` of jcode-website failed: `rust-lld: error: unknown argument: -B/home/jeremy/.justrust/bin/ld`.
+The shim added the wild `-B` dir to every local linking unit regardless of `--target`.
+Now only Linux targets (or no `--target`) get it.
