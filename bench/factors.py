@@ -179,10 +179,10 @@ FACTORS = [
         off={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JUSTRUST_CARGO_FORK": "0"}, n=8,
     ),
     Factor(
-        "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-use) vs the official nightly at the same commit",
+        "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-bolt-stage2) vs the official nightly at the same commit",
         "loop", "desktop-test-edit",
         on={"JUSTRUST_TOOLCHAIN": "system",
-            "RUSTC": str(Path.home() / "jr-rustc/build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-use") / "bin/rustc")},
+            "RUSTC": str(Path.home() / "jr-rustc/build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-bolt-stage2") / "bin/rustc")},
         off={"JUSTRUST_TOOLCHAIN": "system",
              "RUSTC": str(suite.JR_HOME / "toolchains" / NIGHTLY / "bin" / "rustc")},
         n=4, slow=True,
