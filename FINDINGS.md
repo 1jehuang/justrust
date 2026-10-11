@@ -2922,6 +2922,28 @@ bench lock: stock 11.5 / 11.7 s; justrust before 22.7 / 22.6 s; after
 and `JUSTRUST_TEST_TIMES=0` were already at stock speed (11.0 to 11.5 s),
 which isolated the pool.
 
+Rerun points (`change: rerun`, justrust 1.22 s vs stock 0.74 s mean): the
+gap is mostly noise on the shared spot host, not a fixed cost. On the
+machine with nothing else running, no-op `check -p jcode-base` is ~0.29 s
+justrust vs ~0.21 s stock (4 of 6 pairs). Laptop, run
+`20261011-155942999-1`: 0.355 s wall = 23 ms before cargo starts, 300 ms
+cargo (stock alone ~265 ms), 26 ms tail, 7 ms exit, so the fixed overhead
+is ~0.1 s. Neither `CARGO_TERM_VERBOSE` nor `RUSTC`=shim moved plain
+cargo's no-op CPU time measurably (interleaved, 20 rounds: 354 / 310 /
+362 ms medians). The synth run's 0.90 s and 1.28 s rerun walls were all
+`cargo startup` with io stalls of 0.5 to 0.8 s in the same runs. A
+`--no-run` then filtered test sequence on the laptop matches stock (0.6 to
+0.8 s both). Caution: ad hoc timing on the build machine during a
+benchmark skews it. Ad hoc runs at 23:00 to 23:05 UTC overlapped synth2
+points 8 and 9 (stock 70 s / 30 s, flagged noisy), so rerun those points
+before quoting them.
+
+Remote failures of points 2 and 28 fixed in 1c50a2b: justrust makes
+`/bin/sh` bash on its own AWS machine (at provisioning and on each
+justrust install), checked there: `cargo test --no-run` in jcode-desktop
+builds `tests/version.rs`. `bench/versus.py run --synth 1 --only-points
+2,28` reruns single points for debugging (nothing saved).
+
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
 Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
