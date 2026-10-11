@@ -231,7 +231,7 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
     }
     // Same linker on both sides: with wild here and not there, the
     // machine linked the 670 MB Desktop test binary with mold, 1.26 s
-    // against 0.25 s (FINDINGS 31). Best effort: a failure only costs speed.
+    // against 0.25 s (FINDINGS 33). Best effort: a failure only costs speed.
     if crate::linker::is_installed() && std::env::var("JUSTRUST_LINKER").as_deref() != Ok("off") {
         let _ = t
             .command()

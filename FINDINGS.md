@@ -2373,3 +2373,57 @@ factors stay in `bench/factors.py` (slow) to rerun after a toolchain bump.
 Pitfall: an unlocked `versus.py` run by another agent edited the shared
 snapshot during the first attempt (type error injected into a test-loop
 sample); all timed runs must hold `/tmp/justrust-bench.lock`.
+
+## 33. Benchmarking the remote route from the agent's seat (2026-10-11)
+
+New: `bench/versus.py --remote` adds a `remote` stack (`JUSTRUST_REMOTE=force`
+from the laptop, wall includes sync and ssh; a local fallback is an error),
+and `bench/on-remote.sh` runs any benchmark *on* the build machine
+(c7i.8xlarge, Xeon 8488C, 32 threads). Laptop: Core Ultra X9 388H, 16
+threads. Same pinned Desktop snapshot, warm target dirs on both sides.
+
+The first run (`versus-20261011-081038-69d8c04310ce-dirty.json`) said remote
+was 0.39x local overall. Three bugs, all fixed:
+
+| bug | effect | fix |
+|---|---|---|
+| a workspace outside git was mirrored crate dir by crate dir, so `jcode-build-meta`'s `rerun-if-changed` root `Cargo.toml` did not exist remotely | its build script reran every call and 8 local crates recompiled: no-op `test` 11.4 s remote vs 0.5 s local | mirror the whole workspace when a path dependency is not in a git repo; take over root-created dirs inside a widened root |
+| the cached IP was never refreshed after the machine restarted (new public IP every start) | every remote call timed out, then fell back | `describe()` keeps `~/.justrust/remote/ip` equal to AWS's |
+| the machine lacked `libxkbcommon-x11`, `libX11`, `dbus`, `EGL` | every Desktop binary or bin-test build failed to link there | provisioning installs them |
+
+Also: the machine linked with mold where the laptop uses wild (link pass
+1.26 s vs 0.25 s on the reference loop); justrust now installs wild there
+whenever it links locally. Routing skipped any run with a pinned run id,
+so a benchmark could never take the remote path; the remote agent now
+marks its builds explicitly (`JUSTRUST_ON_REMOTE_AGENT`).
+
+After the fixes (`versus-20261011-084326-26e91bc15a8f-dirty.json`, n=5,
+and `versus-20261011-085118-bd4ede273a6d-dirty.json` with wild on both):
+
+| workload | justrust local | remote | remote vs local |
+|---|---:|---:|---:|
+| reference loop (test, 1 crate) | 7.07 s | 8.35 s | 0.85x |
+| deep edit (16 crates, test) | 12.59 s | 16.44 s | 0.77x |
+| body check | 2.06 s | 2.37 s | 0.87x |
+| first error | 1.60 s | 2.03 s | 0.88x |
+| no-op test | 0.50 s | 0.56 s | 0.82x |
+
+Sync and ssh are now small (40 to 100 ms sync, ~0.1 s fixed). The rest is
+the machine: per-phase, the UI crate's frontend is 4.1 to 4.3 s remote vs
+2.9 to 3.6 s local, codegen 1.2 to 1.5 s vs 0.8 to 1.4 s. One rustc thread
+on the Xeon 8488C (spot, shared host) is slower than a laptop P-core, and
+warm incremental loops are single-crate, nearly single-threaded work. The
+machine's 32 threads only pay where parallelism exists: cold and
+multi-crate builds (finding 25: cold `check -p jcode-tui` 40.6 s remote)
+and big test suites. Routing already decides per command from measured
+walls; these numbers say warm single-crate loops should stay local on this
+instance type. For warm loops a high-clock instance (c7i is 3.2 GHz
+all-core; z1d/m7i-flex/c8g are worth measuring with
+`bench/on-remote.sh`) is the lever, not more cores.
+
+The synthetic workload (`bench/versus.py --synth 1`) is running on the
+machine with `bench/on-remote.sh`. One point there (`test -- reload_config`
+in jcode-desktop) fails its pre-build with `CARGO_BIN_EXE_jcode-desktop`
+undefined for the `version` integration test; the same command builds
+locally, so it is a state left on the machine by the builds that failed to
+link before the library fix, not yet explained.

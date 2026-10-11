@@ -1,0 +1,600 @@
+{
+ "started": "2026-10-11T08:45:23-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "bd4ede273a6d",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 5,
+ "warmup": 1,
+ "stacks": [
+  "justrust",
+  "remote"
+ ],
+ "stack_defs": [
+  {
+   "name": "justrust",
+   "what": "justrust defaults, private depcache warmed by the warmup round",
+   "env": {},
+   "justrust": true
+  },
+  {
+   "name": "remote",
+   "what": "justrust, JUSTRUST_REMOTE=force: check/clippy/test on the remote machine, wall includes sync and ssh",
+   "env": {
+    "JUSTRUST_REMOTE": "force"
+   },
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "reference-loop": {
+   "what": "edit a #[test] fn in the 118k-line UI crate, run its tests",
+   "scenario": "desktop-test-edit",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "justrust": [
+     {
+      "wall": 7.398,
+      "exit": 0,
+      "cpu": 8.54,
+      "max_rss_mb": 2133.5,
+      "instructions": 45948191894,
+      "id": "20261011-084634124-4028917645",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.3,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.419,
+      "exit": 0,
+      "cpu": 6.39,
+      "max_rss_mb": 2157.0,
+      "instructions": 45929479518,
+      "id": "20261011-084641539-4028917262",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.1,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.067,
+      "exit": 0,
+      "cpu": 8.17,
+      "max_rss_mb": 2162.3,
+      "instructions": 45989086761,
+      "id": "20261011-084704132-4028917375",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.43,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.304,
+      "exit": 0,
+      "cpu": 8.49,
+      "max_rss_mb": 2128.5,
+      "instructions": 46059204457,
+      "id": "20261011-084711216-4028917730",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.29,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.76,
+      "exit": 0,
+      "cpu": 7.75,
+      "max_rss_mb": 2156.6,
+      "instructions": 45987028411,
+      "id": "20261011-084735833-4028917998",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.89,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 7.687,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.0,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 48
+      },
+      "id": "20261011-084626420-4028917613",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.58,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 9.222,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 47
+      },
+      "id": "20261011-084646974-4028917207",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.01,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.905,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 52
+      },
+      "id": "20261011-084656213-4028917933",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.55,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 8.348,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 47
+      },
+      "id": "20261011-084718537-4028917415",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.34,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 8.914,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 50
+      },
+      "id": "20261011-084726903-4028917835",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.06,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "justrust": {
+     "n": 5,
+     "median": 7.067,
+     "min": 5.419,
+     "max": 7.398,
+     "quiet_median": 7.067,
+     "cpu": 8.17,
+     "max_rss_mb": 2156.6,
+     "instructions": 45987028411,
+     "instructions_spread": 0.0028
+    },
+    "remote": {
+     "n": 5,
+     "median": 8.348,
+     "min": 7.687,
+     "max": 9.222,
+     "quiet_median": 8.348,
+     "cpu": 0.0,
+     "max_rss_mb": 15.1,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "deep-edit": {
+   "what": "body edit deep in the graph (16 crates rebuild), run tests",
+   "scenario": "desktop-jcode-core-body",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "justrust": [
+     {
+      "wall": 12.593,
+      "exit": 0,
+      "cpu": 19.17,
+      "max_rss_mb": 2157.8,
+      "instructions": 85434548810,
+      "id": "20261011-084833369-4028917547",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.19,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 12.163,
+      "exit": 0,
+      "cpu": 18.58,
+      "max_rss_mb": 2138.9,
+      "instructions": 84913319118,
+      "id": "20261011-084845975-4028917237",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.54,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 13.455,
+      "exit": 0,
+      "cpu": 20.39,
+      "max_rss_mb": 2126.6,
+      "instructions": 85745751476,
+      "id": "20261011-084932129-4028917932",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.42,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 12.057,
+      "exit": 0,
+      "cpu": 18.22,
+      "max_rss_mb": 2155.2,
+      "instructions": 84469937645,
+      "id": "20261011-084945596-4028917654",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.44,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 12.759,
+      "exit": 0,
+      "cpu": 18.76,
+      "max_rss_mb": 2165.2,
+      "instructions": 85369577993,
+      "id": "20261011-085032723-4028917417",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.2,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 14.629,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 81
+      },
+      "id": "20261011-084818727-4028917129",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.53,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 17.512,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 46
+      },
+      "id": "20261011-084858150-4028917455",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.16,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 16.436,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 328
+      },
+      "id": "20261011-084915677-4028917394",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.68,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 19.644,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 45
+      },
+      "id": "20261011-084957665-4028917709",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.97,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 15.387,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 190
+      },
+      "id": "20261011-085017322-4028917491",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 1.55,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "justrust": {
+     "n": 5,
+     "median": 12.593,
+     "min": 12.057,
+     "max": 13.455,
+     "quiet_median": 12.593,
+     "cpu": 18.76,
+     "max_rss_mb": 2155.2,
+     "instructions": 85369577993,
+     "instructions_spread": 0.0149
+    },
+    "remote": {
+     "n": 5,
+     "median": 16.436,
+     "min": 14.629,
+     "max": 19.644,
+     "quiet_median": 16.436,
+     "cpu": 0.0,
+     "max_rss_mb": 15.2,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "justrust": [
+     {
+      "wall": 2.23,
+      "exit": 0,
+      "cpu": 2.48,
+      "max_rss_mb": 721.3,
+      "instructions": 10493509508,
+      "id": "20261011-085059189-4028917404",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.04,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.219,
+      "exit": 0,
+      "cpu": 2.51,
+      "max_rss_mb": 739.7,
+      "instructions": 10497934498,
+      "id": "20261011-085101437-4028917952",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.03,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.048,
+      "exit": 0,
+      "cpu": 2.33,
+      "max_rss_mb": 740.8,
+      "instructions": 10487388735,
+      "id": "20261011-085108466-4028917530",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.11,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.592,
+      "exit": 0,
+      "cpu": 1.81,
+      "max_rss_mb": 720.9,
+      "instructions": 10471258103,
+      "id": "20261011-085110534-4028917165",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.11,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.058,
+      "exit": 0,
+      "cpu": 2.33,
+      "max_rss_mb": 743.9,
+      "instructions": 10500517584,
+      "id": "20261011-085116919-4028917537",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.09,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 2.354,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 50
+      },
+      "id": "20261011-085056822-4028917605",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.04,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.373,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 42
+      },
+      "id": "20261011-085103668-4028917442",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.03,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.387,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 45
+      },
+      "id": "20261011-085106060-4028917973",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.11,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.402,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.2,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 45
+      },
+      "id": "20261011-085112144-4028917532",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.18,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.341,
+      "exit": 0,
+      "cpu": 0.0,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "c7i.8xlarge us-west-2",
+       "sync_ms": 49
+      },
+      "id": "20261011-085114562-4028917543",
+      "tests_passed": 0,
+      "noisy": false,
+      "load_before": 1.18,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "justrust": {
+     "n": 5,
+     "median": 2.058,
+     "min": 1.592,
+     "max": 2.23,
+     "quiet_median": 2.058,
+     "cpu": 2.33,
+     "max_rss_mb": 739.7,
+     "instructions": 10493509508,
+     "instructions_spread": 0.0028
+    },
+    "remote": {
+     "n": 5,
+     "median": 2.373,
+     "min": 2.341,
+     "max": 2.402,
+     "quiet_median": 2.373,
+     "cpu": 0.0,
+     "max_rss_mb": 15.2,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  }
+ },
+ "finished": "2026-10-11T08:51:18-0700"
+}
