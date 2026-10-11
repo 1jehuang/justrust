@@ -45,6 +45,7 @@ import suite  # noqa: E402
 FACTOR_WORK = Path(os.environ.get("JUSTRUST_FACTORS_WORK", suite.JR_HOME / "bench" / "factors"))
 FACTORS_MD = suite.ROOT / "bench" / "FACTORS.md"
 NIGHTLY = "nightly-2026-10-08"  # the pinned toolchain (docs/toolchain.md)
+WILD_CLANG = suite.JR_HOME / "toolchains" / "linkers" / "bin" / "clang-wild"
 
 
 @dataclass
@@ -114,6 +115,13 @@ FACTORS = [
         "mold", "mold linker instead of the system default (cc here links with lld)",
         "loop", "desktop-test-edit",
         on={}, off={"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc"},
+    ),
+    Factor(
+        "wild", "wild linker (0.10, not incremental yet) instead of mold, both through clang",
+        "loop", "desktop-test-edit",
+        on={"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": str(WILD_CLANG)}, off={}, n=6,
+        note="install: wild release binary under ~/.justrust/toolchains/linkers/bin (clang-wild wrapper "
+             "passes --ld-path); off is Desktop's scripts/fast-linker (clang -fuse-ld=mold)",
     ),
     Factor(
         "incremental", "rustc incremental compilation (reuse of unchanged query results and CGUs)",
