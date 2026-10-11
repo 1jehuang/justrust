@@ -2320,3 +2320,56 @@ only the instruction column is usable):
 Stage 2 removes 4-6 points, about as much as PGO did on stage 1. The build
 takes 24 min instead of 6.5. Next: PGO+BOLT on stage 2 (`JR_STAGE=2` in
 jr-rustc's build-jr.sh, pgo-train.sh, bolt.sh).
+
+## 32. Pinned-nightly flags on the reference loop: none ship (2026-10-11)
+
+Phase 2 of `docs/toolchain.md`: each flag measured alone with
+`bench/factors.py` (new slow factors, both sides on the pinned nightly,
+the flag injected through cargo `--config` so manifests stay untouched).
+Results `bench/results/factors-20261011-045132-nightly-flags-a.json` (a)
+and `factors-20261011-051155-nightly-flags-b.json` (b, `--quiet-wait 120`,
+0-1 noisy samples per side). n=6 per side, medians with min-max.
+
+| factor | workload | on | off | saved | verdict |
+|---|---|---:|---:|---:|---|
+| `-Zcache-proc-macros` (UI crate), b | desktop-test-edit | 5.54 s (5.1-5.7) | 5.79 s (5.6-6.7) | +4% | within noise |
+| same, a (all samples noisy, 9-15 other cores) | desktop-test-edit | 14.49 s | 12.57 s | -15% | noise |
+| same | desktop-body-check | 1.60 s (1.5-1.7) | 1.55 s (1.3-1.9) | -3% | within noise |
+| `-Zshare-generics=y` on every dep | desktop-test-edit | 5.39 s (4.6-5.7) | 5.49 s (5.1-6.1) | +2% | within noise |
+| `-Zhint-mostly-unused` on the 10 biggest deps | desktop-test-edit | 5.59 s (5.0-6.1) | 5.63 s (5.2-6.0) | +1% | within noise |
+| same, cold `test --no-run`, depcache off (n=2) | desktop-cold-test-build | 114.7 s | 114.6 s | 0% | within noise |
+| `-Zthreads=16` vs 8 (local crates) | desktop-test-edit | 6.15 s (5.7-6.4) | 5.61 s (5.4-5.9) | -10% | within noise, worse |
+| `-Zthreads=4` vs 8 | desktop-test-edit | 5.42 s (5.3-6.2) | 5.38 s (5.1-5.7) | -1% | within noise |
+
+Why, from the per-pass split of the UI crate (medians, run b):
+
+- **cache-proc-macros**: `macro_expand_crate` 1.87 -> 1.59 s (-0.28 s),
+  the only pass that moved. The flag caches *derive* macros only; the UI
+  crate has 190 derives but 724 `#[gpui::test]` attributes and 1309
+  `div()` builder calls, which it does not touch. Most of the 2.7 s
+  "macro expansion" in `docs/toolchain.md` is not derive output, so this
+  flag cannot reach the goal. Also flagged "potentially unsound" by
+  rustc. Not shipped. A cache for attribute proc macros (jr-rustc) is the
+  real target.
+- **share-generics on deps**: `monomorphization_collector_graph_walk`
+  0.37 -> 0.30 s, codegen 0.75 -> 0.71 s, about 0.1 s total. The opt-level 2
+  deps (gpui, wgpu, text stack) default to not sharing; turning it on
+  needs a full dependency rebuild and would change every depcache key for
+  a 2% median move. Not shipped.
+- **hint-mostly-unused**: works as designed on the hinted crates (cold:
+  gpui 42.8 -> 24.6 s, wgpu-core 22.5 -> 6.9 s) but the codegen moves to
+  their users (aws-sdk-bedrock 12.0 -> 16.2 s, jcode-desktop-ui 14.6 ->
+  17.8 s), and the cold build is critical-path bound, so wall is
+  unchanged at 114.7 s. Warm loop unchanged. Not shipped; with the
+  depcache cold builds rarely compile these crates anyway.
+- **-Zthreads**: 8 (Desktop's wrapper default) stays. 16 is worse
+  (macro_expand 1.80 -> 1.88 s, more sync overhead), 4 is the same.
+
+Bottom line: no pinned-nightly flag moves the warm reference loop beyond
+noise; no justrust default changes. The loop's 5.5 s here is frontend
+(macro expansion, resolve) plus incremental persist, which only a
+resident compiler or attribute-macro caching in jr-rustc will cut. The
+factors stay in `bench/factors.py` (slow) to rerun after a toolchain bump.
+Pitfall: an unlocked `versus.py` run by another agent edited the shared
+snapshot during the first attempt (type error injected into a test-loop
+sample); all timed runs must hold `/tmp/justrust-bench.lock`.
