@@ -1,0 +1,395 @@
+{
+ "started": "2026-10-11T01:03:46-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "b66e4bc7a44f",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 3,
+ "warmup": 1,
+ "stacks": [
+  "stock",
+  "jr-nocache",
+  "jr-system"
+ ],
+ "stack_defs": [
+  {
+   "name": "stock",
+   "what": "plain cargo + system rustc, no justrust",
+   "env": {},
+   "justrust": false
+  },
+  {
+   "name": "jr-nocache",
+   "what": "justrust, every cache off: toolchain, forks, integration only",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0"
+   },
+   "justrust": true
+  },
+  {
+   "name": "jr-system",
+   "what": "justrust defaults plus {'JUSTRUST_TOOLCHAIN': 'system', 'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0'}",
+   "env": {
+    "JUSTRUST_TOOLCHAIN": "system",
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0"
+   },
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 2.079,
+      "exit": 0,
+      "cpu": 2.21,
+      "max_rss_mb": 745.6,
+      "instructions": 10130485935,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.13,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.289,
+      "exit": 0,
+      "cpu": 2.43,
+      "max_rss_mb": 745.7,
+      "instructions": 10131429495,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.08,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.399,
+      "exit": 0,
+      "cpu": 2.54,
+      "max_rss_mb": 745.2,
+      "instructions": 10130423882,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.11,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 2.013,
+      "exit": 0,
+      "cpu": 2.33,
+      "max_rss_mb": 748.6,
+      "instructions": 10599314975,
+      "id": "20261011-010516377-486418249",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 17.1,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.443,
+      "exit": 0,
+      "cpu": 2.84,
+      "max_rss_mb": 748.8,
+      "instructions": 10634443899,
+      "id": "20261011-010526989-486418544",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.08,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.482,
+      "exit": 0,
+      "cpu": 2.88,
+      "max_rss_mb": 749.5,
+      "instructions": 10636479976,
+      "id": "20261011-010531907-486418951",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.11,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-system": [
+     {
+      "wall": 1.981,
+      "exit": 0,
+      "cpu": 2.28,
+      "max_rss_mb": 764.1,
+      "instructions": 10593282263,
+      "id": "20261011-010518421-486418311",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.13,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.092,
+      "exit": 0,
+      "cpu": 2.44,
+      "max_rss_mb": 763.7,
+      "instructions": 10595925516,
+      "id": "20261011-010522541-486418660",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.13,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.426,
+      "exit": 0,
+      "cpu": 2.8,
+      "max_rss_mb": 766.9,
+      "instructions": 10632852447,
+      "id": "20261011-010534429-486418770",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.22,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 2.289,
+     "min": 2.079,
+     "max": 2.399,
+     "quiet_median": 0,
+     "cpu": 2.43,
+     "max_rss_mb": 745.6,
+     "instructions": 10130485935,
+     "instructions_spread": 0.0001
+    },
+    "jr-nocache": {
+     "n": 3,
+     "median": 2.443,
+     "min": 2.013,
+     "max": 2.482,
+     "quiet_median": 0,
+     "cpu": 2.84,
+     "max_rss_mb": 748.8,
+     "instructions": 10634443899,
+     "instructions_spread": 0.0035
+    },
+    "jr-system": {
+     "n": 3,
+     "median": 2.092,
+     "min": 1.981,
+     "max": 2.426,
+     "quiet_median": 0,
+     "cpu": 2.44,
+     "max_rss_mb": 764.1,
+     "instructions": 10595925516,
+     "instructions_spread": 0.0037
+    }
+   }
+  },
+  "noop-test": {
+   "what": "no edit: fixed cost of a `test` call",
+   "scenario": "desktop-noop-test",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 0.452,
+      "exit": 0,
+      "cpu": 0.46,
+      "max_rss_mb": 176.8,
+      "instructions": 2229511950,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.455,
+      "exit": 0,
+      "cpu": 0.47,
+      "max_rss_mb": 176.8,
+      "instructions": 2229001877,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.334,
+      "exit": 0,
+      "cpu": 0.34,
+      "max_rss_mb": 177.1,
+      "instructions": 2229530532,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nocache": [
+     {
+      "wall": 0.496,
+      "exit": 0,
+      "cpu": 0.55,
+      "max_rss_mb": 177.3,
+      "instructions": 2356587222,
+      "id": "20261011-010848620-486418869",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.485,
+      "exit": 0,
+      "cpu": 0.53,
+      "max_rss_mb": 177.9,
+      "instructions": 2354484090,
+      "id": "20261011-010851240-486418532",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.547,
+      "exit": 0,
+      "cpu": 0.59,
+      "max_rss_mb": 178.0,
+      "instructions": 2354354344,
+      "id": "20261011-010852138-486418275",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-system": [
+     {
+      "wall": 0.525,
+      "exit": 0,
+      "cpu": 0.57,
+      "max_rss_mb": 177.1,
+      "instructions": 2354735258,
+      "id": "20261011-010849163-486418130",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.488,
+      "exit": 0,
+      "cpu": 0.53,
+      "max_rss_mb": 178.2,
+      "instructions": 2353902555,
+      "id": "20261011-010850219-486418425",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.434,
+      "exit": 0,
+      "cpu": 0.46,
+      "max_rss_mb": 177.6,
+      "instructions": 2334741482,
+      "id": "20261011-010852715-486418151",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.23,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 0.452,
+     "min": 0.334,
+     "max": 0.455,
+     "quiet_median": 0,
+     "cpu": 0.46,
+     "max_rss_mb": 176.8,
+     "instructions": 2229511950,
+     "instructions_spread": 0.0002
+    },
+    "jr-nocache": {
+     "n": 3,
+     "median": 0.496,
+     "min": 0.485,
+     "max": 0.547,
+     "quiet_median": 0,
+     "cpu": 0.55,
+     "max_rss_mb": 177.9,
+     "instructions": 2354484090,
+     "instructions_spread": 0.0009
+    },
+    "jr-system": {
+     "n": 3,
+     "median": 0.488,
+     "min": 0.434,
+     "max": 0.525,
+     "quiet_median": 0,
+     "cpu": 0.53,
+     "max_rss_mb": 177.6,
+     "instructions": 2353902555,
+     "instructions_spread": 0.0085
+    }
+   }
+  }
+ },
+ "finished": "2026-10-11T01:08:53-0700"
+}

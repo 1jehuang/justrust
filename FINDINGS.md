@@ -1975,3 +1975,41 @@ one job per 2 GiB (30 on the c7i.8xlarge) unless the client passed `-j` or
 `CARGO_BUILD_JOBS`. Cold `check -p jcode-tui` on the machine, fresh target
 dir, all caches off: `-j4` 85.8 s (20261011-074216045-122932), `-j30`
 40.6 s (20261011-074341880-137389), 2.1x.
+
+## 26. System 3: stock cargo+rustc vs justrust, head to head (2026-10-11)
+
+New `bench/versus.py`: the same agent workloads on `stock` (/usr/bin/cargo,
+system rustc 1.98.1), `jr-nocache` (justrust, every cache off) and
+`justrust` (defaults), round-robin on the pinned snapshots, with
+user-space instructions retired by the whole build tree as a low-noise
+second metric (spread 0.0-1.8% across runs; wall varies 5-50%).
+
+First full result (`bench/results/versus-20261011-010303-084664294e8c-dirty.json`, n=5):
+
+| workload | stock | jr-nocache | justrust | instr jr/stock |
+|---|---:|---:|---:|---:|
+| reference-loop | 10.28s | 10.40s | 11.56s | 1.03 |
+| body-check | 2.61s | 3.02s (slower) | 3.05s (slower) | 1.05-1.06 |
+| first-error | 2.12s | 2.60s | 2.38s | 1.06 |
+| deep-edit | 16.50s | 19.26s | 23.99s | 1.04 |
+| noop-test | 0.52s | 0.55s | 0.56s | 1.06 |
+| small-crate | 2.15s | 2.25s | 2.27s | 1.02 |
+| cold-check | 79.05s | 81.71s | **19.17s (4.1x)** | 0.13 |
+
+- **The only win over stock today is caching on cold builds (4.1x).**
+  Without caches justrust does 2-6% *more* work than stock on every warm
+  workload. Geomean of warm + cold: jr-nocache 0.91x, justrust 1.08x.
+- Where the extra work is (follow-ups `versus-20261011-010853-*`,
+  `versus-20261011-011620-*`, `versus-20261011-012455-*`):
+  - Not the toolchain: `JUSTRUST_TOOLCHAIN=system` has the same 1.05-1.06
+    instruction ratio as the pinned nightly.
+  - Not feature unification: `JUSTRUST_UNIFY_FEATURES=0` is identical.
+  - `-Ztime-passes` on local crates (pinned nightly default) costs about
+    3 points: body-check 1.06 -> 1.03 with `JUSTRUST_PASSES=0`.
+  - The rest is fixed per-invocation overhead: on a no-op `test`,
+    `JUSTRUST_DISABLE=1` is 2.230G instructions (same as stock), a
+    recorded run is 2.353G (+0.12G, +5%, +0.05-0.1s wall): the rustc
+    shim per unit, the stderr pipe threads, summary writing.
+- The incremental loop is a regression we pay on every agent call:
+  making the recording path free (and time-passes off by default, or
+  sampled) is worth 3-6% on every warm workload before any fork lands.

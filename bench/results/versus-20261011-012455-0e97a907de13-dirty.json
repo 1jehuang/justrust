@@ -1,0 +1,397 @@
+{
+ "started": "2026-10-11T01:18:39-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "0e97a907de13",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 3,
+ "warmup": 1,
+ "stacks": [
+  "stock",
+  "jr-nopasses",
+  "jr-nounify"
+ ],
+ "stack_defs": [
+  {
+   "name": "stock",
+   "what": "plain cargo + system rustc, no justrust",
+   "env": {},
+   "justrust": false
+  },
+  {
+   "name": "jr-nopasses",
+   "what": "justrust defaults plus {'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_PASSES': '0'}",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_PASSES": "0"
+   },
+   "justrust": true
+  },
+  {
+   "name": "jr-nounify",
+   "what": "justrust defaults plus {'JUSTRUST_UNIFY_FEATURES': '0', 'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_PASSES': '0'}",
+   "env": {
+    "JUSTRUST_UNIFY_FEATURES": "0",
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_PASSES": "0"
+   },
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 2.029,
+      "exit": 0,
+      "cpu": 2.16,
+      "max_rss_mb": 746.1,
+      "instructions": 10130692589,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.82,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.277,
+      "exit": 0,
+      "cpu": 2.42,
+      "max_rss_mb": 745.8,
+      "instructions": 10131495826,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.79,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.211,
+      "exit": 0,
+      "cpu": 2.36,
+      "max_rss_mb": 744.6,
+      "instructions": 10131488267,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.85,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nopasses": [
+     {
+      "wall": 2.255,
+      "exit": 0,
+      "cpu": 2.5,
+      "max_rss_mb": 756.9,
+      "instructions": 10401885019,
+      "id": "20261011-012012947-698926240",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.327,
+      "exit": 0,
+      "cpu": 2.64,
+      "max_rss_mb": 757.6,
+      "instructions": 10403039709,
+      "id": "20261011-012024552-698926348",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.85,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.414,
+      "exit": 0,
+      "cpu": 2.73,
+      "max_rss_mb": 757.3,
+      "instructions": 10420460294,
+      "id": "20261011-012029177-698926593",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.06,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nounify": [
+     {
+      "wall": 2.327,
+      "exit": 0,
+      "cpu": 2.54,
+      "max_rss_mb": 764.0,
+      "instructions": 10389474855,
+      "id": "20261011-012015235-698926679",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.82,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.525,
+      "exit": 0,
+      "cpu": 2.84,
+      "max_rss_mb": 761.9,
+      "instructions": 10410281341,
+      "id": "20261011-012019659-698926217",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.79,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.22,
+      "exit": 0,
+      "cpu": 2.46,
+      "max_rss_mb": 762.5,
+      "instructions": 10390064278,
+      "id": "20261011-012031634-698926446",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.06,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 2.211,
+     "min": 2.029,
+     "max": 2.277,
+     "quiet_median": 0,
+     "cpu": 2.36,
+     "max_rss_mb": 745.8,
+     "instructions": 10131488267,
+     "instructions_spread": 0.0001
+    },
+    "jr-nopasses": {
+     "n": 3,
+     "median": 2.327,
+     "min": 2.255,
+     "max": 2.414,
+     "quiet_median": 0,
+     "cpu": 2.64,
+     "max_rss_mb": 757.3,
+     "instructions": 10403039709,
+     "instructions_spread": 0.0018
+    },
+    "jr-nounify": {
+     "n": 3,
+     "median": 2.327,
+     "min": 2.22,
+     "max": 2.525,
+     "quiet_median": 0,
+     "cpu": 2.54,
+     "max_rss_mb": 762.5,
+     "instructions": 10390064278,
+     "instructions_spread": 0.002
+    }
+   }
+  },
+  "reference-loop": {
+   "what": "edit a #[test] fn in the 118k-line UI crate, run its tests",
+   "scenario": "desktop-test-edit",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 8.367,
+      "exit": 0,
+      "cpu": 9.09,
+      "max_rss_mb": 2034.7,
+      "instructions": 49068058572,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 14.27,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.683,
+      "exit": 0,
+      "cpu": 8.27,
+      "max_rss_mb": 2014.5,
+      "instructions": 49062208544,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.79,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.79,
+      "exit": 0,
+      "cpu": 8.31,
+      "max_rss_mb": 2004.1,
+      "instructions": 49001082474,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.06,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nopasses": [
+     {
+      "wall": 8.447,
+      "exit": 0,
+      "cpu": 9.37,
+      "max_rss_mb": 2018.8,
+      "instructions": 49899892579,
+      "id": "20261011-012345382-698926830",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 17.39,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 8.128,
+      "exit": 0,
+      "cpu": 9.49,
+      "max_rss_mb": 2024.7,
+      "instructions": 49984572866,
+      "id": "20261011-012424579-698926643",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.58,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.512,
+      "exit": 0,
+      "cpu": 8.54,
+      "max_rss_mb": 2050.1,
+      "instructions": 49875062789,
+      "id": "20261011-012440584-698926555",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.87,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-nounify": [
+     {
+      "wall": 7.127,
+      "exit": 0,
+      "cpu": 8.19,
+      "max_rss_mb": 2111.5,
+      "instructions": 49768063516,
+      "id": "20261011-012353880-698926293",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 15.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.344,
+      "exit": 0,
+      "cpu": 8.5,
+      "max_rss_mb": 2115.1,
+      "instructions": 49910744835,
+      "id": "20261011-012409461-698926939",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.72,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.791,
+      "exit": 0,
+      "cpu": 8.9,
+      "max_rss_mb": 2114.7,
+      "instructions": 49859578337,
+      "id": "20261011-012448135-698926655",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.56,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 7.79,
+     "min": 7.683,
+     "max": 8.367,
+     "quiet_median": 0,
+     "cpu": 8.31,
+     "max_rss_mb": 2014.5,
+     "instructions": 49062208544,
+     "instructions_spread": 0.0014
+    },
+    "jr-nopasses": {
+     "n": 3,
+     "median": 8.128,
+     "min": 7.512,
+     "max": 8.447,
+     "quiet_median": 0,
+     "cpu": 9.37,
+     "max_rss_mb": 2024.7,
+     "instructions": 49899892579,
+     "instructions_spread": 0.0022
+    },
+    "jr-nounify": {
+     "n": 3,
+     "median": 7.344,
+     "min": 7.127,
+     "max": 7.791,
+     "quiet_median": 0,
+     "cpu": 8.5,
+     "max_rss_mb": 2114.7,
+     "instructions": 49859578337,
+     "instructions_spread": 0.0029
+    }
+   }
+  }
+ },
+ "finished": "2026-10-11T01:24:55-0700"
+}
