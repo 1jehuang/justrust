@@ -59,6 +59,16 @@ pub fn scan(root: &Path) -> Result<Scan> {
             .collect(),
         _ => walk(root)?,
     };
+    let mut rels = rels;
+    // Lockfiles decide which dependency versions the machine builds. Many
+    // libraries gitignore theirs, and a machine without it resolves the
+    // newest versions: different code than the local build, and nothing
+    // shared with the local dependency cache. Mirror them regardless.
+    for lock in ignored_lockfiles(root) {
+        if !rels.contains(&lock) {
+            rels.push(lock);
+        }
+    }
     for rel in rels {
         if skip(&rel) {
             continue;
@@ -102,6 +112,36 @@ pub const UNKNOWN: Stamp = Stamp {
     size: u64::MAX,
     mode: 0,
 };
+
+/// `Cargo.lock` files under `root` that git ignores.
+fn ignored_lockfiles(root: &Path) -> Vec<PathBuf> {
+    let Ok(o) = Command::new("git")
+        .args([
+            "ls-files",
+            "-o",
+            "-i",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "Cargo.lock",
+            "**/Cargo.lock",
+        ])
+        .current_dir(root)
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !o.status.success() {
+        return Vec::new();
+    }
+    o.stdout
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
+        .filter(|p| !skip(p))
+        .collect()
+}
 
 fn skip(rel: &Path) -> bool {
     rel.components().any(|c| {
@@ -252,6 +292,8 @@ impl Mirror {
             "--exclude=.git",
             "--exclude=target/",
             "--exclude=.justrust/",
+            // Lockfiles travel even when gitignored (see `scan`).
+            "--include=Cargo.lock",
             "--filter=:- .gitignore",
         ]);
         let dst = match &self.target {
@@ -407,6 +449,32 @@ mod tests {
         assert!(!is_build_source(Path::new("big.bin")));
         let ds = dirs(&d, &m);
         assert!(ds.contains(&d) && ds.contains(&d.join("src")));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn gitignored_lockfiles_are_still_mirrored() {
+        let d = std::env::temp_dir().join(format!("jr-scan-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&d)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(d.join(".gitignore"), "Cargo.lock\n*.log\n").unwrap();
+        std::fs::write(d.join("Cargo.lock"), "lock").unwrap();
+        std::fs::write(d.join("sub/Cargo.lock"), "lock").unwrap();
+        std::fs::write(d.join("x.log"), "noise").unwrap();
+        std::fs::write(d.join("lib.rs"), "x").unwrap();
+        let keys: Vec<PathBuf> = scan(&d).unwrap().files.keys().cloned().collect();
+        for want in ["Cargo.lock", "sub/Cargo.lock", "lib.rs", ".gitignore"] {
+            assert!(keys.contains(&PathBuf::from(want)), "{want}: {keys:?}");
+        }
+        assert!(!keys.contains(&PathBuf::from("x.log")));
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
