@@ -293,6 +293,27 @@ def snapshot_dir(name: str) -> Path:
 _BENCH_LOCK = None
 
 
+def lock_holders(path: Path) -> str:
+    """Processes with `path` open (from /proc), e.g. "1234 python3, 99 wl-copy".
+
+    A shell `flock` on the lock file leaks its fd into every child, so a
+    daemonized grandchild (a clipboard helper, a server) can keep holding the
+    lock after the benchmark exits. Naming the holders makes that visible.
+    """
+    target = str(path.resolve())
+    out = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            fds = os.listdir(f"/proc/{pid}/fd")
+            if any(os.readlink(f"/proc/{pid}/fd/{fd}") == target for fd in fds):
+                out.append(f"{pid} {Path(f'/proc/{pid}/comm').read_text().strip()}")
+        except OSError:
+            continue
+    return ", ".join(out) or "unknown"
+
+
 def bench_lock() -> None:
     """Hold an exclusive lock on the pinned snapshots for this process's life.
 
@@ -314,7 +335,8 @@ def bench_lock() -> None:
     try:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        print("bench: another benchmark holds the snapshot lock, waiting", file=sys.stderr)
+        print("bench: another benchmark holds the snapshot lock, waiting; holders: "
+              + lock_holders(WORK / ".bench.lock"), file=sys.stderr)
         fcntl.flock(f, fcntl.LOCK_EX)
     _BENCH_LOCK = f
     # Children (other bench scripts started from this one) share the lock.
