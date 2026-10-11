@@ -25,7 +25,10 @@ const NAME: &str = "justrust-remote";
 const DEFAULT_REGION: &str = "us-west-2";
 const DEFAULT_TYPE: &str = "c7i.8xlarge";
 const DEFAULT_IDLE_MINUTES: u32 = 30;
-const DISK_GB: u32 = 200;
+// 200 GB filled up: Desktop's warm target dirs are 30 to 37 GB each (14 to
+// 19 GB of it incremental), and benchmark stacks keep one per stack. gp3
+// costs about $0.08/GB-month, so 500 GB is ~$40/month while the disk exists.
+const DISK_GB: u32 = 500;
 pub(crate) const SSH_USER: &str = "ubuntu";
 /// How long a cached probe is reused by `status` before re-probing over ssh.
 const PROBE_TTL: f64 = 30.0;
