@@ -61,9 +61,10 @@ use std::path::{Path, PathBuf};
 /// 3: `--extern` keyed by crate metadata only, `CARGO_HOME` not keyed, and
 /// the C library checked for compatibility at restore instead of keyed.
 /// 4: `CARGO_TARGET_DIR` not keyed.
+/// 5: dependency units compile with the target dir remapped.
 /// 2: the cargo home is a placeholder (portable across machines), and
 /// proc macros and bins key the C library they link against.
-const SCHEME: &str = "justrust-depcache-4";
+const SCHEME: &str = "justrust-depcache-5";
 const PROFILE_TOKEN: &str = "@@JUSTRUST_PROFILE_DIR@@";
 const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// The cargo home (registry sources, git checkouts), so keys and manifest
@@ -237,7 +238,15 @@ pub struct Plan {
     pub cwd: PathBuf,
     pub norm: Norm,
     pub(crate) root: PathBuf,
+    /// Extra rustc arguments the unit must be compiled with when it misses
+    /// (keyed): the target dir remapped to a fixed path, so outputs of
+    /// crates that `include!` generated `OUT_DIR` files are the same in
+    /// every target dir and on every machine.
+    pub extra_args: Vec<String>,
 }
+
+/// Fixed path the target dir is remapped to in dependency outputs.
+pub const REMAPPED_TARGET: &str = "/justrust-target";
 
 /// Parsed eligibility: `None` means "not cacheable, compile normally".
 #[derive(Debug, Default, PartialEq)]
@@ -461,6 +470,21 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
     h.field(rustc_version(real)?.as_bytes());
     h.field(norm.norm(cwd.to_str()?).as_bytes());
     key_args(&args, &norm, &cwd, &mut h)?;
+    // Paths under the target dir (generated `OUT_DIR` sources) are written
+    // into crate metadata and debuginfo. Remapping them makes those bytes,
+    // and so every dependent's key, independent of where the target dir is.
+    // Only when the caller does not remap paths itself.
+    let extra_args = if args.iter().any(|a| a.starts_with("--remap-path-prefix")) {
+        Vec::new()
+    } else {
+        vec![format!(
+            "--remap-path-prefix={}={REMAPPED_TARGET}",
+            norm.target
+        )]
+    };
+    for a in &extra_args {
+        h.field(norm.norm(a).as_bytes());
+    }
     // Proc macros and bins are dynamically linked against the C library.
     // Only its family is keyed: the version an output needs is recorded
     // when it is stored and checked against this host on restore, so a
@@ -494,6 +518,7 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
         cwd,
         norm,
         root,
+        extra_args,
     })
 }
 
@@ -1510,6 +1535,7 @@ mod tests {
                 cwd: dir.clone(),
                 norm: Norm::new(out_dir.parent().unwrap()).unwrap(),
                 root: dir.join("cache"),
+                extra_args: Vec::new(),
             }
         };
         let p1 = mk("t1");

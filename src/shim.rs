@@ -166,6 +166,9 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let (passes_on, force_bootstrap) = want_passes(args, described.local);
     let mut cmd = Command::new(real);
     cmd.args(args).stderr(Stdio::piped());
+    if let Some(plan) = &plan {
+        cmd.args(&plan.extra_args);
+    }
     if passes_on {
         cmd.arg("-Ztime-passes").arg("-Ztime-passes-format=json");
     }
