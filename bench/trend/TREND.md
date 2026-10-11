@@ -14,18 +14,18 @@ numbers and `bench/factors.py` for controlled ones.
 
 | repo | kind | baseline n | p50 | p90 | current n | p50 | p90 | p50 change |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| jcode-desktop | all | 1694 | 26.6s | 194.6s | 612 | 21.8s | 136.6s | -18% |
-| jcode-desktop | test | 1214 | 27.2s | 194.6s | 377 | 25.2s | 163.2s | -8% |
-| jcode-desktop | check | 188 | 38.3s | 170.4s | 152 | 17.7s | 75.0s | -54% |
-| jcode-desktop | build | 292 | 17.4s | 206.3s | 83 | 11.4s | 207.1s | -34% |
-| jcode | all | 916 | 35.3s | 144.8s | 573 | 25.5s | 115.3s | -28% |
-| jcode | test | 681 | 33.5s | 144.5s | 405 | 27.2s | 120.5s | -19% |
-| jcode | check | 178 | 43.7s | 125.2s | 120 | 22.5s | 75.1s | -49% |
-| jcode | build | 57 | 45.1s | 156.3s | 48 | 29.4s | 100.6s | -35% |
-| justrust | all | 96 | 8.5s | 16.4s | 488 | 6.3s | 21.6s | -26% |
-| justrust | test | 48 | 8.1s | 21.1s | 303 | 6.2s | 21.1s | -23% |
-| justrust | check | 32 | 10.1s | 11.8s | 107 | 5.3s | 25.7s | -47% |
-| justrust | build | 16 | 8.5s | 16.4s | 78 | 7.5s | 41.1s | -12% |
+| jcode-desktop | all | 1694 | 26.6s | 194.6s | 635 | 22.2s | 133.6s | -16% |
+| jcode-desktop | test | 1214 | 27.2s | 194.6s | 392 | 26.1s | 153.9s | -4% |
+| jcode-desktop | check | 188 | 38.3s | 170.4s | 157 | 18.1s | 75.0s | -53% |
+| jcode-desktop | build | 292 | 17.4s | 206.3s | 86 | 11.0s | 207.1s | -37% |
+| jcode | all | 916 | 35.3s | 144.8s | 602 | 25.4s | 120.0s | -28% |
+| jcode | test | 681 | 33.5s | 144.5s | 426 | 26.7s | 121.2s | -20% |
+| jcode | check | 178 | 43.7s | 125.2s | 126 | 22.5s | 75.1s | -49% |
+| jcode | build | 57 | 45.1s | 156.3s | 50 | 29.4s | 115.2s | -35% |
+| justrust | all | 96 | 8.5s | 16.4s | 544 | 6.3s | 22.3s | -26% |
+| justrust | test | 48 | 8.1s | 21.1s | 335 | 6.3s | 21.1s | -22% |
+| justrust | check | 32 | 10.1s | 11.8s | 125 | 7.1s | 29.0s | -30% |
+| justrust | build | 16 | 8.5s | 16.4s | 84 | 6.6s | 39.9s | -22% |
 
 ## Weekly, all kinds
 
@@ -36,7 +36,7 @@ numbers and `bench/factors.py` for controlled ones.
 | 2026-W38 | 127 / 6.3s / 76s | 20 / 0.1s / 37s | - |
 | 2026-W39 | 862 / 39.1s / 268s | 479 / 47.7s / 190s | - |
 | 2026-W40 | 314 / 22.6s / 120s | 247 / 25.9s / 87s | - |
-| 2026-W41 | 612 / 21.8s / 137s | 459 / 26.8s / 125s | 488 / 6.3s / 22s |
+| 2026-W41 | 635 / 22.2s / 134s | 488 / 26.6s / 127s | 544 / 6.3s / 22s |
 
 ## Same command, before vs after
 
@@ -45,21 +45,21 @@ the baseline vs everything since 2026-10-07).
 
 | repo | command | before n | p50 | p90 | since n | p50 | p90 | p50 change |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| jcode-desktop | `test -p jcode-desktop-ui --lib` | 653 | 24.2s | 195s | 54 | 31.6s | 98s | +30% |
+| jcode-desktop | `test -p jcode-desktop-ui --lib` | 653 | 24.2s | 195s | 63 | 31.6s | 89s | +30% |
+| jcode-desktop | `test -p jcode-desktop-ui` | 354 | 28.5s | 158s | 11 | 43.3s | 126s | +52% |
+| jcode | `test -p jcode-tui --lib` | 126 | 35.4s | 138s | 75 | 23.1s | 128s | -35% |
 | jcode | `test -p jcode-app-core --lib` | 92 | 67.3s | 236s | 34 | 59.8s | 120s | -11% |
-| jcode | `test -p jcode-tui --lib` | 126 | 35.4s | 138s | 73 | 23.0s | 127s | -35% |
-| jcode | `test -p jcode-base --lib` | 129 | 49.8s | 121s | 17 | 45.1s | 129s | -9% |
-| jcode-desktop | `check -p jcode-desktop-ui` | 133 | 31.7s | 163s | 15 | 29.5s | 120s | -7% |
-| jcode | `check --workspace` | 37 | 76.3s | 373s | 11 | 16.1s | 35s | -79% |
-| jcode-desktop | `build` | 114 | 7.6s | 92s | 20 | 1.9s | 17s | -75% |
+| jcode | `test -p jcode-base --lib` | 129 | 49.8s | 121s | 18 | 44.7s | 129s | -10% |
+| jcode-desktop | `check -p jcode-desktop-ui` | 133 | 31.7s | 163s | 18 | 25.4s | 120s | -20% |
+| jcode | `check --workspace` | 37 | 76.3s | 373s | 14 | 20.4s | 53s | -73% |
+| jcode-desktop | `build` | 114 | 7.6s | 92s | 23 | 4.7s | 17s | -38% |
 | jcode-desktop | `test --workspace` | 32 | 84.9s | 164s | 20 | 83.1s | 224s | -2% |
 | jcode-desktop | `check --workspace` | 11 | 93.2s | 596s | 20 | 28.9s | 92s | -69% |
 | jcode | `check` | 25 | 24.3s | 125s | 21 | 23.3s | 280s | -4% |
 | jcode | `check -p jcode-tui` | 18 | 32.8s | 66s | 20 | 44.9s | 101s | +37% |
-| justrust | `build` | 16 | 8.5s | 16s | 32 | 9.1s | 120s | +7% |
+| justrust | `build` | 16 | 8.5s | 16s | 39 | 6.6s | 120s | -22% |
 | justrust | `build --release` | 40 | 11.5s | 14s | 63 | 8.0s | 17s | -31% |
 | jcode-desktop | `check` | 11 | 76.4s | 170s | 10 | 4.3s | 12s | -94% |
-| justrust | `check --release` | 24 | 4.3s | 8s | 16 | 5.7s | 6s | +32% |
 
 ## Work not redone (reuse ledger)
 
@@ -72,6 +72,6 @@ Saved seconds are the recorded rustc/script time of the original build.
 
 | week | repo | runs | compiled | fresh | depcache hits | depcache saved | script hits | script saved | slot refreshed | reused share |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 2026-W41 | jcode | 767 | 10532 | 220309 | 1204 | 26 min | 32 | 1.4 min | 546 | 95% |
-| 2026-W41 | jcode-desktop | 715 | 55864 | 316541 | 28587 | 727 min | 550 | 7.7 min | 1759 | 86% |
-| 2026-W41 | justrust | 422 | 974 | 16895 | 213 | 2 min | 0 | 0.0 min | 78 | 95% |
+| 2026-W41 | jcode | 793 | 11788 | 227841 | 1220 | 27 min | 32 | 1.4 min | 546 | 95% |
+| 2026-W41 | jcode-desktop | 744 | 56041 | 332018 | 28697 | 746 min | 550 | 7.7 min | 1764 | 87% |
+| 2026-W41 | justrust | 473 | 1183 | 19457 | 234 | 2 min | 0 | 0.0 min | 78 | 94% |
