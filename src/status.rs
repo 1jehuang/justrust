@@ -417,20 +417,18 @@ pub fn render_waybar(s: &Status) -> String {
             None => "{\"text\": \"\", \"class\": \"idle\"}".into(),
         };
     };
-    let mut text = format!("\u{e7a8} {} {}", a.label, phase_word(a));
+    // Bar shows time taken so far, then progress. The time-left estimate
+    // stays in the tooltip.
+    let mut text = format!("\u{e7a8} {} {} {}", a.label, dur(a.elapsed), phase_word(a));
     let (class, pct) = match &a.estimate {
         Some(e) => {
-            let _ = write!(text, " ~{} left", dur(e.remaining));
             let over = a.elapsed > e.reference_wall * 1.2 && e.remaining < 2.0;
             (
                 if over { "long" } else { "building" },
                 (e.fraction * 100.0).round(),
             )
         }
-        None => {
-            let _ = write!(text, " {}", dur(a.elapsed));
-            ("starting", 0.0)
-        }
+        None => ("starting", 0.0),
     };
     if s.active.len() > 1 {
         let _ = write!(text, " +{}", s.active.len() - 1);
