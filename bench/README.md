@@ -6,6 +6,7 @@ Three layers, from "what agents actually wait for" to "why":
 |---|---|---|---|
 | System 1 | `bench/trend.py update` | Are real agent builds in Jcode, Desktop, justrust getting faster than before justrust? | `bench/trend/TREND.md`, `daily.csv`, `reuse.csv` |
 | System 2 | `bench/factors.py run` | What is each factor (depcache, slots, linker, ...) worth on its own? | `bench/FACTORS.md`, `bench/results/factors-*.json` |
+| System 3 | `bench/versus.py run` | How much faster is justrust than the stock toolchain, with and without its caches? | `bench/VERSUS.md`, `bench/results/versus-*.json` |
 | Suite | `bench/suite.py run` | Did this commit make the standard scenarios faster or slower? | `bench/results/*.json`, `compare` |
 
 ## System 1: rolling log, `bench/trend.py`
@@ -19,6 +20,36 @@ compiled vs fresh, depcache hits and the rustc time they saved, build-script
 replays, slot refreshes. Run `bench/trend.py update` now and then and commit
 `bench/trend/` (aggregates only). Real usage, not controlled: the work mix
 changes, so read the same-command table and System 2 for causes.
+
+## System 3: stock toolchain vs justrust, `bench/versus.py`
+
+```sh
+bench/versus.py run                   # every warm workload on every stack (add --cold for fresh-dir)
+bench/versus.py run reference-loop -n 8
+bench/versus.py run --stack jr-rustc:RUSTC=$HOME/jr-rustc/build/host/stage1/bin/rustc
+bench/versus.py report                # rebuild VERSUS.md from the newest result
+bench/versus.py compare A.json B.json # same stacks, two dates or justrust versions
+```
+
+One scoreboard: the same agent workloads (reference loop, check, first
+type error, deep edit, no-op, small crate, cold checkout) run on three
+stacks, round-robin with a rotating order on the pinned snapshots:
+
+- `stock`: `/usr/bin/cargo` + system rustc, no justrust anywhere.
+- `jr-nocache`: justrust with every cache off. `stock -> jr-nocache` is
+  what the owned toolchain, forks and integration buy without caching.
+- `justrust`: defaults, with a private depcache warmed by the warmup round.
+
+An extra `--stack NAME:K=V,...` is a candidate component (a forked rustc,
+another linker) on top of justrust defaults.
+
+Besides wall time, every run counts **user-space instructions retired by
+the whole build process tree** (`perf_event_open` with inherit, both
+hybrid core PMUs). Run to run, instruction counts vary by about 0.1%,
+where wall time varies by 5 to 20%, so a forked compiler doing 3% less
+work shows up as `instr 0.97` even when wall ranges overlap. Caveat: work
+moved out of the build's tree (a resident daemon, a remote host) is
+invisible to the count, so read it together with wall time.
 
 ## System 2: one factor at a time, `bench/factors.py`
 
