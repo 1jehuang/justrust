@@ -2972,3 +2972,11 @@ remote for a cold run.
 `trunk build` of jcode-website failed: `rust-lld: error: unknown argument: -B/home/jeremy/.justrust/bin/ld`.
 The shim added the wild `-B` dir to every local linking unit regardless of `--target`.
 Now only Linux targets (or no `--target`) get it.
+
+Update (fail-fast, 9ab215a): the pool now honors cargo's fail-fast. Real
+Jcode workspace, laptop, warm, under the bench lock: `test --workspace`
+stock 76.0 s (1,868 tests, exit 101), justrust 44.5 s (1,792 tests, exit
+101, the unstarted binaries named in a note). Before, justrust ran every
+binary (8,911 tests). Counts differ slightly because the pool orders
+binaries by history (likely failures first), so a different set has
+finished when the first failure stops the run; both report the failure.
