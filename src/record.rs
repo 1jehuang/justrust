@@ -409,6 +409,10 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
             // options never change the incremental cache key.
             cmd.env("JUSTRUST_TOOLCHAIN_NIGHTLY", "1");
         }
+        if tc.id.starts_with("jr-") {
+            // justrust's compiler: the shim enables its caches.
+            cmd.env("JUSTRUST_TOOLCHAIN_JR", "1");
+        }
     }
     cmd.args(&cargo_args)
         .env("RUSTC", &shim)

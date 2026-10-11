@@ -351,6 +351,18 @@ enum ToolchainCmd {
     /// crates (test binaries, bins) then link with it, falling back to the
     /// configured linker if wild fails. `JUSTRUST_LINKER=off` disables it.
     Wild,
+    /// Install a jr-rustc build (justrust's rustc fork) as toolchain
+    /// `jr-<commit>`. With no pin, builds then use the newest installed jr
+    /// toolchain and its proc-macro cache (`JUSTRUST_TOOLCHAIN=system` or
+    /// `JUSTRUST_CACHE_PROC_MACROS=0` to opt out).
+    JrInstall {
+        /// Sysroot with bin/{rustc,rustdoc,clippy-driver,cargo-clippy}.
+        #[arg(default_value = "~/jr-rustc/build/host/stage2")]
+        sysroot: String,
+        /// Installed official toolchain to take cargo and rustfmt from.
+        #[arg(long, default_value = "nightly-2026-10-08")]
+        cargo_from: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -589,6 +601,20 @@ pub fn main() -> anyhow::Result<()> {
             ToolchainCmd::Pin { spec, no_install } => toolchain::pin_command(&spec, no_install)?,
             ToolchainCmd::Unpin => toolchain::unpin_command()?,
             ToolchainCmd::Remove { spec } => toolchain::remove_command(&spec)?,
+            ToolchainCmd::JrInstall {
+                sysroot,
+                cargo_from,
+            } => {
+                use anyhow::Context as _;
+                let sysroot = match sysroot.strip_prefix("~/") {
+                    Some(rest) => dirs::home_dir().context("no home")?.join(rest),
+                    None => PathBuf::from(sysroot),
+                };
+                let from = toolchain::installed(&toolchain::Spec::parse(&cargo_from)?)?
+                    .with_context(|| format!("{cargo_from} is not installed (`justrust toolchain install {cargo_from}`)"))?;
+                let tc = toolchain::jr_install(&sysroot, &from)?;
+                println!("installed {} at {}", tc.id, tc.dir.display());
+            }
             ToolchainCmd::CargoFork { binary, toolchain } => {
                 toolchain::cargo_fork_command(&binary, toolchain)?
             }

@@ -69,6 +69,17 @@ pub struct Spec {
 impl Spec {
     pub fn parse(s: &str) -> Result<Spec> {
         let s = s.trim();
+        // justrust's own rustc build: `jr-<commit>` (installed from a local
+        // jr-rustc build with `justrust toolchain jr-install`).
+        if let Some(commit) = s.strip_prefix("jr-") {
+            if commit.len() < 7 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+                bail!("`{s}`: expected jr-<rustc commit hash>");
+            }
+            return Ok(Spec {
+                channel: "jr".into(),
+                date: Some(commit.into()),
+            });
+        }
         for ch in ["nightly", "beta"] {
             if let Some(date) = s.strip_prefix(ch).and_then(|r| r.strip_prefix('-')) {
                 if !is_date(date) {
@@ -105,7 +116,14 @@ impl Spec {
     }
 
     pub fn is_nightly(&self) -> bool {
-        self.channel == "nightly"
+        // jr builds are nightly-channel compilers (accept -Z flags).
+        self.channel == "nightly" || self.is_jr()
+    }
+
+    /// justrust's rustc fork (`jr-<commit>`): never downloaded from the
+    /// dist server, enables the fork's caches.
+    pub fn is_jr(&self) -> bool {
+        self.channel == "jr"
     }
 
     /// The channel manifest URL, relative to the dist server.
@@ -339,7 +357,14 @@ pub fn installed(spec: &Spec) -> Result<Option<Toolchain>> {
 pub fn for_build() -> Option<Toolchain> {
     let cwd = std::env::current_dir().ok()?;
     let pin = match resolve(&cwd) {
-        Ok(p) => p?,
+        Ok(Some(p)) => p,
+        // Nothing pinned: justrust's own compiler when one is installed
+        // (`justrust toolchain jr-install`). `JUSTRUST_TOOLCHAIN=system`
+        // resolves to Ok(None) too, so check the variable.
+        Ok(None) => {
+            let off = std::env::var("JUSTRUST_TOOLCHAIN").is_ok_and(|v| is_off(v.trim()));
+            return if off { None } else { default_jr() };
+        }
         Err(e) => {
             eprintln!("justrust: ignoring the toolchain pin: {e:#}");
             return None;
@@ -347,6 +372,15 @@ pub fn for_build() -> Option<Toolchain> {
     };
     if let Ok(Some(tc)) = installed(&pin.spec) {
         return Some(tc);
+    }
+    if pin.spec.is_jr() {
+        eprintln!(
+            "justrust: toolchain {} (from {}) is not installed and cannot be downloaded \
+             (`justrust toolchain jr-install`), using the system toolchain",
+            pin.spec.id(),
+            pin.source
+        );
+        return None;
     }
     if matches!(
         std::env::var("JUSTRUST_TOOLCHAIN_AUTO_INSTALL").as_deref(),
@@ -603,6 +637,107 @@ pub fn install(
     }
 }
 
+/// Install a jr-rustc build (a stage sysroot such as
+/// `~/jr-rustc/build/host/stage2`, with rustc, rustdoc and clippy) as the
+/// toolchain `jr-<commit>`. Cargo comes from `cargo_from` (an installed
+/// official toolchain, the one the fork is based on). Copied, not linked:
+/// rebuilding the fork never changes an installed toolchain under a build.
+pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
+    let rustc = sysroot.join("bin/rustc");
+    for b in ["rustc", "rustdoc", "clippy-driver", "cargo-clippy"] {
+        if !is_executable(&sysroot.join("bin").join(b)) {
+            bail!(
+                "{} has no bin/{b}: build it (`./x build --stage 2 compiler/rustc src/tools/rustdoc src/tools/clippy`)",
+                sysroot.display()
+            );
+        }
+    }
+    let out = Command::new(&rustc).arg("-vV").output()?;
+    let vv = String::from_utf8_lossy(&out.stdout).into_owned();
+    let commit = vv
+        .lines()
+        .find_map(|l| l.strip_prefix("commit-hash: "))
+        .context("rustc -vV has no commit-hash")?;
+    let spec = Spec::parse(&format!("jr-{}", &commit[..commit.len().min(12)]))?;
+    let root = root()?;
+    std::fs::create_dir_all(&root)?;
+    let _lock = lock_exclusive(&root.join(".install.lock"))?;
+    let start = crate::paths::now();
+    let staging = root.join(format!(".staging-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    let prefix = staging.join("prefix");
+    std::fs::create_dir_all(&staging)?;
+    // `cp -a` keeps the sysroot's symlinks (rust-src points into the source
+    // tree) and hard-link-free copies of the libraries.
+    let st = Command::new("cp")
+        .arg("-a")
+        .arg(sysroot)
+        .arg(&prefix)
+        .status()?;
+    if !st.success() {
+        let _ = std::fs::remove_dir_all(&staging);
+        bail!("copying {} failed", sysroot.display());
+    }
+    // Resolve rust-src: a symlink into a source tree that may move.
+    let src = prefix.join("lib/rustlib/src/rust");
+    if let Ok(target) = std::fs::read_link(&src) {
+        let _ = std::fs::remove_file(&src);
+        let st = Command::new("cp")
+            .arg("-a")
+            .arg(target.join("library"))
+            .arg(src.join("library"))
+            .status();
+        if !matches!(st, Ok(s) if s.success()) {
+            std::fs::create_dir_all(src.join("library"))?;
+        }
+    }
+    let _ = std::fs::remove_file(prefix.join("lib/rustlib/rustc-src/rust"));
+    for b in ["cargo", "rustfmt", "cargo-fmt", JR_CARGO] {
+        let from = cargo_from.bin(b);
+        if is_executable(&from) {
+            std::fs::copy(&from, prefix.join("bin").join(b))?;
+        }
+    }
+    let info = Installed {
+        id: spec.id(),
+        manifest_date: String::new(),
+        manifest_sha256: String::new(),
+        rustc_version: vv.lines().next().unwrap_or_default().to_owned(),
+        components: vec![
+            format!("jr-rustc from {}", sysroot.display()),
+            format!("cargo from {}", cargo_from.id),
+        ],
+        installed_at: crate::paths::now(),
+        install_secs: crate::paths::now() - start,
+    };
+    std::fs::write(prefix.join(MARKER), serde_json::to_vec_pretty(&info)?)?;
+    let dest = root.join(spec.id());
+    if dest.exists() {
+        let trash = root.join(format!(".trash-{}", std::process::id()));
+        std::fs::rename(&dest, &trash)?;
+        let _ = std::fs::remove_dir_all(&trash);
+    }
+    std::fs::rename(&prefix, &dest)?;
+    let _ = std::fs::remove_dir_all(&staging);
+    Ok(Toolchain {
+        id: spec.id(),
+        dir: dest,
+        nightly: true,
+    })
+}
+
+/// The newest installed jr toolchain, used by default when nothing else is
+/// pinned (`JUSTRUST_TOOLCHAIN=system` or a `justrust.toml` pin wins).
+pub fn default_jr() -> Option<Toolchain> {
+    list_installed()
+        .into_iter()
+        .filter(|t| t.id.starts_with("jr-"))
+        .max_by(|a, b| {
+            let t = |t: &Toolchain| t.info().map(|i| i.installed_at).unwrap_or(0.0);
+            t(a).total_cmp(&t(b))
+        })
+}
+
 /// Add one more manifest component (for example `rust-analyzer-preview`) to
 /// an installed toolchain, from the same dated manifest. Idempotent: a
 /// component already listed in `justrust-toolchain.json` is skipped.
@@ -832,7 +967,7 @@ pub fn list_installed() -> Vec<Toolchain> {
         .map(|e| {
             let id = e.file_name().to_string_lossy().into_owned();
             Toolchain {
-                nightly: id.starts_with("nightly-"),
+                nightly: id.starts_with("nightly-") || id.starts_with("jr-"),
                 id,
                 dir: e.path(),
             }
@@ -873,6 +1008,25 @@ pub fn status() -> Result<()> {
             println!("pinned  {} from {} ({state})", pin.spec.id(), pin.source);
         }
         None => {
+            let off = std::env::var("JUSTRUST_TOOLCHAIN").is_ok_and(|v| is_off(v.trim()));
+            if let Some(jr) = default_jr().filter(|_| !off) {
+                let cache = if matches!(
+                    std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref(),
+                    Ok("0") | Ok("off") | Ok("false") | Ok("no")
+                ) {
+                    "off (JUSTRUST_CACHE_PROC_MACROS=0)"
+                } else {
+                    "on"
+                };
+                let ver = jr.info().map(|i| i.rustc_version).unwrap_or_default();
+                println!(
+                    "default {} (justrust's compiler, {ver}); proc-macro cache {cache}. \
+                     JUSTRUST_TOOLCHAIN=system for the system rustc",
+                    jr.id
+                );
+                println!("{}", crate::linker::status_line());
+                return list_status();
+            }
             let rustc = crate::paths::find_on_path("rustc", Path::new(""))
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "rustc not found".into());
@@ -880,6 +1034,10 @@ pub fn status() -> Result<()> {
         }
     }
     println!("{}", crate::linker::status_line());
+    list_status()
+}
+
+fn list_status() -> Result<()> {
     let all = list_installed();
     if all.is_empty() {
         println!("no toolchains installed in {}", root()?.display());
@@ -1054,6 +1212,11 @@ mod tests {
         assert_eq!(s.manifest_path(), "dist/channel-rust-1.91.0.toml");
         assert!(!s.is_nightly());
         assert!(Spec::parse("beta-2026-10-01").is_ok());
+        let s = Spec::parse("jr-20061d4879b3").unwrap();
+        assert!(s.is_jr() && s.is_nightly());
+        assert_eq!(s.id(), "jr-20061d4879b3");
+        assert!(Spec::parse("jr-xyz").is_err());
+        assert!(Spec::parse("jr-abc").is_err());
         for bad in [
             "nightly",
             "stable",
