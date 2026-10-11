@@ -111,7 +111,7 @@ FACTORS = [
         on={}, off={"JCODE_PARALLEL_FRONTEND": "0"}, n=4,
     ),
     Factor(
-        "mold", "mold linker instead of the system cc/ld (Desktop's fast-linker)",
+        "mold", "mold linker instead of the system default (cc here links with lld)",
         "loop", "desktop-test-edit",
         on={}, off={"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc"},
     ),
@@ -312,16 +312,29 @@ def verdict(on: dict, off: dict, floor: float) -> str:
     return "within noise"
 
 
+def binary_fingerprint() -> str:
+    """Identity of the justrust binary on PATH. Other agents reinstall it
+    while a run is going (seen: a depcache key-scheme change mid-run turned
+    one 'on' sample into 833 misses), which silently mixes versions."""
+    path = shutil.which(suite.J) or suite.J
+    st = os.stat(path)
+    return f"{path}:{st.st_size}:{st.st_mtime_ns}"
+
+
 def run_factor(f: Factor, n: int | None, warmup: int | None, quiet_wait: float) -> dict:
     n = f.n if n is None else n
     warmup = f.warmup if warmup is None else warmup
     sampler = SAMPLERS[f.kind]
     base_n = int(time.time()) % 100000 * 100
     samples: dict[str, list[dict]] = {"on": [], "off": []}
+    fp = binary_fingerprint()
     for i in range(warmup + n):
         # ABBA: alternate which variant goes first, so drift cancels.
         order = ("on", "off") if i % 2 == 0 else ("off", "on")
         for v in order:
+            if binary_fingerprint() != fp:
+                sys.exit(f"factors: {f.name}: justrust was reinstalled during the run ({fp} -> "
+                         f"{binary_fingerprint()}); results would mix versions. Rerun this factor.")
             if quiet_wait:
                 suite.wait_quiet(quiet_wait)
             r = sampler(f, v, i, base_n)
@@ -337,6 +350,7 @@ def run_factor(f: Factor, n: int | None, warmup: int | None, quiet_wait: float) 
         "on_env": f.on, "off_env": f.off,
         "samples": samples, "on": on, "off": off,
         "saved_secs": round(off["median"] - on["median"], 3),
+        "justrust": fp,
         "saved_pct": round(100 * (off["median"] - on["median"]) / off["median"], 1) if off["median"] else 0.0,
     }
 

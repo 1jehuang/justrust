@@ -24,7 +24,7 @@ changes, so read the same-command table and System 2 for causes.
 
 ```sh
 bench/factors.py list                 # factors, workloads, on/off switches
-bench/factors.py run                  # every factor not marked slow (~1h)
+bench/factors.py run                  # every factor not marked slow (hours: each new config builds cold once)
 bench/factors.py run --all            # plus feature-unify, pinned nightly, cranelift
 bench/factors.py run mold -n 8        # one factor
 bench/factors.py report               # rebuild FACTORS.md from the newest results
