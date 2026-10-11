@@ -49,6 +49,9 @@ from a cache.
 
 ## Phases
 
+The optimizations that owning both sides of a layer boundary enables, ranked,
+are in `docs/integrations.md`.
+
 Each phase ships only after a measured win on the reference loop
 (`bench/edit-loop.sh` and the Desktop benches), recorded in FINDINGS.md.
 
