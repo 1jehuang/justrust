@@ -1938,7 +1938,15 @@ installed), raw cargo, 12 alternating runs each, 0 units rebuilt in any
 run: `check -p jcode-desktop-ui` stock 0.327 s, fork with the stamp off
 0.329 s, fork with the stamp on **0.271 s** (-17%). `test --no-run` was
 noisy in this round (busy machine, 0.4-1.5 s spread; medians 1.29 / 1.45 /
-1.07 s), so the earlier table is the cleaner number for it. The point of this step is ownership:
+1.07 s), so the earlier table is the cleaner number for it.
+
+System 2 (`bench/factors-isolated.sh run cargo-fork cargo-fork-loop`,
+`bench/results/factors-20261010-234515-fb4b860a68dd-dirty.json`), through
+justrust with the pinned toolchain, on/off interleaved: no-edit `test`
+0.49 s vs 0.52 s (10 each, -5%, within noise: justrust's own startup and
+the test run dominate), reference loop 7.77 s vs 7.64 s (8 each, within
+noise). So at the agent level the first fork change is not yet
+measurable; raw cargo `check` is where the 17% shows. The point of this step is ownership:
 the fork now builds, installs, and is selected by justrust, so the bigger
 cargo changes (in-process fingerprints, a resident cargo, replaying a
 recorded unit graph) have somewhere to land.

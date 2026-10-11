@@ -24,6 +24,8 @@ replaced.
 | incremental | desktop-test-edit | 9.04s (8.8-10.4) | 25.20s (24.4-25.8) | +16.16s (+64%) | 1/1 | 743/743 | 0s | helps |
 | pinned-nightly | desktop-test-edit | 8.08s (7.6-8.1) | 8.78s (8.6-9.4) | +0.70s (+8%) | 1/1 | 743/743 | 0s | within noise |
 | cranelift | desktop-test-edit | 8.25s (7.2-12.4) | 8.05s (7.4-13.0) | -0.21s (-3%) | 1/1 | 743/743 | 0s | within noise |
+| cargo-fork | desktop-noop-test | 0.49s (0.3-0.6) | 0.52s (0.4-0.6) | +0.03s (+5%) | 0/0 | 744/744 | 0s | within noise |
+| cargo-fork-loop | desktop-test-edit | 7.77s (6.8-8.8) | 7.64s (7.0-14.2) | -0.13s (-2%) | 1/1 | 743/743 | 0s | within noise |
 
 ## Factors and workloads
 
@@ -37,6 +39,8 @@ replaced.
 - **incremental**: rustc incremental compilation (reuse of unchanged query results and CGUs). Workload `desktop-test-edit` (loop). Off: `{'CARGO_INCREMENTAL': '0'}`. Result: `factors-20261010-204006-c3c63f0156d5-dirty.json` (justrust c3c63f0156d5).
 - **pinned-nightly**: justrust's pinned nightly toolchain instead of the system stable rustc. Workload `desktop-test-edit` (loop). Off: `{'JUSTRUST_TOOLCHAIN': 'system'}`. Result: `factors-20261010-204006-c3c63f0156d5-dirty.json` (justrust c3c63f0156d5).
 - **cranelift**: cranelift codegen backend for every crate (pinned nightly in both variants). Workload `desktop-test-edit` (loop). Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08'}`. Result: `factors-20261010-204006-c3c63f0156d5-dirty.json` (justrust c3c63f0156d5).
+- **cargo-fork**: jr-cargo (justrust's cargo fork, resolve stamp) instead of the toolchain's stock cargo. Workload `desktop-noop-test` (loop): no edit, so the wall is cargo + justrust overhead; needs `justrust toolchain cargo-fork` first. Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08', 'JUSTRUST_CARGO_FORK': '0'}`. Result: `factors-20261010-234515-fb4b860a68dd-dirty.json` (justrust fb4b860a68dd).
+- **cargo-fork-loop**: same, on the reference edit loop. Workload `desktop-test-edit` (loop). Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08', 'JUSTRUST_CARGO_FORK': '0'}`. Result: `factors-20261010-234515-fb4b860a68dd-dirty.json` (justrust fb4b860a68dd).
 
 Not here: the scheduler under contention (`bench/sched-contention.sh`),
 remote builds, crate splits (`bench/split-*.sh`, they change the source).
