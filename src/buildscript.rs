@@ -121,7 +121,17 @@ fn wrap_with(out_dir: &Path, crate_name: &str, extra: &str, me: &Path) -> Option
 fn keyed_env(name: &str) -> bool {
     if matches!(
         name,
-        "CARGO_MAKEFLAGS" | "RUSTC" | "RUSTDOC" | "CARGO" | "NUM_JOBS" | "JOBSERVER_FDS"
+        "CARGO_MAKEFLAGS"
+            | "RUSTC"
+            | "RUSTDOC"
+            | "CARGO"
+            | "NUM_JOBS"
+            | "JOBSERVER_FDS"
+            // Set only by some callers, value a placeholder anyway (as in
+            // depcache::keyed_env).
+            | "CARGO_HOME"
+            | "CARGO_TARGET_DIR"
+            | "CARGO_BUILD_TARGET_DIR"
     ) || name.starts_with("CARGO_TERM_")
         || name.starts_with("JUSTRUST_")
     {
@@ -196,6 +206,10 @@ struct Meta {
     stderr: Vec<String>,
     wall: f64,
     package: String,
+    /// Keyed by the C toolchain instead of the host package database
+    /// (`HERMETIC`): portable, so the prebuilt store may carry it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hermetic: bool,
 }
 
 struct Plan {
@@ -206,6 +220,7 @@ struct Plan {
     out_dir: PathBuf,
     cwd: PathBuf,
     cargo_home: PathBuf,
+    hermetic: bool,
 }
 
 fn cargo_home() -> PathBuf {
@@ -300,24 +315,79 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     }
     add_path_maps(&norm);
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let mut h = H128::new();
-    h.field(SCHEME.as_bytes());
-    h.field(depcache::file_hash(real, true)?.as_bytes());
-    h.field(cwd.to_str()?.as_bytes());
-    h.field(depcache::rustc_version(Path::new(&rustc))?.as_bytes());
-    for a in args {
-        h.field(norm.norm(a.to_str()?).as_bytes());
+    let package = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
+    if hermetic(&package)
+        && let Ok(real_dir) = manifest.canonicalize()
+        && real_dir != manifest
+    {
+        // cc names objects by a hash of the source dir relative to
+        // CARGO_MANIFEST_DIR. aws-lc compiles from its canonicalized dir,
+        // so with a symlinked registry the prefix did not match and object
+        // names (and the archive bytes) depended on the cargo home spelling
+        // (FINDINGS 30: the last 26 differing Desktop keys). Same dir,
+        // resolved spelling.
+        // SAFETY: single-threaded here, before the script is spawned.
+        unsafe { std::env::set_var("CARGO_MANIFEST_DIR", &real_dir) };
     }
-    h.field(system_stamp().as_bytes());
+    let mut h = H128::new();
+    let mut hermetic_run = false;
+    let mut explain = Vec::new();
+    let mut field = |name: &str, v: &str| {
+        h.field(v.as_bytes());
+        explain.push(format!("{name} {v}"));
+    };
+    field("scheme", SCHEME);
+    // Hermetic scripts: keyed by what they are built from, not the binary.
+    // The binary embeds `env!("CARGO_MANIFEST_DIR")` (libsqlite3-sys prints
+    // `cargo:include=<that>`) and string-table offsets shift with its
+    // length, so its bytes differ per cargo home (measured: 3178472 vs
+    // 3178632 bytes). The registry package (name, version, checksum-pinned
+    // sources) and the script's compile flags in args/env below pin it, and
+    // the build-script binary itself was compiled by the depcache-keyed
+    // rustc unit from the same sources.
+    if hermetic(&package) {
+        let v = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+        let src = manifest.join("build.rs");
+        let build_rs = depcache::file_hash(&src, false).unwrap_or_default();
+        field("script", &format!("{package} {v} build.rs {build_rs}"));
+    } else {
+        field("script", &depcache::file_hash(real, true)?);
+    }
+    // The package dir in the registry: a placeholder, so the key is the
+    // same in every cargo home (the script hash already pins the version).
+    field("cwd", &norm.norm(cwd.to_str()?));
+    field("rustc", &depcache::rustc_version(Path::new(&rustc))?);
+    for a in args {
+        field("arg", &norm.norm(a.to_str()?));
+    }
+    // What the host can change about the run: for packages that build
+    // vendored C and probe nothing, only the C toolchain; for the rest,
+    // any system package change.
+    match hermetic_stamp(&package) {
+        Some(s) => {
+            hermetic_run = true;
+            field("c-toolchain", &s)
+        }
+        None => field("system", &system_stamp()),
+    }
     let mut env: Vec<(String, String)> = std::env::vars().filter(|(k, _)| keyed_env(k)).collect();
     env.sort();
     for (k, v) in &env {
-        h.field(k.as_bytes());
         if by_content(k) && Path::new(v).is_file() {
-            h.field(depcache::file_hash(Path::new(v), true)?.as_bytes());
+            field(k, &depcache::file_hash(Path::new(v), true)?);
+        } else if k == "PATH" && hermetic_run {
+            // Which compiler `cc` resolves to is in the stamp; the rest of
+            // PATH (per-user dirs) must not split keys between machines.
         } else {
-            h.field(norm.norm(v).as_bytes());
+            field(k, &norm.norm(v));
         }
+    }
+    if let Some(dir) = std::env::var_os("JUSTRUST_DEPCACHE_EXPLAIN") {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(
+            Path::new(&dir).join(format!("script-{package}-{}.txt", h.hex())),
+            explain.join("\n"),
+        );
     }
     Some(Plan {
         real: real.to_path_buf(),
@@ -327,7 +397,123 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
         out_dir,
         cwd,
         cargo_home,
+        hermetic: hermetic_run,
     })
+}
+
+/// Packages whose build script compiles vendored C sources and, in the
+/// configuration justrust sees, takes nothing from the system but the C
+/// compiler and libc headers. Their runs are keyed by the C toolchain
+/// (`hermetic_stamp`) instead of the package database, so they can be
+/// shared across machines and published to the prebuilt store. Each entry
+/// names the pkg-config modules the script probes before falling back to
+/// its vendored copy: their presence is part of the key, so a host where
+/// the probe would succeed never reuses a vendored run (and the reverse).
+///
+/// Measured on Jcode Desktop (FINDINGS 30): aws-lc-sys 12.8 s, libsqlite3-sys
+/// 7.6 s, ring 4.8 s, onig_sys 2.3 s on the critical path of a cold build.
+const HERMETIC: &[(&str, &[&str])] = &[
+    ("ring", &[]),
+    // `bundled` feature: compiles sqlite3.c, pkg-config only on request.
+    ("libsqlite3-sys", &["sqlite3"]),
+    ("onig_sys", &["oniguruma"]),
+    (
+        "aws-lc-sys",
+        &["openssl", "aws-lc", "libcrypto", "libcrypto-awslc"],
+    ),
+];
+
+fn hermetic(package: &str) -> bool {
+    !matches!(
+        std::env::var("JUSTRUST_HERMETIC_SCRIPTS").as_deref(),
+        Ok("0") | Ok("off")
+    ) && HERMETIC.iter().any(|(p, _)| *p == package)
+}
+
+/// The C toolchain a hermetic script compiles with: the resolved `cc`
+/// (or `$CC`) and `ar` by content, the compiler's `--version`, and which of
+/// the package's fallback pkg-config modules this host has. `None` when the
+/// package is not hermetic or the toolchain cannot be identified.
+fn hermetic_stamp(package: &str) -> Option<String> {
+    if !hermetic(package) {
+        return None;
+    }
+    let modules = HERMETIC.iter().find(|(p, _)| *p == package)?.1;
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let tool = |names: &[&str], default: &str| -> Option<PathBuf> {
+        let v = names
+            .iter()
+            .find_map(|n| std::env::var(n).ok().filter(|v| !v.is_empty()))
+            .unwrap_or_else(|| default.to_owned());
+        // Only a bare program or a path, no wrapper with arguments.
+        if v.contains(char::is_whitespace) {
+            return None;
+        }
+        let p = PathBuf::from(&v);
+        if p.is_absolute() {
+            return Some(p);
+        }
+        paths::find_on_path(&v, Path::new("/nonexistent"))
+    };
+    let u = target.replace('-', "_");
+    let cc = tool(
+        &[
+            &format!("CC_{target}"),
+            &format!("CC_{u}"),
+            "TARGET_CC",
+            "CC",
+        ],
+        "cc",
+    )?
+    .canonicalize()
+    .ok()?;
+    let ar = tool(
+        &[
+            &format!("AR_{target}"),
+            &format!("AR_{u}"),
+            "TARGET_AR",
+            "AR",
+        ],
+        "ar",
+    )?
+    .canonicalize()
+    .ok()?;
+    let version = Command::new(&cc)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_owned()
+        })?;
+    let mut s = format!(
+        "cc {} {version}; ar {}",
+        depcache::file_hash(&cc, true)?,
+        depcache::file_hash(&ar, true)?
+    );
+    if !modules.is_empty() {
+        let found: Vec<&str> = modules
+            .iter()
+            .copied()
+            .filter(|m| {
+                Command::new("pkg-config")
+                    .args(["--exists", m])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            })
+            .collect();
+        s.push_str(&format!("; pkg-config {}", found.join(",")));
+    }
+    Some(s)
 }
 
 /// Changes whenever system packages or shared libraries change. Scripts that
@@ -491,6 +677,7 @@ impl Plan {
                 stderr: stderr.lines().map(|l| self.norm.norm(l)).collect(),
                 wall,
                 package: std::env::var("CARGO_PKG_NAME").unwrap_or_default(),
+                hermetic: self.hermetic,
             };
             let r = self.write_outputs(&tmp, meta);
             if r.is_none() || std::fs::rename(&tmp, &final_dir).is_err() {
@@ -551,6 +738,207 @@ impl Plan {
     }
 }
 
+// ------------------------------------------------------- prebuilt store tier
+//
+// Hermetic build-script runs go to the prebuilt store under `v1/s/`:
+//   v1/s/m/<base>.jsonl   manifest lines (`Entry`)
+//   v1/s/o/<out>.jrbs     bundle: gzip of `JRBS1\n` then per file
+//                          `u32 path_len, path, u64 len, bytes`, meta.json first
+// Only entries whose meta.json says `hermetic` are published.
+
+const BUNDLE_MAGIC: &[u8] = b"JRBS1\n";
+const BUNDLE_MAX_FILES: usize = 4096;
+const BUNDLE_MAX_BYTES: u64 = 256 << 20;
+
+/// A relative path with only normal components.
+fn safe_rel(p: &str) -> bool {
+    !p.is_empty()
+        && !p.contains('\0')
+        && Path::new(p).is_relative()
+        && Path::new(p)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+pub(crate) fn pack_entry(dir: &Path, dst: &Path) -> Option<()> {
+    let meta: Meta = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
+    if !meta.hermetic {
+        return None;
+    }
+    let f = std::fs::File::create(dst).ok()?;
+    let mut gz =
+        flate2::write::GzEncoder::new(std::io::BufWriter::new(f), flate2::Compression::fast());
+    gz.write_all(BUNDLE_MAGIC).ok()?;
+    let mut put = |rel: &str, src: &Path| -> Option<()> {
+        let len = std::fs::metadata(src).ok()?.len();
+        gz.write_all(&(rel.len() as u32).to_le_bytes()).ok()?;
+        gz.write_all(rel.as_bytes()).ok()?;
+        gz.write_all(&len.to_le_bytes()).ok()?;
+        std::io::copy(&mut std::fs::File::open(src).ok()?, &mut gz).ok()?;
+        Some(())
+    };
+    put("meta.json", &dir.join("meta.json"))?;
+    for f in &meta.files {
+        if !safe_rel(&f.path) {
+            return None;
+        }
+        put(&format!("out/{}", f.path), &dir.join("out").join(&f.path))?;
+    }
+    gz.finish().ok()?.flush().ok()
+}
+
+/// Unpack into a fresh `dst`, accepting only the files meta.json lists.
+pub(crate) fn unpack_entry(src: &Path, dst: &Path) -> Option<()> {
+    let f = std::fs::File::open(src).ok()?;
+    let mut r = flate2::read::GzDecoder::new(std::io::BufReader::new(f)).take(BUNDLE_MAX_BYTES);
+    let mut magic = [0u8; 6];
+    r.read_exact(&mut magic).ok()?;
+    if magic != BUNDLE_MAGIC {
+        return None;
+    }
+    let next = |r: &mut dyn Read| -> Option<Option<(String, Vec<u8>)>> {
+        let mut n = [0u8; 4];
+        match r.read(&mut n[..1]) {
+            Ok(0) => return Some(None),
+            Ok(_) => r.read_exact(&mut n[1..]).ok()?,
+            Err(_) => return None,
+        }
+        let n = u32::from_le_bytes(n) as usize;
+        if n == 0 || n > 4096 {
+            return None;
+        }
+        let mut name = vec![0u8; n];
+        r.read_exact(&mut name).ok()?;
+        let mut len = [0u8; 8];
+        r.read_exact(&mut len).ok()?;
+        let len = u64::from_le_bytes(len);
+        if len > BUNDLE_MAX_BYTES {
+            return None;
+        }
+        let mut body = Vec::with_capacity(len as usize);
+        r.take(len).read_to_end(&mut body).ok()?;
+        if body.len() as u64 != len {
+            return None;
+        }
+        Some(Some((String::from_utf8(name).ok()?, body)))
+    };
+    let (name, body) = next(&mut r)??;
+    if name != "meta.json" {
+        return None;
+    }
+    let meta: Meta = serde_json::from_slice(&body).ok()?;
+    if !meta.hermetic || meta.files.len() > BUNDLE_MAX_FILES {
+        return None;
+    }
+    let mut want: std::collections::HashSet<String> = meta
+        .files
+        .iter()
+        .map(|f| f.path.clone())
+        .collect::<std::collections::HashSet<_>>();
+    if want.len() != meta.files.len() || !want.iter().all(|p| safe_rel(p)) {
+        return None;
+    }
+    std::fs::create_dir_all(dst.join("out")).ok()?;
+    std::fs::write(dst.join("meta.json"), &body).ok()?;
+    while let Some((name, body)) = next(&mut r)? {
+        let rel = name.strip_prefix("out/")?;
+        if !want.remove(rel) {
+            return None;
+        }
+        let p = dst.join("out").join(rel);
+        std::fs::create_dir_all(p.parent()?).ok()?;
+        std::fs::write(&p, body).ok()?;
+    }
+    want.is_empty().then_some(())
+}
+
+/// For `justrust cache --publish`: if `line` is a hermetic build-script
+/// entry of the local cache at `root`, copy its bundle to `v1/s/o` (the
+/// caller appends the line to `v1/s/m/<base>.jsonl`). Returns the bundle
+/// bytes written (0 when it already existed), `None` for lines that are not
+/// publishable script entries.
+pub(crate) fn publish_entry(root: &Path, line: &str, v1: &Path) -> Option<u64> {
+    let e: Entry = serde_json::from_str(line).ok()?;
+    let dir = root.join("o").join(&e.out);
+    let meta: Meta = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
+    if !meta.hermetic {
+        return None;
+    }
+    let o = v1.join("s/o");
+    std::fs::create_dir_all(&o).ok()?;
+    let bundle = o.join(format!("{}.jrbs", e.out));
+    if bundle.is_file() {
+        return Some(0);
+    }
+    let t = o.join(format!(".{}.{}", e.out, std::process::id()));
+    if pack_entry(&dir, &t).is_none() {
+        let _ = std::fs::remove_file(&t);
+        return None;
+    }
+    let n = std::fs::metadata(&t).ok()?.len();
+    std::fs::rename(&t, &bundle).ok()?;
+    Some(n)
+}
+
+impl Plan {
+    /// After a local miss: fetch a hermetic run from the prebuilt store
+    /// into the local cache, then restore it locally.
+    fn fetch_prebuilt(&self) -> Option<Meta> {
+        use crate::depcache_prebuilt as pb;
+        let base = pb::base()?;
+        let root = &self.root;
+        if pb::fresh_file(&pb::breaker(root), pb::BREAKER_SECS) {
+            return None;
+        }
+        let m = pb::tmp(root, "sm");
+        let got = pb::get(&base, &format!("s/m/{}.jsonl", self.base), &m, 8, 1 << 20);
+        let text = std::fs::read_to_string(&m).unwrap_or_default();
+        let _ = std::fs::remove_file(&m);
+        match got {
+            pb::Got::Ok => {}
+            pb::Got::Missing => return None,
+            pb::Got::Failed(why) => {
+                let _ = std::fs::write(pb::breaker(root), format!("script manifest: {why}"));
+                return None;
+            }
+        }
+        let (out, line) = text.lines().rev().find_map(|l| {
+            let e: Entry = serde_json::from_str(l).ok()?;
+            (pb::valid_key(&e.out) && self.matches(&e)).then(|| (e.out, l.to_owned()))
+        })?;
+        let final_dir = root.join("o").join(&out);
+        if !final_dir.join("meta.json").is_file() {
+            let bundle = pb::tmp(root, "sb");
+            let stage = root
+                .join("o")
+                .join(format!(".{out}.pbs{}", std::process::id()));
+            let ok = matches!(
+                pb::get(
+                    &base,
+                    &format!("s/o/{out}.jrbs"),
+                    &bundle,
+                    120,
+                    BUNDLE_MAX_BYTES
+                ),
+                pb::Got::Ok
+            ) && unpack_entry(&bundle, &stage).is_some();
+            let _ = std::fs::remove_file(&bundle);
+            if !ok || std::fs::rename(&stage, &final_dir).is_err() {
+                let _ = std::fs::remove_dir_all(&stage);
+                if !final_dir.join("meta.json").is_file() {
+                    return None;
+                }
+            }
+        }
+        let known = std::fs::read_to_string(self.manifest()).unwrap_or_default();
+        if !known.lines().any(|l| l == line) {
+            std::fs::create_dir_all(root.join("m")).ok()?;
+            paths::append_line(&self.manifest(), &line).ok()?;
+        }
+        self.restore()
+    }
+}
+
 /// `rerun-if-changed` paths and `rerun-if-env-changed` names from a build
 /// script's stdout (both the `cargo:` and `cargo::` forms).
 fn directives(stdout: &str) -> (Vec<String>, Vec<String>) {
@@ -582,16 +970,19 @@ fn exec_real(real: &Path, args: &[OsString]) -> ! {
     std::process::exit(127);
 }
 
-fn record(package: &str, hit: bool, wall: f64, saved: f64) {
+fn record(package: &str, hit: bool, wall: f64, saved: f64, prebuilt: bool) {
     let Some(dir) = std::env::var_os("JUSTRUST_RUN_DIR") else {
         return;
     };
-    let line = serde_json::json!({
+    let mut line = serde_json::json!({
         "package": package,
         "hit": hit,
         "wall": wall,
         "saved_secs": saved,
     });
+    if prebuilt {
+        line["prebuilt"] = true.into();
+    }
     let _ = paths::append_line(&Path::new(&dir).join("scripts.jsonl"), &line.to_string());
 }
 
@@ -626,7 +1017,12 @@ pub fn main(real: PathBuf, args: Vec<OsString>) -> ! {
     };
     let package = std::env::var("CARGO_PKG_NAME").unwrap_or_default();
     let start = paths::now();
-    if let Some(meta) = plan.restore() {
+    let mut prebuilt = false;
+    if let Some(meta) = plan.restore().or_else(|| {
+        let m = plan.fetch_prebuilt();
+        prebuilt = m.is_some();
+        m
+    }) {
         let mut out = std::io::stdout().lock();
         for l in &meta.stdout {
             let _ = writeln!(out, "{}", plan.norm.denorm(l));
@@ -636,7 +1032,7 @@ pub fn main(real: PathBuf, args: Vec<OsString>) -> ! {
         for l in &meta.stderr {
             let _ = writeln!(err, "{}", plan.norm.denorm(l));
         }
-        record(&package, true, paths::now() - start, meta.wall);
+        record(&package, true, paths::now() - start, meta.wall, prebuilt);
         std::process::exit(0);
     }
     let child = Command::new(&plan.real)
@@ -653,7 +1049,7 @@ pub fn main(real: PathBuf, args: Vec<OsString>) -> ! {
     let out = t_out.join().unwrap_or_default();
     let err = t_err.join().unwrap_or_default();
     let wall = paths::now() - start;
-    record(&package, false, wall, 0.0);
+    record(&package, false, wall, 0.0, false);
     let status = match status {
         Ok(s) => s,
         Err(_) => std::process::exit(1),
@@ -740,6 +1136,7 @@ mod tests {
                 out_dir,
                 cwd: src.clone(),
                 cargo_home: dir.join("no-cargo-home"),
+                hermetic: false,
             }
         };
         let p1 = mk("t1");
@@ -891,6 +1288,7 @@ mod tests {
             out_dir: out_dir.clone(),
             cwd: src.clone(),
             cargo_home: dir.join("no-cargo-home"),
+            hermetic: false,
         };
         // rerun-if-changed on a missing path (cargo always reruns those).
         assert!(
@@ -941,5 +1339,121 @@ mod tests {
         std::fs::write(dir.join("d/sub/a"), "3").unwrap();
         assert_ne!(l1, input_sig(&dir.join("l"), &ch).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn script_entry(dir: &Path, hermetic: bool) -> PathBuf {
+        let e = dir.join("o/e");
+        std::fs::create_dir_all(e.join("out/include/openssl")).unwrap();
+        std::fs::write(e.join("out/libcrypto.a"), b"!<arch>\n\0bin").unwrap();
+        std::fs::write(e.join("out/include/openssl/base.h"), "#define X 1\n").unwrap();
+        let meta = Meta {
+            files: vec![
+                OutFile {
+                    path: "libcrypto.a".into(),
+                    text: false,
+                },
+                OutFile {
+                    path: "include/openssl/base.h".into(),
+                    text: true,
+                },
+            ],
+            stdout: vec!["cargo:rustc-link-lib=static=crypto".into()],
+            stderr: vec![],
+            wall: 12.5,
+            package: "aws-lc-sys".into(),
+            hermetic,
+        };
+        std::fs::write(e.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+        e
+    }
+
+    #[test]
+    fn script_bundle_round_trip_and_hermetic_only() {
+        let dir = std::env::temp_dir().join(format!("jr-bs-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let e = script_entry(&dir, true);
+        let b = dir.join("b.gz");
+        pack_entry(&e, &b).unwrap();
+        let out = dir.join("u");
+        unpack_entry(&b, &out).unwrap();
+        for f in ["meta.json", "out/libcrypto.a", "out/include/openssl/base.h"] {
+            assert_eq!(
+                std::fs::read(out.join(f)).unwrap(),
+                std::fs::read(e.join(f)).unwrap(),
+                "{f}"
+            );
+        }
+        // Host-keyed runs are never packed or accepted.
+        let e2 = script_entry(&dir.join("x"), false);
+        assert!(pack_entry(&e2, &dir.join("b2.gz")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn script_bundle_rejects_hostile_input() {
+        let dir = std::env::temp_dir().join(format!("jr-bs-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = |files: &[&str]| {
+            serde_json::to_vec(&Meta {
+                files: files
+                    .iter()
+                    .map(|p| OutFile {
+                        path: (*p).into(),
+                        text: false,
+                    })
+                    .collect(),
+                stdout: vec![],
+                stderr: vec![],
+                wall: 1.0,
+                package: "ring".into(),
+                hermetic: true,
+            })
+            .unwrap()
+        };
+        let write = |name: &str, entries: &[(&str, &[u8])]| {
+            let p = dir.join(name);
+            let mut gz = flate2::write::GzEncoder::new(
+                std::fs::File::create(&p).unwrap(),
+                flate2::Compression::fast(),
+            );
+            gz.write_all(BUNDLE_MAGIC).unwrap();
+            for (n, b) in entries {
+                gz.write_all(&(n.len() as u32).to_le_bytes()).unwrap();
+                gz.write_all(n.as_bytes()).unwrap();
+                gz.write_all(&(b.len() as u64).to_le_bytes()).unwrap();
+                gz.write_all(b).unwrap();
+            }
+            gz.finish().unwrap();
+            p
+        };
+        // Traversal listed in meta.json.
+        let m = meta(&["../escape"]);
+        let b = write("t1", &[("meta.json", &m), ("out/../escape", b"x")]);
+        assert!(unpack_entry(&b, &dir.join("o1")).is_none());
+        assert!(!dir.join("escape").exists());
+        // A file meta.json does not list.
+        let m = meta(&["a"]);
+        let b = write("t2", &[("meta.json", &m), ("out/a", b"x"), ("out/b", b"y")]);
+        assert!(unpack_entry(&b, &dir.join("o2")).is_none());
+        // A listed file missing.
+        let m = meta(&["a", "b"]);
+        let b = write("t3", &[("meta.json", &m), ("out/a", b"x")]);
+        assert!(unpack_entry(&b, &dir.join("o3")).is_none());
+        // meta.json not first.
+        let b = write("t4", &[("out/a", b"x")]);
+        assert!(unpack_entry(&b, &dir.join("o4")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hermetic_list_is_vendored_c_only() {
+        for p in ["ring", "aws-lc-sys", "libsqlite3-sys", "onig_sys"] {
+            assert!(HERMETIC.iter().any(|(n, _)| *n == p), "{p}");
+        }
+        // System probes stay keyed by the package database.
+        for p in ["alsa-sys", "freetype-sys", "wayland-sys", "openssl-sys"] {
+            assert!(!HERMETIC.iter().any(|(n, _)| *n == p), "{p}");
+        }
     }
 }

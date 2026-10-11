@@ -359,10 +359,11 @@ pub fn command(
     if let Some(dst) = publish {
         let p = crate::depcache_prebuilt::publish(&root, &dst)?;
         println!(
-            "published {} new bundles ({}), {} manifest lines, {} skipped, to {}",
+            "published {} new bundles ({}), {} manifest lines, {} build-script runs, {} skipped, to {}",
             p.bundles,
             gb(p.bytes),
             p.lines,
+            p.scripts,
             p.skipped,
             dst.display()
         );

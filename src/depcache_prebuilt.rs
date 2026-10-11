@@ -40,7 +40,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const BREAKER_SECS: f64 = 600.0;
+pub(crate) const BREAKER_SECS: f64 = 600.0;
 const INDEX_SECS: f64 = 600.0;
 const MAX_INDEX: u64 = 64 * 1024 * 1024;
 
@@ -63,14 +63,14 @@ fn parse_base(v: &str) -> Option<String> {
     v.starts_with('/').then(|| format!("file://{v}"))
 }
 
-enum Got {
+pub(crate) enum Got {
     Ok,
     Missing,
     Failed(String),
 }
 
 /// Fetch `<base>/v1/<rel>` into `dst`.
-fn get(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) -> Got {
+pub(crate) fn get(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) -> Got {
     if let Some(dir) = base.strip_prefix("file://") {
         let src = Path::new(dir).join("v1").join(rel);
         return match std::fs::metadata(&src) {
@@ -119,11 +119,11 @@ fn get(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) -> Got 
     }
 }
 
-fn breaker(root: &Path) -> PathBuf {
+pub(crate) fn breaker(root: &Path) -> PathBuf {
     root.join("prebuilt.down")
 }
 
-fn fresh_file(p: &Path, secs: f64) -> bool {
+pub(crate) fn fresh_file(p: &Path, secs: f64) -> bool {
     std::fs::metadata(p)
         .ok()
         .and_then(|m| m.modified().ok())
@@ -131,7 +131,7 @@ fn fresh_file(p: &Path, secs: f64) -> bool {
         .is_some_and(|e| e.as_secs_f64() < secs)
 }
 
-fn tmp(root: &Path, tag: &str) -> PathBuf {
+pub(crate) fn tmp(root: &Path, tag: &str) -> PathBuf {
     let d = root.join("tmp");
     let _ = std::fs::create_dir_all(&d);
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -256,7 +256,7 @@ fn fetch_from(base: &str, plan: &Plan, err: &mut dyn Write) -> Option<depcache::
     plan.restore(err)
 }
 
-fn valid_key(k: &str) -> bool {
+pub(crate) fn valid_key(k: &str) -> bool {
     k.len() == 32
         && k.bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
@@ -266,6 +266,8 @@ fn valid_key(k: &str) -> bool {
 pub struct Published {
     pub bundles: usize,
     pub lines: usize,
+    /// Hermetic build-script runs published (`v1/s/`).
+    pub scripts: usize,
     pub skipped: usize,
     pub bytes: u64,
 }
@@ -289,10 +291,6 @@ pub fn publish(root: &Path, dst: &Path) -> anyhow::Result<Published> {
         let dst_m = v1.join("m").join(&name);
         let mut have = std::fs::read_to_string(&dst_m).unwrap_or_default();
         for line in text.lines() {
-            // Build-script run entries share the directory and line shape,
-            // but their meta.json is not a rustc `Outputs`: `pack` rejects
-            // them, so they are skipped (their keys include a host package
-            // database stamp and would not match elsewhere anyway).
             let Some(out) = serde_json::from_str::<Entry>(line)
                 .ok()
                 .map(|e| e.out)
@@ -302,6 +300,30 @@ pub fn publish(root: &Path, dst: &Path) -> anyhow::Result<Published> {
                 continue;
             };
             if have.lines().any(|l| l == line) {
+                continue;
+            }
+            // Build-script run entries share the cache dir and line shape
+            // (their meta.json has `stdout`). Hermetic ones, keyed by the C
+            // toolchain, go to `v1/s/`; the rest are host-specific.
+            let o = root.join("o").join(&out);
+            let is_script = serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(o.join("meta.json")).unwrap_or_default(),
+            )
+            .is_ok_and(|v| v.get("stdout").is_some());
+            if is_script {
+                match crate::buildscript::publish_entry(root, line, &v1) {
+                    Some(n) => {
+                        let sm = v1.join("s/m").join(&name);
+                        let have_s = std::fs::read_to_string(&sm).unwrap_or_default();
+                        if !have_s.lines().any(|l| l == line) {
+                            std::fs::create_dir_all(v1.join("s/m"))?;
+                            paths::append_line(&sm, line)?;
+                            p.scripts += 1;
+                            p.bytes += n;
+                        }
+                    }
+                    None => p.skipped += 1,
+                }
                 continue;
             }
             let bundle = v1.join("o").join(format!("{out}.jrdc"));
@@ -323,6 +345,9 @@ pub fn publish(root: &Path, dst: &Path) -> anyhow::Result<Published> {
         }
     }
     write_index(&v1)?;
+    if v1.join("s/m").is_dir() {
+        write_index(&v1.join("s"))?;
+    }
     Ok(p)
 }
 

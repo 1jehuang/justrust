@@ -223,8 +223,9 @@ fn installs_pins_and_builds_with_the_pinned_toolchain() {
         seen.contains(&format!("REAL={}", bin.join("rustc").display())),
         "{seen}"
     );
+    // The shim is per justrust binary: `bin/shim/<hash>/rustc`.
     assert!(
-        seen.contains("RUSTC=") && seen.contains("bin/shim/rustc"),
+        seen.contains("RUSTC=") && seen.contains("bin/shim/") && seen.contains("/rustc"),
         "{seen}"
     );
     assert!(seen.contains("ACTIVE=nightly-2026-10-08"), "{seen}");
