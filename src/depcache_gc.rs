@@ -348,10 +348,22 @@ fn hit_rate(days: f64) -> (usize, usize, f64, usize) {
 }
 
 /// `justrust cache [--prune] [--clear]`.
-pub fn command(prune_now: bool, clear: bool, auto_mode: bool) -> Result<()> {
+pub fn command(prune_now: bool, clear: bool, auto_mode: bool, sync: bool) -> Result<()> {
     let root = depcache::cache_dir().context("no cache directory")?;
     if auto_mode {
         auto(&root);
+        return Ok(());
+    }
+    if sync {
+        match crate::depcache_remote::sync(&root) {
+            Some(s) => println!(
+                "uploaded {} entries, {} skipped, {} failed",
+                s.uploaded, s.skipped, s.failed
+            ),
+            None => {
+                println!("nothing uploaded (empty queue, signed out, or another upload running)")
+            }
+        }
         return Ok(());
     }
     let max = max_bytes();
@@ -374,6 +386,7 @@ pub fn command(prune_now: bool, clear: bool, auto_mode: bool) -> Result<()> {
     if !depcache::enabled() {
         println!("status    disabled by JUSTRUST_DEPCACHE");
     }
+    println!("{}", crate::depcache_remote::status_line(&root));
     if let (Some(old), Some(new)) = (
         s.entries.iter().map(|e| e.last_used).reduce(f64::min),
         s.entries.iter().map(|e| e.last_used).reduce(f64::max),

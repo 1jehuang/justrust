@@ -50,6 +50,25 @@ scale out parallel agents, and offload heavy builds and storage.
 
 Most of the value comes from caching across users and projects.
 
+Status (implemented): `src/depcache_remote.rs` here (client) and
+`src/cache.js` in the private `~/justrust-cloud` (server, R2). After a local
+depcache miss, eligible registry and git units look up
+`build.jcode.sh/v1/build/cache` and download a bundle on a match. Successful
+compiles queue an upload that a detached `justrust cache --sync` sends after
+the run. Two tiers: `shared`, written only by the prebuild fleet
+(`JUSTRUST_CACHE_PUBLISH_TOKEN`), read by every signed-in account, and
+`private`, per account (its other machines, CI, hosted hosts). Keys are
+portable across machines (scheme 2: the cargo home is a placeholder, and
+proc macros and bins key the glibc version). Verified end to end with two
+isolated machines (different cargo homes): a cold build of serde+itoa on the
+second machine was 12/12 remote hits, byte-identical rlibs, a runnable binary,
+1.0s instead of 6.1s; another account could not see private entries or
+publish to the shared tier. Remaining: the prebuild fleet that fills the
+shared tier from the top crates, a remap of the cargo home in debug info
+(entries still name the publishing machine's paths in panic locations and
+debug line tables, like the `OUT_DIR` case in depcache.rs), and deploying
+(R2 bucket, `CACHE_ENABLED`).
+
 | Artifact | Shared across | Value |
 |---|---|---|
 | Popular crates.io dependencies | All users | Large |

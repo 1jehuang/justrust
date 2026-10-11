@@ -176,7 +176,16 @@ impl Creds {
         Ok(())
     }
 
-    fn url(&self, suffix: &str) -> String {
+    /// The curl `--config -` text carrying the bearer key (stdin only).
+    pub(crate) fn curl_auth_config(&self) -> String {
+        if self.key.is_empty() {
+            return String::new();
+        }
+        let k = self.key.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("header = \"Authorization: Bearer {k}\"\n")
+    }
+
+    pub(crate) fn url(&self, suffix: &str) -> String {
         let suffix = suffix.trim_start_matches('/');
         let base = if suffix.starts_with("build/") {
             &self.build_base

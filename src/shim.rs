@@ -126,14 +126,16 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if let Some(plan) = &plan {
         let start = paths::now();
         let mut err = std::io::stderr();
-        if let Some(hit) = plan.restore(&mut err) {
+        let local = plan.restore(&mut err);
+        let remote = local.is_none();
+        if let Some(hit) = local.or_else(|| crate::depcache_remote::fetch(plan, &mut err)) {
             let end = paths::now();
             let mut unit = described;
             unit.start = start;
             unit.end = end;
             unit.wall = end - start;
             unit.rmeta_secs = Some(unit.wall);
-            unit.depcache = "hit".into();
+            unit.depcache = if remote { "remote" } else { "hit" }.into();
             unit.depcache_saved_secs = Some(hit.saved_secs);
             let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
             if let Ok(line) = serde_json::to_string(&unit) {
@@ -175,7 +177,9 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         unit.depcache = "miss".into();
         if exit == 0 && !passes_on {
             let lines = std::mem::take(&mut *captured.lock().unwrap());
-            let _ = plan.store(start, end - start, &lines);
+            if let Some(line) = plan.store(start, end - start, &lines) {
+                crate::depcache_remote::enqueue(plan, &line);
+            }
             // After storing: the cache keeps the real binary, not the wrapper.
             let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
         }

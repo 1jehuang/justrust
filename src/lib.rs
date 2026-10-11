@@ -14,6 +14,7 @@ mod agent_output;
 mod buildscript;
 mod depcache;
 mod depcache_gc;
+mod depcache_remote;
 mod export;
 mod findings;
 mod history;
@@ -162,6 +163,10 @@ enum Command {
         /// Background collection after a run (internal).
         #[arg(long, hide = true)]
         auto: bool,
+        /// Upload queued entries to the remote cache now (runs in the
+        /// background after builds on its own).
+        #[arg(long)]
+        sync: bool,
     },
     /// Pinned Rust toolchain (justrust.toml `[toolchain] channel`):
     /// status, install, pin, unpin, remove.
@@ -472,7 +477,12 @@ pub fn main() -> anyhow::Result<()> {
             du,
             gc_root,
         } => slots::command(clean, gc, du, gc_root)?,
-        Command::Cache { prune, clear, auto } => depcache_gc::command(prune, clear, auto)?,
+        Command::Cache {
+            prune,
+            clear,
+            auto,
+            sync,
+        } => depcache_gc::command(prune, clear, auto, sync)?,
         Command::Toolchain { cmd } => match cmd.unwrap_or(ToolchainCmd::Status) {
             ToolchainCmd::Status => toolchain::status()?,
             ToolchainCmd::Install { spec } => toolchain::install_command(spec)?,

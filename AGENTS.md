@@ -34,6 +34,20 @@ When choosing work, prefer what moves the reference loop
 never stop at "good enough" when a deeper change (a fork, a server, a new
 component) would be measurably faster.
 
+## Related repositories (where things live)
+
+| Piece | Repo |
+|---|---|
+| This client, local depcache, cache key scheme, remote cache wire format (MIT) | here (`src/depcache.rs`, `src/depcache_remote.rs`) |
+| Self-hostable single-tenant server (FSL) | `server/` here |
+| **Multitenant cloud**: hosted build hosts, global shared dependency cache (R2), prebuild publish, tenant isolation, poisoning defenses | `~/justrust-cloud` (private, github.com/1jehuang/justrust-cloud, `build.jcode.sh`) |
+| Accounts, billing, API keys, `/internal/builds/*` | `~/solosystems-backend` (`api.jcode.sh`) |
+
+Anything multitenant goes in `~/justrust-cloud`, never here (see
+`docs/remote-strategy.md`, licensing). Remote cache protocol changes touch
+both `src/depcache_remote.rs` here and `src/cache.js` there: change both,
+test both (`justrust test`, `npm test`), push both.
+
 ## Git workflow
 
 - Work directly on `main`. No feature branches.

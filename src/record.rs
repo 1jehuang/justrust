@@ -511,6 +511,7 @@ fn finish(
     crate::split_index::record(&s);
     crate::split_index::maybe_refresh(&s);
     crate::depcache_gc::maybe_spawn();
+    crate::depcache_remote::maybe_spawn_sync();
     if opts.agent {
         eprint!("{}", s.agent_footer(&hidden));
     } else if std::env::var_os("JUSTRUST_QUIET").is_none() {

@@ -122,6 +122,10 @@ pub struct UnitStats {
     /// Wall time spent compiling the misses.
     #[serde(default)]
     pub depcache_miss_secs: f64,
+    /// Hits served by the remote cache (shared tier or the account's own
+    /// uploads), included in `depcache_hits`.
+    #[serde(default)]
+    pub depcache_remote_hits: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -630,7 +634,11 @@ pub fn build(
         rustc_cpu_secs: units.iter().map(|u| u.user + u.sys).sum(),
         rustc_wall_sum: units.iter().map(|u| u.wall).sum(),
         with_pass_timings: units.iter().filter(|u| !u.passes.is_empty()).count(),
-        depcache_hits: units.iter().filter(|u| u.depcache == "hit").count(),
+        depcache_hits: units
+            .iter()
+            .filter(|u| u.depcache == "hit" || u.depcache == "remote")
+            .count(),
+        depcache_remote_hits: units.iter().filter(|u| u.depcache == "remote").count(),
         depcache_misses: units.iter().filter(|u| u.depcache == "miss").count(),
         depcache_saved_secs: units.iter().filter_map(|u| u.depcache_saved_secs).sum(),
         depcache_miss_secs: units
@@ -822,8 +830,13 @@ impl UnitStats {
         } else {
             String::new()
         };
+        let remote = if self.depcache_remote_hits > 0 {
+            format!(" ({} remote)", self.depcache_remote_hits)
+        } else {
+            String::new()
+        };
         format!(
-            ", depcache {} hit/{} miss{saved}",
+            ", depcache {} hit{remote}/{} miss{saved}",
             self.depcache_hits, self.depcache_misses
         )
     }

@@ -58,9 +58,14 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Bump to invalidate every entry when the key scheme changes.
-const SCHEME: &str = "justrust-depcache-1";
+/// 2: the cargo home is a placeholder (portable across machines), and
+/// proc macros and bins key the C library they link against.
+const SCHEME: &str = "justrust-depcache-2";
 const PROFILE_TOKEN: &str = "@@JUSTRUST_PROFILE_DIR@@";
 const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
+/// The cargo home (registry sources, git checkouts), so keys and manifest
+/// lines are the same on every machine and can be shared remotely.
+const CARGO_HOME_TOKEN: &str = "@@JUSTRUST_CARGO_HOME@@";
 const XATTR: &str = "user.justrust.h";
 
 pub fn enabled() -> bool {
@@ -108,32 +113,67 @@ impl H128 {
     }
 }
 
-/// Maps the build's profile and target dirs to placeholders and back.
+/// `CARGO_HOME`, else `~/.cargo`.
+pub(crate) fn cargo_home() -> PathBuf {
+    std::env::var_os("CARGO_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".cargo")))
+        .unwrap_or_default()
+}
+
+/// Maps the build's profile and target dirs, and the cargo home, to
+/// placeholders and back.
 #[derive(Debug, Clone)]
 pub struct Norm {
     profile: String,
     pub(crate) target: String,
+    pub(crate) cargo: Option<String>,
 }
 
 impl Norm {
     pub fn new(profile_dir: &Path) -> Option<Norm> {
+        Norm::with_cargo_home(profile_dir, &cargo_home())
+    }
+    pub fn with_cargo_home(profile_dir: &Path, cargo_home: &Path) -> Option<Norm> {
         let profile = profile_dir.to_str()?.trim_end_matches('/').to_owned();
         let target = profile_dir.parent()?.to_str()?.to_owned();
         if profile.len() < 2 || target.len() < 2 {
             return None;
         }
-        Some(Norm { profile, target })
+        let cargo = cargo_home
+            .to_str()
+            .map(|c| c.trim_end_matches('/').to_owned())
+            // A target dir inside the cargo home would be rewritten twice.
+            .filter(|c| c.len() >= 2 && !target.starts_with(c.as_str()));
+        Some(Norm {
+            profile,
+            target,
+            cargo,
+        })
     }
     pub fn norm(&self, s: &str) -> String {
-        if !s.contains(&self.target) {
-            return s.to_owned();
+        let mut s = if s.contains(&self.target) {
+            s.replace(&self.profile, PROFILE_TOKEN)
+                .replace(&self.target, TARGET_TOKEN)
+        } else {
+            s.to_owned()
+        };
+        if let Some(c) = &self.cargo
+            && s.contains(c.as_str())
+        {
+            s = s.replace(c.as_str(), CARGO_HOME_TOKEN);
         }
-        s.replace(&self.profile, PROFILE_TOKEN)
-            .replace(&self.target, TARGET_TOKEN)
+        s
     }
     pub fn denorm(&self, s: &str) -> String {
-        s.replace(PROFILE_TOKEN, &self.profile)
-            .replace(TARGET_TOKEN, &self.target)
+        let s = s
+            .replace(PROFILE_TOKEN, &self.profile)
+            .replace(TARGET_TOKEN, &self.target);
+        match &self.cargo {
+            Some(c) => s.replace(CARGO_HOME_TOKEN, c),
+            None => s,
+        }
     }
 }
 
@@ -158,7 +198,7 @@ pub struct Plan {
     pub crate_name: String,
     pub cwd: PathBuf,
     pub norm: Norm,
-    root: PathBuf,
+    pub(crate) root: PathBuf,
 }
 
 /// Parsed eligibility: `None` means "not cacheable, compile normally".
@@ -258,6 +298,21 @@ fn keyed_env(name: &str) -> bool {
         )
 }
 
+/// The C library version, e.g. `glibc 2.41`, or empty.
+fn libc_version() -> String {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        // SAFETY: returns a pointer to a static NUL-terminated string.
+        let p = unsafe { libc::gnu_get_libc_version() };
+        if !p.is_null() {
+            // SAFETY: non-null static C string.
+            let v = unsafe { std::ffi::CStr::from_ptr(p) };
+            return format!("glibc {}", v.to_string_lossy());
+        }
+    }
+    String::new()
+}
+
 pub(crate) fn rustc_version(real: &Path) -> Option<String> {
     let out = std::process::Command::new(real)
         .arg("-vV")
@@ -287,6 +342,13 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
     h.field(rustc_version(real)?.as_bytes());
     h.field(norm.norm(cwd.to_str()?).as_bytes());
     key_args(&args, &norm, &cwd, &mut h)?;
+    // Proc macros and bins are dynamically linked: one built against a newer
+    // glibc must not be restored where it cannot load.
+    if args.iter().any(|a| {
+        a == "proc-macro" || a == "bin" || a.ends_with("=proc-macro") || a.ends_with("=bin")
+    }) {
+        h.field(libc_version().as_bytes());
+    }
     let mut env: Vec<&(String, String)> = env.iter().filter(|(k, _)| keyed_env(k)).collect();
     env.sort();
     for (k, v) in &env {
@@ -457,7 +519,7 @@ pub fn file_hash(path: &Path, memo: bool) -> Option<String> {
     Some(hash)
 }
 
-fn hash_file_content(path: &Path) -> Option<String> {
+pub(crate) fn hash_file_content(path: &Path) -> Option<String> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
     let mut h = H128::new();
@@ -477,25 +539,25 @@ fn hash_file_content(path: &Path) -> Option<String> {
 
 /// One known input set for a base key.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-struct Entry {
+pub(crate) struct Entry {
     /// (normalized path, content hash)
-    inputs: Vec<(String, String)>,
+    pub(crate) inputs: Vec<(String, String)>,
     /// (name, normalized value) for env vars the unit read.
-    env: Vec<(String, Option<String>)>,
-    out: String,
+    pub(crate) env: Vec<(String, Option<String>)>,
+    pub(crate) out: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct OutFile {
-    name: String,
-    hash: String,
+pub(crate) struct OutFile {
+    pub(crate) name: String,
+    pub(crate) hash: String,
     /// Text with placeholders (dep-info), rewritten on restore.
-    text: bool,
+    pub(crate) text: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct Outputs {
-    files: Vec<OutFile>,
+pub(crate) struct Outputs {
+    pub(crate) files: Vec<OutFile>,
     /// Normalized stderr lines, replayed on a hit.
     stderr: Vec<String>,
     /// Wall seconds the original compile took.
@@ -507,7 +569,7 @@ pub struct Hit {
 }
 
 impl Plan {
-    fn manifest(&self) -> PathBuf {
+    pub(crate) fn manifest(&self) -> PathBuf {
         self.root.join("m").join(format!("{}.jsonl", self.base))
     }
 
@@ -566,7 +628,7 @@ impl Plan {
         })
     }
 
-    fn matches(&self, e: &Entry, memo: &mut HashMap<String, Option<String>>) -> bool {
+    pub(crate) fn matches(&self, e: &Entry, memo: &mut HashMap<String, Option<String>>) -> bool {
         let env_ok = e
             .env
             .iter()
@@ -582,7 +644,8 @@ impl Plan {
     }
 
     /// Store the outputs of a successful compile that started at `start`.
-    pub fn store(&self, start: f64, wall: f64, stderr: &[Vec<u8>]) -> Option<()> {
+    /// Returns the manifest line (for the remote upload queue).
+    pub fn store(&self, start: f64, wall: f64, stderr: &[Vec<u8>]) -> Option<String> {
         let dep_info = self
             .out_dir
             .join(format!("{}{}.d", self.crate_name, self.extra));
@@ -682,9 +745,10 @@ impl Plan {
         let line = serde_json::to_string(&entry).ok()?;
         let known = std::fs::read_to_string(self.manifest()).unwrap_or_default();
         if known.lines().any(|l| l == line) {
-            return Some(());
+            return Some(line);
         }
-        paths::append_line(&self.manifest(), &line).ok()
+        paths::append_line(&self.manifest(), &line).ok()?;
+        Some(line)
     }
 
     fn write_outputs(
@@ -861,6 +925,36 @@ mod tests {
             m.denorm(&a),
             "-L dependency=/b/other/justrust-slots/3/debug/deps"
         );
+    }
+
+    #[test]
+    fn cargo_home_is_portable_across_machines() {
+        let a = Norm::with_cargo_home(Path::new("/w/t/debug"), Path::new("/home/alice/.cargo"))
+            .unwrap();
+        let b = Norm::with_cargo_home(Path::new("/x/y/debug"), Path::new("/opt/cargo/")).unwrap();
+        let src = "/home/alice/.cargo/registry/src/idx/serde-1.0.0/src/lib.rs";
+        let n = a.norm(src);
+        assert_eq!(
+            n,
+            format!("{CARGO_HOME_TOKEN}/registry/src/idx/serde-1.0.0/src/lib.rs")
+        );
+        assert_eq!(
+            n,
+            b.norm("/opt/cargo/registry/src/idx/serde-1.0.0/src/lib.rs")
+        );
+        assert_eq!(
+            b.denorm(&n),
+            "/opt/cargo/registry/src/idx/serde-1.0.0/src/lib.rs"
+        );
+        // Both kinds of path in one string.
+        let mixed = a.norm("-L dependency=/w/t/debug/deps /home/alice/.cargo/x");
+        assert_eq!(
+            b.denorm(&mixed),
+            "-L dependency=/x/y/debug/deps /opt/cargo/x"
+        );
+        // A target dir inside the cargo home disables the cargo token.
+        let c = Norm::with_cargo_home(Path::new("/c/target/debug"), Path::new("/c")).unwrap();
+        assert!(c.cargo.is_none());
     }
 
     #[test]
