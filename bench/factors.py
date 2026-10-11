@@ -42,7 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import suite  # noqa: E402
 
-FACTOR_WORK = suite.JR_HOME / "bench" / "factors"
+FACTOR_WORK = Path(os.environ.get("JUSTRUST_FACTORS_WORK", suite.JR_HOME / "bench" / "factors"))
 FACTORS_MD = suite.ROOT / "bench" / "FACTORS.md"
 NIGHTLY = "nightly-2026-10-08"  # the pinned toolchain (docs/toolchain.md)
 
