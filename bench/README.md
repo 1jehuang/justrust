@@ -90,6 +90,9 @@ same extracted snapshots, so each takes an exclusive lock
 (`~/.justrust/bench/work/.bench.lock`) before touching them and a second
 run waits ("another benchmark holds the snapshot lock"). Do not bypass it
 with `BENCH_NO_LOCK=1` unless the runs use different snapshots.
+A script that takes the lock itself (`flock` on that file) and then
+runs a bench script must export `BENCH_LOCK_HELD=1`, or the child waits on
+its parent forever.
 
 ```sh
 bench/suite.py list                    # scenarios

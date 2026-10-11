@@ -300,10 +300,12 @@ def bench_lock() -> None:
     restore them per run, so two concurrent runs corrupt each other (one
     sees the other's injected type error) and skew each other's wall times.
     Taken in prepare(), which every runner calls before touching a snapshot;
-    blocks until the other run exits. BENCH_NO_LOCK=1 skips it.
+    blocks until the other run exits. BENCH_NO_LOCK=1 skips it. A parent
+    process that already holds the lock (e.g. a shell `flock` on the same
+    file) must export BENCH_LOCK_HELD=1, or this would wait on it forever.
     """
     global _BENCH_LOCK
-    if _BENCH_LOCK is not None or os.environ.get("BENCH_NO_LOCK") == "1":
+    if _BENCH_LOCK is not None or "1" in (os.environ.get("BENCH_NO_LOCK"), os.environ.get("BENCH_LOCK_HELD")):
         return
     import fcntl
 
@@ -315,6 +317,8 @@ def bench_lock() -> None:
         print("bench: another benchmark holds the snapshot lock, waiting", file=sys.stderr)
         fcntl.flock(f, fcntl.LOCK_EX)
     _BENCH_LOCK = f
+    # Children (other bench scripts started from this one) share the lock.
+    os.environ["BENCH_LOCK_HELD"] = "1"
 
 
 def prepare(name: str) -> Path:
