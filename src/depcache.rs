@@ -177,7 +177,11 @@ impl Norm {
     }
 }
 
-/// Profile dir for an out dir: `<P>/deps` or `<P>/build/<pkg-hash>`.
+/// Profile dir for a rustc `--out-dir`:
+/// - classic layout: `<P>/deps`, or `<P>/build/<pkg>-<hash>` (build scripts);
+/// - new build-dir layout (cargo nightly, `-Zbuild-dir-new-layout`, default in
+///   the pinned toolchains): `<P>/build/<pkg>/<hash>/out` for every unit,
+///   libraries and build scripts alike.
 pub fn profile_dir(out_dir: &Path) -> Option<PathBuf> {
     if out_dir.file_name()? == "deps" {
         return Some(out_dir.parent()?.to_path_buf());
@@ -185,6 +189,35 @@ pub fn profile_dir(out_dir: &Path) -> Option<PathBuf> {
     let parent = out_dir.parent()?;
     if parent.file_name()? == "build" {
         return Some(parent.parent()?.to_path_buf());
+    }
+    if out_dir.file_name()? == "out" {
+        let build = parent.parent()?.parent()?;
+        if build.file_name()? == "build" && is_unit_hash(parent.file_name()?.to_str()?) {
+            return Some(build.parent()?.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Cargo's 16-hex-digit unit hash (`-C extra-filename=-<hash>`).
+fn is_unit_hash(s: &str) -> bool {
+    s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Profile dir for a build script's `OUT_DIR`: `<P>/build/<pkg>-<hash>/out`
+/// (classic) or `<P>/build/<pkg>/<hash>/out` (new build-dir layout).
+pub fn build_script_profile_dir(out_dir: &Path) -> Option<PathBuf> {
+    if out_dir.file_name()? != "out" {
+        return None;
+    }
+    let unit = out_dir.parent()?;
+    let up = unit.parent()?;
+    if up.file_name()? == "build" {
+        return Some(up.parent()?.to_path_buf());
+    }
+    let build = up.parent()?;
+    if build.file_name()? == "build" && is_unit_hash(unit.file_name()?.to_str()?) {
+        return Some(build.parent()?.to_path_buf());
     }
     None
 }
@@ -274,10 +307,27 @@ fn shape(args: &[String]) -> Option<Shape> {
     {
         return None;
     }
-    if s.out_dir.is_empty() || s.extra.len() < 2 || s.crate_name.is_empty() {
+    if s.out_dir.is_empty() || s.crate_name.is_empty() {
+        return None;
+    }
+    // Outputs are found by their `-C extra-filename` suffix. The new layout
+    // compiles build scripts without one, but gives every unit its own out
+    // dir, so there the whole dir is the unit's.
+    if s.extra.len() < 2 && !(s.extra.is_empty() && is_unit_out_dir(Path::new(&s.out_dir))) {
         return None;
     }
     Some(s)
+}
+
+/// `<P>/build/<pkg>/<hash>/out`: a per-unit out dir of the new layout.
+fn is_unit_out_dir(out_dir: &Path) -> bool {
+    out_dir.file_name().is_some_and(|n| n == "out")
+        && out_dir
+            .parent()
+            .and_then(|u| u.file_name())
+            .and_then(|u| u.to_str())
+            .is_some_and(is_unit_hash)
+        && profile_dir(out_dir).is_some()
 }
 
 /// Env vars that are part of the base key. `CARGO_MAKEFLAGS` carries
@@ -968,6 +1018,47 @@ mod tests {
             Path::new("/t/debug")
         );
         assert!(profile_dir(Path::new("/t/debug/examples")).is_none());
+        // New build-dir layout (pinned nightly cargo): every unit's out dir.
+        assert_eq!(
+            profile_dir(Path::new("/t/debug/build/serde_json/8ada6c1221654e94/out")).unwrap(),
+            Path::new("/t/debug")
+        );
+        assert_eq!(
+            profile_dir(Path::new(
+                "/t/debug/build/aho-corasick/054c51e9873a2c10/out"
+            ))
+            .unwrap(),
+            Path::new("/t/debug")
+        );
+        // Classic build-script OUT_DIR is not an rustc out dir.
+        assert!(profile_dir(Path::new("/t/debug/build/serde-abc/out")).is_none());
+        assert!(profile_dir(Path::new("/t/debug/build/x/not-a-hash/out")).is_none());
+    }
+
+    #[test]
+    fn finds_build_script_profile_dir() {
+        assert_eq!(
+            build_script_profile_dir(Path::new("/t/debug/build/serde-abc/out")).unwrap(),
+            Path::new("/t/debug")
+        );
+        assert_eq!(
+            build_script_profile_dir(Path::new("/t/debug/build/serde/4e5510cdae32d8e3/out"))
+                .unwrap(),
+            Path::new("/t/debug")
+        );
+        assert!(build_script_profile_dir(Path::new("/t/debug/build/serde-abc")).is_none());
+        assert!(build_script_profile_dir(Path::new("/t/debug/x/serde/zz/out")).is_none());
+    }
+
+    /// The new layout keys the same as the classic one: the profile dir is
+    /// the placeholder, so two target dirs share entries.
+    #[test]
+    fn new_layout_out_dir_normalizes() {
+        let a = Path::new("/a/t1/debug/build/itoa/6a6d3f3d53caa1d6/out");
+        let b = Path::new("/b/t2/debug/build/itoa/6a6d3f3d53caa1d6/out");
+        let na = Norm::new(&profile_dir(a).unwrap()).unwrap();
+        let nb = Norm::new(&profile_dir(b).unwrap()).unwrap();
+        assert_eq!(na.norm(a.to_str().unwrap()), nb.norm(b.to_str().unwrap()));
     }
 
     #[test]
@@ -999,6 +1090,22 @@ mod tests {
         let mut emit_path = base.clone();
         emit_path[5] = "--emit=dep-info,link=/x/y".into();
         assert!(shape(&emit_path).is_none());
+        // New layout build script: no extra-filename, own unit out dir.
+        let bs = |out: &str| {
+            shape(&s(&[
+                "--crate-name",
+                "build_script_build",
+                "build.rs",
+                "--crate-type",
+                "bin",
+                "--emit=dep-info,link",
+                "--out-dir",
+                out,
+            ]))
+        };
+        assert!(bs("/t/debug/build/serde/c95beadfc4874447/out").is_some());
+        assert!(bs("/t/debug/deps").is_none());
+        assert!(bs("/t/debug/build/serde-c95beadfc4874447").is_none());
     }
 
     #[test]

@@ -217,12 +217,8 @@ fn cargo_home() -> PathBuf {
 
 fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR")?);
-    // <profile>/build/<pkg>-<hash>/out
-    let profile = out_dir.parent()?.parent()?.parent()?;
-    if out_dir.parent()?.parent()?.file_name()? != "build" {
-        return None;
-    }
-    let norm = Norm::new(profile)?;
+    let profile = depcache::build_script_profile_dir(&out_dir)?;
+    let norm = Norm::new(&profile)?;
     let cwd = std::env::current_dir().ok()?;
     let cargo_home = cargo_home();
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR")?);
