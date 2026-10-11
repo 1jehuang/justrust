@@ -36,16 +36,16 @@ from a cache.
 | rustc | forked: `jr-rustc` (github.com/1jehuang/jr-rustc, branch `justrust`, based on the pinned nightly's commit), submodule pointer at `toolchain/rustc` (opt-in checkout: `git submodule update --init --checkout toolchain/rustc`), built with `./build-jr.sh` (stage 1, CI LLVM, ~9.5 min cold) | unstable flags, resident compiler, body-only invalidation (`docs/integrations.md`) |
 | LLVM | prebuilt from rust CI first, built ourselves with PGO+BOLT later | faster codegen of dependencies |
 | std / sysroot | rebuilt with `-Zbuild-std` flags we choose (share-generics, dylib) | dylib test binaries, fewer monomorphizations |
-| cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), pinned as submodule `toolchain/cargo` (opt-in checkout: `git submodule update --init --checkout toolchain/cargo`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp (shipped), next: in-process fingerprints, no rescan, daemon mode |
+| cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), pinned as submodule `toolchain/cargo` (opt-in checkout: `git submodule update --init --checkout toolchain/cargo`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp and mimalloc shipped (no-op `test --no-run` 0.366 -> 0.257 s, FINDINGS 38). A resident cargo without kept caches gives nothing; next: parallel manifest prefetch (download_accessible 250 -> 70 ms in traces), then cached resolve/index summaries |
 | codegen backends | cranelift for local opt-level 0 crates | faster full-crate regeneration (-25%) |
 | linker | wild for local crates, shipped (`justrust toolchain wild`, fail open to the project's linker; FINDINGS 36: link pass 0.44 -> 0.23 s). Incremental wild when it exists. Deps-as-dylib prototyped, not worth it yet | relinking a 283 MB test binary on every edit |
 | C toolchain | clang, lld, ar, a sysroot of pinned libs/headers | build scripts become hermetic, so their cache keys need no system stamp |
 | pkg-config + -sys libraries | vendored sysroot (wayland, xkbcommon, alsa, fontconfig, openssl...) | same output on every machine |
 | registry sources | local mirror / `cargo vendor` | offline, no index updates, stable paths |
-| rust-analyzer | pinned to the same rustc (`rust-analyzer-preview`), resident per workspace (`src/early.rs`, opt-in `JUSTRUST_EARLY=1`) | first type error in 0.09 s (FINDINGS 28) |
-| test runner | justrust-owned (nextest-style process per test binary) | test selection, hot patching hook |
+| rust-analyzer | pinned to the same rustc (`rust-analyzer-preview`), resident per workspace (`src/early.rs`, opt-in `JUSTRUST_EARLY=1`) | first type error in 0.08-0.09 s (FINDINGS 28), callers and syntax errors, 14/19 first errors found with 0 false positives, `JUSTRUST_EARLY=auto` (FINDINGS 29). Borrowck and exhaustiveness need the resident rustc |
+| test runner | justrust-owned test pool, shipped: binaries in parallel, likely failures first, slow tests split out, overlapped failures confirmed alone (FINDINGS 34: justrust test -31%, Desktop first failure 14.4 -> 7.0 s) | test selection, hot patching hook |
 | hot patcher | subsecond-style patching of the running test binary | skip relinking entirely |
-| artifact cache | depcache today, then a remote content-addressed store | cold builds from cache across machines and agents |
+| artifact cache | depcache, peer and remote cache, and a static prebuilt store (`JUSTRUST_PREBUILT`, `justrust cache --publish`) with keys portable across cargo homes and hermetic keys for vendored-C build scripts (FINDINGS 30, 37: cold Desktop check from an empty cache 53.3 -> 14.8 s, floor 12.7 s). Public S3 stack written in justrust-cloud, not deployed | cold builds from cache across machines and agents |
 
 ## Phases
 
@@ -72,6 +72,9 @@ Each phase ships only after a measured win on the reference loop
    builds (relink only the small crate), cranelift for local crates, wild.
 3. **Hermetic sysroot.** Vendored C toolchain and libraries. The
    build-script cache loses its heuristics. Remote artifact cache.
+   *In progress*: the four vendored-C build scripts on Desktop are keyed
+   by the C toolchain instead of the host package db and replay from the
+   prebuilt store (FINDINGS 37). Next layers in `docs/c-sysroot.md`.
 4. **jr-rustc fork.** A resident compiler process per crate that keeps the
    query cache in memory between edits (no dep-graph load/persist, no
    re-expansion of untouched items), early diagnostics streamed to the
