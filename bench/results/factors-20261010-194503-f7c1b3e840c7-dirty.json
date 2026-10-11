@@ -1,0 +1,2211 @@
+{
+ "started": "2026-10-10T19:45:03-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.1",
+  "justrust_rev": "f7c1b3e840c7",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  }
+ },
+ "factors": {
+  "depcache": {
+   "what": "shared dependency cache: restore dependency rlibs instead of compiling",
+   "kind": "cold",
+   "workload": "desktop-cold-check",
+   "note": "fresh target dir (a new checkout, worktree, or slot); the cache was filled by one earlier build",
+   "on_env": {},
+   "off_env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0"
+   },
+   "samples": {
+    "on": [
+     {
+      "id": "20261010-195134965-266766781",
+      "wall": 20.147,
+      "recorded_wall": 20.097,
+      "cpu": 115.99,
+      "startup": 0.505,
+      "compile": 18.619,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 1302.18,
+       "script_hits": 45,
+       "script_saved_secs": 125.82,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 23.08,
+       "codegen": 0.001,
+       "link": 0.008,
+       "incremental": 0.276,
+       "other": 0.356
+      },
+      "link_secs": 0.255,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 8.12,
+      "foreign_rustc_before": 0,
+      "load_before": 24.46,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-195155501-266766728",
+      "wall": 26.98,
+      "recorded_wall": 26.938,
+      "cpu": 122.64,
+      "startup": 0.457,
+      "compile": 25.438,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 1302.18,
+       "script_hits": 45,
+       "script_saved_secs": 125.86,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 28.868,
+       "codegen": 0.001,
+       "link": 0.01,
+       "incremental": 0.351,
+       "other": 0.14
+      },
+      "link_secs": 0.218,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 11.44,
+      "foreign_rustc_before": 1,
+      "load_before": 22.68,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-195526016-266766229",
+      "wall": 103.661,
+      "recorded_wall": 103.617,
+      "cpu": 735.05,
+      "startup": 0.599,
+      "compile": 102.726,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 887,
+       "fresh": 0,
+       "depcache_hits": 0,
+       "depcache_misses": 833,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 8.275,
+       "codegen": 0.0,
+       "link": 0.004,
+       "incremental": 0.184,
+       "other": 0.0
+      },
+      "link_secs": 0.296,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 10.45,
+      "foreign_rustc_before": 0,
+      "load_before": 21.29,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     }
+    ],
+    "off": [
+     {
+      "id": "20261010-194943727-266766901",
+      "wall": 110.803,
+      "recorded_wall": 110.758,
+      "cpu": 716.75,
+      "startup": 0.311,
+      "compile": 109.614,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 887,
+       "fresh": 0,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 8.658,
+       "codegen": 0.0,
+       "link": 0.003,
+       "incremental": 0.205,
+       "other": 0.0
+      },
+      "link_secs": 0.298,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 10.22,
+      "foreign_rustc_before": 2,
+      "load_before": 27.01,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-195222883-266766147",
+      "wall": 96.807,
+      "recorded_wall": 96.762,
+      "cpu": 697.59,
+      "startup": 0.591,
+      "compile": 96.035,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 887,
+       "fresh": 0,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 8.257,
+       "codegen": 0.0,
+       "link": 0.003,
+       "incremental": 0.155,
+       "other": 0.0
+      },
+      "link_secs": 0.281,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 10.49,
+      "foreign_rustc_before": 0,
+      "load_before": 21.9,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-195400073-266766721",
+      "wall": 85.533,
+      "recorded_wall": 85.481,
+      "cpu": 685.8,
+      "startup": 0.473,
+      "compile": 84.857,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 887,
+       "fresh": 0,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 9.647,
+       "codegen": 0.0,
+       "link": 0.004,
+       "incremental": 0.206,
+       "other": 0.0
+      },
+      "link_secs": 0.213,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 9.41,
+      "foreign_rustc_before": 0,
+      "load_before": 24.32,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     }
+    ]
+   },
+   "on": {
+    "n": 3,
+    "median": 26.98,
+    "min": 20.147,
+    "max": 103.661,
+    "cpu": 122.64,
+    "units": 887,
+    "noisy": 3,
+    "reuse": {
+     "compiled": 54,
+     "fresh": 0,
+     "depcache_hits": 833,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 1302.18,
+     "script_hits": 45,
+     "script_saved_secs": 125.82,
+     "slot_refreshed_units": 0
+    }
+   },
+   "off": {
+    "n": 3,
+    "median": 96.807,
+    "min": 85.533,
+    "max": 110.803,
+    "cpu": 697.59,
+    "units": 887,
+    "noisy": 3,
+    "reuse": {
+     "compiled": 887,
+     "fresh": 0,
+     "depcache_hits": 0,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0
+    }
+   },
+   "saved_secs": 69.827,
+   "saved_pct": 72.1
+  },
+  "build-script-cache": {
+   "what": "replay registry build-script runs (OUT_DIR + output) instead of running them",
+   "kind": "cold",
+   "workload": "desktop-cold-check",
+   "note": "fresh target dir with the depcache warm in both variants",
+   "on_env": {},
+   "off_env": {
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0"
+   },
+   "samples": {
+    "on": [
+     {
+      "id": "20261010-195940127-266766570",
+      "wall": 19.589,
+      "recorded_wall": 19.543,
+      "cpu": 114.72,
+      "startup": 0.559,
+      "compile": 17.93,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 736.05,
+       "script_hits": 45,
+       "script_saved_secs": 73.22,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 22.952,
+       "codegen": 0.001,
+       "link": 0.009,
+       "incremental": 0.308,
+       "other": 0.215
+      },
+      "link_secs": 0.206,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 7.71,
+      "foreign_rustc_before": 0,
+      "load_before": 20.74,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-200000107-266766844",
+      "wall": 19.146,
+      "recorded_wall": 19.099,
+      "cpu": 113.16,
+      "startup": 0.413,
+      "compile": 17.741,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 736.05,
+       "script_hits": 45,
+       "script_saved_secs": 73.22,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 23.311,
+       "codegen": 0.001,
+       "link": 0.009,
+       "incremental": 0.292,
+       "other": 0.329
+      },
+      "link_secs": 0.179,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 7.58,
+      "foreign_rustc_before": 0,
+      "load_before": 19.44,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-200115858-266766637",
+      "wall": 21.687,
+      "recorded_wall": 21.639,
+      "cpu": 117.58,
+      "startup": 0.566,
+      "compile": 19.491,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 736.05,
+       "script_hits": 45,
+       "script_saved_secs": 73.16,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 24.061,
+       "codegen": 0.001,
+       "link": 0.009,
+       "incremental": 0.294,
+       "other": 0.254
+      },
+      "link_secs": 0.184,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 8.61,
+      "foreign_rustc_before": 0,
+      "load_before": 16.9,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     }
+    ],
+    "off": [
+     {
+      "id": "20261010-195912126-266766629",
+      "wall": 27.664,
+      "recorded_wall": 27.612,
+      "cpu": 160.97,
+      "startup": 0.547,
+      "compile": 20.585,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 736.05,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 23.061,
+       "codegen": 0.375,
+       "link": 0.101,
+       "incremental": 0.319,
+       "other": 0.382
+      },
+      "link_secs": 0.197,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 8.11,
+      "foreign_rustc_before": 0,
+      "load_before": 22.36,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-200019638-266766969",
+      "wall": 28.078,
+      "recorded_wall": 28.03,
+      "cpu": 160.87,
+      "startup": 0.518,
+      "compile": 20.517,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 736.05,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 23.564,
+       "codegen": 0.391,
+       "link": 0.1,
+       "incremental": 0.315,
+       "other": 0.17
+      },
+      "link_secs": 0.191,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 8.38,
+      "foreign_rustc_before": 0,
+      "load_before": 18.27,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     },
+     {
+      "id": "20261010-200048105-266766857",
+      "wall": 27.382,
+      "recorded_wall": 27.33,
+      "cpu": 158.56,
+      "startup": 0.616,
+      "compile": 19.622,
+      "test_run": 0.0,
+      "units": 887,
+      "local_units": 52,
+      "dep_units": 759,
+      "reuse": {
+       "compiled": 54,
+       "fresh": 0,
+       "depcache_hits": 833,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 736.05,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 22.513,
+       "codegen": 0.341,
+       "link": 0.127,
+       "incremental": 0.276,
+       "other": 0.3
+      },
+      "link_secs": 0.225,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 8.13,
+      "foreign_rustc_before": 0,
+      "load_before": 18.05,
+      "noisy": true,
+      "top_unit": "jcode_base"
+     }
+    ]
+   },
+   "on": {
+    "n": 3,
+    "median": 19.589,
+    "min": 19.146,
+    "max": 21.687,
+    "cpu": 114.72,
+    "units": 887,
+    "noisy": 3,
+    "reuse": {
+     "compiled": 54,
+     "fresh": 0,
+     "depcache_hits": 833,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 736.05,
+     "script_hits": 45,
+     "script_saved_secs": 73.22,
+     "slot_refreshed_units": 0
+    }
+   },
+   "off": {
+    "n": 3,
+    "median": 27.664,
+    "min": 27.382,
+    "max": 28.078,
+    "cpu": 160.87,
+    "units": 887,
+    "noisy": 3,
+    "reuse": {
+     "compiled": 54,
+     "fresh": 0,
+     "depcache_hits": 833,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 736.05,
+     "script_hits": 0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0
+    }
+   },
+   "saved_secs": 8.075,
+   "saved_pct": 29.2
+  },
+  "feature-unify": {
+   "what": "resolve dependency features once per workspace, so -p switches reuse builds",
+   "kind": "sequence",
+   "workload": "desktop-pkg-switch",
+   "note": "fresh target dir, depcache off, three `check -p` in a row (the switch cost without caches hiding it)",
+   "on_env": {},
+   "off_env": {
+    "JUSTRUST_UNIFY_FEATURES": "0"
+   },
+   "samples": {
+    "on": [
+     {
+      "id": "20261010-200137856-266766550,20261010-200156828-266766863,20261010-200231299-266766276",
+      "wall": 96.208,
+      "cpu": 671.56,
+      "units": 887,
+      "steps": [
+       {
+        "cmd": "check -p jcode-desktop-model",
+        "wall": 18.933,
+        "units": 166
+       },
+       {
+        "cmd": "check -p jcode-desktop-harness",
+        "wall": 34.429,
+        "units": 329
+       },
+       {
+        "cmd": "check -p jcode-desktop-ui",
+        "wall": 42.846,
+        "units": 392
+       }
+      ],
+      "reuse": {
+       "compiled": 887,
+       "fresh": 530,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": true,
+      "other_cores": 9.7
+     },
+     {
+      "id": "20261010-200721117-266766547,20261010-200738848-266766507,20261010-200817546-266766717",
+      "wall": 99.603,
+      "cpu": 692.07,
+      "units": 887,
+      "steps": [
+       {
+        "cmd": "check -p jcode-desktop-model",
+        "wall": 17.689,
+        "units": 166
+       },
+       {
+        "cmd": "check -p jcode-desktop-harness",
+        "wall": 38.665,
+        "units": 329
+       },
+       {
+        "cmd": "check -p jcode-desktop-ui",
+        "wall": 43.249,
+        "units": 392
+       }
+      ],
+      "reuse": {
+       "compiled": 887,
+       "fresh": 530,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": true,
+      "other_cores": 9.54
+     }
+    ],
+    "off": [
+     {
+      "id": "20261010-200314525-266766977,20261010-200324075-266766864,20261010-200415519-266766927",
+      "wall": 124.128,
+      "cpu": 913.2,
+      "units": 1151,
+      "steps": [
+       {
+        "cmd": "check -p jcode-desktop-model",
+        "wall": 9.506,
+        "units": 114
+       },
+       {
+        "cmd": "check -p jcode-desktop-harness",
+        "wall": 51.397,
+        "units": 395
+       },
+       {
+        "cmd": "check -p jcode-desktop-ui",
+        "wall": 63.225,
+        "units": 642
+       }
+      ],
+      "reuse": {
+       "compiled": 1151,
+       "fresh": 218,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": true,
+      "other_cores": 9.65
+     },
+     {
+      "id": "20261010-200519151-266766626,20261010-200527787-266766727,20261010-200616411-266766714",
+      "wall": 121.493,
+      "cpu": 910.35,
+      "units": 1151,
+      "steps": [
+       {
+        "cmd": "check -p jcode-desktop-model",
+        "wall": 8.591,
+        "units": 114
+       },
+       {
+        "cmd": "check -p jcode-desktop-harness",
+        "wall": 48.584,
+        "units": 395
+       },
+       {
+        "cmd": "check -p jcode-desktop-ui",
+        "wall": 64.318,
+        "units": 642
+       }
+      ],
+      "reuse": {
+       "compiled": 1151,
+       "fresh": 218,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": true,
+      "other_cores": 8.73
+     }
+    ]
+   },
+   "on": {
+    "n": 2,
+    "median": 97.905,
+    "min": 96.208,
+    "max": 99.603,
+    "cpu": 681.815,
+    "units": 887.0,
+    "noisy": 2,
+    "reuse": {
+     "compiled": 887.0,
+     "fresh": 530.0,
+     "depcache_hits": 0.0,
+     "depcache_misses": 0.0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0.0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0.0
+    }
+   },
+   "off": {
+    "n": 2,
+    "median": 122.81,
+    "min": 121.493,
+    "max": 124.128,
+    "cpu": 911.775,
+    "units": 1151.0,
+    "noisy": 2,
+    "reuse": {
+     "compiled": 1151.0,
+     "fresh": 218.0,
+     "depcache_hits": 0.0,
+     "depcache_misses": 0.0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0.0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0.0
+    }
+   },
+   "saved_secs": 24.905,
+   "saved_pct": 20.3
+  },
+  "slots": {
+   "what": "per-agent target dirs: a second agent does not wait on the first one's build lock",
+   "kind": "concurrent",
+   "workload": "desktop-two-agents",
+   "note": "agent A runs `build -p jcode-desktop-ui` after a ui-core body edit; agent B starts 1s later with the reference loop (test-fn edit, `test --lib -- fps_counter`); B's wall is measured",
+   "on_env": {},
+   "off_env": {
+    "JUSTRUST_SLOTS": "0"
+   },
+   "samples": {
+    "on": [
+     {
+      "id": "20261010-202126830-266766226,20261010-202127832-266766198",
+      "wall": 10.622,
+      "wall_a": 11.625,
+      "cpu": 12.64,
+      "units": 4,
+      "lock_wait": 0.0,
+      "slot": "sticky",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 4.28
+     },
+     {
+      "id": "20261010-202138491-266766179,20261010-202139492-266766890",
+      "wall": 10.177,
+      "wall_a": 11.177,
+      "cpu": 11.8,
+      "units": 4,
+      "lock_wait": 0.0,
+      "slot": "sticky",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 4.22
+     },
+     {
+      "id": "20261010-202219769-266766877,20261010-202220770-266766676",
+      "wall": 10.529,
+      "wall_a": 11.53,
+      "cpu": 12.21,
+      "units": 4,
+      "lock_wait": 0.0,
+      "slot": "sticky",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 4.2
+     },
+     {
+      "id": "20261010-202231342-266766273,20261010-202232343-266766749",
+      "wall": 10.728,
+      "wall_a": 11.729,
+      "cpu": 12.55,
+      "units": 4,
+      "lock_wait": 0.0,
+      "slot": "sticky",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 4.35
+     }
+    ],
+    "off": [
+     {
+      "id": "20261010-202112036-266766191,20261010-202113037-266766258",
+      "wall": 13.738,
+      "wall_a": 14.74,
+      "cpu": 11.45,
+      "units": 4,
+      "lock_wait": 4.298,
+      "slot": "none",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 3.91
+     },
+     {
+      "id": "20261010-202149718-266766571,20261010-202150718-266766436",
+      "wall": 13.941,
+      "wall_a": 14.941,
+      "cpu": 11.1,
+      "units": 4,
+      "lock_wait": 4.775,
+      "slot": "none",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 4.24
+     },
+     {
+      "id": "20261010-202204713-266766564,20261010-202205714-266766590",
+      "wall": 14.0,
+      "wall_a": 15.001,
+      "cpu": 11.46,
+      "units": 4,
+      "lock_wait": 4.364,
+      "slot": "none",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 3.89
+     },
+     {
+      "id": "20261010-202243115-266766476,20261010-202244115-266766939",
+      "wall": 13.694,
+      "wall_a": 14.695,
+      "cpu": 11.46,
+      "units": 4,
+      "lock_wait": 4.184,
+      "slot": "none",
+      "reuse": {
+       "compiled": 4,
+       "fresh": 740,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "noisy": false,
+      "other_cores": 4.12
+     }
+    ]
+   },
+   "on": {
+    "n": 4,
+    "median": 10.575,
+    "min": 10.177,
+    "max": 10.728,
+    "cpu": 12.38,
+    "units": 4.0,
+    "noisy": 0,
+    "reuse": {
+     "compiled": 4.0,
+     "fresh": 740.0,
+     "depcache_hits": 0.0,
+     "depcache_misses": 0.0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0.0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0.0
+    }
+   },
+   "off": {
+    "n": 4,
+    "median": 13.84,
+    "min": 13.694,
+    "max": 14.0,
+    "cpu": 11.455,
+    "units": 4.0,
+    "noisy": 0,
+    "reuse": {
+     "compiled": 4.0,
+     "fresh": 740.0,
+     "depcache_hits": 0.0,
+     "depcache_misses": 0.0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0.0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0.0
+    }
+   },
+   "saved_secs": 3.265,
+   "saved_pct": 23.6
+  },
+  "parallel-frontend": {
+   "what": "rustc -Zthreads=8 for local crates (Desktop's rustc wrapper)",
+   "kind": "loop",
+   "workload": "desktop-test-edit",
+   "note": "",
+   "on_env": {},
+   "off_env": {
+    "JCODE_PARALLEL_FRONTEND": "0"
+   },
+   "samples": {
+    "on": [
+     {
+      "id": "20261010-202326223-266766589",
+      "wall": 8.124,
+      "recorded_wall": 8.084,
+      "cpu": 8.78,
+      "startup": 0.478,
+      "compile": 7.529,
+      "test_run": 0.008,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 3.968,
+       "codegen": 1.141,
+       "link": 0.641,
+       "incremental": 0.802,
+       "other": 0.925
+      },
+      "link_secs": 0.641,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.83,
+      "foreign_rustc_before": 0,
+      "load_before": 8.85,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202334394-266766867",
+      "wall": 8.671,
+      "recorded_wall": 8.632,
+      "cpu": 9.33,
+      "startup": 0.564,
+      "compile": 8.009,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.321,
+       "codegen": 1.262,
+       "link": 0.657,
+       "incremental": 0.806,
+       "other": 0.909
+      },
+      "link_secs": 0.657,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.69,
+      "foreign_rustc_before": 0,
+      "load_before": 8.7,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202401007-266766885",
+      "wall": 8.592,
+      "recorded_wall": 8.551,
+      "cpu": 9.26,
+      "startup": 0.558,
+      "compile": 7.93,
+      "test_run": 0.007,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.202,
+       "codegen": 1.191,
+       "link": 0.694,
+       "incremental": 0.886,
+       "other": 0.898
+      },
+      "link_secs": 0.694,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.91,
+      "foreign_rustc_before": 0,
+      "load_before": 8.96,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202409652-266766922",
+      "wall": 8.767,
+      "recorded_wall": 8.698,
+      "cpu": 9.31,
+      "startup": 0.589,
+      "compile": 8.034,
+      "test_run": 0.007,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.013,
+       "codegen": 1.348,
+       "link": 0.843,
+       "incremental": 0.75,
+       "other": 1.029
+      },
+      "link_secs": 0.843,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.13,
+      "foreign_rustc_before": 0,
+      "load_before": 9.12,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202435595-266766688",
+      "wall": 8.848,
+      "recorded_wall": 8.808,
+      "cpu": 9.4,
+      "startup": 0.507,
+      "compile": 8.227,
+      "test_run": 0.007,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.211,
+       "codegen": 1.25,
+       "link": 0.785,
+       "incremental": 0.917,
+       "other": 1.004
+      },
+      "link_secs": 0.785,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.01,
+      "foreign_rustc_before": 0,
+      "load_before": 8.64,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     }
+    ],
+    "off": [
+     {
+      "id": "20261010-202317238-266766848",
+      "wall": 8.935,
+      "recorded_wall": 8.893,
+      "cpu": 8.66,
+      "startup": 0.461,
+      "compile": 8.366,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.198,
+       "codegen": 1.478,
+       "link": 0.713,
+       "incremental": 0.957,
+       "other": 0.982
+      },
+      "link_secs": 0.713,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.99,
+      "foreign_rustc_before": 0,
+      "load_before": 8.91,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202343116-266766361",
+      "wall": 9.228,
+      "recorded_wall": 9.192,
+      "cpu": 9.15,
+      "startup": 0.481,
+      "compile": 8.645,
+      "test_run": 0.007,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.594,
+       "codegen": 1.704,
+       "link": 0.558,
+       "incremental": 0.8,
+       "other": 0.951
+      },
+      "link_secs": 0.558,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.26,
+      "foreign_rustc_before": 0,
+      "load_before": 8.75,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202352388-266766770",
+      "wall": 8.574,
+      "recorded_wall": 8.539,
+      "cpu": 8.41,
+      "startup": 0.552,
+      "compile": 7.911,
+      "test_run": 0.007,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.158,
+       "codegen": 1.595,
+       "link": 0.616,
+       "incremental": 0.715,
+       "other": 0.792
+      },
+      "link_secs": 0.616,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.25,
+      "foreign_rustc_before": 0,
+      "load_before": 8.79,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202418472-266766312",
+      "wall": 8.327,
+      "recorded_wall": 8.287,
+      "cpu": 8.2,
+      "startup": 0.382,
+      "compile": 7.843,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.036,
+       "codegen": 1.574,
+       "link": 0.561,
+       "incremental": 0.803,
+       "other": 0.841
+      },
+      "link_secs": 0.561,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.78,
+      "foreign_rustc_before": 0,
+      "load_before": 9.35,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202426839-266766446",
+      "wall": 8.708,
+      "recorded_wall": 8.661,
+      "cpu": 8.5,
+      "startup": 0.504,
+      "compile": 8.083,
+      "test_run": 0.007,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.141,
+       "codegen": 1.556,
+       "link": 0.652,
+       "incremental": 0.781,
+       "other": 0.924
+      },
+      "link_secs": 0.652,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.98,
+      "foreign_rustc_before": 0,
+      "load_before": 9.39,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     }
+    ]
+   },
+   "on": {
+    "n": 5,
+    "median": 8.671,
+    "min": 8.124,
+    "max": 8.848,
+    "cpu": 9.31,
+    "units": 1,
+    "noisy": 0,
+    "reuse": {
+     "compiled": 1,
+     "fresh": 743,
+     "depcache_hits": 0,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0
+    }
+   },
+   "off": {
+    "n": 5,
+    "median": 8.708,
+    "min": 8.327,
+    "max": 9.228,
+    "cpu": 8.5,
+    "units": 1,
+    "noisy": 0,
+    "reuse": {
+     "compiled": 1,
+     "fresh": 743,
+     "depcache_hits": 0,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0
+    }
+   },
+   "saved_secs": 0.037,
+   "saved_pct": 0.4
+  },
+  "parallel-frontend-deep": {
+   "what": "same, on the worst warm case (jcode-core body edit, 16 crates rebuilt)",
+   "kind": "loop",
+   "workload": "desktop-jcode-core-body",
+   "note": "",
+   "on_env": {},
+   "off_env": {
+    "JCODE_PARALLEL_FRONTEND": "0"
+   },
+   "samples": {
+    "on": [
+     {
+      "id": "20261010-202540984-266766240",
+      "wall": 16.643,
+      "recorded_wall": 16.601,
+      "cpu": 24.12,
+      "startup": 0.554,
+      "compile": 15.97,
+      "test_run": 0.007,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 12.417,
+       "codegen": 1.381,
+       "link": 0.777,
+       "incremental": 1.88,
+       "other": 1.373
+      },
+      "link_secs": 0.807,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.47,
+      "foreign_rustc_before": 0,
+      "load_before": 7.5,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202557687-266766350",
+      "wall": 15.954,
+      "recorded_wall": 15.905,
+      "cpu": 23.31,
+      "startup": 0.458,
+      "compile": 15.366,
+      "test_run": 0.007,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 11.432,
+       "codegen": 1.338,
+       "link": 0.767,
+       "incremental": 2.045,
+       "other": 1.498
+      },
+      "link_secs": 0.799,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.26,
+      "foreign_rustc_before": 0,
+      "load_before": 8.15,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202646872-266766267",
+      "wall": 16.579,
+      "recorded_wall": 16.541,
+      "cpu": 24.06,
+      "startup": 0.491,
+      "compile": 15.967,
+      "test_run": 0.007,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 12.251,
+       "codegen": 1.455,
+       "link": 0.88,
+       "incremental": 1.937,
+       "other": 1.378
+      },
+      "link_secs": 0.91,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.62,
+      "foreign_rustc_before": 0,
+      "load_before": 8.74,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202703504-266766549",
+      "wall": 15.407,
+      "recorded_wall": 15.354,
+      "cpu": 22.33,
+      "startup": 0.457,
+      "compile": 14.815,
+      "test_run": 0.007,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 10.797,
+       "codegen": 1.255,
+       "link": 0.853,
+       "incremental": 2.021,
+       "other": 1.626
+      },
+      "link_secs": 0.879,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.99,
+      "foreign_rustc_before": 0,
+      "load_before": 7.98,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     }
+    ],
+    "off": [
+     {
+      "id": "20261010-202524401-266766852",
+      "wall": 16.472,
+      "recorded_wall": 16.388,
+      "cpu": 19.1,
+      "startup": 0.389,
+      "compile": 15.887,
+      "test_run": 0.01,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 11.805,
+       "codegen": 1.548,
+       "link": 0.876,
+       "incremental": 1.814,
+       "other": 1.406
+      },
+      "link_secs": 0.904,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.18,
+      "foreign_rustc_before": 0,
+      "load_before": 8.02,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202613687-266766135",
+      "wall": 16.483,
+      "recorded_wall": 16.44,
+      "cpu": 19.26,
+      "startup": 0.491,
+      "compile": 15.864,
+      "test_run": 0.008,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 11.856,
+       "codegen": 1.505,
+       "link": 0.814,
+       "incremental": 1.966,
+       "other": 1.374
+      },
+      "link_secs": 0.844,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.21,
+      "foreign_rustc_before": 0,
+      "load_before": 7.52,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202630219-266766401",
+      "wall": 16.598,
+      "recorded_wall": 16.528,
+      "cpu": 19.4,
+      "startup": 0.486,
+      "compile": 15.959,
+      "test_run": 0.007,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 11.927,
+       "codegen": 1.692,
+       "link": 0.803,
+       "incremental": 1.896,
+       "other": 1.287
+      },
+      "link_secs": 0.828,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.23,
+      "foreign_rustc_before": 0,
+      "load_before": 9.3,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-202718949-266766291",
+      "wall": 16.497,
+      "recorded_wall": 16.452,
+      "cpu": 19.34,
+      "startup": 0.486,
+      "compile": 15.88,
+      "test_run": 0.008,
+      "units": 16,
+      "local_units": 16,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 16,
+       "fresh": 728,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 11.689,
+       "codegen": 1.699,
+       "link": 0.88,
+       "incremental": 2.032,
+       "other": 1.425
+      },
+      "link_secs": 0.904,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.26,
+      "foreign_rustc_before": 0,
+      "load_before": 7.18,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     }
+    ]
+   },
+   "on": {
+    "n": 4,
+    "median": 16.267,
+    "min": 15.407,
+    "max": 16.643,
+    "cpu": 23.685,
+    "units": 16.0,
+    "noisy": 0,
+    "reuse": {
+     "compiled": 16.0,
+     "fresh": 728.0,
+     "depcache_hits": 0.0,
+     "depcache_misses": 0.0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0.0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0.0
+    }
+   },
+   "off": {
+    "n": 4,
+    "median": 16.49,
+    "min": 16.472,
+    "max": 16.598,
+    "cpu": 19.3,
+    "units": 16.0,
+    "noisy": 0,
+    "reuse": {
+     "compiled": 16.0,
+     "fresh": 728.0,
+     "depcache_hits": 0.0,
+     "depcache_misses": 0.0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0.0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0.0
+    }
+   },
+   "saved_secs": 0.223,
+   "saved_pct": 1.4
+  },
+  "mold": {
+   "what": "mold linker instead of the system cc/ld (Desktop's fast-linker)",
+   "kind": "loop",
+   "workload": "desktop-test-edit",
+   "note": "",
+   "on_env": {},
+   "off_env": {
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc"
+   },
+   "samples": {
+    "on": [
+     {
+      "id": "20261010-203132553-266766983",
+      "wall": 9.315,
+      "recorded_wall": 9.234,
+      "cpu": 9.73,
+      "startup": 0.478,
+      "compile": 8.692,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.288,
+       "codegen": 1.432,
+       "link": 1.098,
+       "incremental": 0.954,
+       "other": 0.862
+      },
+      "link_secs": 1.098,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 4.37,
+      "foreign_rustc_before": 0,
+      "load_before": 16.13,
+      "noisy": true,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203141913-266766889",
+      "wall": 8.526,
+      "recorded_wall": 8.488,
+      "cpu": 9.12,
+      "startup": 0.519,
+      "compile": 7.891,
+      "test_run": 0.007,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.088,
+       "codegen": 1.348,
+       "link": 0.796,
+       "incremental": 0.732,
+       "other": 0.87
+      },
+      "link_secs": 0.796,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.57,
+      "foreign_rustc_before": 0,
+      "load_before": 15.47,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203209107-266766587",
+      "wall": 8.517,
+      "recorded_wall": 8.484,
+      "cpu": 9.21,
+      "startup": 0.513,
+      "compile": 7.894,
+      "test_run": 0.009,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.209,
+       "codegen": 1.332,
+       "link": 0.704,
+       "incremental": 0.776,
+       "other": 0.818
+      },
+      "link_secs": 0.704,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.79,
+      "foreign_rustc_before": 0,
+      "load_before": 15.07,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203217658-266766211",
+      "wall": 9.261,
+      "recorded_wall": 9.227,
+      "cpu": 9.76,
+      "startup": 0.496,
+      "compile": 8.652,
+      "test_run": 0.008,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.252,
+       "codegen": 1.462,
+       "link": 1.035,
+       "incremental": 0.97,
+       "other": 0.871
+      },
+      "link_secs": 1.035,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 5.09,
+      "foreign_rustc_before": 0,
+      "load_before": 13.67,
+      "noisy": true,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203251027-266766688",
+      "wall": 14.368,
+      "recorded_wall": 14.324,
+      "cpu": 12.98,
+      "startup": 0.664,
+      "compile": 13.584,
+      "test_run": 0.008,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 8.751,
+       "codegen": 1.597,
+       "link": 1.007,
+       "incremental": 0.934,
+       "other": 1.234
+      },
+      "link_secs": 1.007,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 10.42,
+      "foreign_rustc_before": 1,
+      "load_before": 12.96,
+      "noisy": true,
+      "top_unit": "jcode_desktop_ui (test)"
+     }
+    ],
+    "off": [
+     {
+      "id": "20261010-203123171-266766488",
+      "wall": 9.335,
+      "recorded_wall": 9.293,
+      "cpu": 12.55,
+      "startup": 0.471,
+      "compile": 8.764,
+      "test_run": 0.005,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 3.949,
+       "codegen": 1.302,
+       "link": 1.662,
+       "incremental": 0.806,
+       "other": 0.987
+      },
+      "link_secs": 1.662,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.84,
+      "foreign_rustc_before": 0,
+      "load_before": 18.26,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203150482-266766879",
+      "wall": 9.367,
+      "recorded_wall": 9.324,
+      "cpu": 12.62,
+      "startup": 0.476,
+      "compile": 8.786,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.078,
+       "codegen": 1.409,
+       "link": 1.448,
+       "incremental": 0.938,
+       "other": 0.874
+      },
+      "link_secs": 1.448,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 4.05,
+      "foreign_rustc_before": 0,
+      "load_before": 15.38,
+      "noisy": true,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203159893-266766518",
+      "wall": 9.171,
+      "recorded_wall": 9.118,
+      "cpu": 12.28,
+      "startup": 0.474,
+      "compile": 8.581,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.033,
+       "codegen": 1.39,
+       "link": 1.507,
+       "incremental": 0.813,
+       "other": 0.792
+      },
+      "link_secs": 1.507,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 3.59,
+      "foreign_rustc_before": 0,
+      "load_before": 15.86,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203226961-266766217",
+      "wall": 10.698,
+      "recorded_wall": 10.662,
+      "cpu": 14.26,
+      "startup": 0.57,
+      "compile": 10.025,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.84,
+       "codegen": 1.579,
+       "link": 1.609,
+       "incremental": 0.931,
+       "other": 1.014
+      },
+      "link_secs": 1.609,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 6.41,
+      "foreign_rustc_before": 2,
+      "load_before": 13.39,
+      "noisy": true,
+      "top_unit": "jcode_desktop_ui (test)"
+     },
+     {
+      "id": "20261010-203237705-266766366",
+      "wall": 13.271,
+      "recorded_wall": 13.191,
+      "cpu": 15.72,
+      "startup": 0.544,
+      "compile": 12.549,
+      "test_run": 0.009,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+       "compiled": 1,
+       "fresh": 743,
+       "depcache_hits": 0,
+       "depcache_misses": 0,
+       "depcache_saved_secs": 0.0,
+       "script_hits": 0,
+       "script_saved_secs": 0.0,
+       "slot_refreshed_units": 0
+      },
+      "split": {
+       "frontend": 4.9,
+       "codegen": 1.571,
+       "link": 3.115,
+       "incremental": 1.69,
+       "other": 1.205
+      },
+      "link_secs": 3.115,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 9.46,
+      "foreign_rustc_before": 1,
+      "load_before": 12.33,
+      "noisy": true,
+      "top_unit": "jcode_desktop_ui (test)"
+     }
+    ]
+   },
+   "on": {
+    "n": 5,
+    "median": 9.261,
+    "min": 8.517,
+    "max": 14.368,
+    "cpu": 9.73,
+    "units": 1,
+    "noisy": 3,
+    "reuse": {
+     "compiled": 1,
+     "fresh": 743,
+     "depcache_hits": 0,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0
+    }
+   },
+   "off": {
+    "n": 5,
+    "median": 9.367,
+    "min": 9.171,
+    "max": 13.271,
+    "cpu": 12.62,
+    "units": 1,
+    "noisy": 3,
+    "reuse": {
+     "compiled": 1,
+     "fresh": 743,
+     "depcache_hits": 0,
+     "depcache_misses": 0,
+     "depcache_saved_secs": 0.0,
+     "script_hits": 0,
+     "script_saved_secs": 0.0,
+     "slot_refreshed_units": 0
+    }
+   },
+   "saved_secs": 0.106,
+   "saved_pct": 1.1
+  }
+ },
+ "finished": "2026-10-10T20:33:05-0700"
+}

@@ -1725,20 +1725,24 @@ bench). Machine busy with other agents, so the cold rows are flagged noisy.
 
 | factor | workload | on | off | saved |
 |---|---|---:|---:|---:|
-| depcache (+script cache) | fresh target dir, `check -p jcode-desktop-ui` | 20.1, 27.0s | 85.5-110.8s | ~70s, 833 units restored (1302s of original rustc) |
+| depcache (+script cache) | fresh target dir, `check -p jcode-desktop-ui` | 18.6s (18.4-18.7) | 104.1s (100.2-123.8) | 85.5s (-82%), 833 units restored |
 | build-script cache | same, depcache warm in both | 19.6s | 27.7s | 8.1s (-29%), 45 scripts replayed |
 | feature unification | fresh dir, `check -p` model, harness, ui | 97.9s, 887 units | 122.8s, 1151 units | 24.9s (-20%), 264 fewer units |
 | slots | agent B's reference loop while agent A builds | 10.6s | 13.8s | 3.3s (-24%): 4.2-4.8s lock wait gone |
 | parallel front-end | reference loop | 8.67s | 8.71s | none |
 | parallel front-end | jcode-core body edit, 16 crates | 16.3s | 16.5s | none |
 | mold vs lld | reference loop | 9.26s | 9.37s | none (link pass 0.8 vs 1.4s) |
+| incremental (CARGO_INCREMENTAL=0 off) | reference loop | 9.04s | 25.20s | 16.2s (-64%) |
+| pinned nightly vs system stable | reference loop | 8.08s | 8.78s | 0.7s (-8%), below the 10% floor |
+| cranelift (all crates, nightly both) | reference loop | 8.25s | 8.05s | none |
 
 Notes:
-- The depcache `on` row lost one sample: justrust was reinstalled mid-run
-  with a new depcache key scheme (ab89431/0ab7874), so sample 3 was 833
-  misses (103.7s). The median of the two valid samples is about 23.5s.
-  `factors.py` now aborts a factor when the justrust binary changes; the
-  depcache factor is being rerun.
+- The first depcache run lost one sample to a mid-run justrust reinstall
+  (new depcache key scheme, ab89431/0ab7874: 833 misses). Rerun
+  `factors-20261010-204006-c3c63f0156d5-dirty.json` via
+  `bench/factors-isolated.sh` (frozen justrust copy, private
+  JUSTRUST_HOME) is the row above; the second attempt had aborted on
+  another reinstall, which the new guard caught.
 - Parallel front-end: switch verified (frontend_threads 8 vs none), and
   it does not help the warm incremental loop: the edited crate's frontend
   is mostly incremental query reuse. Its measured win is on full
@@ -1747,8 +1751,16 @@ Notes:
 - mold: switch verified (ld.mold vs collect2+ld.lld). The link pass is
   0.65s shorter but within the loop's noise. The system default here is
   already lld, not GNU ld.
-- incremental, pinned nightly, cranelift: run interrupted by a server
-  reload; rerunning detached.
+- Cranelift: no gain on the warm reference loop (1 unit, mostly frontend
+  and incremental); the first cranelift build was 121s cold. Pinned
+  nightly ran 8% faster with disjoint ranges, but under the 10% floor.
+- Bottom line: the measured wins are reuse (depcache 82%, incremental
+  64%, build-script cache 29%, slots 24%, feature unification 20%). The
+  CPU-side knobs (parallel front-end, mold, cranelift, nightly) are each
+  within noise on the warm loop. The warm loop (~8-9s) is now bounded by
+  one crate's incremental frontend + persist, so the next big step needs
+  less frontend work per edit (crate splits, resident compiler), not
+  faster codegen or linking.
 
 ## 22. Test execution: one slow test sets the suite's wall time (2026-10-10)
 
