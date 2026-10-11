@@ -61,6 +61,9 @@ component) would be measurably faster.
   and after, commit both result files, and quote `bench/suite.py compare`.
   `justrust show` explains a single run.
 - Record notable observations in `FINDINGS.md` with the run id.
+- Run `justrust export` from the repo root and commit `data/runs/` so every
+  cited run id exists in the repository (slim, path-redacted summaries, see
+  `data/runs/README.md`).
 - `justrust history` mines past Jcode sessions; `justrust runs` lists recorded
   builds.
 

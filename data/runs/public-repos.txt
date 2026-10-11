@@ -1,0 +1,7 @@
+# Repos whose run details (crate names, args, paths, error text) may be
+# exported to this public repository. Everything else is exported as
+# timings only, with repo "private". See src/export.rs.
+justrust
+jcode
+jcode-desktop
+gpui

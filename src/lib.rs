@@ -14,6 +14,7 @@ mod agent_output;
 mod buildscript;
 mod depcache;
 mod depcache_gc;
+mod export;
 mod findings;
 mod history;
 mod install;
@@ -233,6 +234,18 @@ enum Command {
     Remote {
         #[command(subcommand)]
         cmd: RemoteCmd,
+    },
+    /// Append slim, path-redacted run summaries to the repo's data/runs/<machine>/.
+    Export {
+        /// Output root. Defaults to ./data/runs in the justrust repository.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Machine directory name. Defaults to the hostname.
+        #[arg(long)]
+        machine: Option<String>,
+        /// Report what would be added without writing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Analyze cargo invocations recorded in Jcode session history.
     History {
@@ -508,6 +521,11 @@ pub fn main() -> anyhow::Result<()> {
                 identity,
             } => remote_backend::use_command(&kind, host, port, identity)?,
         },
+        Command::Export {
+            out,
+            machine,
+            dry_run,
+        } => export::command(out, machine, dry_run)?,
         Command::History {
             sessions,
             repo,
