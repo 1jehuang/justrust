@@ -272,9 +272,14 @@ are needed here.
 
 `JUSTRUST_REMOTE` controls it:
 
-- `auto` (default): remote only when predicted faster. Never starts a
-  machine, never starts anything when no backend is configured, and never
-  touches the network to decide.
+- unset (default): signed in to hosted builds (`JCODE_API_KEY` from an
+  account API key or `justrust login`, hosted backend) means remote for
+  check, clippy, and test, starting the hosted machine if needed. The 10
+  minute failure backoff still applies. Any other backend behaves as `auto`.
+- `auto` or `router`: remote only when predicted faster. Never starts a
+  machine (except a hosted start the router predicts pays off), never
+  starts anything when no backend is configured, and never touches the
+  network to decide.
 - `0` or `off`: always local, nothing is read.
 - `1` or `force`: remote for check, clippy, and test, starting the AWS
   machine if needed.

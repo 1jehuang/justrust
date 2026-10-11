@@ -310,6 +310,9 @@ mod tests {
         assert_eq!(resolve(None, false, true), Some(Backend::Hosted));
         assert_eq!(resolve(None, true, true), Some(Backend::Aws));
         let ssh = br#"{"kind":"ssh","host":"me@box"}"#.to_vec();
-        assert!(matches!(resolve(Some(ssh), false, true), Some(Backend::Ssh { .. })));
+        assert!(matches!(
+            resolve(Some(ssh), false, true),
+            Some(Backend::Ssh { .. })
+        ));
     }
 }

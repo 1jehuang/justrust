@@ -51,8 +51,12 @@ const DEFAULT_IDLE_MINUTES: f64 = 30.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
     Off,
+    /// The router: remote only when predicted faster.
     Auto,
     Force,
+    /// `JUSTRUST_REMOTE` unset: remote when signed in to hosted builds (API
+    /// key or subscription), else the router.
+    Default,
 }
 
 pub fn mode() -> Mode {
@@ -63,7 +67,8 @@ fn mode_from(v: Option<&str>) -> Mode {
     match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
         Some("0" | "off" | "no" | "false" | "local") => Mode::Off,
         Some("1" | "force" | "on" | "yes" | "true" | "remote") => Mode::Force,
-        _ => Mode::Auto,
+        Some("auto" | "router") => Mode::Auto,
+        _ => Mode::Default,
     }
 }
 
@@ -394,8 +399,15 @@ pub fn maybe_remote(full: &[OsString]) {
         return say_local("no remote machine configured");
     };
     let now = crate::paths::now();
+    let hosted_default =
+        m == Mode::Default && backend == Backend::Hosted && crate::remote_hosted::signed_in();
     let reason = if m == Mode::Force {
         "JUSTRUST_REMOTE=force".to_string()
+    } else if hosted_default {
+        if recently_failed(now) {
+            return say_local("remote failed in the last 10 minutes");
+        }
+        "default for hosted builds; --local or JUSTRUST_REMOTE=auto to change".to_string()
     } else {
         if recently_failed(now) {
             return say_local("remote failed in the last 10 minutes");
@@ -539,8 +551,10 @@ mod tests {
 
     #[test]
     fn modes() {
-        assert_eq!(mode_from(None), Mode::Auto);
+        assert_eq!(mode_from(None), Mode::Default);
+        assert_eq!(mode_from(Some("")), Mode::Default);
         assert_eq!(mode_from(Some("auto")), Mode::Auto);
+        assert_eq!(mode_from(Some("router")), Mode::Auto);
         assert_eq!(mode_from(Some("0")), Mode::Off);
         assert_eq!(mode_from(Some("OFF")), Mode::Off);
         assert_eq!(mode_from(Some("1")), Mode::Force);

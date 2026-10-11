@@ -48,7 +48,9 @@ Agents without a browser: `justrust login --no-wait` prints the link for the
 user and returns at once. Builds stay local until it is approved. After the
 free builds, `justrust upgrade` ($10/mo, 500 builds). Out of builds, offline,
 or signed out: every build runs locally, with one line saying why.
-`--local` / `--remote` (or `JUSTRUST_REMOTE=off|force`) override routing.
+Signed in (API key or subscription), check, clippy, and test run remote by
+default. The agent picks per command: `--local`, `--remote`, or `--auto` (the
+router: remote only when predicted faster), or `JUSTRUST_REMOTE=off|force|auto`.
 
 CI and headless machines: create an API key at https://jcode.sh/account and
 export it as `JCODE_API_KEY`. It takes precedence over the saved login, so no

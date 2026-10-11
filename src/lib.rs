@@ -57,6 +57,11 @@ same arguments as cargo, record a timing profile, and print compact output:
 errors and failing tests in full, the first few warnings, no progress noise,
 then a one-line verdict. The full output is always saved: `justrust log`.
 
+Where check/clippy/test run: signed in to hosted builds (API key or
+subscription) means remote by default. Choose per command with `--local`,
+`--remote`, or `--auto` (the router: remote only when predicted faster),
+or set JUSTRUST_REMOTE=off|force|auto.
+
 Examples:
   justrust check -p my-crate
   justrust test -p my-crate --lib some_module::
@@ -381,7 +386,8 @@ struct RemoteArgs {
     args: Vec<String>,
 }
 
-/// `--local` / `--remote` before any `--`: aliases for JUSTRUST_REMOTE=off|force.
+/// `--local` / `--remote` / `--auto` before any `--`: aliases for
+/// JUSTRUST_REMOTE=off|force|auto (the router).
 fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>) {
     let mut mode = None;
     let mut out = Vec::with_capacity(args.len());
@@ -391,6 +397,7 @@ fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>
         match a.to_str() {
             Some("--local") if !passed => mode = Some("off"),
             Some("--remote") if !passed => mode = Some("force"),
+            Some("--auto") if !passed => mode = Some("auto"),
             _ => out.push(a),
         }
     }
