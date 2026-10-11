@@ -57,9 +57,17 @@ static REBUILT: LazyLock<Regex> =
 static TIMING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"tool timing: start=\S+ finish=\S+ duration=([\d.]+)(ms|s)").unwrap()
 });
+static TIMING_LINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*\[tool timing:[^\]]*\]\s*").unwrap());
 static ERROR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^error(\[E\d+\])?:").unwrap());
-static CARGO_SUB: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"cargo\s+(?:\+\S+\s+)?(?:-\S+\s+)*([a-z-]+)").unwrap());
+static CARGO_SUB: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:cargo|justrust)\s+(?:\+\S+\s+)?(?:-\S+\s+)*([a-z-]+)").unwrap()
+});
+/// Tool results that return before the build finishes (queued self-dev
+/// builds, reload acknowledgements). Their wall time is not build time.
+static ASYNC_RESULT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"queued in background|^\s*\{\s*"acknowledged"|^Reload initiated"#).unwrap()
+});
 static PKG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-p\s+(\S+)").unwrap());
 
 fn classify(cmd: &str) -> Kind {
@@ -214,7 +222,9 @@ pub fn extract_session(session: &Value, calls: &mut Vec<Call>) {
                     } else {
                         commands.extend(tool_command(name, &input));
                     }
-                    commands.retain(|c| c.contains("cargo") || c.starts_with('<'));
+                    commands.retain(|c| {
+                        c.contains("cargo") || c.contains("justrust") || c.starts_with('<')
+                    });
                     if commands.is_empty() {
                         continue;
                     }
@@ -277,6 +287,8 @@ fn build_call(session: &str, wd: &str, p: Pending, end_ts: Option<f64>, text: &s
         tests_run += c[1].parse::<u64>().unwrap_or(0) + c[2].parse::<u64>().unwrap_or(0);
         test_exec_secs += c[3].parse::<f64>().unwrap_or(0.0);
     }
+    let text_body = TIMING_LINE.replace(text, "");
+    let background = p.background || ASYNC_RESULT.is_match(&text_body);
     let kind = p
         .commands
         .iter()
@@ -289,7 +301,7 @@ fn build_call(session: &str, wd: &str, p: Pending, end_ts: Option<f64>, text: &s
         kind,
         timestamp: p.ts.unwrap_or(0.0),
         wall_secs: wall,
-        background: p.background,
+        background,
         cargo_finished_secs,
         test_exec_secs,
         tests_run,
@@ -530,5 +542,34 @@ mod tests {
         assert_eq!(c.tests_run, 7);
         assert_eq!(c.test_exec_secs, 2.5);
         assert_eq!(c.rebuilt_crates, vec!["a".to_owned()]);
+    }
+
+    #[test]
+    fn queued_selfdev_results_are_background_and_justrust_counts() {
+        let session = json!({
+            "id": "s1",
+            "working_dir": "/home/u/proj",
+            "messages": [
+                {"timestamp": "2026-10-01T00:00:00Z", "content": [
+                    {"type": "tool_use", "id": "t1", "name": "selfdev", "input": {"action": "test", "command": "cargo test -p a"}},
+                    {"type": "tool_use", "id": "t2", "name": "bash", "input": {"command": "cd ~/justrust && justrust check -p b"}},
+                    {"type": "tool_use", "id": "t3", "name": "bash", "input": {"command": "cd ~/justrust && git status"}}
+                ]},
+                {"timestamp": "2026-10-01T00:00:01Z", "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content":
+                        "[tool timing: start=a finish=b duration=21ms]\nSelf-dev test queued in background.\n"},
+                    {"type": "tool_result", "tool_use_id": "t2", "content":
+                        "[tool timing: start=a finish=b duration=12.5s]\njustrust: ok"},
+                    {"type": "tool_result", "tool_use_id": "t3", "content": "clean"}
+                ]}
+            ]
+        });
+        let mut calls = Vec::new();
+        extract_session(&session, &mut calls);
+        assert!(calls[0].background);
+        assert_eq!(calls[1].kind, Kind::Check);
+        assert!(!calls[1].background);
+        assert_eq!(calls[1].wall_secs, Some(12.5));
+        assert_eq!(calls[2].kind, Kind::Other);
     }
 }
