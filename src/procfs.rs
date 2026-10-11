@@ -195,15 +195,21 @@ mod tests {
             libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0
         };
         let spawn_sleeper = |close: bool| {
+            use std::os::unix::process::CommandExt;
             let f = std::fs::File::create(&p).unwrap();
-            // Inheritable, like the fd `flock(1)` hands to its command.
-            unsafe {
-                let fl = libc::fcntl(f.as_raw_fd(), libc::F_GETFD);
-                libc::fcntl(f.as_raw_fd(), libc::F_SETFD, fl & !libc::FD_CLOEXEC);
-            }
             assert!(lock(&f));
+            let fd = f.as_raw_fd();
             let mut c = std::process::Command::new("sleep");
             c.arg("5");
+            // Inheritable in this child only, like the fd `flock(1)` hands
+            // its command (dup2 clears CLOEXEC on the copy). The parent's fd
+            // stays CLOEXEC, so other tests' children never get it.
+            unsafe {
+                c.pre_exec(move || {
+                    libc::dup2(fd, 50);
+                    Ok(())
+                });
+            }
             if close {
                 close_inherited_fds(&mut c);
             }
