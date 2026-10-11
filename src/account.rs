@@ -359,6 +359,25 @@ pub fn login(no_wait: bool) -> Result<()> {
     Ok(())
 }
 
+/// For `justrust mcp`: the sign-in link to relay to the human, starting or
+/// resuming a device flow that later justrust commands complete. `None` when
+/// already signed in.
+pub fn login_link() -> Result<Option<String>> {
+    poll_pending();
+    if hosted::signed_in() {
+        if crate::remote_backend::load().is_none() {
+            crate::remote_backend::save(&crate::remote_backend::Backend::Hosted)?;
+        }
+        return Ok(None);
+    }
+    let p = match load_pending() {
+        Some(p) => p,
+        None => start(&hosted::api_base())?,
+    };
+    save_pending(&p)?;
+    Ok(Some(p.url))
+}
+
 /// `justrust logout`: drop only the account lines.
 pub fn logout() -> Result<()> {
     clear_pending();

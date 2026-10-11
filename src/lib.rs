@@ -20,6 +20,7 @@ mod findings;
 mod history;
 mod install;
 mod live;
+mod mcp;
 mod paths;
 mod peercache;
 mod procfs;
@@ -232,6 +233,9 @@ enum Command {
     },
     /// Remove the Jcode API key (keeps other settings in the file).
     Logout,
+    /// MCP server on stdio for the Jcode account: status, sign-in, API keys,
+    /// billing links. `claude mcp add justrust -- justrust mcp`.
+    Mcp,
     /// Subscribe for more hosted builds ($10/mo per plan unit, 500 builds).
     Upgrade {
         /// Plan in USD per month.
@@ -465,7 +469,10 @@ pub fn main() -> anyhow::Result<()> {
     }
 
     let cli = Cli::parse();
-    if !matches!(cli.command, Command::Login { .. } | Command::Logout) {
+    if !matches!(
+        cli.command,
+        Command::Login { .. } | Command::Logout | Command::Mcp
+    ) {
         account::poll_pending();
     }
     match cli.command {
@@ -522,6 +529,7 @@ pub fn main() -> anyhow::Result<()> {
         Command::Uninstall { dir } => install::uninstall(dir)?,
         Command::Login { no_wait } => account::login(no_wait)?,
         Command::Logout => account::logout()?,
+        Command::Mcp => mcp::serve()?,
         Command::Upgrade { plan, no_wait } => account::upgrade(plan, no_wait)?,
         Command::Remote { cmd } => match cmd {
             RemoteCmd::Up {

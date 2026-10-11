@@ -56,6 +56,12 @@ CI and headless machines: create an API key at https://jcode.sh/account and
 export it as `JCODE_API_KEY`. It takes precedence over the saved login, so no
 `justrust login` step is needed.
 
+MCP: `justrust mcp` is an MCP server for the Jcode account (status and builds
+left, sign-in link, API keys, billing links). Add it to an agent with
+`claude mcp add justrust -- justrust mcp` (or `{"command": "justrust",
+"args": ["mcp"]}` in any MCP client). Billing changes are links for the
+human, never actions the agent can take.
+
 ## What exists so far
 
 - **Agent interface.** `justrust check|test|build|clippy|run` takes cargo's

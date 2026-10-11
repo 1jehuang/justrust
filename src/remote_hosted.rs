@@ -332,7 +332,7 @@ pub fn api_error(r: &Resp) -> anyhow::Error {
     }
 }
 
-fn ok(r: Resp) -> Result<Value> {
+pub(crate) fn ok(r: Resp) -> Result<Value> {
     if (200..300).contains(&r.code) {
         Ok(r.body)
     } else {
