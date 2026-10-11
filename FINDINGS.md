@@ -2759,7 +2759,7 @@ jcode-desktop (`#!/usr/bin/env bash` for the wrapper, or do not exec
 through sh); it affects any Ubuntu machine, including its CI runners if
 they build that test with the wrapper.
 
-## 29. Where macro expansion goes on the reference loop (2026-10-11)
+## 40. Where macro expansion goes on the reference loop (2026-10-11)
 
 jr-rustc stage 2 PGO+BOLT, one-line edit in a `#[test]` of
 jcode-desktop-ui, `-Ztime-passes` and `-Zself-profile`: rustc total 5.32 s,

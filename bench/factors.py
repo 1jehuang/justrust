@@ -190,7 +190,7 @@ FACTORS = [
         on_args=ui_rustflags("-Zcache-proc-macros"), n=6, slow=True, note=note,
     ) for name, what, scenario, note in [
         ("jr-attr-cache", "jr-rustc caches attribute proc-macro expansions (#[gpui::test]) under -Zcache-proc-macros",
-         "desktop-test-edit", "FINDINGS 29: 724 #[gpui::test] expansions per edit, 0.96 s; on runs 1"),
+         "desktop-test-edit", "FINDINGS 40: 724 #[gpui::test] expansions per edit, 0.96 s; on runs 1"),
         ("jr-attr-cache-check", "same, on the check-only loop", "desktop-body-check", ""),
     ]],
     Factor(
