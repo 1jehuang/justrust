@@ -2747,3 +2747,14 @@ Next (in progress): parse the 721 registry manifests in parallel while
 `Downloads` holds the package cache lock (`download_accessible` 250 ms ->
 ~70 ms in traces), then cache index summaries / parsed manifests across
 runs.
+
+Update: the point-3 failure is explained. Jcode Desktop's rustc wrapper
+`scripts/rustc-parallel-frontend` is `#!/bin/sh`. On Debian/Ubuntu `/bin/sh`
+is dash, which drops environment variables whose names contain `-` when it
+`exec`s rustc, so `CARGO_BIN_EXE_jcode-desktop` (cargo does set it, checked
+with `-vv`) never reaches rustc and `tests/version.rs` fails to compile.
+Arch's `/bin/sh` is bash, so the laptop never sees it. Same on cargo 1.98.1
+and 1.99.0, and with a clean target dir on the machine. Fix belongs in
+jcode-desktop (`#!/usr/bin/env bash` for the wrapper, or do not exec
+through sh); it affects any Ubuntu machine, including its CI runners if
+they build that test with the wrapper.
