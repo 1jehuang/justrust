@@ -23,7 +23,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::remote_proto::{MIN_VERSION, Msg, VERSION, read_frame, write_frame};
+use crate::remote_proto::{CACHE_VERSION, MIN_VERSION, Msg, VERSION, read_frame, write_frame};
 
 type Out = Arc<Mutex<Box<dyn Write + Send>>>;
 
@@ -142,6 +142,26 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         _ => bail!("expected Hello"),
     };
     send(&out, &Msg::Hello { version }, &[]);
+    // Peer dependency cache: this machine's cache serves the daemon's
+    // requests, and this machine's rustc shims reach the daemon's machine
+    // through `peer.sock`.
+    let relay = {
+        let out = out.clone();
+        crate::peercache::Relay::new(version >= CACHE_VERSION, move |m, p| {
+            out.lock()
+                .is_ok_and(|mut w| write_frame(&mut *w, m, p).is_ok())
+        })
+    };
+    if relay.capable
+        && let Some(p) = crate::peercache::sock_path()
+    {
+        let current: crate::peercache::Current = Arc::new(Mutex::new(Some(relay.clone())));
+        // No key prefetch: the daemon may be idle. The first shim query
+        // loads the key set.
+        if let Err(e) = crate::peercache::listen(&p, current) {
+            eprintln!("justrust agent: peer cache socket {}: {e}", p.display());
+        }
+    }
     let at = |p: &str| -> PathBuf {
         if prefix.is_empty() {
             PathBuf::from(p)
@@ -160,6 +180,9 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             Ok(None) => break Ok(()),
             Err(e) => break Err(e),
         };
+        if relay.capable && relay.on_frame(&msg, &payload) {
+            continue;
+        }
         match msg {
             Msg::Write { path, mode } => match write_atomic(&at(&path), &payload, mode) {
                 Ok(()) => {
@@ -248,6 +271,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             _ => {}
         }
     };
+    relay.close();
     if let Ok(p) = pids.lock() {
         for pid in p.values() {
             // SAFETY: signalling our own child's process group.
@@ -272,6 +296,70 @@ fn summary_for(run_id: &str) -> Option<Vec<u8>> {
     .ok()
 }
 
+/// Env var a client sends with a run: its cargo home.
+pub const CLIENT_CARGO_HOME: &str = "JUSTRUST_CLIENT_CARGO_HOME";
+
+/// Registry sources are compiled into crate metadata (and so into every
+/// dependent's SVH) by absolute path. Building with the cargo home at the
+/// client's path makes this machine's dependency artifacts interchangeable
+/// with the client's (the peer cache, `src/peercache.rs`). The client's
+/// path becomes a directory whose `registry` and `git` link to this
+/// machine's own cargo home, so downloads are still shared. `None` (build
+/// with the usual cargo home) when the path cannot be set up or the peer
+/// cache is off.
+fn mirror_cargo_home(client: &Path) -> Option<PathBuf> {
+    if !crate::peercache::enabled() || !client.is_absolute() {
+        return None;
+    }
+    let own = crate::depcache::cargo_home();
+    if own.as_os_str().is_empty() || own == client {
+        return None;
+    }
+    let ready = |p: &Path| {
+        ["registry", "git"]
+            .iter()
+            .all(|d| std::fs::read_link(p.join(d)).ok() == Some(own.join(d)))
+    };
+    if ready(client) {
+        return Some(client.to_path_buf());
+    }
+    let s = client.to_str()?;
+    let made = std::fs::create_dir_all(client).is_ok()
+        || Command::new("sh")
+            .arg("-c")
+            .arg(crate::remote_sync::prepare_script(s))
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|st| st.success());
+    if !made {
+        return None;
+    }
+    for d in ["registry", "git"] {
+        let target = own.join(d);
+        let _ = std::fs::create_dir_all(&target);
+        let link = client.join(d);
+        if std::fs::read_link(&link).ok() != Some(target.clone()) {
+            // Only ever replace a link or nothing: a real directory there
+            // belongs to someone else.
+            if std::fs::symlink_metadata(&link).is_ok_and(|m| !m.file_type().is_symlink()) {
+                return None;
+            }
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&target, &link).ok()?;
+        }
+    }
+    // Config and credentials apply as before.
+    for f in ["config.toml", "config", "credentials.toml"] {
+        let src = own.join(f);
+        let link = client.join(f);
+        if src.exists() && std::fs::symlink_metadata(&link).is_err() {
+            let _ = std::os::unix::fs::symlink(&src, &link);
+        }
+    }
+    ready(client).then(|| client.to_path_buf())
+}
+
 fn start_run(
     id: u64,
     cwd: &Path,
@@ -285,7 +373,11 @@ fn start_run(
     let mut c = Command::new(me);
     c.args(args)
         .current_dir(cwd)
-        .envs(env.iter().map(|(k, v)| (k, v)))
+        .envs(
+            env.iter()
+                .map(|(k, v)| (k, v))
+                .filter(|(k, _)| *k != CLIENT_CARGO_HOME),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -298,6 +390,11 @@ fn start_run(
     if let Some(home) = dirs::home_dir() {
         let path = std::env::var("PATH").unwrap_or_default();
         c.env("PATH", format!("{}/.cargo/bin:{path}", home.display()));
+    }
+    if let Some((_, home)) = env.iter().find(|(k, _)| k == CLIENT_CARGO_HOME)
+        && let Some(home) = mirror_cargo_home(Path::new(home))
+    {
+        c.env("CARGO_HOME", home);
     }
     let mut child = c.spawn()?;
     pids.lock().unwrap().insert(id, child.id() as i32);

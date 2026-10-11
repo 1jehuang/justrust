@@ -126,16 +126,27 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if let Some(plan) = &plan {
         let start = paths::now();
         let mut err = std::io::stderr();
-        let local = plan.restore(&mut err);
-        let remote = local.is_none();
-        if let Some(hit) = local.or_else(|| crate::depcache_remote::fetch(plan, &mut err)) {
+        // Tiers, cheapest first: this machine, the account and shared
+        // cache (HTTP), then the peer machine over the remote link.
+        let mut tier = "hit";
+        let found = plan
+            .restore(&mut err)
+            .or_else(|| {
+                tier = "remote";
+                crate::depcache_remote::fetch(plan, &mut err)
+            })
+            .or_else(|| {
+                tier = "peer";
+                crate::peercache::fetch(plan, &mut err)
+            });
+        if let Some(hit) = found {
             let end = paths::now();
             let mut unit = described;
             unit.start = start;
             unit.end = end;
             unit.wall = end - start;
             unit.rmeta_secs = Some(unit.wall);
-            unit.depcache = if remote { "remote" } else { "hit" }.into();
+            unit.depcache = tier.into();
             unit.depcache_saved_secs = Some(hit.saved_secs);
             let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
             if let Ok(line) = serde_json::to_string(&unit) {
@@ -179,6 +190,12 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             let lines = std::mem::take(&mut *captured.lock().unwrap());
             if let Some(line) = plan.store(start, end - start, &lines) {
                 crate::depcache_remote::enqueue(plan, &line);
+                if crate::peercache::enabled()
+                    && let Some(vv) = crate::depcache::rustc_version(real)
+                {
+                    let tc = crate::peercache::toolchain_tag(&vv);
+                    crate::peercache::record_store(plan, &line, end - start, &tc);
+                }
             }
             // After storing: the cache keeps the real binary, not the wrapper.
             let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);

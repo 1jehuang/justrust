@@ -38,6 +38,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::peercache;
 use crate::remote_backend::{self, Backend};
 use crate::remote_proto::{Msg, VERSION, read_frame, write_frame};
 use crate::remote_sync::{self, MAX_FILE, Manifest, Mirror, UNKNOWN};
@@ -206,9 +207,11 @@ struct Routes {
 /// One ssh session to the agent.
 struct Link {
     child: Mutex<Child>,
-    stdin: Mutex<BufWriter<ChildStdin>>,
+    stdin: Arc<Mutex<BufWriter<ChildStdin>>>,
     routes: Mutex<Routes>,
     mirror: Mirror,
+    /// Peer dependency cache over this session (`src/peercache.rs`).
+    peer: Arc<peercache::Relay>,
 }
 
 impl Link {
@@ -264,6 +267,8 @@ struct Daemon {
     lock: Mutex<Option<std::fs::File>>,
     /// Shut down but still relaying runs that were in flight.
     draining: AtomicBool,
+    /// The relay of the current link, for this machine's rustc shims.
+    peer: peercache::Current,
 }
 
 impl Daemon {
@@ -380,7 +385,18 @@ fn daemon() -> Result<()> {
         sock: (sock.clone(), md.dev(), md.ino()),
         lock: Mutex::new(Some(lock)),
         draining: AtomicBool::new(false),
+        peer: Arc::default(),
     });
+    if peercache::enabled()
+        && let Some(p) = peercache::sock_path()
+        && let Err(e) = peercache::listen(&p, d.peer.clone())
+    {
+        log(&format!("peer cache socket {}: {e}", p.display()));
+    }
+    {
+        let d = d.clone();
+        std::thread::spawn(move || peer_sync_loop(&d));
+    }
     {
         let d = d.clone();
         std::thread::spawn(move || push_loop(&d, wrx));
@@ -478,6 +494,18 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                 d.shutdown();
                 return Ok(());
             }
+            Msg::Warm => {
+                // Connect in the background so this machine's shims can use
+                // the peer cache. Never starts a stopped machine.
+                let d = d.clone();
+                std::thread::spawn(move || {
+                    let Ok(mut st) = d.sync.lock() else { return };
+                    if let Err(e) = ensure_link(&d, &mut st, false) {
+                        log(&format!("warm: {e:#}"));
+                    }
+                });
+                return Ok(());
+            }
             Msg::Run {
                 cwd,
                 args,
@@ -510,7 +538,11 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
 
 fn drop_link(d: &Daemon, st: &mut Sync) {
     if let Some(l) = st.link.take() {
+        l.peer.close();
         l.kill();
+    }
+    if let Ok(mut c) = d.peer.lock() {
+        *c = None;
     }
     d.set_info(|i| i.connected = false);
 }
@@ -572,9 +604,18 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
             bail!("remote agent handshake failed: {other:?}");
         }
     }
+    let stdin = Arc::new(Mutex::new(stdin));
+    let peer = {
+        let w = stdin.clone();
+        peercache::Relay::new(true, move |m, p| {
+            w.lock()
+                .is_ok_and(|mut w| write_frame(&mut *w, m, p).is_ok())
+        })
+    };
     let link = Arc::new(Link {
         child: Mutex::new(child),
-        stdin: Mutex::new(stdin),
+        stdin,
+        peer: peer.clone(),
         routes: Mutex::default(),
         mirror: Mirror {
             target: Some(target.clone()),
@@ -586,6 +627,10 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
         std::thread::spawn(move || read_agent(&link, stdout));
     }
     log(&format!("connected to {}", target.dest));
+    peer.prefetch_keys();
+    if let Ok(mut c) = d.peer.lock() {
+        *c = Some(peer);
+    }
     st.link = Some(link.clone());
     d.set_info(|i| i.connected = true);
     // Everything the machine had may be stale: start from a full mirror.
@@ -599,6 +644,9 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
 
 fn read_agent(link: &Link, mut stdout: BufReader<std::process::ChildStdout>) {
     while let Ok(Some((msg, payload))) = read_frame(&mut stdout) {
+        if link.peer.on_frame(&msg, &payload) {
+            continue;
+        }
         let mut r = link.routes.lock().unwrap();
         match msg {
             Msg::BarrierAck { id, failed } => {
@@ -620,6 +668,7 @@ fn read_agent(link: &Link, mut stdout: BufReader<std::process::ChildStdout>) {
         }
     }
     // Connection lost: fail every waiter so clients fall back or stop.
+    link.peer.close();
     let mut r = link.routes.lock().unwrap();
     r.dead = true;
     r.barriers.clear();
@@ -959,4 +1008,65 @@ fn run(
         }
     }
     Ok(())
+}
+
+// ------------------------------------------------------------- peer cache
+
+/// Journal offsets already exchanged with the machine, so a restarted
+/// daemon does not offer everything again.
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy, PartialEq)]
+struct PeerOffsets {
+    /// How far this machine's store journal was offered to the peer.
+    pushed: u64,
+    /// How far the peer's journal was pulled from.
+    pulled: u64,
+}
+
+fn peer_offsets_file() -> Option<PathBuf> {
+    crate::remote::dir()
+        .ok()
+        .map(|d| d.join("peer-offsets.json"))
+}
+
+/// Every few seconds while connected: offer the machine the dependency
+/// entries this machine compiled since last time, and take the ones it
+/// compiled, so whichever side builds next finds them. Runs only when no
+/// build is relayed (pushing never competes with a remote run's output),
+/// and moves the most valuable entries first.
+fn peer_sync_loop(d: &Daemon) {
+    let file = peer_offsets_file();
+    let mut off: PeerOffsets = file
+        .as_ref()
+        .and_then(|f| std::fs::read(f).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    loop {
+        std::thread::sleep(Duration::from_secs(5));
+        if d.draining.load(Ordering::SeqCst) || d.info.lock().map_or(1, |i| i.active) > 0 {
+            continue;
+        }
+        let Some(relay) = d.peer.lock().ok().and_then(|c| c.clone()) else {
+            continue;
+        };
+        if !relay.capable {
+            continue;
+        }
+        let before = off;
+        let (sent, sbytes, next) = relay.push_new(off.pushed);
+        off.pushed = next;
+        let (got, gbytes, next) = relay.pull_new(off.pulled);
+        off.pulled = next;
+        if sent + got > 0 {
+            log(&format!(
+                "peer cache: pushed {sent} entries ({:.1} MB), pulled {got} ({:.1} MB)",
+                sbytes as f64 / 1e6,
+                gbytes as f64 / 1e6
+            ));
+        }
+        if off != before
+            && let Some(f) = &file
+        {
+            let _ = std::fs::write(f, serde_json::to_vec(&off).unwrap_or_default());
+        }
+    }
 }

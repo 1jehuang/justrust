@@ -21,6 +21,7 @@ mod history;
 mod install;
 mod live;
 mod paths;
+mod peercache;
 mod procfs;
 mod record;
 mod remote;

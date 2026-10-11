@@ -41,6 +41,7 @@ impl Agent {
             .arg("__agent")
             .arg(dir.join("root"))
             .env("JUSTRUST_HOME", dir.join("home"))
+            .env_remove("JUSTRUST_DEPCACHE_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -483,4 +484,357 @@ fn serves_v1_daemons() {
 
 fn libc_sigint() -> i32 {
     2
+}
+
+// ------------------------------------------------------------- peer cache
+
+/// Put a depcache entry (one text output, so no binary hashes to compute)
+/// into the cache under `home`. Returns (base, out, line).
+fn seed_entry(home: &Path, tag: char) -> (String, String, String) {
+    let base = tag.to_string().repeat(32);
+    let out = "0123456789abcdef".repeat(2);
+    let out = format!("{}{}", &out[..31], tag);
+    let root = home.join("cache/depcache");
+    let dir = root.join("o").join(&out);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("x-abc.d"),
+        "@@JUSTRUST_PROFILE_DIR@@/deps/x: a.rs\n",
+    )
+    .unwrap();
+    let meta = r#"{"files":[{"name":"x-abc.d","hash":"h","text":true}],"stderr":[],"wall":4.5}"#;
+    std::fs::write(dir.join("meta.json"), meta).unwrap();
+    let line = format!(r#"{{"inputs":[],"env":[],"out":"{out}"}}"#);
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(
+        root.join("m").join(format!("{base}.jsonl")),
+        format!("{line}\n"),
+    )
+    .unwrap();
+    (base, out, line)
+}
+
+/// Next frame that is not the agent's key-set prefetch (answered with
+/// `keys`, as the daemon would).
+fn recv_answering_keys(a: &mut Agent, keys: &str) -> (Msg, Vec<u8>) {
+    loop {
+        match a.recv() {
+            (Msg::CacheKeys { id }, _) => a.send(Msg::CacheKeySet { id }, keys.as_bytes()),
+            f => return f,
+        }
+    }
+}
+
+fn fetch_bundle(a: &mut Agent, id: u64, out: &str) -> Vec<u8> {
+    a.send(
+        Msg::CacheFetch {
+            id,
+            out: out.into(),
+        },
+        &[],
+    );
+    let mut data = Vec::new();
+    loop {
+        match recv_answering_keys(a, "") {
+            (Msg::CacheData { id: i, last, ok }, p) if i == id => {
+                assert!(ok, "fetch failed");
+                data.extend_from_slice(&p);
+                if last {
+                    return data;
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+/// The agent answers cache requests from its own cache, and an entry moved
+/// from one machine to another with `CachePut` arrives intact.
+#[test]
+fn peer_cache_serves_and_installs_entries() {
+    let mut a = Agent::start("peer-a");
+    let mut b = Agent::start("peer-b");
+    let (base, out, line) = seed_entry(&a.dir.join("home"), 'a');
+
+    a.send(
+        Msg::CacheQuery {
+            id: 1,
+            base: base.clone(),
+        },
+        &[],
+    );
+    match recv_answering_keys(&mut a, "") {
+        (
+            Msg::CacheLines {
+                id: 1, lines, outs, ..
+            },
+            _,
+        ) => {
+            assert_eq!(lines, vec![line.clone()]);
+            assert_eq!(outs.len(), 1);
+            assert_eq!(outs[0].out, out);
+            assert_eq!(outs[0].wall, 4.5);
+            assert!(outs[0].bytes > 0);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // Unknown and hostile keys: nothing.
+    a.send(
+        Msg::CacheQuery {
+            id: 2,
+            base: "../../etc".into(),
+        },
+        &[],
+    );
+    assert!(matches!(
+        recv_answering_keys(&mut a, ""),
+        (Msg::CacheLines { id: 2, ref lines, .. }, _) if lines.is_empty()
+    ));
+    a.send(
+        Msg::CacheFetch {
+            id: 3,
+            out: "f".repeat(32),
+        },
+        &[],
+    );
+    assert!(matches!(
+        recv_answering_keys(&mut a, ""),
+        (
+            Msg::CacheData {
+                id: 3,
+                ok: false,
+                last: true
+            },
+            _
+        )
+    ));
+    // Key set.
+    a.send(Msg::CacheKeys { id: 4 }, &[]);
+    match recv_answering_keys(&mut a, "") {
+        (Msg::CacheKeySet { id: 4 }, p) => assert_eq!(String::from_utf8(p).unwrap(), base),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    let bundle = fetch_bundle(&mut a, 5, &out);
+    assert!(!bundle.is_empty());
+
+    // b takes it only for a compiler it uses.
+    let item = |tc: &str| remote_proto::OfferItem {
+        base: base.clone(),
+        line: line.clone(),
+        out: out.clone(),
+        bytes: 10,
+        wall: 4.5,
+        tc: tc.into(),
+    };
+    let broot = b.dir.join("home/cache/depcache");
+    std::fs::create_dir_all(&broot).unwrap();
+    std::fs::write(broot.join("peer-toolchains"), "1.99 abc\n").unwrap();
+    b.send(
+        Msg::CacheOffer {
+            id: 6,
+            items: vec![item("1.99 abc"), item("1.0 other")],
+        },
+        &[],
+    );
+    match recv_answering_keys(&mut b, "") {
+        (Msg::CacheWant { id: 6, outs }, _) => {
+            assert_eq!(outs, vec![out.clone(), out.clone()][..1])
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // Sent in two chunks.
+    let mid = bundle.len() / 2;
+    for (chunk, last) in [(&bundle[..mid], false), (&bundle[mid..], true)] {
+        b.send(
+            Msg::CachePut {
+                id: 7,
+                base: base.clone(),
+                line: line.clone(),
+                out: out.clone(),
+                last,
+            },
+            chunk,
+        );
+    }
+    // Installed (asynchronously): b now serves it, byte for byte.
+    let mut ok = false;
+    for i in 0..100 {
+        b.send(
+            Msg::CacheQuery {
+                id: 100 + i,
+                base: base.clone(),
+            },
+            &[],
+        );
+        if let (Msg::CacheLines { lines, .. }, _) = recv_answering_keys(&mut b, "")
+            && lines == vec![line.clone()]
+        {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(ok, "entry not installed");
+    assert_eq!(
+        read(&broot.join("o").join(&out).join("x-abc.d")),
+        read(
+            &a.dir
+                .join("home/cache/depcache/o")
+                .join(&out)
+                .join("x-abc.d")
+        )
+    );
+    // A corrupt bundle installs nothing.
+    let (base2, out2, line2) = (
+        "c".repeat(32),
+        "d".repeat(32),
+        format!(r#"{{"inputs":[],"env":[],"out":"{}"}}"#, "d".repeat(32)),
+    );
+    b.send(
+        Msg::CachePut {
+            id: 8,
+            base: base2.clone(),
+            line: line2,
+            out: out2.clone(),
+            last: true,
+        },
+        b"not a bundle",
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!broot.join("o").join(&out2).exists());
+    assert!(!broot.join("m").join(format!("{base2}.jsonl")).exists());
+}
+
+/// A rustc shim on the agent's machine reaches the daemon's cache through
+/// the agent's `peer.sock`: queries and fetches are relayed over the link.
+#[test]
+fn peer_cache_relays_shim_requests_to_the_daemon() {
+    use std::os::unix::net::UnixStream;
+    let mut a = Agent::start("peer-relay");
+    let sock = a.dir.join("home/peer.sock");
+    for _ in 0..200 {
+        if sock.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let base = "e".repeat(32);
+    let out = "f".repeat(32);
+    // Before the key set arrives, queries go to the daemon. Answer the
+    // prefetch with our one key.
+    let s = UnixStream::connect(&sock).expect("peer.sock");
+    let mut sw = BufWriter::new(s.try_clone().unwrap());
+    let mut sr = BufReader::new(s);
+    write_frame(
+        &mut sw,
+        &Msg::CacheQuery {
+            id: 9,
+            base: base.clone(),
+        },
+        &[],
+    )
+    .unwrap();
+    let fwd_id = match recv_answering_keys(&mut a, &base) {
+        (Msg::CacheQuery { id, base: b }, _) => {
+            assert_eq!(b, base);
+            id
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+    let info = remote_proto::OutInfo {
+        out: out.clone(),
+        bytes: 123,
+        wall: 2.0,
+    };
+    a.send(
+        Msg::CacheLines {
+            id: fwd_id,
+            lines: vec!["L".into()],
+            outs: vec![info.clone()],
+            busy: 0,
+            bw: 0.0,
+        },
+        &[],
+    );
+    match read_frame(&mut sr).unwrap().unwrap() {
+        (
+            Msg::CacheLines {
+                id: 9, lines, outs, ..
+            },
+            _,
+        ) => {
+            assert_eq!(lines, vec!["L".to_string()]);
+            assert_eq!(outs, vec![info]);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // Fetch: relayed chunk by chunk.
+    write_frame(
+        &mut sw,
+        &Msg::CacheFetch {
+            id: 10,
+            out: out.clone(),
+        },
+        &[],
+    )
+    .unwrap();
+    let fwd = match recv_answering_keys(&mut a, &base) {
+        (Msg::CacheFetch { id, out: o }, _) => {
+            assert_eq!(o, out);
+            id
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+    a.send(
+        Msg::CacheData {
+            id: fwd,
+            last: false,
+            ok: true,
+        },
+        b"hello ",
+    );
+    a.send(
+        Msg::CacheData {
+            id: fwd,
+            last: true,
+            ok: true,
+        },
+        b"world",
+    );
+    let mut got = Vec::new();
+    loop {
+        match read_frame(&mut sr).unwrap().unwrap() {
+            (
+                Msg::CacheData {
+                    id: 10,
+                    last,
+                    ok: true,
+                },
+                p,
+            ) => {
+                got.extend_from_slice(&p);
+                if last {
+                    break;
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert_eq!(got, b"hello world");
+    // Once the key set is known, a base the daemon lacks is answered
+    // without a round trip.
+    write_frame(
+        &mut sw,
+        &Msg::CacheQuery {
+            id: 11,
+            base: "a".repeat(32),
+        },
+        &[],
+    )
+    .unwrap();
+    match read_frame(&mut sr).unwrap().unwrap() {
+        (Msg::CacheLines { id: 11, lines, .. }, _) => assert!(lines.is_empty()),
+        other => panic!("unexpected {other:?}"),
+    }
 }

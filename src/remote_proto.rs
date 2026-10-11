@@ -12,10 +12,39 @@ use std::io::{Read, Write};
 
 /// Bumped when frames change incompatibly. The daemon requires an agent
 /// that answers in this version.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// Oldest daemon protocol the agent still serves (v1 is v2 without
-/// `Synced` and without write-failure reports).
+/// `Synced` and without write-failure reports, v2 is v3 without the
+/// `Cache*` frames).
 pub const MIN_VERSION: u32 = 1;
+/// First version with the peer dependency cache (`Cache*` frames).
+pub const CACHE_VERSION: u32 = 3;
+
+/// One cache entry a peer has: enough to decide whether fetching it beats
+/// compiling.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct OutInfo {
+    pub out: String,
+    /// Raw bytes of the entry's files (before compression).
+    pub bytes: u64,
+    /// Wall seconds the original compile took.
+    pub wall: f64,
+}
+
+/// One entry from a peer's store journal.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct OfferItem {
+    pub base: String,
+    /// The depcache manifest line (`Entry` JSON).
+    pub line: String,
+    pub out: String,
+    pub bytes: u64,
+    pub wall: f64,
+    /// Compiler that built it (`release` and `commit-hash` of `rustc -vV`).
+    /// A peer only takes entries for compilers it has used itself.
+    #[serde(default)]
+    pub tc: String,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "t")]
@@ -121,6 +150,82 @@ pub enum Msg {
     },
     /// Client -> daemon: exit now.
     Shutdown,
+    /// Client -> daemon: connect to the machine in the background if it is
+    /// known to be up (never starts it), so the peer cache is ready.
+    Warm,
+
+    // Peer dependency cache (v3, `src/peercache.rs`). Requests flow in
+    // both directions between daemon and agent, and from a machine's rustc
+    // shims to its daemon or agent. Ids are the requester's: replies carry
+    // the request's id.
+    /// Which entries do you have for this base key?
+    CacheQuery {
+        id: u64,
+        base: String,
+    },
+    /// Reply: manifest lines and, for each one whose outputs are present,
+    /// its size and compile time.
+    CacheLines {
+        id: u64,
+        lines: Vec<String>,
+        outs: Vec<OutInfo>,
+        /// Filled in by the requester's relay: bundles already in flight
+        /// from this peer, and the measured throughput from it (compressed
+        /// bytes/s, 0 when unknown).
+        #[serde(default)]
+        busy: u32,
+        #[serde(default)]
+        bw: f64,
+    },
+    /// Send me this entry as a bundle.
+    CacheFetch {
+        id: u64,
+        out: String,
+    },
+    /// Reply to `CacheFetch`: one bundle chunk (payload). `last` ends the
+    /// bundle. `ok: false` means not available (or failed mid-way).
+    CacheData {
+        id: u64,
+        last: bool,
+        ok: bool,
+    },
+    /// Every base key you have (reply `CacheKeySet`, payload: keys, one
+    /// per line). Lets a relay answer most misses without a round trip.
+    CacheKeys {
+        id: u64,
+    },
+    CacheKeySet {
+        id: u64,
+    },
+    /// Entries you stored since journal offset `since`.
+    CacheList {
+        id: u64,
+        since: u64,
+    },
+    /// Reply to `CacheList`. `next` is the offset to ask from next time.
+    CacheJournal {
+        id: u64,
+        items: Vec<OfferItem>,
+        next: u64,
+    },
+    /// I can send you these entries: which do you lack? (reply `CacheWant`)
+    CacheOffer {
+        id: u64,
+        items: Vec<OfferItem>,
+    },
+    CacheWant {
+        id: u64,
+        outs: Vec<String>,
+    },
+    /// Install this entry: one bundle chunk (payload) per frame, in order,
+    /// installed when `last` arrives. The id is the sender's.
+    CachePut {
+        id: u64,
+        base: String,
+        line: String,
+        out: String,
+        last: bool,
+    },
 }
 
 pub fn write_frame<W: Write>(w: &mut W, msg: &Msg, payload: &[u8]) -> Result<()> {

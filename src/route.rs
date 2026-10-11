@@ -136,7 +136,7 @@ pub fn decide(
             .collect(),
     );
     match (local, remote) {
-        (None, None) => Choice::Local("no history for this command".into()),
+        (None, None) => Choice::Local(NO_HISTORY.into()),
         (Some(l), None) if l > EXPLORE_LOCAL_SECS => Choice::Remote(format!(
             "trying remote: local ~{l:.1}s, no recent remote sample for this command"
         )),
@@ -157,6 +157,33 @@ pub fn decide(
         (Some(l), Some(r)) => Choice::Local(format!(
             "local ~{l:.1}s vs remote ~{r:.1}s for this command"
         )),
+    }
+}
+
+/// A command with no history in a workspace with no build output yet is a
+/// cold build: dependencies dominate it, and the running machine has them
+/// in its cache and more cores. Send it there.
+fn cold_rule(c: Choice, cold: bool) -> Choice {
+    match c {
+        Choice::Local(why) if cold && why == NO_HISTORY => Choice::Remote(
+            "cold target dir, no history: building where the dependency cache is warm".into(),
+        ),
+        c => c,
+    }
+}
+
+const NO_HISTORY: &str = "no history for this command";
+
+/// Ask the sync daemon to connect to the machine in the background (never
+/// starts a stopped one), so this build's rustc shims can fetch dependency
+/// entries from it. Costs a socket write when the daemon runs.
+fn warm() {
+    if !crate::peercache::enabled() {
+        return;
+    }
+    if let Ok(s) = crate::remote_daemon::connect() {
+        let mut w = &s;
+        let _ = crate::remote_proto::write_frame(&mut w, &crate::remote_proto::Msg::Warm, &[]);
     }
 }
 
@@ -378,12 +405,25 @@ pub fn maybe_remote(full: &[OsString]) {
                 return say_local("remote machine probably stopped itself (idle)");
             }
         }
-        match (
-            start_reason,
+        let cold = cold_target(&cwd_path);
+        let choice = cold_rule(
             decide(&args, &cwd, &entries, &remote_client_wall, now),
-        ) {
+            cold,
+        );
+        match (start_reason, choice) {
             (Some(why), _) => why,
-            (None, Choice::Local(why)) => return say_local(&why),
+            (None, Choice::Local(why)) => {
+                // Staying local: if this build will compile dependencies,
+                // bring the link up so they can come from the machine's
+                // cache instead (peer cache).
+                if cold
+                    || local_median(&args, &cwd, &entries, now)
+                        .is_none_or(|l| l > EXPLORE_LOCAL_SECS)
+                {
+                    warm();
+                }
+                return say_local(&why);
+            }
             (None, Choice::Remote(why)) => why,
         }
     };
@@ -453,6 +493,18 @@ mod tests {
 
     fn is_remote(c: &Choice) -> bool {
         matches!(c, Choice::Remote(_))
+    }
+
+    #[test]
+    fn cold_workspace_goes_remote_only_without_history() {
+        let c = cold_rule(run(&["check"], &[]), true);
+        assert!(is_remote(&c), "{c:?}");
+        assert!(!is_remote(&cold_rule(run(&["check"], &[]), false)));
+        // History wins over the cold heuristic.
+        let h = vec![e(&["check"], 0.4, false, 50.0)];
+        assert!(!is_remote(&cold_rule(run(&["check"], &h), true)));
+        // `build` stays local even when cold.
+        assert!(!is_remote(&cold_rule(run(&["build"], &[]), true)));
     }
 
     #[test]

@@ -295,6 +295,17 @@ pub fn run_remote(
             env.push((var.to_string(), v));
         }
     }
+    // The machine builds with its cargo home at our path, so dependency
+    // artifacts are interchangeable with ours (peer cache).
+    if let Some(h) = crate::depcache::cargo_home()
+        .to_str()
+        .filter(|h| !h.is_empty())
+    {
+        env.push((
+            crate::remote_agent::CLIENT_CARGO_HOME.to_string(),
+            h.to_string(),
+        ));
+    }
     let mut w = BufWriter::new(sock.try_clone()?);
     let mut r = BufReader::new(sock);
     let mut full = vec![sub.to_string()];

@@ -126,6 +126,11 @@ pub struct UnitStats {
     /// uploads), included in `depcache_hits`.
     #[serde(default)]
     pub depcache_remote_hits: usize,
+    /// Hits fetched from the peer machine over the remote link (the build
+    /// machine for a local build, the laptop for a remote one), included in
+    /// `depcache_hits`.
+    #[serde(default)]
+    pub depcache_peer_hits: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -711,9 +716,10 @@ pub fn build(
         with_pass_timings: units.iter().filter(|u| !u.passes.is_empty()).count(),
         depcache_hits: units
             .iter()
-            .filter(|u| u.depcache == "hit" || u.depcache == "remote")
+            .filter(|u| matches!(u.depcache.as_str(), "hit" | "remote" | "peer"))
             .count(),
         depcache_remote_hits: units.iter().filter(|u| u.depcache == "remote").count(),
+        depcache_peer_hits: units.iter().filter(|u| u.depcache == "peer").count(),
         depcache_misses: units.iter().filter(|u| u.depcache == "miss").count(),
         depcache_saved_secs: units.iter().filter_map(|u| u.depcache_saved_secs).sum(),
         depcache_miss_secs: units
@@ -905,10 +911,18 @@ impl UnitStats {
         } else {
             String::new()
         };
-        let remote = if self.depcache_remote_hits > 0 {
-            format!(" ({} remote)", self.depcache_remote_hits)
-        } else {
+        let tiers: Vec<String> = [
+            (self.depcache_remote_hits, "remote"),
+            (self.depcache_peer_hits, "peer"),
+        ]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, t)| format!("{n} {t}"))
+        .collect();
+        let remote = if tiers.is_empty() {
             String::new()
+        } else {
+            format!(" ({})", tiers.join(", "))
         };
         format!(
             ", depcache {} hit{remote}/{} miss{saved}",
