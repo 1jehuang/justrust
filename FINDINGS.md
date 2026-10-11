@@ -2775,3 +2775,43 @@ not help: it caches derive macros only. On every edit rustc re-runs the
 input tokens. The fork change: cache attribute proc-macro expansions the
 same way upstream caches derives (an incremental query keyed by invocation
 and input tokens), worth up to ~0.9 s of the 5.3 s compile.
+
+## 39. jr-cargo: parallel manifest prefetch, cargo-fork factor now helps (2026-10-11)
+
+Follows 38. After resolving, `Downloads` turned 721 `PackageId`s into
+`Package`s one at a time, each a full `Cargo.toml` parse (250 ms of a
+Desktop no-op). jr-cargo 08fc34c92 parses the already-unpacked registry
+manifests on all cores first, while the package cache lock is held, and
+`read_package` takes a parked result only for the same path and source.
+`.cargo-ok` checks, last-use tracking and checksums stay on the
+sequential path. Speculative parses print nothing. `Manifest`/`Package`
+moved from `Rc` to `Arc` so they can cross threads. Kill switch
+`JUSTRUST_CARGO_PREFETCH=0`. In traces `download_accessible` went from 180-290 ms to ~70 ms.
+
+Raw cargo `test -p jcode-desktop-ui --lib --no-run`, 12 alternating runs,
+two rounds under the bench lock (machine at load 12-16, so absolute
+numbers are higher than in 38):
+
+| binary | round 1 | round 2 |
+|---|---:|---:|
+| stock cargo | | 0.746 s (0.73-0.79) |
+| jr-cargo mimalloc (6f30c42ee) | 0.558 s (0.51-0.61) | 0.555 s (0.52-0.60) |
+| jr-cargo + prefetch (08fc34c92) | **0.471 s (0.44-0.48)** | **0.476 s (0.44-0.63)** |
+
+Output is identical up to the (already nondeterministic) order of Fresh
+lines, 0 units rebuilt. Cargo testsuite: 4042 passed. The failures were the 2 known environment ones,
+`death::ctrl_c_kills_everyone` (hangs without a tty, killed), and 3
+(`lto::cdylib_and_rlib`, `lto::dylib`,
+`package_features::other_member_from_current`) that pass on rerun (load).
+
+System 2, agent level (`bench/factors.py run cargo-fork`,
+`bench/results/factors-20261011-103622-cargo-fork.json`), through justrust
+with the pinned toolchain, 11 on/off interleaved: **0.22 s (0.2-0.3) vs
+0.39 s (0.4-0.5) for stock cargo, -43%, verdict helps** (finding 24 had
+0.49 vs 0.52 s, within noise).
+
+Remaining in a no-op, from the traces: targeted resolve ~200 ms (index
+summaries from `~/.cargo/registry/index/*/.cache`, then the resolver),
+fingerprints ~120 ms. Next: a per-workspace cache of the targeted resolve
+result keyed like the resolve stamp, which would skip the index entirely
+on a no-op.
