@@ -53,6 +53,10 @@ pub struct Meta {
     /// Pinned toolchain id (`justrust.toml`), `None` for the system one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain: Option<String>,
+    /// Why this agent-mode build ran here and not on the remote machine
+    /// (`route::local_reason`), `None` when routing was not consulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -338,6 +342,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         env,
         slot: slot.as_ref().map(|s| s.info.clone()),
         toolchain: pinned.as_ref().map(|tc| tc.id.clone()),
+        route: crate::route::local_reason(),
     };
     std::fs::write(run_dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
 

@@ -164,6 +164,11 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     if let Some(a) = &s.agent_session {
         let _ = writeln!(o, "agent    {a}");
     }
+    if let Some(r) = &s.remote {
+        let _ = writeln!(o, "where    remote on {}", r.machine);
+    } else if let Some(why) = &s.route {
+        let _ = writeln!(o, "where    local ({why})");
+    }
     let status = if s.diagnostics.compile_failed {
         format!(
             "exit {} (compile failed, {} errors)",

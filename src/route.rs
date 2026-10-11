@@ -356,7 +356,17 @@ fn explain() -> bool {
     )
 }
 
+static LOCAL_REASON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Why the router kept this process's build local, if it was consulted.
+/// Recorded in the run (`meta.json`, `justrust show`) so slow local builds
+/// can be traced to the rule that kept them off the remote machine.
+pub fn local_reason() -> Option<String> {
+    LOCAL_REASON.get().cloned()
+}
+
 fn say_local(why: &str) {
+    let _ = LOCAL_REASON.set(why.to_string());
     if explain() {
         eprintln!("justrust: local ({why})");
     }

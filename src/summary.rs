@@ -51,6 +51,9 @@ pub struct Summary {
     /// Pinned toolchain id the build used (`justrust.toml`), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain: Option<String>,
+    /// Why the build ran locally, from the router (see `Meta::route`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -870,6 +873,7 @@ pub fn build(
         remote: None,
         split_hints: Vec::new(),
         toolchain: meta.toolchain.clone(),
+        route: meta.route.clone(),
     }
 }
 
