@@ -315,10 +315,14 @@ fn mirror_cargo_home(client: &Path) -> Option<PathBuf> {
     if own.as_os_str().is_empty() || own == client {
         return None;
     }
+    // Usable: each of `registry` and `git` links to our own, or is a real
+    // directory (a cargo home someone already uses at that path: it works,
+    // it only downloads separately).
     let ready = |p: &Path| {
-        ["registry", "git"]
-            .iter()
-            .all(|d| std::fs::read_link(p.join(d)).ok() == Some(own.join(d)))
+        ["registry", "git"].iter().all(|d| {
+            std::fs::read_link(p.join(d)).ok() == Some(own.join(d))
+                || std::fs::symlink_metadata(p.join(d)).is_ok_and(|m| m.is_dir())
+        }) && std::fs::metadata(p).is_ok_and(|m| !m.permissions().readonly())
     };
     if ready(client) {
         return Some(client.to_path_buf());
@@ -340,10 +344,9 @@ fn mirror_cargo_home(client: &Path) -> Option<PathBuf> {
         let _ = std::fs::create_dir_all(&target);
         let link = client.join(d);
         if std::fs::read_link(&link).ok() != Some(target.clone()) {
-            // Only ever replace a link or nothing: a real directory there
-            // belongs to someone else.
-            if std::fs::symlink_metadata(&link).is_ok_and(|m| !m.file_type().is_symlink()) {
-                return None;
+            // A real directory there is a cargo home already in use: keep it.
+            if std::fs::symlink_metadata(&link).is_ok_and(|m| m.is_dir()) {
+                continue;
             }
             let _ = std::fs::remove_file(&link);
             std::os::unix::fs::symlink(&target, &link).ok()?;
