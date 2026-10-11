@@ -31,6 +31,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -206,6 +207,35 @@ def _check_targets(p: Pkg, tests: bool) -> list[str]:
     return out
 
 
+JOURNAL = WORK / "probe-journal"
+
+
+def _recover_journal() -> None:
+    """Undo a probe that was killed before it restored its files."""
+    if not JOURNAL.exists():
+        return
+    idx = JOURNAL / "index.json"
+    if idx.exists():
+        for k, dst in json.loads(idx.read_text()).items():
+            src = JOURNAL / k
+            if src.exists():
+                shutil.copy2(src, dst)
+                print(f"synth: restored {dst} after an interrupted probe", file=sys.stderr)
+    shutil.rmtree(JOURNAL)
+
+
+def _locked() -> None:
+    """Probes edit the shared snapshot sources: always under the bench lock,
+    even with BENCH_NO_LOCK=1."""
+    v = os.environ.pop("BENCH_NO_LOCK", None)
+    try:
+        suite.bench_lock()
+    finally:
+        if v is not None:
+            os.environ["BENCH_NO_LOCK"] = v
+    _recover_journal()
+
+
 def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests: bool) -> tuple[set[int], set[int], set[Path]]:
     """Insert every probe, check, restore.
 
@@ -218,7 +248,15 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
     by_file: dict[Path, list[tuple[int, int]]] = collections.defaultdict(list)
     for pid, (f, line) in probes.items():
         by_file[f].append((line, pid))
+    _locked()  # before reading: another benchmark may have an edit in flight
     saved = {f: f.read_text() for f in by_file}
+    JOURNAL.mkdir(parents=True, exist_ok=True)
+    index = {}
+    for k, f in enumerate(saved):
+        (JOURNAL / str(k)).write_text(saved[f])
+        index[str(k)] = str(f)
+    (JOURNAL / "index.json").write_text(json.dumps(index))
+    old_term = signal.signal(signal.SIGTERM, _raise_interrupt)
     try:
         for f, items in by_file.items():
             lines = saved[f].splitlines(keepends=True)
@@ -260,6 +298,12 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
     finally:
         for f, s in saved.items():
             f.write_text(s)
+        shutil.rmtree(JOURNAL, ignore_errors=True)
+        signal.signal(signal.SIGTERM, old_term)
+
+
+def _raise_interrupt(*_a) -> None:
+    raise KeyboardInterrupt
 
 
 def probe(ws: Workspace, name: str, force: bool = False) -> dict:
@@ -268,6 +312,7 @@ def probe(ws: Workspace, name: str, force: bool = False) -> dict:
     cache = WORK / "probe" / suite.snapshot_dir(ws.snap).name / f"{name}.json"
     if cache.exists() and not force:
         return json.loads(cache.read_text())
+    _locked()  # candidate lines must come from unedited sources
     rng = random.Random(name)
     cands = [(f, line) for f in rs_files(p, ws) for line in candidates(f)]
     rng.shuffle(cands)
@@ -475,12 +520,21 @@ def plan(pt: Point, seed: int) -> Plan:
         nfiles = rng.randint(2, 6)
     else:
         crates = pick_crates(ncrates)
+        if not crates and change == "type-error":
+            # The build failed, so the error is in something it compiles.
+            rel = "target"
+            crates = pick_crates(ncrates)
         if not crates:
             note = "edit outside this build's crates: no effect"
 
     def live(crate: str, kind: str) -> list[tuple[str, int]]:
         pr = probe(home_workspace(crate) or ws, crate)
         return [(f, ln) for f, v in sorted(pr.items()) for ln in v[kind]]
+
+    def live_any(crate: str) -> bool:
+        # Only crates agents edit (or the build's own targets): probing every
+        # dependency of a workspace would take an hour.
+        return (crate in edited or crate in targets) and bool(live(crate, "body"))
 
     used: set[tuple[str, int]] = set()
 
@@ -525,17 +579,22 @@ def plan(pt: Point, seed: int) -> Plan:
     if change == "switch" and sh.get("prev"):
         pf = test_filter(ws, targets[0], [], rng) if sh["prev"] == "test-filtered" and targets[0] in ws.pkgs else None
         prev = command(sh["prev"], pkg, flags, pf)
-        if prev == cmd:
-            prev = None
-        elif prev[0] == "test":
+        if prev[0] == "test":
             prev = pre_command(prev)
+        if prev == pre_command(cmd):
+            # Same kind of command, so the agent built another package
+            # first: one that shares a dependency with this build.
+            others = [m for m in ws.members if m not in targets and ws.closure([m]) & ws.closure(targets)]
+            other = weighted(rng, others, edited) if others else None
+            prev = pre_command(command(sh["prev"], other, "", pf)) if other else None
     if change == "switch" and prev is not None:
         # Switch = same sources, another command: something was edited and
         # built by the previous command; this one sees it for the first time.
-        crates = pick_crates(1) if rel != "none" else [weighted(rng, sorted(targets), edited)]
-        crates = [c for c in crates if c in ws.pkgs]
-        if crates:
-            op = place("body", crates[0])
+        prev_pkg = prev[prev.index("-p") + 1] if "-p" in prev else None
+        shared = sorted(ws.closure(targets) & ws.closure([prev_pkg] if prev_pkg else ws.default))
+        pool = [c for c in shared if c in ws.pkgs and live_any(c)]
+        if pool:
+            op = place("body", weighted(rng, pool, edited))
             if op:
                 edits.append(op)
     return Plan(pt, ws.repo, ws.snap, str(ws.cwd.relative_to(ws.root)), cmd, pre_command(cmd), prev, edits,
