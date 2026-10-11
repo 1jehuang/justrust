@@ -2758,3 +2758,20 @@ and 1.99.0, and with a clean target dir on the machine. Fix belongs in
 jcode-desktop (`#!/usr/bin/env bash` for the wrapper, or do not exec
 through sh); it affects any Ubuntu machine, including its CI runners if
 they build that test with the wrapper.
+
+## 29. Where macro expansion goes on the reference loop (2026-10-11)
+
+jr-rustc stage 2 PGO+BOLT, one-line edit in a `#[test]` of
+jcode-desktop-ui, `-Ztime-passes` and `-Zself-profile`: rustc total 5.32 s,
+`expand_crate` 1.78 s (the largest pass), codegen 0.91, dep-graph and
+result-cache persist 0.63, link 0.45, resolve 0.43. Proc-macro time inside
+expansion is 1.01 s over 883 calls, and **0.96 s of it is `#[gpui::test]`
+(724 calls)**. Derives are 0.05 s in total (Deserialize 0.026, Action
+0.010, Serialize 0.009).
+
+So `-Zcache-proc-macros` (factor `cache-proc-macros`, within noise) could
+not help: it caches derive macros only. On every edit rustc re-runs the
+`gpui::test` attribute macro on all 724 tests although 723 have identical
+input tokens. The fork change: cache attribute proc-macro expansions the
+same way upstream caches derives (an incremental query keyed by invocation
+and input tokens), worth up to ~0.9 s of the 5.3 s compile.
