@@ -1890,7 +1890,7 @@ of an in-flight install.
 
 Two earlier runs of this A/B found real bugs, now fixed: a remote build
 with `JUSTRUST_PEER_CACHE=0` journaled nothing, so the sync had nothing to
-offer (1db6bb4-era code, 0 entries pulled). The sync also dropped journal
+offer (0 entries pulled, fixed in 036f9cb). The sync also dropped journal
 entries beyond the first 400 of a window instead of deferring them
 (1fd90a2).
 
