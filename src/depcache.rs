@@ -616,6 +616,10 @@ pub(crate) struct Outputs {
 
 pub struct Hit {
     pub saved_secs: f64,
+    /// Result key (`o/<out>`) of the restored entry.
+    pub out: String,
+    /// The matched manifest line, exactly as stored.
+    pub line: String,
 }
 
 impl Plan {
@@ -624,27 +628,51 @@ impl Plan {
     }
 
     /// Look up and restore. On success the outputs are in place and the
-    /// recorded stderr has been written to `err`.
+    /// recorded stderr has been written to `err`. Matching lines are tried
+    /// newest first. One whose outputs are missing or broken (evicted, or a
+    /// peer appended a line before its outputs arrived) is skipped in favor
+    /// of the next older match.
     pub fn restore(&self, err: &mut dyn Write) -> Option<Hit> {
         let text = std::fs::read_to_string(self.manifest()).ok()?;
         let mut memo: HashMap<String, Option<String>> = HashMap::new();
-        let entry = text
-            .lines()
-            .rev()
-            .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
-            .find(|e| self.matches(e, &mut memo))?;
+        let mut tried = Vec::new();
+        for line in text.lines().rev() {
+            let Ok(entry) = serde_json::from_str::<Entry>(line) else {
+                continue;
+            };
+            if tried.contains(&entry.out) || !self.matches(&entry, &mut memo) {
+                continue;
+            }
+            if let Some(saved_secs) = self.restore_entry(&entry, err) {
+                return Some(Hit {
+                    saved_secs,
+                    out: entry.out,
+                    line: line.to_owned(),
+                });
+            }
+            tried.push(entry.out);
+        }
+        None
+    }
+
+    /// Restore one entry's outputs. `None` (nothing replayed) if they are
+    /// missing or unreadable.
+    fn restore_entry(&self, entry: &Entry, err: &mut dyn Write) -> Option<f64> {
         let dir = self.root.join("o").join(&entry.out);
         // Mark the entry used before reading it, so a concurrent eviction
         // that already picked it sees the touch and puts it back.
         touch(&dir.join("meta.json"));
         let outs: Outputs =
             serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
+        // Check every file first, so a broken entry leaves the out dir alone.
+        if outs.files.iter().any(|f| {
+            f.name.contains('/') || f.name.starts_with('.') || !dir.join(&f.name).is_file()
+        }) {
+            return None;
+        }
         // Restore every file before replaying anything, so a partial restore
         // just falls back to a normal compile that overwrites it.
         for f in &outs.files {
-            if f.name.contains('/') || f.name.starts_with('.') {
-                return None;
-            }
             let src = dir.join(&f.name);
             let dst = self.out_dir.join(&f.name);
             let tmp = self
@@ -673,9 +701,7 @@ impl Plan {
             let _ = err.write_all(b"\n");
         }
         let _ = err.flush();
-        Some(Hit {
-            saved_secs: outs.wall,
-        })
+        Some(outs.wall)
     }
 
     pub(crate) fn matches(&self, e: &Entry, memo: &mut HashMap<String, Option<String>>) -> bool {
@@ -1201,6 +1227,9 @@ mod tests {
         let mut err = Vec::new();
         let hit = p2.restore(&mut err).expect("hit");
         assert_eq!(hit.saved_secs, 2.5);
+        let stored = std::fs::read_to_string(p2.manifest()).unwrap();
+        assert_eq!(stored.lines().last().unwrap(), hit.line);
+        assert_eq!(entry_out(&hit.line).as_deref(), Some(hit.out.as_str()));
         let deps2 = &p2.out_dir;
         assert_eq!(
             std::fs::read(deps2.join("libx-abc.rmeta")).unwrap(),
@@ -1216,6 +1245,33 @@ mod tests {
         assert!(p2.restore(&mut Vec::new()).is_none());
         std::fs::write(&src, "pub fn f() {}").unwrap();
         assert!(p2.restore(&mut Vec::new()).is_some());
+
+        // A newer matching line whose outputs never arrived (a peer's line,
+        // or an evicted entry): skipped, the older line still restores.
+        let good = std::fs::read_to_string(p2.manifest()).unwrap();
+        let good_line = good.lines().last().unwrap().to_owned();
+        let mut e: Entry = serde_json::from_str(&good_line).unwrap();
+        e.out = "f".repeat(32);
+        let newer = serde_json::to_string(&e).unwrap();
+        paths::append_line(&p2.manifest(), &newer).unwrap();
+        let mut err = Vec::new();
+        let hit = p2.restore(&mut err).expect("older line restores");
+        assert_eq!(hit.line, good_line);
+        assert!(!err.is_empty());
+        // A newer line whose meta.json lists a file that is gone: skipped too.
+        let broken = dir.join("cache/o").join("e".repeat(32));
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(
+            broken.join("meta.json"),
+            r#"{"files":[{"name":"libx-abc.rmeta","hash":"h","text":false}],"stderr":["bad"],"wall":9.0}"#,
+        )
+        .unwrap();
+        e.out = "e".repeat(32);
+        paths::append_line(&p2.manifest(), &serde_json::to_string(&e).unwrap()).unwrap();
+        let mut err = Vec::new();
+        let hit = p2.restore(&mut err).expect("older line restores");
+        assert_eq!(hit.line, good_line);
+        assert!(!String::from_utf8(err).unwrap().contains("bad"));
 
         // Cached outputs gone: miss, nothing replayed.
         let o = dir.join("cache/o");
