@@ -529,7 +529,12 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
     info["stock_cargo"] = suite.sh([STOCK_CARGO, "-V"])
     res = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info, "stacks": [s.name for s in stacks],
            "stack_defs": [{"name": s.name, "what": s.what, "env": s.env, "justrust": s.justrust} for s in stacks]}
-    res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait, partial=suite.RESULTS / "partial" / f"synth{args.synth}.json")
+    only = {int(x) for x in args.only_points.split(",")} if args.only_points else None
+    res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait,
+                                 partial=suite.RESULTS / "partial" / f"synth{args.synth}.json", only=only)
+    if only:  # a subset is for debugging, never a result to compare
+        print(synth_run.table(res["synth"]))
+        return
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = suite.RESULTS / (f"versus-synth{args.synth}-{time.strftime('%Y%m%d-%H%M%S')}-{info['justrust_rev']}"
                            f"{'-dirty' if info['justrust_dirty'] else ''}.json")
@@ -606,6 +611,8 @@ def main() -> None:
                    help="run the synthetic usage-weighted workload (bench/synth/) instead of the named "
                         "workloads; -n is then repetitions per point")
     r.add_argument("--points", type=int, default=40, help="synthetic points (default 40)")
+    r.add_argument("--only-points", metavar="I,J",
+                   help="synthetic: run only these point indices (debugging, nothing saved)")
     r.set_defaults(fn=cmd_run)
     p = sub.add_parser("report")
     p.add_argument("file", nargs="?")

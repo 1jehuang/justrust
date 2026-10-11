@@ -239,6 +239,21 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             .stdin(Stdio::null())
             .status();
     }
+    // Our own AWS machine only (never a user's ssh host): /bin/sh as bash,
+    // see remote::SH_IS_BASH. Best effort.
+    if matches!(
+        crate::remote_backend::load(),
+        Some(crate::remote_backend::Backend::Aws)
+    ) {
+        let _ = t
+            .command()
+            .arg(format!(
+                "sudo -n sh -c '{}'",
+                crate::remote::SH_IS_BASH.replace('\'', "'\\''")
+            ))
+            .stdin(Stdio::null())
+            .status();
+    }
     std::fs::write(&stamp, want)?;
     crate::remote::log_event(&format!(
         "installed justrust on {} in {:.1}s",

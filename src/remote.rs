@@ -1161,6 +1161,16 @@ fn allow_my_ip(region: &str, sg: &str) -> Result<()> {
     }
 }
 
+/// Make `/bin/sh` bash on the build machine. Ubuntu's dash drops environment
+/// variables whose names are not shell identifiers, such as cargo's
+/// `CARGO_BIN_EXE_<bin-name>` for a bin with a `-`. A `#!/bin/sh` rustc
+/// wrapper (Jcode Desktop's `scripts/rustc-parallel-frontend`) then hides it
+/// from rustc and `env!("CARGO_BIN_EXE_jcode-desktop")` fails to compile on
+/// the machine while it builds on the laptop, where /bin/sh is bash
+/// (FINDINGS 41). Idempotent; run at provisioning and on every justrust
+/// install, so existing machines get it too.
+pub(crate) const SH_IS_BASH: &str = "if [ \"$(readlink -f /bin/sh)\" != /usr/bin/bash ] && [ -x /usr/bin/bash ]; then ln -sfn bash /bin/sh.justrust && mv -f /bin/sh.justrust /bin/sh; fi";
+
 /// Cloud-init: build tools, rustup with the stable toolchain, mold, and an
 /// idle watchdog that powers the machine off (stop, not terminate) after
 /// `idle` minutes with no ssh session and low load.
@@ -1215,6 +1225,7 @@ apt-get install -y build-essential clang lld mold pkg-config libssl-dev cmake gi
   libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libasound2-dev libfontconfig1-dev libfreetype-dev \
   libxcb1-dev libx11-dev libx11-xcb-dev libdbus-1-dev libegl-dev libgl-dev libvulkan-dev protobuf-compiler \
   poppler-utils xvfb
+{SH_IS_BASH}
 sudo -u {SSH_USER} -H bash -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable -c clippy,rustfmt'
 touch /var/lib/justrust/ready
 "#

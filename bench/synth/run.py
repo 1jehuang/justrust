@@ -99,10 +99,13 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
 
 
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
-        partial: Path | None = None) -> dict:
-    """`partial`: rewritten after every point, so a killed run keeps what it measured."""
+        partial: Path | None = None, only: set[int] | None = None) -> dict:
+    """`partial`: rewritten after every point, so a killed run keeps what it measured.
+    `only`: run just these point indices (debugging one point; not a comparable result)."""
     pts, info = gen.sample(seed, points)
     plans = [gen.plan(p, seed) for p in pts]
+    if only:
+        plans = [p for p in plans if p.point.i in only]
     for snap in {p.snap for p in plans}:
         gen.restore_all(snap)
     base = int(time.time()) % 100000 * 100
