@@ -9,6 +9,14 @@ Three layers, from "what agents actually wait for" to "why":
 | System 3 | `bench/versus.py run` | How much faster is justrust than the stock toolchain, with and without its caches? | `bench/VERSUS.md`, `bench/results/versus-*.json` |
 | Suite | `bench/suite.py run` | Did this commit make the standard scenarios faster or slower? | `bench/results/*.json`, `compare` |
 
+System 3 and the suite also run the **synthetic agent workload**
+(`--synth SEED`, see `bench/synth/README.md`): points sampled from how
+agents really call cargo (mined from Jcode sessions: command, what was
+edited before it, where), turned into concrete edits on the pinned
+snapshots. Its headline is the expected wait per agent call. Prefer it for
+any claim about agents in general; the named scenarios stay for targeted
+questions and for comparing with older results.
+
 ## System 1: rolling log, `bench/trend.py`
 
 Mines Jcode session history (`justrust history --dump`) for every foreground

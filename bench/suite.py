@@ -679,6 +679,8 @@ def cmd_run(args) -> None:
     if TOOLCHAIN != "system":
         # Install up front so the first sample does not include the download.
         subprocess.run([J, "toolchain", "install", TOOLCHAIN], check=True, stdout=subprocess.DEVNULL)
+    if args.synth is not None:
+        return cmd_run_synth(args)
     names = args.scenarios or [s.name for s in SCENARIOS if not s.cold]
     if args.cold:
         names += [s.name for s in SCENARIOS if s.cold and s.name not in names]
@@ -710,8 +712,43 @@ def cmd_run(args) -> None:
     print(f"\nsaved {out}")
 
 
+def _synth():
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "synth"))
+    import run as synth_run  # noqa: E402
+    import versus  # noqa: E402
+
+    return synth_run, versus
+
+
+def cmd_run_synth(args) -> None:
+    """The synthetic usage-weighted workload (bench/synth/) on justrust as
+    agents run it: one stack, for comparing justrust commits."""
+    synth_run, versus = _synth()
+    # Its own target dir per toolchain, kept warm across runs and commits.
+    st = versus.Stack("suite" if TOOLCHAIN == "system" else f"suite-{TOOLCHAIN}", "justrust defaults", True,
+                      {} if TOOLCHAIN == "system" else {"JUSTRUST_TOOLCHAIN": TOOLCHAIN}, private_cache=True)
+    info = env_info()
+    result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
+              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait)}
+    result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    out = Path(args.out) if args.out else RESULTS / (
+        f"synth{args.synth}-" + time.strftime("%Y%m%d-%H%M%S")
+        + f"-{info['justrust_rev']}{'-dirty' if info['justrust_dirty'] else ''}"
+        + ("" if TOOLCHAIN == "system" else f"-{TOOLCHAIN}") + ".json"
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=1) + "\n")
+    print(synth_run.table(result["synth"]))
+    print(f"\nsaved {out}")
+
+
 def cmd_show(args) -> None:
     r = json.loads(Path(args.file).read_text())
+    if "synth" in r:
+        synth_run, _ = _synth()
+        print(synth_run.table(r["synth"]))
+        print(synth_run.detail(r["synth"]))
+        return
     e = r["env"]
     print(f"{args.file}: justrust {e['justrust_rev']}{' dirty' if e['justrust_dirty'] else ''}, {e['rustc']}, {e['cpu']}, {r['started']}")
     print(table(r))
@@ -719,6 +756,17 @@ def cmd_show(args) -> None:
 
 def cmd_compare(args) -> None:
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    if "synth" in a or "synth" in b:
+        if not ("synth" in a and "synth" in b):
+            sys.exit("bench: compare a synthetic result with another synthetic result")
+        synth_run, _ = _synth()
+        print(f"A {args.a} (justrust {a['env']['justrust_rev']})\nB {args.b} (justrust {b['env']['justrust_rev']})")
+        # Stack names can differ (toolchain suffix): compare position by position.
+        b["synth"]["stack_names"] = list(a["synth"]["stack_names"])
+        for p in b["synth"]["results"]:
+            p["stats"] = dict(zip(a["synth"]["stack_names"], p["stats"].values()))
+        print(synth_run.compare(a["synth"], b["synth"]))
+        return
     if a["env"]["snapshots"] != b["env"]["snapshots"]:
         print("WARNING: different pinned snapshots, numbers are not comparable", file=sys.stderr)
     if a["env"].get("host") != b["env"].get("host"):
@@ -771,6 +819,10 @@ def main() -> None:
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
                    help="before each run wait up to SECS for no foreign rustc and load < 2")
     r.add_argument("-o", "--out", help="result file (default bench/results/<time>-<rev>.json)")
+    r.add_argument("--synth", type=int, metavar="SEED",
+                   help="run the synthetic usage-weighted workload (bench/synth/) instead of the named "
+                        "scenarios; -n is then runs per point")
+    r.add_argument("--points", type=int, default=40, help="synthetic points (default 40)")
     r.add_argument("--toolchain", default="system", metavar="SPEC",
                    help="pinned toolchain (nightly-YYYY-MM-DD) via JUSTRUST_TOOLCHAIN, own target dir; "
                         "default: the system rustc")
