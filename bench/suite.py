@@ -530,6 +530,9 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     )
     env.pop("JUSTRUST_DISABLE", None)
     env["JUSTRUST_TOOLCHAIN"] = TOOLCHAIN
+    # The public store is on by default for users. Benchmarks compare
+    # against their own caches, so it is off unless the scenario asks.
+    env["JUSTRUST_PREBUILT"] = "off"
     env.update(s.env)
     if s.prebuilt:
         # A new machine: nothing in the local depcache, the store has it.

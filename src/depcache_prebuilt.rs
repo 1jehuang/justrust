@@ -16,13 +16,15 @@
 //! ```
 //!
 //! `<base>` is `JUSTRUST_PREBUILT` (`https://...`, `http://...`, `file:///dir`
-//! or an absolute path). Unset or `0` means off. Lookups happen after a
+//! or an absolute path). Unset means justrust's public store
+//! ([`DEFAULT_STORE`], S3); `0`/`off` turns it off. Lookups happen after a
 //! local miss and before the account cache. The index, when the store has
 //! one, is fetched once per 10 minutes and answers most misses without a
 //! request: a cold build of 900 units makes one request per unit the store
-//! actually has. A missing manifest (404) is a plain miss; any other error
-//! trips a 10-minute breaker, so a dead store costs one timeout, not one per
-//! unit. Every downloaded bundle is verified (`unpack`: names, file list,
+//! actually has. A missing manifest (404) is a plain miss. Failed requests
+//! are retried once, and five in a row trip a 10-minute breaker, so a dead
+//! store costs a few timeouts, not one per unit. Every downloaded bundle is
+//! verified (`unpack`: names, file list,
 //! content hash of every binary output) before it enters the local cache.
 //!
 //! Trust: the store holds only what our fleet compiled from crates.io
@@ -71,12 +73,21 @@ pub(crate) fn note_success(root: &Path) {
     }
 }
 
+/// justrust's public prebuilt store (justrust-cloud `infra/prebuilt-store.yaml`,
+/// filled by the scheduled prebuild fleet). Used when `JUSTRUST_PREBUILT`
+/// is unset.
+pub const DEFAULT_STORE: &str =
+    "https://jcode-justrust-prebuilt-production-280196252242.s3.us-east-1.amazonaws.com";
+
 /// The store base, without a trailing slash, or `None` when off.
 pub fn base() -> Option<String> {
     if !depcache::enabled() {
         return None;
     }
-    parse_base(&std::env::var("JUSTRUST_PREBUILT").ok()?)
+    match std::env::var("JUSTRUST_PREBUILT") {
+        Ok(v) => parse_base(&v),
+        Err(_) => Some(DEFAULT_STORE.to_owned()),
+    }
 }
 
 fn parse_base(v: &str) -> Option<String> {
@@ -414,7 +425,7 @@ fn write_index(v1: &Path) -> anyhow::Result<()> {
 /// One status line for `justrust cache`.
 pub fn status_line(root: &Path) -> String {
     match base() {
-        None => "prebuilt  off (set JUSTRUST_PREBUILT to a store URL)".into(),
+        None => "prebuilt  off (JUSTRUST_PREBUILT=off or the depcache is off)".into(),
         Some(b) if fresh_file(&breaker(root), BREAKER_SECS) => format!(
             "prebuilt  {b}: paused after an error ({}), retrying within 10 min",
             std::fs::read_to_string(breaker(root))
@@ -558,6 +569,9 @@ mod tests {
         assert_eq!(parse_base("relative/dir"), None);
         assert_eq!(parse_base("ftp://x"), None);
         assert_eq!(parse_base("0"), None);
+        assert_eq!(parse_base("off"), None);
         assert_eq!(parse_base(""), None);
+        // The default store must survive its own parser (https, no slash).
+        assert_eq!(parse_base(DEFAULT_STORE).as_deref(), Some(DEFAULT_STORE));
     }
 }

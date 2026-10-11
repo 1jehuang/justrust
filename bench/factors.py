@@ -360,7 +360,7 @@ def run_agent(cmd: list[str], cwd: Path, env: dict[str, str]) -> tuple[subproces
     e.pop("CARGO_TARGET_DIR", None)
     e.pop("JUSTRUST_DISABLE", None)
     e.update({"JUSTRUST_RUN_ID_OVERRIDE": rid, "JUSTRUST_REMOTE": "0", "JUSTRUST_QUIET": "1",
-              "JUSTRUST_TOOLCHAIN": "system", **env})
+              "JUSTRUST_TOOLCHAIN": "system", "JUSTRUST_PREBUILT": "off", **env})
     t0 = time.monotonic()
     p = subprocess.Popen([suite.J, *cmd], cwd=cwd, env=e, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     return p, rid, t0
