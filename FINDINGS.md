@@ -2044,3 +2044,74 @@ carries `.bolt.org.text`), next: `bolt.sh` in jr-rustc.
 
 Pitfall: a wait loop `while pgrep -f "bench/versus.py"` matches its own
 command line and never exits.
+
+## 28. First type error in 0.09 s: a resident rust-analyzer (2026-10-11)
+
+Goal (`docs/toolchain.md`): the first type error in under 0.2 s. New
+`src/early.rs`, opt-in with `JUSTRUST_EARLY=1`. A daemon per workspace
+(`justrust __early-daemon`, socket in `~/.justrust/early/<hash>/`) runs
+the managed toolchain's rust-analyzer (`rust-analyzer-preview` of the
+pinned nightly, added on first use by `toolchain::add_component`, with
+its own target dir). When an agent build starts, the recorder asks the
+daemon in a side thread. The daemon stats the workspace and path-dependency
+sources (780 files, a few ms), pushes changed files to rust-analyzer,
+pulls diagnostics for them, and keeps only severity-error diagnostics that
+carry a rustc code. They are printed as one block marked early, and cargo
+keeps running and printing its own errors unchanged. After the build,
+`summary.early` scores them against rustc's errors (matched, early only,
+rustc only), and the report adds an `early:` line that flags anything
+rustc did not confirm. The cargo command, env and output are untouched
+(fail open: no daemon or not ready means no early output). `justrust
+early start|stop|status`.
+
+**Latency** (`bench/suite.py`, new `first_error` column: seconds until the
+first `error` line on the agent's stderr; new scenario
+`desktop-type-error-early`, daemon started untimed). Run
+`20261011-045152-5cea93061a6c-dirty.json`, n=6, a busy machine (all
+samples noisy):
+
+| scenario | wall median | first error median | range |
+|---|---:|---:|---:|
+| desktop-type-error (rustc) | 3.08 s | 2.96 s | 1.76-4.04 s |
+| desktop-type-error-early | 2.46 s | **0.09 s** | 0.08-0.11 s |
+
+Of the 0.09 s, the daemon's answer arrives 0.06-0.085 s after the run
+starts (`summary.early.secs`). The rest is justrust startup and the
+toolchain pin. The spike (`bench/ra_spike.py`) measured a didChange plus
+pull at 115-130 ms per edit on the same crate. The first pull after a
+load takes 0.5-1 s. Costs: about 50 s to load the Desktop workspace cold
+(15-28 s with rust-analyzer's own target dir warm), 4.7 GB RSS resident,
+idle exit after 3 h (`JUSTRUST_EARLY_IDLE_SECS`).
+
+**Accuracy** (`bench/early_accuracy.py`, untimed): a clean sweep pulls
+every one of the 278 workspace files on pristine sources, which rustc
+accepts. A corpus of 19 one-error edits of the kinds agents make, each
+compared with a real `justrust check -p jcode-desktop-ui`.
+
+| config | clean-sweep FP | first rustc error found | FP in mutations | result |
+|---|---:|---:|---:|---|
+| stable diagnostics only | 0 | 7/19 | 0 | `early-accuracy-20261011-051136.json` |
+| + experimental, unfiltered | 3 | 13/19 | 57 | `...-051952-experimental.json` |
+| + experimental, minus E0282 / `{unknown}` (shipped) | **0** | **13/19** | **0** | `early-accuracy-20261011-052951.json` |
+
+- The only false positives were rust-analyzer's own inference limits:
+  three `E0282 type annotations needed` in `panel_gmail_read_card.rs`,
+  on `assert_eq!` over a type it could not compute (`{unknown}`).
+  Dropping E0282 and any message mentioning `{unknown}` removed all of
+  them and cost no true positive.
+- Found early: E0308 (5 shapes), E0599, E0425, E0432, E0609 (reported as
+  E0559 on the same line), E0061, E0063, E0277, and an error in the
+  sibling dependency crate `jcode-core`.
+- Missed, by design of rust-analyzer: borrow check (E0382, E0499,
+  E0384), match exhaustiveness (E0004), `format!` argument checks, syntax
+  errors (rust-analyzer reports them without a rustc code, so they are
+  filtered), and errors at *callers* of a changed signature in other
+  files (E0061 and E0593: only the changed files are pulled).
+- So rust-analyzer finds 68% of first errors at 0.09 s, with no wrong
+  ones in this corpus. The rest still come from cargo at 1.7-3 s. Still
+  opt-in: 4.7 GB per workspace, and the corpus is small.
+
+Next: pull reverse dependencies of a changed signature (callers), map
+rust-analyzer's syntax errors onto a code, and start the daemon
+automatically for workspaces with recent agent builds. A resident rustc
+(phase 4) would cover borrowck and give rustc's exact diagnostics.

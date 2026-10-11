@@ -42,7 +42,7 @@ from a cache.
 | C toolchain | clang, lld, ar, a sysroot of pinned libs/headers | build scripts become hermetic, so their cache keys need no system stamp |
 | pkg-config + -sys libraries | vendored sysroot (wayland, xkbcommon, alsa, fontconfig, openssl...) | same output on every machine |
 | registry sources | local mirror / `cargo vendor` | offline, no index updates, stable paths |
-| rust-analyzer | pinned to the same rustc, kept warm | sub-second type errors |
+| rust-analyzer | pinned to the same rustc (`rust-analyzer-preview`), resident per workspace (`src/early.rs`, opt-in `JUSTRUST_EARLY=1`) | first type error in 0.09 s (FINDINGS 28) |
 | test runner | justrust-owned (nextest-style process per test binary) | test selection, hot patching hook |
 | hot patcher | subsecond-style patching of the running test binary | skip relinking entirely |
 | artifact cache | depcache today, then a remote content-addressed store | cold builds from cache across machines and agents |

@@ -135,6 +135,7 @@ Scenarios (warm unless marked):
 | `desktop-body-test` | one line in non-test code of the same crate, same test command |
 | `desktop-body-check` | same edit, `check` only |
 | `desktop-type-error` | edit that adds a type error, `check`: time until the agent sees the error |
+| `desktop-type-error-early` | same, with early diagnostics (`JUSTRUST_EARLY=1`, rust-analyzer daemon started untimed). Read the `1st err` column |
 | `desktop-noop-test` | no edit: fixed overhead of `test` (should compile 0 units) |
 | `desktop-upstream-body` | body edit in `jcode-desktop-ui-core` (a dependency), UI tests |
 | `desktop-upstream-sig` | new pub fn in `jcode-desktop-ui-core`, `check`: metadata change cascade |
@@ -153,3 +154,5 @@ These measure one mechanism each. Keep using them for that purpose:
 - `feature-switch.sh`: dependency rebuilds when switching packages.
 - `split-*.sh`: crate split before/after.
 - `cranelift/`: cranelift backend comparison.
+- `early_accuracy.py`: early diagnostics vs rustc (clean-sweep false positives, mutation corpus). Untimed.
+- `ra_spike.py`: raw rust-analyzer LSP latency on the Desktop snapshot.
