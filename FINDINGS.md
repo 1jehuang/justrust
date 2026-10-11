@@ -2259,7 +2259,7 @@ host-independent, which is the vendored C toolchain (`docs/c-sysroot.md`,
 layers 1 and 2). Not measured yet: a real network store (S3 over the
 internet), and other seed sets than the Desktop lockfile.
 
-## 28. jr-rustc stage 2 vs stage 1 (2026-10-11)
+## 31. jr-rustc stage 2 vs stage 1 (2026-10-11)
 
 Same release config (thin LTO, cgu 1, no PGO/BOLT, frame pointers off),
 compiler compiled by stage 0 (1.100 beta) vs by our own stage 1 (as the
