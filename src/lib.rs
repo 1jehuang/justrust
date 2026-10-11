@@ -48,6 +48,7 @@ mod split_apply;
 mod split_index;
 mod status;
 mod summary;
+mod test_pool;
 mod test_runner;
 mod toolchain;
 

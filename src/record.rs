@@ -362,10 +362,38 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     };
     // Per-test durations (see `test_runner`). Runner config is not part of
     // any fingerprint, so artifacts stay shared with unrecorded builds.
-    if crate::test_runner::wanted(&meta.subcommand, &cargo_args)
-        && let Some(c) = crate::test_runner::cargo_config(&me)
-    {
-        cargo_args = insert_config(&cargo_args, &c);
+    // In agent mode the runner hands binaries to a pool that runs them in
+    // parallel (`test_pool`); the pool prints through the same tee.
+    let lines: Arc<Mutex<Vec<OutputLine>>> = Arc::default();
+    let is_test = matches!(meta.subcommand.as_str(), "test" | "t" | "bench" | "nextest");
+    let filter = |stdout: bool| {
+        opts.agent.then(|| {
+            Mutex::new(agent_output::Filter::new(
+                stdout,
+                is_test,
+                opts.max_warnings,
+            ))
+        })
+    };
+    let f_out = Arc::new(filter(true));
+    let f_err = Arc::new(filter(false));
+    let out_lock: Arc<Mutex<()>> = Arc::default();
+    let mut pool = None;
+    if crate::test_runner::wanted(&meta.subcommand, &cargo_args) {
+        if matches!(meta.subcommand.as_str(), "test" | "t") && crate::test_pool::enabled(opts.agent)
+        {
+            let sink = Arc::new(PoolSink {
+                lines: lines.clone(),
+                f_out: f_out.clone(),
+                f_err: f_err.clone(),
+                out_lock: out_lock.clone(),
+            });
+            pool = crate::test_pool::Pool::start(&run_dir, Path::new(&meta.cwd), &me, sink);
+        }
+        let arg = pool.as_ref().map(|p| p.runner_arg());
+        if let Some(c) = crate::test_runner::cargo_config(&me, arg.as_deref()) {
+            cargo_args = insert_config(&cargo_args, &c);
+        }
     }
 
     let mut cmd = Command::new(&real_cargo);
@@ -421,26 +449,27 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     CHILD_PID.store(pid, Ordering::SeqCst);
     install_signal_forwarding();
 
-    let lines: Arc<Mutex<Vec<OutputLine>>> = Arc::default();
     let out = child.stdout.take().context("stdout")?;
     let err = crate::live::SniffReader::new(
         child.stderr.take().context("stderr")?,
         crate::live::Sniffer::new(Some(&run_dir), strip_progress),
     );
-    let is_test = matches!(meta.subcommand.as_str(), "test" | "t" | "bench" | "nextest");
-    let filter = |stdout: bool| {
-        opts.agent.then(|| {
-            Mutex::new(agent_output::Filter::new(
-                stdout,
-                is_test,
-                opts.max_warnings,
-            ))
-        })
-    };
-    let f_out = Arc::new(filter(true));
-    let f_err = Arc::new(filter(false));
-    let t_out = spawn_tee(out, std::io::stdout(), "o", lines.clone(), f_out.clone());
-    let t_err = spawn_tee(err, std::io::stderr(), "e", lines.clone(), f_err.clone());
+    let t_out = spawn_tee(
+        out,
+        std::io::stdout(),
+        "o",
+        lines.clone(),
+        f_out.clone(),
+        out_lock.clone(),
+    );
+    let t_err = spawn_tee(
+        err,
+        std::io::stderr(),
+        "e",
+        lines.clone(),
+        f_err.clone(),
+        out_lock.clone(),
+    );
 
     let done: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
     let sampler = {
@@ -448,7 +477,17 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         std::thread::spawn(move || sample_loop(pid, &done))
     };
 
-    let (code, cpu_user, cpu_sys) = wait_child(pid);
+    let (mut code, mut cpu_user, cpu_sys) = wait_child(pid);
+    let _ = t_out.join();
+    let _ = t_err.join();
+    if let Some(p) = pool {
+        // Binaries cargo handed over may still be running.
+        let o = p.finish();
+        cpu_user += o.cpu_secs;
+        if o.any_failed && code == 0 {
+            code = 101;
+        }
+    }
     let end = paths::now();
     let sched = scope.map(crate::sched::Scope::finish);
     CHILD_PID.store(0, Ordering::SeqCst);
@@ -457,8 +496,6 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         *lock.lock().unwrap() = true;
         cv.notify_all();
     }
-    let _ = t_out.join();
-    let _ = t_err.join();
     build_done.store(true, Ordering::SeqCst);
     // A short grace period only: the daemon answers in about 0.1 s, and a
     // slow or stuck one must not hold up the build's exit.
@@ -605,10 +642,11 @@ fn spawn_tee<R: Read + Send + 'static, W: Write + Send + 'static>(
     stream: &'static str,
     lines: Arc<Mutex<Vec<OutputLine>>>,
     filter: Arc<Option<Mutex<agent_output::Filter>>>,
+    out_lock: Arc<Mutex<()>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         if let Some(filter) = filter.as_ref() {
-            return tee_filtered(src, dst, stream, &lines, filter);
+            return tee_filtered(src, dst, stream, &lines, filter, &out_lock);
         }
         let mut buf = vec![0u8; 64 * 1024];
         let mut pending: Vec<u8> = Vec::new();
@@ -619,8 +657,11 @@ fn spawn_tee<R: Read + Send + 'static, W: Write + Send + 'static>(
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             };
-            let _ = dst.write_all(&buf[..n]);
-            let _ = dst.flush();
+            {
+                let _g = out_lock.lock();
+                let _ = dst.write_all(&buf[..n]);
+                let _ = dst.flush();
+            }
             let t = paths::now();
             pending.extend_from_slice(&buf[..n]);
             while let Some(pos) = pending.iter().position(|&b| b == b'\n') {
@@ -642,6 +683,7 @@ fn tee_filtered<R: Read, W: Write>(
     stream: &str,
     lines: &Mutex<Vec<OutputLine>>,
     filter: &Mutex<agent_output::Filter>,
+    out_lock: &Mutex<()>,
 ) {
     use std::io::BufRead;
     let mut reader = std::io::BufReader::new(src);
@@ -657,12 +699,50 @@ fn tee_filtered<R: Read, W: Write>(
         let body = raw.strip_suffix(b"\n").unwrap_or(&raw);
         let body = body.strip_suffix(b"\r").unwrap_or(body);
         let text = strip_ansi(&String::from_utf8_lossy(body));
+        let _g = out_lock.lock();
         if filter.lock().unwrap().keep(&text) {
             let _ = dst.write_all(text.as_bytes());
             let _ = dst.write_all(b"\n");
             let _ = dst.flush();
         }
         push_line(lines, paths::now(), stream, body);
+    }
+}
+
+/// Where the test pool prints: the same filters, saved output, and terminal
+/// as cargo's own output, one binary's block at a time.
+struct PoolSink {
+    lines: Arc<Mutex<Vec<OutputLine>>>,
+    f_out: Arc<Option<Mutex<agent_output::Filter>>>,
+    f_err: Arc<Option<Mutex<agent_output::Filter>>>,
+    out_lock: Arc<Mutex<()>>,
+}
+
+impl crate::test_pool::Sink for PoolSink {
+    fn emit_block(&self, block: &[(f64, &'static str, Vec<u8>)]) {
+        let _g = self.out_lock.lock();
+        let (mut out, mut err) = (std::io::stdout().lock(), std::io::stderr().lock());
+        for (t, stream, raw) in block {
+            let to_stdout = *stream == "o";
+            let filter = if to_stdout { &self.f_out } else { &self.f_err };
+            let dst: &mut dyn Write = if to_stdout { &mut out } else { &mut err };
+            match filter.as_ref() {
+                Some(f) => {
+                    let text = strip_ansi(&String::from_utf8_lossy(raw));
+                    if f.lock().unwrap().keep(&text) {
+                        let _ = dst.write_all(text.as_bytes());
+                        let _ = dst.write_all(b"\n");
+                    }
+                }
+                None => {
+                    let _ = dst.write_all(raw);
+                    let _ = dst.write_all(b"\n");
+                }
+            }
+            push_line(&self.lines, *t, stream, raw);
+        }
+        let _ = out.flush();
+        let _ = err.flush();
     }
 }
 
@@ -773,7 +853,11 @@ fn sample_loop(
             .into_iter()
             .filter_map(procfs::read_stat)
             .collect();
-        let tree = tree_of(root, &all);
+        let mut tree = tree_of(root, &all);
+        // Test binaries the pool runs are our children, not cargo's.
+        for p in crate::test_pool::live_pids() {
+            tree.extend(tree_of(p, &all));
+        }
         let mut tree_ticks = 0;
         let mut rss = 0u64;
         let mut rustc_procs = 0;

@@ -1,0 +1,1251 @@
+//! Test binaries in parallel, likely failures first.
+//!
+//! `cargo test` runs its test binaries one after another and waits for each.
+//! A workspace with eleven binaries (Jcode Desktop) spends ~5 s per run on
+//! small binaries queued behind each other, `jcode -p jcode-sdk` 10-12 s
+//! (FINDINGS section 28).
+//!
+//! In agent mode the recorder starts a pool on a unix socket in the run
+//! directory, and the test runner (`justrust __test-runner --pool=<sock>`)
+//! hands a libtest binary to it instead of running it: it sends the program,
+//! arguments, working directory and environment, gets an ack, and exits 0 so
+//! cargo moves on to the next binary at once. The pool runs up to
+//! `JUSTRUST_TEST_JOBS` binaries at a time (binaries that failed last time
+//! first, then the longest by recorded wall), captures each one's output,
+//! and prints it as one contiguous block when that binary finishes, so
+//! failures show up as soon as they are known rather than after every
+//! earlier binary. The recorder waits for the pool before it exits and turns
+//! any failed binary into a failing exit code.
+//!
+//! Within a binary, with recorded history, the selected tests run as up to
+//! six processes side by side: tests that failed last time plus tests in
+//! modules whose files changed since the binary last ran (what the agent
+//! is waiting on, reported as soon as they finish), each test whose
+//! recorded time alone would set the binary's wall time, and the rest. All
+//! use exact names from the binary's own `--list` with the user's filters
+//! applied, so together they run exactly the requested tests; libtest's
+//! "filtered out" counts are adjusted to match one plain run.
+//!
+//! Faithfulness: a process that fails while other test processes ran waits
+//! until nothing else runs, then its failed tests are rerun alone by exact
+//! name. If they fail again, the failure is reported as it first happened.
+//! If they pass (or the process crashed), the process is run again alone
+//! and that result is reported, with a note. Anything unexpected (unknown
+//! libtest flags, `--nocapture`, one test thread, doc tests, benchmarks, no
+//! socket) runs the binary the way cargo would. `JUSTRUST_TEST_PARALLEL=0`
+//! turns the pool off, `JUSTRUST_TEST_SPLIT=0` only the per-binary split.
+
+use crate::paths;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
+
+const SOCK: &str = "tests.sock";
+/// Prefix of the runner argument that names the pool socket.
+pub const POOL_ARG: &str = "--pool=";
+
+/// Where the pool prints and records a line (implemented by the recorder).
+pub trait Sink: Send + Sync {
+    /// Print and record lines as one uninterrupted block. `stream` is "o"
+    /// (stdout) or "e" (stderr).
+    fn emit_block(&self, lines: &[(f64, &'static str, Vec<u8>)]);
+}
+
+/// Whether to run test binaries through the pool for this run.
+pub fn enabled(agent: bool) -> bool {
+    match std::env::var("JUSTRUST_TEST_PARALLEL").as_deref() {
+        Ok("0") | Ok("off") | Ok("false") => false,
+        Ok("1") | Ok("on") | Ok("true") => true,
+        _ => agent,
+    }
+}
+
+fn max_jobs() -> usize {
+    std::env::var("JUSTRUST_TEST_JOBS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or_else(|| (crate::procfs::ncpu() / 4).clamp(2, 8))
+}
+
+/// One binary handed over by the runner.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Request {
+    pub bin: String,
+    pub args: Vec<String>,
+    pub cwd: String,
+    pub env: Vec<(String, String)>,
+}
+
+// ------------------------------------------------------------------ runner
+
+/// Whether the user's libtest arguments allow running the binary in the
+/// pool: plain runs only, never when output is wanted live or tests must not
+/// overlap.
+pub fn poolable_args(user: &[String]) -> bool {
+    let env_set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    if env_set("RUST_TEST_NOCAPTURE") || std::env::var("RUST_TEST_THREADS").as_deref() == Ok("1") {
+        return false;
+    }
+    let mut prev_threads = false;
+    for a in user {
+        if prev_threads && a == "1" {
+            return false;
+        }
+        prev_threads = a == "--test-threads";
+        if matches!(
+            a.as_str(),
+            "--nocapture"
+                | "--no-capture"
+                | "--test-threads=1"
+                | "--list"
+                | "--bench"
+                | "-h"
+                | "--help"
+        ) || a.starts_with("--format")
+            || a.starts_with("--logfile")
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Hand `bin args` to the pool at `sock`. True when the pool took it (the
+/// caller then exits 0), false to run it here.
+pub fn submit(sock: &Path, bin: &str, args: &[String]) -> bool {
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    let mut env = Vec::new();
+    for (k, v) in std::env::vars_os() {
+        match (k.into_string(), v.into_string()) {
+            (Ok(k), Ok(v)) => env.push((k, v)),
+            _ => return false,
+        }
+    }
+    let req = Request {
+        bin: bin.to_owned(),
+        args: args.to_vec(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        env,
+    };
+    let Ok(mut s) = UnixStream::connect(sock) else {
+        return false;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+    let Ok(mut line) = serde_json::to_string(&req) else {
+        return false;
+    };
+    line.push('\n');
+    if s.write_all(line.as_bytes()).is_err() {
+        return false;
+    }
+    let mut ack = String::new();
+    BufReader::new(s).read_line(&mut ack).is_ok() && ack.trim() == "ok"
+}
+
+// ------------------------------------------------------------------ pool
+
+struct Job {
+    id: usize,
+    req: Request,
+    stem: String,
+    priority: (bool, f64),
+    arrived: usize,
+}
+
+#[derive(Default)]
+struct State {
+    queue: Vec<Job>,
+    running: HashSet<usize>,
+    overlapped: HashSet<usize>,
+    next_id: usize,
+    results: Vec<Finished>,
+    cpu_secs: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TestOutcome {
+    name: String,
+    passed: bool,
+    secs: Option<f64>,
+}
+
+struct Finished {
+    bin: String,
+    stem: String,
+    exit: i32,
+    start: f64,
+    end: f64,
+    lines: Vec<(f64, &'static str, Vec<u8>)>,
+    /// Every `test x ... ok|FAILED [<1.2s>]` line.
+    outcomes: Vec<TestOutcome>,
+    /// Tests this process left out only because justrust split the binary:
+    /// subtracted from libtest's "filtered out" so totals match one run.
+    hide_filtered: Option<u64>,
+}
+
+/// One process of a binary: its libtest args.
+struct Group {
+    args: Vec<String>,
+    hide_filtered: Option<u64>,
+}
+
+struct Inner {
+    state: Mutex<State>,
+    cv: Condvar,
+    sink: Arc<dyn Sink>,
+    me: String,
+    jobs: usize,
+    history: Mutex<History>,
+    gate: Gate,
+}
+
+pub struct Pool {
+    sock: PathBuf,
+    inner: Arc<Inner>,
+    accept: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Result of the whole pool, for the recorder.
+pub struct Outcome {
+    pub any_failed: bool,
+    pub cpu_secs: f64,
+}
+
+static LIVE_PIDS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
+/// Test processes the pool is running, for the recorder's sampler (they are
+/// children of the recorder, not of cargo).
+pub fn live_pids() -> Vec<i32> {
+    LIVE_PIDS.lock().map(|v| v.clone()).unwrap_or_default()
+}
+
+impl Pool {
+    /// Listen in `run_dir`. `None` when the socket cannot be made (fail open:
+    /// binaries then run under cargo as usual).
+    pub fn start(run_dir: &Path, cwd: &Path, me: &Path, sink: Arc<dyn Sink>) -> Option<Pool> {
+        let sock = run_dir.join(SOCK);
+        // sockaddr_un holds 108 bytes.
+        if sock.as_os_str().len() >= 100 {
+            return None;
+        }
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).ok()?;
+        let inner = Arc::new(Inner {
+            state: Mutex::default(),
+            cv: Condvar::new(),
+            sink,
+            me: me.to_string_lossy().into_owned(),
+            jobs: max_jobs(),
+            history: Mutex::new(History::load(cwd)),
+            gate: Gate::default(),
+        });
+        let acc = inner.clone();
+        let accept = std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(conn) = conn else { continue };
+                // An empty connection from `finish` stops the loop.
+                if !accept_one(&acc, conn) {
+                    break;
+                }
+            }
+        });
+        Some(Pool {
+            sock,
+            inner,
+            accept: Some(accept),
+        })
+    }
+
+    /// The runner argument that points at this pool.
+    pub fn runner_arg(&self) -> String {
+        format!("{POOL_ARG}{}", self.sock.display())
+    }
+
+    /// After cargo exited: stop accepting, wait for every binary, confirm
+    /// failures that may come from running in parallel, save history.
+    pub fn finish(mut self) -> Outcome {
+        // Wake the accept loop with an empty connection.
+        let _ = UnixStream::connect(&self.sock);
+        if let Some(a) = self.accept.take() {
+            let _ = a.join();
+        }
+        let _ = std::fs::remove_file(&self.sock);
+        let inner = &self.inner;
+        let mut st = inner.state.lock().unwrap();
+        while !st.queue.is_empty() || !st.running.is_empty() {
+            st = inner.cv.wait(st).unwrap();
+        }
+        let any_failed = st.results.iter().any(|r| r.exit != 0);
+        let mut h = inner.history.lock().unwrap();
+        h.update(&st.results);
+        h.save();
+        Outcome {
+            any_failed,
+            cpu_secs: st.cpu_secs,
+        }
+    }
+}
+
+fn accept_one(inner: &Arc<Inner>, mut conn: UnixStream) -> bool {
+    let _ = conn.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut line = String::new();
+    let Ok(n) = BufReader::new(&conn).read_line(&mut line) else {
+        return true;
+    };
+    if n == 0 {
+        return false;
+    }
+    let Ok(req) = serde_json::from_str::<Request>(&line) else {
+        let _ = conn.write_all(b"no\n");
+        return true;
+    };
+    let stem = stem_of(&req.bin);
+    let priority = inner.history.lock().unwrap().priority(&stem);
+    {
+        let mut st = inner.state.lock().unwrap();
+        let id = st.next_id;
+        st.next_id += 1;
+        st.queue.push(Job {
+            id,
+            req,
+            stem,
+            priority,
+            arrived: id,
+        });
+    }
+    // Ack only once queued, so `finish` cannot miss the job.
+    let _ = conn.write_all(b"ok\n");
+    dispatch(inner);
+    true
+}
+
+/// Start queued jobs while there is room: failed last time first, then the
+/// longest recorded wall, then arrival order.
+fn dispatch(inner: &Arc<Inner>) {
+    let mut st = inner.state.lock().unwrap();
+    while st.running.len() < inner.jobs && !st.queue.is_empty() {
+        let best = (0..st.queue.len())
+            .max_by(|&a, &b| {
+                let (ja, jb) = (&st.queue[a], &st.queue[b]);
+                ja.priority
+                    .0
+                    .cmp(&jb.priority.0)
+                    .then(ja.priority.1.total_cmp(&jb.priority.1))
+                    .then(jb.arrived.cmp(&ja.arrived))
+            })
+            .unwrap();
+        let job = st.queue.remove(best);
+        if !st.running.is_empty() {
+            let running: Vec<usize> = st.running.iter().copied().collect();
+            st.overlapped.extend(running);
+            st.overlapped.insert(job.id);
+        }
+        st.running.insert(job.id);
+        let inner = inner.clone();
+        std::thread::spawn(move || run_job(&inner, job));
+    }
+}
+
+fn run_job(inner: &Arc<Inner>, job: Job) {
+    let groups = plan(inner, &job).unwrap_or_else(|| {
+        vec![Group {
+            args: job.req.args.clone(),
+            hide_filtered: None,
+        }]
+    });
+    if groups.len() > 1 {
+        // Processes of one binary overlap each other.
+        inner.state.lock().unwrap().overlapped.insert(job.id);
+    }
+    std::thread::scope(|s| {
+        for g in &groups {
+            let (inner, job) = (&**inner, &job);
+            s.spawn(move || {
+                let mut fin = {
+                    let _shared = inner.gate.shared();
+                    execute(inner, &job.req, &g.args, &job.stem)
+                };
+                fin.hide_filtered = g.hide_filtered;
+                let overlapped = inner.state.lock().unwrap().overlapped.contains(&job.id);
+                if fin.exit != 0 && overlapped {
+                    // It ran next to other test processes: confirm alone.
+                    fin = confirm_alone(inner, &job.req, &job.stem, &g.args, fin);
+                }
+                report(inner, &fin);
+                inner.state.lock().unwrap().results.push(fin);
+            });
+        }
+    });
+    inner.state.lock().unwrap().running.remove(&job.id);
+    dispatch(inner);
+    inner.cv.notify_all();
+}
+
+/// Run one process of a test binary, capturing its output with timestamps.
+fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finished {
+    let start = paths::now();
+    let mut cmd = Command::new(&req.bin);
+    cmd.args(args)
+        .current_dir(&req.cwd)
+        .env_clear()
+        .envs(req.env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: prctl is async-signal-safe. The test process dies with the
+    // recorder (Ctrl-C, a killed agent) instead of running on unseen.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("justrust: failed to run {}: {e}", req.bin);
+            return Finished {
+                bin: req.bin.clone(),
+                stem: stem.to_owned(),
+                exit: 127,
+                start,
+                end: paths::now(),
+                lines: vec![(start, "e", msg.into_bytes())],
+                outcomes: Vec::new(),
+                hide_filtered: None,
+            };
+        }
+    };
+    let pid = child.id() as i32;
+    LIVE_PIDS.lock().unwrap().push(pid);
+    let read = |r: Box<dyn Read + Send>, s: &'static str| {
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let mut r = BufReader::new(r);
+            let mut buf = Vec::new();
+            loop {
+                buf.clear();
+                match r.read_until(b'\n', &mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let line = buf.strip_suffix(b"\n").unwrap_or(&buf).to_vec();
+                out.push((paths::now(), s, line));
+            }
+            out
+        })
+    };
+    let to = read(Box::new(child.stdout.take().unwrap()), "o");
+    let te = read(Box::new(child.stderr.take().unwrap()), "e");
+    let (exit, cpu) = wait4(pid);
+    let mut lines = to.join().unwrap_or_default();
+    lines.extend(te.join().unwrap_or_default());
+    lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+    LIVE_PIDS.lock().unwrap().retain(|&p| p != pid);
+    inner.state.lock().unwrap().cpu_secs += cpu;
+    let outcomes = lines
+        .iter()
+        .filter_map(|(_, _, l)| test_outcome(&String::from_utf8_lossy(l)))
+        .collect();
+    Finished {
+        bin: req.bin.clone(),
+        stem: stem.to_owned(),
+        exit,
+        start,
+        end: paths::now(),
+        lines,
+        outcomes,
+        hide_filtered: None,
+    }
+}
+
+/// Exit code (signals as 128+n, like a shell) and CPU seconds of `pid`.
+fn wait4(pid: i32) -> (i32, f64) {
+    let mut status = 0;
+    // SAFETY: rusage is plain data written by wait4.
+    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+    loop {
+        // SAFETY: pointers to valid local storage.
+        let r = unsafe { libc::wait4(pid, &mut status, 0, &mut ru) };
+        if r == pid {
+            break;
+        }
+        if r < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return (1, 0.0);
+        }
+    }
+    let code = if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else if libc::WIFSIGNALED(status) {
+        128 + libc::WTERMSIG(status)
+    } else {
+        1
+    };
+    let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+    (code, tv(ru.ru_utime) + tv(ru.ru_stime))
+}
+
+/// Print one finished process as a block: a `Running` header (the summary
+/// attributes the lines below it to the binary), its output, and for a
+/// failure the error line cargo would have printed.
+fn report(inner: &Inner, f: &Finished) {
+    let header = format!(
+        "     Running `{} {} {}`",
+        inner.me,
+        crate::test_runner::SUBCOMMAND,
+        f.bin
+    );
+    let mut block = vec![(f.start, "e", header.into_bytes())];
+    for (t, s, l) in &f.lines {
+        let l = match f.hide_filtered {
+            Some(n) => adjust_filtered(l, n),
+            None => l.clone(),
+        };
+        block.push((*t, *s, l));
+    }
+    if f.exit != 0 {
+        let msg = format!(
+            "error: test failed: {} exited with code {} (justrust ran test binaries in parallel; JUSTRUST_TEST_PARALLEL=0 runs them one at a time)",
+            f.stem, f.exit
+        );
+        block.push((f.end, "e", msg.into_bytes()));
+    }
+    inner.sink.emit_block(&block);
+}
+
+/// Subtract `n` from the "N filtered out" count of a `test result:` line.
+fn adjust_filtered(line: &[u8], n: u64) -> Vec<u8> {
+    let text = String::from_utf8_lossy(line);
+    if !text.trim_start().starts_with("test result: ") {
+        return line.to_vec();
+    }
+    let Some(end) = text.find(" filtered out") else {
+        return line.to_vec();
+    };
+    let start = text[..end].rfind(' ').map_or(0, |i| i + 1);
+    let Ok(v) = text[start..end].parse::<u64>() else {
+        return line.to_vec();
+    };
+    format!("{}{}{}", &text[..start], v.saturating_sub(n), &text[end..]).into_bytes()
+}
+
+/// A process failed while other test processes ran. With no other test
+/// process running, rerun its failed tests by exact name: if they fail
+/// again, the first result stands (reported right away). If they pass, or
+/// the process failed without naming a test, run the same process alone and
+/// report that, with a note.
+fn confirm_alone(
+    inner: &Inner,
+    req: &Request,
+    stem: &str,
+    args: &[String],
+    first: Finished,
+) -> Finished {
+    let _alone = inner.gate.exclusive();
+    let failed: Vec<&str> = first
+        .outcomes
+        .iter()
+        .filter(|o| !o.passed)
+        .map(|o| o.name.as_str())
+        .collect();
+    if !failed.is_empty()
+        && let Some(mut again) = strip_filters(args)
+    {
+        again.push("--exact".into());
+        again.extend(failed.iter().map(|s| s.to_string()));
+        if execute(inner, req, &again, stem).exit != 0 {
+            return first;
+        }
+    }
+    let mut alone = execute(inner, req, args, stem);
+    alone.hide_filtered = first.hide_filtered;
+    if alone.exit == 0 {
+        let what = if failed.is_empty() {
+            format!("exited with code {}", first.exit)
+        } else {
+            format!("failed ({})", failed.join(", "))
+        };
+        let note = format!(
+            "justrust: {stem} {what} while other test processes ran in parallel, and passed when run alone; reporting the run alone"
+        );
+        alone.lines.push((paths::now(), "e", note.into_bytes()));
+    }
+    alone
+}
+
+/// Lets test processes run together (shared) or one alone (exclusive). A
+/// waiting exclusive holder keeps new shared holders out.
+#[derive(Default)]
+struct Gate {
+    state: Mutex<(usize, usize, bool)>,
+    cv: Condvar,
+}
+
+struct GateGuard<'a> {
+    gate: &'a Gate,
+    exclusive: bool,
+}
+
+impl Gate {
+    fn shared(&self) -> GateGuard<'_> {
+        let mut st = self.state.lock().unwrap();
+        // (active shared, waiting exclusive, exclusive held)
+        while st.1 > 0 || st.2 {
+            st = self.cv.wait(st).unwrap();
+        }
+        st.0 += 1;
+        GateGuard {
+            gate: self,
+            exclusive: false,
+        }
+    }
+
+    fn exclusive(&self) -> GateGuard<'_> {
+        let mut st = self.state.lock().unwrap();
+        st.1 += 1;
+        while st.0 > 0 || st.2 {
+            st = self.cv.wait(st).unwrap();
+        }
+        st.1 -= 1;
+        st.2 = true;
+        GateGuard {
+            gate: self,
+            exclusive: true,
+        }
+    }
+}
+
+impl Drop for GateGuard<'_> {
+    fn drop(&mut self) {
+        let mut st = self.gate.state.lock().unwrap();
+        if self.exclusive {
+            st.2 = false;
+        } else {
+            st.0 -= 1;
+        }
+        self.gate.cv.notify_all();
+    }
+}
+
+/// `test name ... ok|FAILED [<1.2s>]`.
+fn test_outcome(line: &str) -> Option<TestOutcome> {
+    let rest = line.trim().strip_prefix("test ")?;
+    let (name, status) = rest.rsplit_once(" ... ")?;
+    let (status, time) = match status.split_once(" <") {
+        Some((s, t)) => (s, t.strip_suffix("s>").and_then(|t| t.parse().ok())),
+        None => (status, None),
+    };
+    let passed = match status {
+        "ok" => true,
+        "FAILED" => false,
+        _ => return None,
+    };
+    Some(TestOutcome {
+        name: name.to_owned(),
+        passed,
+        secs: time,
+    })
+}
+
+/// History key of a test binary: its file name, `x-0123456789abcdef`.
+fn stem_of(bin: &str) -> String {
+    // Cargo's hash is stable across edits and tells apart a package's lib
+    // and bin test binaries (both named after the package).
+    bin.rsplit('/').next().unwrap_or(bin).to_owned()
+}
+
+// ------------------------------------------------------------------ split
+
+/// libtest flags that take a value.
+const VALUE_FLAGS: &[&str] = &[
+    "--test-threads",
+    "--color",
+    "--format",
+    "-Z",
+    "--logfile",
+    "--shuffle-seed",
+    "--skip",
+];
+/// libtest flags without a value that keep their meaning when we add exact
+/// test names.
+const PLAIN_FLAGS: &[&str] = &[
+    "-q",
+    "--quiet",
+    "--ignored",
+    "--include-ignored",
+    "--show-output",
+    "--report-time",
+    "--ensure-time",
+    "--exact",
+    "--test",
+];
+
+/// The user's args with filters (`--skip X` and positional) and `--exact`
+/// removed: the base for a run by exact test names. `None` for flags we do
+/// not know.
+fn strip_filters(args: &[String]) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--skip" {
+            i += 2;
+            continue;
+        }
+        if a.starts_with("--skip=") || a == "--exact" {
+            i += 1;
+            continue;
+        }
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            out.push(a.clone());
+            out.push(args.get(i + 1)?.clone());
+            i += 2;
+            continue;
+        }
+        if a.starts_with('-') {
+            let known = PLAIN_FLAGS.contains(&a.as_str())
+                || VALUE_FLAGS.iter().any(|f| a.starts_with(&format!("{f}=")));
+            if !known {
+                return None;
+            }
+            out.push(a.clone());
+        }
+        // Positional: a filter, dropped.
+        i += 1;
+    }
+    Some(out)
+}
+
+/// The user's selection args only (filters, skips, exact, ignored), for `--list`.
+fn list_args(args: &[String]) -> Vec<String> {
+    let mut out = vec!["--list".to_owned()];
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--skip" {
+            out.push(a.clone());
+            if let Some(v) = args.get(i + 1) {
+                out.push(v.clone());
+            }
+            i += 2;
+            continue;
+        }
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            i += 2;
+            continue;
+        }
+        if !a.starts_with('-')
+            || a.starts_with("--skip=")
+            || matches!(a.as_str(), "--exact" | "--ignored" | "--include-ignored")
+        {
+            out.push(a.clone());
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Module path of a source file: `src/a/b.rs` and `src/a/b/mod.rs` -> `a::b`.
+/// Crate roots and non-`src` files give `None`.
+pub fn module_of(rel: &str) -> Option<String> {
+    let p = rel.strip_prefix("src/")?.strip_suffix(".rs")?;
+    let p = p.strip_suffix("/mod").unwrap_or(p);
+    if matches!(p, "lib" | "main") || p.contains("bin/") {
+        return None;
+    }
+    Some(p.replace('/', "::"))
+}
+
+/// Tests in `names` that live in one of `modules` (by path, or by the last
+/// segment when the full path matches nothing, for `#[path]` modules).
+pub fn affected<'a>(names: &'a [String], modules: &[String]) -> HashSet<&'a str> {
+    let mut out = HashSet::new();
+    for m in modules {
+        let full = |n: &str| n.starts_with(&format!("{m}::")) || n.contains(&format!("::{m}::"));
+        let before = out.len();
+        out.extend(names.iter().filter(|n| full(n)).map(String::as_str));
+        if out.len() == before
+            && let Some(last) = m.rsplit("::").next()
+            && last.len() >= 4
+            && !matches!(last, "tests" | "test" | "util" | "utils")
+        {
+            let seg =
+                |n: &str| n.starts_with(&format!("{last}::")) || n.contains(&format!("::{last}::"));
+            out.extend(names.iter().filter(|n| seg(n)).map(String::as_str));
+        }
+    }
+    out
+}
+
+/// Split one binary into processes, as exact-name lists drawn from its own
+/// `--list` with the user's filters applied, so together they run exactly
+/// the selected tests:
+///
+/// 1. tests that failed last time and tests in the edited modules (the ones
+///    an agent is waiting on), reported as soon as they finish,
+/// 2. each test whose recorded duration alone is a large part of the binary
+///    (it would set the binary's wall time and hold a libtest thread),
+/// 3. everything else.
+///
+/// `None` to run the binary whole, as cargo would.
+fn plan(inner: &Inner, job: &Job) -> Option<Vec<Group>> {
+    if std::env::var("JUSTRUST_TEST_SPLIT").as_deref() == Ok("0") {
+        return None;
+    }
+    let (failed, durations, last_run) = {
+        let h = inner.history.lock().unwrap();
+        (
+            h.failed(&job.stem),
+            h.durations(&job.stem),
+            h.last_run(&job.stem),
+        )
+    };
+    // Files of this package edited since this binary last ran.
+    let modules: Vec<String> = match (
+        last_run,
+        job.req.env.iter().find(|(k, _)| k == "CARGO_MANIFEST_DIR"),
+    ) {
+        (Some(since), Some((_, dir))) => edited_modules(Path::new(dir), since),
+        _ => Vec::new(),
+    };
+    let slow_candidates = durations.values().any(|&d| d >= SLOW_TEST_SECS);
+    if modules.is_empty() && failed.is_empty() && !slow_candidates {
+        return None;
+    }
+    let base = strip_filters(&job.req.args)?;
+    let out = Command::new(&job.req.bin)
+        .args(list_args(&job.req.args))
+        .current_dir(&job.req.cwd)
+        .env_clear()
+        .envs(job.req.env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let listing = String::from_utf8_lossy(&out.stdout);
+    // Benchmarks run once as tests in a test run; exact-name lists of tests
+    // would leave them out. Never drop a selected item: run whole.
+    if listing.lines().any(|l| l.ends_with(": benchmark")) {
+        return None;
+    }
+    let names: Vec<String> = listing
+        .lines()
+        .filter_map(|l| l.strip_suffix(": test"))
+        .map(str::to_owned)
+        .collect();
+    let groups = partition(&names, &modules, &failed, &durations);
+    if groups.len() < 2 {
+        return None;
+    }
+    Some(
+        groups
+            .into_iter()
+            .enumerate()
+            .map(|(i, g)| {
+                // The first process reports the user's own filtering, the
+                // others none: together, the counts of one plain run.
+                let hide = if i == 0 {
+                    (names.len() - g.len()) as u64
+                } else {
+                    u64::MAX
+                };
+                let mut args = base.clone();
+                args.push("--exact".into());
+                args.extend(g.into_iter().map(str::to_owned));
+                Group {
+                    args,
+                    hide_filtered: Some(hide),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Modules (`a::b`) of `.rs` files under `<pkg>/src` modified after `since`.
+fn edited_modules(pkg: &Path, since: f64) -> Vec<String> {
+    let src = pkg.join("src");
+    let mut out = Vec::new();
+    let mut stack = vec![src.clone()];
+    let mut seen = 0usize;
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > 20_000 {
+                return out;
+            }
+            let p = e.path();
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs")
+                && let Ok(m) = e.metadata()
+                && let Ok(mt) = m.modified()
+                && mt
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .is_ok_and(|d| d.as_secs_f64() > since)
+                && let Ok(rel) = p.strip_prefix(pkg)
+                && let Some(m) = module_of(&rel.to_string_lossy())
+            {
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
+/// A test this slow (recorded) is worth its own process.
+const SLOW_TEST_SECS: f64 = 1.0;
+/// At most this many slow tests get their own process per binary.
+const MAX_SLOW_SPLITS: usize = 4;
+
+/// The groups of [`plan`], first group first. Every name lands in exactly one.
+fn partition<'a>(
+    names: &'a [String],
+    modules: &[String],
+    failed: &HashSet<String>,
+    durations: &HashMap<String, f64>,
+) -> Vec<Vec<&'a str>> {
+    let mut first = affected(names, modules);
+    first.extend(
+        names
+            .iter()
+            .filter(|n| failed.contains(*n))
+            .map(String::as_str),
+    );
+    let total: f64 = names.iter().filter_map(|n| durations.get(n)).sum();
+    let mut slow: Vec<(&str, f64)> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !first.contains(n))
+        .filter_map(|n| durations.get(n).map(|&d| (n, d)))
+        .filter(|&(_, d)| d >= SLOW_TEST_SECS && d >= 0.25 * total)
+        .collect();
+    slow.sort_by(|a, b| b.1.total_cmp(&a.1));
+    slow.truncate(MAX_SLOW_SPLITS);
+    let slow_set: HashSet<&str> = slow.iter().map(|s| s.0).collect();
+    let mut first: Vec<&str> = first.into_iter().collect();
+    first.sort_unstable();
+    let rest: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !first.contains(n) && !slow_set.contains(n))
+        .collect();
+    let mut groups = Vec::new();
+    if !first.is_empty() {
+        groups.push(first);
+    }
+    groups.extend(slow.into_iter().map(|s| vec![s.0]));
+    if !rest.is_empty() {
+        groups.push(rest);
+    }
+    groups
+}
+
+// ------------------------------------------------------------------ history
+
+/// Per workspace: per binary, the last wall time, the tests that failed and
+/// have not passed since, and recorded per-test durations.
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct History {
+    #[serde(skip)]
+    path: Option<PathBuf>,
+    #[serde(default)]
+    binaries: HashMap<String, BinHistory>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+struct BinHistory {
+    wall: f64,
+    #[serde(default)]
+    failed: Vec<String>,
+    /// Only tests of at least `KEEP_TEST_SECS`, to keep the file small.
+    #[serde(default)]
+    slow: HashMap<String, f64>,
+    updated: f64,
+    /// Start of the last run: files modified after it are new edits.
+    #[serde(default)]
+    started: f64,
+}
+
+const KEEP_TEST_SECS: f64 = 0.2;
+
+impl History {
+    fn load(cwd: &Path) -> History {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(home) = paths::home() else {
+            return History::default();
+        };
+        let path = home
+            .join("tests")
+            .join(format!("{:016x}.json", fnv(cwd.as_os_str().as_bytes())));
+        let mut h: History = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        h.path = Some(path);
+        h
+    }
+
+    /// (failed last time, recorded wall). Unknown binaries sort as long.
+    fn priority(&self, stem: &str) -> (bool, f64) {
+        match self.binaries.get(stem) {
+            Some(b) => (!b.failed.is_empty(), b.wall),
+            None => (false, f64::MAX),
+        }
+    }
+
+    fn failed(&self, stem: &str) -> HashSet<String> {
+        self.binaries
+            .get(stem)
+            .map(|b| b.failed.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// When this binary's last recorded run started.
+    fn last_run(&self, stem: &str) -> Option<f64> {
+        self.binaries
+            .get(stem)
+            .map(|b| b.started)
+            .filter(|&t| t > 0.0)
+    }
+
+    fn durations(&self, stem: &str) -> HashMap<String, f64> {
+        self.binaries
+            .get(stem)
+            .map(|b| b.slow.clone())
+            .unwrap_or_default()
+    }
+
+    /// Fold in every process of one run.
+    fn update(&mut self, results: &[Finished]) {
+        let mut wall: HashMap<&str, (f64, f64)> = HashMap::new();
+        for f in results {
+            let w = wall.entry(&f.stem).or_insert((f.start, f.end));
+            w.0 = w.0.min(f.start);
+            w.1 = w.1.max(f.end);
+            let b = self.binaries.entry(f.stem.clone()).or_default();
+            for o in &f.outcomes {
+                b.failed.retain(|n| *n != o.name);
+                if !o.passed {
+                    b.failed.push(o.name.clone());
+                }
+                match o.secs {
+                    Some(s) if s >= KEEP_TEST_SECS => {
+                        b.slow.insert(o.name.clone(), s);
+                    }
+                    Some(_) => {
+                        b.slow.remove(&o.name);
+                    }
+                    None => {}
+                }
+            }
+            b.failed.sort();
+            b.failed.dedup();
+            b.updated = f.end;
+        }
+        for (stem, (s, e)) in wall {
+            if let Some(b) = self.binaries.get_mut(stem) {
+                // A filtered run is short; decay rather than forget the full wall.
+                b.wall = (e - s).max(b.wall * 0.5);
+                b.started = s;
+            }
+        }
+    }
+
+    fn save(&self) {
+        let Some(path) = &self.path else { return };
+        if let Some(d) = path.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+        if let Ok(b) = serde_json::to_vec(self)
+            && std::fs::write(&tmp, b).is_ok()
+        {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
+fn fnv(s: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn binaries_are_keyed_by_file_name() {
+        assert_eq!(
+            stem_of("/t/debug/deps/jcode_desktop_ui-945cf00a983ec5be"),
+            "jcode_desktop_ui-945cf00a983ec5be"
+        );
+    }
+
+    #[test]
+    fn maps_files_to_modules() {
+        assert_eq!(module_of("src/a/b.rs").as_deref(), Some("a::b"));
+        assert_eq!(module_of("src/a/b/mod.rs").as_deref(), Some("a::b"));
+        assert_eq!(module_of("src/lib.rs"), None);
+        assert_eq!(module_of("tests/x.rs"), None);
+    }
+
+    #[test]
+    fn finds_tests_in_edited_modules() {
+        let names = s(&[
+            "slots::tests::refresh",
+            "slots_extra::tests::x",
+            "panel::panel_login::tests::y",
+            "other::z",
+        ]);
+        let got = affected(&names, &s(&["slots"]));
+        assert_eq!(got, HashSet::from(["slots::tests::refresh"]));
+        // `#[path]`-style: file panel_login.rs, module panel::panel_login.
+        let got = affected(&names, &s(&["panel_login"]));
+        assert_eq!(got, HashSet::from(["panel::panel_login::tests::y"]));
+    }
+
+    #[test]
+    fn strips_filters_and_keeps_known_flags() {
+        assert_eq!(
+            strip_filters(&s(&[
+                "-Z",
+                "unstable-options",
+                "--report-time",
+                "fps",
+                "--skip",
+                "x",
+                "-q"
+            ])),
+            Some(s(&["-Z", "unstable-options", "--report-time", "-q"]))
+        );
+        assert_eq!(strip_filters(&s(&["--weird"])), None);
+        assert_eq!(
+            list_args(&s(&[
+                "-Z",
+                "unstable-options",
+                "fps",
+                "--skip",
+                "x",
+                "--exact"
+            ])),
+            s(&["--list", "fps", "--skip", "x", "--exact"])
+        );
+    }
+
+    #[test]
+    fn pool_refuses_live_output_and_one_thread() {
+        assert!(poolable_args(&s(&["fps"])));
+        assert!(!poolable_args(&s(&["--nocapture"])));
+        assert!(!poolable_args(&s(&["--test-threads", "1"])));
+        assert!(!poolable_args(&s(&["--test-threads=1"])));
+        assert!(poolable_args(&s(&["--test-threads", "4"])));
+        assert!(!poolable_args(&s(&["--list"])));
+        assert!(!poolable_args(&s(&[
+            "-Z",
+            "unstable-options",
+            "--format",
+            "json"
+        ])));
+    }
+
+    #[test]
+    fn parses_test_outcomes() {
+        let o = |n: &str, p, secs| TestOutcome {
+            name: n.into(),
+            passed: p,
+            secs,
+        };
+        assert_eq!(
+            test_outcome("test a::b ... ok <0.100s>"),
+            Some(o("a::b", true, Some(0.1)))
+        );
+        assert_eq!(test_outcome("test a ... FAILED"), Some(o("a", false, None)));
+        assert_eq!(test_outcome("test a ... ignored"), None);
+    }
+
+    fn fin(outcomes: &[(&str, bool, f64)]) -> Finished {
+        Finished {
+            bin: "/t/deps/b-0123456789abcdef".into(),
+            stem: "b".into(),
+            exit: 0,
+            start: 0.0,
+            end: 2.0,
+            lines: Vec::new(),
+            hide_filtered: None,
+            outcomes: outcomes
+                .iter()
+                .map(|&(n, p, s)| TestOutcome {
+                    name: n.into(),
+                    passed: p,
+                    secs: Some(s),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn history_tracks_failures_until_they_pass() {
+        let mut h = History::default();
+        h.update(&[fin(&[("x", false, 0.1), ("y", true, 3.0)])]);
+        assert_eq!(h.priority("b"), (true, 2.0));
+        assert!(h.failed("b").contains("x"));
+        assert_eq!(h.durations("b").get("y"), Some(&3.0));
+        h.update(&[fin(&[("y", true, 0.01)])]);
+        assert!(h.failed("b").contains("x"), "x did not run, still suspect");
+        assert!(h.durations("b").is_empty(), "y got fast");
+        h.update(&[fin(&[("x", true, 0.1), ("y", true, 0.1)])]);
+        assert!(h.failed("b").is_empty());
+        assert_eq!(h.priority("nope"), (false, f64::MAX));
+    }
+
+    #[test]
+    fn partition_runs_every_selected_test_exactly_once() {
+        let names = s(&["a::t1", "a::t2", "b::slow", "b::fast", "c::flaky", "c::x"]);
+        let failed = HashSet::from(["c::flaky".to_owned()]);
+        let dur = HashMap::from([("b::slow".to_owned(), 5.0), ("b::fast".to_owned(), 0.3)]);
+        let g = partition(&names, &s(&["a"]), &failed, &dur);
+        assert_eq!(
+            g,
+            vec![
+                vec!["a::t1", "a::t2", "c::flaky"],
+                vec!["b::slow"],
+                vec!["b::fast", "c::x"]
+            ]
+        );
+        let mut all: Vec<&str> = g.concat();
+        all.sort_unstable();
+        let mut want: Vec<&str> = names.iter().map(String::as_str).collect();
+        want.sort_unstable();
+        assert_eq!(all, want);
+        // Nothing known: one group (the caller then runs the binary whole).
+        assert_eq!(
+            partition(&names, &[], &HashSet::new(), &HashMap::new()).len(),
+            1
+        );
+    }
+}

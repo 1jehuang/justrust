@@ -21,12 +21,14 @@ use std::process::Command;
 pub const SUBCOMMAND: &str = "__test-runner";
 
 /// The `--config` value that routes test binaries through the runner.
-pub fn cargo_config(me: &Path) -> Option<String> {
+/// With `pool`, the runner hands binaries to that test pool (`test_pool`).
+pub fn cargo_config(me: &Path, pool: Option<&str>) -> Option<String> {
     let me = me.to_str()?;
     // TOML basic strings: escape backslashes and quotes.
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let pool = pool.map(|p| format!(",\"{}\"", esc(p))).unwrap_or_default();
     Some(format!(
-        "target.'cfg(all())'.runner=[\"{}\",\"{SUBCOMMAND}\"]",
+        "target.'cfg(all())'.runner=[\"{}\",\"{SUBCOMMAND}\"{pool}]",
         esc(me)
     ))
 }
@@ -133,12 +135,49 @@ fn is_libtest(bin: &Path) -> bool {
 
 /// `justrust __test-runner <binary> <args...>`: exec the binary.
 pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
-    let Some(bin) = args.next() else {
+    let mut bin = args.next();
+    let pool = bin
+        .as_ref()
+        .and_then(|b| b.to_str())
+        .and_then(|b| b.strip_prefix(crate::test_pool::POOL_ARG))
+        .map(std::path::PathBuf::from);
+    if pool.is_some() {
+        bin = args.next();
+    }
+    let Some(bin) = bin else {
         eprintln!("justrust: {SUBCOMMAND} needs a program");
         std::process::exit(2);
     };
     let user: Vec<OsString> = args.collect();
-    let extra = extra_args(&user, is_libtest(Path::new(&bin)));
+    let libtest = is_libtest(Path::new(&bin));
+    let extra = extra_args(&user, libtest);
+    // Hand plain libtest runs to the recorder's pool, which runs binaries in
+    // parallel. Anything else (or a pool that does not answer) runs here.
+    if let Some(sock) = &pool
+        && libtest
+        && let Some(user_s) = user
+            .iter()
+            .map(|a| a.to_str().map(str::to_owned))
+            .collect::<Option<Vec<String>>>()
+        && crate::test_pool::poolable_args(&user_s)
+        && let Some(bin_s) = bin.to_str()
+        // Cargo's test targets only. rustdoc also runs doc-test binaries
+        // through the runner, from a temp dir, and reads their result itself.
+        && bin_s.contains("/deps/")
+    {
+        let mut all: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
+        all.extend(user_s);
+        // SAFETY: single-threaded; the pool runs the binary with this env.
+        if !extra.is_empty() && std::env::var_os("RUSTC_BOOTSTRAP").is_none() {
+            unsafe { std::env::set_var("RUSTC_BOOTSTRAP", "justrust-report-time") };
+        }
+        if crate::test_pool::submit(sock, bin_s, &all) {
+            std::process::exit(0);
+        }
+        if std::env::var("RUSTC_BOOTSTRAP").as_deref() == Ok("justrust-report-time") {
+            unsafe { std::env::remove_var("RUSTC_BOOTSTRAP") };
+        }
+    }
     let mut cmd = Command::new(&bin);
     if !extra.is_empty() {
         // Any value other than "1" or a crate name only unlocks unstable
@@ -214,10 +253,16 @@ mod tests {
 
     #[test]
     fn config_is_valid_toml_for_cargo() {
-        let c = cargo_config(Path::new("/a b/jr\"x")).unwrap();
+        let c = cargo_config(Path::new("/a b/jr\"x"), None).unwrap();
         let v: toml::Table =
             toml::from_str(&c.replacen("target.'cfg(all())'.runner", "r", 1)).expect("toml");
         assert_eq!(v["r"].as_array().unwrap()[0].as_str(), Some("/a b/jr\"x"));
+        let c = cargo_config(Path::new("/jr"), Some("--pool=/r/tests.sock")).unwrap();
+        let v: toml::Table =
+            toml::from_str(&c.replacen("target.'cfg(all())'.runner", "r", 1)).expect("toml");
+        let r = v["r"].as_array().unwrap();
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[2].as_str(), Some("--pool=/r/tests.sock"));
     }
 
     #[test]

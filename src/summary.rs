@@ -589,10 +589,23 @@ pub fn build(
     // Test binaries: "Running <path>" until the next Running/Doc-tests or end.
     let mut tests = TestStats::default();
     let mut current: Option<TestBinary> = None;
-    let close = |b: Option<TestBinary>, t: f64, tests: &mut TestStats| {
+    // Test processes, for the test phase: binaries may run in parallel
+    // (`test_pool`), and one binary may run as several processes.
+    let mut test_spans: Vec<(f64, f64)> = Vec::new();
+    let mut close = |b: Option<TestBinary>, t: f64, tests: &mut TestStats| {
         if let Some(mut b) = b {
             b.wall = (rel(t) - b.start).max(0.0);
-            tests.binaries.push(b);
+            test_spans.push((b.start, b.start + b.wall));
+            if let Some(same) = tests.binaries.iter_mut().find(|x| x.name == b.name) {
+                let end = (same.start + same.wall).max(b.start + b.wall);
+                same.start = same.start.min(b.start);
+                same.wall = end - same.start;
+                same.passed += b.passed;
+                same.failed += b.failed;
+                same.filtered_out += b.filtered_out;
+            } else {
+                tests.binaries.push(b);
+            }
         }
     };
     let mut first_test_line: Option<f64> = None;
@@ -606,11 +619,15 @@ pub fn build(
                 let mut words = cmd.trim_end_matches('`').split_whitespace();
                 let mut exe = words.next()?;
                 // Through `test_runner`: `justrust __test-runner <binary> ...`.
-                if exe.ends_with("justrust") {
-                    if words.next()? != crate::test_runner::SUBCOMMAND {
+                // With `--pool=`, cargo handed the binary to the test pool,
+                // which prints its own header when the binary has run.
+                let mut peek = words.clone();
+                if peek.next() == Some(crate::test_runner::SUBCOMMAND) {
+                    words = peek;
+                    exe = words.next()?;
+                    if exe.starts_with(crate::test_pool::POOL_ARG) {
                         return None;
                     }
-                    exe = words.next()?;
                 }
                 let is_test =
                     exe.contains("/deps/") && !exe.ends_with("rustc") && !exe.contains("rustdoc");
@@ -621,7 +638,8 @@ pub fn build(
         });
         if let Some(rest) = running_test.or_else(|| text.strip_prefix("Doc-tests ")) {
             close(current.take(), l.t, &mut tests);
-            first_test_line.get_or_insert(rel(l.t));
+            let t = rel(l.t);
+            first_test_line = Some(first_test_line.map_or(t, |f: f64| f.min(t)));
             let name = rest
                 .rsplit('(')
                 .next()
@@ -693,11 +711,8 @@ pub fn build(
         first_unit.min(build_end)
     };
     let startup_lock = lock_wait.min(startup);
-    let test_run: f64 = tests
-        .binaries
-        .iter()
-        .map(|b| b.wall)
-        .sum::<f64>()
+    let test_run: f64 = share_time(&test_spans, 0.0, wall)
+        .1
         .min((wall - build_end).max(0.0))
         .max(0.0);
     let build_window = (build_end - startup).max(0.0);
