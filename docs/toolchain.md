@@ -61,7 +61,12 @@ Each phase ships only after a measured win on the reference loop
    holds a nightly with rust-src, cranelift, and rustc-dev. Projects opt in
    (`justrust.toml` or `[toolchain]`). One toolchain everywhere, so depcache
    keys never churn from distro updates.
-2. **Flag experiments on that toolchain**, each measured alone and combined:
+2. **Flag experiments on that toolchain.** *Done 2026-10-11, none ship*
+   (FINDINGS 32: every flag within noise on the reference loop).
+   `-Zcache-proc-macros` caches derives only, and most of the macro time is
+   attribute macros (`#[gpui::test]`) and `div()` builders, so an
+   attribute proc-macro cache in jr-rustc is the real target. Each flag was
+   measured alone and combined:
    `-Zcache-proc-macros` (targets the 2.7 s), `-Zshare-generics`,
    `-Zhint-mostly-unused` on large deps, dependencies as one dylib for test
    builds (relink only the small crate), cranelift for local crates, wild.
