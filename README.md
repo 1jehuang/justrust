@@ -50,6 +50,10 @@ free builds, `justrust upgrade` ($10/mo, 500 builds). Out of builds, offline,
 or signed out: every build runs locally, with one line saying why.
 `--local` / `--remote` (or `JUSTRUST_REMOTE=off|force`) override routing.
 
+CI and headless machines: create an API key at https://jcode.sh/account and
+export it as `JCODE_API_KEY`. It takes precedence over the saved login, so no
+`justrust login` step is needed.
+
 ## What exists so far
 
 - **Agent interface.** `justrust check|test|build|clippy|run` takes cargo's

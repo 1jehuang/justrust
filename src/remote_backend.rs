@@ -46,12 +46,26 @@ fn file() -> Result<PathBuf> {
 
 /// The configured backend, or `None` when remote builds are not set up.
 /// Cheap: used on every `justrust check`.
+/// A `JCODE_API_KEY` in the environment (CI, headless boxes) selects hosted
+/// when nothing else is configured, so an API key from jcode.sh/account works
+/// without `justrust login`. The saved credentials file alone does not:
+/// Jcode writes it too, and that should not turn remote builds on.
 pub fn load() -> Option<Backend> {
     let home = crate::paths::home().ok()?.join("remote");
-    match std::fs::read(home.join("backend.json")) {
-        Ok(b) => serde_json::from_slice(&b).ok(),
+    let env_key = std::env::var("JCODE_API_KEY").is_ok_and(|k| !k.trim().is_empty());
+    resolve(
+        std::fs::read(home.join("backend.json")).ok(),
+        home.join("state.json").exists(),
+        env_key,
+    )
+}
+
+fn resolve(backend_json: Option<Vec<u8>>, aws_state: bool, env_key: bool) -> Option<Backend> {
+    match backend_json {
+        Some(b) => serde_json::from_slice(&b).ok(),
         // Machines created before backend.json existed.
-        Err(_) => home.join("state.json").exists().then_some(Backend::Aws),
+        None if aws_state => Some(Backend::Aws),
+        None => env_key.then_some(Backend::Hosted),
     }
 }
 
@@ -288,5 +302,14 @@ mod tests {
         assert_eq!(b, Backend::Aws);
         let b: Backend = serde_json::from_str(r#"{"kind":"hosted"}"#).unwrap();
         assert_eq!(b, Backend::Hosted);
+    }
+
+    #[test]
+    fn env_api_key_selects_hosted_only_when_unconfigured() {
+        assert_eq!(resolve(None, false, false), None);
+        assert_eq!(resolve(None, false, true), Some(Backend::Hosted));
+        assert_eq!(resolve(None, true, true), Some(Backend::Aws));
+        let ssh = br#"{"kind":"ssh","host":"me@box"}"#.to_vec();
+        assert!(matches!(resolve(Some(ssh), false, true), Some(Backend::Ssh { .. })));
     }
 }
