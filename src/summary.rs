@@ -54,6 +54,9 @@ pub struct Summary {
     /// Why the build ran locally, from the router (see `Meta::route`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    /// Early diagnostics from the resident rust-analyzer (`early`), opt-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub early: Option<crate::early::EarlyInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -879,6 +882,7 @@ pub fn build(
         split_hints: Vec::new(),
         toolchain: meta.toolchain.clone(),
         route: meta.route.clone(),
+        early: None,
     }
 }
 
@@ -1042,6 +1046,13 @@ impl Summary {
         }
         if let Some(tc) = &self.toolchain {
             let _ = writeln!(o, "  rustc   pinned toolchain {tc}");
+        }
+        if let Some(l) = self
+            .early
+            .as_ref()
+            .and_then(|e| crate::early::report_line(e, self.diagnostics.compile_failed))
+        {
+            let _ = writeln!(o, "  {l}");
         }
 
         // Units.

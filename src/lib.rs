@@ -17,6 +17,7 @@ mod depcache;
 mod depcache_gc;
 mod depcache_prebuilt;
 mod depcache_remote;
+mod early;
 mod export;
 mod findings;
 mod history;
@@ -182,6 +183,13 @@ enum Command {
         /// `JUSTRUST_PREBUILT`). For the prebuild fleet.
         #[arg(long, value_name = "DIR")]
         publish: Option<PathBuf>,
+    },
+    /// Early type errors from a resident rust-analyzer (opt-in with
+    /// JUSTRUST_EARLY=1): start, stop, or status of this workspace's daemon.
+    Early {
+        /// start | stop | status
+        #[arg(default_value = "status")]
+        action: String,
     },
     /// Pinned Rust toolchain (justrust.toml `[toolchain] channel`):
     /// status, install, pin, unpin, remove.
@@ -489,6 +497,12 @@ pub fn main() -> anyhow::Result<()> {
         .and_then(|a| a.to_str())
     {
         Some("__daemon") => remote_daemon::main(),
+        Some(early::DAEMON_ARG) => early::daemon_main(
+            std::env::args_os()
+                .nth(2)
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+        ),
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
         _ => {}
     }
@@ -559,6 +573,7 @@ pub fn main() -> anyhow::Result<()> {
             sync,
             publish,
         } => depcache_gc::command(prune, clear, auto, sync, publish)?,
+        Command::Early { action } => early::command(&action)?,
         Command::Toolchain { cmd } => match cmd.unwrap_or(ToolchainCmd::Status) {
             ToolchainCmd::Status => toolchain::status()?,
             ToolchainCmd::Install { spec } => toolchain::install_command(spec)?,

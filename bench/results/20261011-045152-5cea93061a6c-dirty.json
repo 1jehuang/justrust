@@ -1,0 +1,613 @@
+{
+ "started": "2026-10-11T04:50:54-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "5cea93061a6c",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  }
+ },
+ "runs_per_scenario": 6,
+ "scenarios": {
+  "desktop-type-error": {
+   "what": "time to the first type error after an edit (the check must fail)",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261011-045059034-672802212",
+     "wall": 3.045,
+     "first_error": 2.92,
+     "early": null,
+     "recorded_wall": 3.014,
+     "cpu": 3.24,
+     "startup": 0.927,
+     "compile": 2.038,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.652,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.001,
+      "other": 0.362
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 9.19,
+     "foreign_rustc_before": 1,
+     "load_before": 24.21,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045102122-672802341",
+     "wall": 2.143,
+     "first_error": 1.923,
+     "early": null,
+     "recorded_wall": 2.094,
+     "cpu": 2.3,
+     "startup": 0.451,
+     "compile": 1.553,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.234,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.281
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 5.79,
+     "foreign_rustc_before": 1,
+     "load_before": 24.21,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045104288-672802826",
+     "wall": 4.289,
+     "first_error": 4.041,
+     "early": null,
+     "recorded_wall": 4.229,
+     "cpu": 3.83,
+     "startup": 0.968,
+     "compile": 3.181,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 2.538,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.602
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 15.09,
+     "foreign_rustc_before": 1,
+     "load_before": 22.67,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045108608-672802810",
+     "wall": 3.107,
+     "first_error": 2.993,
+     "early": null,
+     "recorded_wall": 3.067,
+     "cpu": 3.21,
+     "startup": 0.928,
+     "compile": 2.104,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.718,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.006,
+      "other": 0.347
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 10.04,
+     "foreign_rustc_before": 1,
+     "load_before": 23.5,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045111755-672802503",
+     "wall": 1.866,
+     "first_error": 1.756,
+     "early": null,
+     "recorded_wall": 1.837,
+     "cpu": 2.06,
+     "startup": 0.43,
+     "compile": 1.363,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.094,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.003,
+      "other": 0.248
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 2.87,
+     "foreign_rustc_before": 1,
+     "load_before": 23.5,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045113641-672802423",
+     "wall": 4.004,
+     "first_error": 3.736,
+     "early": null,
+     "recorded_wall": 3.943,
+     "cpu": 3.59,
+     "startup": 0.759,
+     "compile": 3.092,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 2.531,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.005,
+      "other": 0.523
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 15.06,
+     "foreign_rustc_before": 1,
+     "load_before": 21.94,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    }
+   ],
+   "stats": {
+    "n": 6,
+    "first_error": 2.957,
+    "first_error_min": 1.756,
+    "first_error_max": 4.041,
+    "median": 3.076,
+    "min": 1.866,
+    "max": 4.289,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.843,
+     "compile": 2.071,
+     "test_run": 0.0,
+     "cpu": 3.225,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 1.685,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.002,
+     "other": 0.354
+    },
+    "units": 1.0
+   }
+  },
+  "desktop-type-error-early": {
+   "what": "desktop-type-error with early diagnostics (JUSTRUST_EARLY=1, warm rust-analyzer daemon started untimed)",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261011-045138332-672802241",
+     "wall": 2.558,
+     "first_error": 0.088,
+     "early": {
+      "secs": 0.06858420372009277,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.533,
+     "cpu": 2.8,
+     "startup": 0.482,
+     "compile": 2.006,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.62,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.359
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.53,
+     "foreign_rustc_before": 1,
+     "load_before": 19.01,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045140914-672802231",
+     "wall": 2.545,
+     "first_error": 0.091,
+     "early": {
+      "secs": 0.06584334373474121,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.513,
+     "cpu": 2.77,
+     "startup": 0.597,
+     "compile": 1.877,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.541,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.308
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 5.83,
+     "foreign_rustc_before": 1,
+     "load_before": 19.01,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045143487-672802857",
+     "wall": 2.187,
+     "first_error": 0.083,
+     "early": {
+      "secs": 0.0599827766418457,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.157,
+     "cpu": 2.4,
+     "startup": 0.561,
+     "compile": 1.551,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.197,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.327
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 5.28,
+     "foreign_rustc_before": 1,
+     "load_before": 18.37,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045145699-672802324",
+     "wall": 2.489,
+     "first_error": 0.098,
+     "early": {
+      "secs": 0.06656312942504883,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.448,
+     "cpu": 2.71,
+     "startup": 0.507,
+     "compile": 1.887,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.448,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.411
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.39,
+     "foreign_rustc_before": 1,
+     "load_before": 18.37,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045148213-672802934",
+     "wall": 2.438,
+     "first_error": 0.112,
+     "early": {
+      "secs": 0.08534741401672363,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.402,
+     "cpu": 2.7,
+     "startup": 0.533,
+     "compile": 1.809,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.457,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.004,
+      "other": 0.32
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.18,
+     "foreign_rustc_before": 1,
+     "load_before": 17.78,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261011-045150674-672802274",
+     "wall": 2.231,
+     "first_error": 0.087,
+     "early": {
+      "secs": 0.06039071083068848,
+      "ready": true,
+      "shown": true,
+      "matched": 1,
+      "early_only": 0,
+      "rustc_only": 0
+     },
+     "recorded_wall": 2.197,
+     "cpu": 2.46,
+     "startup": 0.429,
+     "compile": 1.722,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 1.39,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.003,
+      "other": 0.304
+     },
+     "link_secs": 0.0,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 5.58,
+     "foreign_rustc_before": 1,
+     "load_before": 17.78,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    }
+   ],
+   "stats": {
+    "n": 6,
+    "first_error": 0.089,
+    "first_error_min": 0.083,
+    "first_error_max": 0.112,
+    "median": 2.463,
+    "min": 2.187,
+    "max": 2.558,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.52,
+     "compile": 1.843,
+     "test_run": 0.0,
+     "cpu": 2.705,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 1.453,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.324
+    },
+    "units": 1.0
+   }
+  }
+ },
+ "finished": "2026-10-11T04:51:52-0700"
+}

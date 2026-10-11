@@ -404,6 +404,16 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     }
 
     let start = paths::now();
+    // Early diagnostics (opt-in): a resident rust-analyzer answers in
+    // parallel with cargo. Never touches cargo's command or output.
+    let build_done: Arc<std::sync::atomic::AtomicBool> = Arc::default();
+    let early_rx = if opts.agent {
+        std::env::current_dir().ok().and_then(|cwd| {
+            crate::early::run_for_build(&meta.subcommand, cwd, start, build_done.clone())
+        })
+    } else {
+        None
+    };
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
@@ -449,6 +459,10 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     }
     let _ = t_out.join();
     let _ = t_err.join();
+    build_done.store(true, Ordering::SeqCst);
+    // A short grace period only: the daemon answers in about 0.1 s, and a
+    // slow or stuck one must not hold up the build's exit.
+    let early = early_rx.and_then(|rx| rx.recv_timeout(std::time::Duration::from_millis(50)).ok());
     let (samples, procs) = sampler.join().unwrap_or_default();
     let git = git.join().unwrap_or_default();
 
@@ -462,6 +476,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     if let Err(e) = finish(
         opts,
         hidden,
+        early,
         sched,
         &run_dir,
         &meta,
@@ -490,6 +505,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
 fn finish(
     opts: Options,
     hidden: agent_output::Hidden,
+    early: Option<crate::early::EarlyInfo>,
     sched: Option<crate::sched::SchedInfo>,
     run_dir: &Path,
     meta: &Meta,
@@ -514,6 +530,13 @@ fn finish(
         meta, git, start, end, code, cpu_secs, lines, samples, procs, &units,
     );
     s.sched = sched;
+    if let Some(mut e) = early {
+        let root = crate::early::workspace_root(Path::new(&meta.cwd))
+            .unwrap_or_else(|| PathBuf::from(&meta.cwd));
+        let errs = crate::early::rustc_errors(lines.iter().map(|l| l.l.as_str()), &root);
+        crate::early::score(&mut e, &errs);
+        s.early = Some(e);
+    }
     crate::split_index::attach(&mut s);
     std::fs::write(run_dir.join("summary.json"), serde_json::to_vec_pretty(&s)?)?;
     paths::append_line(

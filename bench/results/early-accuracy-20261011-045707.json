@@ -1,0 +1,10 @@
+{
+ "started": "2026-10-11T04:56:58-0700",
+ "snapshot": "{'jcode-desktop': (PosixPath('/home/jeremy/jcode-desktop'), '7d38fb7'), 'jcode': (PosixPath('/home/jeremy/jcode'), 'abff94eeb')}",
+ "sweep": {
+  "files": 278,
+  "pulled": 278,
+  "secs": 8.4,
+  "false_positives": []
+ }
+}

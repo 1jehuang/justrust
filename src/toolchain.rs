@@ -603,6 +603,33 @@ pub fn install(
     }
 }
 
+/// Add one more manifest component (for example `rust-analyzer-preview`) to
+/// an installed toolchain, from the same dated manifest. Idempotent: a
+/// component already listed in `justrust-toolchain.json` is skipped.
+pub fn add_component(tc: &Toolchain, name: &str, log: &mut dyn std::io::Write) -> Result<()> {
+    let root = root()?;
+    let _lock = lock_exclusive(&root.join(".install.lock"))?;
+    let mut info = tc.info().context("toolchain has no install record")?;
+    let spec = Spec::parse(&tc.id)?;
+    let scratch = root.join(format!(".component-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch)?;
+    let result = (|| {
+        let manifest = fetch_manifest(&spec, &scratch)?;
+        let pkg = manifest.package(name)?;
+        if info.components.contains(&pkg.name) {
+            return Ok(());
+        }
+        let _ = writeln!(log, "justrust: adding {} to {}", pkg.name, tc.id);
+        fetch_component(&pkg, &scratch.join("c"), &tc.dir)?;
+        info.components.push(pkg.name);
+        std::fs::write(tc.dir.join(MARKER), serde_json::to_vec_pretty(&info)?)?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
 fn install_into(
     spec: &Spec,
     components: &[&str],
