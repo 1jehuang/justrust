@@ -2944,6 +2944,14 @@ justrust install), checked there: `cargo test --no-run` in jcode-desktop
 builds `tests/version.rs`. `bench/versus.py run --synth 1 --only-points
 2,28` reruns single points for debugging (nothing saved).
 
+Early synth2 on the machine (justrust 9ab215a, both fixes in, partial at
+point 13 of 40, one run each): the former point-2 command (`test --
+reload_config`, now listed as point 3) measures on every stack (stock
+12.73 s, justrust 12.56 s). `test --workspace` (point 12) is stock 74.5 s,
+justrust 59.1 s, jr-nocache 57.7 s, where synth1 had justrust 93.8 s
+against stock 70.5 s. Justrust's samples are flagged noisy, so wait for the
+full result before quoting it.
+
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
 Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
