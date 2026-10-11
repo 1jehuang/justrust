@@ -2511,7 +2511,72 @@ this is where we stop chasing parity: fork changes are measured as
 official nightly. `bench/factors.py` factor `jr-rustc` defaults to
 `build/jr/pgo-bolt-stage2`.
 
-## 35. Linking: wild for local crates, dependencies as one dylib (2026-10-11)
+## 35. Hot patching test binaries (phase 5 prototype): works on Desktop, saves the link, ~0.35 s (2026-10-11)
+
+Prototype in `bench/hotpatch/` (README there), not wired into justrust,
+nothing default-on. Subsecond (Dioxus) patches a long-lived process
+through a jump table its code must call through (`subsecond::call`). Test
+processes are fresh every run, so jr-hot patches before `main` instead and
+needs no source changes:
+
+- jr-hot is the linker. The first link with `JR_HOT=1` is a normal link
+  plus `--no-gc-sections` and records each codegen unit's inode. rustc
+  hardlinks reused units from the incremental cache, so a new inode *is* the
+  set of regenerated units, with no diffing.
+- Later links do not relink: `ld.lld -shared` links only the changed units
+  (5-7 of 257 for the reference edit) at a fixed address 256 MiB below the
+  no-ASLR PIE base. Every other symbol is defined in a generated linker
+  script as its address in the base binary (locals matched by their CGU's
+  `FILE` symbol group). Writable globals bind to the base's copy.
+- jr-hot is also the runner: ASLR off, `LD_PRELOAD` a 140-line C loader
+  that maps the image, applies its relocations, writes `jmp rel32` over the
+  entry of every replaced function (287-403 per edit), and registers its
+  `.eh_frame` so panics unwind through patched code.
+
+Correctness: on a toy crate, function body, string literal, test body,
+new private fn, new `#[test]` fn (libtest's test list lives in the
+patched unit) and a panic caught through patched code all give the same
+results as a full link. A new static falls back. On a copy of the Desktop
+snapshot, a test edit that makes `assert_eq!` fail is reported failing,
+and fixing it passes again, all patched. What forced fallbacks before each
+fix: TLS definitions in a changed unit (harmless, only TLS *accesses* fall
+back now), unit-local statics (the patch's fresh copy is the only one
+reachable), instances `--gc-sections` had dropped from the base (hence
+`--no-gc-sections`), and 1-4 byte functions too small for a jump (skipped
+when their bytes are unchanged, which they always were). After that, every
+Desktop edit tried (about 25) patched.
+
+Timing, `bench/hotpatch/bench.py` (flock, alternating blocks of 3, 6
+samples per mode, machine shared with other agents' benches):
+
+| workload | normal wall | hot wall | link pass normal -> hot | jr-hot patch step |
+|---|---:|---:|---:|---:|
+| Desktop reference loop (test fn edit) | 8.97 s (5.6-13.1) | 8.02 s (5.2-10.0) | 0.54 -> 0.20 s | 154 ms |
+| Desktop non-test body edit | 8.54 s (7.3-22.9) | 7.17 s (6.9-8.7) | 0.60 -> 0.18 s | 133 ms |
+| toy crate (3 tests) | 0.103 s | 0.099 s | ~0 | 10 ms |
+
+Results: `bench/results/hotpatch-{desktop-20261011-090939,desktop-body-20261011-091218,toy-20261011-093114}.json`,
+run ids in the samples (for example normal 20261011-090740134-36074, hot
+20261011-090810250-38553). Wall ranges overlap (noisy shared machine), so
+read the link column: justrust's own per-pass split shows the link going
+from 0.54-0.60 s to 0.18-0.20 s (that is jr-hot's patch step plus process
+overhead), and linker CPU from 1.2-2.9 s to 0. The patch step is 115-195
+ms, of which ~120 ms is reading the 640k-symbol table of the 245 MB base
+binary; caching the base's symbol index across edits would bring it to
+~30 ms (lld on 7 objects is 18-35 ms).
+
+Assessment for the reference loop: hot patching removes the link, about
+0.35-0.45 s of ~7.5 s today (5%). The loop is frontend-bound (3.4-3.6 s)
+plus codegen and incremental persist (~1.6 s), which patching cannot touch.
+So it is not worth shipping ahead of phase 4. Once a resident compiler
+brings frontend + persist under a second, the link is the largest fixed
+cost left, and patching is then worth 30-50% of the loop. Next steps when
+that happens, in order: cache the base symbol index (patch step -> ~30 ms),
+wire it into justrust's linker shim and test runner behind
+`JUSTRUST_HOTPATCH=1`, rebase automatically after N patches or when the
+patch exceeds a size, and verify results with a periodic full link.
+
+## 36. Linking: wild for local crates, dependencies as one dylib (2026-10-11)
 
 The link of the Desktop UI test binary (283 MB, 582 rlibs) runs after
 every edit on the reference loop. Two ways to make it cheaper, measured on

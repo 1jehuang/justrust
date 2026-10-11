@@ -225,7 +225,7 @@ justrust toolchain wild     # download wild (pinned release, sha256 checked) int
 
 Once installed, every local crate that links (test binaries, bins, cdylibs)
 links with [wild](https://github.com/wild-linker/wild) instead of the
-project's linker. Measured on the Desktop UI test binary (FINDINGS 35): the
+project's linker. Measured on the Desktop UI test binary (FINDINGS 36): the
 link itself 0.92 s with mold, 0.35 s with wild. The shim adds
 `-B ~/.justrust/bin/ld` to those rustc runs. gcc and clang take `ld`,
 `ld.mold`, `ld.lld`, ... from a `-B` directory before their own, whatever

@@ -38,7 +38,7 @@ from a cache.
 | std / sysroot | rebuilt with `-Zbuild-std` flags we choose (share-generics, dylib) | dylib test binaries, fewer monomorphizations |
 | cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), pinned as submodule `toolchain/cargo` (opt-in checkout: `git submodule update --init --checkout toolchain/cargo`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp (shipped), next: in-process fingerprints, no rescan, daemon mode |
 | codegen backends | cranelift for local opt-level 0 crates | faster full-crate regeneration (-25%) |
-| linker | wild for local crates, shipped (`justrust toolchain wild`, fail open to the project's linker; FINDINGS 35: link pass 0.44 -> 0.23 s). Incremental wild when it exists. Deps-as-dylib prototyped, not worth it yet | relinking a 283 MB test binary on every edit |
+| linker | wild for local crates, shipped (`justrust toolchain wild`, fail open to the project's linker; FINDINGS 36: link pass 0.44 -> 0.23 s). Incremental wild when it exists. Deps-as-dylib prototyped, not worth it yet | relinking a 283 MB test binary on every edit |
 | C toolchain | clang, lld, ar, a sysroot of pinned libs/headers | build scripts become hermetic, so their cache keys need no system stamp |
 | pkg-config + -sys libraries | vendored sysroot (wayland, xkbcommon, alsa, fontconfig, openssl...) | same output on every machine |
 | registry sources | local mirror / `cargo vendor` | offline, no index updates, stable paths |
@@ -78,7 +78,23 @@ Each phase ships only after a measured win on the reference loop
    agent, body-only changes in an upstream crate not invalidating
    downstream codegen (finding 5: 9.5 s became 46 s).
 5. **Hot patching** of test binaries, so an edit that only changes function
-   bodies reruns tests without relinking.
+   bodies reruns tests without relinking. *Prototyped 2026-10-11*
+   (`bench/hotpatch/`, FINDINGS 35), not shipped. Design: justrust's linker
+   shim links a base once (`--no-gc-sections`) and records each codegen
+   unit's inode. After an edit, the units with new inodes (rustc hardlinks
+   reused ones) are linked alone by lld into a small image at a fixed
+   address next to the no-ASLR base, with every other symbol bound to its
+   base address through a generated linker script. The test runner
+   preloads a loader that maps the image and writes `jmp rel32` over each
+   replaced function's entry before `main`. Unlike subsecond it needs no
+   jump table in the code, because test processes start fresh. Fallback to
+   a full link on TLS accesses, symbols missing from the base, or large
+   changes. Measured on the reference loop: link 0.54 s -> 0.20 s, wall
+   within noise (~5% of today's loop). Ship it after phase 4, when
+   frontend + persist are under a second and the link is the largest fixed
+   cost left (then 30-50% of the loop). Remaining work: cache the base
+   symbol index (patch step 150 ms -> ~30 ms), integrate it into the shim
+   and runner behind `JUSTRUST_HOTPATCH=1`, rebase on a schedule.
 
 ## Infrastructure
 
