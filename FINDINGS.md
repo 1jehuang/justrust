@@ -1931,7 +1931,14 @@ same 2 environment failures as stock.
 | justrust reference loop (test-fn edit), 10 each | 7.39 s (6.9-9.7) | | 7.55 s (6.7-8.4) |
 
 So the stamp saves ~70 ms per cargo invocation, which is invisible in the
-7.5 s reference loop (within noise). The point of this step is ownership:
+7.5 s reference loop (within noise).
+
+Rerun with the channel-matched build (`build-jr.sh`, the binary actually
+installed), raw cargo, 12 alternating runs each, 0 units rebuilt in any
+run: `check -p jcode-desktop-ui` stock 0.327 s, fork with the stamp off
+0.329 s, fork with the stamp on **0.271 s** (-17%). `test --no-run` was
+noisy in this round (busy machine, 0.4-1.5 s spread; medians 1.29 / 1.45 /
+1.07 s), so the earlier table is the cleaner number for it. The point of this step is ownership:
 the fork now builds, installs, and is selected by justrust, so the bigger
 cargo changes (in-process fingerprints, a resident cargo, replaying a
 recorded unit graph) have somewhere to land.
