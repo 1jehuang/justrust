@@ -306,6 +306,39 @@ def new_id() -> str:
     return f"{stamp}-{os.getpid()}{random.randrange(100, 999)}"
 
 
+def reuse_ledger(sm: dict, run_dir: Path) -> dict:
+    """Work this run did not redo, and what it would have cost.
+
+    fresh: units cargo found up to date. depcache: rustc units restored from
+    the shared cache (saved = the original compile's recorded wall time).
+    scripts: build-script runs replayed. compiled: rustc units that ran.
+    """
+    u = sm["units"]
+    hits = u.get("depcache_hits", 0)
+    s_hits, s_saved = 0, 0.0
+    sp = run_dir / "scripts.jsonl"
+    if sp.exists():
+        for line in sp.read_text().splitlines():
+            try:
+                x = json.loads(line)
+            except ValueError:
+                continue
+            if x.get("hit"):
+                s_hits += 1
+                s_saved += max(0.0, x.get("saved_secs", 0.0) - x.get("wall", 0.0))
+    slot = sm.get("slot") or {}
+    return {
+        "compiled": u["compiled"] - hits,
+        "fresh": u.get("fresh", 0),
+        "depcache_hits": hits,
+        "depcache_misses": u.get("depcache_misses", 0),
+        "depcache_saved_secs": round(max(0.0, u.get("depcache_saved_secs", 0.0)), 2),
+        "script_hits": s_hits,
+        "script_saved_secs": round(s_saved, 2),
+        "slot_refreshed_units": slot.get("refreshed_units", 0) or 0,
+    }
+
+
 def run_once(s: Scenario, root: Path, target: Path) -> dict:
     rid = new_id()
     env = dict(os.environ)
@@ -363,6 +396,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         "units": sm["units"]["compiled"],
         "local_units": sm["units"]["local"],
         "dep_units": sm["units"]["dependencies"],
+        "reuse": reuse_ledger(sm, JR_HOME / "runs" / rid),
         "split": {k: round(v, 3) for k, v in split.items()},
         "link_secs": round(sm.get("link", {}).get("link_pass_secs", 0.0), 3),
         "tests_passed": sm.get("tests", {}).get("passed", 0),

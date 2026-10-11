@@ -1,5 +1,45 @@
 # Benchmarks
 
+Three layers, from "what agents actually wait for" to "why":
+
+| | tool | question | output |
+|---|---|---|---|
+| System 1 | `bench/trend.py update` | Are real agent builds in Jcode, Desktop, justrust getting faster than before justrust? | `bench/trend/TREND.md`, `daily.csv`, `reuse.csv` |
+| System 2 | `bench/factors.py run` | What is each factor (depcache, slots, linker, ...) worth on its own? | `bench/FACTORS.md`, `bench/results/factors-*.json` |
+| Suite | `bench/suite.py run` | Did this commit make the standard scenarios faster or slower? | `bench/results/*.json`, `compare` |
+
+## System 1: rolling log, `bench/trend.py`
+
+Mines Jcode session history (`justrust history --dump`) for every foreground
+`check`/`test`/`build`/`clippy` call an agent made in the three repos, with
+the wall time it was blocked, from September 2026 (before justrust) onward.
+Baseline = everything before 2026-10-07, when agents switched to justrust.
+Also reads `~/.justrust/runs/*/summary.json` for the reuse ledger: units
+compiled vs fresh, depcache hits and the rustc time they saved, build-script
+replays, slot refreshes. Run `bench/trend.py update` now and then and commit
+`bench/trend/` (aggregates only). Real usage, not controlled: the work mix
+changes, so read the same-command table and System 2 for causes.
+
+## System 2: one factor at a time, `bench/factors.py`
+
+```sh
+bench/factors.py list                 # factors, workloads, on/off switches
+bench/factors.py run                  # every factor not marked slow (~1h)
+bench/factors.py run --all            # plus feature-unify, pinned nightly, cranelift
+bench/factors.py run mold -n 8        # one factor
+bench/factors.py report               # rebuild FACTORS.md from the newest results
+```
+
+Each factor is switched off alone with everything else at the default
+("leave one out"), on the suite's pinned snapshots, on a workload where it
+matters (warm edit loop, cold fresh target dir, package switch sequence, or
+two concurrent agents). On and off runs alternate in ABBA order. Loop
+variants keep their own warm target dir keyed by the build configuration;
+cold caching factors use a private depcache dir. Every sample carries the
+reuse ledger (compiled, fresh, depcache hits and saved rustc seconds,
+build-script hits, slot-refreshed units). Add a factor whenever a new
+optimization lands: give it an off switch and a workload.
+
 ## The suite: `bench/suite.py`
 
 Use this for any speed claim. It runs the agent edit loop on **pinned source
