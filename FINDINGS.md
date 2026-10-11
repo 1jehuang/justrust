@@ -2908,3 +2908,16 @@ Pitfall: a shell `exec 9>lock; flock 9` leaks fd 9 into children; an
 orphaned `wl-copy` inherited it and held the bench lock for 30 minutes.
 `suite.bench_lock` now names the holders when it waits, and jr-rustc's
 pgo-train.sh uses `flock -o`.
+
+Update (cause and fix): the 25 s "tail" was the test pool's faithfulness
+check. jcode-tui's lib tests have 3 real failures plus a few that fail
+only next to other test processes; when the quick by-name rerun did not
+reproduce every failure, the pool reran the *whole* 2,500-test binary
+alone. Now only the names that passed are rerun alone; those that pass
+again are reported as parallel-only (named in a note, not counted), the
+rest stay failures, and only a crash with no named failure reruns the
+binary. Laptop, warm, `test -p jcode-tui --lib`, 2 runs each under the
+bench lock: stock 11.5 / 11.7 s; justrust before 22.7 / 22.6 s; after
+11.3 / 11.5 s, same 3 real failures as stock. `JUSTRUST_TEST_PARALLEL=0`
+and `JUSTRUST_TEST_TIMES=0` were already at stock speed (11.0 to 11.5 s),
+which isolated the pool.

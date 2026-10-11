@@ -541,9 +541,12 @@ fn adjust_filtered(line: &[u8], n: u64) -> Vec<u8> {
 /// A process failed while other test processes ran. Rerun its failed
 /// tests by exact name, one at a time (some tests fail only next to another
 /// test of the same process): if every one fails again, the first result
-/// stands and is reported at once. Otherwise, with no other test process
-/// running, the same process runs again alone and that result is reported,
-/// with a note naming the tests that failed only in parallel.
+/// stands and is reported at once. If some pass, they are rerun once more
+/// with no other test process running; the ones that still pass are
+/// reported as failing only in parallel, the rest as failures. Only a
+/// process that died without naming a failed test (a crash) is run again
+/// whole and alone: rerunning a 2,500-test binary to settle three flaky
+/// names doubled `test -p jcode-tui --lib` (FINDINGS 41).
 fn confirm_alone(
     inner: &Inner,
     req: &Request,
@@ -551,14 +554,18 @@ fn confirm_alone(
     args: &[String],
     first: Finished,
 ) -> Finished {
-    let failed: Vec<&str> = failed_names(&first);
-    let rerun_failed = |exclusive: bool| -> Option<HashSet<String>> {
+    let failed_owned: Vec<String> = failed_names(&first)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let failed: Vec<&str> = failed_owned.iter().map(String::as_str).collect();
+    let rerun = |names: &[&str], exclusive: bool| -> Option<HashSet<String>> {
         let mut again = strip_filters(args)?;
         again.push("--exact".into());
         if !again.iter().any(|a| a.starts_with("--test-threads")) {
             again.push("--test-threads=1".into());
         }
-        again.extend(failed.iter().map(|s| s.to_string()));
+        again.extend(names.iter().map(|s| s.to_string()));
         let _g = if exclusive {
             inner.gate.exclusive()
         } else {
@@ -567,12 +574,40 @@ fn confirm_alone(
         let r = execute(inner, req, &again, stem);
         Some(failed_names(&r).into_iter().map(str::to_owned).collect())
     };
-    let reproduced = |still: &HashSet<String>| failed.iter().all(|f| still.contains(*f));
     if !failed.is_empty() {
         // Quick check, next to whatever else runs: a real failure does not
         // wait for the pool to drain.
-        if rerun_failed(false).is_some_and(|s| reproduced(&s)) {
-            return first;
+        if let Some(still) = rerun(&failed, false) {
+            let passed: Vec<&str> = failed
+                .iter()
+                .copied()
+                .filter(|f| !still.contains(*f))
+                .collect();
+            if passed.is_empty() {
+                return first;
+            }
+            // Settle only the ones that passed, alone.
+            if let Some(again) = rerun(&passed, true) {
+                let flaky: Vec<&str> = passed
+                    .iter()
+                    .copied()
+                    .filter(|f| !again.contains(*f))
+                    .collect();
+                let mut out = first;
+                if !flaky.is_empty() {
+                    out = drop_failures(out, &flaky);
+                    out.lines.push((
+                        paths::now(),
+                        "e",
+                        format!(
+                            "justrust: {stem}: {} failed while other test processes ran in parallel and passed when rerun alone by name; not counted as failures",
+                            flaky.join(", ")
+                        )
+                        .into_bytes(),
+                    ));
+                }
+                return out;
+            }
         }
     }
     let _alone = inner.gate.exclusive();
@@ -604,6 +639,63 @@ fn failed_names(f: &Finished) -> Vec<&str> {
         .filter(|o| !o.passed)
         .map(|o| o.name.as_str())
         .collect()
+}
+
+/// `f` with the tests in `flaky` counted as passed: their outcome, their
+/// `test x ... FAILED` line, and the `test result:` counts. The process
+/// exits 0 when nothing else failed. Their failure output stays (it is the
+/// evidence), with the note the caller adds.
+fn drop_failures(mut f: Finished, flaky: &[&str]) -> Finished {
+    let flaky: HashSet<String> = flaky.iter().map(|s| s.to_string()).collect();
+    for o in &mut f.outcomes {
+        if flaky.contains(&o.name) {
+            o.passed = true;
+        }
+    }
+    let n = flaky.len() as u64;
+    for (_, _, l) in &mut f.lines {
+        let text = String::from_utf8_lossy(l).into_owned();
+        if let Some((name, rest)) = text
+            .strip_prefix("test ")
+            .and_then(|r| r.rsplit_once(" ... "))
+            && flaky.contains(name)
+            && rest.starts_with("FAILED")
+        {
+            *l = format!("test {name} ... ok{}", &rest["FAILED".len()..]).into_bytes();
+        } else if text.trim_start().starts_with("test result: ") {
+            *l = adjust_result(&text, n).into_bytes();
+        }
+    }
+    if failed_names(&f).is_empty() {
+        f.exit = 0;
+    }
+    f
+}
+
+/// A `test result:` line with `n` failures moved to passed.
+fn adjust_result(text: &str, n: u64) -> String {
+    let num = |key: &str| -> Option<(usize, usize, u64)> {
+        let end = text.find(key)?;
+        let start = text[..end].rfind(' ').map_or(0, |i| i + 1);
+        Some((start, end, text[start..end].parse().ok()?))
+    };
+    let (Some((ps, pe, p)), Some((fs, fe, fl))) = (num(" passed"), num(" failed")) else {
+        return text.to_owned();
+    };
+    let fl2 = fl.saturating_sub(n);
+    let p2 = p + (fl - fl2);
+    let mut out = format!(
+        "{}{}{}{}{}",
+        &text[..ps],
+        p2,
+        &text[pe..fs],
+        fl2,
+        &text[fe..]
+    );
+    if fl2 == 0 {
+        out = out.replacen("test result: FAILED.", "test result: ok.", 1);
+    }
+    out
 }
 
 /// Lets test processes run together (shared) or one alone (exclusive). A
@@ -1120,6 +1212,55 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn drop_failures_counts_flaky_tests_as_passed() {
+        let line = |t: &str| (0.0, "o", t.as_bytes().to_vec());
+        let out = |name: &str, passed| TestOutcome {
+            name: name.into(),
+            passed,
+            secs: None,
+        };
+        let f = Finished {
+            bin: "b".into(),
+            stem: "b".into(),
+            exit: 101,
+            start: 0.0,
+            end: 1.0,
+            lines: vec![
+                line("test a::x ... FAILED <0.057s>"),
+                line("test a::y ... FAILED"),
+                line("test a::z ... ok"),
+                line(
+                    "test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+                ),
+            ],
+            outcomes: vec![out("a::x", false), out("a::y", false), out("a::z", true)],
+            hide_filtered: None,
+        };
+        let g = drop_failures(f, &["a::x"]);
+        let text: Vec<String> = g
+            .lines
+            .iter()
+            .map(|l| String::from_utf8_lossy(&l.2).into_owned())
+            .collect();
+        assert_eq!(text[0], "test a::x ... ok <0.057s>");
+        assert_eq!(text[1], "test a::y ... FAILED");
+        assert!(
+            text[3].starts_with("test result: FAILED. 2 passed; 1 failed;"),
+            "{}",
+            text[3]
+        );
+        assert_eq!(g.exit, 101);
+        let h = drop_failures(g, &["a::y"]);
+        let last = String::from_utf8_lossy(&h.lines[3].2).into_owned();
+        assert!(
+            last.starts_with("test result: ok. 3 passed; 0 failed;"),
+            "{last}"
+        );
+        assert_eq!(h.exit, 0);
+        assert!(failed_names(&h).is_empty());
     }
 
     #[test]
