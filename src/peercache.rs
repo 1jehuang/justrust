@@ -72,7 +72,7 @@ const MIN_GAIN_SECS: f64 = 0.15;
 /// Fixed cost of a fetch (round trip, unpack) in seconds.
 const FETCH_FIXED_SECS: f64 = 0.08;
 /// Key set refreshed at most this often.
-const KEYSET_TTL: Duration = Duration::from_secs(20);
+const KEYSET_TTL: Duration = Duration::from_secs(5);
 /// Most entries one background push or pull moves.
 const SYNC_MAX_ITEMS: usize = 400;
 
@@ -685,8 +685,10 @@ impl Relay {
         Some(rx)
     }
 
-    /// The peer's key set, refreshed in the background when stale. `None`
-    /// until first loaded (callers then ask the peer directly).
+    /// The peer's key set if it is fresh enough to rule a key out, else
+    /// `None` (ask the peer). A stale or missing set is refreshed in the
+    /// background. The peer gains keys all the time (its builds, our
+    /// pushes), so an old set must never turn a hit into a miss.
     fn peer_keys(self: &Arc<Self>) -> Option<Arc<HashSet<String>>> {
         let cur = self.keys.lock().unwrap().clone();
         let stale = cur.as_ref().is_none_or(|(t, _)| t.elapsed() > KEYSET_TTL);
@@ -705,7 +707,12 @@ impl Relay {
                 me.keys_loading.store(false, Ordering::SeqCst);
             });
         }
-        cur.map(|(_, k)| k)
+        cur.filter(|_| !stale).map(|(_, k)| k)
+    }
+
+    /// Forget the peer's key set (it just gained entries).
+    pub fn invalidate_keys(&self) {
+        *self.keys.lock().unwrap() = None;
     }
 
     /// Start loading the peer's key set now (on connect).
@@ -860,6 +867,9 @@ impl Relay {
             }
             n += 1;
             bytes += i.bytes;
+        }
+        if n > 0 {
+            self.invalidate_keys();
         }
         (n, bytes, next)
     }
@@ -1114,5 +1124,72 @@ mod serve_tests {
         assert_eq!(lines, vec![line]);
         assert_eq!(outs.len(), 1);
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+
+    /// A relay whose peer answers `CacheKeys` with `keys` and every
+    /// `CacheQuery` with one line, counting the queries it sees.
+    fn relay_with_peer(keys: &'static str) -> (Arc<Relay>, Arc<AtomicU32>) {
+        let queries = Arc::new(AtomicU32::new(0));
+        let slot: Arc<Mutex<Option<Arc<Relay>>>> = Arc::default();
+        let (s2, q2) = (slot.clone(), queries.clone());
+        let relay = Relay::new(true, move |m, _| {
+            let me = s2.lock().unwrap().clone().unwrap();
+            let reply = match m {
+                Msg::CacheKeys { id } => {
+                    Some((Msg::CacheKeySet { id: *id }, keys.as_bytes().to_vec()))
+                }
+                Msg::CacheQuery { id, .. } => {
+                    q2.fetch_add(1, Ordering::SeqCst);
+                    Some((
+                        Msg::CacheLines {
+                            id: *id,
+                            lines: vec!["l".into()],
+                            outs: vec![],
+                            busy: 0,
+                            bw: 0.0,
+                        },
+                        vec![],
+                    ))
+                }
+                _ => None,
+            };
+            if let Some((m, p)) = reply {
+                std::thread::spawn(move || {
+                    me.on_frame(&m, &p);
+                });
+            }
+            true
+        });
+        *slot.lock().unwrap() = Some(relay.clone());
+        (relay, queries)
+    }
+
+    #[test]
+    fn fresh_key_set_rules_out_misses_but_stale_one_never_does() {
+        let (r, q) = relay_with_peer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let other = "b".repeat(32);
+        // No key set yet: ask the peer.
+        assert_eq!(r.query(&other).0.len(), 1);
+        for _ in 0..100 {
+            if r.keys.lock().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Fresh set without the key: answered locally, no round trip.
+        let before = q.load(Ordering::SeqCst);
+        assert!(r.query(&other).0.is_empty());
+        assert_eq!(q.load(Ordering::SeqCst), before);
+        // Stale set (the peer may have gained the key since): ask again.
+        r.keys.lock().unwrap().as_mut().unwrap().0 -= KEYSET_TTL * 2;
+        assert_eq!(r.query(&other).0.len(), 1);
+        // Invalidated after a push: ask again.
+        r.invalidate_keys();
+        assert_eq!(r.query(&other).0.len(), 1);
     }
 }

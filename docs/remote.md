@@ -193,6 +193,76 @@ provide a byte stream.
 - `Error {id, msg}` is an infrastructure failure, never a build failure.
 - `Ping` and `Pong {roots, machine, pushed, connected, build}` for status.
 - `Shutdown` stops the daemon.
+- `Warm` (client to daemon): connect in the background if the machine is
+  known to be up.
+- v3, peer cache, in both directions between daemon and agent and from
+  shims to their relay: `CacheQuery {id, base}` / `CacheLines {lines,
+  outs, busy, bw}`, `CacheFetch {id, out}` / `CacheData {last, ok}` (bundle
+  in 256 KB chunks so build output keeps flowing), `CacheKeys` /
+  `CacheKeySet` (payload: every base key), `CacheList {since}` /
+  `CacheJournal {items, next}`, `CacheOffer {items}` / `CacheWant {outs}`,
+  `CachePut {base, line, out, last}`. The agent still serves v1 and v2
+  daemons, without the cache frames.
+
+## Peer dependency cache
+
+`src/peercache.rs`. The laptop and the build machine share their
+dependency caches (`~/.justrust/cache/depcache`) over the sync daemon's
+ssh session, with no server in between. It complements the HTTP tier
+(`src/depcache_remote.rs`, build.jcode.sh), which serves account-wide and
+shared entries.
+
+```text
+ laptop                                       build machine
+ rustc shim --unix--> daemon ==ssh frames==> agent <--unix-- rustc shim
+              peer.sock   (Relay)     (Relay)   peer.sock
+```
+
+Both ends run a relay: it answers the other side's requests from its own
+cache, and forwards its own rustc shims' requests across the link.
+
+| when | what happens |
+|---|---|
+| a dependency unit misses locally (and in the HTTP tier) | the shim asks its relay. The relay answers at once from a copy of the peer's key set when the peer lacks the key, else asks the peer for its manifest lines. The shim picks the newest line whose inputs hash the same here, then fetches only if `bundle bytes / 3 / measured throughput` (plus queueing behind bundles in flight) is under 70% of the entry's recorded compile time and saves at least 0.15 s |
+| a build stored new entries on either side | the daemon's background sync (every 5 s, only while no remote run is relayed) offers the laptop's new entries to the machine and pulls the machine's, most compile seconds per byte first, and only for compilers the receiving side has used (`peer-toolchains`) |
+| a hit came from the HTTP tier | it is journaled too, so the other machine gets it on the next sync |
+
+Order of tiers in the shim: local, HTTP, peer. Run summaries count peer
+hits separately (`depcache 66 hit (66 peer)/310 miss`).
+`JUSTRUST_PEER_EXPLAIN=1` prints why each lookup did not fetch (absent,
+inputs differ, not worth it with the numbers, no relay).
+`JUSTRUST_PEER_CACHE=0` turns it off per build.
+
+What makes entries portable between machines (depcache scheme 5):
+
+- the cargo home and target dir are placeholders in keys and manifest
+  lines. Remote runs send `JUSTRUST_CLIENT_CARGO_HOME`, and the agent
+  builds with `CARGO_HOME` at the laptop's path (a directory whose
+  `registry` and `git` link to the machine's own), because registry
+  source paths are compiled into crate metadata and every dependent's SVH;
+- `--extern` artifacts are keyed by their crate metadata only (`.rmeta`,
+  the `lib.rmeta` member of an rlib, the `.rustc` section of a proc
+  macro), so object code and C runtime differences between hosts do not
+  cascade through keys, while any metadata difference still does;
+- dependency units compile with `--remap-path-prefix=<target>=/justrust-target`,
+  so crates that `include!` generated `OUT_DIR` files (serde, toml, ring,
+  aws-lc) produce the same metadata in every target dir;
+- `CARGO_HOME` and `CARGO_TARGET_DIR` are not keyed (cargo passes them to
+  rustc only when set);
+- proc macros and build scripts are restored only where the host glibc is
+  at least the newest `GLIBC_x.y` they need (read from `.dynstr` at store);
+- gitignored `Cargo.lock` files are mirrored, so the machine resolves the
+  same dependency versions.
+
+Safety is the same as a local hit: an entry is restored only if every
+input file hashes the same here, `unpack` verifies every binary output's
+content hash, and a peer can only write `o/<32 hex>` and `m/<32 hex>.jsonl`.
+
+Routing uses the caches too: a command with no history in a workspace with
+no build output goes remote (that is where the dependency cache is warm and
+the cores are), and a local build that will compile dependencies (cold, or
+slow history) asks the daemon to connect in the background (`Warm`, never
+starts a stopped machine) so its shims can fetch from the machine.
 
 ## Routing
 
@@ -255,6 +325,7 @@ Local is always the safe answer.
   daemon.sock     sync daemon socket (daemon.log, daemon.lock beside it)
   roots.json      source roots per lockfile
   route-fail      last infrastructure failure (10 minute local backoff)
+  peer-offsets.json  how far each side's store journal was synced
   events.log      remote runs and machine events
 ```
 
