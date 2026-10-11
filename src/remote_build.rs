@@ -229,6 +229,16 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             bail!("installing justrust on the remote machine failed");
         }
     }
+    // Same linker on both sides: with wild here and not there, the
+    // machine linked the 670 MB Desktop test binary with mold, 1.26 s
+    // against 0.25 s (FINDINGS 31). Best effort: a failure only costs speed.
+    if crate::linker::is_installed() && std::env::var("JUSTRUST_LINKER").as_deref() != Ok("off") {
+        let _ = t
+            .command()
+            .arg("~/.cargo/bin/justrust toolchain wild >/dev/null 2>&1")
+            .stdin(Stdio::null())
+            .status();
+    }
     std::fs::write(&stamp, want)?;
     crate::remote::log_event(&format!(
         "installed justrust on {} in {:.1}s",

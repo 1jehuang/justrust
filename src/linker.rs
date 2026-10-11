@@ -52,6 +52,11 @@ fn installed() -> Option<PathBuf> {
     is_executable(&p).then_some(p)
 }
 
+/// The pinned wild is installed here.
+pub fn is_installed() -> bool {
+    installed().is_some()
+}
+
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)

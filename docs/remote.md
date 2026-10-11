@@ -39,6 +39,33 @@ cargo startup). Remote wins clearly on cold builds, big recompiles, and
 test suites, ties on small edits, and still loses on no-ops. That split is
 exactly what routing measures per command.
 
+## Benchmarking remote builds
+
+Two questions, two tools:
+
+- **Does the remote route hold up from the agent's seat?**
+  `bench/versus.py run ... --remote` (or `--synth SEED --remote`) adds a
+  `remote` stack: `JUSTRUST_REMOTE=force`, run from the laptop, so its wall
+  includes sync, ssh and output streaming, exactly what an agent waits
+  for. A sample that fell back to a local build is an error, not a number
+  (the `justrust remote: ok on ...` line must be there). Instruction
+  counts are dropped for this stack: the build tree runs on the machine.
+- **How fast is the machine itself?** `bench/on-remote.sh start --
+  bench/versus.py run --synth 1` runs any benchmark *on* the machine:
+  it copies the justrust binary and the repo, ships the pinned snapshot
+  trees as `git archive` tarballs (`JUSTRUST_BENCH_SRC`), enables perf
+  counters, keeps the idle watchdog from stopping the machine, and runs
+  in tmux. `status`, `attach`, and `fetch` (copies results back as
+  `*-remote-<type>.json`).
+
+The first `--remote` run found two bugs that made every remote build of
+the Desktop snapshot slower than local, now fixed: a workspace outside
+git was mirrored crate by crate, so a build script's `rerun-if-changed`
+root `Cargo.toml` was missing and 8 crates recompiled on every call (no-op
+`test` 11.4 s remote vs 0.5 s local; 0.5 s remote after the fix), and the
+machine lacked libraries Desktop links (`libxkbcommon-x11`, `libX11`,
+`dbus`, `EGL`).
+
 ## Backends
 
 `~/.justrust/remote/backend.json` holds the choice
