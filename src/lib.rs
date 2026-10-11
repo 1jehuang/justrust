@@ -22,6 +22,7 @@ mod export;
 mod findings;
 mod history;
 mod install;
+mod linker;
 mod live;
 mod mcp;
 mod paths;
@@ -345,6 +346,10 @@ enum ToolchainCmd {
         #[arg(long)]
         toolchain: Option<String>,
     },
+    /// Download the wild linker (pinned release, checksum verified). Local
+    /// crates (test binaries, bins) then link with it, falling back to the
+    /// configured linker if wild fails. `JUSTRUST_LINKER=off` disables it.
+    Wild,
 }
 
 #[derive(Subcommand)]
@@ -506,6 +511,9 @@ pub fn main() -> anyhow::Result<()> {
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
         _ => {}
     }
+    if linker::invoked_as_ld(&argv0) {
+        linker::ld_main();
+    }
     if shim::invoked_as_shim(&argv0) {
         shim::main();
     }
@@ -583,6 +591,7 @@ pub fn main() -> anyhow::Result<()> {
             ToolchainCmd::CargoFork { binary, toolchain } => {
                 toolchain::cargo_fork_command(&binary, toolchain)?
             }
+            ToolchainCmd::Wild => linker::install_command()?,
         },
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,

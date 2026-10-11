@@ -397,7 +397,7 @@ pub fn for_build() -> Option<Toolchain> {
 
 // ------------------------------------------------------------------ install
 
-fn curl(url: &str, dest: &Path) -> Result<()> {
+pub(crate) fn curl(url: &str, dest: &Path) -> Result<()> {
     let out = Command::new("curl")
         .args(["-fsSL", "--retry", "3", "--connect-timeout", "20", "-o"])
         .arg(dest)
@@ -413,7 +413,7 @@ fn curl(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sha256(path: &Path) -> Result<String> {
+pub(crate) fn sha256(path: &Path) -> Result<String> {
     let out = Command::new("sha256sum")
         .arg(path)
         .output()
@@ -879,6 +879,7 @@ pub fn status() -> Result<()> {
             println!("system  {rustc} (no {CONFIG_FILE} [toolchain] pin here)");
         }
     }
+    println!("{}", crate::linker::status_line());
     let all = list_installed();
     if all.is_empty() {
         println!("no toolchains installed in {}", root()?.display());

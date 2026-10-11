@@ -177,6 +177,12 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if passes_on {
         cmd.arg("-Ztime-passes").arg("-Ztime-passes-format=json");
     }
+    // Local linking units link with wild when installed (fail open inside
+    // the `ld` dispatcher). Never for depcache units: plan is None here.
+    if plan.is_none() {
+        let nightly = std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some();
+        cmd.args(crate::linker::rustc_args(args, described.local, nightly));
+    }
     if force_bootstrap {
         cmd.env("RUSTC_BOOTSTRAP", "1");
     }
