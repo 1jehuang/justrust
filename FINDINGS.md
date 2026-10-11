@@ -1785,3 +1785,10 @@ justrust now records per-test durations on every `test` (255d152): a cargo
 process-local `RUSTC_BOOTSTRAP`, so artifacts stay Fresh. The report lists
 the slowest tests when one is >=1s and >=10% of the test phase, and
 `slow_tests` names the slowest one.
+
+Remaining, measured alone after the fixes (load 16): pending_editor 2.6s
+(~2.2s of it real `thread::sleep`, because motion tweens read
+`Instant::now`; an injectable animation clock in jcode-desktop-motion would
+remove it and the other 2x-duration sleeps in workspace.rs), tail_glide
+tests 1.9-2.7s (rendering plus ~1s of 8ms frame sleeps the glide relies
+on), everything else under 1.7s. tall_preview went 1.16s -> 0.07s.
