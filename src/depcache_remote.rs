@@ -57,12 +57,16 @@ pub enum Mode {
     ReadWrite,
 }
 
+/// Off by default while the backend moves to AWS. Opt in with
+/// `JUSTRUST_REMOTE_CACHE=1` (or `read`).
 pub fn mode() -> Mode {
+    if !depcache::enabled() {
+        return Mode::Off;
+    }
     match std::env::var("JUSTRUST_REMOTE_CACHE").as_deref() {
-        Ok("0") | Ok("off") | Ok("false") | Ok("no") => Mode::Off,
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes") => Mode::ReadWrite,
         Ok("read") | Ok("ro") => Mode::Read,
-        _ if !depcache::enabled() => Mode::Off,
-        _ => Mode::ReadWrite,
+        _ => Mode::Off,
     }
 }
 
