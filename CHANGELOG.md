@@ -3,6 +3,30 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.4
+
+- **Public prebuilt dependency store, on by default.** After a local miss,
+  dependency units come from justrust's S3 store (popular crates.io crates
+  compiled by our fleet with the pinned toolchain), verified before use.
+  `JUSTRUST_PREBUILT=off` disables it, `JUSTRUST_PREBUILT=<url>` points at
+  another store. Cold check of 43 popular crates: 60-70 s -> 39-43 s.
+  Cache keys are portable across cargo homes and symlinked registries
+  (scheme 8), and vendored-C build scripts (ring, aws-lc-sys,
+  libsqlite3-sys, onig_sys) replay from the store.
+- **Test pool.** Test binaries run in parallel, likely failures first,
+  slow tests in their own processes, failures under overlap confirmed alone,
+  cargo's fail-fast honored. `JUSTRUST_TEST_PARALLEL=0` turns it off.
+- **Early diagnostics (opt-in).** `JUSTRUST_EARLY=1` or `auto` keeps a
+  rust-analyzer per workspace and prints type errors in ~0.1 s while cargo
+  runs. `justrust early start|stop|status`.
+- **wild linker for local crates** (`justrust toolchain wild`), falling
+  back to the project's linker on any failure. `JUSTRUST_LINKER=off`.
+- **jr-cargo**: mimalloc and parallel manifest parsing (no-op `test`
+  0.39 s -> 0.22 s with the pinned toolchain's cargo fork).
+- Fixes: daemons no longer inherit the caller's file descriptors (held
+  locks), remote sync keeps source directories named `target`, remote
+  builds size jobs for the build machine.
+
 ## 0.1.0-alpha.1
 
 First public release. Linux only.
