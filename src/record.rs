@@ -388,7 +388,12 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
                 f_err: f_err.clone(),
                 out_lock: out_lock.clone(),
             });
-            pool = crate::test_pool::Pool::start(&run_dir, Path::new(&meta.cwd), &me, sink);
+            let fail_fast = !cargo_args
+                .iter()
+                .take_while(|a| *a != "--")
+                .any(|a| a == "--no-fail-fast");
+            pool =
+                crate::test_pool::Pool::start(&run_dir, Path::new(&meta.cwd), &me, sink, fail_fast);
         }
         let arg = pool.as_ref().map(|p| p.runner_arg());
         if let Some(c) = crate::test_runner::cargo_config(&me, arg.as_deref()) {

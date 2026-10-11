@@ -168,6 +168,10 @@ struct State {
     next_id: usize,
     results: Vec<Finished>,
     cpu_secs: f64,
+    /// Fail-fast tripped: a binary failed, so queued and later binaries are
+    /// not run (cargo's default stops at the first failing binary).
+    stopped: bool,
+    skipped: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +209,7 @@ struct Inner {
     jobs: usize,
     history: Mutex<History>,
     gate: Gate,
+    fail_fast: bool,
 }
 
 pub struct Pool {
@@ -230,7 +235,13 @@ pub fn live_pids() -> Vec<i32> {
 impl Pool {
     /// Listen in `run_dir`. `None` when the socket cannot be made (fail open:
     /// binaries then run under cargo as usual).
-    pub fn start(run_dir: &Path, cwd: &Path, me: &Path, sink: Arc<dyn Sink>) -> Option<Pool> {
+    pub fn start(
+        run_dir: &Path,
+        cwd: &Path,
+        me: &Path,
+        sink: Arc<dyn Sink>,
+        fail_fast: bool,
+    ) -> Option<Pool> {
         let sock = run_dir.join(SOCK);
         // sockaddr_un holds 108 bytes.
         if sock.as_os_str().len() >= 100 {
@@ -246,6 +257,7 @@ impl Pool {
             jobs: max_jobs(),
             history: Mutex::new(History::load(cwd)),
             gate: Gate::default(),
+            fail_fast,
         });
         let acc = inner.clone();
         let accept = std::thread::spawn(move || {
@@ -284,6 +296,15 @@ impl Pool {
             st = inner.cv.wait(st).unwrap();
         }
         let any_failed = st.results.iter().any(|r| r.exit != 0);
+        if !st.skipped.is_empty() {
+            let msg = format!(
+                "justrust: not run after the first failing test binary (cargo's fail-fast; --no-fail-fast runs them all): {}",
+                st.skipped.join(", ")
+            );
+            inner
+                .sink
+                .emit_block(&[(paths::now(), "e", msg.into_bytes())]);
+        }
         let mut h = inner.history.lock().unwrap();
         h.update(&st.results);
         h.save();
@@ -311,6 +332,12 @@ fn accept_one(inner: &Arc<Inner>, mut conn: UnixStream) -> bool {
     let priority = inner.history.lock().unwrap().priority(&stem);
     {
         let mut st = inner.state.lock().unwrap();
+        if st.stopped {
+            st.skipped.push(stem);
+            drop(st);
+            let _ = conn.write_all(b"ok\n");
+            return true;
+        }
         let id = st.next_id;
         st.next_id += 1;
         st.queue.push(Job {
@@ -380,7 +407,13 @@ fn run_job(inner: &Arc<Inner>, job: Job) {
                     fin = confirm_alone(inner, &job.req, &job.stem, &g.args, fin);
                 }
                 report(inner, &fin);
-                inner.state.lock().unwrap().results.push(fin);
+                let mut st = inner.state.lock().unwrap();
+                if fin.exit != 0 && inner.fail_fast {
+                    st.stopped = true;
+                    let queued: Vec<String> = st.queue.drain(..).map(|j| j.stem).collect();
+                    st.skipped.extend(queued);
+                }
+                st.results.push(fin);
             });
         }
     });
@@ -1371,6 +1404,99 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    struct VecSink(Mutex<Vec<String>>);
+    impl Sink for VecSink {
+        fn emit_block(&self, lines: &[(f64, &'static str, Vec<u8>)]) {
+            let mut v = self.0.lock().unwrap();
+            v.extend(
+                lines
+                    .iter()
+                    .map(|l| String::from_utf8_lossy(&l.2).into_owned()),
+            );
+        }
+    }
+
+    /// Cargo stops at the first failing test binary unless --no-fail-fast.
+    /// Running every binary anyway made `test --workspace` on Jcode run
+    /// 8,911 tests against stock's 1,862 (FINDINGS 41).
+    fn pool_run(fail_fast: bool) -> (bool, Vec<String>, Vec<String>) {
+        use std::os::unix::fs::PermissionsExt;
+        struct TmpDir(PathBuf);
+        impl TmpDir {
+            fn path(&self) -> &Path {
+                &self.0
+            }
+        }
+        impl Drop for TmpDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        // Short: the pool's socket path must fit in sockaddr_un.
+        let dir =
+            TmpDir(std::env::temp_dir().join(format!("jr-ff-{}-{fail_fast}", std::process::id())));
+        let _ = std::fs::remove_dir_all(dir.path());
+        std::fs::create_dir_all(dir.path()).unwrap();
+        let mk = |name: &str, body: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(
+                &p,
+                format!(
+                    "#!/bin/sh\necho ran >> {}/ran-{name}\n{body}\n",
+                    dir.path().display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        let bad = mk("bad", "echo 'test t::a ... FAILED'; exit 101");
+        let good = mk("good", "echo 'test t::b ... ok'; exit 0");
+        let sink = Arc::new(VecSink(Mutex::new(Vec::new())));
+        // One job at a time, so `good` is queued or arrives after `bad` failed.
+        unsafe { std::env::set_var("JUSTRUST_TEST_JOBS", "1") };
+        let pool = Pool::start(
+            dir.path(),
+            dir.path(),
+            Path::new("jr"),
+            sink.clone(),
+            fail_fast,
+        )
+        .unwrap();
+        assert!(submit(&pool.sock, &bad, &[]));
+        // Let `bad` finish before `good` arrives (cargo runs binaries in order).
+        let t0 = std::time::Instant::now();
+        while pool.inner.state.lock().unwrap().results.is_empty() && t0.elapsed().as_secs() < 10 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(submit(&pool.sock, &good, &[]));
+        let o = pool.finish();
+        let ran: Vec<String> = ["bad", "good"]
+            .into_iter()
+            .filter(|n| dir.path().join(format!("ran-{n}")).exists())
+            .map(String::from)
+            .collect();
+        let out = sink.0.lock().unwrap().clone();
+        (o.any_failed, ran, out)
+    }
+
+    #[test]
+    fn pool_stops_after_a_failing_binary_like_cargo() {
+        let (failed, ran, out) = pool_run(true);
+        assert!(failed);
+        assert_eq!(ran, ["bad"]);
+        assert!(
+            out.iter().any(
+                |l| l.contains("not run after the first failing test binary") && l.contains("good")
+            ),
+            "{out:?}"
+        );
+        let (failed, ran, out) = pool_run(false);
+        assert!(failed);
+        assert_eq!(ran, ["bad", "good"]);
+        assert!(!out.iter().any(|l| l.contains("not run after")), "{out:?}");
     }
 
     #[test]
