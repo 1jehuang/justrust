@@ -1,0 +1,370 @@
+{
+ "started": "2026-10-10T18:52:56-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.1",
+  "justrust_rev": "5b0be04862d3",
+  "justrust_dirty": false,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  }
+ },
+ "runs_per_scenario": 5,
+ "scenarios": {
+  "desktop-test-edit": {
+   "what": "THE reference loop: one line inside a #[test] fn of the 118k-line UI crate, run its tests",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "samples": [
+    {
+     "id": "20261010-185509293-4015756435",
+     "wall": 9.095,
+     "recorded_wall": 9.046,
+     "cpu": 9.14,
+     "startup": 0.505,
+     "compile": 8.472,
+     "test_run": 0.006,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 4.589,
+      "codegen": 1.158,
+      "link": 0.762,
+      "incremental": 0.922,
+      "other": 0.99
+     },
+     "link_secs": 0.762,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 3.7,
+     "foreign_rustc_before": 0,
+     "load_before": 5.47,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui (test)"
+    },
+    {
+     "id": "20261010-185619340-4015756760",
+     "wall": 10.73,
+     "recorded_wall": 10.547,
+     "cpu": 10.36,
+     "startup": 0.595,
+     "compile": 9.781,
+     "test_run": 0.01,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 4.37,
+      "codegen": 1.939,
+      "link": 1.371,
+      "incremental": 0.877,
+      "other": 1.073
+     },
+     "link_secs": 1.371,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 6.11,
+     "foreign_rustc_before": 4,
+     "load_before": 10.04,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui (test)"
+    },
+    {
+     "id": "20261010-185731024-4015756508",
+     "wall": 8.487,
+     "recorded_wall": 8.451,
+     "cpu": 9.35,
+     "startup": 0.465,
+     "compile": 7.914,
+     "test_run": 0.007,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 3.983,
+      "codegen": 1.416,
+      "link": 0.506,
+      "incremental": 0.849,
+      "other": 1.103
+     },
+     "link_secs": 0.506,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 4.2,
+     "foreign_rustc_before": 0,
+     "load_before": 8.6,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui (test)"
+    },
+    {
+     "id": "20261010-185840083-4015756176",
+     "wall": 8.322,
+     "recorded_wall": 8.283,
+     "cpu": 9.21,
+     "startup": 0.513,
+     "compile": 7.71,
+     "test_run": 0.006,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 4.255,
+      "codegen": 1.183,
+      "link": 0.469,
+      "incremental": 0.86,
+      "other": 0.889
+     },
+     "link_secs": 0.469,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 3.29,
+     "foreign_rustc_before": 0,
+     "load_before": 5.85,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui (test)"
+    },
+    {
+     "id": "20261010-185948995-4015756106",
+     "wall": 8.15,
+     "recorded_wall": 8.111,
+     "cpu": 8.98,
+     "startup": 0.504,
+     "compile": 7.55,
+     "test_run": 0.006,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 4.267,
+      "codegen": 1.182,
+      "link": 0.463,
+      "incremental": 0.68,
+      "other": 0.896
+     },
+     "link_secs": 0.463,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 2.8,
+     "foreign_rustc_before": 0,
+     "load_before": 4.51,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui (test)"
+    }
+   ],
+   "stats": {
+    "n": 5,
+    "median": 8.487,
+    "min": 8.15,
+    "max": 10.73,
+    "quiet_n": 3,
+    "quiet_median": 8.322,
+    "phases": {
+     "startup": 0.505,
+     "compile": 7.914,
+     "test_run": 0.006,
+     "cpu": 9.21,
+     "link_secs": 0.506
+    },
+    "split": {
+     "frontend": 4.267,
+     "codegen": 1.183,
+     "link": 0.506,
+     "incremental": 0.86,
+     "other": 0.99
+    },
+    "units": 1
+   }
+  },
+  "desktop-body-check": {
+   "what": "same body edit, `check` only (the inner type-check loop)",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261010-190201256-4015756780",
+     "wall": 2.434,
+     "recorded_wall": 2.401,
+     "cpu": 2.66,
+     "startup": 0.44,
+     "compile": 1.916,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 1.468,
+      "codegen": 0.0,
+      "link": 0.008,
+      "incremental": 0.117,
+      "other": 0.301
+     },
+     "link_secs": 0.008,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 2.93,
+     "foreign_rustc_before": 0,
+     "load_before": 4.09,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261010-190304226-4015756762",
+     "wall": 2.427,
+     "recorded_wall": 2.396,
+     "cpu": 2.68,
+     "startup": 0.44,
+     "compile": 1.898,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 1.477,
+      "codegen": 0.0,
+      "link": 0.007,
+      "incremental": 0.117,
+      "other": 0.273
+     },
+     "link_secs": 0.007,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 2.96,
+     "foreign_rustc_before": 0,
+     "load_before": 3.84,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261010-190407356-4015756830",
+     "wall": 3.05,
+     "recorded_wall": 3.001,
+     "cpu": 3.15,
+     "startup": 0.558,
+     "compile": 2.365,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 1.792,
+      "codegen": 0.0,
+      "link": 0.009,
+      "incremental": 0.216,
+      "other": 0.31
+     },
+     "link_secs": 0.009,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.95,
+     "foreign_rustc_before": 2,
+     "load_before": 7.87,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261010-190511184-4015756291",
+     "wall": 2.655,
+     "recorded_wall": 2.618,
+     "cpu": 2.87,
+     "startup": 0.459,
+     "compile": 2.107,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 1.627,
+      "codegen": 0.0,
+      "link": 0.007,
+      "incremental": 0.138,
+      "other": 0.306
+     },
+     "link_secs": 0.007,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 3.99,
+     "foreign_rustc_before": 1,
+     "load_before": 9.26,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui"
+    },
+    {
+     "id": "20261010-190614345-4015756118",
+     "wall": 2.578,
+     "recorded_wall": 2.547,
+     "cpu": 2.82,
+     "startup": 0.443,
+     "compile": 2.051,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "split": {
+      "frontend": 1.632,
+      "codegen": 0.0,
+      "link": 0.008,
+      "incremental": 0.117,
+      "other": 0.266
+     },
+     "link_secs": 0.008,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 2.49,
+     "foreign_rustc_before": 0,
+     "load_before": 6.08,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    }
+   ],
+   "stats": {
+    "n": 5,
+    "median": 2.578,
+    "min": 2.427,
+    "max": 3.05,
+    "quiet_n": 3,
+    "quiet_median": 2.434,
+    "phases": {
+     "startup": 0.443,
+     "compile": 2.051,
+     "test_run": 0.0,
+     "cpu": 2.82,
+     "link_secs": 0.008
+    },
+    "split": {
+     "frontend": 1.627,
+     "codegen": 0.0,
+     "link": 0.008,
+     "incremental": 0.117,
+     "other": 0.301
+    },
+    "units": 1
+   }
+  }
+ },
+ "finished": "2026-10-10T19:06:16-0700"
+}

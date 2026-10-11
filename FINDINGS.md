@@ -1664,3 +1664,36 @@ remote numbers are on a 16 vCPU machine; production default is c7i.8xlarge
 Over 272 recorded Jcode Desktop builds over 20 s on this laptop: median peak
 build RSS 4.3 GB (p90 5.9, max 8.5), median peak 11 cores, median 237 CPU-s.
 Local target dirs here: jcode 744 GB, jcode-desktop 1.1 TB.
+
+## 2026-10-10: pinned toolchain (phase 1) vs system rustc
+
+`justrust toolchain` now installs dated toolchains from static.rust-lang.org
+into `~/.justrust/toolchains/<id>` (commit 2e5721d). nightly-2026-10-08 with
+rustc, cargo, std, rust-src, clippy, rustfmt, cranelift, rustc-dev and
+llvm-tools: 23.4 s to download, verify and unpack (9 components in
+parallel), 1.66 GB on disk. Cranelift loads (`-Zcodegen-backend=cranelift`
+hello world runs).
+
+Reference loop, same pinned snapshots, own target dir per toolchain
+(`bench/suite.py run --toolchain`), 5 samples each:
+
+| scenario | system 1.98.1 | nightly-2026-10-08 | compare |
+|---|---:|---:|---|
+| desktop-test-edit | 8.49 s (8.15..10.73) | 7.44 s (6.76..8.78) | -12%, within noise (ranges overlap) |
+| desktop-body-check | 2.58 s (2.43..3.05) | 2.44 s (2.02..2.75) | -6%, within noise |
+
+Results: `bench/results/20261010-190616-5b0be04862d3.json` (system),
+`bench/results/20261010-192507-5b0be04862d3-dirty-nightly-2026-10-08.json`
+(the dirty flag is an uncommitted README edit only). Frontend 4.27 -> 3.59 s
+and incr 0.86 -> 0.71 s moved most, which fits a newer rustc, but the
+samples overlap, so no speedup is claimed. The cold dependency build on the
+new toolchain took 155 s (run 20261010-190717445-4098100643, 887 units),
+and a later warmup rebuilt 662 units in 64 s (run
+20261010-191741408-4098100974): switching toolchains costs one cold build
+per target dir.
+
+Takeaway: phase 1 does not slow the loop down, and it delivers what phase 2
+needs: one exact nightly on every machine, unstable flags without
+`RUSTC_BOOTSTRAP` (the shim now gets per-pass timings for every local crate
+on a pinned nightly), Cranelift, and rustc-dev. The wins come from the
+phase 2 flag experiments on this toolchain.

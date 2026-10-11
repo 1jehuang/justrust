@@ -52,7 +52,9 @@ from a cache.
 Each phase ships only after a measured win on the reference loop
 (`bench/edit-loop.sh` and the Desktop benches), recorded in FINDINGS.md.
 
-1. **Pinned toolchain, managed by justrust.** `~/.justrust/toolchains/<id>`
+1. **Pinned toolchain, managed by justrust.** *Shipped 2026-10-10*
+   (`justrust toolchain`, README "Pinned toolchain"; FINDINGS 2026-10-10:
+   neutral on the loop, -12% within noise). `~/.justrust/toolchains/<id>`
    holds a nightly with rust-src, cranelift, and rustc-dev. Projects opt in
    (`justrust.toml` or `[toolchain]`). One toolchain everywhere, so depcache
    keys never churn from distro updates.

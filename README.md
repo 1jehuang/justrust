@@ -68,6 +68,12 @@ or signed out: every build runs locally, with one line saying why.
   in its waste report (`JUSTRUST_SPLIT_HINTS=0` disables the refresh).
 - **`justrust history`** mines past [Jcode](https://github.com/1jehuang/jcode)
   sessions for cargo calls. See [FINDINGS.md](FINDINGS.md).
+- **Pinned toolchains** (phase 1 of [docs/toolchain.md](docs/toolchain.md)).
+  `justrust toolchain pin nightly` writes `justrust.toml` and installs the
+  latest complete nightly (rustc, cargo, std, rust-src, clippy, rustfmt,
+  Cranelift, rustc-dev, llvm-tools) straight from static.rust-lang.org into
+  `~/.justrust/toolchains/<id>`, checksum-verified, no rustup. Every build
+  in that project then uses it. See [Pinned toolchain](#pinned-toolchain).
 
 ## Agent interface
 
@@ -171,6 +177,33 @@ Where the wall time went
 Environment: `JUSTRUST_DISABLE=1` turns recording off, `JUSTRUST_QUIET=1`
 hides the summary line, and `JUSTRUST_PASSES=off|always` controls pass timings.
 Linux only for now.
+
+## Pinned toolchain
+
+```sh
+justrust toolchain pin nightly             # latest complete nightly, writes justrust.toml, installs (~25 s, 1.7 GB)
+justrust toolchain pin nightly-2026-10-08  # or an exact one; X.Y.Z and beta-YYYY-MM-DD work too
+justrust toolchain                         # what builds here use, what is installed
+justrust toolchain unpin                   # back to the system toolchain
+justrust toolchain remove nightly-2026-10-08
+```
+
+```toml
+# justrust.toml (found in the build directory or any parent)
+[toolchain]
+channel = "nightly-2026-10-08"
+```
+
+Recorded builds (`justrust check|test|build|clippy|run`, the `cargo` proxy)
+run the pinned cargo with the pinned rustc behind the recorder, and the
+toolchain's `bin/` first on `PATH`, so clippy, rustfmt and rustdoc match.
+Other cargo commands through the proxy use it once it is installed.
+`JUSTRUST_TOOLCHAIN=<spec>` overrides the file for one run and
+`JUSTRUST_TOOLCHAIN=system` turns it off. A missing toolchain is installed
+on first use (`JUSTRUST_TOOLCHAIN_AUTO_INSTALL=0` to never download during a
+build). If that fails the build runs on the system toolchain, says so, and
+does not retry for 10 minutes. On a pinned nightly, every local crate gets
+rustc's per-pass timings (no `RUSTC_BOOTSTRAP` cache flip needed).
 
 ## Direction: all in
 
