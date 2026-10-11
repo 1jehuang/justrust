@@ -405,6 +405,46 @@ struct RemoteArgs {
     args: Vec<String>,
 }
 
+/// `justrust <check|test|build|clippy|run|cargo> ARGS...` -> the subcommand
+/// and ARGS exactly as given, `--help` included (cargo's help, as before).
+fn passthrough_split(argv: &[OsString]) -> Option<(&'static str, Vec<OsString>)> {
+    let sub = argv.get(1)?.to_str()?;
+    let sub = ["check", "test", "build", "clippy", "run", "cargo"]
+        .into_iter()
+        .find(|s| *s == sub)?;
+    Some((sub, argv[2..].to_vec()))
+}
+
+#[cfg(test)]
+mod passthrough_tests {
+    use super::*;
+
+    fn split(args: &[&str]) -> Option<(&'static str, Vec<String>)> {
+        let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
+        passthrough_split(&argv)
+            .map(|(s, r)| (s, r.into_iter().map(|a| a.into_string().unwrap()).collect()))
+    }
+
+    #[test]
+    fn leading_double_dash_reaches_cargo() {
+        let (sub, rest) = split(&["justrust", "test", "--", "--skip", "x"]).unwrap();
+        assert_eq!(sub, "test");
+        assert_eq!(rest, ["--", "--skip", "x"]);
+        let (_, rest) = split(&["justrust", "test", "--lib", "--", "--nocapture"]).unwrap();
+        assert_eq!(rest, ["--lib", "--", "--nocapture"]);
+    }
+
+    #[test]
+    fn other_subcommands_go_to_clap() {
+        assert!(split(&["justrust", "show"]).is_none());
+        assert!(split(&["justrust"]).is_none());
+        assert_eq!(
+            split(&["justrust", "check", "--help"]).unwrap().1,
+            ["--help"]
+        );
+    }
+}
+
 /// `--local` / `--remote` / `--auto` before any `--`: aliases for
 /// JUSTRUST_REMOTE=off|force|auto (the router).
 fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>) {
@@ -481,6 +521,18 @@ pub fn main() -> anyhow::Result<()> {
     }
     if name == "cargo" {
         record::main(std::env::args_os().skip(1).collect());
+    }
+
+    // Cargo passthrough subcommands take argv verbatim: clap swallows a
+    // leading `--` (`justrust test -- --skip x` reached cargo as
+    // `test --skip x` and failed).
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    if let Some((sub, rest)) = passthrough_split(&argv) {
+        account::poll_pending();
+        if sub == "cargo" {
+            record::main(rest);
+        }
+        agent(sub, rest);
     }
 
     let cli = Cli::parse();
