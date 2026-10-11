@@ -1,0 +1,698 @@
+{
+ "experimental": true,
+ "started": "2026-10-11T06:42:01-0700",
+ "snapshot": "{'jcode-desktop': (PosixPath('/home/jeremy/jcode-desktop'), '7d38fb7'), 'jcode': (PosixPath('/home/jeremy/jcode'), 'abff94eeb')}",
+ "sweep": {
+  "raw_errors": [
+   {
+    "code": "E0282",
+    "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_gmail_read_card.rs",
+    "line": 627,
+    "message": "type annotations needed\nfull type: `fn assert_failed<{unknown}, &str>(AssertKind, &{unknown}, &&str, Option<Arguments<'_>>) -> !`\n",
+    "severity": 1
+   },
+   {
+    "code": "E0282",
+    "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_gmail_read_card.rs",
+    "line": 659,
+    "message": "type annotations needed",
+    "severity": 1
+   },
+   {
+    "code": "E0282",
+    "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_gmail_read_card.rs",
+    "line": 664,
+    "message": "type annotations needed",
+    "severity": 1
+   }
+  ],
+  "files": 278,
+  "pulled": 278,
+  "secs": 73.8,
+  "false_positives": []
+ },
+ "mutations": [
+  {
+   "name": "type mismatch",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 19,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 1846.3,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0308"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     "line": 20,
+     "message": "expected u32, found &'static str",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "unknown method",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 19,
+   "want": "E0599",
+   "early_ready": true,
+   "early_ms": 141.9,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0599"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0599"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0599",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     "line": 20,
+     "message": "no method `no_such_method` on type `Option<u64>`",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "unresolved name",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 19,
+   "want": "E0425",
+   "early_ready": true,
+   "early_ms": 230.1,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0425"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     20,
+     "E0425"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     "line": 20,
+     "message": "no such value in this scope",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "use after move",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+   "line": 25,
+   "want": "E0382",
+   "early_ready": true,
+   "early_ms": 229.1,
+   "callers_ms": null,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/fps_counter.rs",
+     26,
+     "E0382"
+    ]
+   ],
+   "ra_raw": [],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "wrong return type",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 68,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 328.8,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     68,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     68,
+     "E0308"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     "line": 68,
+     "message": "expected &str, found i32",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "integer type mix",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 58,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 360.1,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0308"
+    ],
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0277"
+    ],
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0277"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0308"
+    ],
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     58,
+     "E0277"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     "line": 58,
+     "message": "expected usize, found u8",
+     "severity": 1
+    },
+    {
+     "code": "E0277",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     "line": 58,
+     "message": "the trait bound `usize: Add<u8>` is not satisfied",
+     "severity": 1
+    },
+    {
+     "code": "E0277",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     "line": 58,
+     "message": "the trait bound `usize: Add<u8>` is not satisfied",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "unresolved import",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 10,
+   "want": "E0432",
+   "early_ready": true,
+   "early_ms": 1764.0,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     10,
+     "E0432"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     10,
+     "E0432"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0432",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     "line": 10,
+     "message": "unresolved import",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "non-exhaustive match",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 76,
+   "want": "E0004",
+   "early_ready": true,
+   "early_ms": 603.2,
+   "callers_ms": null,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+     67,
+     "E0004"
+    ]
+   ],
+   "ra_raw": [],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "unknown field",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 43,
+   "want": "E0609",
+   "early_ready": true,
+   "early_ms": 1266.8,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     44,
+     "E0559"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     44,
+     "E0609"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0559",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     "line": 44,
+     "message": "no field `no_such_field` on type `&mut Panel`",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "wrong arg count",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 83,
+   "want": "E0061",
+   "early_ready": true,
+   "early_ms": 301.6,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     83,
+     "E0061"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     83,
+     "E0061"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0061",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     "line": 83,
+     "message": "expected 1 argument, found 2",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "missing struct field",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 59,
+   "want": "E0063",
+   "early_ready": true,
+   "early_ms": 222.2,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     58,
+     "E0063"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     58,
+     "E0063"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0063",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     "line": 58,
+     "message": "missing structure fields:\n- requested\n",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "borrow conflict",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+   "line": 62,
+   "want": "E0499",
+   "early_ready": true,
+   "early_ms": 269.8,
+   "callers_ms": null,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     64,
+     "E0499"
+    ]
+   ],
+   "ra_raw": [],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "tuple arity",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 11,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 548.1,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     11,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     11,
+     "E0308"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     "line": 11,
+     "message": "expected (f32, f32, bool), found (f32, f32)",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "trait bound",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 13,
+   "want": "E0277",
+   "early_ready": true,
+   "early_ms": 163.0,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     13,
+     "E0277"
+    ],
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     13,
+     "E0277"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     13,
+     "E0277"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0277",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     "line": 13,
+     "message": "the trait bound `f32: Add<u32>` is not satisfied",
+     "severity": 1
+    },
+    {
+     "code": "E0277",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     "line": 13,
+     "message": "the trait bound `f32: Add<u32>` is not satisfied",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  },
+  {
+   "name": "assign immutable",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 14,
+   "want": "E0384",
+   "early_ready": true,
+   "early_ms": 125.2,
+   "callers_ms": null,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     15,
+     "E0384"
+    ]
+   ],
+   "ra_raw": [],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "format args",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 14,
+   "want": "",
+   "early_ready": true,
+   "early_ms": 168.4,
+   "callers_ms": null,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     15,
+     ""
+    ]
+   ],
+   "ra_raw": [],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "syntax error",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+   "line": 14,
+   "want": "",
+   "early_ready": true,
+   "early_ms": 166.4,
+   "callers_ms": null,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     14,
+     ""
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     "line": 14,
+     "message": "Syntax Error: expected expression",
+     "severity": 1
+    },
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     "line": 14,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    },
+    {
+     "code": "E0282",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/ack.rs",
+     "line": 14,
+     "message": "type annotations needed",
+     "severity": 1
+    }
+   ],
+   "tp": 0,
+   "fp": 0,
+   "fn": 1,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "signature change (callers elsewhere)",
+   "file": "jcode-desktop/crates/jcode-desktop-ui/src/effort.rs",
+   "line": 66,
+   "want": "E0061",
+   "early_ready": true,
+   "early_ms": 254.2,
+   "callers_ms": null,
+   "early": [],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     83,
+     "E0061"
+    ],
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode-desktop/crates/jcode-desktop-ui/src/panel_effort.rs",
+     90,
+     "E0593"
+    ]
+   ],
+   "ra_raw": [],
+   "tp": 0,
+   "fp": 0,
+   "fn": 2,
+   "first_rustc_error_found": false
+  },
+  {
+   "name": "dependency crate (jcode-core)",
+   "file": "jcode/crates/jcode-core/src/id.rs",
+   "line": 201,
+   "want": "E0308",
+   "early_ready": true,
+   "early_ms": 520.8,
+   "callers_ms": null,
+   "early": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode/crates/jcode-core/src/id.rs",
+     202,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "/home/jeremy/.jcode/scratch/earlydev/jcode/crates/jcode-core/src/id.rs",
+     202,
+     "E0308"
+    ]
+   ],
+   "ra_raw": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.jcode/scratch/earlydev/jcode/crates/jcode-core/src/id.rs",
+     "line": 202,
+     "message": "expected u32, found &str",
+     "severity": 1
+    }
+   ],
+   "tp": 1,
+   "fp": 0,
+   "fn": 0,
+   "first_rustc_error_found": true
+  }
+ ],
+ "totals": {
+  "n": 19,
+  "first_found": 12,
+  "clean": 12,
+  "fp": 0,
+  "tp": 12,
+  "fn": 8
+ }
+}

@@ -26,7 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import suite  # noqa: E402
 
 J = os.environ.get("JUSTRUST", str(Path.home() / ".cargo/bin/justrust"))
-ROOT = suite.prepare("desktop")
+# EARLY_ACCURACY_ROOT: a private copy of the snapshot (jcode + jcode-desktop),
+# so the accuracy work does not hold the shared snapshot lock for long.
+ROOT = Path(os.environ["EARLY_ACCURACY_ROOT"]) if os.environ.get("EARLY_ACCURACY_ROOT") else suite.prepare("desktop")
 WS = ROOT / "jcode-desktop"
 UI = "jcode-desktop/crates/jcode-desktop-ui/src"
 CORE = "jcode/crates/jcode-core/src/id.rs"
@@ -139,7 +141,7 @@ def sweep() -> dict:
 
 def mutations() -> list[dict]:
     rows = []
-    target = ROOT / "target"
+    target = ROOT / "target"  # private per root
     for name, rel, anchor, repl, want in M:
         path = ROOT / rel
         pristine = suite.pristine(ROOT, rel)
@@ -151,6 +153,13 @@ def mutations() -> list[dict]:
             t = time.monotonic()
             early = daemon({"op": "diagnostics", "raw": True}, timeout=30)
             early_ms = (time.monotonic() - t) * 1000
+            callers_ms = None
+            if early.get("callers") and not early.get("diags"):
+                # Second phase, as an agent build runs it.
+                c = daemon({"op": "callers", "raw": True}, timeout=30)
+                callers_ms = (time.monotonic() - t) * 1000
+                early["diags"] = early.get("diags", []) + c.get("diags", [])
+                early["raw"] = early.get("raw", []) + c.get("raw", [])
             env = {**os.environ, "CARGO_TARGET_DIR": str(target), "JUSTRUST_REMOTE": "0", "JUSTRUST_TOOLCHAIN": "system"}
             env.pop("JUSTRUST_EARLY", None)
             p = subprocess.run([J, "check", "-p", "jcode-desktop-ui"], cwd=WS, env=env, capture_output=True, text=True)
@@ -167,13 +176,15 @@ def mutations() -> list[dict]:
         row = {
             "name": name, "file": rel, "line": line, "want": want,
             "early_ready": early.get("ready"), "early_ms": round(early_ms, 1),
+            "callers_ms": None if callers_ms is None else round(callers_ms, 1),
             "early": ed, "rustc": rerr, "ra_raw": early.get("raw", []), "tp": tp, "fp": fp, "fn": fn,
             "first_rustc_error_found": first_ok,
         }
         rows.append(row)
         verdict = "HIT" if first_ok and fp == 0 else ("MISS" if not ed else ("PARTIAL" if tp else "WRONG"))
         print(f"{verdict:8s} {name:38s} rustc {[c for *_, c in rerr]} early {[c for *_, c in ed]} "
-              f"tp {tp} fp {fp} fn {fn} ({early_ms:.0f} ms)", flush=True)
+              f"tp {tp} fp {fp} fn {fn} ({early_ms:.0f} ms"
+              f"{'' if callers_ms is None else f', callers {callers_ms:.0f} ms'})", flush=True)
         if verdict != "HIT":
             for d in early.get("raw", []):
                 print(f"           ra: sev {d['severity']} {d['code']} line {d['line']}: {str(d['message'])[:90]}")

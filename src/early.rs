@@ -64,6 +64,9 @@ pub struct Reply {
     /// Time spent inside the daemon.
     #[serde(default)]
     pub ms: f64,
+    /// Files queued for the `callers` op (second phase).
+    #[serde(default)]
+    pub callers: usize,
     /// Every rust-analyzer diagnostic, unfiltered (`pull` with `raw`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub raw: Vec<Value>,
@@ -81,6 +84,10 @@ pub struct EarlyInfo {
     pub files: Vec<String>,
     #[serde(default)]
     pub diags: Vec<Diag>,
+    /// Seconds from the start of the run to the second-phase answer
+    /// (files using a changed signature), when there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callers_secs: Option<f64>,
     /// Time the daemon spent answering.
     #[serde(default)]
     pub daemon_ms: f64,
@@ -147,12 +154,19 @@ fn state_dir(root: &Path) -> Result<PathBuf> {
 /// Ask the daemon of the workspace at `cwd`, or start one when opted in.
 /// `None` when there is nothing to show (no daemon, not ready, timeout).
 pub fn query(cwd: &Path, timeout: Duration) -> Option<Reply> {
+    query_op(cwd, timeout, "diagnostics")
+}
+
+fn query_op(cwd: &Path, timeout: Duration, op: &str) -> Option<Reply> {
     let root = workspace_root(cwd)?;
     let dir = state_dir(&root).ok()?;
     let sock = dir.join("sock");
     let s = match UnixStream::connect(&sock) {
         Ok(s) => s,
         Err(_) => {
+            if op != "diagnostics" {
+                return None;
+            }
             if let Err(e) = spawn_daemon(&root, &dir) {
                 eprintln!("justrust: early diagnostics unavailable: {e:#}");
             }
@@ -162,7 +176,7 @@ pub fn query(cwd: &Path, timeout: Duration) -> Option<Reply> {
     let _ = s.set_read_timeout(Some(timeout));
     let _ = s.set_write_timeout(Some(timeout));
     let mut w = s.try_clone().ok()?;
-    writeln!(w, "{}", json!({"op": "diagnostics"})).ok()?;
+    writeln!(w, "{}", json!({ "op": op })).ok()?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).ok()?;
     serde_json::from_str(&line).ok()
@@ -206,15 +220,31 @@ fn early_for_build(
             daemon_ms: r.ms,
             ..Default::default()
         };
-        if info.ready
-            && !info.diags.is_empty()
-            && !build_done.load(std::sync::atomic::Ordering::SeqCst)
-        {
-            let root = workspace_root(&cwd).unwrap_or(cwd.clone());
-            let text = format_block(&info.diags, &root, &cwd, secs);
+        let done = || build_done.load(std::sync::atomic::Ordering::SeqCst);
+        if info.ready && !info.diags.is_empty() && !done() {
+            let text = format_block(&info.diags, &cwd, secs, "");
             // One write: lines from cargo's tee never land inside the block.
             let _ = std::io::stderr().lock().write_all(text.as_bytes());
             info.shown = true;
+        }
+        // Second phase: a signature changed, so files that use the item
+        // may now be wrong. Pulled after the first answer is out, and only
+        // when the edited files themselves are clean (otherwise the agent
+        // already has an error to fix, and the pulls would hold the daemon
+        // for seconds).
+        if info.ready && r.callers > 0 && info.diags.is_empty() && !done() {
+            if let Some(c) = query_op(&cwd, Duration::from_secs(5), "callers") {
+                let secs = crate::paths::now() - start;
+                info.callers_secs = Some(secs);
+                info.files.extend(c.files);
+                if !c.diags.is_empty() && !done() {
+                    let text =
+                        format_block(&c.diags, &cwd, secs, " in files using a changed signature");
+                    let _ = std::io::stderr().lock().write_all(text.as_bytes());
+                    info.shown = true;
+                }
+                info.diags.extend(c.diags);
+            }
         }
         Some(info)
     }
@@ -227,14 +257,18 @@ fn rel(file: &str, cwd: &Path) -> String {
         .unwrap_or_else(|_| file.to_owned())
 }
 
-fn format_block(diags: &[Diag], _root: &Path, cwd: &Path, secs: f64) -> String {
+fn format_block(diags: &[Diag], cwd: &Path, secs: f64, what: &str) -> String {
     let mut o = format!(
-        "justrust: early errors from rust-analyzer after {secs:.2}s (cargo is still running and has the final word):\n"
+        "justrust: early errors{what} from rust-analyzer after {secs:.2}s (cargo is still running and has the final word):\n"
     );
     for d in diags {
+        let head = if d.code.is_empty() {
+            "error".to_owned()
+        } else {
+            format!("error[{}]", d.code)
+        };
         o.push_str(&format!(
-            "error[{}]: {}\n  --> {}:{}:{}\n",
-            d.code,
+            "{head}: {}\n  --> {}:{}:{}\n",
             d.message,
             rel(&d.file, cwd),
             d.line,
@@ -757,6 +791,12 @@ struct State {
     erroring: BTreeSet<PathBuf>,
     manifest_changed: bool,
     queries: u64,
+    /// Last seen text of every source file, to tell signature edits from
+    /// body edits and to find the files that mention a changed item.
+    texts: HashMap<PathBuf, String>,
+    /// Files that mention an item whose signature changed in the last
+    /// sync: pulled by the `callers` op, after the first answer.
+    callers: Vec<PathBuf>,
 }
 
 impl State {
@@ -785,6 +825,7 @@ impl State {
             self.erroring.remove(&p);
         }
         let mut rs = Vec::new();
+        let mut sig_names: BTreeSet<String> = BTreeSet::new();
         for p in changed {
             if p.file_name().is_some_and(|n| n == "Cargo.toml") {
                 // rust-analyzer reloads the workspace on its own; until it
@@ -795,6 +836,10 @@ impl State {
             let Ok(text) = std::fs::read_to_string(&p) else {
                 continue;
             };
+            if let Some(old) = self.texts.get(&p) {
+                sig_names.extend(changed_signatures(old, &text));
+            }
+            self.texts.insert(p.clone(), text.clone());
             let uri = file_uri(&p);
             let r = match self.versions.get_mut(&p) {
                 Some(v) => {
@@ -818,6 +863,7 @@ impl State {
                 rs.push(p);
             }
         }
+        self.callers = mentioning(&self.texts, &sig_names, &rs, MAX_CALLER_FILES);
         rs
     }
 
@@ -842,8 +888,17 @@ impl State {
         let mut files: BTreeSet<PathBuf> = changed.into_iter().collect();
         files.extend(self.erroring.iter().cloned());
         files.extend(extra.iter().cloned());
+        let files: Vec<PathBuf> = files.into_iter().collect();
+        let mut r = self.pull(&files, timeout, raw);
+        r.ms = t.elapsed().as_secs_f64() * 1000.0;
+        r.callers = self.callers.len();
+        r
+    }
+
+    fn pull(&mut self, files: &[PathBuf], timeout: Duration, raw: bool) -> Reply {
+        let t = Instant::now();
         let mut rxs = Vec::new();
-        for f in &files {
+        for f in files {
             if let Ok(rx) = self.lsp.request_async(
                 "textDocument/diagnostic",
                 json!({"textDocument": {"uri": file_uri(f)}}),
@@ -869,7 +924,13 @@ impl State {
                            "message": d["message"]})
                 }));
             }
-            let errs: Vec<Diag> = items.iter().filter_map(|d| to_diag(&f, d)).collect();
+            let mut errs: Vec<Diag> = items.iter().filter_map(|d| to_diag(&f, d)).collect();
+            let mut seen = BTreeSet::new();
+            errs.retain(|d| !d.code.is_empty() || seen.insert(d.line));
+            // A file that does not parse has unreliable type errors.
+            if errs.iter().any(|d| d.code.is_empty()) {
+                errs.retain(|d| d.code.is_empty());
+            }
             if errs.is_empty() {
                 self.erroring.remove(&f);
             } else {
@@ -884,8 +945,184 @@ impl State {
             diags,
             ms: t.elapsed().as_secs_f64() * 1000.0,
             raw: raws,
+            callers: 0,
         }
     }
+
+    /// Second phase: diagnostics of the files that mention an item whose
+    /// signature changed (callers of a changed fn, users of a changed
+    /// struct). Does not sync again.
+    /// Nearest files first, a few at a time, stopping at the first batch
+    /// with errors: rust-analyzer checks a big file in 0.1-0.5 s, and only
+    /// the first error has to beat cargo. The rest stay queued.
+    fn callers(&mut self, timeout: Duration, raw: bool) -> Reply {
+        let t = Instant::now();
+        let mut out = Reply {
+            ready: true,
+            ..Default::default()
+        };
+        if !*self.lsp.ready.lock().unwrap() {
+            return out;
+        }
+        while !self.callers.is_empty() && t.elapsed() < timeout {
+            let n = self.callers.len().min(CALLER_BATCH);
+            let batch: Vec<PathBuf> = self.callers.drain(..n).collect();
+            let r = self.pull(&batch, timeout.saturating_sub(t.elapsed()), raw);
+            out.files.extend(r.files);
+            out.raw.extend(r.raw);
+            let found = !r.diags.is_empty();
+            out.diags.extend(r.diags);
+            if found {
+                break;
+            }
+        }
+        out.callers = self.callers.len();
+        out.ms = t.elapsed().as_secs_f64() * 1000.0;
+        out
+    }
+}
+
+/// At most this many files are pulled for a changed signature, the ones
+/// closest to the edited file first.
+const MAX_CALLER_FILES: usize = 24;
+/// Caller files pulled per round of the `callers` op.
+const CALLER_BATCH: usize = 4;
+
+fn is_ident(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Item name declared on `line` (`fn x`, `struct X`, ...), if any.
+fn declared_name(line: &str) -> Option<&str> {
+    const KW: &[&str] = &[
+        "fn", "struct", "enum", "trait", "type", "const", "static", "union",
+    ];
+    let mut words = line
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty());
+    while let Some(w) = words.next() {
+        if KW.contains(&w) {
+            let name = words.next()?;
+            return (!name.as_bytes()[0].is_ascii_digit()).then_some(name);
+        }
+    }
+    None
+}
+
+/// Names of items whose signature differs between `old` and `new`: a
+/// changed line that declares an item, or a changed line inside a
+/// multi-line `fn` signature (between `fn name(` and the line that opens
+/// its body). Body edits return nothing, so they cost no extra pulls.
+pub fn changed_signatures(old: &str, new: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for (text, other) in [(new, old), (old, new)] {
+        let others: std::collections::HashSet<&str> = other.lines().collect();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            if others.contains(l) || l.trim().is_empty() {
+                continue;
+            }
+            let t = l.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            if let Some(n) = declared_name(t) {
+                names.insert(n.to_owned());
+                continue;
+            }
+            // Inside a multi-line signature? Walk back to the `fn` line; any
+            // line opening a body or ending an item in between means no.
+            for j in (i.saturating_sub(12)..i).rev() {
+                let p = lines[j].trim_end();
+                if let Some(n) = declared_name(lines[j].trim_start()) {
+                    if lines[j].contains("fn ") && !p.ends_with('{') && !p.ends_with(';') {
+                        names.insert(n.to_owned());
+                    }
+                    break;
+                }
+                if p.ends_with('{') || p.ends_with(';') || p.ends_with('}') {
+                    break;
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Files (other than `changed`) whose text mentions one of `names` as a
+/// whole word, nearest to the changed files first (longest shared path).
+fn mentioning(
+    texts: &HashMap<PathBuf, String>,
+    names: &BTreeSet<String>,
+    changed: &[PathBuf],
+    max: usize,
+) -> Vec<PathBuf> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    // Module names of the changed files (`src/effort.rs` -> `effort`,
+    // `src/foo/mod.rs` -> `foo`, `jcode-core/src/lib.rs` -> `jcode_core`).
+    let modules: Vec<String> = changed
+        .iter()
+        .filter_map(|c| {
+            let stem = c.file_stem()?.to_str()?;
+            Some(match stem {
+                "mod" => c.parent()?.file_name()?.to_str()?.to_owned(),
+                "lib" | "main" => c
+                    .parent()?
+                    .parent()?
+                    .file_name()?
+                    .to_str()?
+                    .replace('-', "_"),
+                s => s.to_owned(),
+            })
+        })
+        .collect();
+    let mut hits: Vec<(u8, usize, &PathBuf)> = Vec::new();
+    for (p, text) in texts {
+        if changed.contains(p) {
+            continue;
+        }
+        let b = text.as_bytes();
+        // Best evidence of a real use: the name behind the module of a
+        // changed file (`effort::label`), then any whole-word mention.
+        // Common names (`label`, `new`) appear in most files, so the
+        // qualified ones must be pulled first.
+        let mut rank = 0;
+        for n in names {
+            for i in memchr::memmem::find_iter(b, n.as_bytes()) {
+                let whole = (i == 0 || !is_ident(b[i - 1]))
+                    && b.get(i + n.len()).is_none_or(|c| !is_ident(*c));
+                if !whole {
+                    continue;
+                }
+                rank = rank.max(1);
+                let before = &text[..i];
+                if modules.iter().any(|m| before.ends_with(&format!("{m}::"))) {
+                    rank = 2;
+                    break;
+                }
+            }
+        }
+        if rank > 0 {
+            let near = changed
+                .iter()
+                .map(|c| {
+                    c.components()
+                        .zip(p.components())
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                })
+                .max()
+                .unwrap_or(0);
+            hits.push((rank, near, p));
+        }
+    }
+    hits.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(b.2)));
+    hits.into_iter()
+        .take(max)
+        .map(|(_, _, p)| p.clone())
+        .collect()
 }
 
 /// Hard errors with a rustc error code only. rust-analyzer's own
@@ -896,11 +1133,22 @@ fn to_diag(file: &Path, d: &Value) -> Option<Diag> {
         return None;
     }
     let code = d["code"].as_str()?;
+    let message = d["message"].as_str().unwrap_or_default();
+    // Parser errors have no rustc code. rustc rejects the same file, so
+    // report them uncoded (rustc prints them as plain `error:`).
+    let (code, message) = if code == "syntax-error" {
+        (
+            "",
+            message.strip_prefix("Syntax Error: ").unwrap_or(message),
+        )
+    } else {
+        (code, message)
+    };
     let b = code.as_bytes();
-    if !(b.len() == 5 && b[0] == b'E' && b[1..].iter().all(u8::is_ascii_digit)) {
+    if !code.is_empty() && !(b.len() == 5 && b[0] == b'E' && b[1..].iter().all(u8::is_ascii_digit))
+    {
         return None;
     }
-    let message = d["message"].as_str().unwrap_or_default();
     // Where rust-analyzer's own inference gave up, not the program's:
     // "type annotations needed" (E0282) and anything mentioning a type it
     // could not compute. On the Desktop snapshot these were the only
@@ -908,6 +1156,14 @@ fn to_diag(file: &Path, d: &Value) -> Option<Diag> {
     if code == "E0282" || message.contains("{unknown}") {
         return None;
     }
+    // A fn item passed where a closure is expected: rust-analyzer says
+    // `fn x(..): FnOnce<..>` is not satisfied (E0277) where rustc reports
+    // E0593 one line later. Wrong code and line: not shown.
+    if code == "E0277" && message.contains("the trait bound `fn ") && message.contains(": Fn") {
+        return None;
+    }
+    // rust-analyzer's parser recovers differently than rustc's and reports
+    // several errors per mistake. Keep only the first one per line.
     let start = &d["range"]["start"];
     Some(Diag {
         file: file.display().to_string(),
@@ -955,6 +1211,11 @@ fn daemon(root: &Path) -> Result<()> {
     // Baseline before rust-analyzer reads the disk: anything edited after
     // this is pushed on the first query.
     let stamps = scan(&roots);
+    let texts: HashMap<PathBuf, String> = stamps
+        .keys()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .filter_map(|p| Some((p.clone(), std::fs::read_to_string(p).ok()?)))
+        .collect();
     log(&format!(
         "{} source roots, {} files",
         roots.len(),
@@ -969,6 +1230,8 @@ fn daemon(root: &Path) -> Result<()> {
         erroring: BTreeSet::new(),
         manifest_changed: false,
         queries: 0,
+        texts,
+        callers: Vec::new(),
     }));
     let idle_secs: u64 = std::env::var("JUSTRUST_EARLY_IDLE_SECS")
         .ok()
@@ -1014,6 +1277,13 @@ fn daemon(root: &Path) -> Result<()> {
                         Duration::from_secs(4),
                         req["raw"].as_bool() == Some(true),
                     );
+                    let _ = writeln!(w, "{}", serde_json::to_string(&r).unwrap_or_default());
+                }
+                Some("callers") => {
+                    let r = state
+                        .lock()
+                        .unwrap()
+                        .callers(Duration::from_secs(4), req["raw"].as_bool() == Some(true));
                     let _ = writeln!(w, "{}", serde_json::to_string(&r).unwrap_or_default());
                 }
                 Some("pull") => {
@@ -1123,9 +1393,20 @@ mod tests {
         assert!(to_diag(f, &mk(1, "unresolved-proc-macro")).is_none());
         assert!(to_diag(f, &mk(2, "E0308")).is_none());
         assert!(to_diag(f, &mk(1, "E0282")).is_none());
+        let syn = json!({"severity": 1, "code": "syntax-error", "message": "Syntax Error: expected expression",
+                         "range": {"start": {"line": 0, "character": 0}}});
+        let d = to_diag(f, &syn).unwrap();
+        assert_eq!(
+            (d.code.as_str(), d.message.as_str()),
+            ("", "expected expression")
+        );
         let unknown = json!({"severity": 1, "code": "E0308", "message": "expected {unknown}",
                              "range": {"start": {"line": 1, "character": 1}}});
         assert!(to_diag(f, &unknown).is_none());
+        let fnptr = json!({"severity": 1, "code": "E0277",
+                           "message": "the trait bound `fn label(&str, u8) -> &str: FnOnce<(&str,)>` is not satisfied",
+                           "range": {"start": {"line": 1, "character": 1}}});
+        assert!(to_diag(f, &fnptr).is_none());
     }
 
     #[test]
@@ -1137,6 +1418,46 @@ mod tests {
         std::fs::write(inner.join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
         assert_eq!(workspace_root(&inner.join("src")), Some(d.clone()));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn signature_changes_but_not_body_edits() {
+        let old = "pub fn label(effort: &str) -> &str {\n    effort\n}\nfn two(\n    a: u8,\n) -> u8 {\n    a\n}\n";
+        let body = old.replace("    effort\n", "    let _ = 1;\n    effort\n");
+        assert!(changed_signatures(old, &body).is_empty());
+        let sig = old.replace("(effort: &str)", "(effort: &str, x: u8)");
+        assert_eq!(
+            changed_signatures(old, &sig),
+            BTreeSet::from(["label".to_owned()])
+        );
+        let multi = old.replace("    a: u8,\n", "    a: u16,\n");
+        assert_eq!(
+            changed_signatures(old, &multi),
+            BTreeSet::from(["two".to_owned()])
+        );
+        let removed = old.replace("fn two(\n    a: u8,\n) -> u8 {\n    a\n}\n", "");
+        assert!(changed_signatures(old, &removed).contains("two"));
+    }
+
+    #[test]
+    fn finds_files_mentioning_a_name() {
+        let texts: HashMap<PathBuf, String> = [
+            ("/w/a/x.rs", "fn f() { label(1) }"),
+            ("/w/a/y.rs", "fn f() { labels(1) }"),
+            ("/w/b/z.rs", "use crate::edited::label;"),
+            ("/w/a/edited.rs", "fn label() {}"),
+        ]
+        .into_iter()
+        .map(|(p, t)| (PathBuf::from(p), t.to_owned()))
+        .collect();
+        let names = BTreeSet::from(["label".to_owned()]);
+        let got = mentioning(&texts, &names, &[PathBuf::from("/w/a/edited.rs")], 10);
+        assert_eq!(
+            got,
+            // z.rs names `edited::label`, a real use: first.
+            vec![PathBuf::from("/w/b/z.rs"), PathBuf::from("/w/a/x.rs")]
+        );
+        assert_eq!(mentioning(&texts, &names, &[], 1).len(), 1);
     }
 
     #[test]
