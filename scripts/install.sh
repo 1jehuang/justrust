@@ -6,6 +6,8 @@
 #   JUSTRUST_BASE_URL     release asset base URL
 #                         (default: https://github.com/1jehuang/justrust/releases/latest/download)
 #   JUSTRUST_NO_LOGIN     if set, skip running `justrust login`
+#   JUSTRUST_NO_AGENTS    if set, do not add justrust instructions to the
+#                         global CLAUDE.md / AGENTS.md of installed agents
 set -eu
 
 BASE_URL="${JUSTRUST_BASE_URL:-https://github.com/1jehuang/justrust/releases/latest/download}"
@@ -94,6 +96,12 @@ main() {
         fi
     else
         cargo_fallback "$(uname -s)/$(uname -m)"
+    fi
+
+    # Tell installed coding agents to use justrust (global CLAUDE.md /
+    # AGENTS.md, a marked block that `justrust agents --remove` takes out).
+    if [ -z "${JUSTRUST_NO_AGENTS:-}" ] && "$BIN" agents --help </dev/null >/dev/null 2>&1; then
+        "$BIN" agents --quiet </dev/null 2>&1 | sed 's/^/justrust: /' || true
     fi
 
     if [ -n "${JUSTRUST_NO_LOGIN:-}" ]; then

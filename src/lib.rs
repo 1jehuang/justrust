@@ -11,6 +11,7 @@
 
 mod account;
 mod agent_output;
+mod agents;
 mod buildscript;
 mod depcache;
 mod depcache_gc;
@@ -236,6 +237,20 @@ enum Command {
     /// MCP server on stdio for the Jcode account: status, sign-in, API keys,
     /// billing links. `claude mcp add justrust -- justrust mcp`.
     Mcp,
+    /// Tell installed coding agents (Claude Code, Codex, Gemini CLI, Jcode)
+    /// to use justrust: adds a short managed block to their global
+    /// instruction file. Safe to rerun.
+    Agents {
+        /// Take the block out again.
+        #[arg(long)]
+        remove: bool,
+        /// Show what would change.
+        #[arg(long)]
+        dry_run: bool,
+        /// Only report changes.
+        #[arg(long, hide = true)]
+        quiet: bool,
+    },
     /// Subscribe for more hosted builds ($10/mo per plan unit, 500 builds).
     Upgrade {
         /// Plan in USD per month.
@@ -530,6 +545,11 @@ pub fn main() -> anyhow::Result<()> {
         Command::Login { no_wait } => account::login(no_wait)?,
         Command::Logout => account::logout()?,
         Command::Mcp => mcp::serve()?,
+        Command::Agents {
+            remove,
+            dry_run,
+            quiet,
+        } => agents::command(remove, dry_run, quiet)?,
         Command::Upgrade { plan, no_wait } => account::upgrade(plan, no_wait)?,
         Command::Remote { cmd } => match cmd {
             RemoteCmd::Up {
