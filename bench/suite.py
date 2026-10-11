@@ -93,6 +93,7 @@ class Scenario:
     edit: Edit | None
     what: str
     expect_fail: bool = False
+    expect_test_fail: bool = False  # a test must fail (the timing is to its report)
     cold: bool = False  # fresh target dir every iteration; opt-in
     env: dict[str, str] = field(default_factory=dict)
     # Cold, with an empty local depcache every iteration and a prebuilt
@@ -213,6 +214,36 @@ SCENARIOS = [
             "    let d = (paths::now() - t).max(0.0);\n    std::hint::black_box({n}u64);\n",
         ),
         "small crate: body edit in this repo, full `test` (the old bench/edit-loop.sh)",
+    ),
+    Scenario(
+        "desktop-workspace-test",
+        "desktop",
+        ["test", "--workspace", "--no-fail-fast"],
+        None,
+        "no edit, every test binary of the workspace (11 binaries + doc tests): test execution only",
+    ),
+    Scenario(
+        "desktop-ui-full-test",
+        "desktop",
+        ["test", "-p", "jcode-desktop-ui", "--lib"],
+        Edit(
+            FPS,
+            "let mut counter = FpsCounter::default();\n        let now = Instant::now();\n        assert_eq!(counter.label(now, || snapshot(&[])),",
+            "let mut counter = FpsCounter::default();\n        std::hint::black_box({n}u64);\n        let now = Instant::now();\n        assert_eq!(counter.label(now, || snapshot(&[])),",
+        ),
+        "test-fn edit, the whole UI lib suite (1290 tests, no filter): when do the edited module's tests report",
+    ),
+    Scenario(
+        "desktop-ui-full-test-fail",
+        "desktop",
+        ["test", "-p", "jcode-desktop-ui", "--lib"],
+        Edit(
+            FPS,
+            "let mut counter = FpsCounter::default();\n        let now = Instant::now();\n        assert_eq!(counter.label(now, || snapshot(&[])),",
+            "let mut counter = FpsCounter::default();\n        assert!(std::hint::black_box({n}u64) == 0, \"bench failure\");\n        let now = Instant::now();\n        assert_eq!(counter.label(now, || snapshot(&[])),",
+        ),
+        "the edit breaks an fps_counter test, whole UI lib suite: `first_fail` = when the agent sees the panic",
+        expect_test_fail=True,
     ),
     Scenario(
         "desktop-cold-check",
@@ -480,7 +511,15 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     p = subprocess.Popen([J, *s.cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     first_error = None
     err_lines = []
-    out_reader = threading.Thread(target=p.stdout.read, daemon=True)
+    first_fail = []
+
+    def read_out():
+        # Seconds until the agent sees a failing test's panic message.
+        for line in p.stdout:
+            if not first_fail and ("panicked at" in line or line.startswith("---- ")):
+                first_fail.append(time.monotonic() - t0)
+
+    out_reader = threading.Thread(target=read_out, daemon=True)
     out_reader.start()
     for line in p.stderr:
         if first_error is None and line.startswith("error"):
@@ -497,12 +536,14 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     failed = p.returncode != 0
     compile_failed = sm.get("diagnostics", {}).get("compile_failed", False)
     tests_failed = sm.get("tests", {}).get("failed", 0)
+    if s.expect_test_fail and not tests_failed:
+        sys.exit(f"bench: {s.name}: expected a failing test (justrust log {rid})\n{p.stderr[-3000:]}")
     if s.expect_fail != compile_failed or (failed and not compile_failed and not tests_failed):
         sys.exit(
             f"bench: {s.name}: exit {p.returncode}, expected {'failure' if s.expect_fail else 'success'}"
             f" (justrust log {rid})\n{p.stderr[-3000:]}"
         )
-    if tests_failed:
+    if tests_failed and not s.expect_test_fail:
         # The timing is still valid; a flaky test in a pinned snapshot must
         # not abort an hour of benchmarking. Recorded per sample.
         print(f"  note {s.name}: {tests_failed} test(s) failed (justrust log {rid})", file=sys.stderr)
@@ -518,6 +559,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         "wall": round(wall, 3),
         # Seconds until the first `error` line on stderr (None: no error).
         "first_error": None if first_error is None else round(first_error, 3),
+        "first_fail": round(first_fail[0], 3) if first_fail else None,
         "early": {k: early.get(k) for k in ("secs", "ready", "shown", "matched", "early_only", "rustc_only")}
         if early else None,
         "recorded_wall": round(sm["wall"], 3),
@@ -549,7 +591,11 @@ def stats(samples: list[dict]) -> dict:
     walls = [x["wall"] for x in samples]
     quiet = [x["wall"] for x in samples if not x["noisy"]]
     fe = [x["first_error"] for x in samples if x.get("first_error") is not None]
+    ff = [x["first_fail"] for x in samples if x.get("first_fail") is not None]
     return {
+        "first_fail": med(ff) if ff else None,
+        "first_fail_min": round(min(ff), 3) if ff else None,
+        "first_fail_max": round(max(ff), 3) if ff else None,
         "n": len(walls),
         "first_error": med(fe) if fe else None,
         "first_error_min": round(min(fe), 3) if fe else None,
@@ -659,6 +705,8 @@ def table(result: dict) -> str:
         ph, sp = st["phases"], st["split"]
         q = f"{st['quiet_median']:.2f}" if st["quiet_n"] else "-"
         fe = f"{st['first_error']:.2f}" if st.get("first_error") is not None else "-"
+        if st.get("first_fail") is not None:
+            fe = f"{st['first_fail']:.2f}"
         rows.append(
             f"{name:28s} {st['median']:7.2f} {st['min']:7.2f} {st['max']:7.2f} {st['n']:3d} {q:>7s}"
             f" {fe:>7s} {ph['startup']:6.2f} {ph['compile']:7.2f} {ph['test_run']:6.2f}"
@@ -796,6 +844,11 @@ def cmd_compare(args) -> None:
                   f" {sb['first_error'] - sa['first_error']:+7.2f}"
                   f" (ranges {sa['first_error_min']:.2f}-{sa['first_error_max']:.2f}"
                   f" / {sb['first_error_min']:.2f}-{sb['first_error_max']:.2f})")
+        if sa.get("first_fail") is not None and sb.get("first_fail") is not None:
+            print(f"{'  first failing test':28s} {sa['first_fail']:7.2f} {sb['first_fail']:7.2f}"
+                  f" {sb['first_fail'] - sa['first_fail']:+7.2f}"
+                  f" (ranges {sa['first_fail_min']:.2f}-{sa['first_fail_max']:.2f}"
+                  f" / {sb['first_fail_min']:.2f}-{sb['first_fail_max']:.2f})")
 
     # Overhead justrust adds around cargo: agent-visible wall minus the wall
     # justrust recorded. Independent of compile noise, so small changes show.

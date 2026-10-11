@@ -561,18 +561,44 @@ fn confirm_alone(
         && let Some(mut again) = strip_filters(args)
     {
         again.push("--exact".into());
+        // One at a time: some tests fail only next to other tests in the
+        // same process (Desktop's applet test next to a selection test).
+        if !again.iter().any(|a| a.starts_with("--test-threads")) {
+            again.push("--test-threads=1".into());
+        }
         again.extend(failed.iter().map(|s| s.to_string()));
-        if execute(inner, req, &again, stem).exit != 0 {
+        let rerun = execute(inner, req, &again, stem);
+        // Every failure reproduced alone: the first result is what one
+        // plain run reports. Otherwise some failed only next to other
+        // processes, and a run alone decides.
+        let still: HashSet<&str> = rerun
+            .outcomes
+            .iter()
+            .filter(|o| !o.passed)
+            .map(|o| o.name.as_str())
+            .collect();
+        if rerun.exit != 0 && failed.iter().all(|f| still.contains(f)) {
             return first;
         }
     }
     let mut alone = execute(inner, req, args, stem);
     alone.hide_filtered = first.hide_filtered;
-    if alone.exit == 0 {
+    let alone_failed: HashSet<&str> = alone
+        .outcomes
+        .iter()
+        .filter(|o| !o.passed)
+        .map(|o| o.name.as_str())
+        .collect();
+    let flaky: Vec<&str> = failed
+        .iter()
+        .copied()
+        .filter(|f| !alone_failed.contains(f))
+        .collect();
+    if alone.exit == 0 || !flaky.is_empty() {
         let what = if failed.is_empty() {
             format!("exited with code {}", first.exit)
         } else {
-            format!("failed ({})", failed.join(", "))
+            format!("failed ({})", flaky.join(", "))
         };
         let note = format!(
             "justrust: {stem} {what} while other test processes ran in parallel, and passed when run alone; reporting the run alone"
