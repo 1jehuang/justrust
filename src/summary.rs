@@ -134,6 +134,10 @@ pub struct UnitStats {
     /// `depcache_hits`.
     #[serde(default)]
     pub depcache_peer_hits: usize,
+    /// Hits downloaded from the prebuilt store (`JUSTRUST_PREBUILT`),
+    /// included in `depcache_hits`.
+    #[serde(default)]
+    pub depcache_prebuilt_hits: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -719,10 +723,11 @@ pub fn build(
         with_pass_timings: units.iter().filter(|u| !u.passes.is_empty()).count(),
         depcache_hits: units
             .iter()
-            .filter(|u| matches!(u.depcache.as_str(), "hit" | "remote" | "peer"))
+            .filter(|u| matches!(u.depcache.as_str(), "hit" | "remote" | "peer" | "prebuilt"))
             .count(),
         depcache_remote_hits: units.iter().filter(|u| u.depcache == "remote").count(),
         depcache_peer_hits: units.iter().filter(|u| u.depcache == "peer").count(),
+        depcache_prebuilt_hits: units.iter().filter(|u| u.depcache == "prebuilt").count(),
         depcache_misses: units.iter().filter(|u| u.depcache == "miss").count(),
         depcache_saved_secs: units.iter().filter_map(|u| u.depcache_saved_secs).sum(),
         depcache_miss_secs: units
@@ -916,6 +921,7 @@ impl UnitStats {
             String::new()
         };
         let tiers: Vec<String> = [
+            (self.depcache_prebuilt_hits, "prebuilt"),
             (self.depcache_remote_hits, "remote"),
             (self.depcache_peer_hits, "peer"),
         ]

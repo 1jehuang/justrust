@@ -348,8 +348,26 @@ fn hit_rate(days: f64) -> (usize, usize, f64, usize) {
 }
 
 /// `justrust cache [--prune] [--clear]`.
-pub fn command(prune_now: bool, clear: bool, auto_mode: bool, sync: bool) -> Result<()> {
+pub fn command(
+    prune_now: bool,
+    clear: bool,
+    auto_mode: bool,
+    sync: bool,
+    publish: Option<PathBuf>,
+) -> Result<()> {
     let root = depcache::cache_dir().context("no cache directory")?;
+    if let Some(dst) = publish {
+        let p = crate::depcache_prebuilt::publish(&root, &dst)?;
+        println!(
+            "published {} new bundles ({}), {} manifest lines, {} skipped, to {}",
+            p.bundles,
+            gb(p.bytes),
+            p.lines,
+            p.skipped,
+            dst.display()
+        );
+        return Ok(());
+    }
     if auto_mode {
         auto(&root);
         return Ok(());
@@ -387,6 +405,7 @@ pub fn command(prune_now: bool, clear: bool, auto_mode: bool, sync: bool) -> Res
         println!("status    disabled by JUSTRUST_DEPCACHE");
     }
     println!("{}", crate::depcache_remote::status_line(&root));
+    println!("{}", crate::depcache_prebuilt::status_line(&root));
     if let (Some(old), Some(new)) = (
         s.entries.iter().map(|e| e.last_used).reduce(f64::min),
         s.entries.iter().map(|e| e.last_used).reduce(f64::max),

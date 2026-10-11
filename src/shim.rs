@@ -126,11 +126,16 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if let Some(plan) = &plan {
         let start = paths::now();
         let mut err = std::io::stderr();
-        // Tiers, cheapest first: this machine, the account and shared
-        // cache (HTTP), then the peer machine over the remote link.
+        // Tiers, cheapest first: this machine, the prebuilt store (static
+        // HTTP, anonymous), the account and shared cache (HTTP), then the
+        // peer machine over the remote link.
         let mut tier = "hit";
         let found = plan
             .restore(&mut err)
+            .or_else(|| {
+                tier = "prebuilt";
+                crate::depcache_prebuilt::fetch(plan, &mut err)
+            })
             .or_else(|| {
                 tier = "remote";
                 crate::depcache_remote::fetch(plan, &mut err)
@@ -142,7 +147,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         if let Some(hit) = found {
             // Downloaded from the account or shared cache: the peer
             // machine likely lacks it too, so offer it on the next sync.
-            if tier == "remote"
+            if matches!(tier, "remote" | "prebuilt")
                 && let Some(vv) = crate::depcache::rustc_version(real)
             {
                 let tc = crate::peercache::toolchain_tag(&vv);

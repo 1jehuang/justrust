@@ -62,9 +62,11 @@ use std::path::{Path, PathBuf};
 /// the C library checked for compatibility at restore instead of keyed.
 /// 4: `CARGO_TARGET_DIR` not keyed.
 /// 5: dependency units compile with the target dir remapped.
+/// 6: dependency units compile with the cargo home remapped too, so keys
+/// match across users whose cargo homes live at different paths.
 /// 2: the cargo home is a placeholder (portable across machines), and
 /// proc macros and bins key the C library they link against.
-const SCHEME: &str = "justrust-depcache-5";
+const SCHEME: &str = "justrust-depcache-6";
 const PROFILE_TOKEN: &str = "@@JUSTRUST_PROFILE_DIR@@";
 const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// The cargo home (registry sources, git checkouts), so keys and manifest
@@ -247,6 +249,14 @@ pub struct Plan {
 
 /// Fixed path the target dir is remapped to in dependency outputs.
 pub const REMAPPED_TARGET: &str = "/justrust-target";
+/// Fixed path the cargo home (registry sources, git checkouts) is remapped
+/// to in dependency outputs. Registry sources are written into crate
+/// metadata by absolute path, so without it every crate with a dependency
+/// gets a different key for each user (`/home/alice/.cargo` vs
+/// `/home/bob/.cargo`): measured 32 of 56 justrust keys equal, FINDINGS 28.
+/// Same trade as cargo's `trim-paths`: panic locations and debug line
+/// tables of dependencies name this path instead of the local one.
+pub const REMAPPED_CARGO_HOME: &str = "/justrust-cargo-home";
 
 /// Parsed eligibility: `None` means "not cacheable, compile normally".
 #[derive(Debug, Default, PartialEq)]
@@ -470,21 +480,8 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
     h.field(rustc_version(real)?.as_bytes());
     h.field(norm.norm(cwd.to_str()?).as_bytes());
     key_args(&args, &norm, &cwd, &mut h)?;
-    // Paths under the target dir (generated `OUT_DIR` sources) are written
-    // into crate metadata and debuginfo. Remapping them makes those bytes,
-    // and so every dependent's key, independent of where the target dir is.
-    // Only when the caller does not remap paths itself.
-    let extra_args = if args.iter().any(|a| a.starts_with("--remap-path-prefix")) {
-        Vec::new()
-    } else {
-        vec![format!(
-            "--remap-path-prefix={}={REMAPPED_TARGET}",
-            norm.target
-        )]
-    };
-    for a in &extra_args {
-        h.field(norm.norm(a).as_bytes());
-    }
+    let extra_args = remap_args(&args, &norm);
+    key_remaps(&extra_args, &mut h);
     // Proc macros and bins are dynamically linked against the C library.
     // Only its family is keyed: the version an output needs is recorded
     // when it is stored and checked against this host on restore, so a
@@ -520,6 +517,56 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
         root,
         extra_args,
     })
+}
+
+/// Extra rustc arguments for a dependency unit that misses: remap the
+/// target dir and the cargo home to fixed paths. Paths under the target
+/// dir (generated `OUT_DIR` sources) and registry sources are written into
+/// crate metadata and debuginfo; remapping them makes those bytes, and so
+/// every dependent's key, independent of where the target dir and the
+/// cargo home are. Empty when the caller remaps paths itself.
+fn remap_args(args: &[String], norm: &Norm) -> Vec<String> {
+    if args.iter().any(|a| a.starts_with("--remap-path-prefix")) {
+        return Vec::new();
+    }
+    let mut v = Vec::new();
+    if let Some(c) = &norm.cargo {
+        v.push(format!("--remap-path-prefix={c}={REMAPPED_CARGO_HOME}"));
+        // A symlinked registry or git dir (the remote agent links the
+        // client's cargo home path to its own): rustc's working dir is the
+        // resolved path, so map that too.
+        for sub in ["registry", "git"] {
+            let p = Path::new(c).join(sub);
+            if let Ok(real) = p.canonicalize()
+                && real != p
+                && let Some(r) = real.to_str()
+            {
+                v.push(format!(
+                    "--remap-path-prefix={r}={REMAPPED_CARGO_HOME}/{sub}"
+                ));
+            }
+        }
+    }
+    // Last: rustc lets the last matching remapping win.
+    v.push(format!(
+        "--remap-path-prefix={}={REMAPPED_TARGET}",
+        norm.target
+    ));
+    v
+}
+
+/// Keyed by destination only: the sources are this machine's target dir
+/// and cargo home (placeholders anyway). The aliases for symlinked
+/// registry/git dirs are not keyed at all: whether they exist depends on
+/// how this machine's cargo home is laid out, and they map to the same
+/// place as the cargo home itself.
+fn key_remaps(extra_args: &[String], h: &mut H128) {
+    for a in extra_args {
+        let to = a.rsplit_once('=').map_or(a.as_str(), |(_, to)| to);
+        if !to.starts_with(&format!("{REMAPPED_CARGO_HOME}/")) {
+            h.field(to.as_bytes());
+        }
+    }
 }
 
 fn key_args(args: &[String], norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
@@ -1484,6 +1531,44 @@ mod tests {
         };
         assert_eq!(key("t1", "opt-level=0"), key("t2", "opt-level=0"));
         assert_ne!(key("t1", "opt-level=0"), key("t1", "opt-level=1"));
+    }
+
+    #[test]
+    fn remaps_make_keys_independent_of_cargo_home_and_symlinks() {
+        let dir = std::env::temp_dir().join(format!("jr-depcache-remap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let real_registry = dir.join("shared-registry");
+        std::fs::create_dir_all(&real_registry).unwrap();
+        // Home a: plain cargo home. Home b: registry is a symlink elsewhere.
+        std::fs::create_dir_all(dir.join("a/.cargo/registry")).unwrap();
+        std::fs::create_dir_all(dir.join("b/.cargo")).unwrap();
+        std::os::unix::fs::symlink(&real_registry, dir.join("b/.cargo/registry")).unwrap();
+        let args = s(&["--crate-name", "x"]);
+        let remaps = |home: &str, t: &str| {
+            let n =
+                Norm::with_cargo_home(&dir.join(t).join("debug"), &dir.join(home).join(".cargo"))
+                    .unwrap();
+            remap_args(&args, &n)
+        };
+        let (ra, rb) = (remaps("a", "t1"), remaps("b", "t2"));
+        assert_eq!(ra.len(), 2);
+        assert_eq!(rb.len(), 3, "{rb:?}");
+        assert!(rb[1].starts_with(&format!(
+            "--remap-path-prefix={}=",
+            real_registry.canonicalize().unwrap().display()
+        )));
+        assert!(rb.last().unwrap().ends_with(&format!("={REMAPPED_TARGET}")));
+        let key = |r: &[String]| {
+            let mut h = H128::new();
+            key_remaps(r, &mut h);
+            h.hex()
+        };
+        assert_eq!(key(&ra), key(&rb));
+        // The caller remaps itself: nothing added.
+        let own = s(&["--remap-path-prefix=/x=/y"]);
+        let n = Norm::new(&dir.join("t1/debug")).unwrap();
+        assert!(remap_args(&own, &n).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

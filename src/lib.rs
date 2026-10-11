@@ -15,6 +15,7 @@ mod agents;
 mod buildscript;
 mod depcache;
 mod depcache_gc;
+mod depcache_prebuilt;
 mod depcache_remote;
 mod export;
 mod findings;
@@ -176,6 +177,11 @@ enum Command {
         /// background after builds on its own).
         #[arg(long)]
         sync: bool,
+        /// Copy every dependency entry of the local cache into a prebuilt
+        /// store directory (`<dir>/v1/...`, served read-only to
+        /// `JUSTRUST_PREBUILT`). For the prebuild fleet.
+        #[arg(long, value_name = "DIR")]
+        publish: Option<PathBuf>,
     },
     /// Pinned Rust toolchain (justrust.toml `[toolchain] channel`):
     /// status, install, pin, unpin, remove.
@@ -551,7 +557,8 @@ pub fn main() -> anyhow::Result<()> {
             clear,
             auto,
             sync,
-        } => depcache_gc::command(prune, clear, auto, sync)?,
+            publish,
+        } => depcache_gc::command(prune, clear, auto, sync, publish)?,
         Command::Toolchain { cmd } => match cmd.unwrap_or(ToolchainCmd::Status) {
             ToolchainCmd::Status => toolchain::status()?,
             ToolchainCmd::Install { spec } => toolchain::install_command(spec)?,
