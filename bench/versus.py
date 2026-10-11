@@ -75,6 +75,12 @@ STACKS = [
     Stack("jr-nocache", "justrust, every cache off: toolchain, forks, integration only", True, dict(NOCACHE)),
     Stack("justrust", "justrust defaults, private depcache warmed by the warmup round", True, private_cache=True),
 ]
+# Opt-in (`--remote`): every check/clippy/test goes to the remote machine
+# through the agent's own path (sync daemon, ssh, remote agent), timed from
+# the agent's seat. `build` always stays local, as for agents. The machine
+# keeps its own warm target dirs, at the same absolute paths.
+REMOTE = Stack("remote", "justrust, JUSTRUST_REMOTE=force: check/clippy/test on the remote machine, "
+                         "wall includes sync and ssh", True, {"JUSTRUST_REMOTE": "force"})
 
 
 @dataclass
@@ -228,8 +234,20 @@ def run_one(st: Stack, s: suite.Scenario, root: Path, cold_tag: str | None, extr
     if st.justrust and summ.exists():  # quiet mode prints no libtest lines
         passed = json.loads(summ.read_text()).get("tests", {}).get("passed", 0)
     log.unlink()  # keep only failures; justrust runs stay in `justrust log <id>`
+    _mark_remote(st, r, out)
     return {**r, "id": rid if st.justrust else None, "tests_passed": passed, "noisy": rustc > 0 or load > suite.NOISY_CORES,
             "load_before": load, "foreign_rustc_before": rustc}
+
+
+def _mark_remote(st: Stack, r: dict, out: str) -> None:
+    """For the remote stack: did the build really run there? A local fallback
+    would silently measure the laptop. Instructions counted here are only
+    the client's (ssh, sync), so they are dropped."""
+    if st.env.get("JUSTRUST_REMOTE") != "force":
+        return
+    m = re.search(r"justrust remote: (?:ok|failed) on (.+?) in ([\d.]+)s \(sync (\d+) ms", out)
+    r["remote"] = {"machine": m.group(1), "sync_ms": int(m.group(3))} if m else None
+    r["instructions"] = None
 
 
 def run_workload(w: Workload, stacks: list[Stack], n: int, warmup: int, quiet_wait: float) -> dict:
@@ -461,6 +479,8 @@ def cmd_list(_args) -> None:
 
 def cmd_run(args) -> None:
     stacks = [s for s in STACKS if not args.only or s.name in args.only.split(",")]
+    if args.remote:
+        stacks.append(REMOTE)
     stacks += [parse_stack(x) for x in args.stack]
     if stacks[0].name != "stock" and not args.only:
         sys.exit("versus: stock must be the first stack")
@@ -573,6 +593,8 @@ def main() -> None:
     r.add_argument("--stack", action="append", default=[], metavar="NAME:K=V,...",
                    help="extra justrust stack with env overrides (repeatable)")
     r.add_argument("--only", metavar="A,B", help="run only these built-in stacks")
+    r.add_argument("--remote", action="store_true",
+                   help="add the `remote` stack: check/clippy/test forced onto the remote machine")
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
                    help="before each run wait up to SECS for no foreign rustc and load < 2")
     r.add_argument("--no-instructions", action="store_true")

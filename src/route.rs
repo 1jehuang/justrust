@@ -372,12 +372,19 @@ fn say_local(why: &str) {
     }
 }
 
+/// Set by the remote agent on the builds it runs: they never route again.
+pub const ON_AGENT: &str = "JUSTRUST_ON_REMOTE_AGENT";
+
 /// Route one agent-mode build. Returns when the build should run locally;
 /// otherwise runs it remotely and exits with its code.
 pub fn maybe_remote(full: &[OsString]) {
     let m = mode();
-    // The remote agent runs this same binary: never route from there.
-    if std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some() {
+    // The remote agent runs this same binary: never route from there. Older
+    // agents only set the run id override, and so does a benchmark that
+    // pins run ids; that one routes only when it forces remote explicitly.
+    if std::env::var_os(ON_AGENT).is_some()
+        || (std::env::var_os("JUSTRUST_RUN_ID_OVERRIDE").is_some() && m != Mode::Force)
+    {
         return;
     }
     if m == Mode::Off {

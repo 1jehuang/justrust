@@ -63,6 +63,9 @@ def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str) -> dict:
         passed, r["tests_failed"] = t.get("passed", passed), t.get("failed", r["tests_failed"])
     r.update({"id": rid if st.justrust else None, "tests_passed": passed, "load_before": load,
               "foreign_rustc_before": rustc, "noisy": rustc > 0 or load > suite.NOISY_CORES, "log": str(log)})
+    versus._mark_remote(st, r, out)
+    if "remote" in r and r["remote"] is None and cmd[0] in ("check", "clippy", "test"):
+        r["fell_back_local"] = True
     return r
 
 
@@ -85,6 +88,8 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
         r = _run(st, plan, plan.cmd, "run")
     finally:
         gen.restore(plan, created)
+    if r.get("fell_back_local"):
+        return {"error": f"forced remote fell back to a local build, log {r['log']}", "wall": r["wall"]}
     if r["compile_failed"] != plan.expect_fail or (r["exit"] != 0 and not r["compile_failed"] and not r["tests_failed"]):
         return {"error": f"exit {r['exit']}, expected {'a compile error' if plan.expect_fail else 'success'}, "
                          f"log {r['log']}", "wall": r["wall"]}

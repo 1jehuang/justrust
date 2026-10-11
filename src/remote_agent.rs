@@ -427,6 +427,8 @@ fn start_run(
     if !run_id.is_empty() {
         c.env("JUSTRUST_RUN_ID_OVERRIDE", run_id);
     }
+    // Never route a build the agent runs back to another machine.
+    c.env(crate::route::ON_AGENT, "1");
     if let Some(j) = machine_jobs(args, env) {
         c.env("CARGO_BUILD_JOBS", j.to_string());
     }
