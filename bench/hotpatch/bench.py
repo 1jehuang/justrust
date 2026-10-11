@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hot patch vs normal incremental test run, interleaved (FINDINGS 28).
+"""Hot patch vs normal incremental test run, interleaved (FINDINGS 35).
 
     flock /tmp/justrust-bench.lock bench/hotpatch/bench.py desktop -n 5
     flock /tmp/justrust-bench.lock bench/hotpatch/bench.py toy -n 5
@@ -101,6 +101,10 @@ def run(w: dict, hot: bool, n: int) -> dict:
     wall = time.monotonic() - t
     out = p.stdout + p.stderr + log.read_text()
     result = re.findall(r"test result: (\w+)\. (\d+) passed; (\d+) failed", out)
+    if not result:
+        # justrust hides passing-test lines; its verdict carries the result.
+        v = re.search(r"justrust: (ok|FAILED)\b", out)
+        result = [(v.group(1), "", "")] if v else []
     patched = re.search(r"jr-hot: patched instead of linking: (.*?) in (\d+) ms", out)
     full = re.search(r"jr-hot: full link: (.*)", out)
     run_id = re.search(r"justrust show (\S+?)`", out)

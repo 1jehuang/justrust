@@ -1,4 +1,4 @@
-# Hot patching of test binaries (prototype, FINDINGS 28)
+# Hot patching of test binaries (prototype, FINDINGS 35)
 
 Not wired into justrust, not default-on. A measurement prototype for phase 5
 of `docs/toolchain.md`: after a body-only edit, rerun tests without

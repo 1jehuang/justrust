@@ -1,0 +1,266 @@
+{
+ "workload": "desktop-body",
+ "summary": {
+  "normal": {
+   "median": 8.538,
+   "min": 7.315,
+   "max": 22.893,
+   "n": 6,
+   "all_ok": false
+  },
+  "hot": {
+   "median": 7.1715,
+   "min": 6.892,
+   "max": 8.723,
+   "n": 6,
+   "patched": 6,
+   "patch_ms_median": 133.0,
+   "all_ok": false
+  }
+ },
+ "samples": [
+  {
+   "mode": "normal",
+   "n": 73497900,
+   "wall": 14.049,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090939953-46575",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.09,
+    "link_pass_secs": 0.690278965
+   },
+   "warmup": true
+  },
+  {
+   "mode": "normal",
+   "n": 73497901,
+   "wall": 9.307,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090954008-47552",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.87,
+    "link_pass_secs": 0.768585841
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73497902,
+   "wall": 17.421,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-091003319-50167",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.4099999999999997,
+    "link_pass_secs": 2.630585751
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73497903,
+   "wall": 22.893,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-091020737-58038",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.57,
+    "link_pass_secs": 0.945611085
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73497904,
+   "wall": 20.335,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": "_RINvMNtCs4XPPmSydh91_4core6optionINtB3_6OptionNtNtNtCslh3JCYMNosH_3std3ffi6os_str8OsStringE3mapNtNtBO_4path7PathBufNCNvMNtNtCsh4Uy33RhVie_16jcode_desktop_ui15preview_control4unixNtB1U_6Server5start0EB1Y_ is not in the base binary",
+   "run_id": "20261011-091043635-67948",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.9299999999999997,
+    "link_pass_secs": 0.766163894
+   },
+   "warmup": true
+  },
+  {
+   "mode": "hot",
+   "n": 73497905,
+   "wall": 7.31,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 391 functions redirected, 0 new, 4 statics bound, 6 imports, ms: objs 1 basesyms 137 script 2 lld 18 map 1",
+   "patch_ms": 161,
+   "fallback": null,
+   "run_id": "20261011-091103968-79723",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.211618201
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73497906,
+   "wall": 6.892,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 391 functions redirected, 0 new, 4 statics bound, 6 imports, ms: objs 1 basesyms 93 script 2 lld 17 map 1",
+   "patch_ms": 115,
+   "fallback": null,
+   "run_id": "20261011-091111279-83933",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.15181081
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73497907,
+   "wall": 6.937,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 391 functions redirected, 0 new, 4 statics bound, 6 imports, ms: objs 1 basesyms 112 script 2 lld 20 map 1",
+   "patch_ms": 138,
+   "fallback": null,
+   "run_id": "20261011-091118172-87320",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.180680855
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73497908,
+   "wall": 7.769,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-091125109-89678",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 1.46,
+    "link_pass_secs": 0.421701837
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73497909,
+   "wall": 7.315,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-091132879-93599",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 1.48,
+    "link_pass_secs": 0.437250915
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73497910,
+   "wall": 7.767,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-091140195-96319",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 1.24,
+    "link_pass_secs": 0.383374125
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73497911,
+   "wall": 7.928,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": "_RINvMs7_NtCs9JcTNnS1m2x_4gpui3appNtB6_3App11on_app_quitINtNtNtCs4XPPmSydh91_4core6future5ready5ReadyuENCNvNtNtCsh4Uy33RhVie_16jcode_desktop_ui9workspace8recovery7installs_0EB1K_ is not in the base binary",
+   "run_id": "20261011-091147962-98990",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.9099999999999997,
+    "link_pass_secs": 0.932098487
+   },
+   "warmup": true
+  },
+  {
+   "mode": "hot",
+   "n": 73497912,
+   "wall": 8.723,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 391 functions redirected, 0 new, 4 statics bound, 6 imports, ms: objs 1 basesyms 101 script 2 lld 17 map 1",
+   "patch_ms": 124,
+   "fallback": null,
+   "run_id": "20261011-091155895-101745",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.157657759
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73497913,
+   "wall": 7.251,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 391 functions redirected, 0 new, 4 statics bound, 6 imports, ms: objs 1 basesyms 104 script 2 lld 18 map 1",
+   "patch_ms": 128,
+   "fallback": null,
+   "run_id": "20261011-091204630-104130",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.184704541
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73497914,
+   "wall": 7.092,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 391 functions redirected, 0 new, 4 statics bound, 6 imports, ms: objs 1 basesyms 143 script 3 lld 20 map 2",
+   "patch_ms": 171,
+   "fallback": null,
+   "run_id": "20261011-091211883-106659",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.238831922
+   }
+  }
+ ]
+}

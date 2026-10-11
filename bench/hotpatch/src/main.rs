@@ -1,4 +1,4 @@
-//! jr-hot: hot patching of Rust test binaries (prototype, FINDINGS 28).
+//! jr-hot: hot patching of Rust test binaries (prototype, FINDINGS 35).
 //!
 //! Two roles:
 //!

@@ -1,0 +1,326 @@
+{
+ "workload": "toy",
+ "summary": {
+  "normal": {
+   "median": 0.10250000000000001,
+   "min": 0.092,
+   "max": 0.121,
+   "n": 6,
+   "all_ok": true
+  },
+  "hot": {
+   "median": 0.0985,
+   "min": 0.088,
+   "max": 0.125,
+   "n": 6,
+   "patched": 6,
+   "patch_ms_median": 9.5,
+   "all_ok": true
+  }
+ },
+ "samples": [
+  {
+   "mode": "normal",
+   "n": 73627200,
+   "wall": 0.176,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-093112972-392936",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   },
+   "warmup": true
+  },
+  {
+   "mode": "normal",
+   "n": 73627201,
+   "wall": 0.098,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-093113127-393092",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73627202,
+   "wall": 0.117,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-093113225-393226",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73627203,
+   "wall": 0.121,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-093113343-393363",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73627204,
+   "wall": 0.12,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 12 map 0",
+   "patch_ms": 12,
+   "fallback": null,
+   "run_id": "20261011-093113464-393497",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   },
+   "warmup": true
+  },
+  {
+   "mode": "hot",
+   "n": 73627205,
+   "wall": 0.116,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 11 map 0",
+   "patch_ms": 12,
+   "fallback": null,
+   "run_id": "20261011-093113585-393627",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73627206,
+   "wall": 0.088,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 7 map 0",
+   "patch_ms": 8,
+   "fallback": null,
+   "run_id": "20261011-093113700-393757",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73627207,
+   "wall": 0.125,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 8 map 0",
+   "patch_ms": 9,
+   "fallback": null,
+   "run_id": "20261011-093113789-393892",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73627208,
+   "wall": 0.107,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-093113915-394023",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73627209,
+   "wall": 0.092,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-093114021-394160",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73627210,
+   "wall": 0.095,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-093114113-394307",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73627211,
+   "wall": 0.1,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 9 map 0",
+   "patch_ms": 10,
+   "fallback": null,
+   "run_id": "20261011-093114209-394442",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   },
+   "warmup": true
+  },
+  {
+   "mode": "hot",
+   "n": 73627212,
+   "wall": 0.1,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 9 map 0",
+   "patch_ms": 10,
+   "fallback": null,
+   "run_id": "20261011-093114309-394576",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73627213,
+   "wall": 0.091,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 7 map 0",
+   "patch_ms": 8,
+   "fallback": null,
+   "run_id": "20261011-093114410-394706",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73627214,
+   "wall": 0.097,
+   "exit": 0,
+   "result": [
+    "ok",
+    "",
+    ""
+   ],
+   "patched": "2/45 units, 7 functions redirected, 0 new, 0 statics bound, 0 imports, ms: objs 0 basesyms 0 script 0 lld 9 map 0",
+   "patch_ms": 10,
+   "fallback": null,
+   "run_id": "20261011-093114501-394836",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+   }
+  }
+ ]
+}

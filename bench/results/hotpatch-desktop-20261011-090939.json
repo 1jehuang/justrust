@@ -1,0 +1,266 @@
+{
+ "workload": "desktop",
+ "summary": {
+  "normal": {
+   "median": 8.9655,
+   "min": 5.586,
+   "max": 13.097,
+   "n": 6,
+   "all_ok": false
+  },
+  "hot": {
+   "median": 8.0245,
+   "min": 5.162,
+   "max": 9.979,
+   "n": 6,
+   "patched": 6,
+   "patch_ms_median": 153.5,
+   "all_ok": false
+  }
+ },
+ "samples": [
+  {
+   "mode": "normal",
+   "n": 73484900,
+   "wall": 10.395,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090729759-35339",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 1.96,
+    "link_pass_secs": 0.355584835
+   },
+   "warmup": true
+  },
+  {
+   "mode": "normal",
+   "n": 73484901,
+   "wall": 5.586,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090740134-36074",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 0.12000000000000001,
+    "link_pass_secs": 0.224824939
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73484902,
+   "wall": 6.701,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090745720-36661",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 1.7,
+    "link_pass_secs": 0.240014645
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73484903,
+   "wall": 7.604,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090752423-37244",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 1.53,
+    "link_pass_secs": 0.520117026
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73484904,
+   "wall": 10.222,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": "_RNvNtCsat7wQO7vwu7_19jcode_desktop_model8learning10state_path is not in the base binary",
+   "run_id": "20261011-090800028-37870",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 3.28,
+    "link_pass_secs": 0.818870845
+   },
+   "warmup": true
+  },
+  {
+   "mode": "hot",
+   "n": 73484905,
+   "wall": 9.784,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 293 functions redirected, 0 new, 4 statics bound, 3 imports, ms: objs 1 basesyms 159 script 4 lld 27 map 1",
+   "patch_ms": 195,
+   "fallback": null,
+   "run_id": "20261011-090810250-38553",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.242521366
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73484906,
+   "wall": 9.749,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 293 functions redirected, 0 new, 4 statics bound, 3 imports, ms: objs 1 basesyms 136 script 2 lld 28 map 2",
+   "patch_ms": 171,
+   "fallback": null,
+   "run_id": "20261011-090820035-39324",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.217648425
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73484907,
+   "wall": 9.979,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 293 functions redirected, 0 new, 4 statics bound, 3 imports, ms: objs 1 basesyms 138 script 2 lld 24 map 2",
+   "patch_ms": 169,
+   "fallback": null,
+   "run_id": "20261011-090829785-39989",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.215242793
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73484908,
+   "wall": 10.327,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090839765-40696",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.2800000000000002,
+    "link_pass_secs": 0.694956026
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73484909,
+   "wall": 12.048,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090850096-41485",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.3499999999999996,
+    "link_pass_secs": 0.732149148
+   }
+  },
+  {
+   "mode": "normal",
+   "n": 73484910,
+   "wall": 13.097,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": null,
+   "run_id": "20261011-090902144-42284",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.59,
+    "link_pass_secs": 0.567304342
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73484911,
+   "wall": 6.899,
+   "exit": 0,
+   "result": null,
+   "patched": null,
+   "patch_ms": null,
+   "fallback": "_RINvMNtCs4XPPmSydh91_4core4boolb4thenNtNtNtCsh4Uy33RhVie_16jcode_desktop_ui9workspace12account_menu8SnapshotNCNvBB_7fixture0EBF_ is not in the base binary",
+   "run_id": "20261011-090915242-43321",
+   "link": {
+    "linker_processes": 3,
+    "linker_cpu_secs": 2.27,
+    "link_pass_secs": 0.569007825
+   },
+   "warmup": true
+  },
+  {
+   "mode": "hot",
+   "n": 73484912,
+   "wall": 6.3,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 293 functions redirected, 0 new, 4 statics bound, 3 imports, ms: objs 1 basesyms 113 script 2 lld 19 map 1",
+   "patch_ms": 138,
+   "fallback": null,
+   "run_id": "20261011-090922141-44593",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.174778259
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73484913,
+   "wall": 6.29,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 293 functions redirected, 0 new, 4 statics bound, 3 imports, ms: objs 1 basesyms 98 script 2 lld 16 map 1",
+   "patch_ms": 120,
+   "fallback": null,
+   "run_id": "20261011-090928442-45435",
+   "link": {
+    "linker_processes": 1,
+    "linker_cpu_secs": 0.01,
+    "link_pass_secs": 0.163154089
+   }
+  },
+  {
+   "mode": "hot",
+   "n": 73484914,
+   "wall": 5.162,
+   "exit": 0,
+   "result": null,
+   "patched": "5/257 units, 293 functions redirected, 0 new, 4 statics bound, 3 imports, ms: objs 1 basesyms 94 script 2 lld 14 map 1",
+   "patch_ms": 114,
+   "fallback": null,
+   "run_id": "20261011-090934732-46052",
+   "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.14027276
+   }
+  }
+ ]
+}
