@@ -3010,3 +3010,21 @@ stock 76.0 s (1,868 tests, exit 101), justrust 44.5 s (1,792 tests, exit
 binary (8,911 tests). Counts differ slightly because the pool orders
 binaries by history (likely failures first), so a different set has
 finished when the first failure stops the run; both report the failure.
+
+## 2026-10-11: three-way uv benchmark, remote loses on new checkouts to upload time
+
+uv 44b2e58, a new git worktree per case, mean of 2 interleaved rounds. Laptop
+load 12 to 39 from other agents. Remote c7i.8xlarge us-west-2, both caches warm.
+
+| case | stock cargo | justrust --local | justrust --remote |
+|---|---:|---:|---:|
+| `check --workspace` | 89.7 s, 484 CPU-s | 54.0 s, 111 CPU-s | 83.2 s, 0.6 CPU-s |
+| `test -p uv-resolver --no-run` | 121.1 s | 39.3 s | 109.4 s |
+| one-line edit, `check -p uv-resolver` | ~1 s | ~1.2 s | ~1.0 s |
+
+Remote compile itself was 17.7 to 23.2 s (574/574 and 475/475 depcache hits).
+The rest is the first rsync of a new checkout: 40 to 121 s for ~45 MB of source
+(sync 87484/120623/39825/49956 ms). Fix belongs in justrust: content-addressed
+upload or seeding the remote tree from the same git commit (fetch on the machine,
+then sync only the diff) would put remote at ~20 s here, 2.7x local.
+Logs: ~/.jcode/scratch/uvbench/final.txt.
