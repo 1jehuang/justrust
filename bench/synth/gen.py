@@ -211,7 +211,7 @@ JOURNAL = WORK / "probe-journal"
 
 
 def _recover_journal() -> None:
-    """Undo a probe that was killed before it restored its files."""
+    """Undo a probe or synth edit that was killed before it restored its files."""
     if not JOURNAL.exists():
         return
     idx = JOURNAL / "index.json"
@@ -220,7 +220,9 @@ def _recover_journal() -> None:
             src = JOURNAL / k
             if src.exists():
                 shutil.copy2(src, dst)
-                print(f"synth: restored {dst} after an interrupted probe", file=sys.stderr)
+                print(f"synth: restored {dst} after an interrupted run", file=sys.stderr)
+                for f in Path(dst).parent.glob("jr_synth_mod_*.rs"):
+                    f.unlink()
     shutil.rmtree(JOURNAL)
 
 
@@ -609,8 +611,19 @@ def _pristine(root: Path, rel: str) -> Path:
 
 
 def apply(p: Plan, n: int) -> list[Path]:
-    """Make the plan's edits with unique number n. Returns files created."""
+    """Make the plan's edits with unique number n. Returns files created.
+
+    Journaled like probes: a killed run is undone by the next one, and
+    SIGTERM raises so `restore` runs (see run.py)."""
     root = snapshot_root(p.snap)
+    _locked()
+    signal.signal(signal.SIGTERM, _raise_interrupt)
+    JOURNAL.mkdir(parents=True, exist_ok=True)
+    index = {}
+    for k, rel in enumerate(sorted({e.file for e in p.edits})):
+        shutil.copy2(_pristine(root, rel), JOURNAL / str(k))
+        index[str(k)] = str(root / rel)
+    (JOURNAL / "index.json").write_text(json.dumps(index))
     created: list[Path] = []
     by_file: dict[str, list[EditOp]] = collections.defaultdict(list)
     for e in p.edits:
@@ -655,6 +668,7 @@ def restore(p: Plan, created: list[Path]) -> None:
         shutil.copy2(_pristine(root, e.file), root / e.file)
     for f in created:
         f.unlink(missing_ok=True)
+    shutil.rmtree(JOURNAL, ignore_errors=True)
 
 
 def restore_all(snap: str) -> None:

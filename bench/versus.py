@@ -529,7 +529,7 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
     info["stock_cargo"] = suite.sh([STOCK_CARGO, "-V"])
     res = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info, "stacks": [s.name for s in stacks],
            "stack_defs": [{"name": s.name, "what": s.what, "env": s.env, "justrust": s.justrust} for s in stacks]}
-    res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait)
+    res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait, partial=suite.RESULTS / "partial" / f"synth{args.synth}.json")
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = suite.RESULTS / (f"versus-synth{args.synth}-{time.strftime('%Y%m%d-%H%M%S')}-{info['justrust_rev']}"
                            f"{'-dirty' if info['justrust_dirty'] else ''}.json")

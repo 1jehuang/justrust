@@ -788,7 +788,7 @@ def cmd_run_synth(args) -> None:
                       {} if TOOLCHAIN == "system" else {"JUSTRUST_TOOLCHAIN": TOOLCHAIN}, private_cache=True)
     info = env_info()
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
-              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait)}
+              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json")}
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
         f"synth{args.synth}-" + time.strftime("%Y%m%d-%H%M%S")

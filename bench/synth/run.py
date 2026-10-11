@@ -98,7 +98,9 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
     return r
 
 
-def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float) -> dict:
+def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
+        partial: Path | None = None) -> dict:
+    """`partial`: rewritten after every point, so a killed run keeps what it measured."""
     pts, info = gen.sample(seed, points)
     plans = [gen.plan(p, seed) for p in pts]
     for snap in {p.snap for p in plans}:
@@ -131,6 +133,11 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
               file=sys.stderr)
         res_points.append({**plan.to_json(), "samples": samples, "errors": errors,
                            "stats": {s: versus.stats(v) for s, v in samples.items() if v}})
+        if partial:
+            partial.parent.mkdir(parents=True, exist_ok=True)
+            partial.write_text(json.dumps({"seed": seed, "points": points, "reps": reps, "partial": True,
+                                           "generator": gen.fingerprint(), "sample_info": info,
+                                           "stack_names": [s.name for s in stacks], "results": res_points}))
     for snap in {p.snap for p in plans}:
         gen.restore_all(snap)
     return {"seed": seed, "points": points, "reps": reps, "generator": gen.fingerprint(), "sample_info": info,
