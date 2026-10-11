@@ -45,6 +45,25 @@ import suite  # noqa: E402
 FACTOR_WORK = Path(os.environ.get("JUSTRUST_FACTORS_WORK", suite.JR_HOME / "bench" / "factors"))
 FACTORS_MD = suite.ROOT / "bench" / "FACTORS.md"
 NIGHTLY = "nightly-2026-10-08"  # the pinned toolchain (docs/toolchain.md)
+# Cargo reads per-package profile rustflags and hint-mostly-unused only with
+# these unstable features (the pinned nightly's cargo accepts them).
+UNSTABLE_PROFILE = {"CARGO_UNSTABLE_PROFILE_RUSTFLAGS": "true",
+                    "CARGO_UNSTABLE_PROFILE_HINT_MOSTLY_UNUSED": "true"}
+# The slowest dependencies of a cold Desktop UI test build (run
+# 20261011-043427013-426230: gpui 115 s, aws-sdk-bedrock 68 s, wgpu-core 67 s, ...).
+BIG_DEPS = ["gpui", "aws-sdk-bedrock", "wgpu-core", "gpui_linux", "read-fonts", "wgpu-hal",
+            "mermaid-rs-renderer", "aws-sdk-bedrockruntime", "x11rb-protocol", "zbus"]
+
+
+def ui_rustflags(*flags: str) -> list[str]:
+    return ["--config", f"profile.dev.package.jcode-desktop-ui.rustflags={json.dumps(list(flags))}"]
+
+
+def hint_mostly_unused_args() -> list[str]:
+    out = []
+    for p in BIG_DEPS:
+        out += ["--config", f'profile.dev.package."{p}".hint-mostly-unused=true']
+    return out
 
 
 @dataclass
@@ -66,6 +85,11 @@ class Factor:
     private_cache: bool = False
     cmds: list[list[str]] = field(default_factory=list)  # sequence factors
     note: str = ""
+    # Extra cargo arguments (`--config ...`) inserted after the subcommand,
+    # for settings cargo only reads from config, such as per-package profile
+    # rustflags. Loop factors only.
+    on_args: list[str] = field(default_factory=list)
+    off_args: list[str] = field(default_factory=list)
 
 
 FACTORS = [
@@ -164,6 +188,57 @@ FACTORS = [
         n=4, slow=True,
         note="same rustc commit both sides; build-jr.sh saves each mode (dev, release, pgo-use) under build/jr/",
     ),
+    # Pinned-nightly flag experiments (docs/toolchain.md phase 2). Both sides
+    # run the pinned nightly; `on` adds one flag through cargo config, so
+    # project manifests stay untouched.
+    *[Factor(
+        name, what, "loop", scenario,
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY, **UNSTABLE_PROFILE}, off={"JUSTRUST_TOOLCHAIN": NIGHTLY},
+        on_args=args, n=n, slow=True, note=note,
+    ) for name, what, scenario, args, n, note in [
+        ("cache-proc-macros", "-Zcache-proc-macros on the UI crate: reuse derive expansions from the incremental cache",
+         "desktop-test-edit", ui_rustflags("-Zcache-proc-macros"), 6,
+         "only derive macros are cached; `macro_expand_crate` is the largest pass of the loop"),
+        ("cache-proc-macros-check", "same, on the check-only loop", "desktop-body-check",
+         ui_rustflags("-Zcache-proc-macros"), 6, ""),
+        ("share-generics-deps", "-Zshare-generics=y on every dependency (opt-level 2 deps default to off)",
+         "desktop-test-edit", ["--config", 'profile.dev.package."*".rustflags=["-Zshare-generics=y"]'], 6,
+         "the UI crate could reuse generic instances from gpui and friends instead of codegenning its own; "
+         "the first build of this configuration recompiles every dependency"),
+        ("hint-mostly-unused", "-Zhint-mostly-unused on the largest dependencies (gpui, wgpu, aws-sdk, ...)",
+         "desktop-test-edit", hint_mostly_unused_args(), 6,
+         "defers codegen of the hinted crates' items to their users: cheaper dependency builds, "
+         "possibly more codegen in the loop"),
+    ]],
+    Factor(
+        "hint-mostly-unused-cold", "same hint, on a cold build of the UI test binary (what it is meant for)",
+        "sequence", "desktop-cold-test-build",
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY, **UNSTABLE_PROFILE}, off={"JUSTRUST_TOOLCHAIN": NIGHTLY},
+        on_args=hint_mostly_unused_args(), n=2, warmup=0, slow=True,
+        cmds=[["test", "-p", "jcode-desktop-ui", "--lib", "--no-run"]],
+        note="fresh target dir, depcache off, `test --no-run` (codegen included, unlike check)",
+    ),
+    Factor(
+        "nightly-flags-combo", "-Zcache-proc-macros on the UI crate plus -Zshare-generics=y on dependencies",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY, **UNSTABLE_PROFILE}, off={"JUSTRUST_TOOLCHAIN": NIGHTLY},
+        on_args=[*ui_rustflags("-Zcache-proc-macros"),
+                 "--config", 'profile.dev.package."*".rustflags=["-Zshare-generics=y"]'],
+        n=8, slow=True, note="the two flags with a positive (within-noise) median alone",
+    ),
+    Factor(
+        "frontend-threads-16", "rustc -Zthreads=16 instead of 8 for local crates (Desktop's wrapper)",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JCODE_FRONTEND_THREADS": "16"},
+        off={"JUSTRUST_TOOLCHAIN": NIGHTLY}, n=6, slow=True,
+        note="16 hardware threads here; -Zthreads is untracked, so incremental state is the same",
+    ),
+    Factor(
+        "frontend-threads-4", "rustc -Zthreads=4 instead of 8 for local crates (Desktop's wrapper)",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JCODE_FRONTEND_THREADS": "4"},
+        off={"JUSTRUST_TOOLCHAIN": NIGHTLY}, n=6, slow=True,
+    ),
 ]
 BY_NAME = {f.name: f for f in FACTORS}
 
@@ -185,7 +260,9 @@ def add_ledgers(rs: list[dict]) -> dict:
 def variant_scenario(f: Factor, v: str) -> suite.Scenario:
     base = suite.BY_NAME[f.scenario]
     env = {**base.env, **(f.on if v == "on" else f.off)}
-    return dataclasses.replace(base, env=env)
+    extra = f.on_args if v == "on" else f.off_args
+    cmd = [base.cmd[0], *extra, *base.cmd[1:]]
+    return dataclasses.replace(base, env=env, cmd=cmd)
 
 
 def cache_env(f: Factor) -> dict[str, str]:
@@ -199,7 +276,10 @@ def sample_loop(f: Factor, v: str, i: int, base_n: int) -> dict:
     root = suite.prepare(s.snapshot)
     # Keyed by the build configuration, not the factor: every factor's `on`
     # side of the same workload is the same build and shares one warm dir.
-    key = hashlib.sha1(json.dumps([s.snapshot, sorted(s.env.items())]).encode()).hexdigest()[:10]
+    # Extra cargo args are part of the configuration; plain commands keep
+    # their old key so existing warm dirs stay valid.
+    parts = [s.snapshot, sorted(s.env.items())] + ([s.cmd] if f.on_args or f.off_args else [])
+    key = hashlib.sha1(json.dumps(parts).encode()).hexdigest()[:10]
     target = FACTOR_WORK / "target" / f"loop-{s.snapshot}-{key}"
     try:
         if s.edit:
@@ -225,9 +305,10 @@ def sample_sequence(f: Factor, v: str, i: int, base_n: int) -> dict:
            **(f.on if v == "on" else f.off)}
     root = suite.prepare("desktop")
     target = FACTOR_WORK / "target" / f"{f.name}-{v}-seq-{os.getpid()}-{i}"
+    extra = f.on_args if v == "on" else f.off_args
     runs = []
     try:
-        for cmd in f.cmds:
+        for cmd in ([c[0], *extra, *c[1:]] for c in f.cmds):
             s = suite.Scenario(f"{f.name}:{' '.join(cmd)}", "desktop", cmd, None, "", cold=True, env=env)
             runs.append(suite.run_once(s, root, target))
     finally:
