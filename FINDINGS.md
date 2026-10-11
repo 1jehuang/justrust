@@ -1749,3 +1749,39 @@ Notes:
   already lld, not GNU ld.
 - incremental, pinned nightly, cranelift: run interrupted by a server
   reload; rerunning detached.
+
+## 22. Test execution: one slow test sets the suite's wall time (2026-10-10)
+
+Across 1193 recorded test runs on this machine, compile is still most of
+the wait (jcode-desktop: 94 min compile vs 9 min running tests; jcode: 95
+vs 16). But the jcode-desktop-ui lib suite (1290 tests) runs 10-38s, and
+its wall time was bounded by single tests: under load,
+`startup_each_native_submission_paints_the_newest_row` took 31.6s (9.2s
+alone), 35 tests over 2s were 43% of summed test CPU. Running slowest-first
+with one process per slow test did not help (19-22s vs 19-21s, load 44):
+the suite is CPU-bound, so the fix is cheaper tests, not scheduling.
+
+Causes, from a samply profile and reading the tests:
+
+- `simulate_input` dispatches one keystroke and one full window render per
+  character. A test typing 20 prompts of ~210 chars rendered ~4200 times
+  over a growing transcript. Fix: `test_input::commit_text`, one IME commit
+  through the same input handler (9.15s -> 0.17s).
+- Scroll tests travelled 500+ rows in 180px wheel steps, each settled for
+  up to 16 frames. Long strokes reach the same end state (7.13s -> 0.35s;
+  mutation-checked that a wrong target still fails).
+- Real `thread::sleep` for 2x tween durations, and PDF pages rasterized at
+  2400px (~450ms of pdftoppm each) in tests that only check layout.
+
+Result, interleaved A/B of the old and new test binaries on the same
+machine (load 26-40), whole suite: old 17.3/18.8/16.9/12.2s, new
+10.7/11.0/10.2/8.1s, median 16.9s -> 10.5s (-37%). Runs
+20261010-203941085-1026350 (baseline, 9.15s slowest) and
+20261010-204556033-1118868
+(after). jcode-desktop commit a780ae3.
+
+justrust now records per-test durations on every `test` (255d152): a cargo
+`runner` (`justrust __test-runner`) adds libtest `--report-time` with a
+process-local `RUSTC_BOOTSTRAP`, so artifacts stay Fresh. The report lists
+the slowest tests when one is >=1s and >=10% of the test phase, and
+`slow_tests` names the slowest one.
