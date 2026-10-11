@@ -215,6 +215,79 @@ fn cargo_home() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// C and C++ flags that keep machine paths out of objects a registry build
+/// script compiles (cc crate, cmake honor `CFLAGS`/`CXXFLAGS`): the cargo
+/// home (and its resolved registry/git dirs) and the target dir map to the
+/// same fixed paths rustc uses for dependency units. Without them, static
+/// archives like ring's and aws-lc's embed the source path in DWARF line
+/// tables, so their bytes, and every dependent's depcache key, differ per
+/// user (FINDINGS 30: 25 of 833 Desktop units, aws_sdk_bedrock 11 s).
+/// Appended to what the user set, set only for this script's process, and
+/// part of the key (the env is keyed after this runs).
+fn path_map_flags(norm: &Norm) -> String {
+    let mut maps = Vec::new();
+    if let Some(c) = &norm.cargo {
+        maps.push(format!(
+            "-ffile-prefix-map={c}={}",
+            depcache::REMAPPED_CARGO_HOME
+        ));
+        // Same set on every machine, like rustc's (depcache::remap_args).
+        for sub in ["registry", "git"] {
+            let p = Path::new(c).join(sub);
+            let real = p.canonicalize().unwrap_or(p);
+            maps.push(format!(
+                "-ffile-prefix-map={}={}/{sub}",
+                real.display(),
+                depcache::REMAPPED_CARGO_HOME
+            ));
+        }
+    }
+    maps.push(format!(
+        "-ffile-prefix-map={}={}",
+        norm.target,
+        depcache::REMAPPED_TARGET
+    ));
+    maps.join(" ")
+}
+
+fn add_path_maps(norm: &Norm) {
+    if matches!(
+        std::env::var("JUSTRUST_C_PATH_MAP").as_deref(),
+        Ok("0") | Ok("off")
+    ) {
+        return;
+    }
+    let Ok(target) = std::env::var("TARGET") else {
+        return;
+    };
+    let flags = path_map_flags(norm);
+    for base in ["CFLAGS", "CXXFLAGS"] {
+        // cc reads `<VAR>_<target>` before `<VAR>`; use the most specific
+        // one already set, else the target-specific one.
+        let names = [
+            format!("{base}_{target}"),
+            format!("{base}_{}", target.replace('-', "_")),
+        ];
+        let name = names
+            .iter()
+            .find(|n| std::env::var_os(n).is_some())
+            .cloned()
+            .unwrap_or_else(|| names[1].clone());
+        let old = std::env::var(&name)
+            .ok()
+            .or_else(|| std::env::var(base).ok())
+            .unwrap_or_default();
+        let new = if old.is_empty() {
+            flags.clone()
+        } else {
+            format!("{old} {flags}")
+        };
+        // SAFETY: single-threaded at this point (before any spawn), and the
+        // value is only read by this process and the script it starts.
+        unsafe { std::env::set_var(&name, new) };
+    }
+}
+
 fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR")?);
     let profile = depcache::build_script_profile_dir(&out_dir)?;
@@ -225,6 +298,7 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     if !manifest.starts_with(&cargo_home) {
         return None; // local package: always run
     }
+    add_path_maps(&norm);
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let mut h = H128::new();
     h.field(SCHEME.as_bytes());

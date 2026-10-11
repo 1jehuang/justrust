@@ -36,13 +36,23 @@ pub fn index_file() -> Result<PathBuf> {
     Ok(home()?.join("index.jsonl"))
 }
 
-/// Make sure `~/.justrust/bin/shim/rustc` points at the running binary.
+/// Make sure a `rustc` shim pointing at the running binary exists, and
+/// return it. One shim dir per binary (`bin/shim/<hash of the binary
+/// path>/rustc`): a single shared link was repointed by every build, so
+/// two justrust binaries building at once (an installed one and a bench or
+/// development build) ran each other's rustc shims, mixing depcache
+/// schemes inside one build. `bin/shim/rustc` is still kept pointing at
+/// the most recent binary for anything that runs it directly.
 pub fn ensure_rustc_shim() -> Result<PathBuf> {
     let exe = std::env::current_exe()?.canonicalize()?;
-    let dir = home()?.join("bin/shim");
+    let base = home()?.join("bin/shim");
+    let mut h = crate::depcache::H128::new();
+    h.field(exe.as_os_str().as_encoded_bytes());
+    let dir = base.join(&h.hex()[..16]);
     std::fs::create_dir_all(&dir)?;
     let link = dir.join(RUSTC_SHIM_NAME);
     replace_symlink(&exe, &link)?;
+    let _ = replace_symlink(&exe, &base.join(RUSTC_SHIM_NAME));
     Ok(link)
 }
 

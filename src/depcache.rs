@@ -66,9 +66,12 @@ use std::path::{Path, PathBuf};
 /// match across users whose cargo homes live at different paths.
 /// 7: a symlinked registry/git dir's resolved path is normalized like the
 /// cargo home (rustc's cwd is the resolved source dir).
+/// 8: the same remapping set on every machine (rustc folds matching
+/// remappings into the SVH), and registry build scripts compile C with
+/// `-ffile-prefix-map` for the cargo home and target dir.
 /// 2: the cargo home is a placeholder (portable across machines), and
 /// proc macros and bins key the C library they link against.
-const SCHEME: &str = "justrust-depcache-7";
+const SCHEME: &str = "justrust-depcache-8";
 const PROFILE_TOKEN: &str = "@@JUSTRUST_PROFILE_DIR@@";
 const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// The cargo home (registry sources, git checkouts), so keys and manifest
@@ -178,10 +181,6 @@ impl Norm {
             aliases,
         })
     }
-    /// Resolved registry/git dirs that differ from their cargo home path.
-    pub(crate) fn alias_dirs(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.aliases.iter().map(|(r, t)| (r.as_str(), t.as_str()))
-    }
     pub fn norm(&self, s: &str) -> String {
         let mut s = if s.contains(&self.target) {
             s.replace(&self.profile, PROFILE_TOKEN)
@@ -281,7 +280,7 @@ pub const REMAPPED_TARGET: &str = "/justrust-target";
 /// to in dependency outputs. Registry sources are written into crate
 /// metadata by absolute path, so without it every crate with a dependency
 /// gets a different key for each user (`/home/alice/.cargo` vs
-/// `/home/bob/.cargo`): measured 32 of 56 justrust keys equal, FINDINGS 28.
+/// `/home/bob/.cargo`): measured 32 of 56 justrust keys equal, FINDINGS 30.
 /// Same trade as cargo's `trim-paths`: panic locations and debug line
 /// tables of dependencies name this path instead of the local one.
 pub const REMAPPED_CARGO_HOME: &str = "/justrust-cargo-home";
@@ -560,13 +559,19 @@ fn remap_args(args: &[String], norm: &Norm) -> Vec<String> {
     let mut v = Vec::new();
     if let Some(c) = &norm.cargo {
         v.push(format!("--remap-path-prefix={c}={REMAPPED_CARGO_HOME}"));
-        // A symlinked registry or git dir (the remote agent links the
-        // client's cargo home path to its own): rustc's working dir is the
-        // resolved path, so map that too.
-        for (real, token) in norm.alias_dirs() {
-            let sub = token.rsplit('/').next().unwrap_or_default();
+        // The registry and git dirs, by their resolved path (the remote
+        // agent and the prebuild fleet link the cargo home's dirs to a
+        // shared one, and rustc's working dir is the resolved path).
+        // Emitted on every machine, symlinked or not: a remapping that
+        // matches a path changes the crate's SVH even when a later one
+        // wins, so all machines must pass the same set (FINDINGS 30:
+        // rustix and 15 other crates differed otherwise).
+        for sub in ["registry", "git"] {
+            let p = Path::new(c).join(sub);
+            let real = p.canonicalize().unwrap_or(p);
             v.push(format!(
-                "--remap-path-prefix={real}={REMAPPED_CARGO_HOME}/{sub}"
+                "--remap-path-prefix={}={REMAPPED_CARGO_HOME}/{sub}",
+                real.display()
             ));
         }
     }
@@ -1574,12 +1579,19 @@ mod tests {
             remap_args(&args, &n)
         };
         let (ra, rb) = (remaps("a", "t1"), remaps("b", "t2"));
-        assert_eq!(ra.len(), 2);
-        assert_eq!(rb.len(), 3, "{rb:?}");
+        // Same shape on every machine: cargo home, registry, git, target.
+        assert_eq!(ra.len(), 4, "{ra:?}");
+        assert_eq!(rb.len(), 4, "{rb:?}");
         assert!(rb[1].starts_with(&format!(
             "--remap-path-prefix={}=",
             real_registry.canonicalize().unwrap().display()
         )));
+        let dests = |r: &[String]| -> Vec<String> {
+            r.iter()
+                .map(|a| a.rsplit_once('=').unwrap().1.to_owned())
+                .collect()
+        };
+        assert_eq!(dests(&ra), dests(&rb));
         assert!(rb.last().unwrap().ends_with(&format!("={REMAPPED_TARGET}")));
         let key = |r: &[String]| {
             let mut h = H128::new();

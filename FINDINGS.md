@@ -2259,6 +2259,49 @@ host-independent, which is the vendored C toolchain (`docs/c-sysroot.md`,
 layers 1 and 2). Not measured yet: a real network store (S3 over the
 internet), and other seed sets than the Desktop lockfile.
 
+### Follow-up: why the 25 missed, scheme 8 (2026-10-11)
+
+Probe: two cold Desktop builds without a store, consumer cargo home
+(`~/.cargo`) vs publisher home (a dir whose `registry`/`git` symlink to
+`~/.cargo`), then compare the C archives and every dependency key.
+
+| change | ring archive | aws-lc archive | equal dep keys |
+|---|---|---|---:|
+| scheme 7 (finding above) | differs | differs | 808/833 |
+| + `-ffile-prefix-map` in CFLAGS for registry build scripts | **identical** | differs | 740/833 |
+| + same `--remap-path-prefix` set on every machine (scheme 8) + per-binary rustc shim | identical | differs | **807/833** |
+
+Three causes, all fixed in the working tree:
+
+- **C objects embed the source path.** ring and sqlite compiled by cc put
+  the registry path (via the publisher's symlinked home) into DWARF line
+  tables, so the static archive bytes, and every dependent key, differed.
+  `-ffile-prefix-map` for the cargo home, its resolved registry/git dirs and
+  the target dir makes ring and sqlite byte-identical.
+- **rustc folds matching remappings into the SVH.** With identical source
+  bytes, rustix's rmeta differed only in its 16-byte hash because one side
+  passed one matching `--remap-path-prefix` and the other two (replayed by
+  hand: home only `369b45b0`, home+registry `98962ae1`). 16 crates were
+  roots like this (rustix, alsa, png, onig, rusqlite, ...). Scheme 8 passes
+  the same set (cargo home, resolved registry, resolved git, target dir) on
+  every machine, whether or not anything is symlinked.
+- **The bench was measuring a mix of binaries.** `~/.justrust/bin/shim/rustc`
+  is a single symlink every justrust build repoints, so concurrent builds by
+  other agents' binaries ran their shims inside my builds (the 740 and an
+  intermediate 444 were partly that). The shim is now per binary
+  (`bin/shim/<hash>/rustc`); a build by another binary on the same target
+  dir stays fresh (0 compiled, 48 fresh, no Dirty).
+
+Remaining 26 keys: aws-lc's archive. All 365 objects have identical
+content, but their names differ: cc names objects
+`<hash of dirname relative to CARGO_MANIFEST_DIR>-<file>.o` with std's
+`DefaultHasher`, and the dirname is relative only when it starts with the
+manifest dir spelling, which differs between a symlinked and a plain home
+for aws-lc's generated sources. The next step is to key the `--extern`/native
+lib inputs by archive member content rather than names, or to run registry
+build scripts with `CARGO_MANIFEST_DIR` resolved, then make build-script
+runs publishable (see `docs/c-sysroot.md`).
+
 ## 31. jr-rustc stage 2 vs stage 1 (2026-10-11)
 
 Same release config (thin LTO, cgu 1, no PGO/BOLT, frame pointers off),
