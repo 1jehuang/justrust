@@ -1,0 +1,1152 @@
+{
+ "started": "2026-10-11T09:09:45-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "17daf818e79f",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 6,
+ "warmup": 1,
+ "stacks": [
+  "stock",
+  "nightly",
+  "jr-s1-pgo-bolt",
+  "jr-s2-pgo-bolt"
+ ],
+ "stack_defs": [
+  {
+   "name": "stock",
+   "what": "plain cargo + system rustc, no justrust",
+   "env": {},
+   "justrust": false
+  },
+  {
+   "name": "nightly",
+   "what": "justrust defaults plus {'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_TOOLCHAIN': 'system', 'RUSTC': '/home/jeremy/.justrust/toolchains/nightly-2026-10-08/bin/rustc'}",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "RUSTC": "/home/jeremy/.justrust/toolchains/nightly-2026-10-08/bin/rustc"
+   },
+   "justrust": true
+  },
+  {
+   "name": "jr-s1-pgo-bolt",
+   "what": "justrust defaults plus {'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_TOOLCHAIN': 'system', 'RUSTC': '/home/jeremy/jr-rustc/build/jr/pgo-bolt/bin/rustc'}",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "RUSTC": "/home/jeremy/jr-rustc/build/jr/pgo-bolt/bin/rustc"
+   },
+   "justrust": true
+  },
+  {
+   "name": "jr-s2-pgo-bolt",
+   "what": "justrust defaults plus {'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_TOOLCHAIN': 'system', 'RUSTC': '/home/jeremy/jr-rustc/build/jr/pgo-bolt-stage2/bin/rustc'}",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "RUSTC": "/home/jeremy/jr-rustc/build/jr/pgo-bolt-stage2/bin/rustc"
+   },
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "reference-loop": {
+   "what": "edit a #[test] fn in the 118k-line UI crate, run its tests",
+   "scenario": "desktop-test-edit",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 7.811,
+      "exit": 0,
+      "cpu": 8.27,
+      "max_rss_mb": 2146.4,
+      "instructions": 49116985617,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 23.43,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 6.97,
+      "exit": 0,
+      "cpu": 7.42,
+      "max_rss_mb": 2154.2,
+      "instructions": 49131514492,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 17.97,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 6.426,
+      "exit": 0,
+      "cpu": 6.95,
+      "max_rss_mb": 2159.0,
+      "instructions": 49125514851,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 14.58,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.53,
+      "exit": 0,
+      "cpu": 7.14,
+      "max_rss_mb": 2123.7,
+      "instructions": 49077897326,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.52,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.605,
+      "exit": 0,
+      "cpu": 7.17,
+      "max_rss_mb": 2129.5,
+      "instructions": 49191972362,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 6.75,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.164,
+      "exit": 0,
+      "cpu": 7.74,
+      "max_rss_mb": 2158.9,
+      "instructions": 49064974909,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 5.71,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "nightly": [
+     {
+      "wall": 9.08,
+      "exit": 0,
+      "cpu": 9.21,
+      "max_rss_mb": 2046.9,
+      "instructions": 42348853180,
+      "id": "20261011-091724524-46834966",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 24.77,
+      "foreign_rustc_before": 19
+     },
+     {
+      "wall": 5.152,
+      "exit": 0,
+      "cpu": 6.32,
+      "max_rss_mb": 2011.0,
+      "instructions": 42120425279,
+      "id": "20261011-091815875-46834913",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.7,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.085,
+      "exit": 0,
+      "cpu": 6.29,
+      "max_rss_mb": 1986.8,
+      "instructions": 42200689388,
+      "id": "20261011-091832361-46834422",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.56,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.489,
+      "exit": 0,
+      "cpu": 6.62,
+      "max_rss_mb": 1973.1,
+      "instructions": 42110801497,
+      "id": "20261011-091849514-46834651",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.68,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 4.971,
+      "exit": 0,
+      "cpu": 6.21,
+      "max_rss_mb": 2066.6,
+      "instructions": 42164762026,
+      "id": "20261011-091906842-46834971",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.0,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 4.802,
+      "exit": 0,
+      "cpu": 6.0,
+      "max_rss_mb": 1976.8,
+      "instructions": 42094066254,
+      "id": "20261011-091946981-46834689",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 5.14,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-s1-pgo-bolt": [
+     {
+      "wall": 8.715,
+      "exit": 0,
+      "cpu": 9.39,
+      "max_rss_mb": 2111.3,
+      "instructions": 44423775342,
+      "id": "20261011-091733641-46834302",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 24.99,
+      "foreign_rustc_before": 24
+     },
+     {
+      "wall": 5.438,
+      "exit": 0,
+      "cpu": 6.5,
+      "max_rss_mb": 2087.3,
+      "instructions": 44236191075,
+      "id": "20261011-091756961-46834383",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 20.88,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 5.488,
+      "exit": 0,
+      "cpu": 6.77,
+      "max_rss_mb": 2160.6,
+      "instructions": 44340169690,
+      "id": "20261011-091837463-46834464",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.44,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.02,
+      "exit": 0,
+      "cpu": 7.31,
+      "max_rss_mb": 2092.8,
+      "instructions": 44279911681,
+      "id": "20261011-091855018-46834690",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.9,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.772,
+      "exit": 0,
+      "cpu": 7.02,
+      "max_rss_mb": 2077.2,
+      "instructions": 44236153724,
+      "id": "20261011-091911830-46834625",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 7.52,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.388,
+      "exit": 0,
+      "cpu": 6.64,
+      "max_rss_mb": 2079.8,
+      "instructions": 44250756566,
+      "id": "20261011-091929760-46834667",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 6.37,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-s2-pgo-bolt": [
+     {
+      "wall": 6.727,
+      "exit": 0,
+      "cpu": 7.82,
+      "max_rss_mb": 2096.1,
+      "instructions": 43620858492,
+      "id": "20261011-091742382-46834518",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 24.95,
+      "foreign_rustc_before": 7
+     },
+     {
+      "wall": 6.447,
+      "exit": 0,
+      "cpu": 7.78,
+      "max_rss_mb": 2172.9,
+      "instructions": 43823704203,
+      "id": "20261011-091802416-46834830",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 19.37,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 4.859,
+      "exit": 0,
+      "cpu": 6.06,
+      "max_rss_mb": 2092.8,
+      "instructions": 43523158478,
+      "id": "20261011-091821043-46834250",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 15.76,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.77,
+      "exit": 0,
+      "cpu": 7.07,
+      "max_rss_mb": 2065.3,
+      "instructions": 43582496885,
+      "id": "20261011-091901054-46834612",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.19,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.505,
+      "exit": 0,
+      "cpu": 6.63,
+      "max_rss_mb": 2095.1,
+      "instructions": 43648127341,
+      "id": "20261011-091917617-46834384",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 7.08,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 4.617,
+      "exit": 0,
+      "cpu": 5.7,
+      "max_rss_mb": 2136.6,
+      "instructions": 43676569280,
+      "id": "20261011-091935166-46834803",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 5.94,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 6,
+     "median": 6.787,
+     "min": 6.426,
+     "max": 7.811,
+     "quiet_median": 0,
+     "cpu": 7.29,
+     "max_rss_mb": 2150.3,
+     "instructions": 49121250234.0,
+     "instructions_spread": 0.0026
+    },
+    "nightly": {
+     "n": 6,
+     "median": 5.119,
+     "min": 4.802,
+     "max": 9.08,
+     "quiet_median": 0,
+     "cpu": 6.3,
+     "max_rss_mb": 1998.9,
+     "instructions": 42142593652.5,
+     "instructions_spread": 0.006
+    },
+    "jr-s1-pgo-bolt": {
+     "n": 6,
+     "median": 5.63,
+     "min": 5.388,
+     "max": 8.715,
+     "quiet_median": 0,
+     "cpu": 6.89,
+     "max_rss_mb": 2090.1,
+     "instructions": 44265334123.5,
+     "instructions_spread": 0.0042
+    },
+    "jr-s2-pgo-bolt": {
+     "n": 6,
+     "median": 5.637,
+     "min": 4.617,
+     "max": 6.727,
+     "quiet_median": 0,
+     "cpu": 6.85,
+     "max_rss_mb": 2095.6,
+     "instructions": 43634492916.5,
+     "instructions_spread": 0.0069
+    }
+   }
+  },
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 1.631,
+      "exit": 0,
+      "cpu": 1.77,
+      "max_rss_mb": 739.1,
+      "instructions": 10132047974,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.86,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.89,
+      "exit": 0,
+      "cpu": 2.04,
+      "max_rss_mb": 738.7,
+      "instructions": 10130325049,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.23,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.015,
+      "exit": 0,
+      "cpu": 3.11,
+      "max_rss_mb": 718.9,
+      "instructions": 10129355981,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.77,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.832,
+      "exit": 0,
+      "cpu": 1.95,
+      "max_rss_mb": 739.8,
+      "instructions": 10131023149,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 10.64,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.816,
+      "exit": 0,
+      "cpu": 1.93,
+      "max_rss_mb": 738.7,
+      "instructions": 10131082112,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.663,
+      "exit": 0,
+      "cpu": 1.78,
+      "max_rss_mb": 739.1,
+      "instructions": 10132241053,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 7.96,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "nightly": [
+     {
+      "wall": 1.665,
+      "exit": 0,
+      "cpu": 1.82,
+      "max_rss_mb": 751.9,
+      "instructions": 9470980952,
+      "id": "20261011-092111446-46834962",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 10.45,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.689,
+      "exit": 0,
+      "cpu": 1.88,
+      "max_rss_mb": 753.9,
+      "instructions": 9468463432,
+      "id": "20261011-092124013-46834653",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.23,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.541,
+      "exit": 0,
+      "cpu": 3.82,
+      "max_rss_mb": 727.4,
+      "instructions": 9532597859,
+      "id": "20261011-092131612-46834357",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 10.43,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.696,
+      "exit": 0,
+      "cpu": 1.9,
+      "max_rss_mb": 751.7,
+      "instructions": 9502939351,
+      "id": "20261011-092140061-46834874",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 10.64,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.926,
+      "exit": 0,
+      "cpu": 2.13,
+      "max_rss_mb": 753.1,
+      "instructions": 9483644963,
+      "id": "20261011-092145119-46834780",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.373,
+      "exit": 0,
+      "cpu": 1.53,
+      "max_rss_mb": 753.1,
+      "instructions": 9452747552,
+      "id": "20261011-092158103-46834772",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 7.96,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-s1-pgo-bolt": [
+     {
+      "wall": 1.899,
+      "exit": 0,
+      "cpu": 2.06,
+      "max_rss_mb": 767.6,
+      "instructions": 10435326055,
+      "id": "20261011-092113126-46834238",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 10.45,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.817,
+      "exit": 0,
+      "cpu": 2.01,
+      "max_rss_mb": 765.9,
+      "instructions": 10426102954,
+      "id": "20261011-092118495-46834105",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.86,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.991,
+      "exit": 0,
+      "cpu": 3.3,
+      "max_rss_mb": 765.2,
+      "instructions": 10485087767,
+      "id": "20261011-092135186-46834231",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 10.43,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.607,
+      "exit": 0,
+      "cpu": 1.75,
+      "max_rss_mb": 763.1,
+      "instructions": 10528040146,
+      "id": "20261011-092141775-46834180",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.031,
+      "exit": 0,
+      "cpu": 2.25,
+      "max_rss_mb": 740.1,
+      "instructions": 10420906840,
+      "id": "20261011-092147062-46834614",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.773,
+      "exit": 0,
+      "cpu": 1.96,
+      "max_rss_mb": 763.3,
+      "instructions": 10426791478,
+      "id": "20261011-092152935-46834404",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 8.57,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-s2-pgo-bolt": [
+     {
+      "wall": 1.789,
+      "exit": 0,
+      "cpu": 1.99,
+      "max_rss_mb": 781.3,
+      "instructions": 10177526426,
+      "id": "20261011-092115037-46834240",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 10.45,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.755,
+      "exit": 0,
+      "cpu": 1.95,
+      "max_rss_mb": 785.3,
+      "instructions": 10186411671,
+      "id": "20261011-092120334-46834936",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.86,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.831,
+      "exit": 0,
+      "cpu": 3.1,
+      "max_rss_mb": 781.0,
+      "instructions": 10232293831,
+      "id": "20261011-092125721-46834161",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.23,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.704,
+      "exit": 0,
+      "cpu": 1.88,
+      "max_rss_mb": 776.7,
+      "instructions": 10289494559,
+      "id": "20261011-092143398-46834858",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.987,
+      "exit": 0,
+      "cpu": 2.18,
+      "max_rss_mb": 777.4,
+      "instructions": 10192626507,
+      "id": "20261011-092149105-46834945",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 9.23,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.693,
+      "exit": 0,
+      "cpu": 1.85,
+      "max_rss_mb": 777.8,
+      "instructions": 10177422386,
+      "id": "20261011-092154721-46834431",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 8.57,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 6,
+     "median": 1.824,
+     "min": 1.631,
+     "max": 3.015,
+     "quiet_median": 0,
+     "cpu": 1.94,
+     "max_rss_mb": 738.9,
+     "instructions": 10131052630.5,
+     "instructions_spread": 0.0003
+    },
+    "nightly": {
+     "n": 6,
+     "median": 1.692,
+     "min": 1.373,
+     "max": 3.541,
+     "quiet_median": 0,
+     "cpu": 1.89,
+     "max_rss_mb": 752.5,
+     "instructions": 9477312957.5,
+     "instructions_spread": 0.0084
+    },
+    "jr-s1-pgo-bolt": {
+     "n": 6,
+     "median": 1.858,
+     "min": 1.607,
+     "max": 2.991,
+     "quiet_median": 0,
+     "cpu": 2.04,
+     "max_rss_mb": 764.2,
+     "instructions": 10431058766.5,
+     "instructions_spread": 0.0103
+    },
+    "jr-s2-pgo-bolt": {
+     "n": 6,
+     "median": 1.772,
+     "min": 1.693,
+     "max": 2.831,
+     "quiet_median": 0,
+     "cpu": 1.97,
+     "max_rss_mb": 779.4,
+     "instructions": 10189519089.0,
+     "instructions_spread": 0.011
+    }
+   }
+  },
+  "first-error": {
+   "what": "time to the first type error after an edit",
+   "scenario": "desktop-type-error",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 1.757,
+      "exit": 101,
+      "cpu": 1.83,
+      "max_rss_mb": 754.4,
+      "instructions": 8775316729,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 7.36,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.235,
+      "exit": 101,
+      "cpu": 1.31,
+      "max_rss_mb": 754.1,
+      "instructions": 8775865932,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.93,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.759,
+      "exit": 101,
+      "cpu": 1.85,
+      "max_rss_mb": 753.7,
+      "instructions": 8776081333,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.45,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.752,
+      "exit": 101,
+      "cpu": 1.84,
+      "max_rss_mb": 754.2,
+      "instructions": 8774813489,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.02,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.872,
+      "exit": 101,
+      "cpu": 1.95,
+      "max_rss_mb": 754.6,
+      "instructions": 8775241085,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 4.99,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.392,
+      "exit": 101,
+      "cpu": 1.49,
+      "max_rss_mb": 754.4,
+      "instructions": 8776249444,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 4.83,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "nightly": [
+     {
+      "wall": 1.573,
+      "exit": 101,
+      "cpu": 1.78,
+      "max_rss_mb": 740.6,
+      "instructions": 8147878131,
+      "id": "20261011-092205776-46834178",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 7.56,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.63,
+      "exit": 101,
+      "cpu": 1.81,
+      "max_rss_mb": 740.8,
+      "instructions": 8148172397,
+      "id": "20261011-092217207-46834273",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.45,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.615,
+      "exit": 101,
+      "cpu": 1.8,
+      "max_rss_mb": 741.1,
+      "instructions": 8148416141,
+      "id": "20261011-092222405-46834282",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.02,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.541,
+      "exit": 101,
+      "cpu": 1.71,
+      "max_rss_mb": 749.8,
+      "instructions": 8150036190,
+      "id": "20261011-092227635-46834939",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.62,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.627,
+      "exit": 101,
+      "cpu": 1.84,
+      "max_rss_mb": 738.9,
+      "instructions": 8147706329,
+      "id": "20261011-092232243-46834588",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.364,
+      "exit": 101,
+      "cpu": 1.51,
+      "max_rss_mb": 737.7,
+      "instructions": 8141241218,
+      "id": "20261011-092243971-46834651",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 4.83,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-s1-pgo-bolt": [
+     {
+      "wall": 1.754,
+      "exit": 101,
+      "cpu": 1.95,
+      "max_rss_mb": 757.5,
+      "instructions": 9063151322,
+      "id": "20261011-092207369-46834428",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 7.36,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.488,
+      "exit": 101,
+      "cpu": 1.66,
+      "max_rss_mb": 752.4,
+      "instructions": 9055586016,
+      "id": "20261011-092212723-46834763",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.93,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.802,
+      "exit": 101,
+      "cpu": 2.0,
+      "max_rss_mb": 755.0,
+      "instructions": 9063371758,
+      "id": "20261011-092224039-46834304",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.02,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.525,
+      "exit": 101,
+      "cpu": 1.67,
+      "max_rss_mb": 753.1,
+      "instructions": 9053270028,
+      "id": "20261011-092229197-46834523",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.62,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.381,
+      "exit": 101,
+      "cpu": 1.56,
+      "max_rss_mb": 754.9,
+      "instructions": 9046121678,
+      "id": "20261011-092233888-46834659",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.748,
+      "exit": 101,
+      "cpu": 1.95,
+      "max_rss_mb": 755.0,
+      "instructions": 9062861319,
+      "id": "20261011-092238975-46834216",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 4.99,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "jr-s2-pgo-bolt": [
+     {
+      "wall": 1.782,
+      "exit": 101,
+      "cpu": 1.97,
+      "max_rss_mb": 786.8,
+      "instructions": 8871775324,
+      "id": "20261011-092209144-46834968",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 7.36,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.698,
+      "exit": 101,
+      "cpu": 1.9,
+      "max_rss_mb": 773.6,
+      "instructions": 8869585764,
+      "id": "20261011-092214232-46834234",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.93,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.746,
+      "exit": 101,
+      "cpu": 1.9,
+      "max_rss_mb": 775.7,
+      "instructions": 8869537205,
+      "id": "20261011-092218858-46834744",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 6.45,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.488,
+      "exit": 101,
+      "cpu": 1.65,
+      "max_rss_mb": 775.5,
+      "instructions": 8863471371,
+      "id": "20261011-092230741-46834948",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.62,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.773,
+      "exit": 101,
+      "cpu": 1.96,
+      "max_rss_mb": 775.8,
+      "instructions": 8867814988,
+      "id": "20261011-092235289-46834264",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.8,
+      "exit": 101,
+      "cpu": 1.95,
+      "max_rss_mb": 775.2,
+      "instructions": 8867571013,
+      "id": "20261011-092240743-46834937",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 4.99,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 6,
+     "median": 1.754,
+     "min": 1.235,
+     "max": 1.872,
+     "quiet_median": 0,
+     "cpu": 1.83,
+     "max_rss_mb": 754.3,
+     "instructions": 8775591330.5,
+     "instructions_spread": 0.0002
+    },
+    "nightly": {
+     "n": 6,
+     "median": 1.594,
+     "min": 1.364,
+     "max": 1.63,
+     "quiet_median": 0,
+     "cpu": 1.79,
+     "max_rss_mb": 740.7,
+     "instructions": 8148025264.0,
+     "instructions_spread": 0.0011
+    },
+    "jr-s1-pgo-bolt": {
+     "n": 6,
+     "median": 1.636,
+     "min": 1.381,
+     "max": 1.802,
+     "quiet_median": 0,
+     "cpu": 1.81,
+     "max_rss_mb": 755.0,
+     "instructions": 9059223667.5,
+     "instructions_spread": 0.0019
+    },
+    "jr-s2-pgo-bolt": {
+     "n": 6,
+     "median": 1.76,
+     "min": 1.488,
+     "max": 1.8,
+     "quiet_median": 0,
+     "cpu": 1.92,
+     "max_rss_mb": 775.6,
+     "instructions": 8868676096.5,
+     "instructions_spread": 0.0009
+    }
+   }
+  }
+ },
+ "finished": "2026-10-11T09:22:45-0700"
+}

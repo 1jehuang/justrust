@@ -2487,3 +2487,26 @@ Remaining: the confirmation run could rerun only the flaky test alone
 instead of the whole binary when the rest passed; the reference loop
 (`-- fps_counter`, 3 tests) gets nothing from the pool and its +1 s here
 sits in compile, rerun with more samples to rule out a pool cost.
+
+Stage 2 with PGO+BOLT (`JR_STAGE=2`, needs `build.profiler = true` so the
+stage 1 std has `profiler_builtins`), run
+`versus-20261011-092245-17daf818e79f-dirty.json`, instructions relative to
+stock:
+
+| compiler | reference-loop | body-check | first-error |
+|---|---:|---:|---:|
+| official nightly | 0.86 | 0.94 | 0.93 |
+| jr-rustc stage 1 PGO+BOLT | 0.90 | 1.03 | 1.03 |
+| jr-rustc stage 2 PGO+BOLT | 0.89 | 1.01 | 1.01 |
+
+Stage 2 adds only 1-2 points on top of PGO+BOLT (it overlaps with what PGO
+already recovers). The best fork build is now +3.5% instructions on the
+reference loop and +7-9% on check and first error vs the official build;
+wall ranges overlap everywhere. Every config difference against the
+official dist that we know of is now matched except the training set
+(rustc-perf vs our own workloads) and the toolchain that builds the C/C++
+parts. Returns per step are now 1-2 points for an hour of build each, so
+this is where we stop chasing parity: fork changes are measured as
+`jr-rustc stage 2 PGO+BOLT` with and without the change, never against the
+official nightly. `bench/factors.py` factor `jr-rustc` defaults to
+`build/jr/pgo-bolt-stage2`.
