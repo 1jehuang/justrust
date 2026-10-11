@@ -288,8 +288,14 @@ pub fn note_toolchain(root: &Path, tc: &str) {
     let _ = paths::append_line(&toolchains_file(root), tc);
 }
 
-/// Journal items from byte offset `since`, and the next offset.
+/// Journal items from byte offset `since`, at most `SYNC_MAX_ITEMS`, and
+/// the offset just past the last one returned. Later items wait for the
+/// next call: none is skipped.
 pub fn journal_since(root: &Path, since: u64) -> (Vec<OfferItem>, u64) {
+    journal_window(root, since, SYNC_MAX_ITEMS)
+}
+
+fn journal_window(root: &Path, since: u64, max: usize) -> (Vec<OfferItem>, u64) {
     let Ok(text) = std::fs::read(journal(root)) else {
         return (Vec::new(), 0);
     };
@@ -301,12 +307,18 @@ pub fn journal_since(root: &Path, since: u64) -> (Vec<OfferItem>, u64) {
     // A truncated or replaced journal starts over.
     let since = if since > len { 0 } else { since };
     let tail = &text[since as usize..];
-    // Only whole lines: a writer may be mid-append.
-    let end = tail.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-    let items = String::from_utf8_lossy(&tail[..end])
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
+    // Whole lines only (a writer may be mid-append), at most `max`.
+    let mut items = Vec::new();
+    let mut end = 0;
+    for (i, line) in tail.split_inclusive(|&b| b == b'\n').enumerate() {
+        if i == max || !line.ends_with(b"\n") {
+            break;
+        }
+        end += line.len();
+        if let Ok(it) = serde_json::from_slice(line) {
+            items.push(it);
+        }
+    }
     (items, since + end as u64)
 }
 
@@ -854,7 +866,7 @@ impl Relay {
             return (0, 0, since);
         };
         let (items, next) = journal_since(&root, since);
-        let items: Vec<OfferItem> = rank(items, SYNC_MAX_ITEMS)
+        let items: Vec<OfferItem> = rank(items, usize::MAX)
             .into_iter()
             .filter(|i| root.join("o").join(&i.out).join("meta.json").is_file())
             .collect();
@@ -885,7 +897,7 @@ impl Relay {
         let Some((items, next)) = self.list(since) else {
             return (0, 0, since);
         };
-        let items = rank(items, SYNC_MAX_ITEMS);
+        let items = rank(items, usize::MAX);
         let want: HashSet<String> = wanted(&root, &items).into_iter().collect();
         let (mut n, mut bytes) = (0, 0);
         for i in items.iter().filter(|i| want.contains(&i.out)) {
@@ -1053,6 +1065,20 @@ mod tests {
         // A journal that shrank starts over.
         let (items, _) = journal_since(&d, 1 << 30);
         assert_eq!(items.len(), 1);
+        // A window never skips items: 5 lines read 2 at a time.
+        let lines: String = (0..5).map(|_| format!("{line}\n")).collect();
+        std::fs::write(journal(&d), lines).unwrap();
+        let (mut off, mut seen) = (0, 0);
+        loop {
+            let (items, next) = journal_window(&d, off, 2);
+            if items.is_empty() {
+                break;
+            }
+            assert!(items.len() <= 2);
+            seen += items.len();
+            off = next;
+        }
+        assert_eq!(seen, 5);
         let _ = std::fs::remove_dir_all(&d);
     }
 
