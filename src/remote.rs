@@ -197,12 +197,33 @@ fn describe(st: &State) -> Result<Described> {
         Err(e) => return Err(e),
     };
     let i = &v["Reservations"][0]["Instances"][0];
-    Ok(Described {
+    let d = Described {
         state: s(&i["State"]["Name"]).unwrap_or_else(|| "missing".into()),
         ip: s(&i["PublicIpAddress"]),
         launch: s(&i["LaunchTime"]),
         az: s(&i["Placement"]["AvailabilityZone"]),
-    })
+    };
+    remember_ip(&d);
+    Ok(d)
+}
+
+/// Keep the cached IP (what routing and the sync daemon connect to) equal
+/// to what AWS reports: the public IP changes on every start, and a stale
+/// one made every remote call time out until something rewrote the file.
+fn remember_ip(d: &Described) {
+    let Ok(dir) = dir() else { return };
+    let f = dir.join("ip");
+    match (&d.ip, d.state.as_str()) {
+        (Some(ip), "running") => {
+            if std::fs::read_to_string(&f).ok().as_deref().map(str::trim) != Some(ip.as_str()) {
+                let _ = std::fs::write(&f, ip);
+            }
+        }
+        (_, "stopped" | "stopping" | "terminated" | "shutting-down" | "missing") => {
+            let _ = std::fs::remove_file(&f);
+        }
+        _ => {}
+    }
 }
 
 fn parse_time(t: &str) -> Option<f64> {

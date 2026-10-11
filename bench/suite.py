@@ -40,7 +40,9 @@ HOME = Path.home()
 JR_HOME = Path(os.environ.get("JUSTRUST_HOME", HOME / ".justrust"))
 WORK = Path(os.environ.get("JUSTRUST_BENCH_WORK", JR_HOME / "bench" / "work"))
 RESULTS = ROOT / "bench" / "results"
-J = os.environ.get("JUSTRUST", "justrust")
+# Absolute, so a child env (versus stacks, os.execvpe) never resolves it
+# differently from this process.
+J = os.environ.get("JUSTRUST") or shutil.which("justrust") or "justrust"
 # `run --toolchain SPEC`: build with a justrust-pinned toolchain
 # (JUSTRUST_TOOLCHAIN) in its own target dir. "system" = the system rustc.
 TOOLCHAIN = "system"
@@ -319,6 +321,8 @@ def prepare(name: str) -> Path:
     """Extract the pinned snapshot once. Source files are restored per run."""
     bench_lock()
     root = snapshot_dir(name)
+    # bench/on-remote.sh: pinned trees come as tarballs, <dir>/<repo>@<rev>.tar.
+    src_dir = os.environ.get("JUSTRUST_BENCH_SRC")
     for repo, (src, rev) in SNAPSHOTS[name]["repos"].items():
         dst = root / repo
         stamp = dst / ".bench-snapshot"
@@ -328,12 +332,16 @@ def prepare(name: str) -> Path:
         if dst.exists():
             shutil.rmtree(dst)
         dst.mkdir(parents=True)
-        archive = subprocess.Popen(
-            ["git", "-C", str(src), "archive", rev], stdout=subprocess.PIPE
-        )
-        subprocess.run(["tar", "-x", "-C", str(dst)], stdin=archive.stdout, check=True)
-        if archive.wait() != 0:
-            sys.exit(f"bench: git archive {src}@{rev} failed")
+        if src_dir:
+            tar = Path(src_dir) / f"{repo}@{rev}.tar"
+            subprocess.run(["tar", "-x", "-C", str(dst), "-f", str(tar)], check=True)
+        else:
+            archive = subprocess.Popen(
+                ["git", "-C", str(src), "archive", rev], stdout=subprocess.PIPE
+            )
+            subprocess.run(["tar", "-x", "-C", str(dst)], stdin=archive.stdout, check=True)
+            if archive.wait() != 0:
+                sys.exit(f"bench: git archive {src}@{rev} failed")
         for rel, old, new, count in SNAPSHOTS[name].get("fixups", []):
             if not rel.startswith(repo + "/"):
                 continue
@@ -683,8 +691,11 @@ def env_info() -> dict:
         "mem_gb": round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
         "kernel": platform.release(),
         "justrust": tryrun([J, "-V"]),
-        "justrust_rev": tryrun(["git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"]),
-        "justrust_dirty": bool(tryrun(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"])),
+        "justrust_rev": os.environ.get("JUSTRUST_BENCH_REV")
+        or tryrun(["git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"]),
+        "justrust_dirty": os.environ.get("JUSTRUST_BENCH_DIRTY") == "1"
+        if "JUSTRUST_BENCH_DIRTY" in os.environ
+        else bool(tryrun(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"])),
         "rustc": tryrun(["rustc", "-V"]) if TOOLCHAIN == "system" else tryrun(
             [str(JR_HOME / "toolchains" / TOOLCHAIN / "bin" / "rustc"), "-V"]),
         "toolchain": TOOLCHAIN,

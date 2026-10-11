@@ -131,7 +131,7 @@ def workspace(repo: str) -> Workspace:
     if cache.exists():
         meta = json.loads(cache.read_text())
     else:
-        out = subprocess.run([STOCK_CARGO, "metadata", "--format-version", "1", "--offline"], cwd=cwd,
+        out = subprocess.run([STOCK_CARGO, "metadata", "--format-version", "1"], cwd=cwd,
                              env=stock_env(), capture_output=True, text=True, check=True).stdout
         meta = json.loads(out)
         cache.parent.mkdir(parents=True, exist_ok=True)
@@ -269,7 +269,7 @@ def _probe_run(ws: Workspace, p: Pkg, probes: dict[int, tuple[Path, int]], tests
         env = stock_env()
         env["CARGO_TARGET_DIR"] = str(WORK / "probe-target" / f"{ws.snap}-{ws.cwd.name}")
         home = home_workspace(p.name) or ws
-        r = subprocess.run([STOCK_CARGO, "check", "-p", p.name, *targets, "--offline", "--message-format=json"],
+        r = subprocess.run([STOCK_CARGO, "check", "-p", p.name, *targets, "--message-format=json"],
                            cwd=home.cwd, env=env, capture_output=True, text=True)
         live, broken, bad = set(), set(), set()
         for line in r.stdout.splitlines():

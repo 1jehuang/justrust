@@ -480,6 +480,9 @@ def cmd_list(_args) -> None:
 def cmd_run(args) -> None:
     stacks = [s for s in STACKS if not args.only or s.name in args.only.split(",")]
     if args.remote:
+        if os.environ.get("JUSTRUST_BENCH_SRC"):
+            sys.exit("versus: --remote measures remote builds from the laptop; on the build machine itself "
+                     "(bench/on-remote.sh) it would route to itself")
         stacks.append(REMOTE)
     stacks += [parse_stack(x) for x in args.stack]
     if stacks[0].name != "stock" and not args.only:
