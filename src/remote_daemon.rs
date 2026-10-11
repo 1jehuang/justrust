@@ -195,6 +195,7 @@ fn spawn() -> Result<()> {
     use std::os::unix::process::CommandExt;
     // Own session: survives the agent's terminal and its Ctrl+C.
     c.process_group(0);
+    crate::procfs::close_inherited_fds(&mut c);
     c.spawn().context("starting the sync daemon")?;
     Ok(())
 }

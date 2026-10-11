@@ -494,6 +494,7 @@ fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
     }
     use std::os::unix::process::CommandExt;
     c.process_group(0);
+    crate::procfs::close_inherited_fds(&mut c);
     c.spawn().context("starting the early diagnostics daemon")?;
     Ok(())
 }

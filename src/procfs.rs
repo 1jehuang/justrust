@@ -2,6 +2,22 @@
 
 use serde::Serialize;
 
+/// Make a long-lived child not inherit the parent's open descriptors past
+/// stdio. A daemon started from inside `flock file justrust ...` otherwise
+/// keeps the flock's fd, and with it the lock, for hours after the build
+/// that started it exited (a bench lock was held by `justrust __daemon`).
+pub fn close_inherited_fds(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: close_range is async-signal-safe and touches only fds >= 3,
+    // which the child does not use (stdio is set up before pre_exec runs).
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
+            Ok(())
+        });
+    }
+}
+
 pub fn clk_tck() -> f64 {
     // SAFETY: sysconf has no preconditions.
     let v = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
@@ -168,6 +184,49 @@ pub fn cmdline(pid: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A child spawned through `close_inherited_fds` does not keep a flock
+    /// its parent held (the bench-lock leak through `justrust __daemon`).
+    #[test]
+    fn daemon_child_does_not_keep_inherited_flock() {
+        use std::os::fd::AsRawFd;
+        let p = std::env::temp_dir().join(format!("jr-fdleak-{}", std::process::id()));
+        let lock = |f: &std::fs::File| unsafe {
+            libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0
+        };
+        let spawn_sleeper = |close: bool| {
+            let f = std::fs::File::create(&p).unwrap();
+            // Inheritable, like the fd `flock(1)` hands to its command.
+            unsafe {
+                let fl = libc::fcntl(f.as_raw_fd(), libc::F_GETFD);
+                libc::fcntl(f.as_raw_fd(), libc::F_SETFD, fl & !libc::FD_CLOEXEC);
+            }
+            assert!(lock(&f));
+            let mut c = std::process::Command::new("sleep");
+            c.arg("5");
+            if close {
+                close_inherited_fds(&mut c);
+            }
+            let child = c.spawn().unwrap();
+            drop(f);
+            child
+        };
+        let mut leaky = spawn_sleeper(false);
+        assert!(
+            !lock(&std::fs::File::open(&p).unwrap()),
+            "control: plain spawn keeps the lock"
+        );
+        leaky.kill().unwrap();
+        leaky.wait().unwrap();
+        let mut clean = spawn_sleeper(true);
+        assert!(
+            lock(&std::fs::File::open(&p).unwrap()),
+            "lock leaked into the daemon"
+        );
+        clean.kill().unwrap();
+        clean.wait().unwrap();
+        let _ = std::fs::remove_file(&p);
+    }
 
     #[test]
     fn reads_own_process() {
