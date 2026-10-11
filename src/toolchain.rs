@@ -238,9 +238,91 @@ impl Toolchain {
     pub fn bin(&self, name: &str) -> PathBuf {
         self.dir.join("bin").join(name)
     }
+    /// The cargo builds with this toolchain run: justrust's fork
+    /// (`bin/jr-cargo`, installed by `justrust toolchain cargo-fork`) when
+    /// present and not disabled with `JUSTRUST_CARGO_FORK=0`, else the
+    /// toolchain's own cargo.
+    pub fn cargo(&self) -> PathBuf {
+        let fork = self.bin(JR_CARGO);
+        if cargo_fork_enabled() && is_executable(&fork) {
+            return fork;
+        }
+        self.bin("cargo")
+    }
     pub fn info(&self) -> Option<Installed> {
         serde_json::from_slice(&std::fs::read(self.dir.join(MARKER)).ok()?).ok()
     }
+}
+
+/// File name of justrust's cargo fork inside a toolchain's `bin/`.
+pub const JR_CARGO: &str = "jr-cargo";
+
+fn cargo_fork_enabled() -> bool {
+    !matches!(
+        std::env::var("JUSTRUST_CARGO_FORK").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    )
+}
+
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// `cargo 1.101.0-nightly (f3865b2a4 2026-09-29)` -> `f3865b2a4`.
+fn cargo_commit(version_line: &str) -> Option<&str> {
+    version_line.split('(').nth(1)?.split_whitespace().next()
+}
+
+/// Install a built jr-cargo binary into a toolchain as `bin/jr-cargo`.
+/// The fork must be built from the same cargo commit the toolchain ships
+/// (checked against `cargo -V` of both), so it reads the same lock file
+/// and config formats.
+pub fn cargo_fork_command(binary: &Path, spec: Option<String>) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let spec = match spec {
+        Some(s) => concrete(&s)?,
+        None => match resolve(&cwd)? {
+            Some(p) => p.spec,
+            None => {
+                let all = list_installed();
+                let [one] = all.as_slice() else {
+                    bail!(
+                        "no pin here and {} toolchains installed: name one",
+                        all.len()
+                    );
+                };
+                Spec::parse(&one.id)?
+            }
+        },
+    };
+    let tc =
+        installed(&spec)?.with_context(|| format!("toolchain {} is not installed", spec.id()))?;
+    let commit = |bin: &Path| -> Result<String> {
+        let out = Command::new(bin).arg("-V").output()?;
+        let v = String::from_utf8_lossy(&out.stdout).into_owned();
+        cargo_commit(&v)
+            .map(str::to_owned)
+            .with_context(|| format!("unexpected `{} -V` output: {v}", bin.display()))
+    };
+    let (want, got) = (commit(&tc.bin("cargo"))?, commit(binary)?);
+    if want != got {
+        bail!(
+            "{} is built from cargo {got}, toolchain {} ships cargo {want}: rebase the fork on {want}",
+            binary.display(),
+            tc.id
+        );
+    }
+    let dst = tc.bin(JR_CARGO);
+    let tmp = dst.with_extension("tmp");
+    std::fs::copy(binary, &tmp)?;
+    std::fs::rename(&tmp, &dst)?;
+    println!(
+        "installed {} as {} (cargo {got})",
+        binary.display(),
+        dst.display()
+    );
+    Ok(())
 }
 
 pub fn installed(spec: &Spec) -> Result<Option<Toolchain>> {
@@ -880,6 +962,41 @@ pub fn write_pin(path: &Path, channel: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_cargo_commit() {
+        assert_eq!(
+            cargo_commit("cargo 1.101.0-nightly (f3865b2a4 2026-09-29)\n"),
+            Some("f3865b2a4")
+        );
+        assert_eq!(
+            cargo_commit("cargo 1.101.0 (f3865b2a4 2026-09-29) (jr-cargo 9e452e670)"),
+            Some("f3865b2a4")
+        );
+        assert_eq!(cargo_commit("cargo 1.0.0"), None);
+    }
+
+    #[test]
+    fn toolchain_prefers_installed_cargo_fork() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("jr-tc-fork-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let tc = Toolchain {
+            id: "nightly-2026-10-08".into(),
+            dir: dir.clone(),
+            nightly: true,
+        };
+        assert_eq!(tc.cargo(), dir.join("bin/cargo"));
+        let fork = dir.join("bin").join(JR_CARGO);
+        std::fs::write(&fork, "#!/bin/sh\n").unwrap();
+        // Not executable: ignored.
+        assert_eq!(tc.cargo(), dir.join("bin/cargo"));
+        std::fs::set_permissions(&fork, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if cargo_fork_enabled() {
+            assert_eq!(tc.cargo(), fork);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn parses_specs() {

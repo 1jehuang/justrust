@@ -36,7 +36,7 @@ from a cache.
 | rustc | pinned nightly first, then fork `jr-rustc` | unstable flags, resident compiler, body-only invalidation |
 | LLVM | prebuilt from rust CI first, built ourselves with PGO+BOLT later | faster codegen of dependencies |
 | std / sysroot | rebuilt with `-Zbuild-std` flags we choose (share-generics, dylib) | dylib test binaries, fewer monomorphizations |
-| cargo | pinned, then forked | in-process fingerprints, no rescan, daemon mode |
+| cargo | forked: `jr-cargo` (github.com/1jehuang/jr-cargo, branch `justrust`), installed into the pinned toolchain as `bin/jr-cargo` by `justrust toolchain cargo-fork` | resolve stamp (shipped), next: in-process fingerprints, no rescan, daemon mode |
 | codegen backends | cranelift for local opt-level 0 crates | faster full-crate regeneration (-25%) |
 | linker | wild (incremental linking), mold as fallback | relinking a 670 MB binary on every edit |
 | C toolchain | clang, lld, ar, a sysroot of pinned libs/headers | build scripts become hermetic, so their cache keys need no system stamp |

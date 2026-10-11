@@ -1897,3 +1897,48 @@ entries beyond the first 400 of a window instead of deferring them
 Bugs found and fixed on the way: a stale peer key set ruled out every
 entry the machine compiled after the daemon connected (0/376 hits). The
 daemon inherited `JUSTRUST_PEER_CACHE=0` from the build that started it.
+
+## 24. jr-cargo: justrust's cargo fork, first change (2026-10-10)
+
+Forked cargo at f3865b2a4, the cargo that the pinned nightly-2026-10-08
+ships (`~/jr-cargo`, github.com/1jehuang/jr-cargo, branch `justrust`).
+`justrust toolchain cargo-fork <binary>` installs a build as the
+toolchain's `bin/jr-cargo` (refuses a binary built from another cargo
+commit); builds with that toolchain run it, `JUSTRUST_CARGO_FORK=0` uses
+stock cargo.
+
+Where a no-op cargo run goes (Desktop, `test -p jcode-desktop-ui --lib
+--no-run`, warm, `CARGO_LOG_PROFILE` + samply): 0.39 s wall. Full
+workspace resolve against the registry index 110 ms (only to confirm
+Cargo.lock), targeted resolve 300 ms, reading 713 dependency manifests
+for downloads 136 ms, fingerprints ~60 ms, job queue 25 ms.
+
+Change 1, resolve stamp: after a full resolve, store a hash of everything
+it reads (lock file, member, path-dependency and [patch] manifests and
+their workspace roots, cargo config files, version, flags, resolver env)
+in `CARGO_HOME/.justrust-resolve/`. When it matches, the lock file is the
+previous resolve and only the targeted resolve runs. Workspaces with
+`[replace]` or unused patches always resolve fully, so their warnings stay
+exact (`replace::overriding_nonexistent_no_spurious` caught that). The
+first version missed unused-patch manifest edits
+(`patch::update_unused_new_version`). Cargo testsuite: 4045 passed, the
+same 2 environment failures as stock.
+
+| Desktop, warm, 10 alternating runs | stock | fork, stamp off | fork, stamp on |
+|---|---:|---:|---:|
+| `cargo check -p jcode-desktop-ui` no-op | 0.435 s | 0.437 s | **0.367 s** |
+| `cargo test --lib --no-run` no-op | 0.413 s | 0.482 s | **0.402 s** |
+| justrust reference loop (test-fn edit), 10 each | 7.39 s (6.9-9.7) | | 7.55 s (6.7-8.4) |
+
+So the stamp saves ~70 ms per cargo invocation, which is invisible in the
+7.5 s reference loop (within noise). The point of this step is ownership:
+the fork now builds, installs, and is selected by justrust, so the bigger
+cargo changes (in-process fingerprints, a resident cargo, replaying a
+recorded unit graph) have somewhere to land.
+
+Pitfall found: a fork built without `CFG_RELEASE_CHANNEL` reports channel
+`dev`, and cargo's defaults depend on it (`-Zembed-metadata=no` only when
+cargo and rustc are both nightly). That changes every unit's fingerprint
+("the config settings changed"), so switching between stock and fork
+rebuilt all 887 units each time. `build-jr.sh` builds with the stock
+cargo's release and channel; after that, switching rebuilds 0 units.

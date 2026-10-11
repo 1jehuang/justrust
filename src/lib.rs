@@ -296,6 +296,17 @@ enum ToolchainCmd {
     Unpin,
     /// Delete an installed toolchain.
     Remove { spec: String },
+    /// Install a jr-cargo build (justrust's cargo fork) into a toolchain:
+    /// builds with that toolchain then run it instead of stock cargo
+    /// (`JUSTRUST_CARGO_FORK=0` turns it off). Must be built from the
+    /// cargo commit the toolchain ships.
+    CargoFork {
+        /// Path to the built binary, e.g. ~/jr-cargo/target/release/cargo.
+        binary: PathBuf,
+        /// Toolchain (default: the one pinned here, or the only installed one).
+        #[arg(long)]
+        toolchain: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -496,6 +507,9 @@ pub fn main() -> anyhow::Result<()> {
             ToolchainCmd::Pin { spec, no_install } => toolchain::pin_command(&spec, no_install)?,
             ToolchainCmd::Unpin => toolchain::unpin_command()?,
             ToolchainCmd::Remove { spec } => toolchain::remove_command(&spec)?,
+            ToolchainCmd::CargoFork { binary, toolchain } => {
+                toolchain::cargo_fork_command(&binary, toolchain)?
+            }
         },
         Command::Install { dir } => install::install(dir)?,
         Command::Uninstall { dir } => install::uninstall(dir)?,

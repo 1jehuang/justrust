@@ -174,7 +174,7 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
     let mut cmd;
     match &pinned {
         Some(tc) => {
-            cmd = Command::new(tc.bin("cargo"));
+            cmd = Command::new(tc.cargo());
             apply_toolchain_env(&mut cmd, tc);
         }
         None => {
@@ -278,7 +278,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     // rustc. Installed on first use. Fails open to the system toolchain.
     let pinned = crate::toolchain::for_build();
     let real_cargo = match &pinned {
-        Some(tc) => tc.bin("cargo"),
+        Some(tc) => tc.cargo(),
         None => paths::real_cargo()?,
     };
     let shim = paths::ensure_rustc_shim()?;
