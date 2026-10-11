@@ -131,6 +131,19 @@ FACTORS = [
         on={"JUSTRUST_TOOLCHAIN": NIGHTLY, "RUSTFLAGS": "-Zcodegen-backend=cranelift"},
         off={"JUSTRUST_TOOLCHAIN": NIGHTLY}, slow=True,
     ),
+    Factor(
+        "cargo-fork", "jr-cargo (justrust's cargo fork, resolve stamp) instead of the toolchain's stock cargo",
+        "loop", "desktop-noop-test",
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY},
+        off={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JUSTRUST_CARGO_FORK": "0"}, n=10,
+        note="no edit, so the wall is cargo + justrust overhead; needs `justrust toolchain cargo-fork` first",
+    ),
+    Factor(
+        "cargo-fork-loop", "same, on the reference edit loop",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY},
+        off={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JUSTRUST_CARGO_FORK": "0"}, n=8,
+    ),
 ]
 BY_NAME = {f.name: f for f in FACTORS}
 

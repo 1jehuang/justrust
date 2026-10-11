@@ -863,6 +863,20 @@ pub fn status() -> Result<()> {
             tc.id,
             dir_bytes(&tc.dir) as f64 / 1e9
         );
+        let fork = tc.bin(JR_CARGO);
+        if is_executable(&fork) {
+            let v = Command::new(&fork)
+                .arg("-V")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_default();
+            let state = if cargo_fork_enabled() {
+                "used"
+            } else {
+                "off (JUSTRUST_CARGO_FORK=0)"
+            };
+            println!("  {:<22} jr-cargo {state}: {v}", "");
+        }
     }
     Ok(())
 }
