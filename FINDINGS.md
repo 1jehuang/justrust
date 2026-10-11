@@ -2839,3 +2839,45 @@ agrees: 5.42 -> 4.39 s, -19%). Check is unchanged because `check -p`
 does not compile the tests. First fork change that moves the loop.
 Caveat inherited from the derive cache: a proc macro that reads files or
 the environment is not re-run when only those change.
+
+## 41. First synthetic agent workload: justrust 0.81x of stock overall, lost on big test suites (2026-10-11)
+
+`bench/versus.py run --synth 1 --points 40 -n 1` on the build machine
+(c7i.8xlarge, run with `bench/on-remote.sh`), result
+`bench/results/versus-synth1-20261011-181043-21e77126c6ff-dirty-remote-c7i.8xlarge.json`, report `bench/VERSUS-SYNTH.md`.
+40 points drawn from 4,711 real agent build calls (96% map onto the pinned
+snapshots); 38 measured on all three stacks. Points 2 and 28 failed on
+every stack: the dash/`CARGO_BIN_EXE` wrapper bug of finding 33.
+
+| | points | stock | jr-nocache | justrust | justrust vs stock | instr justrust/stock |
+|---|---:|---:|---:|---:|---:|---:|
+| **expected wait per call** | 38 | 14.55 s | 18.99 s | 18.00 s | 0.81x | 1.35 |
+| check | 9 | 2.19 s | 2.51 s | 2.62 s | 0.83x | 1.05 |
+| test-filtered | 10 | 7.03 s | 7.72 s | 8.12 s | 0.87x | 1.20 |
+| test (no filter) | 7 | 22.19 s | 34.04 s | 34.08 s | 0.65x | 1.55 |
+| test --workspace | 1 | 70.5 s | 140.3 s | 93.8 s | 0.75x | 6.15 |
+| build | 6 | 7.26 s | 7.64 s | 7.90 s | 0.92x | 0.92 |
+| build --release | 4 | 48.1 s | 49.0 s | 49.5 s | 0.97x | 1.00 |
+
+This is the first benchmark that weights by what agents actually run, and
+it disagrees with the hand-picked scenarios: on the warm one-crate loops
+justrust is within noise of stock, but most of the expected wait is in
+unfiltered test runs of big suites, and there justrust loses badly. Of the
+131 s total lost over 38 points, 65 s are three `test -p jcode-tui --lib`
+points (2,470 tests): stock 22.6 / 29.8 / 38.3 s, justrust 41.3 / 51.0 /
+63.3 s. In justrust's own phase split those runs spend ~17 to 20 s in
+`test_run` and another 24 to 26 s in `tail` (after the build, outside test
+binaries), with ~1.7x the CPU of stock, while the compile part matches.
+`test --workspace` (8,911 tests counted by justrust vs 1,862 by libtest
+lines for stock, so the stacks may not run the same set) is the other
+large loss. Instructions are 1.35x stock overall, nearly all of it test
+execution. The same jcode-tui command was not covered by any named
+scenario, which is why this never showed up before.
+
+Next: profile justrust's test runner on `test -p jcode-tui --lib` (what
+the 25 s `tail` is, whether the parallel runner or the per-test
+confirmation of overlapped failures re-runs tests), make the stacks run the
+same test set on `--workspace`, and fix finding 33's Desktop wrapper bug
+so points 2 and 28 count. Also: one run per point (`-n 1`) on a spot VM,
+so single points are noisy; the per-command means over 7 to 10 points are
+the reliable rows.
