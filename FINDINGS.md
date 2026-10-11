@@ -2649,3 +2649,57 @@ plumbing for running the binary outside cargo. Not worth it at this
 size. Worth revisiting only if the link pass becomes a big share again
 (for example after hot patching removes codegen), and then in jr-cargo,
 not in project manifests.
+
+## 37. Cold Desktop check from an empty cache: 53.3 s -> 14.8 s, build scripts in the prebuilt store (2026-10-11)
+
+Follow-up to 30. Code: d6bc187, 2c0eced (`src/buildscript.rs`
+`HERMETIC`, `hermetic_stamp`, `v1/s/` store tier; `src/depcache_prebuilt.rs`
+publish). The prebuilt store now carries build-script runs for packages that
+compile vendored C and probe nothing else: ring, aws-lc-sys,
+libsqlite3-sys (bundled), onig_sys. Their key is the C toolchain (resolved
+`cc`/`ar` by content, `cc --version`, which of the package's fallback
+pkg-config modules exist) instead of the host package database, and the
+package + `build.rs` instead of the script binary (it embeds
+`CARGO_MANIFEST_DIR`). Other scripts stay host-keyed and are never
+published.
+
+Cross-machine causes fixed on the way (probe: two cold Desktop builds,
+plain vs symlinked cargo home, `bench/prebuilt-portability.sh`-style):
+
+| cause | effect | fix |
+|---|---|---|
+| cc names objects by a hash of the source dir relative to `CARGO_MANIFEST_DIR`; aws-lc builds from its canonicalized dir | aws-lc archive member names (and bytes) differed per cargo home spelling | hermetic scripts run with `CARGO_MANIFEST_DIR` resolved |
+| `CARGO_HOME` keyed in script env | set by one side only | not keyed (as for rustc units) |
+| registry `rerun-if-changed` files signed by size+mtime under the cargo home path but by content under its resolved path | no hermetic entry matched across homes; only onig_sys (no inputs) hit | resolved registry/git dirs count as cargo home |
+
+Probe result: ring, aws-lc, sqlite archives byte-identical; 4/4 hermetic
+script keys and 831/833 rustc keys equal (807 in 30's follow-up; the 2
+left are ratex_font_loader and ratex_svg, downstream of
+ratex_katex_fonts whose rmeta hash differs: rust-embed folder, not yet
+diagnosed).
+
+### Measured
+
+`bench/suite.py run desktop-cold-check-prebuilt desktop-cold-check
+[desktop-cold-check-nocache] -n 3 --toolchain nightly-2026-10-08`, private
+snapshot copy, under the bench lock. Store republished each time from a
+different cargo home (833 bundles 0.31 GB + 4 build-script runs), served
+over local HTTP; every prebuilt run starts with a fresh target dir and an
+empty local depcache.
+
+| scenario | median (min-max) | rust units compiled | dep hits | scripts replayed | result |
+|---|---:|---:|---:|---:|---|
+| nocache | 53.3 s (52.6-54.7) | 887 | 0 | 0 | `20261011-093818-3c691739da09-dirty-nightly-2026-10-08.json` |
+| prebuilt, finding 30 | 50.8 s (50.5-60.7) | 79 | 808 | 0 | `20261011-074513-86681282a9a0-dirty-nightly-2026-10-08.json` |
+| prebuilt, scheme 8 + hermetic keys, before 2c0eced | 20.9 s (20.8-21.1) | 54 | 833 | 1 (onig) | `20261011-093818-...json` |
+| **prebuilt, 2c0eced** | **14.8 s (14.7-14.9)** | 54 | 833 | 4 | `20261011-094421-82adf0a496f6-dirty-nightly-2026-10-08.json` |
+| warm local depcache (floor) | 12.7 s (12.6-12.7) | 54 | 833 | 45 | same file |
+
+A new machine with only the store is now 2.1 s from the warm floor
+(-72% vs nocache). The gap: the other 41 build scripts still run (all
+small, the largest unicode-general-category 0.39 s), and aws-lc's 20 MB
+OUT_DIR unpacks in 0.54 s. The 54 compiled units are the workspace crates,
+same as the floor.
+
+Remaining: a real network store (S3 deploy pending the user), the two
+ratex keys, and other projects' seed sets.

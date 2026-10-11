@@ -1,0 +1,349 @@
+{
+ "started": "2026-10-11T09:40:43-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "82adf0a496f6",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)",
+  "toolchain": "nightly-2026-10-08",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  }
+ },
+ "runs_per_scenario": 3,
+ "scenarios": {
+  "desktop-cold-check-prebuilt": {
+   "what": "fresh target dir and empty local depcache, dependencies from a prebuilt store (published once from another cargo home, served over local HTTP): a new machine",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261011-094242952-548658303",
+     "wall": 14.813,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 14.781,
+     "cpu": 118.02,
+     "startup": 0.429,
+     "compile": 14.2,
+     "test_run": 0.0,
+     "units": 887,
+     "local_units": 52,
+     "dep_units": 759,
+     "reuse": {
+      "compiled": 54,
+      "fresh": 0,
+      "depcache_hits": 833,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 261.02,
+      "script_hits": 4,
+      "script_saved_secs": 55.25,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 16.567,
+      "codegen": 0.001,
+      "link": 0.004,
+      "incremental": 0.282,
+      "other": 0.295
+     },
+     "link_secs": 0.17,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.48,
+     "foreign_rustc_before": 0,
+     "load_before": 7.57,
+     "noisy": true,
+     "top_unit": "jcode_base"
+    },
+    {
+     "id": "20261011-094258311-548658731",
+     "wall": 14.877,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 14.843,
+     "cpu": 118.42,
+     "startup": 0.375,
+     "compile": 14.357,
+     "test_run": 0.0,
+     "units": 887,
+     "local_units": 52,
+     "dep_units": 759,
+     "reuse": {
+      "compiled": 54,
+      "fresh": 0,
+      "depcache_hits": 833,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 261.02,
+      "script_hits": 4,
+      "script_saved_secs": 55.35,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 16.464,
+      "codegen": 0.001,
+      "link": 0.005,
+      "incremental": 0.293,
+      "other": 0.201
+     },
+     "link_secs": 0.159,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.47,
+     "foreign_rustc_before": 0,
+     "load_before": 8.29,
+     "noisy": true,
+     "top_unit": "jcode_base"
+    },
+    {
+     "id": "20261011-094313877-548658757",
+     "wall": 14.719,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 14.682,
+     "cpu": 117.22,
+     "startup": 0.408,
+     "compile": 14.141,
+     "test_run": 0.0,
+     "units": 887,
+     "local_units": 52,
+     "dep_units": 759,
+     "reuse": {
+      "compiled": 54,
+      "fresh": 0,
+      "depcache_hits": 833,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 261.02,
+      "script_hits": 4,
+      "script_saved_secs": 55.35,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 16.426,
+      "codegen": 0.001,
+      "link": 0.005,
+      "incremental": 0.299,
+      "other": 0.26
+     },
+     "link_secs": 0.179,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.18,
+     "foreign_rustc_before": 0,
+     "load_before": 8.72,
+     "noisy": true,
+     "top_unit": "jcode_base"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 14.813,
+    "min": 14.719,
+    "max": 14.877,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.408,
+     "compile": 14.2,
+     "test_run": 0.0,
+     "cpu": 118.02,
+     "link_secs": 0.17
+    },
+    "split": {
+     "frontend": 16.464,
+     "codegen": 0.001,
+     "link": 0.005,
+     "incremental": 0.293,
+     "other": 0.26
+    },
+    "units": 887
+   }
+  },
+  "desktop-cold-check": {
+   "what": "fresh target dir, shared depcache on: what a new agent checkout pays",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261011-094342261-548658105",
+     "wall": 12.724,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 12.7,
+     "cpu": 79.3,
+     "startup": 0.297,
+     "compile": 11.735,
+     "test_run": 0.0,
+     "units": 887,
+     "local_units": 52,
+     "dep_units": 759,
+     "reuse": {
+      "compiled": 54,
+      "fresh": 0,
+      "depcache_hits": 833,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 404.91,
+      "script_hits": 45,
+      "script_saved_secs": 57.52,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 14.947,
+      "codegen": 0.001,
+      "link": 0.006,
+      "incremental": 0.345,
+      "other": 0.311
+     },
+     "link_secs": 0.131,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 3.69,
+     "foreign_rustc_before": 0,
+     "load_before": 8.83,
+     "noisy": false,
+     "top_unit": "jcode_base"
+    },
+    {
+     "id": "20261011-094355306-548658309",
+     "wall": 12.676,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 12.647,
+     "cpu": 78.86,
+     "startup": 0.295,
+     "compile": 11.675,
+     "test_run": 0.0,
+     "units": 887,
+     "local_units": 52,
+     "dep_units": 759,
+     "reuse": {
+      "compiled": 54,
+      "fresh": 0,
+      "depcache_hits": 833,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 404.91,
+      "script_hits": 45,
+      "script_saved_secs": 57.54,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 15.013,
+      "codegen": 0.001,
+      "link": 0.005,
+      "incremental": 0.338,
+      "other": 0.316
+     },
+     "link_secs": 0.126,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 3.69,
+     "foreign_rustc_before": 0,
+     "load_before": 8.57,
+     "noisy": false,
+     "top_unit": "jcode_base"
+    },
+    {
+     "id": "20261011-094408423-548658408",
+     "wall": 12.567,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 12.541,
+     "cpu": 78.31,
+     "startup": 0.274,
+     "compile": 11.598,
+     "test_run": 0.0,
+     "units": 887,
+     "local_units": 52,
+     "dep_units": 759,
+     "reuse": {
+      "compiled": 54,
+      "fresh": 0,
+      "depcache_hits": 833,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 404.91,
+      "script_hits": 45,
+      "script_saved_secs": 57.54,
+      "slot_refreshed_units": 0
+     },
+     "split": {
+      "frontend": 15.241,
+      "codegen": 0.001,
+      "link": 0.005,
+      "incremental": 0.316,
+      "other": 0.256
+     },
+     "link_secs": 0.135,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 3.7,
+     "foreign_rustc_before": 0,
+     "load_before": 8.03,
+     "noisy": false,
+     "top_unit": "jcode_base"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 12.676,
+    "min": 12.567,
+    "max": 12.724,
+    "quiet_n": 3,
+    "quiet_median": 12.676,
+    "phases": {
+     "startup": 0.295,
+     "compile": 11.675,
+     "test_run": 0.0,
+     "cpu": 78.86,
+     "link_secs": 0.131
+    },
+    "split": {
+     "frontend": 15.013,
+     "codegen": 0.001,
+     "link": 0.005,
+     "incremental": 0.338,
+     "other": 0.311
+    },
+    "units": 887
+   }
+  }
+ },
+ "finished": "2026-10-11T09:44:21-0700"
+}
