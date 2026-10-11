@@ -50,6 +50,7 @@ pub const SUBSCRIBE: &str = "free builds used up. Subscribe ($10/mo, 500 builds)
 pub const RAISE_LIMIT: &str = "monthly usage limit reached: ask your user to raise it at https://jcode.sh/account. Builds run locally until then.";
 pub const NO_CREDITS: &str = "out of Jcode cloud-compute credits (shared with cloud agents). Builds run locally until credits renew. There are no automatic top-ups.";
 pub const UNAVAILABLE: &str = "the hosted build service is unavailable right now. This is not a problem with your subscription. Builds run locally, retry later.";
+pub const NOT_OFFERED: &str = "hosted builds are not available on your Jcode account yet. This is not a problem with your subscription. Builds run locally.";
 pub const RATE_LIMITED: &str = "the Jcode API is rate limiting requests. Retry in a moment.";
 
 // ---------------------------------------------------------------- credentials
@@ -272,9 +273,11 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
     let (text, code) = stdout.rsplit_once('\n').unwrap_or(("", &stdout));
     let code: u16 = code.trim().parse().unwrap_or(0);
     if !out.status.success() || code == 0 {
+        // Name the host actually contacted: build/... paths go to the fleet.
+        let url = c.url(path);
+        let host = url.split('/').take(3).collect::<Vec<_>>().join("/");
         bail!(
-            "could not reach the Jcode API at {}: {}. Account access could not be verified, builds run locally.",
-            c.base,
+            "could not reach {host}: {}. Builds run locally.",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
@@ -411,6 +414,18 @@ pub fn me(c: &Creds) -> Result<Me> {
 pub fn check_access(c: &Creds) -> Result<Me> {
     let m = me(c)?;
     if !m.build_hosts {
+        // A paying subscriber on a server that does not offer hosted builds
+        // yet must not be told to subscribe.
+        let paid = m
+            .status
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case("active"))
+            && m.tier
+                .as_deref()
+                .is_some_and(|t| !t.is_empty() && t != "none");
+        if paid {
+            bail!(NOT_OFFERED);
+        }
         bail!(SUBSCRIBE);
     }
     Ok(m)
@@ -1070,6 +1085,31 @@ mod tests {
         );
         assert!(e(me(&c)).contains("rate limiting"));
         assert!(e(check_access(&c)).contains("justrust upgrade"));
+    }
+
+    /// Paying subscriber, server without hosted builds: never "subscribe".
+    #[test]
+    fn paid_account_without_capability_is_not_told_to_subscribe() {
+        let (c, _) = mock(vec![(
+            200,
+            r#"{"email":"a@b","tier":"plus","status":"active","capabilities":{"remote_compile":false}}"#,
+        )]);
+        let s = check_access(&c).unwrap_err().to_string();
+        assert!(s.contains("not available on your Jcode account yet"), "{s}");
+        assert!(!s.contains("upgrade"), "{s}");
+    }
+
+    /// Unreachable fleet: the error names the fleet host, not the API.
+    #[test]
+    fn unreachable_error_names_the_contacted_host() {
+        let mut c = Creds::new("http://127.0.0.1:9/v1".into(), "k".into()).unwrap();
+        c.set_build_base("http://localhost:9/v1".into()).unwrap();
+        let s = request(&c, "GET", "build/host", None)
+            .unwrap_err()
+            .to_string();
+        assert!(s.contains("http://localhost:9"), "{s}");
+        let s = request(&c, "GET", "me", None).unwrap_err().to_string();
+        assert!(s.contains("http://127.0.0.1:9"), "{s}");
     }
 
     #[test]
