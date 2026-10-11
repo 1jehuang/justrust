@@ -2427,3 +2427,63 @@ in jcode-desktop) fails its pre-build with `CARGO_BIN_EXE_jcode-desktop`
 undefined for the `version` integration test; the same command builds
 locally, so it is a state left on the machine by the builds that failed to
 link before the library fix, not yet explained.
+
+## 34. Test binaries in parallel, likely failures first (2026-10-11)
+
+Mined 1359 recorded `test` runs: cargo runs test binaries one after
+another, and small binaries queue behind each other (Desktop
+`test --workspace`, 11 binaries: ~5 s per run spent behind the longest
+one; `jcode -p jcode-sdk`: 10-12 s). Within one binary, libtest already
+uses every core, so the remaining headroom inside a binary was small
+(10.5 s over 707 s of binary wall); what agents wait on there is when the
+failure they caused shows up. 51 of 196 failing runs failed again on a
+test that had failed in the previous run of the same workspace.
+
+What changed (`src/test_pool.rs`, commits 586c035, bf56d97, 29f4c71): in
+agent mode the cargo runner (`justrust __test-runner --pool=<sock>`) hands
+each libtest binary to the recorder and exits 0, so cargo moves on. The
+recorder runs up to ncpu/4 (2-8) binaries at once, failed-last-time and
+longest first, and prints each binary's output as one block when it ends.
+With history (`~/.justrust/tests/<cwd hash>.json`: per-test times over
+0.2 s, tests that failed and have not passed since, last start), one
+binary runs as several processes by exact name from its own `--list`
+with the user's filters applied: failed-last-time plus tests in modules
+whose files changed since the binary last ran, each test that alone is
+over 25% of the binary's recorded time (max 4), and the rest. Every
+selected test runs exactly once; "filtered out" counts are adjusted.
+A failure next to other processes is rerun by exact name with one
+thread: reproduced, it is reported at once; otherwise the process is run
+alone with nothing else running and that result is reported, with a note
+naming the tests that failed only in parallel. Doc tests, benchmarks,
+`--nocapture`, `--test-threads 1`, `--format`, unknown libtest flags:
+run by cargo as before. `JUSTRUST_TEST_PARALLEL=0` turns it off.
+
+Results, `bench/suite.py`, off (`JUSTRUST_TEST_PARALLEL=0`) vs on, n=3,
+round 2 on a quiet machine (other cores 0.6-3.7; round 1 had 6-15 other
+cores and is noise, files `testpool-*-1.json` kept):
+
+| scenario | off | on | |
+|---|---:|---:|---|
+| justrust-body-test (full `test`, 4 binaries) | 2.57 (2.25-2.86) | 1.76 (1.69-1.76) | -31%, faster; test phase 1.07 -> 0.32 s |
+| desktop-workspace-test (no edit, 11 binaries) | 13.57 (13.30-17.89) | 8.66 (8.61-15.33) | -36%, ranges touch; test phase 13.0 -> 8.2 s |
+| desktop-ui-full-test-fail: first failing test on screen | 14.43 (14.23-14.57) | 6.99 (6.37-8.56) | -52%, disjoint |
+| desktop-ui-full-test-fail: wall | 14.60 (14.40-14.73) | 22.04 (13.83-26.46) | slower, see below |
+| desktop-test-edit (reference loop, 1 binary, filter) | 6.04 (5.99-7.02) | 7.16 (6.83-7.25) | +1.1 s, test phase 0.04 -> 0.004 s; the difference is compile (5.6 -> 6.6 s), not the pool |
+
+Files `bench/results/testpool-off-2.json`, `testpool-on-2.json`. Run ids
+for the failing scenario: 20261011-085222007-4038215624,
+20261011-085248489-4038215378, 20261011-085302331-4038215804.
+
+The failing-scenario wall is longer because Desktop has two flaky tests
+(`the_hint_chip_uses_only_spare_tab_space`, which also failed 7 times in
+plain serial runs since 10-07, and `bundled_github_applet_renders_valid_documents`,
+which fails only next to a selection test in the same process). When one
+of them fails next to other processes, the pool confirms it alone: a
+whole extra run of the 1290-test binary (+8-12 s). The agent already
+saw the real failure at 6-8 s. Off, those flaky failures are just
+reported as failures; on, the report names them as passing alone.
+
+Remaining: the confirmation run could rerun only the flaky test alone
+instead of the whole binary when the rest passed; the reference loop
+(`-- fps_counter`, 3 tests) gets nothing from the pool and its +1 s here
+sits in compile, rerun with more samples to rule out a pool cost.
