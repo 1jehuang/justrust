@@ -70,7 +70,7 @@ pub fn scan(root: &Path) -> Result<Scan> {
         }
     }
     for rel in rels {
-        if skip(&rel) {
+        if skip_listed(root, &rel) {
             continue;
         }
         // Tracked files deleted from the worktree fail here and count as gone.
@@ -148,6 +148,25 @@ fn skip(rel: &Path) -> bool {
         let c = c.as_os_str();
         c == "target" || c == ".git" || c == ".justrust"
     })
+}
+
+/// Skip rule for paths git listed (tracked, or untracked and not ignored).
+/// A directory merely named `target` is source there (cargo's own testsuite
+/// has `tests/testsuite/cargo_add/target/`); only a real cargo target dir,
+/// marked by its `CACHEDIR.TAG`, is build output.
+fn skip_listed(root: &Path, rel: &Path) -> bool {
+    let mut dir = PathBuf::new();
+    for c in rel.parent().into_iter().flat_map(|p| p.components()) {
+        dir.push(c);
+        let name = c.as_os_str();
+        if name == ".git" || name == ".justrust" {
+            return true;
+        }
+        if name == "target" && root.join(&dir).join("CACHEDIR.TAG").is_file() {
+            return true;
+        }
+    }
+    false
 }
 
 fn walk(root: &Path) -> Result<Vec<PathBuf>> {
@@ -340,6 +359,38 @@ mod tests {
             size: 1,
             mode: 0o644,
         }
+    }
+
+    #[test]
+    fn listed_target_dirs_are_source_unless_cargo_tagged() {
+        let d = std::env::temp_dir().join(format!("jr-skip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("tests/cargo_add/target")).unwrap();
+        std::fs::create_dir_all(d.join("target/debug")).unwrap();
+        std::fs::write(d.join("target/CACHEDIR.TAG"), "x").unwrap();
+        assert!(!skip_listed(
+            &d,
+            Path::new("tests/cargo_add/target/Cargo.toml")
+        ));
+        assert!(skip_listed(&d, Path::new("target/debug/foo")));
+        assert!(skip_listed(&d, Path::new(".git/config")));
+        assert!(!skip_listed(&d, Path::new("src/target.rs")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The real case: cargo's testsuite fixtures under `.../target/`.
+    #[test]
+    #[ignore = "needs ~/jr-cargo"]
+    fn jr_cargo_scan_keeps_target_fixtures() {
+        let root = PathBuf::from(std::env::var("HOME").unwrap()).join("jr-cargo");
+        let s = scan(&root).unwrap();
+        let n = s
+            .files
+            .keys()
+            .filter(|p| p.starts_with("tests/testsuite/cargo_add/target"))
+            .count();
+        assert!(n > 0, "cargo_add/target fixtures missing from the scan");
+        assert!(!s.files.keys().any(|p| p.starts_with("target")));
     }
 
     #[test]
