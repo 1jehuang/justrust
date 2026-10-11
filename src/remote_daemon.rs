@@ -446,16 +446,27 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
     let mut r = BufReader::new(stream.try_clone()?);
     let mut w = BufWriter::new(stream.try_clone()?);
     while let Some((msg, _)) = read_frame(&mut r)? {
-        d.set_info(|i| i.last_client = Some(Instant::now()));
+        // Status pings (waybar polls every few seconds) must not keep an
+        // otherwise idle daemon alive.
+        if !matches!(msg, Msg::Ping) {
+            d.set_info(|i| i.last_client = Some(Instant::now()));
+        }
         match msg {
             Msg::Ping => {
+                // `connected` is only updated on connect/drop: a link the
+                // agent closed (machine stopped when idle) is not connected.
+                let alive = d
+                    .sync
+                    .try_lock()
+                    .ok()
+                    .map(|s| s.link.as_ref().is_some_and(|l| l.alive()));
                 let pong = {
                     let i = d.info.lock().unwrap();
                     Msg::Pong {
                         roots: i.roots.clone(),
                         machine: i.machine.clone(),
                         pushed: i.pushed,
-                        connected: i.connected,
+                        connected: alive.unwrap_or(i.connected),
                         build: build_id(),
                         active: i.active,
                         skipped: i.skipped,
