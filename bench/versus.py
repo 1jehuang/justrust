@@ -328,7 +328,9 @@ def scoreboard(res: dict) -> str:
             x = speedup(st[base], st[s])
             speed[s].append(x)
             v = verdict(st[base], st[s])
-            cells.append(f"**{x:.2f}x**" + ("" if v == "faster" else f" {v}"))
+            cells.append(f"**{x:.2f}x**" if v != "~" else f"{x:.2f}x ~")
+            if v == "slower":
+                cells[-1] += " slower"
         for s in names[1:]:
             a, b = st[base]["instructions"], st[s]["instructions"]
             cells.append(f"{b / a:.2f}" if a and b else "-")
