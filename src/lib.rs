@@ -415,36 +415,6 @@ fn passthrough_split(argv: &[OsString]) -> Option<(&'static str, Vec<OsString>)>
     Some((sub, argv[2..].to_vec()))
 }
 
-#[cfg(test)]
-mod passthrough_tests {
-    use super::*;
-
-    fn split(args: &[&str]) -> Option<(&'static str, Vec<String>)> {
-        let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
-        passthrough_split(&argv)
-            .map(|(s, r)| (s, r.into_iter().map(|a| a.into_string().unwrap()).collect()))
-    }
-
-    #[test]
-    fn leading_double_dash_reaches_cargo() {
-        let (sub, rest) = split(&["justrust", "test", "--", "--skip", "x"]).unwrap();
-        assert_eq!(sub, "test");
-        assert_eq!(rest, ["--", "--skip", "x"]);
-        let (_, rest) = split(&["justrust", "test", "--lib", "--", "--nocapture"]).unwrap();
-        assert_eq!(rest, ["--lib", "--", "--nocapture"]);
-    }
-
-    #[test]
-    fn other_subcommands_go_to_clap() {
-        assert!(split(&["justrust", "show"]).is_none());
-        assert!(split(&["justrust"]).is_none());
-        assert_eq!(
-            split(&["justrust", "check", "--help"]).unwrap().1,
-            ["--help"]
-        );
-    }
-}
-
 /// `--local` / `--remote` / `--auto` before any `--`: aliases for
 /// JUSTRUST_REMOTE=off|force|auto (the router).
 fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>) {
@@ -666,4 +636,34 @@ pub fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod passthrough_tests {
+    use super::*;
+
+    fn split(args: &[&str]) -> Option<(&'static str, Vec<String>)> {
+        let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
+        passthrough_split(&argv)
+            .map(|(s, r)| (s, r.into_iter().map(|a| a.into_string().unwrap()).collect()))
+    }
+
+    #[test]
+    fn leading_double_dash_reaches_cargo() {
+        let (sub, rest) = split(&["justrust", "test", "--", "--skip", "x"]).unwrap();
+        assert_eq!(sub, "test");
+        assert_eq!(rest, ["--", "--skip", "x"]);
+        let (_, rest) = split(&["justrust", "test", "--lib", "--", "--nocapture"]).unwrap();
+        assert_eq!(rest, ["--lib", "--", "--nocapture"]);
+    }
+
+    #[test]
+    fn other_subcommands_go_to_clap() {
+        assert!(split(&["justrust", "show"]).is_none());
+        assert!(split(&["justrust"]).is_none());
+        assert_eq!(
+            split(&["justrust", "check", "--help"]).unwrap().1,
+            ["--help"]
+        );
+    }
 }
