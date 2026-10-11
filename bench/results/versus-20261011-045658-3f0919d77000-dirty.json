@@ -1,0 +1,883 @@
+{
+ "started": "2026-10-11T04:51:53-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.3",
+  "justrust_rev": "3f0919d77000",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 6,
+ "warmup": 1,
+ "stacks": [
+  "stock",
+  "nightly",
+  "jr-pgo-bolt-nofp"
+ ],
+ "stack_defs": [
+  {
+   "name": "stock",
+   "what": "plain cargo + system rustc, no justrust",
+   "env": {},
+   "justrust": false
+  },
+  {
+   "name": "nightly",
+   "what": "justrust defaults plus {'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_TOOLCHAIN': 'system', 'RUSTC': '/home/jeremy/.justrust/toolchains/nightly-2026-10-08/bin/rustc'}",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "RUSTC": "/home/jeremy/.justrust/toolchains/nightly-2026-10-08/bin/rustc"
+   },
+   "justrust": true
+  },
+  {
+   "name": "jr-pgo-bolt-nofp",
+   "what": "justrust defaults plus {'JUSTRUST_DEPCACHE': '0', 'JUSTRUST_BUILD_SCRIPT_CACHE': '0', 'JUSTRUST_PEER_CACHE': '0', 'JUSTRUST_REMOTE_CACHE': '0', 'JUSTRUST_TOOLCHAIN': 'system', 'RUSTC': '/home/jeremy/jr-rustc/build/jr/pgo-bolt/bin/rustc'}",
+   "env": {
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_BUILD_SCRIPT_CACHE": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "RUSTC": "/home/jeremy/jr-rustc/build/jr/pgo-bolt/bin/rustc"
+   },
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "reference-loop": {
+   "what": "edit a #[test] fn in the 118k-line UI crate, run its tests",
+   "scenario": "desktop-test-edit",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 7.21,
+      "exit": 0,
+      "cpu": 7.64,
+      "max_rss_mb": 2159.2,
+      "instructions": 49138391751,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.42,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.242,
+      "exit": 0,
+      "cpu": 7.64,
+      "max_rss_mb": 2149.0,
+      "instructions": 49102260386,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.29,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.811,
+      "exit": 0,
+      "cpu": 7.17,
+      "max_rss_mb": 2165.4,
+      "instructions": 49082830718,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.02,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 8.682,
+      "exit": 0,
+      "cpu": 9.17,
+      "max_rss_mb": 2115.9,
+      "instructions": 48958677068,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.29,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.988,
+      "exit": 0,
+      "cpu": 7.52,
+      "max_rss_mb": 2119.9,
+      "instructions": 48998862573,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.45,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 7.828,
+      "exit": 0,
+      "cpu": 8.0,
+      "max_rss_mb": 2141.1,
+      "instructions": 49006519170,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.18,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "nightly": [
+     {
+      "wall": 6.162,
+      "exit": 0,
+      "cpu": 7.08,
+      "max_rss_mb": 2094.1,
+      "instructions": 46082544278,
+      "id": "20261011-045218417-691278670",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 15.05,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.968,
+      "exit": 0,
+      "cpu": 6.9,
+      "max_rss_mb": 2068.8,
+      "instructions": 46015957486,
+      "id": "20261011-045251817-691278579",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.63,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.054,
+      "exit": 0,
+      "cpu": 6.92,
+      "max_rss_mb": 1981.1,
+      "instructions": 45943042813,
+      "id": "20261011-045304647-691278362",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.78,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.187,
+      "exit": 0,
+      "cpu": 7.24,
+      "max_rss_mb": 2068.7,
+      "instructions": 46012241752,
+      "id": "20261011-045317176-691278565",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.89,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.263,
+      "exit": 0,
+      "cpu": 7.35,
+      "max_rss_mb": 1970.8,
+      "instructions": 46188160200,
+      "id": "20261011-045352766-691278699",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.605,
+      "exit": 0,
+      "cpu": 7.68,
+      "max_rss_mb": 1974.0,
+      "instructions": 46057796041,
+      "id": "20261011-045406901-691278252",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.0,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "jr-pgo-bolt-nofp": [
+     {
+      "wall": 6.313,
+      "exit": 0,
+      "cpu": 7.27,
+      "max_rss_mb": 2055.7,
+      "instructions": 48124212771,
+      "id": "20261011-045224604-691278507",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 14.24,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.353,
+      "exit": 0,
+      "cpu": 7.39,
+      "max_rss_mb": 2117.9,
+      "instructions": 48194414222,
+      "id": "20261011-045238173-691278488",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.1,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.43,
+      "exit": 0,
+      "cpu": 7.45,
+      "max_rss_mb": 2066.7,
+      "instructions": 48247126297,
+      "id": "20261011-045310723-691278776",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.32,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 6.373,
+      "exit": 0,
+      "cpu": 7.48,
+      "max_rss_mb": 2061.1,
+      "instructions": 48185495655,
+      "id": "20261011-045323386-691278620",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.75,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.241,
+      "exit": 0,
+      "cpu": 8.36,
+      "max_rss_mb": 2051.2,
+      "instructions": 48179064492,
+      "id": "20261011-045338490-691278387",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 9.84,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 7.219,
+      "exit": 0,
+      "cpu": 8.49,
+      "max_rss_mb": 1959.9,
+      "instructions": 48196558646,
+      "id": "20261011-045413530-691278755",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.91,
+      "foreign_rustc_before": 1
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 6,
+     "median": 7.226,
+     "min": 6.811,
+     "max": 8.682,
+     "quiet_median": 0,
+     "cpu": 7.64,
+     "max_rss_mb": 2145.1,
+     "instructions": 49044674944.0,
+     "instructions_spread": 0.0037
+    },
+    "nightly": {
+     "n": 6,
+     "median": 6.175,
+     "min": 5.968,
+     "max": 6.605,
+     "quiet_median": 0,
+     "cpu": 7.16,
+     "max_rss_mb": 2024.9,
+     "instructions": 46036876763.5,
+     "instructions_spread": 0.0053
+    },
+    "jr-pgo-bolt-nofp": {
+     "n": 6,
+     "median": 6.402,
+     "min": 6.313,
+     "max": 7.241,
+     "quiet_median": 0,
+     "cpu": 7.46,
+     "max_rss_mb": 2058.4,
+     "instructions": 48189954938.5,
+     "instructions_spread": 0.0026
+    }
+   }
+  },
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 2.01,
+      "exit": 0,
+      "cpu": 2.14,
+      "max_rss_mb": 738.4,
+      "instructions": 10130655786,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 21.67,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.864,
+      "exit": 0,
+      "cpu": 1.99,
+      "max_rss_mb": 738.9,
+      "instructions": 10131007627,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 20.25,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 4.905,
+      "exit": 0,
+      "cpu": 4.16,
+      "max_rss_mb": 742.2,
+      "instructions": 10131175891,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.95,
+      "foreign_rustc_before": 18
+     },
+     {
+      "wall": 3.536,
+      "exit": 0,
+      "cpu": 3.56,
+      "max_rss_mb": 742.3,
+      "instructions": 10131204874,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.81,
+      "foreign_rustc_before": 3
+     },
+     {
+      "wall": 4.631,
+      "exit": 0,
+      "cpu": 4.18,
+      "max_rss_mb": 720.0,
+      "instructions": 10127991032,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.06,
+      "foreign_rustc_before": 3
+     },
+     {
+      "wall": 2.36,
+      "exit": 0,
+      "cpu": 2.49,
+      "max_rss_mb": 738.7,
+      "instructions": 10131171383,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.13,
+      "foreign_rustc_before": 3
+     }
+    ],
+    "nightly": [
+     {
+      "wall": 2.196,
+      "exit": 0,
+      "cpu": 2.42,
+      "max_rss_mb": 754.3,
+      "instructions": 9498477072,
+      "id": "20261011-045538761-691278160",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 21.67,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 3.384,
+      "exit": 0,
+      "cpu": 3.26,
+      "max_rss_mb": 729.5,
+      "instructions": 9535043441,
+      "id": "20261011-045548486-691278438",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.95,
+      "foreign_rustc_before": 17
+     },
+     {
+      "wall": 3.69,
+      "exit": 0,
+      "cpu": 3.58,
+      "max_rss_mb": 749.3,
+      "instructions": 9554246177,
+      "id": "20261011-045556842-691278265",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.68,
+      "foreign_rustc_before": 11
+     },
+     {
+      "wall": 1.989,
+      "exit": 0,
+      "cpu": 2.21,
+      "max_rss_mb": 749.7,
+      "instructions": 9479856624,
+      "id": "20261011-045602669-691278821",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 20.18,
+      "foreign_rustc_before": 3
+     },
+     {
+      "wall": 2.567,
+      "exit": 0,
+      "cpu": 2.85,
+      "max_rss_mb": 750.9,
+      "instructions": 9506597319,
+      "id": "20261011-045617789-691278937",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.06,
+      "foreign_rustc_before": 3
+     },
+     {
+      "wall": 1.899,
+      "exit": 0,
+      "cpu": 2.12,
+      "max_rss_mb": 753.0,
+      "instructions": 9480647090,
+      "id": "20261011-045622777-691278768",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.13,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "jr-pgo-bolt-nofp": [
+     {
+      "wall": 1.909,
+      "exit": 0,
+      "cpu": 2.12,
+      "max_rss_mb": 754.3,
+      "instructions": 10427647272,
+      "id": "20261011-045540979-691278114",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 21.67,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.648,
+      "exit": 0,
+      "cpu": 1.81,
+      "max_rss_mb": 776.6,
+      "instructions": 10423495909,
+      "id": "20261011-045544939-691278790",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 20.25,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 2.064,
+      "exit": 0,
+      "cpu": 2.28,
+      "max_rss_mb": 773.2,
+      "instructions": 10440826022,
+      "id": "20261011-045600581-691278448",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 20.18,
+      "foreign_rustc_before": 5
+     },
+     {
+      "wall": 2.037,
+      "exit": 0,
+      "cpu": 2.26,
+      "max_rss_mb": 775.9,
+      "instructions": 10446570281,
+      "id": "20261011-045604678-691278483",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 18.81,
+      "foreign_rustc_before": 3
+     },
+     {
+      "wall": 2.811,
+      "exit": 0,
+      "cpu": 3.09,
+      "max_rss_mb": 774.4,
+      "instructions": 10480082119,
+      "id": "20261011-045610291-691278250",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.06,
+      "foreign_rustc_before": 3
+     },
+     {
+      "wall": 2.168,
+      "exit": 0,
+      "cpu": 2.42,
+      "max_rss_mb": 775.4,
+      "instructions": 10453591029,
+      "id": "20261011-045624694-691278131",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 17.76,
+      "foreign_rustc_before": 1
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 6,
+     "median": 2.948,
+     "min": 1.864,
+     "max": 4.905,
+     "quiet_median": 0,
+     "cpu": 3.03,
+     "max_rss_mb": 738.8,
+     "instructions": 10131089505.0,
+     "instructions_spread": 0.0003
+    },
+    "nightly": {
+     "n": 6,
+     "median": 2.381,
+     "min": 1.899,
+     "max": 3.69,
+     "quiet_median": 0,
+     "cpu": 2.63,
+     "max_rss_mb": 750.3,
+     "instructions": 9502537195.5,
+     "instructions_spread": 0.0078
+    },
+    "jr-pgo-bolt-nofp": {
+     "n": 6,
+     "median": 2.05,
+     "min": 1.648,
+     "max": 2.811,
+     "quiet_median": 0,
+     "cpu": 2.27,
+     "max_rss_mb": 774.9,
+     "instructions": 10443698151.5,
+     "instructions_spread": 0.0054
+    }
+   }
+  },
+  "first-error": {
+   "what": "time to the first type error after an edit",
+   "scenario": "desktop-type-error",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 1.486,
+      "exit": 101,
+      "cpu": 1.59,
+      "max_rss_mb": 754.2,
+      "instructions": 8775279776,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.79,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.469,
+      "exit": 101,
+      "cpu": 1.55,
+      "max_rss_mb": 754.2,
+      "instructions": 8774542710,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.79,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.563,
+      "exit": 101,
+      "cpu": 1.64,
+      "max_rss_mb": 757.7,
+      "instructions": 8774422853,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.01,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.53,
+      "exit": 101,
+      "cpu": 1.62,
+      "max_rss_mb": 754.6,
+      "instructions": 8776260246,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.97,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.484,
+      "exit": 101,
+      "cpu": 1.56,
+      "max_rss_mb": 755.2,
+      "instructions": 8774992123,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.01,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.554,
+      "exit": 101,
+      "cpu": 1.64,
+      "max_rss_mb": 754.8,
+      "instructions": 8776294265,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.13,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "nightly": [
+     {
+      "wall": 1.497,
+      "exit": 101,
+      "cpu": 1.65,
+      "max_rss_mb": 736.9,
+      "instructions": 8147255827,
+      "id": "20261011-045631560-691278237",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.82,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.369,
+      "exit": 101,
+      "cpu": 1.53,
+      "max_rss_mb": 741.0,
+      "instructions": 8141654917,
+      "id": "20261011-045639258-691278233",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.01,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.129,
+      "exit": 101,
+      "cpu": 1.25,
+      "max_rss_mb": 737.0,
+      "instructions": 8132046908,
+      "id": "20261011-045642225-691278519",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.01,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.425,
+      "exit": 101,
+      "cpu": 1.58,
+      "max_rss_mb": 749.4,
+      "instructions": 8140917321,
+      "id": "20261011-045644966-691278931",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.97,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.451,
+      "exit": 101,
+      "cpu": 1.61,
+      "max_rss_mb": 748.2,
+      "instructions": 8139898501,
+      "id": "20261011-045652578-691278487",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.01,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.46,
+      "exit": 101,
+      "cpu": 1.63,
+      "max_rss_mb": 738.6,
+      "instructions": 8147276872,
+      "id": "20261011-045655620-691278949",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.13,
+      "foreign_rustc_before": 1
+     }
+    ],
+    "jr-pgo-bolt-nofp": [
+     {
+      "wall": 1.461,
+      "exit": 101,
+      "cpu": 1.6,
+      "max_rss_mb": 779.5,
+      "instructions": 9056706434,
+      "id": "20261011-045633076-691278611",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.82,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.695,
+      "exit": 101,
+      "cpu": 1.87,
+      "max_rss_mb": 763.8,
+      "instructions": 9073250387,
+      "id": "20261011-045636059-691278487",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 15.79,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.581,
+      "exit": 101,
+      "cpu": 1.76,
+      "max_rss_mb": 765.4,
+      "instructions": 9064372474,
+      "id": "20261011-045643371-691278192",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.97,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.532,
+      "exit": 101,
+      "cpu": 1.69,
+      "max_rss_mb": 766.5,
+      "instructions": 9063793683,
+      "id": "20261011-045646410-691278862",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.97,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.55,
+      "exit": 101,
+      "cpu": 1.73,
+      "max_rss_mb": 769.8,
+      "instructions": 9063330795,
+      "id": "20261011-045649509-691278348",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.01,
+      "foreign_rustc_before": 1
+     },
+     {
+      "wall": 1.324,
+      "exit": 101,
+      "cpu": 1.47,
+      "max_rss_mb": 778.2,
+      "instructions": 9056061259,
+      "id": "20261011-045657097-691278677",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.13,
+      "foreign_rustc_before": 1
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 6,
+     "median": 1.508,
+     "min": 1.469,
+     "max": 1.563,
+     "quiet_median": 0,
+     "cpu": 1.6,
+     "max_rss_mb": 754.7,
+     "instructions": 8775135949.5,
+     "instructions_spread": 0.0002
+    },
+    "nightly": {
+     "n": 6,
+     "median": 1.438,
+     "min": 1.129,
+     "max": 1.497,
+     "quiet_median": 0,
+     "cpu": 1.6,
+     "max_rss_mb": 739.8,
+     "instructions": 8141286119.0,
+     "instructions_spread": 0.0019
+    },
+    "jr-pgo-bolt-nofp": {
+     "n": 6,
+     "median": 1.541,
+     "min": 1.324,
+     "max": 1.695,
+     "quiet_median": 0,
+     "cpu": 1.71,
+     "max_rss_mb": 768.1,
+     "instructions": 9063562239.0,
+     "instructions_spread": 0.0019
+    }
+   }
+  }
+ },
+ "finished": "2026-10-11T04:56:58-0700"
+}

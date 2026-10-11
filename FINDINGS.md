@@ -2042,8 +2042,33 @@ cold builds of justrust, 407 s, one merged 45 MB profile. The rest of the
 gap is BOLT on librustc_driver, which the official build has (its driver
 carries `.bolt.org.text`), next: `bolt.sh` in jr-rustc.
 
-Pitfall: a wait loop `while pgrep -f "bench/versus.py"` matches its own
-command line and never exits.
+Then BOLT (`bolt.sh`, llvm-bolt built from the in-tree LLVM, opt-dist's
+flags, instrumentation mode since there is no `perf` here) and frame
+pointers off (the `compiler` bootstrap profile turns them on, the official
+driver has none), with PGO and BOLT retrained on that build:
+
+| compiler | reference-loop | instr | body-check | instr | first-error | instr |
+|---|---:|---:|---:|---:|---:|---:|
+| official nightly | 5.33 s | 0.86 | 1.73 s | 0.93 | 1.32 s | 0.93 |
+| jr-rustc PGO+BOLT, frame pointers on | 6.97 s* | 0.99 | 2.11 s* | 1.04 | 1.89 s* | 1.05 |
+| jr-rustc PGO+BOLT, frame pointers off | 5.56 s | 0.90 | 2.04 s | 1.03 | 1.69 s | 1.03 |
+
+(*) from the earlier run `versus-20261011-040904-d150dca4c0c1.json`, whose
+nightly measured 0.94/0.93/0.93: same ratios, different machine state.
+Final: `versus-20261011-063822-7a10e0d35fa5-dirty.json`. BOLT relaid out 61%
+of profiled functions but moved instructions by under 1 point, and dropping
+frame pointers by about 1. The fork still retires 4-10% more instructions
+than the official build. Wall ranges overlap on every workload.
+
+Not yet tested: the official compiler is a stage 2 build (the compiler is
+compiled by a stage 1 compiler of the same source, LLVM 23.1.3), ours is
+compiled by stage 0 (1.100 beta, LLVM 23.1.1). That is the largest
+remaining difference in how the two are built.
+
+Pitfalls: a wait loop `while pgrep -f "bench/versus.py"` matches its own
+command line and never exits. A concurrent `suite.py` run injected its
+type-error edit into a `versus.py` run on the same snapshot: every bench
+script now takes an exclusive snapshot lock (`bench/README.md`).
 
 ## 28. First type error in 0.09 s: a resident rust-analyzer (2026-10-11)
 
