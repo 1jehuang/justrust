@@ -117,7 +117,7 @@ impl H128 {
         self.1.write_u64(b.len() as u64);
         self.raw(b);
     }
-    fn raw(&mut self, b: &[u8]) {
+    pub(crate) fn raw(&mut self, b: &[u8]) {
         self.0.write(b);
         self.1.write(b);
     }
@@ -139,7 +139,7 @@ pub(crate) fn cargo_home() -> PathBuf {
 /// placeholders and back.
 #[derive(Debug, Clone)]
 pub struct Norm {
-    profile: String,
+    pub(crate) profile: String,
     pub(crate) target: String,
     pub(crate) cargo: Option<String>,
     /// Resolved paths of a symlinked `registry` or `git` dir in the cargo
@@ -287,13 +287,20 @@ pub const REMAPPED_CARGO_HOME: &str = "/justrust-cargo-home";
 
 /// Parsed eligibility: `None` means "not cacheable, compile normally".
 #[derive(Debug, Default, PartialEq)]
-struct Shape {
-    out_dir: String,
-    extra: String,
-    crate_name: String,
+pub(crate) struct Shape {
+    pub(crate) out_dir: String,
+    pub(crate) extra: String,
+    pub(crate) crate_name: String,
 }
 
 fn shape(args: &[String]) -> Option<Shape> {
+    shape_with(args, false)
+}
+
+/// `shape`, optionally accepting `-C incremental=...` (local crates: the
+/// incremental dir is only read and written by rustc, never an output the
+/// cache restores).
+pub(crate) fn shape_with(args: &[String], allow_incremental: bool) -> Option<Shape> {
     let mut s = Shape::default();
     let mut emit: Option<String> = None;
     let mut i = 0;
@@ -304,7 +311,7 @@ fn shape(args: &[String]) -> Option<Shape> {
             if let Some(e) = v.strip_prefix("extra-filename=") {
                 s.extra = e.to_owned();
             }
-            if v.starts_with("incremental") || v.starts_with("save-temps") {
+            if (v.starts_with("incremental") && !allow_incremental) || v.starts_with("save-temps") {
                 return None;
             }
             Some(())
@@ -383,7 +390,7 @@ fn is_unit_out_dir(out_dir: &Path) -> bool {
 
 /// Env vars that are part of the base key. `CARGO_MAKEFLAGS` carries
 /// jobserver fds, which differ every run.
-fn keyed_env(name: &str) -> bool {
+pub(crate) fn keyed_env(name: &str) -> bool {
     // CARGO_HOME and the target dir: their values are always placeholders,
     // but they reach rustc only when the user (or a build slot) set them, so
     // keying them would split builds that set them from builds that do not.
@@ -410,6 +417,11 @@ fn keyed_env(name: &str) -> bool {
 
 /// The host's glibc version as (major, minor), `None` on other C libraries.
 fn host_glibc() -> Option<(u32, u32)> {
+    static V: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    *V.get_or_init(detect_host_glibc)
+}
+
+fn detect_host_glibc() -> Option<(u32, u32)> {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
         // SAFETY: returns a pointer to a static NUL-terminated string.
@@ -420,7 +432,19 @@ fn host_glibc() -> Option<(u32, u32)> {
             return parse_glibc(&v.to_string_lossy());
         }
     }
-    None
+    // A static (musl) justrust on a glibc host: ask the host's glibc.
+    if libc_family() != "glibc" {
+        return None;
+    }
+    let out = std::process::Command::new("getconf")
+        .arg("GNU_LIBC_VERSION")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    // "glibc 2.39"
+    let s = String::from_utf8_lossy(&out.stdout);
+    parse_glibc(s.split_whitespace().nth(1)?)
 }
 
 /// `2.39` (or `2.39.9000`) as (2, 39).
@@ -429,15 +453,42 @@ fn parse_glibc(v: &str) -> Option<(u32, u32)> {
     Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
 }
 
-/// C library family the host uses: part of the key for dynamically linked
-/// outputs (a musl host cannot load a glibc proc macro at any version).
+/// C library family of the host, which is what rustc and the proc macros it
+/// loads link against: part of the key for dynamically linked outputs (a
+/// musl host cannot load a glibc proc macro at any version). Detected at
+/// runtime, not from justrust's own build target: the release binary is a
+/// static musl build, so `cfg!(target_env)` said "musl" on every glibc host
+/// and its proc-macro keys (and every crate depending on one) never matched
+/// a glibc-built justrust's.
 fn libc_family() -> &'static str {
+    static FAMILY: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FAMILY.get_or_init(detect_libc_family)
+}
+
+fn detect_libc_family() -> &'static str {
     if cfg!(target_env = "gnu") {
-        "glibc"
-    } else if cfg!(target_env = "musl") {
-        "musl"
-    } else {
-        "other"
+        return "glibc";
+    }
+    // The dynamic loader the host's programs use names the C library.
+    let dirs = ["/lib", "/lib64", "/usr/lib", "/usr/lib64"];
+    let mut glibc = false;
+    let mut musl = false;
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let n = e.file_name();
+            let n = n.to_string_lossy();
+            glibc |= n.starts_with("ld-linux");
+            musl |= n.starts_with("ld-musl");
+        }
+    }
+    match (glibc, musl) {
+        (true, _) => "glibc",
+        (false, true) => "musl",
+        _ if cfg!(target_env = "musl") => "musl",
+        _ => "other",
     }
 }
 
@@ -598,6 +649,17 @@ fn key_remaps(extra_args: &[String], h: &mut H128) {
 }
 
 fn key_args(args: &[String], norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
+    key_args_with(args, norm, cwd, h, &extern_hash)
+}
+
+/// `key_args` with a caller-chosen key for `--extern` artifacts.
+pub(crate) fn key_args_with(
+    args: &[String],
+    norm: &Norm,
+    cwd: &Path,
+    h: &mut H128,
+    ext: &dyn Fn(&Path) -> Option<String>,
+) -> Option<()> {
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -606,7 +668,7 @@ fn key_args(args: &[String], norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()
             // Terminal width: only changes how diagnostics wrap.
         } else if a == "--extern" {
             h.field(b"--extern");
-            key_extern(next?, cwd, h)?;
+            key_extern(next?, cwd, h, ext)?;
             i += 1;
         } else if a == "-C" {
             h.field(b"-C");
@@ -630,11 +692,16 @@ fn key_args(args: &[String], norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()
     Some(())
 }
 
-fn key_extern(v: &str, cwd: &Path, h: &mut H128) -> Option<()> {
+fn key_extern(
+    v: &str,
+    cwd: &Path,
+    h: &mut H128,
+    ext: &dyn Fn(&Path) -> Option<String>,
+) -> Option<()> {
     match v.split_once('=') {
         Some((name, path)) => {
             h.field(name.as_bytes());
-            h.field(extern_hash(&cwd.join(path))?.as_bytes());
+            h.field(ext(&cwd.join(path))?.as_bytes());
         }
         None => h.field(v.as_bytes()),
     }
@@ -676,7 +743,7 @@ pub(crate) fn extern_hash(path: &Path) -> Option<String> {
 
 /// The crate metadata embedded in a compiled artifact, or `None` if the
 /// container cannot be parsed.
-fn metadata_bytes(path: &Path) -> Option<Vec<u8>> {
+pub(crate) fn metadata_bytes(path: &Path) -> Option<Vec<u8>> {
     let ext = path.extension()?.to_str()?;
     match ext {
         "rmeta" => {
@@ -819,7 +886,7 @@ fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
     Some(())
 }
 
-fn xattr_get(path: &Path, attr: &str) -> Option<String> {
+pub(crate) fn xattr_get(path: &Path, attr: &str) -> Option<String> {
     let p = CString::new(path.as_os_str().as_bytes()).ok()?;
     let name = CString::new(attr).ok()?;
     let mut buf = [0u8; 128];
@@ -835,7 +902,7 @@ fn xattr_get(path: &Path, attr: &str) -> Option<String> {
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
 }
 
-fn xattr_set(path: &Path, attr: &str, value: &str) {
+pub(crate) fn xattr_set(path: &Path, attr: &str, value: &str) {
     let (Ok(p), Ok(name)) = (
         CString::new(path.as_os_str().as_bytes()),
         CString::new(attr),
@@ -917,13 +984,13 @@ pub(crate) struct OutFile {
 pub(crate) struct Outputs {
     pub(crate) files: Vec<OutFile>,
     /// Normalized stderr lines, replayed on a hit.
-    stderr: Vec<String>,
+    pub(crate) stderr: Vec<String>,
     /// Wall seconds the original compile took.
-    wall: f64,
+    pub(crate) wall: f64,
     /// Newest glibc any output needs (dynamically linked proc macros and
     /// bins), e.g. `[2, 39]`. Restored only where the host has at least it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    glibc: Option<(u32, u32)>,
+    pub(crate) glibc: Option<(u32, u32)>,
 }
 
 pub struct Hit {
@@ -971,7 +1038,12 @@ impl Plan {
     /// Restore one entry's outputs. `None` (nothing replayed) if they are
     /// missing or unreadable.
     fn restore_entry(&self, entry: &Entry, err: &mut dyn Write) -> Option<f64> {
-        let dir = self.root.join("o").join(&entry.out);
+        self.restore_out(&entry.out, err)
+    }
+
+    /// Restore the outputs stored under `o/<out>`.
+    pub(crate) fn restore_out(&self, out: &str, err: &mut dyn Write) -> Option<f64> {
+        let dir = self.root.join("o").join(out);
         // Mark the entry used before reading it, so a concurrent eviction
         // that already picked it sees the touch and puts it back.
         touch(&dir.join("meta.json"));
@@ -1230,7 +1302,7 @@ pub fn entry_out(line: &str) -> Option<String> {
 }
 
 /// Source paths and env var names from a rustc dep-info file.
-fn parse_dep_info(d: &str) -> (Vec<String>, Vec<String>) {
+pub(crate) fn parse_dep_info(d: &str) -> (Vec<String>, Vec<String>) {
     let mut files = Vec::new();
     let mut env = Vec::new();
     for line in d.lines() {
@@ -1307,6 +1379,22 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The key's C library is the host's, read at runtime: a static musl
+    /// release build must key a glibc host as glibc, like a glibc build.
+    #[test]
+    fn libc_family_is_the_hosts() {
+        let host_has_glibc_loader = ["/lib", "/lib64", "/usr/lib", "/usr/lib64"]
+            .iter()
+            .filter_map(|d| std::fs::read_dir(d).ok())
+            .flatten()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("ld-linux"));
+        if host_has_glibc_loader {
+            assert_eq!(detect_libc_family(), "glibc");
+            assert!(host_glibc().is_some_and(|v| v >= (2, 17)));
+        }
+    }
 
     #[test]
     fn glibc_needs_are_read_from_the_dynamic_string_table() {
