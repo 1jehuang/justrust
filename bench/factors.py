@@ -145,13 +145,14 @@ FACTORS = [
         off={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JUSTRUST_CARGO_FORK": "0"}, n=8,
     ),
     Factor(
-        "jr-rustc", "justrust's rustc fork (stage 1, ~/jr-rustc) vs the official nightly at the same commit",
+        "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-use) vs the official nightly at the same commit",
         "loop", "desktop-test-edit",
-        on={"JUSTRUST_TOOLCHAIN": "system", "RUSTC": str(Path.home() / "jr-rustc/build/host/stage1/bin/rustc")},
+        on={"JUSTRUST_TOOLCHAIN": "system",
+            "RUSTC": str(Path.home() / "jr-rustc/build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-use") / "bin/rustc")},
         off={"JUSTRUST_TOOLCHAIN": "system",
              "RUSTC": str(suite.JR_HOME / "toolchains" / NIGHTLY / "bin" / "rustc")},
         n=4, slow=True,
-        note="same rustc commit both sides; shows the cost of our build config (no PGO/BOLT) before any fork change",
+        note="same rustc commit both sides; build-jr.sh saves each mode (dev, release, pgo-use) under build/jr/",
     ),
 ]
 BY_NAME = {f.name: f for f in FACTORS}

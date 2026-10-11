@@ -2013,3 +2013,34 @@ First full result (`bench/results/versus-20261011-010303-084664294e8c-dirty.json
 - The incremental loop is a regression we pay on every agent call:
   making the recording path free (and time-passes off by default, or
   sampled) is worth 3-6% on every warm workload before any fork lands.
+
+## 27. jr-rustc build config: release and PGO vs the official nightly (2026-10-11)
+
+Same rustc commit on every side (jr-rustc at the pinned nightly's commit,
+CI LLVM, which upstream already ships PGO+BOLT optimized). `bench/versus.py`
+with every justrust cache off and `RUSTC` pointed at each compiler; `instr`
+is user-space instructions retired by the whole build tree relative to stock
+(system rustc 1.98.1), the nearly noise-free column.
+
+| compiler | reference-loop | instr | body-check | instr |
+|---|---:|---:|---:|---:|
+| official nightly (PGO+BOLT) | 9.13 s | 0.95 | 2.75 s | 0.95 |
+| jr-rustc release (thin LTO, cgu 1) | 9.12 s | 1.05 | 2.75 s | 1.12 |
+| jr-rustc + PGO (trained on our workloads) | 9.27 s | 1.00 | 2.90 s | 1.06 |
+
+Results: `versus-20261011-021709-bde782c2cedb-dirty.json` (release vs
+nightly) and `versus-20261011-024221-bde782c2cedb-dirty.json` (all three).
+Wall times overlap within noise. Instructions show the real gap: release
+does 10-18% more work than the official build, PGO closes about half of it
+(5-11% left). The earlier 31% (finding in `bench/FACTORS.md`, jr-rustc row)
+was the dev build (incremental, 256 CGUs).
+
+PGO for a stage 1 compiler needed a bootstrap patch (upstream applies PGO
+and BOLT link flags only to a stage 2 dist). Training (`pgo-train.sh` in
+jr-rustc): cold and incremental check and test of the Desktop UI crate plus
+cold builds of justrust, 407 s, one merged 45 MB profile. The rest of the
+gap is BOLT on librustc_driver, which the official build has (its driver
+carries `.bolt.org.text`), next: `bolt.sh` in jr-rustc.
+
+Pitfall: a wait loop `while pgrep -f "bench/versus.py"` matches its own
+command line and never exits.
