@@ -357,7 +357,10 @@ pub fn fetch(plan: &Plan, err: &mut dyn Write) -> Option<depcache::Hit> {
         return None;
     }
     let sock = sock_path()?;
-    let s = UnixStream::connect(&sock).ok()?;
+    let Ok(s) = UnixStream::connect(&sock) else {
+        note(plan, "no relay (sync daemon not running)");
+        return None;
+    };
     s.set_read_timeout(Some(QUERY_TIMEOUT)).ok()?;
     let mut w = BufWriter::new(s.try_clone().ok()?);
     let mut r = BufReader::new(s.try_clone().ok()?);
@@ -370,7 +373,14 @@ pub fn fetch(plan: &Plan, err: &mut dyn Write) -> Option<depcache::Hit> {
         &[],
     )
     .ok()?;
-    let (lines, outs, busy, bw) = match read_frame(&mut r).ok()?? {
+    let reply = match read_frame(&mut r) {
+        Ok(Some(f)) => f,
+        _ => {
+            note(plan, "relay did not answer in time");
+            return None;
+        }
+    };
+    let (lines, outs, busy, bw) = match reply {
         (
             Msg::CacheLines {
                 lines,
@@ -384,16 +394,31 @@ pub fn fetch(plan: &Plan, err: &mut dyn Write) -> Option<depcache::Hit> {
         _ => return None,
     };
     if lines.is_empty() {
+        note(plan, "absent");
         return None;
     }
     let mut memo = HashMap::new();
-    let (line, info) = lines.iter().rev().find_map(|l| {
+    let Some((line, info)) = lines.iter().rev().find_map(|l| {
         let e: depcache::Entry = serde_json::from_str(l).ok()?;
         let info = outs.iter().find(|o| o.out == e.out)?;
         plan.matches(&e, &mut memo)
             .then(|| (l.clone(), info.clone()))
-    })?;
-    worth_fetching(info.bytes, info.wall, busy, bw)?;
+    }) else {
+        note(plan, "inputs differ");
+        return None;
+    };
+    if worth_fetching(info.bytes, info.wall, busy, bw).is_none() {
+        note(
+            plan,
+            &format!(
+                "not worth it: {} KB, {:.2}s compile, {busy} in flight, {:.1} MB/s",
+                info.bytes / 1024,
+                info.wall,
+                bw / 1e6
+            ),
+        );
+        return None;
+    }
     // The transfer itself may take a while on a slow link.
     s.set_read_timeout(Some(Duration::from_secs(120))).ok()?;
     write_frame(
@@ -422,6 +447,13 @@ pub fn fetch(plan: &Plan, err: &mut dyn Write) -> Option<depcache::Hit> {
         return None;
     }
     plan.restore(err)
+}
+
+/// Why a peer lookup did not fetch, for `JUSTRUST_PEER_EXPLAIN=1`.
+fn note(plan: &Plan, why: &str) {
+    if std::env::var_os("JUSTRUST_PEER_EXPLAIN").is_some() {
+        eprintln!("justrust peer: {} {}: {why}", plan.crate_name, plan.base);
+    }
 }
 
 // ------------------------------------------------------------------ relay
