@@ -86,7 +86,11 @@ fn wrap_with(out_dir: &Path, crate_name: &str, extra: &str, me: &Path) -> Option
         .ok()?
         .read_exact(&mut magic)
         .ok()?;
-    if &magic != b"\x7fELF" {
+    // ELF, or Mach-O (thin 64-bit, or universal) on macOS.
+    if !matches!(
+        &magic,
+        b"\x7fELF" | b"\xcf\xfa\xed\xfe" | b"\xca\xfe\xba\xbe"
+    ) {
         return None;
     }
     let me = me.to_str()?;
@@ -1205,7 +1209,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let bin = dir.join("build_script_build-abc");
-        std::fs::copy("/bin/true", &bin).unwrap();
+        // A native executable (ELF on Linux, Mach-O on macOS).
+        std::fs::copy("/bin/sh", &bin).unwrap();
         wrap(&dir, "build_script_build", "-abc").unwrap();
         let w = std::fs::read_to_string(&bin).unwrap();
         assert!(w.starts_with("#!/bin/sh\n") && w.contains(WRAPPER_MARK));

@@ -226,19 +226,26 @@ mod macos {
     /// stdio (see the Linux version). macOS has no `close_range`: mark every
     /// fd above stdio close-on-exec instead, which `fcntl` does
     /// async-signal-safely and which keeps std's exec-error pipe working.
+    /// Only up to the highest fd open now (listed here, before the fork):
+    /// looping over the whole fd limit after fork kept children alive long
+    /// enough to hold other threads' flocks. Fds opened later by std are
+    /// close-on-exec already.
     pub fn close_inherited_fds(cmd: &mut std::process::Command) {
         use std::os::unix::process::CommandExt;
-        // SAFETY: getrlimit and fcntl are async-signal-safe; a closed fd
-        // only makes fcntl fail with EBADF.
+        let max = std::fs::read_dir("/dev/fd")
+            .map(|rd| {
+                rd.flatten()
+                    .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
+                    .max()
+                    .unwrap_or(1024)
+            })
+            .unwrap_or(1024)
+            + 64;
+        // SAFETY: fcntl is async-signal-safe; a closed fd only makes it fail
+        // with EBADF.
         unsafe {
-            cmd.pre_exec(|| {
-                let mut rl: libc::rlimit = std::mem::zeroed();
-                let max = if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 {
-                    rl.rlim_cur.min(1 << 16) as i32
-                } else {
-                    1 << 12
-                };
-                for fd in 3..max {
+            cmd.pre_exec(move || {
+                for fd in 3..=max {
                     libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
                 }
                 Ok(())

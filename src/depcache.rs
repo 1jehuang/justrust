@@ -1560,11 +1560,20 @@ mod tests {
         let c = d.join("libc.rlib");
         std::fs::write(&c, b"garbage").unwrap();
         assert!(extern_hash(&c).unwrap().starts_with('f'));
-        // A real ELF with a .rustc section: this test binary has none, the
-        // parser must say so rather than misread.
-        if let Ok(me) = std::env::current_exe() {
+        // A real executable without a .rustc section: the parser must say
+        // so rather than misread.
+        if let Ok(me) = std::env::current_exe()
+            && cfg!(target_os = "linux")
+        {
             assert!(elf_section(&me, ".text").is_some());
             assert!(elf_section(&me, ".rustc").is_none());
+        }
+        if let Ok(me) = std::env::current_exe()
+            && cfg!(target_os = "macos")
+        {
+            assert!(macho_section(&me, "__TEXT", "__text").is_some());
+            assert!(macho_section(&me, "__DATA", ".rustc").is_none());
+            assert!(elf_section(&me, ".text").is_none());
         }
         let _ = std::fs::remove_dir_all(&d);
     }

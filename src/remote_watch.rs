@@ -293,15 +293,30 @@ mod kqueue {
                 }
                 return;
             }
-            for ev in &evs[..n as usize] {
-                let wd = ev.ident as i32;
-                let dir = w.lock().unwrap().by_wd.get(&wd).cloned();
-                let Some(d) = dir else { continue };
-                if ev.fflags & (libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_REVOKE) != 0 {
+            // Resolve every event's directory before acting on any: acting
+            // closes descriptors, and a new watch may reuse a closed one's
+            // number, so a later event in this batch would name the wrong
+            // directory.
+            let batch: Vec<(i32, u32, PathBuf)> = {
+                let g = w.lock().unwrap();
+                evs[..n as usize]
+                    .iter()
+                    .filter_map(|ev| {
+                        let wd = ev.ident as i32;
+                        Some((wd, ev.fflags, g.by_wd.get(&wd)?.clone()))
+                    })
+                    .collect()
+            };
+            for (wd, fflags, d) in batch {
+                if fflags & (libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_REVOKE) != 0 {
                     // Gone or moved: forget it and everything below, so a
                     // directory re-created at the path is watched again and
-                    // the new location is picked up from its parent.
-                    remove_tree(kq, &w, &d);
+                    // the new location is picked up from its parent. Skip
+                    // it if the parent's rescan already did (the path may
+                    // now be a new directory with its own watch).
+                    if w.lock().unwrap().by_path.get(&d) == Some(&wd) {
+                        remove_tree(kq, &w, &d);
+                    }
                     if let Some(p) = d.parent()
                         && tx.send(p.to_path_buf()).is_err()
                     {
@@ -309,7 +324,7 @@ mod kqueue {
                     }
                     continue;
                 }
-                if ev.fflags & libc::NOTE_WRITE != 0 {
+                if fflags & libc::NOTE_WRITE != 0 {
                     sync_children(kq, &w, &d);
                 }
                 if tx.send(d).is_err() {

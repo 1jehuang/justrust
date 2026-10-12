@@ -350,7 +350,11 @@ mod tests {
 
     #[test]
     fn only_linux_targets_use_wild() {
-        assert!(host_like_target(&a(&["--crate-type", "bin"])));
+        // No --target: the host, wild-eligible only when it is Linux.
+        assert_eq!(
+            host_like_target(&a(&["--crate-type", "bin"])),
+            cfg!(target_os = "linux")
+        );
         assert!(host_like_target(&a(&[
             "--target",
             "x86_64-unknown-linux-gnu"
