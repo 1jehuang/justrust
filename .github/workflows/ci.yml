@@ -82,6 +82,51 @@ jobs:
           # Every dependency, proc macro included, restored in the second.
           grep -E "depcache [0-9]+ hit/0 miss" "$RUNNER_TEMP/dc-b/out.txt"
           grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
+      # One check per macOS path the port changed (FINDINGS 45 maps them).
+      - name: macOS integration paths
+        run: |
+          set -x
+          bin="$PWD/target/debug/justrust"
+          cd "$RUNNER_TEMP/dc-b"
+          # Sampler: build CPU and per-process data are measured, not zero.
+          "$bin" show --json > show.json
+          python3 - <<'EOF'
+          import json
+          s = json.load(open("show.json"))
+          r = s["resources"]
+          assert r["psi_unavailable"] is True, r
+          assert r["avg_build_cores"] > 0, r
+          assert 0 < r["peak_unit_rss_mb"] < 4096, r
+          assert r["min_mem_available_mb"] > 0, r
+          assert s.get("ncpu", 1) > 0
+          print("sampler ok", r)
+          EOF
+          # status: a finished run is not reported as active (pid guard).
+          "$bin" status --json | tee status.json
+          python3 -c "import json; s=json.load(open('status.json')); assert s['active']==[], s"
+          # Routing: a signed-out Mac stays local and says why.
+          JUSTRUST_REMOTE_EXPLAIN=1 "$bin" check 2>&1 | tee route.txt
+          "$bin" show | grep -E "^where +local"
+          # Slots: a second session seeds its own slot by APFS clone.
+          touch src/main.rs
+          JCODE_SESSION_ID=other "$bin" test 2>&1 | tee slot.txt
+          grep -E "slot [0-9]+ \((new|sticky|reused)\)" slot.txt
+          grep -q "1 passed" slot.txt
+          # Pinned toolchain for the host triple (download, sha256 via shasum).
+          printf '[toolchain]\nchannel = "stable"\n' > justrust.toml
+          "$bin" toolchain install 2>&1 | tail -5
+          "$bin" toolchain status 2>&1 | tee tc.txt
+          "$bin" test 2>&1 | tee pinned.txt
+          grep -q "1 passed" pinned.txt
+          grep -E "pinned toolchain" pinned.txt
+          rm justrust.toml
+      # The release binary (thin LTO, stripped), as the installer ships it.
+      - name: Release build runs
+        run: |
+          cargo build --release --locked --config profile.release.lto='"thin"' \
+            --config profile.release.codegen-units=1 --config profile.release.strip=true
+          cd "$RUNNER_TEMP/dc-a" && "$GITHUB_WORKSPACE/target/release/justrust" test 2>&1 | tee rel.txt
+          grep -q "1 passed" rel.txt
 
   passthrough:
     name: ${{ matrix.os }} (passthrough build)
