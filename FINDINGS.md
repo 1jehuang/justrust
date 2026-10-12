@@ -4463,3 +4463,32 @@ bench lock (`flock -o ~/.justrust/bench/work/.bench.lock`). Also, cargo
 caches `rustc -vV` by the rustc binary's mtime, so a rebuilt
 librustc_driver needs `touch bin/rustc` and fresh factor target dirs,
 or every unit fails with E0514.
+
+### What a true resident rustc could still win (stop decision)
+
+Warm profile of the same hot rustc after 58 and this section (early
+build, `-Ztime-passes`, median of 5, total 4.04 s): serialize_dep_graph
+1.02 s and link 0.51 s (overlapped, and off the reply path with early
+reply), codegen_crate 0.91 s, macro_expand 0.69 s, resolve 0.41 s,
+monomorphization walk 0.39 s, typeck plus borrowck about 0.11 s. Startup
+costs that a process kept alive between edits would remove:
+
+| cost | per edit | source |
+|---|---:|---|
+| dep-graph decode + query-cache open, main thread waits before expansion | ~0.25 s | step 1 self-profile (0.19 + 0.06 s) |
+| exec, dynamic loading of librustc_driver | 0.01 s | `rustc -vV`, median of 5 |
+| persist tail | 0 | already off the reply path (2b) |
+
+That is about 0.26 s, under the 0.3 s bar set for this track, so the
+preloading server is not built. Everything bigger lives inside a session
+(expansion, resolution, mono walk, codegen). To reuse it, rustc would
+have to keep the `GlobalCtxt` alive across sessions, with its arenas,
+interners, `CStore` with ~620 upstream crates' metadata, the resolver
+outputs, and the query caches. Then it would have to invalidate exactly
+what an edit touches, without the red/green replay from disk. That means
+replacing `'tcx` arena lifetimes with a generation scheme, a resettable
+`Session` (options, diagnostics, source map), and in-memory red/green
+marking. That is a multi-month compiler redesign (the rust-analyzer
+model), not a step on this track. Cheaper per-edit wins in the same
+profile: macro expansion (0.69 s, the attribute cache in 29 already took
+most of it) and body-only invalidation (`docs/integrations.md`).
