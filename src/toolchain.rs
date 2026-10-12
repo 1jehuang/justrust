@@ -682,13 +682,14 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
     let src = prefix.join("lib/rustlib/src/rust");
     if let Ok(target) = std::fs::read_link(&src) {
         let _ = std::fs::remove_file(&src);
+        std::fs::create_dir_all(&src)?;
         let st = Command::new("cp")
             .arg("-a")
             .arg(target.join("library"))
             .arg(src.join("library"))
             .status();
         if !matches!(st, Ok(s) if s.success()) {
-            std::fs::create_dir_all(src.join("library"))?;
+            bail!("copying rust-src from {} failed", target.display());
         }
     }
     let _ = std::fs::remove_file(prefix.join("lib/rustlib/rustc-src/rust"));
