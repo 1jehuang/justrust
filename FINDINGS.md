@@ -4563,3 +4563,39 @@ default jr toolchain shipping this jr-cargo. Also open: fingerprint
 calculation (57-95 ms) still runs per request; caching fingerprints of
 units whose source mtimes are unchanged in the parked process is the
 next cargo-side win.
+
+## 62. After the architecture tracks: justrust defaults vs stock, end to end (2026-10-12)
+
+Whole-result check after findings 48-61, with justrust reinstalled from
+main (0f5714b) and its own suite passing (307 tests, local and hosted,
+clippy clean).
+
+**System 3, stock cargo + system rustc vs justrust defaults** (pinned
+Desktop snapshot, n=6 after one warmup, round-robin,
+`versus-20261012-091520-0f5714b38bf4.json`). `versus.py` pins
+`JUSTRUST_BUILDD=0`, so this excludes prebuild:
+
+| workload | stock | justrust | ratio | instructions |
+|---|---:|---:|---:|---:|
+| reference-loop | 6.68 s (5.9-7.0) | 3.88 s (3.6-4.7) | **1.72x** | 0.72 |
+| body-check | 2.16 s (1.6-2.3) | 1.53 s (1.2-1.6) | 1.41x, ranges touch | 0.95 |
+| noop-test | 0.47 s (0.4-0.5) | 0.29 s (0.3-0.3) | **1.63x** | 0.64 |
+| geomean | | | **1.58x** | |
+
+Before the tracks, the same reference loop was stock 6.45 s vs 4.75 s for
+the best justrust stack (`versus-20261011-111710-07262f4deb42-dirty.json`,
+1.36x). Now it is 1.72x.
+
+**Prebuild on edit, as shipped** (`bench/factors.py run buildd-prebuild
+-n 6`, installed binary, 4.6 s mined think time,
+`factors-20261012-091523-0f5714b38bf4.json`): on 3.51 s (2.6-3.8) vs off
+6.86 s (6.6-7.7), -49%, disjoint ranges. That reproduces finding 51
+(5.14 vs 8.87 s) on today's faster baseline. With the versus row above,
+an agent that thinks for the median 4.6 s before testing waits about 3.5
+s instead of stock's ~6.7 s, about 1.9x.
+
+**No cache invalidation from the new defaults** (real `~/jcode-desktop`,
+`check -p jcode-desktop-ui`): `JUSTRUST_BUILDD=0 JUSTRUST_LOCALCACHE=0`,
+then defaults, then off again: the second and third runs compiled 0 units
+(746 fresh). Switching the daemon or the local cache on or off never
+dirties cargo's or rustc's state.
