@@ -3,6 +3,12 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.10
+
+- `justrust login` honours `JUSTRUST_NO_TELEMETRY` and `DO_NOT_TRACK` even
+  when an earlier install saved an install id.
+- The kept-local report includes the command when `JUSTRUST_REMOTE=off`.
+
 ## 0.1.0-alpha.9
 
 - **Install funnel.** The installer reports installer_start and
