@@ -310,10 +310,23 @@ pub fn finish_main(dir: PathBuf) -> ! {
         #[cfg(target_os = "linux")]
         libc::syscall(libc::SYS_ioprio_set, 1, 0, 3 << 13);
     }
-    if finish(&dir).is_none() {
+    let t0 = paths::now();
+    let ok = finish(&dir).is_some();
+    if !ok {
         let _ = std::fs::remove_dir_all(&dir);
     }
     if let Some(root) = dir.parent().and_then(Path::parent) {
+        // SAFETY: getrusage fills a plain struct.
+        let cpu = unsafe {
+            let mut ru: libc::rusage = std::mem::zeroed();
+            libc::getrusage(libc::RUSAGE_SELF, &mut ru);
+            let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+            tv(ru.ru_utime) + tv(ru.ru_stime)
+        };
+        let line = serde_json::json!({
+            "t": t0, "secs": paths::now() - t0, "cpu": cpu, "ok": ok,
+        });
+        let _ = paths::append_line(&root.join("finish.jsonl"), &line.to_string());
         maybe_gc(root);
     }
     std::process::exit(0);
