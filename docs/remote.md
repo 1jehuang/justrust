@@ -301,7 +301,9 @@ starts a stopped machine) so its shims can fetch from the machine.
 
 `src/route.rs`. Every agent-mode `check`, `clippy`, and `test` asks the
 router first. `build` and `run` always stay local because their artifacts
-are needed here.
+are needed here. FINDINGS 45 measured bringing them back: `build
+--release` would win (about 1.6-2x with a zstd `--patch-from` delta of
+~2 MB), dev builds lose to the 100 MB debug binary.
 
 `JUSTRUST_REMOTE` controls it:
 

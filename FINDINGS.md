@@ -3258,3 +3258,58 @@ runtime difference below; only runs on real Macs found them.
   is forking (it shares the open file until exec). Flaky slot tests on
   both platforms; probes now unlock explicitly.
 - Pressure stall info does not exist on macOS: reports say "not measured".
+
+## 45. Remote `build` with the binary brought back: release wins, debug ties (2026-10-11)
+
+Question: `build` and `run` always stay local (`src/route.rs`) because the
+binary must end up here. Is a remote build plus artifact download faster?
+
+Setup: the same `git archive` snapshot of justrust on the laptop (12
+threads, load 22-32, other agents building, the realistic case) and the
+hosted c7i.8xlarge (32 cores, us-east-1, 145 ms round trip). Plain cargo on
+both sides, `cargo build --bin justrust`, dependencies fetched first. Edit:
+one line appended to `src/summary.rs`, 3x per profile. Scripts were ad hoc
+(`bench.sh`, `edit.sh`, not committed); numbers in ms.
+
+| case | laptop | remote compile |
+|---|---:|---:|
+| cold dev | 14.7 s | 13.3 s |
+| edit dev | 1.73-1.87 s | 1.66-1.67 s |
+| cold release | 22.3 s | 17.0 s |
+| edit release | 21.6-28.2 s | 13.3-13.4 s |
+
+Artifacts: dev binary 101 MB, release 10.1 MB. A real code edit (changed
+string plus a new branch in `summary.rs`) shifts addresses, so the delta
+is far from zero. Compressing the new binary with `zstd --long=31
+--patch-from=<previous binary>` on the machine:
+
+| artifact | full | zstd -3 | delta -3 (compress time) | delta -19 |
+|---|---:|---:|---:|---:|
+| dev (101 MB) | 101 MB | 21.9 MB | 5.4 MB (~0.3 s) | 2.1 MB (35 s, useless) |
+| release (10 MB) | 10.1 MB | 3.3 MB | 2.2 MB (~0.04 s) | 0.9 MB (5.7 s) |
+
+Fetch the delta and apply it on the laptop against the previous binary:
+release 0.38-0.43 s, dev 0.64-0.80 s. The result is byte-identical
+(sha256 equal). Raw download from the machine varied 5-19 MB/s, so a full
+debug binary (100 MB) would cost 5-19 s and only deltas are viable.
+
+Reading:
+- **Release edit: 21.6-28.2 s local vs ~13.8 s remote (13.4 compile +
+  0.4 fetch), 1.6-2x.** Worth shipping: release builds parallelize
+  (codegen units, LLVM) and the 10 MB binary deltas to ~2 MB.
+- Dev edit: 1.8 s local vs ~2.4 s remote (1.7 + 0.7 fetch). Remote loses.
+  The 100 MB debug binary is the problem: most of it is debug info, and
+  `objcopy --strip-debug` leaves 29 MB. Shipping it needs split debuginfo
+  that stays remote, or lazy fetching.
+- Cold: small wins (1.1x dev, 1.3x release) before transfer. A cold
+  build has no base binary to delta against, so a dev binary costs a full
+  zstd download (22 MB, 1-4 s). Worth it only for bigger projects, where
+  the shared dependency cache does most of the work.
+- Not 10x anywhere: this crate's local build is mostly one crate's
+  frontend, and the machine is 1.3-2x per core-bound step, not 10x.
+
+Plan: route `build --release` (and `run --release`) remote when history
+says the local build takes over ~5 s, ship the binary as a zstd
+`--patch-from` delta against the last binary fetched (a full zstd copy
+when there is none), and keep dev `build`/`run` local until split
+debuginfo is in place.
