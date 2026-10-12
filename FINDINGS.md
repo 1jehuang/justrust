@@ -3908,3 +3908,57 @@ reads +15..54% slower, round 2 -17..+3%: the order flipped with the load,
 every sample of both flagged noisy. A quieter direct measure, no-op
 `justrust check` of this repo, 15 interleaved pairs: main 0.158 s median
 (0.103 min), port 0.155 s (0.106 min). No regression measurable.
+
+## 53. Remote hosts use 4.5 of 32 cores: profile of every remote run (2026-10-12)
+
+All 351 recorded remote runs (298 on our c7i.8xlarge us-west-2, 53 hosted,
+2026-10-09 to 10-12; 183 check, 134 test, 21 clippy, 13 build), mined from
+`summary.json`, `samples.jsonl` and `units.jsonl`. Client wall 6841 s,
+server wall 4045 s, CPU 18,036 s: **4.46 of 32 cores on average**.
+
+Where the client wall went: compile 3606 s, sync 2556 s, startup 194 s,
+lock wait 87 s, test run 72 s. Sync is bimodal: p50 0.17 s, but 54 runs
+synced for over 5 s (2361 s in total, worst 359 s, a fresh worktree of
+jcode-desktop, 20261011-155126540-3719621). So first sync of a new
+worktree costs more than all remote compiling of warm loops.
+
+Time-weighted build cores: under 1 core 43%, 1-2 25%, 2-4 14%, 4-8 9%,
+8-16 6%, 16-32 3%. Of 2444 s with any rustc running, exactly one rustc ran
+for 1515 s (62%).
+
+| run class | runs | server wall | avg cores |
+|---|---:|---:|---:|
+| 0 units | 70 | 52 s | 1.3 |
+| 1 unit | 88 | 285 s | 1.1 |
+| 2-5 units | 59 | 416 s | 3.1 |
+| 6-30 units | 73 | 936 s | 1.9 |
+| >30 units (cold) | 61 | 2356 s | 6.2 |
+
+Inside one rustc it is barely parallel, even with `-Zthreads=8`:
+`jcode_desktop_ui` test link 448 s over 49 runs at 1.35 cores,
+`jcode_base` 263 s at 1.98, `justrust` (no -Zthreads) 297 s at 3.62 (its
+codegen units). Per-pass for the desktop UI test unit (8.8 s/run):
+macro expansion 2.27 s (26%), codegen_crate 2.05 s, mono collector 0.95 s,
+link 0.73 s, dep-graph persist 0.70 s. Macro expansion, resolve,
+coherence, metadata generation and incremental persist are serial in
+today's parallel front end, and they dominate warm loops.
+
+Cold builds (>30 units): 53% of rustc-active time had 2 or fewer rustc
+running. The serial tail is a few giant crates: aws_sdk_bedrock 111 s,
+jcode_base 105 s, jcode_desktop_ui test 56 s, jcode_tui test 47 s,
+jcode_app_core 32 s. Only 22 of 351 remote runs had any depcache hit.
+
+Conclusions for picking the CPU and the work:
+
+1. More cores only help cold, multi-crate and test-suite runs, about 1/3
+   of server wall. The other 2/3 is one to three crates at 1 to 2 cores,
+   where per-core speed is the only hardware lever (Zen 5 at 4.5-5 GHz,
+   c8a/m8azn, over 3.2 GHz Sapphire Rapids). 32 physical cores with no SMT
+   (c8a.8xlarge) beats 16 cores + SMT for the cold third too.
+2. Bigger software levers than any CPU: (a) sync of new worktrees (2361 s,
+   seed from a shared base snapshot or the already-mirrored repo instead
+   of uploading), (b) depcache on remote (aws_sdk_bedrock should be a
+   download, never a critical path), (c) rustc serial passes in jr-rustc:
+   parallel macro expansion is hard, but parallel metadata encoding,
+   dep-graph persist and the mono collector are tractable, (d) splitting
+   giant crates (finding 47) turns serial crates into parallel units.
