@@ -281,13 +281,19 @@ pub const BILLING: &str = "justrust: ";
 
 /// Hosted only: charge this run before anything runs remotely. Err holds
 /// the line to show; the build then runs locally.
-fn charge_hosted(run_id: &str) -> std::result::Result<(), String> {
+/// `Ok(true)` when a hosted charge happened (the run then reports its
+/// lifecycle to the operator dashboard).
+fn charge_hosted(
+    run_id: &str,
+    cmd: &str,
+    project: Option<&str>,
+) -> std::result::Result<bool, String> {
     if remote_backend::load() != Some(remote_backend::Backend::Hosted) {
-        return Ok(());
+        return Ok(false);
     }
     let c = crate::remote_hosted::creds().map_err(|e| format!("{BILLING}{e}"))?;
-    match crate::remote_hosted::charge_run(&c, run_id) {
-        Ok(_) => Ok(()),
+    match crate::remote_hosted::charge_run_labeled(&c, run_id, Some(cmd), project) {
+        Ok(_) => Ok(true),
         Err(e)
             if e.contains("justrust upgrade")
                 || e.contains("jcode.sh/account")
@@ -324,9 +330,33 @@ pub fn run_remote(
         return infra(format!("{} is not inside a synced root", cwd.display()));
     }
     let run_id = crate::record::new_run_id();
-    if let Err(m) = charge_hosted(&run_id) {
-        return infra(m);
-    }
+    let mut label = vec![sub.to_string()];
+    label.extend(args.iter().cloned());
+    let project = roots
+        .iter()
+        .find(|r| cwd.starts_with(r))
+        .and_then(|r| r.file_name())
+        .and_then(|n| n.to_str())
+        .map(str::to_string);
+    let hosted = match charge_hosted(&run_id, &label.join(" "), project.as_deref()) {
+        Ok(h) => h,
+        Err(m) => return infra(m),
+    };
+    // Lifecycle events for the hosted operator dashboard (fire and forget).
+    let report = |event: &str, code: Option<i32>| {
+        if hosted {
+            crate::remote_hosted::report_run_event(
+                &run_id,
+                event,
+                code,
+                Some(total.elapsed().as_secs_f64()),
+            );
+        }
+    };
+    let infra = |m: String| {
+        report("abandoned", None);
+        Ok(Err(Infra(m)))
+    };
     let sock = match crate::remote_daemon::connect() {
         Ok(s) => s,
         Err(e) => return infra(format!("{e:#}")),
@@ -386,6 +416,7 @@ pub fn run_remote(
                 return infra("sync daemon closed the connection".into());
             }
             Ok(None) | Err(_) => {
+                report("abandoned", None);
                 // Output already started: a local rerun would duplicate it.
                 bail!("lost the remote build mid-run (see ~/.justrust/remote/daemon.log)");
             }
@@ -404,6 +435,9 @@ pub fn run_remote(
                 if !note.is_empty() {
                     eprintln!("justrust remote: {note}");
                 }
+                if sync.is_none() {
+                    report("running", None);
+                }
                 sync = Some((files, ms, machine));
             }
             (Msg::Out { stream, .. }, data) => {
@@ -417,6 +451,7 @@ pub fn run_remote(
             }
             (Msg::RunFiles { .. }, data) => run_files = data,
             (Msg::Exit { code, .. }, summary) => {
+                report("done", Some(code));
                 let (files, ms, machine) = sync.unwrap_or((0, 0.0, String::new()));
                 record_remote(
                     &run_id,
@@ -436,7 +471,10 @@ pub fn run_remote(
                 return Ok(Ok(Outcome { code, run_id }));
             }
             (Msg::Error { msg, .. }, _) if sync.is_none() => return infra(msg),
-            (Msg::Error { msg, .. }, _) => bail!("remote build failed mid-run: {msg}"),
+            (Msg::Error { msg, .. }, _) => {
+                report("abandoned", None);
+                bail!("remote build failed mid-run: {msg}")
+            }
             _ => {}
         }
     }

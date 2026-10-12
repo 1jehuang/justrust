@@ -403,7 +403,9 @@ impl Builds {
         match self.next_step.as_deref() {
             Some("subscribe") => s.push_str(". Subscribe: `justrust upgrade`"),
             Some("raise_limit") => s.push_str(". Raise the limit at https://jcode.sh/account"),
-            Some("upgrade_plan") => s.push_str(". Remote builds need the $20 plan: https://jcode.sh/rust#subscribe"),
+            Some("upgrade_plan") => {
+                s.push_str(". Remote builds need the $20 plan: https://jcode.sh/rust#subscribe")
+            }
             _ => {}
         }
         s
@@ -447,16 +449,92 @@ pub fn check_access(c: &Creds) -> Result<Me> {
     Ok(m)
 }
 
-/// `POST {build}/build/runs {run_id}` before a remote run. `Err` holds the
-/// one line to show (the run must then not go remote).
+/// `POST {build}/build/runs {run_id, cmd, project, client}` before a remote
+/// run. `Err` holds the one line to show (the run must then not go remote).
+/// `cmd` and `project` are short labels for the operator dashboard.
+#[cfg(test)]
 pub fn charge_run(c: &Creds, run_id: &str) -> std::result::Result<Option<Builds>, String> {
-    let r = request(c, "POST", "build/runs", Some(&json!({ "run_id": run_id })))
-        .map_err(|e| e.to_string())?;
+    charge_run_labeled(c, run_id, None, None)
+}
+
+pub fn charge_run_labeled(
+    c: &Creds,
+    run_id: &str,
+    cmd: Option<&str>,
+    project: Option<&str>,
+) -> std::result::Result<Option<Builds>, String> {
+    let mut body = json!({ "run_id": run_id });
+    if let Some(cmd) = cmd {
+        body["cmd"] = json!(run_label(cmd, 160));
+    }
+    if let Some(p) = project {
+        body["project"] = json!(run_label(p, 160));
+    }
+    body["client"] = json!(concat!("justrust ", env!("CARGO_PKG_VERSION")));
+    let r = request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?;
     if r.code == 200 {
         Ok(Builds::from(&r.body["builds"]))
     } else {
         Err(api_error(&r).to_string())
     }
+}
+
+/// Printable ASCII, one line, at most `max` chars: the server applies the
+/// same rule, this just avoids sending what it would drop.
+fn run_label(s: &str, max: usize) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max)
+        .collect()
+}
+
+/// `POST {build}/build/runs/<id>/event` (running, done, abandoned) for the
+/// operator dashboard. Fire and forget: a detached curl that never delays
+/// or fails the build, and errors are ignored.
+pub fn report_run_event(run_id: &str, event: &str, exit_code: Option<i32>, wall_s: Option<f64>) {
+    let Ok(c) = creds() else {
+        return;
+    };
+    let mut body = json!({ "event": event });
+    if let Some(e) = exit_code {
+        body["exit_code"] = json!(e);
+    }
+    if let Some(w) = wall_s {
+        body["wall_s"] = json!((w * 100.0).round() / 100.0);
+    }
+    let (mut cmd, config) = curl(
+        &c,
+        "POST",
+        &format!("build/runs/{run_id}/event"),
+        Some(&body),
+    );
+    let Ok(mut child) = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(config.as_bytes());
+    }
+    // Reap in the background so no zombie outlives a long build. The
+    // process exits right after a final event, and curl finishes on its own.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -1182,12 +1260,27 @@ mod tests {
         let lim = charge_run(&c, "r3").unwrap_err();
         assert!(lim.contains("https://jcode.sh/account"), "{lim}");
         let up = charge_run(&c, "r4").unwrap_err();
-        assert!(up.contains("$20 plan") && up.contains("jcode.sh/rust#subscribe"), "{up}");
+        assert!(
+            up.contains("$20 plan") && up.contains("jcode.sh/rust#subscribe"),
+            "{up}"
+        );
         let s = seen.lock().unwrap();
         assert_eq!(s[0].path, "/v1/fleet/build/runs");
-        assert_eq!(s[0].body, r#"{"run_id":"r1"}"#);
+        let b: Value = serde_json::from_str(&s[0].body).unwrap();
+        assert_eq!(b["run_id"], "r1");
+        assert!(b["client"].as_str().unwrap().starts_with("justrust "));
+        assert!(b.get("cmd").is_none());
         assert!(s[0].auth.as_deref() == Some("Bearer sk-secret-123"));
         assert_eq!(c.url("me"), format!("{api}/me"));
+    }
+
+    #[test]
+    fn run_labels_are_printable_single_line_and_bounded() {
+        assert_eq!(
+            run_label("test  -p\tcore\n\u{1b}[31m", 160),
+            "test -p core [31m"
+        );
+        assert_eq!(run_label(&"x".repeat(300), 160).len(), 160);
     }
 
     #[test]
