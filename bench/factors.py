@@ -47,7 +47,7 @@ FACTORS_MD = suite.ROOT / "bench" / "FACTORS.md"
 NIGHTLY = "nightly-2026-10-08"  # the pinned toolchain (docs/toolchain.md)
 # Cross-crate cutoff needs a jr toolchain built with -Zjr-iface-hash and jr-cargo
 # with the cutoff (JR_CUTOFF_TOOLCHAIN overrides).
-CUTOFF_TOOLCHAIN = os.environ.get("JR_CUTOFF_TOOLCHAIN", "jr-4d093f107dfb")
+CUTOFF_TOOLCHAIN = os.environ.get("JR_CUTOFF_TOOLCHAIN", "jr-c5e2a549b295")
 # Cargo reads per-package profile rustflags and hint-mostly-unused only with
 # these unstable features (the pinned nightly's cargo accepts them).
 UNSTABLE_PROFILE = {"CARGO_UNSTABLE_PROFILE_RUSTFLAGS": "true",
