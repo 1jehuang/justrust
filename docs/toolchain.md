@@ -99,6 +99,25 @@ Each phase ships only after a measured win on the reference loop
    symbol index (patch step 150 ms -> ~30 ms), integrate it into the shim
    and runner behind `JUSTRUST_HOTPATCH=1`, rebase on a schedule.
 
+## Architecture tracks (started 2026-10-12)
+
+Changes to how justrust itself is structured, independent of the rustc
+fork. Each is opt-in until a factor in `bench/factors.py` shows a win and
+the correctness check passes. Status is updated as results land.
+
+| track | what | where | status |
+|---|---|---|---|
+| resident daemon | one long-lived justrust process per machine: identical concurrent agent builds share one execution (late arrivals get the full output and exit code), warm per-run state, seam for pre-building on edit | `src/buildd.rs`, `JUSTRUST_BUILDD=1`, `justrust daemon prebuild -- ARGS` | coalescing committed (a2c6ad1), not measured yet |
+| shadow split | build a private copy of the workspace with often-edited modules of giant crates moved into leaf crates (leaf is a dependency of the old crate, re-exported under the old path, so test names stay the same); route a command to the leaf when only leaf files changed; map diagnostics back to the user's files | `JUSTRUST_SHADOW=1` (planned) | manual A/B on Desktop (`~/.jcode/scratch/shadow-proto`): edit `fps_counter` + its tests 6.0 s -> 0.49 s median (n=6); edits staying in the big crate +0.2-0.5 s. Productizing |
+| hot patching / test host | link only regenerated codegen units against the base test binary, loader patches before `main`; then a warm zygote per test binary | `src/hotpatch.rs`, `JUSTRUST_HOTPATCH=1` | in justrust (8ec1f42), TLS accesses bound instead of falling back and base symbol index cached (ea4bae1, patch step ~43 ms); factor runs pending |
+| workspace crate cache | content-addressed cache for workspace/path crates (depcache keys plus link args), so reverts, branch switches, fresh worktrees and slots reuse compiled local crates | `src/localcache.rs`, `JUSTRUST_LOCALCACHE=1` | committed (239bef0) with factors for revert, loop overhead, fresh target dir (bb59f9f); not measured yet |
+
+Why these four: the reference loop is frontend-bound, and the fork owns
+that. These remove the work around the compiler instead: rebuilding code
+that did not change (shadow split, workspace cache), relinking and
+restarting test processes (hot patching), and duplicated or serialized
+builds between agents (daemon).
+
 ## Infrastructure
 
 justrust is one all-in-one solution: client, toolchain, and servers.
