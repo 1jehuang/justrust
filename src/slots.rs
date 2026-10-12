@@ -925,7 +925,15 @@ fn join_identical(root: &Path, cap: usize, key: &str) -> (Option<(usize, File)>,
 /// True when someone holds the lock (non-blocking probe, released at once).
 fn try_lock_probe(path: &Path) -> bool {
     match try_lock(path) {
-        Some(_) => false,
+        Some(f) => {
+            // Unlock explicitly instead of on close: a child another thread
+            // is forking shares this open file until it execs, and would
+            // hold the probe's lock until then (seen in CI as a slot that
+            // looked busy right after an idle probe).
+            // SAFETY: flock on a valid fd.
+            unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN) };
+            false
+        }
         None => path.exists(),
     }
 }
