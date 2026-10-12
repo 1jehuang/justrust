@@ -26,3 +26,5 @@ toml = "1.1.6"
 toml_edit = "0.25"
 flate2 = "1.1.10"
 memchr = "2"
+object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "std"] }
+memmap2 = "0.9.11"

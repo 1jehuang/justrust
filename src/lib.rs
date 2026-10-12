@@ -21,6 +21,7 @@ mod early;
 mod export;
 mod findings;
 mod history;
+mod hotpatch;
 mod install;
 mod linker;
 mod live;

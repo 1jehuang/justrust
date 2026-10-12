@@ -154,6 +154,19 @@ FACTORS = [
              "Link args are untracked, so both sides share incremental state",
     ),
     Factor(
+        "hotpatch", "hot patch the test binary (link only the regenerated codegen units against the base "
+                    "binary, loader patches before main) instead of relinking it (opt-in JUSTRUST_HOTPATCH=1)",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_HOTPATCH": "1"}, off={}, n=6,
+        note="opt-in, so `on` is the non-default side; both sides link with wild. The first `on` build links a "
+             "base (--no-gc-sections + loader), later edits patch. Outcomes in <run dir>/hotpatch.jsonl",
+    ),
+    Factor(
+        "hotpatch-body", "same, on a non-test body edit in the UI crate",
+        "loop", "desktop-body-test",
+        on={"JUSTRUST_HOTPATCH": "1"}, off={}, n=6,
+    ),
+    Factor(
         "incremental", "rustc incremental compilation (reuse of unchanged query results and CGUs)",
         "loop", "desktop-test-edit",
         on={}, off={"CARGO_INCREMENTAL": "0"}, n=4,

@@ -216,7 +216,15 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     // the `ld` dispatcher). Never for depcache units: plan is None here.
     if plan.is_none() {
         let nightly = std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some();
-        cmd.args(crate::linker::rustc_args(args, described.local, nightly));
+        let link_args = crate::linker::rustc_args(args, described.local, nightly);
+        let hot =
+            crate::hotpatch::rustc_args(described.local, described.test, !link_args.is_empty());
+        cmd.args(link_args);
+        if !hot.is_empty() {
+            cmd.args(hot);
+            let (k, v) = crate::hotpatch::link_env();
+            cmd.env(k, v);
+        }
     }
     if force_bootstrap {
         cmd.env("RUSTC_BOOTSTRAP", "1");

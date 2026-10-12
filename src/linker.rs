@@ -174,12 +174,18 @@ pub fn ld_main() -> ! {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "ld".into());
+    // Hot patching (opt-in): a test binary whose base is current gets a
+    // patch image instead of a relink. Anything unexpected links normally.
+    if let Some(code) = crate::hotpatch::before_link(&args) {
+        std::process::exit(code);
+    }
     if let Some(wild) = installed().filter(|_| enabled()) {
         match Command::new(&wild).args(&args).output() {
             Ok(out) if out.status.success() => {
                 use std::io::Write;
                 let _ = std::io::stdout().write_all(&out.stdout);
                 let _ = std::io::stderr().write_all(&out.stderr);
+                crate::hotpatch::after_link(&args);
                 std::process::exit(0);
             }
             Ok(out) => log_fallback(&name, &String::from_utf8_lossy(&out.stderr)),
