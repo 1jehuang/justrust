@@ -7,7 +7,7 @@
 //!   interface agents should use. It takes the same arguments as cargo.
 //!
 //! Linux and macOS. Elsewhere `src/main.rs` runs cargo unchanged.
-#![cfg(any(target_os = "linux", target_os = "macos", windows))]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 mod account;
 mod agent_output;
