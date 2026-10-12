@@ -4599,3 +4599,142 @@ s instead of stock's ~6.7 s, about 1.9x.
 then defaults, then off again: the second and third runs compiled 0 units
 (746 fresh). Switching the daemon or the local cache on or off never
 dirties cargo's or rustc's state.
+
+## 63. Cross-crate early cutoff (jr-rustc interface hash + jr-cargo): deep body edit 9.67 -> 5.16 s, 14 of 15 cascade crates skipped (2026-10-12)
+
+Finding 16 showed this is impossible from a wrapper: the SVH changes on
+every edit, and a dependent built against the old SVH does not load
+(E0460). With both forks it works.
+
+**jr-rustc** (branch `justrust-10x`, b35416a3743d; on for jr toolchains
+through the shim's `JUSTRUST_RUSTC_IFACE_HASH=1`, `JUSTRUST_CUTOFF=0` off,
+`-Zjr-iface-hash` by hand):
+
+- An *interface hash* of the crate metadata stream, computed while
+  encoding: every byte except spans and the source map. Every value
+  derived from a byte position (lazy distances, table entries, type and
+  predicate shorthands, the alloc index) is hashed in logical form, with
+  the skipped span bytes before it subtracted, so spans keep their
+  normal, variable-size encoding. Symbol back-references hash the string.
+  Dependencies' crate hashes are replaced by their interface hashes.
+  Expansion hashes (they hash call-site spans) are skipped. Proc-macro
+  crates get no interface hash, so their dependents always rebuild.
+- Written next to the `.rmeta` as `<rmeta>.jriface` (32 hex chars),
+  before the artifact notification, so cargo sees it with the rmeta.
+- Each dependency's interface hash is recorded in the dependent's
+  metadata (`CrateRootUnhashed`). The loader then accepts a dependency
+  whose crate hash differs when its interface hash matches the recorded
+  one (`existing_match`, `crate_matches`).
+- A crate loaded against such a newer dependency gets an incremental
+  `crate_hash` that folds in the dependencies' actual hashes
+  (`CrateMetadata::incr_hash`). Without it the Desktop suite run ICEd
+  (`Found unstable fingerprints for module_children(jcode_base::id)`).
+  The cause: a glob re-export's spans point into the edited crate's
+  file, so decoded spans moved while the crate's SVH, and so every
+  incremental query on it, stayed green. With the fold, queries on cut-off
+  crates are recomputed in the final crate (cheap: decoding), and the
+  cut-off crates themselves are never compiled.
+- Foreign spans decoded from a stale crate are clamped to the file length.
+- `Generics::param_def_id_to_index` is now encoded in index order. The
+  hash map's order differed between a fresh and an incrementally reused
+  `Generics`, which changed the interface hash of an unchanged crate
+  (found by diffing the dumped streams, `JUSTRUST_RUSTC_IFACE_DUMP`).
+
+**jr-cargo** (`src/compiler/fingerprint/jr_cutoff.rs`, `JUSTRUST_CARGO_CUTOFF=0`
+off): a lib/check unit that is dirty only because a dependency rebuilt is
+deferred to execution time. If every transitive lib dependency's current
+`.jriface` equals the one recorded at its last compile, rustc does not
+run: output mtimes are bumped and the fingerprint is written.
+
+Factors (`bench/factors.py jr-cutoff*`, same jr toolchain both sides, off
+= both switches off), final build (`factors-20261012-111123-10e8ae34da92.json`):
+
+| factor | workload | on | off | units on/off |
+|---|---|---:|---:|---:|
+| `jr-cutoff-deep` | body edit in jcode-core (Jcode repo), Desktop UI tests, n=8 | **5.16 s** | 9.67 s | 2 / 16 |
+| `jr-cutoff` | body edit in jcode-desktop-ui-core, n=8 | 5.28 s | 5.42 s | 2 / 4 |
+| `jr-cutoff-cost` | UI crate body check (nothing to cut off), n=12 | 1.70 s | 1.73 s | 1 / 1 |
+| `jr-cutoff-sig` | new pub item upstream (control), n=6 | 2.26 s | 2.10 s | 4 / 4 |
+
+The deep result reproduced in four runs: 10.88 -> 5.48 s
+(`factors-20261012-083222-...`), 9.84 -> 5.09 s (`...-090950-...`),
+9.74 -> 4.69 s (`...-095018-...`), 9.67 -> 5.16 s. The off side's
+jcode_base alone is 3.6 s. On `desktop-upstream-body` the two cut-off
+sibling crates are not on the critical path (the UI test crate starts
+after ui-core either way), so it stays within noise. The control
+(interface change) compiles the same units on both sides.
+
+Cost side. The first version padded spans to a fixed size (positions
+then did not move). That grew every rmeta 24-42% (all dependencies
+together 866 -> 1825 MB) and cost +0.2 s per check in macro expansion
+and resolution, which decode dependency metadata. Logical positions
+bring the overhead to 0.1% of rmeta size (22,248 -> 22,266 bytes on a
+test file). Metadata generation of the UI crate takes 0.002 s either way.
+
+Correctness:
+
+- `jr/iface-hash-test.sh` (jr-rustc): body edits, added lines, comments
+  and panic messages keep the hash. Signature, inline body, generic body,
+  macro, const, new item and field type changes alter it. A dependent
+  built against the old `up` links against a body-edited `up` and runs
+  the new body, with a panic location from the new file. A signature
+  change is rejected (E0460). No sidecar without the switch.
+- `jr/iface-stress.py`: 25 random rounds of 1-400 inserted lines in 1-3
+  bodies, up to 300 leading comment lines, and added pub items. All
+  correct.
+- `jr/cutoff-real-e2e.sh` (jr-cargo, real jr-rustc): cutoff on two
+  successive body edits, binary output reflects the new bodies, rebuilds
+  on inline, generic and struct changes, test and check modes, off switch.
+  Now includes a glob re-export through a cut-off crate, the ICE
+  regression above.
+- `bench/cutoff_semantic.sh` (Desktop): a temporary UI test asserts on
+  what an upstream function returns. Two cut-off crates every time; the
+  test sees each new value and then the old one.
+- `bench/cutoff_suites.sh`, jcode-core body edit after a warm build:
+  Desktop workspace, 14 units cut off, 1752 ok on both sides in two
+  repeats, per-test results identical (two known timing-sensitive tests
+  are listed separately; both failed once on one side only and pass on
+  rerun). Jcode workspace (8,970 tests, 30 units cut off vs 0, 69 vs 99
+  units compiled): the same 12 environment-dependent failures on both
+  sides. The 7 tests that differed between the runs pass 5 of 5 in
+  isolation on both builds, except one that fails 5 of 5 on both.
+
+Not yet on by default: the jr toolchain with the interface hash is
+`jr-b35416a3743d` (installed, never the default, `JUSTRUST_TOOLCHAIN` to
+use it). Next: PGO+BOLT build of this branch as the default jr toolchain,
+then make the cutoff part of the shipped toolchain.
+
+Run ids: deep on 20261012-111239548-3526197124 .. 20261012-111411908-3526197109,
+off 20261012-111229803-3526197310 .. 20261012-111417192-3526197450.
+
+## 64. Test-filter-aware compilation (`JUSTRUST_TEST_FILTER_COMPILE=1`): test binary 242 -> 49 MB, reference loop within noise (2026-10-12)
+
+The libtest filter (`-- fps_counter`) reaches jr-rustc as
+`JUSTRUST_RUSTC_TEST_FILTER` (one filter per line, `--exact` supported,
+recorded as an env dependency). The harness then lists only the
+selected tests. Each unselected test's `static TestDescAndFn` becomes an
+`#[allow(dead_code)] const`: it is still type-checked, and the functions
+it calls stay "used" (no new dead_code warnings, verified), but it is no
+longer a codegen root. Custom `#![test_runner]` crates are left alone.
+justrust sets the variable for `test` on jr toolchains when the filter is
+plain (positional names, `--exact`; unknown libtest flags disable it).
+`jr/test-filter-test.sh`: listing, run, multiple filters, exact, no match,
+real dead code still warned, type errors in unselected tests still
+reported, 8 -> 0 unselected test symbols, env-dep in dep-info.
+
+On Desktop (`fps_counter`, 3 of 1314 tests) the test binary is 242 MB
+instead of 49 MB, and test symbols drop from 42,607 to 106. But the warm
+loop does not change: `jr-test-filter` 4.49 vs 4.51 s, n=10
+(`factors-20261012-095018-...`, an earlier run 4.20 vs 4.69 s,
+`...-090950-...`). In the warm loop incremental codegen already reuses
+every unchanged test's codegen unit, and the edited one is redone either
+way. The frontend still covers every test, and link only drops
+0.23 -> 0.18 s. Opt-in: it rebuilds the test binary whenever the filter
+changes, and the build daemon's prebuilds have no filter.
+
+Takeaway: codegen of unselected tests is not where the reference loop's
+time goes. The frontend (expansion 0.6-0.8 s, resolve 0.3-0.5 s,
+typeck) covers all 1314 tests. A filter-aware *frontend* (skip
+`#[cfg(test)]` bodies of unselected tests entirely) is the version that
+could pay. It needs to keep their items for name resolution, and to
+re-check them in the background build.
