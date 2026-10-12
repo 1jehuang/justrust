@@ -95,6 +95,13 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
                          f"log {r['log']}", "wall": r["wall"]}
     _keep_log(r)
     r["pre_wall"] = pre["wall"]
+    # The pre-build leaves the target dir warm for exactly these sources, so a
+    # rerun (same command, nothing edited) must be near a no-op. If it is not,
+    # this stack's cache was invalidated by something outside the edit (the
+    # synth2 run saw stock rebuild 70 s on a `build` rerun): flag the point
+    # so the report can leave it out instead of crediting the other stacks.
+    if plan.point.shape.get("change") == "rerun" and not plan.edits and r["wall"] > max(5.0, 0.5 * pre["wall"]):
+        r["suspect"] = f"rerun took {r['wall']:.1f}s after a {pre['wall']:.1f}s pre-build (cache invalidated?)"
     return r
 
 
@@ -150,10 +157,32 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
 # --- reporting --------------------------------------------------------------
 
 
+def _outlier(p: dict, names: list[str]) -> str | None:
+    """A stack far off every other stack on this point: almost always a
+    harness artifact (its warm cache invalidated by the unmeasured setup,
+    synth2 points 7 and 8: stock 70 s and 30 s where the others took 0.4 s),
+    not something a stack does better or worse per call. Also flagged by
+    run_point for reruns that rebuilt."""
+    for s in names:
+        for x in p["samples"].get(s, []):
+            if x.get("suspect"):
+                return f"{s}: {x['suspect']}"
+    if len(names) < 3:
+        return None
+    for s in names:
+        others = [p["stats"][o]["median"] for o in names if o != s]
+        me = p["stats"][s]["median"]
+        ref = statistics.median(others)
+        if me > 10 and me > 5 * max(ref, 0.5) and max(others) < 0.5 * me:
+            return f"{s} {me:.1f}s vs {ref:.1f}s for the others"
+    return None
+
+
 def _complete(synth: dict) -> list[dict]:
-    """Points every stack measured (others would bias the means)."""
+    """Points every stack measured (others would bias the means), minus
+    outliers (`_outlier`), which the report lists."""
     names = synth["stack_names"]
-    return [p for p in synth["results"] if all(s in p["stats"] for s in names)]
+    return [p for p in synth["results"] if all(s in p["stats"] for s in names) and not _outlier(p, names)]
 
 
 def summarize(synth: dict) -> dict:
@@ -220,6 +249,11 @@ def detail(synth: dict) -> str:
             st = p["stats"].get(s)
             cells.append(f"{st['median']:.2f}s" if st else "ERR")
         out.append("| " + " | ".join(cells) + " |")
+    excl = [(p["i"], why) for p in synth["results"]
+            if all(s in p["stats"] for s in names) and (why := _outlier(p, names))]
+    if excl:
+        out += ["", "Left out of the means as harness artifacts:"]
+        out += [f"- point {i}: {why}" for i, why in excl]
     return "\n".join(out)
 
 

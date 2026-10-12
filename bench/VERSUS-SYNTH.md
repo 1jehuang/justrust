@@ -12,22 +12,22 @@ points is the expected wait per agent call. `Nx` = stock mean / stack mean.
 `instr` = total user-space instructions of the build trees relative to
 stock.
 
-Synthetic agent workload: seed 1, 40/40 points measured on every stack, sampled from 4711 real calls (96% mappable to the snapshots). Mean wall per point = expected wait per agent call.
+Synthetic agent workload: seed 1, 38/40 points measured on every stack, sampled from 4711 real calls (96% mappable to the snapshots). Mean wall per point = expected wait per agent call.
 
 |  | points | stock | jr-nocache | justrust | jr-nocache vs stock | justrust vs stock | instr jr-nocache/stock | instr justrust/stock |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| **expected wait per call** | 40 | 16.01s | 13.66s | 14.10s | 1.17x | 1.14x | 0.86 | 0.86 |
+| **expected wait per call** | 38 | 14.22s | 14.36s | 14.45s | 0.99x | 0.98x | 1.03 | 1.03 |
 | command: test-filtered | 11 | 6.92s | 7.53s | 7.25s | 0.92x | 0.95x | 0.98 | 0.98 |
-| command: check | 9 | 5.41s | 2.52s | 2.41s | 2.14x | 2.25x | 1.05 | 1.05 |
+| command: check | 8 | 2.33s | 2.80s | 2.67s | 0.83x | 0.87x | 1.05 | 1.05 |
 | command: test | 7 | 20.62s | 21.53s | 21.80s | 0.96x | 0.95x | 1.00 | 1.00 |
-| command: build | 6 | 18.56s | 6.90s | 9.42s | 2.69x | 1.97x | 0.15 | 0.18 |
+| command: build | 5 | 8.24s | 8.20s | 8.40s | 1.00x | 0.98x | 0.92 | 0.92 |
 | command: build-release | 4 | 43.22s | 45.84s | 46.31s | 0.94x | 0.93x | 1.00 | 1.00 |
 | command: test-workspace | 2 | 42.86s | 32.15s | 33.40s | 1.33x | 1.28x | 1.51 | 1.51 |
 | command: clippy | 1 | 1.23s | 1.23s | 1.41s | 1.00x | 0.87x | 1.01 | 1.01 |
-| change: rerun | 9 | 9.66s | 1.54s | 3.35s | 6.25x | 2.88x | 0.17 | 0.21 |
+| change: rerun | 8 | 2.10s | 1.69s | 1.95s | 1.24x | 1.08x | 1.03 | 1.04 |
 | change: body | 7 | 30.33s | 32.76s | 33.17s | 0.93x | 0.91x | 1.00 | 1.00 |
 | change: vcs | 7 | 15.65s | 15.86s | 15.75s | 0.99x | 0.99x | 0.99 | 0.99 |
-| change: switch | 6 | 22.76s | 15.74s | 15.88s | 1.45x | 1.43x | 1.28 | 1.28 |
+| change: switch | 5 | 21.31s | 18.82s | 18.99s | 1.13x | 1.12x | 1.28 | 1.28 |
 | change: type-error | 5 | 1.69s | 1.88s | 1.94s | 0.90x | 0.87x | 1.05 | 1.05 |
 | change: item | 3 | 7.61s | 8.69s | 8.28s | 0.87x | 0.92x | 1.02 | 1.02 |
 | change: first | 1 | 36.85s | 34.61s | 34.41s | 1.06x | 1.07x | 1.00 | 1.00 |
@@ -84,6 +84,10 @@ Synthetic agent workload: seed 1, 40/40 points measured on every stack, sampled 
 | 37 | `test -p jcode-tui --lib` | vcs | 5 | 35.45s | 37.72s | 37.27s |
 | 38 | `build --release -p jcode-desktop` | body | 1 | 61.56s | 69.09s | 68.37s |
 | 39 | `build -p jcode-desktop-ui` | body | 1 | 4.01s | 4.94s | 5.50s |
+
+Left out of the means as harness artifacts:
+- point 7: stock 70.2s vs 7.5s for the others
+- point 8: stock 30.0s vs 0.3s for the others
 
 ## Errors
 
