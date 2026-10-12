@@ -550,6 +550,17 @@ impl Relay {
             | Msg::CacheList { .. }
             | Msg::CacheOffer { .. }
             | Msg::CachePut { .. } => {
+                // A put's chunks are appended here, on the reader thread,
+                // in arrival order: one thread per chunk let a last chunk
+                // finish assembly before an earlier one was appended, and the
+                // corrupt bundle was dropped (flaky peer_cache test).
+                if let Msg::CachePut { id, last, .. } = msg {
+                    let mut puts = self.puts.lock().unwrap();
+                    puts.entry(*id).or_default().extend_from_slice(payload);
+                    if !*last {
+                        return true;
+                    }
+                }
                 // Off the reader thread: serving reads and packs files.
                 let me = self.clone();
                 let msg = msg.clone();
@@ -573,6 +584,9 @@ impl Relay {
     /// Answer one request from the peer from this machine's cache.
     fn serve(&self, msg: Msg, payload: Vec<u8>) {
         let Some(root) = self.root.clone() else {
+            if let Msg::CachePut { id, .. } = &msg {
+                self.puts.lock().unwrap().remove(id);
+            }
             return self.refuse(&msg);
         };
         match msg {
@@ -617,17 +631,12 @@ impl Relay {
                 base,
                 line,
                 out,
-                last,
+                ..
             } => {
-                let data = {
-                    let mut puts = self.puts.lock().unwrap();
-                    let buf = puts.entry(id).or_default();
-                    buf.extend_from_slice(&payload);
-                    if !last {
-                        return;
-                    }
-                    puts.remove(&id).unwrap_or_default()
-                };
+                // Chunks were appended in order by the reader thread; this
+                // is the last one, so the bundle is complete.
+                let data = self.puts.lock().unwrap().remove(&id).unwrap_or_default();
+                let _ = payload;
                 let _ = install(&root, &base, &line, &out, &data);
             }
             _ => {}
