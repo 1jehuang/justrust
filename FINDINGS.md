@@ -4492,3 +4492,74 @@ marking. That is a multi-month compiler redesign (the rust-analyzer
 model), not a step on this track. Cheaper per-edit wins in the same
 profile: macro expansion (0.69 s, the attribute cache in 29 already took
 most of it) and body-only invalidation (`docs/integrations.md`).
+
+## 61. jr-cargo fork server (`JUSTRUST_CARGO_DAEMON=1`): no-op `test` 0.24 -> 0.12 s, body-edit `check` 1.62 -> 1.46 s (noise), opt-in (2026-10-12)
+
+Before the first rustc starts, a warm `cargo check -p jcode-desktop-ui`
+spends 0.15-0.25 s in cargo: `create_bcx` 142-182 ms (resolve
+90-126 ms, `download_accessible` 29-39 ms) plus fingerprinting. None of
+it depends on `.rs` contents. jr-cargo now keeps a parked process per
+exact invocation that has already run `create_bcx`, and forks it per
+request (jr-cargo `src/jr_daemon.rs`, e238aec29..).
+
+Mechanism. Key = hash of the cargo binary (path, inode, mtime), argv,
+cwd, and the environment minus caller-identity variables (justrust run
+ids, `JUSTRUST_TEST_POOL`, Jcode/terminal ids). The client (`main`'s
+first line) connects to `$XDG_RUNTIME_DIR/jr-cargo/<key>.sock`, sends
+fds 0-2 (SCM_RIGHTS) and its full environment. The server recomputes a
+stamp (stat of `Cargo.lock`, every member, path-dependency and inherited
+workspace manifest, cargo config files, rustc and wrappers, plus the
+entry names of `src`, `src/bin`, `tests`, `examples`, `benches` of every
+path package, for target auto-discovery). On mismatch it answers stale
+and exits; otherwise it forks. The child takes over the client's fds and
+environment (the config env snapshot reads volatile variables from the
+client), times from the request, writes its pid to
+`$JUSTRUST_RUN_DIR/cargo-daemon.pid` (justrust samples that tree), runs
+the rest of `compile_ws`, and sends its exit code. Client killed: the
+child kills its process group. No server, stale, or any error before
+the fork: the client runs as plain cargo and, at exit, starts a server
+(same argv/env, `setsid`, inherited fds closed), which parks right after
+`create_bcx` only if a single thread is left (the idle `futures-timer`
+helper allowed), no package-cache lock is held, no build logger, and no
+input changed while it loaded. Only `build`/`check`/`test`, never with a
+terminal on stdout/stderr or a jobserver in the environment. Children
+skip cargo's once-a-day `CARGO_HOME` auto-gc. justrust side: the test
+pool socket moved from the runner argument to `JUSTRUST_TEST_POOL`
+(`--pool=env`, da4f05e) so cargo's argv is identical every run.
+
+| measurement | on | off |
+|---|---:|---:|
+| factor `cargo-daemon` (desktop-noop-test), n=12, `factors-20261012-090625-bf4f90e1e837.json` | 0.12 s (0.10-0.16) | 0.24 s (0.17-0.26) **helps** |
+| factor `cargo-daemon-check` (desktop-body-check), n=12, same file | 1.46 s (1.1-1.7) | 1.62 s (1.2-1.8) within noise |
+| first run, `factors-20261012-085616-da4f05e3eae5-dirty.json`: noop-test n=12 | 0.11 s | 0.23 s |
+| same file: body-check n=8 | 1.36 s | 1.59 s |
+| same file: reference loop (desktop-test-edit) n=8 | 5.25 s | 5.54 s (noise) |
+| justrust's own phase split, loop sample on/off | cargo startup 0.05 s | 0.20 s |
+| parked server RSS (per key) | 215-253 MB | |
+
+Run ids: noop on/off 20261012-090626444-2173682125 ..
+20261012-090630831-2173682721, check 20261012-090634281-2173682519 ..
+20261012-090709144-2173682883, loop pair on 20261012-090202381-2095872373
+/ off 20261012-090156671-2095872398.
+
+Correctness (`jr/daemon-correct.py` in jr-cargo): two private copies of
+the pinned Desktop snapshot, one with the daemon, one plain, 18 steps
+(no-op, body edits, a type error and its fix, a jcode-core edit, adding
+and removing a `tests/` file, a manifest edit, warm and edited `test`,
+a failing test and its fix). Identical Fresh/Dirty/Compiling sets, exit
+codes and stdout (modulo the panicking thread id); a plain cargo run
+right after every daemon run is all Fresh (fingerprints on disk are
+plain cargo's). Through `justrust test` with the test pool: same test
+lines, report shows the rustc unit and its phases.
+
+Verdict: opt-in. It saves the full 0.1-0.15 s cargo startup on every
+warm request, a clear win on no-op runs, but on the edit loops it is
+2-5% and inside run-to-run noise. Each parked key holds ~230 MB, and an
+agent uses several keys (check, test, different `-p`). Default-on wants
+(1) eviction across keys (LRU, memory cap), (2) the build daemon
+(`src/buildd.rs`) prestarting the server for the predicted next command,
+so the first request after a manifest change is also served, (3) the
+default jr toolchain shipping this jr-cargo. Also open: fingerprint
+calculation (57-95 ms) still runs per request; caching fingerprints of
+units whose source mtimes are unchanged in the parked process is the
+next cargo-side win.
