@@ -158,6 +158,42 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             crate::depcache::plan(real, args, &env)
         })
         .flatten();
+    // Local units link with wild when installed (fail open inside the `ld`
+    // dispatcher). Never for depcache units (registry crates).
+    let nightly = std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some();
+    let link_args = match plan {
+        None => crate::linker::rustc_args(args, described.local, nightly),
+        Some(_) => Vec::new(),
+    };
+    // Workspace and path crates: the local cache (`localcache.rs`), keyed
+    // with the link arguments the shim adds, since they change the output.
+    let local_plan = (described.local && plan.is_none() && crate::localcache::enabled())
+        .then(|| {
+            let env: Vec<(String, String)> = std::env::vars().collect();
+            let salt = link_args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            crate::localcache::plan(real, args, &env, salt)
+        })
+        .flatten();
+    if let Some(lp) = &local_plan {
+        let start = paths::now();
+        if let Some(hit) = lp.restore(&mut std::io::stderr()) {
+            let end = paths::now();
+            let mut unit = described;
+            unit.start = start;
+            unit.end = end;
+            unit.wall = end - start;
+            unit.rmeta_secs = Some(unit.wall);
+            unit.depcache = "local".into();
+            unit.depcache_saved_secs = Some(hit.saved_secs);
+            if let Ok(line) = serde_json::to_string(&unit) {
+                let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
+            }
+            return Some(0);
+        }
+    }
     if let Some(plan) = &plan {
         let start = paths::now();
         let mut err = std::io::stderr();
@@ -212,14 +248,10 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if passes_on {
         cmd.arg("-Ztime-passes").arg("-Ztime-passes-format=json");
     }
-    // Local linking units link with wild when installed (fail open inside
-    // the `ld` dispatcher). Never for depcache units: plan is None here.
     if plan.is_none() {
-        let nightly = std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some();
-        let link_args = crate::linker::rustc_args(args, described.local, nightly);
         let hot =
             crate::hotpatch::rustc_args(described.local, described.test, !link_args.is_empty());
-        cmd.args(link_args);
+        cmd.args(&link_args);
         if !hot.is_empty() {
             cmd.args(hot);
             let (k, v) = crate::hotpatch::link_env();
@@ -234,7 +266,8 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let stderr = child.stderr.take()?;
     let rmeta_at: Arc<Mutex<Option<f64>>> = Arc::default();
     let passes: Arc<Mutex<Vec<Pass>>> = Arc::default();
-    let captured: Option<Arc<Mutex<Vec<Vec<u8>>>>> = plan.as_ref().map(|_| Arc::default());
+    let captured: Option<Arc<Mutex<Vec<Vec<u8>>>>> =
+        (plan.is_some() || local_plan.is_some()).then(Arc::default);
     let reader = {
         let rmeta_at = rmeta_at.clone();
         let passes = passes.clone();
@@ -264,6 +297,15 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             }
             // After storing: the cache keeps the real binary, not the wrapper.
             let _ = crate::buildscript::wrap(&plan.out_dir, &plan.crate_name, &plan.extra);
+        }
+    }
+    if let (Some(lp), Some(captured)) = (&local_plan, &captured) {
+        unit.depcache = "local-miss".into();
+        if exit == 0 {
+            // Pass timings are filtered out of the capture, and
+            // -Ztime-passes does not change a local unit's outputs.
+            let lines = std::mem::take(&mut *captured.lock().unwrap());
+            crate::localcache::stage(lp, start, end - start, &lines);
         }
     }
     unit.start = start;

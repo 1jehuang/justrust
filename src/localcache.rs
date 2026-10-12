@@ -1,0 +1,471 @@
+//! Content-addressed cache for the project's own (workspace and path) crates.
+//!
+//! The dependency cache (`depcache.rs`) only takes registry and git units.
+//! Local crates are rebuilt whenever cargo sees a changed mtime or a new
+//! target dir, even when the exact same sources were compiled minutes ago:
+//! reverting an edit, switching a branch back, a second build slot, or a
+//! fresh target dir of the same checkout. This cache keys local units the
+//! same way depcache does (every argument with the profile dir normalized,
+//! `--extern`s by crate metadata, then every dep-info source and tracked env
+//! var by content) and restores their outputs by reflink.
+//!
+//! ```text
+//! ~/.justrust/cache/localcache/
+//!   m/<base-key>.jsonl     manifest lines, as in depcache
+//!   o/<result-key>/        outputs + meta.json
+//!   s/<result-key>.<pid>/  staged by the shim, committed by the finisher
+//! ```
+//!
+//! Differences from depcache, and why:
+//! - **No extra rustc arguments.** Dependencies are compiled with the target
+//!   dir and cargo home remapped. A local unit is compiled exactly as cargo
+//!   asked, so recording never changes its output, its incremental state, or
+//!   cargo's fingerprints. Consequence: outputs carry the checkout's absolute
+//!   path (debuginfo `comp_dir`, `CARGO_MANIFEST_DIR`), so the key includes
+//!   the working dir and a checkout at another path (a new `git worktree`)
+//!   does not hit. Outputs naming the target dir as data are still refused.
+//! - **`-C incremental` accepted.** A hit leaves the incremental dir as it
+//!   was. rustc validates incremental state by content hashes, so the next
+//!   real compile is correct, it only reuses less if the state is older.
+//! - **Stored off the critical path.** A local miss is the agent's edit
+//!   loop, and its test binary is hundreds of MB (Desktop UI: 285 MB): hashing
+//!   and scanning it costs ~0.5 s. The shim only hashes the inputs and
+//!   reflinks the outputs into `s/` (milliseconds), then a detached, niced
+//!   `justrust __localcache-finish` hashes, checks, commits, and collects.
+//! - **Off with hot patching** (`JUSTRUST_HOTPATCH=1`): the patcher tracks
+//!   the binaries it linked.
+//!
+//! `JUSTRUST_LOCALCACHE=0|1` (default: see `enabled`), cache dir
+//! `JUSTRUST_LOCALCACHE_DIR`, size cap `JUSTRUST_LOCALCACHE_MAX` (default
+//! 10G, LRU like depcache). Every error means "compile normally".
+//!
+//! Accepted risk, same as depcache: inputs a proc macro or build script read
+//! without telling rustc (no dep-info line, no `env!`) are not keyed.
+
+use crate::depcache::{self, Entry, H128, LocalKey, OutFile, Outputs, Plan};
+use crate::paths;
+use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+pub const FINISH_ARG: &str = "__localcache-finish";
+const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const GC_INTERVAL_SECS: f64 = 600.0;
+
+pub fn enabled() -> bool {
+    if !depcache::enabled() || crate::hotpatch::enabled() {
+        return false;
+    }
+    match std::env::var("JUSTRUST_LOCALCACHE").as_deref() {
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes") => true,
+        Ok(_) => false,
+        Err(_) => DEFAULT_ON,
+    }
+}
+
+/// Off until a measured win (FINDINGS 46).
+const DEFAULT_ON: bool = false;
+
+pub fn cache_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("JUSTRUST_LOCALCACHE_DIR") {
+        return Some(PathBuf::from(d));
+    }
+    paths::home().ok().map(|h| h.join("cache/localcache"))
+}
+
+/// Key a local unit. `salt`: arguments the shim adds to the compile
+/// (linker selection), which change the output but are not in `args`.
+pub fn plan(
+    real: &Path,
+    args: &[OsString],
+    env: &[(String, String)],
+    salt: Vec<String>,
+) -> Option<Plan> {
+    let root = cache_dir()?;
+    depcache::plan_with(
+        real,
+        args,
+        env,
+        Some(LocalKey {
+            root,
+            salt,
+            cwd: None,
+        }),
+    )
+}
+
+/// What the shim hands the finisher.
+#[derive(Serialize, Deserialize)]
+struct Staged {
+    entry: Entry,
+    /// Staged file names; `.d` files are already normalized.
+    files: Vec<String>,
+    stderr: Vec<String>,
+    wall: f64,
+    /// This build's target dir, and input files under it (allowed to be
+    /// named in outputs, see `depcache::target_refs_are_inputs`).
+    target: String,
+    target_inputs: Vec<String>,
+    manifest: PathBuf,
+}
+
+/// After a successful compile: key the inputs, reflink the outputs into a
+/// staging dir, and leave the rest to a background finisher. Returns the
+/// result key.
+pub fn stage(plan: &Plan, start: f64, wall: f64, stderr: &[Vec<u8>]) -> Option<String> {
+    stage_with(plan, start, wall, stderr, false)
+}
+
+/// `stage`; `sync` commits in this process instead of a finisher (tests).
+fn stage_with(
+    plan: &Plan,
+    start: f64,
+    wall: f64,
+    stderr: &[Vec<u8>],
+    sync: bool,
+) -> Option<String> {
+    let dep_info = plan
+        .out_dir
+        .join(format!("{}{}.d", plan.crate_name, plan.extra));
+    let d = std::fs::read_to_string(&dep_info).ok()?;
+    let (inputs, env_names) = depcache::parse_dep_info(&d);
+    let mut entry = Entry {
+        inputs: Vec::new(),
+        env: Vec::new(),
+        out: String::new(),
+    };
+    let mut h = H128::new();
+    h.field(plan.base.as_bytes());
+    for p in inputs {
+        let abs = plan.cwd.join(&p);
+        let hash = depcache::file_hash(&abs, false)?;
+        let np = plan.norm.norm(abs.to_str()?);
+        h.field(np.as_bytes());
+        h.field(hash.as_bytes());
+        entry.inputs.push((np, hash));
+    }
+    for k in env_names {
+        let v = std::env::var(&k).ok().map(|v| plan.norm.norm(&v));
+        h.field(k.as_bytes());
+        h.field(v.as_deref().unwrap_or("\0unset").as_bytes());
+        entry.env.push((k, v));
+    }
+    entry.out = h.hex();
+    let root = &plan.root;
+    let final_dir = root.join("o").join(&entry.out);
+    let manifest = plan.manifest();
+    if final_dir.join("meta.json").is_file() {
+        // Same result already stored (two slots, or a rebuild after a
+        // revert with the cache off): make sure the line is there.
+        depcache::touch(&final_dir.join("meta.json"));
+        let line = serde_json::to_string(&entry).ok()?;
+        append_once(&manifest, &line)?;
+        return Some(entry.out);
+    }
+
+    let mut stderr_lines = Vec::new();
+    let mut artifacts = Vec::new();
+    for l in stderr {
+        let s = String::from_utf8_lossy(l);
+        let s = s.trim_end_matches(['\n', '\r']);
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(s)
+            && v.get("$message_type").and_then(|m| m.as_str()) == Some("artifact")
+            && let Some(a) = v.get("artifact").and_then(|a| a.as_str())
+        {
+            artifacts.push(plan.cwd.join(a));
+        }
+        stderr_lines.push(plan.norm.norm(s));
+    }
+    let mut files = Vec::new();
+    for e in std::fs::read_dir(&plan.out_dir).ok()?.flatten() {
+        let name = e.file_name().to_str()?.to_owned();
+        if name.starts_with('.') || !name.contains(&plan.extra) {
+            continue;
+        }
+        let m = e.metadata().ok()?;
+        let mtime = m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9;
+        if m.is_file() && mtime + 1.0 >= start {
+            files.push(name);
+        }
+    }
+    files.sort();
+    for a in &artifacts {
+        let name = a.file_name()?.to_str()?;
+        if a.parent() != Some(plan.out_dir.as_path()) || !files.iter().any(|f| f == name) {
+            return None;
+        }
+    }
+
+    let dir = root
+        .join("s")
+        .join(format!("{}.{}", entry.out, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).ok()?;
+    let ok = files.iter().all(|name| {
+        let src = plan.out_dir.join(name);
+        if name.ends_with(".d") {
+            std::fs::read_to_string(&src)
+                .ok()
+                .and_then(|t| std::fs::write(dir.join(name), plan.norm.norm(&t)).ok())
+                .is_some()
+        } else {
+            depcache::reflink_or_copy(&src, &dir.join(name))
+        }
+    });
+    let target_inputs = entry
+        .inputs
+        .iter()
+        .map(|(p, _)| plan.norm.denorm(p))
+        .filter(|p| p.starts_with(&plan.norm.target))
+        .collect();
+    let staged = Staged {
+        entry,
+        files,
+        stderr: stderr_lines,
+        wall,
+        target: plan.norm.target.clone(),
+        target_inputs,
+        manifest,
+    };
+    let out = staged.entry.out.clone();
+    if !ok
+        || serde_json::to_vec(&staged)
+            .ok()
+            .and_then(|b| std::fs::write(dir.join("stage.json"), b).ok())
+            .is_none()
+        || !(if sync {
+            finish(&dir).is_some()
+        } else {
+            spawn_finisher(&dir)
+        })
+    {
+        let _ = std::fs::remove_dir_all(&dir);
+        return None;
+    }
+    Some(out)
+}
+
+fn spawn_finisher(dir: &Path) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    use std::os::unix::process::CommandExt;
+    // Null stdio: cargo reads the shim's stderr until EOF, so the finisher
+    // must not hold it.
+    std::process::Command::new(exe)
+        .arg(FINISH_ARG)
+        .arg(dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .is_ok()
+}
+
+fn append_once(manifest: &Path, line: &str) -> Option<()> {
+    std::fs::create_dir_all(manifest.parent()?).ok()?;
+    let known = std::fs::read_to_string(manifest).unwrap_or_default();
+    if !known.lines().any(|l| l == line) {
+        paths::append_line(manifest, line).ok()?;
+    }
+    Some(())
+}
+
+/// `justrust __localcache-finish <staged dir>`: background commit.
+pub fn finish_main(dir: PathBuf) -> ! {
+    // SAFETY: plain syscalls on the current process.
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
+        // IOPRIO_WHO_PROCESS, class idle.
+        #[cfg(target_os = "linux")]
+        libc::syscall(libc::SYS_ioprio_set, 1, 0, 3 << 13);
+    }
+    if finish(&dir).is_none() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    if let Some(root) = dir.parent().and_then(Path::parent) {
+        maybe_gc(root);
+    }
+    std::process::exit(0);
+}
+
+/// Hash and check the staged outputs, then publish them.
+fn finish(dir: &Path) -> Option<()> {
+    let staged: Staged =
+        serde_json::from_slice(&std::fs::read(dir.join("stage.json")).ok()?).ok()?;
+    let mut outs = Outputs {
+        files: Vec::new(),
+        stderr: staged.stderr,
+        wall: staged.wall,
+        glibc: None,
+    };
+    for name in &staged.files {
+        let p = dir.join(name);
+        let text = name.ends_with(".d");
+        if !text {
+            let bytes = std::fs::read(&p).ok()?;
+            if !depcache::target_refs_are_inputs(&bytes, &staged.target, &staged.target_inputs) {
+                return None;
+            }
+            if !name.ends_with(".rlib") && !name.ends_with(".rmeta") {
+                let need = depcache::needed_glibc(&p)?;
+                if need > (0, 0) {
+                    outs.glibc = Some(outs.glibc.map_or(need, |g| g.max(need)));
+                }
+            }
+        }
+        outs.files.push(OutFile {
+            name: name.clone(),
+            hash: depcache::file_hash(&p, false)?,
+            text,
+        });
+    }
+    let _ = std::fs::remove_file(dir.join("stage.json"));
+    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&outs).ok()?).ok()?;
+    let root = dir.parent()?.parent()?;
+    std::fs::create_dir_all(root.join("o")).ok()?;
+    let final_dir = root.join("o").join(&staged.entry.out);
+    if std::fs::rename(dir, &final_dir).is_err() {
+        // Another process committed the same result first.
+        let _ = std::fs::remove_dir_all(dir);
+        if !final_dir.join("meta.json").is_file() {
+            return None;
+        }
+    }
+    append_once(
+        &staged.manifest,
+        &serde_json::to_string(&staged.entry).ok()?,
+    )
+}
+
+fn max_bytes() -> u64 {
+    std::env::var("JUSTRUST_LOCALCACHE_MAX")
+        .ok()
+        .and_then(|v| crate::depcache_gc::parse_size(&v))
+        .unwrap_or(DEFAULT_MAX_BYTES)
+}
+
+/// LRU down to the cap, at most every ten minutes, from the finisher.
+fn maybe_gc(root: &Path) {
+    let stamp = root.join("gc.stamp");
+    if let Ok(m) = std::fs::metadata(&stamp) {
+        let age = paths::now() - (m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9);
+        if age < GC_INTERVAL_SECS {
+            return;
+        }
+    }
+    if std::fs::write(&stamp, b"").is_err() {
+        return;
+    }
+    // Stale stages from crashed shims or finishers.
+    for e in std::fs::read_dir(root.join("s"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        if let Ok(m) = e.metadata()
+            && paths::now() - (m.mtime() as f64) > 3600.0
+        {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+    let max = max_bytes();
+    if max > 0 {
+        crate::depcache_gc::prune(root, max, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A local unit stored by one target dir is restored into another one,
+    /// with its dep-info rewritten and stderr replayed, and misses once a
+    /// source changes.
+    #[test]
+    fn local_unit_round_trip_across_target_dirs() {
+        let base = std::env::temp_dir().join(format!("justrust-localcache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::write(ws.join("src/lib.rs"), "pub fn f() {}").unwrap();
+        let cache = base.join("cache");
+        let rustc = paths::find_on_path("rustc", Path::new("/nonexistent")).unwrap();
+        let build = |target: &str| -> (Plan, Vec<OsString>) {
+            let out = ws.join(target).join("debug/deps");
+            std::fs::create_dir_all(&out).unwrap();
+            let args: Vec<OsString> = [
+                "--crate-name",
+                "w",
+                "--edition=2021",
+                "src/lib.rs",
+                "--crate-type",
+                "lib",
+                "--emit=dep-info,metadata,link",
+                "-C",
+                "extra-filename=-0123456789abcdef",
+                "-C",
+                &format!(
+                    "incremental={}",
+                    ws.join(target).join("debug/incremental").display()
+                ),
+                "--out-dir",
+                out.to_str().unwrap(),
+            ]
+            .iter()
+            .map(OsString::from)
+            .collect();
+            let key = LocalKey {
+                root: cache.clone(),
+                salt: vec![],
+                cwd: Some(ws.clone()),
+            };
+            let p = depcache::plan_with(&rustc, &args, &[], Some(key)).unwrap();
+            (p, args)
+        };
+        let (p1, args) = build("t1");
+        let mut err = Vec::new();
+        assert!(p1.restore(&mut err).is_none());
+        let start = paths::now() - 0.5;
+        let st = std::process::Command::new(&rustc)
+            .args(&args)
+            .current_dir(&ws)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        assert!(stage_with(&p1, start, 1.5, &[b"warning: x\n".to_vec()], true).is_some());
+
+        let (p2, _) = build("t2");
+        assert_eq!(
+            p1.base, p2.base,
+            "base key must not depend on the target dir"
+        );
+        let hit = p2.restore(&mut err).expect("hit in a second target dir");
+        assert_eq!(hit.saved_secs, 1.5);
+        assert_eq!(String::from_utf8_lossy(&err), "warning: x\n");
+        let d = std::fs::read_to_string(ws.join("t2/debug/deps/w-0123456789abcdef.d")).unwrap();
+        assert!(
+            d.contains(&format!("{}/t2/debug/deps", ws.display())),
+            "{d}"
+        );
+        assert!(!d.contains("/t1/"), "{d}");
+        assert!(
+            ws.join("t2/debug/deps/libw-0123456789abcdef.rlib")
+                .is_file()
+        );
+
+        std::fs::write(ws.join("src/lib.rs"), "pub fn g() {}").unwrap();
+        let (p3, _) = build("t3");
+        assert!(
+            p3.restore(&mut Vec::new()).is_none(),
+            "changed source must miss"
+        );
+        // Revert: the first result is valid again.
+        std::fs::write(ws.join("src/lib.rs"), "pub fn f() {}").unwrap();
+        assert!(p3.restore(&mut Vec::new()).is_some());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

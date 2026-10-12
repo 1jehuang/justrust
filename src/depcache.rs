@@ -293,6 +293,7 @@ pub(crate) struct Shape {
     pub(crate) crate_name: String,
 }
 
+#[cfg(test)]
 fn shape(args: &[String]) -> Option<Shape> {
     shape_with(args, false)
 }
@@ -546,27 +547,63 @@ pub(crate) fn rustc_version(real: &Path) -> Option<String> {
 
 /// Build the base key. `None` if the unit is not cacheable or anything fails.
 pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<Plan> {
+    plan_with(real, args, env, None)
+}
+
+/// A workspace or path crate (`localcache.rs`): its own cache root, no
+/// extra rustc arguments (its compile must stay byte-for-byte what cargo
+/// asked for, or incremental state and fingerprints would move), and extra
+/// key fields (the package tree's content, link arguments the shim adds).
+pub(crate) struct LocalKey {
+    pub(crate) root: PathBuf,
+    pub(crate) salt: Vec<String>,
+    /// rustc's working dir, when not this process's (tests).
+    pub(crate) cwd: Option<PathBuf>,
+}
+
+pub(crate) fn plan_with(
+    real: &Path,
+    args: &[OsString],
+    env: &[(String, String)],
+    local: Option<LocalKey>,
+) -> Option<Plan> {
     let args: Vec<String> = args
         .iter()
         .map(|a| a.to_str().map(str::to_owned))
         .collect::<Option<_>>()?;
-    let s = shape(&args)?;
-    let cwd = std::env::current_dir().ok()?;
+    let s = shape_with(&args, local.is_some())?;
+    let cwd = match local.as_ref().and_then(|l| l.cwd.clone()) {
+        Some(c) => c,
+        None => std::env::current_dir().ok()?,
+    };
     let out_dir = cwd.join(&s.out_dir);
     let norm = Norm::new(&profile_dir(&out_dir)?)?;
-    let root = cache_dir()?;
+    let root = match &local {
+        Some(l) => l.root.clone(),
+        None => cache_dir()?,
+    };
 
     let mut h = H128::new();
     h.field(SCHEME.as_bytes());
     h.field(rustc_version(real)?.as_bytes());
     h.field(norm.norm(cwd.to_str()?).as_bytes());
     key_args(&args, &norm, &cwd, &mut h)?;
-    let mut extra_args = remap_args(&args, &norm);
+    if let Some(l) = &local {
+        h.field(b"local");
+        for v in &l.salt {
+            h.field(norm.norm(v).as_bytes());
+        }
+    }
+    let mut extra_args = match local {
+        Some(_) => Vec::new(),
+        None => remap_args(&args, &norm),
+    };
     // macOS: ld64 writes a dylib's output path, inside this target dir,
     // into its LC_ID_DYLIB install name, and the store then (rightly)
     // refuses it as carrying the target dir. rustc loads proc macros by
     // path, so the install name is never used: make it fixed.
     if cfg!(target_os = "macos")
+        && !extra_args.is_empty()
         && args
             .iter()
             .any(|a| a == "proc-macro" || a == "--crate-type=proc-macro")

@@ -7,7 +7,7 @@
 //!   interface agents should use. It takes the same arguments as cargo.
 //!
 //! Linux and macOS. Elsewhere `src/main.rs` runs cargo unchanged.
-#![cfg(any(target_os = "linux", target_os = "macos"))]
+#![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
 mod account;
 mod agent_output;
@@ -25,6 +25,7 @@ mod hotpatch;
 mod install;
 mod linker;
 mod live;
+mod localcache;
 mod mcp;
 mod paths;
 mod peercache;
@@ -520,6 +521,12 @@ pub fn main() -> anyhow::Result<()> {
                 .unwrap_or_default(),
         ),
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
+        Some(localcache::FINISH_ARG) => localcache::finish_main(
+            std::env::args_os()
+                .nth(2)
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+        ),
         _ => {}
     }
     if linker::invoked_as_ld(&argv0) {

@@ -141,6 +141,15 @@ pub struct UnitStats {
     /// included in `depcache_hits`.
     #[serde(default)]
     pub depcache_prebuilt_hits: usize,
+    /// Workspace/path units restored from the local cache (`localcache.rs`,
+    /// not included in `depcache_hits`).
+    #[serde(default)]
+    pub localcache_hits: usize,
+    #[serde(default)]
+    pub localcache_misses: usize,
+    /// Compile time the local hits would have cost.
+    #[serde(default)]
+    pub localcache_saved_secs: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -765,7 +774,18 @@ pub fn build(
         depcache_peer_hits: units.iter().filter(|u| u.depcache == "peer").count(),
         depcache_prebuilt_hits: units.iter().filter(|u| u.depcache == "prebuilt").count(),
         depcache_misses: units.iter().filter(|u| u.depcache == "miss").count(),
-        depcache_saved_secs: units.iter().filter_map(|u| u.depcache_saved_secs).sum(),
+        depcache_saved_secs: units
+            .iter()
+            .filter(|u| u.depcache != "local")
+            .filter_map(|u| u.depcache_saved_secs)
+            .sum(),
+        localcache_hits: units.iter().filter(|u| u.depcache == "local").count(),
+        localcache_misses: units.iter().filter(|u| u.depcache == "local-miss").count(),
+        localcache_saved_secs: units
+            .iter()
+            .filter(|u| u.depcache == "local")
+            .filter_map(|u| u.depcache_saved_secs)
+            .sum(),
         depcache_miss_secs: units
             .iter()
             .filter(|u| u.depcache == "miss")
@@ -951,7 +971,7 @@ impl UnitStats {
     /// `, depcache 40 hit/3 miss (saved ~12.3s)`, or empty when unused.
     pub fn depcache_line(&self) -> String {
         if self.depcache_hits + self.depcache_misses == 0 {
-            return String::new();
+            return self.localcache_line();
         }
         let saved = if self.depcache_hits > 0 {
             format!(" (saved ~{:.1}s of rustc)", self.depcache_saved_secs)
@@ -975,6 +995,17 @@ impl UnitStats {
         format!(
             ", depcache {} hit{remote}/{} miss{saved}",
             self.depcache_hits, self.depcache_misses
+        ) + &self.localcache_line()
+    }
+
+    /// `, localcache 3 hit/1 miss (saved ~4.2s)`, or empty when unused.
+    pub fn localcache_line(&self) -> String {
+        if self.localcache_hits + self.localcache_misses == 0 {
+            return String::new();
+        }
+        format!(
+            ", localcache {} hit/{} miss (saved ~{:.1}s)",
+            self.localcache_hits, self.localcache_misses, self.localcache_saved_secs
         )
     }
 }
