@@ -3151,3 +3151,14 @@ same rule as the remote route), (2) one persistent HTTP/2 connection
 instead of a curl process per request, (3) zstd and no rlib for `check`
 (rmeta is enough), (4) sizes in the index so the client can decide without
 a manifest request.
+
+## 2026-10-11: cargo shim breaks `trunk build` for wasm32 (pinned toolchain has no wasm std)
+
+`~/.local/bin/cargo` -> justrust. `trunk build` in ~/jcode-website runs
+`cargo build --target=wasm32-unknown-unknown`, and justrust builds with its
+pinned toolchain `jr-ac20de5e7921`, which has no `wasm32-unknown-unknown`
+std: `error[E0463]: can't find crate for core`. The system toolchain
+(/usr/lib/rustlib) has the wasm targets, and `PATH=/usr/bin:$PATH trunk
+build` succeeds. Fix in justrust: when `--target` names a target the pinned
+toolchain lacks, either add it to the pin or fall through to the system
+rustc, and say so in one line instead of failing the build.
