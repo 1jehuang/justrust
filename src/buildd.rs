@@ -1,7 +1,7 @@
 //! The resident build daemon: `justrust __buildd`.
 //!
 //! One per user, started on demand by the first agent build that wants it,
-//! exits after an hour without requests and running builds. Agent builds
+//! exits after 15 minutes without requests or running builds. Agent builds
 //! (`justrust check|test|build|clippy`) hand their request to it over
 //! `~/.justrust/buildd/sock` instead of running cargo themselves:
 //!
@@ -28,8 +28,9 @@
 //!
 //! Fail open: no daemon, a daemon that cannot start, a protocol error, or a
 //! daemon from another justrust build before any output arrived means the
-//! build runs in the client as before. Opt-in for now: `JUSTRUST_BUILDD=1`
-//! (FINDINGS.md section 46 has the measurements).
+//! build runs in the client as before. On by default for non-terminal
+//! agent builds on Linux; `JUSTRUST_BUILDD=0` disables the daemon,
+//! `JUSTRUST_BUILDD_PREBUILD=0` only prebuilds (FINDINGS.md, build daemon).
 //!
 //! Wire format, both directions: `[u8 kind][u32 len, big endian][payload]`.
 //! Client to daemon: `R` request JSON, `P` ping, `S` shutdown. Daemon to
@@ -51,7 +52,7 @@ use std::time::{Duration, Instant};
 pub const DAEMON_ARG: &str = "__buildd";
 /// Set on the builds the daemon runs: they never go back to the daemon.
 const CHILD_ENV: &str = "JUSTRUST_BUILDD_CHILD";
-const IDLE_EXIT: Duration = Duration::from_secs(3600);
+const IDLE_EXIT: Duration = Duration::from_secs(900);
 
 /// Variables that identify the agent or its terminal, not the build. Two
 /// agents whose environments differ only in these share a build.
@@ -91,10 +92,15 @@ fn env_ignored(name: &str) -> bool {
     IGNORED_ENV.contains(&name) || IGNORED_ENV_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+/// On by default; `JUSTRUST_BUILDD=0` builds in the client as before.
 pub fn enabled() -> bool {
-    matches!(
+    // CI runs and test harnesses would leave a daemon behind per job.
+    if std::env::var_os("CI").is_some() && std::env::var_os("JUSTRUST_BUILDD").is_none() {
+        return false;
+    }
+    !matches!(
         std::env::var("JUSTRUST_BUILDD").as_deref(),
-        Ok("1") | Ok("on") | Ok("true")
+        Ok("0") | Ok("off") | Ok("false")
     )
 }
 
@@ -419,7 +425,9 @@ pub fn command(action: &str, args: Vec<OsString>) -> Result<()> {
                     " (another justrust build: replaced on next use)"
                 }
             ),
-            Err(_) => println!("no build daemon running (opt in with JUSTRUST_BUILDD=1)"),
+            Err(_) => println!(
+                "no build daemon running (starts with the next agent build; JUSTRUST_BUILDD=0 disables)"
+            ),
         },
         "stop" => match info_request(b'S') {
             Ok(i) => println!("stopping build daemon pid {}", i.pid),
@@ -606,6 +614,8 @@ struct Log {
 
 struct Build {
     stamp: String,
+    /// Agent session that asked (`JUSTRUST_SLOT_SESSION`).
+    session: String,
     run_id: Option<String>,
     started: Instant,
     finished: Mutex<Option<Instant>>,
@@ -631,7 +641,7 @@ struct State {
     last_request: Option<Instant>,
 }
 
-/// A request whose agent opted in to prebuilding (`JUSTRUST_BUILDD_PREBUILD=1`).
+/// A request to prebuild when its sources change (`JUSTRUST_BUILDD_PREBUILD=0` disables).
 struct Recent {
     req: Request,
     roots: Vec<PathBuf>,
@@ -644,9 +654,11 @@ struct Recent {
 
 const PREBUILDS_PER_REQUEST: u8 = 3;
 
-/// Prebuild only what was asked for lately, and few of them.
+/// Prebuild only what was asked for lately: each agent session's last
+/// request (right for 53% of 3,436 mined post-edit build calls, 0.47
+/// wasted prebuilds per edit; the last 3 were right 68% but wasted 1.59).
 const RECENT_MAX_AGE: Duration = Duration::from_secs(1800);
-const RECENT_MAX: usize = 3;
+const RECENT_MAX: usize = 8;
 /// Quiet time after the last file event before prebuilding: an agent's
 /// multi-file edit lands as one burst.
 const DEBOUNCE: Duration = Duration::from_millis(400);
@@ -829,6 +841,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let (stamp, _files) = source_stamp(&roots, &cwd, &req.env);
     if !req.prebuild {
         cancel_stale_prebuild(dm, &key, &stamp);
+        cancel_wrong_guess(dm, &key, &session_of(&req));
     }
     let (build, attached, replayed) = {
         let mut st = dm.state.lock().unwrap();
@@ -1012,10 +1025,21 @@ fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
         .stderr(Stdio::piped());
     use std::os::unix::process::CommandExt;
     c.process_group(0);
+    if req.prebuild {
+        // A guess: below every build an agent is waiting for.
+        // SAFETY: setpriority is async-signal-safe.
+        unsafe {
+            c.pre_exec(|| {
+                libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                Ok(())
+            });
+        }
+    }
     crate::procfs::close_inherited_fds(&mut c);
     let mut child = c.spawn().context("starting the build")?;
     let b = Arc::new(Build {
         stamp,
+        session: session_of(req),
         run_id: req
             .env
             .iter()
@@ -1096,14 +1120,56 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
     }
 }
 
+/// On by default; `JUSTRUST_BUILDD_PREBUILD=0` turns it off.
 fn wants_prebuild(req: &Request) -> bool {
+    !req.env.iter().any(|(k, v)| {
+        k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "0" | "off" | "false")
+    })
+}
+
+fn session_of(req: &Request) -> String {
     req.env
         .iter()
-        .any(|(k, v)| k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "1" | "on" | "true"))
+        .find(|(k, _)| k == "JUSTRUST_SLOT_SESSION")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default()
+}
+
+/// The agent asked for something other than what was prebuilt for it: the
+/// guess was wrong, stop the prebuild so it does not compete.
+fn cancel_wrong_guess(dm: &Daemon, key: &str, session: &str) {
+    let wrong: Vec<Arc<Build>> = {
+        let st = dm.state.lock().unwrap();
+        st.builds
+            .iter()
+            .filter(|(k, b)| {
+                k.as_str() != key
+                    && b.session == session
+                    && *b.prebuild.lock().unwrap()
+                    && !b.log.lock().unwrap().claimed
+            })
+            .map(|(_, b)| b.clone())
+            .collect()
+    };
+    for b in wrong {
+        log(&format!(
+            "agent asked for another build, stopping prebuild pid {}",
+            b.pid
+        ));
+        // SAFETY: plain syscall on the prebuild's process group.
+        unsafe { libc::kill(-b.pid, libc::SIGTERM) };
+    }
 }
 
 fn prune_recent(recent: &mut HashMap<String, Recent>) {
     recent.retain(|_, r| r.used.elapsed() < RECENT_MAX_AGE);
+    // One per agent session: its latest request.
+    let mut latest: HashMap<String, Instant> = HashMap::new();
+    for r in recent.values() {
+        let e = latest.entry(session_of(&r.req)).or_insert(r.used);
+        *e = (*e).max(r.used);
+    }
+    recent.retain(|_, r| latest.get(&session_of(&r.req)) == Some(&r.used));
     while recent.len() > RECENT_MAX {
         let Some(oldest) = recent
             .iter()
@@ -1210,6 +1276,9 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             req.env.retain(|(k, _)| k != "JUSTRUST_RUN_ID_OVERRIDE");
             let id = format!("{}-pre", crate::record::new_run_id());
             req.env.push(("JUSTRUST_RUN_ID_OVERRIDE".into(), id));
+            // Nobody waits for it: not an agent build in history and trend
+            // statistics. The slot stays the agent's (JUSTRUST_SLOT_SESSION).
+            req.env.retain(|(k, _)| k != "JCODE_SESSION_ID");
             match start(&req, stamp, &cwd) {
                 Ok(b) => {
                     log(&format!(

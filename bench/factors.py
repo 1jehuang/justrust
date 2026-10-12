@@ -167,28 +167,28 @@ FACTORS = [
     Factor(
         "buildd-coalesce", "resident build daemon: a second agent asking for the identical build attaches to the "
                            "running one instead of waiting for its slot and re-running cargo and the tests "
-                           "(opt-in JUSTRUST_BUILDD=1)",
+                           "(default on; JUSTRUST_BUILDD=0)",
         "coalesce", "desktop-two-agents-same",
-        on={"JUSTRUST_BUILDD": "1"}, off={}, n=6,
+        on={"JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "0"}, off={"JUSTRUST_BUILDD": "0"}, n=6,
         note="one test-fn edit, then agent A and, 1s later, agent B run the identical reference-loop command; "
              "B's wall is measured. Off, B joins A's slot (slots.rs join_identical) and runs a no-op cargo after it",
     ),
     Factor(
         "buildd-noop", "same daemon, its cost on a lone no-op `test` (client, socket, source stamp, extra exec)",
         "loop", "desktop-noop-test",
-        on={"JUSTRUST_BUILDD": "1"}, off={}, n=10,
-        note="opt-in, so `on` is the non-default side; nothing to coalesce, pure overhead",
+        on={"JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "0"}, off={"JUSTRUST_BUILDD": "0"}, n=10,
+        note="prebuild off on both sides; nothing to coalesce, pure overhead. Benchmarks default to JUSTRUST_BUILDD=0",
     ),
     Factor(
         "buildd-loop", "same daemon on the reference loop (one agent, nothing to coalesce)",
         "loop", "desktop-test-edit",
-        on={"JUSTRUST_BUILDD": "1"}, off={}, n=6,
+        on={"JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "0"}, off={"JUSTRUST_BUILDD": "0"}, n=6,
     ),
     Factor(
         "buildd-prebuild", "resident build daemon prebuilds the agent's last request when its sources change "
-                           "(opt-in JUSTRUST_BUILDD=1 JUSTRUST_BUILDD_PREBUILD=1)",
+                           "(default on; JUSTRUST_BUILDD_PREBUILD=0)",
         "prebuild", "desktop-test-edit",
-        on={"JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "1"}, off={}, n=6,
+        on={"JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "1"}, off={"JUSTRUST_BUILDD": "0"}, n=6,
         note="reference loop with agent think time: edit, wait BUILDD_THINK seconds (default 4.6, the median gap "
              "between an agent's last edit and its build call in 2,241 mined calls), then the build; its wall is "
              "measured. Both sides wait the same",
@@ -438,6 +438,7 @@ def run_agent(cmd: list[str], cwd: Path, env: dict[str, str]) -> tuple[subproces
     e = dict(os.environ)
     e.pop("CARGO_TARGET_DIR", None)
     e.pop("JUSTRUST_DISABLE", None)
+    e.setdefault("JUSTRUST_BUILDD", "0")
     e.update({"JUSTRUST_RUN_ID_OVERRIDE": rid, "JUSTRUST_REMOTE": "0", "JUSTRUST_QUIET": "1",
               "JUSTRUST_TOOLCHAIN": "system", "JUSTRUST_PREBUILT": "off", **env})
     t0 = time.monotonic()

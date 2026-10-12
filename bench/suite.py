@@ -550,6 +550,9 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     # The public store is on by default for users. Benchmarks compare
     # against their own caches, so it is off unless the scenario asks.
     env["JUSTRUST_PREBUILT"] = "off"
+    # The build daemon (default on) would prebuild restored files between
+    # samples; scenarios that measure it turn it on.
+    env.setdefault("JUSTRUST_BUILDD", "0")
     env.update(s.env)
     if s.prebuilt:
         # A new machine: nothing in the local depcache, the store has it.

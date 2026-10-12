@@ -194,6 +194,7 @@ def stack_env(st: Stack, s: suite.Scenario, target: Path, rid: str) -> dict[str,
         env.update(s.env)
         env.update(st.env)
         return env
+    env.setdefault("JUSTRUST_BUILDD", "0")  # no prebuilds between samples
     env.update({"JUSTRUST_RUN_ID_OVERRIDE": rid, "JUSTRUST_REMOTE": "0", "JUSTRUST_QUIET": "1",
                 # Public store (on by default for users) off unless a stack
                 # sets JUSTRUST_PREBUILT: results compare local caching.
