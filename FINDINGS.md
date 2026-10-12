@@ -4113,8 +4113,20 @@ toolchain), median wall per pass at -Zthreads 1 / 8 / 16:
 (Thread counts verified per run in units.jsonl `frontend_threads`. But
 the Desktop -Z8 column is n=1 clean sample (4 of 5 flagged noisy) and
 -Z16 n=2, so the 6.30 -> 4.66 s gain is not established. The jcode_base
-rows have n=3-5 and are solid. Rerun Desktop with more samples on a quiet
-machine before acting on it.)
+rows have n=3-5 and are solid.)
+
+Rerun, Desktop only, n=7 per side (`threads-20261012-055648.json`, load
+average 17 on 16 threads from other agents, all samples flagged noisy):
+agent wall median -Z1 7.54 s, -Z8 8.11 s; unit wall 7.08 vs 7.66 s; CPU
+6.9 vs 9.0 s. Only mono collector (1.17 -> 0.97) and partition
+(0.67 -> 0.58) and borrow check got faster; persist, lints and macro
+expansion got slower. **The 6.3 -> 4.7 s Desktop gain does not reproduce.**
+On a loaded machine -Zthreads=8 costs 2 s of CPU per loop for no wall gain.
+Taken together: the parallel front end does not speed up these warm loops,
+because their serial passes (macro expansion, persist, resolution) dominate
+and the parallel ones are small. That makes making those serial passes
+cheaper or parallel (item 3) the rustc work, and -Zthreads alone a dead end
+for warm loops. A quiet-machine rerun would still be worth doing.
 
 Ranking for parallelization work:
 
