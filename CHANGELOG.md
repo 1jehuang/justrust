@@ -3,6 +3,14 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.6
+
+- **Prebuilt store is opt-in again** (`JUSTRUST_PREBUILT=default`, now
+  served through CloudFront). Measured on a quiet 16-core laptop, a cold
+  check of 105 popular crates took 80-138 s from the store against 36-39 s
+  compiling locally, so on by default made such machines slower. It still
+  helps on busy machines, small VMs, and CI.
+
 ## 0.1.0-alpha.5
 
 - **Prebuilt store hits from release binaries.** The static musl release
