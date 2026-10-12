@@ -3760,3 +3760,99 @@ yet measured on the synthetic workload. A fresh worktree at another path
 and second checkouts do not hit (absolute paths in local outputs). Making
 those hit needs `--remap-path-prefix` for the workspace, which changes
 panic paths and debuginfo the user sees: a follow-up to measure.
+
+## 51. Resident build daemon: prebuild on edit cuts the reference loop 8.9 -> 5.1 s; coalescing ties slots (2026-10-12)
+
+`justrust __buildd` (`src/buildd.rs`), one per user over
+`~/.justrust/buildd/sock`, spawned like `__daemon` (own process group,
+inherited fds closed). Agent builds (`check|test|build|clippy`, no tty)
+hand their request to it, and it runs the same `justrust <args>` with the
+client's exact env and cwd, so routing, slots, toolchain, recording and the
+report are unchanged. Three parts:
+
+- **Coalescing**: identical request (cwd, argv, env minus agent identity
+  such as `JCODE_SESSION_ID`/`KITTY_*`, and a source stamp: path, size,
+  mtime, inode of every file under the workspace and its path
+  dependencies, ~8 ms on Desktop) attaches to the running build and gets
+  the full output and exit code.
+- **Prebuild on edit**: the daemon watches the sources (inotify) of each
+  agent session's last request and starts it 0.4 s after an edit burst,
+  niced 10. `test` is prebuilt as `test ARGS --no-run`. Tests never run on
+  a guess, and the agent's own request waits for the compile and then runs
+  its tests on Fresh units. A new edit, or the agent asking for another
+  command, stops an unclaimed prebuild. 3 prebuilds per request between
+  asks (bounds builds that write into their own sources).
+- **Warm state**: the measured win isn't there. justrust's own pre-cargo
+  work is 5 ms plus a 16 ms median systemd scope (p90 42 ms, 467 no-op
+  runs). The ~80 ms "overhead" in older notes was jr-cargo vs stock cargo
+  noise, not justrust. A jr-cargo daemon mode would have to keep parsed
+  manifests and index summaries resident (FINDINGS 38: a fresh process
+  costs nothing, the parsing does). Not attempted.
+
+Factors (Desktop snapshot, ABBA), `factors-20261011-234427-dcbed51dadfc.json`,
+`factors-20261012-002718-fa7980014c4e-dirty.json`,
+`factors-20261012-003954-c998b6a9ce04-dirty.json`:
+
+| factor | on | off | verdict |
+|---|---:|---:|---|
+| buildd-prebuild, compile-only test prebuild (final), reference loop with 4.6 s think time | **5.14 s** (4.9-5.4), 0 units | 8.87 s (8.8-9.0) | helps, -42% |
+| buildd-prebuild, first version (ran tests speculatively) | 4.37 / 4.74 s | 9.26 / 8.79 s | helps |
+| buildd-coalesce: A and, 1 s later, B run the identical command | B 8.52 s, CPU A+B 10.4 s | B 8.64 s, CPU 10.5 s | within noise |
+| buildd-noop: lone no-op `test` | 0.68 s | 0.65 s | +0.03 s, within noise |
+| buildd-loop: reference loop, no think time | 8.92 s | 8.96 s | within noise |
+| buildd-prebuild-interference: other agent's wrong-guess prebuild running while B does the loop | B 9.19 s | B 8.84 s | -4%, within noise |
+
+Run ids (first on/off sample): prebuild 20261012-004117749-1180832501 /
+20261012-004055505-1180832632, interference 20261012-003028138-1056780716 /
+20261012-003018557-1056780260, coalesce 20261011-235557538-455398264 /
+20261011-235547557-455398328, noop 20261011-235152778-455398861.
+
+Coalescing ties because slots already coalesce (`join_identical`, FINDINGS
+7): B waits for A's slot, then pays a 0.4 s no-op cargo. In real history
+identical requests overlap rarely: 12 cross-session and 30 same-session
+overlaps in 5,679 agent runs. The daemon keeps it for exact output sharing,
+but it is not the win.
+
+The think time is mined from Jcode sessions: the gap between an agent's
+last edit and its build call has median 4.6 s, p75 13 s, p25 0 s (2,241
+calls). With 0 s (`buildd-loop`) nothing is gained or lost.
+
+Predictor (mined, 3,436 build calls that follow an edit and a previous
+build in the same session):
+
+| prebuild | right | prebuilds per edit | wasted per edit |
+|---|---:|---:|---:|
+| session's last request (shipped) | 53% | 1.0 | 0.47 |
+| last 2 | 62% | 1.72 | 1.10 |
+| last 3 | 68% | 2.27 | 1.59 |
+
+Wasted CPU: 0.47 builds per edit. A wrong guess usually compiles the same
+edited crate for a sibling command, and it is stopped as soon as the agent
+asks for something else, so the cost is at most one median agent build
+(9.6 CPU-s over 4,896 compiling agent builds, mean 91 CPU-s with cold
+outliers) per wrong guess, niced. Measured interference on another agent
+is within noise (-4%).
+
+Correctness (`bench/buildd-correctness.py`, prebuild vs a direct build with
+the daemon off in its own warm target, exit code and normalized test and
+error lines):
+
+    pass: prebuilt=True exit daemon=0 direct=0 same_output=True no_dirty_after=True
+    fail: prebuilt=True exit daemon=101 direct=101 same_output=True no_dirty_after=True
+    OK
+
+The normalization drops pass counts of a failing run, because those differ
+between two direct runs too: likely-failures-first with fail-fast prints
+"2 passed" once and "0 passed" the next time. Exit 101 matches on the tiny
+crate as well. A daemon that hangs up makes the client build locally (fail
+open). Stdout is byte-identical apart from thread ids.
+
+Decision: **on by default** for non-terminal agent builds on Linux, off
+under `CI`. Kill switches: `JUSTRUST_BUILDD=0` (no daemon) and
+`JUSTRUST_BUILDD_PREBUILD=0` (daemon, no prebuild). Benchmarks pin
+`JUSTRUST_BUILDD=0` unless a scenario measures it, so prebuilds of restored
+files never overlap samples. Remaining risks: build scripts with side
+effects run on a guess (as with any `cargo check` from rust-analyzer), and
+a prebuild holds the session's slot until stopped. Next: prebuild the next
+command from history instead of the last one (the 68% ceiling of last 3
+without the waste), and serve `check` from early rust-analyzer state.
