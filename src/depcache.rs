@@ -1478,21 +1478,30 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
 }
 
 /// Copy-on-write clone on APFS (`clonefile`, which keeps permissions), else
-/// a plain copy.
+/// a plain copy. Either way the result gets a fresh mtime, like a new file
+/// on Linux: clonefile and macOS `std::fs::copy` keep the cache entry's old
+/// one, and cargo then treats a restored rlib as older than the unit's
+/// `invoked.timestamp` and rebuilds every dependent ("quote changed").
 #[cfg(target_os = "macos")]
 pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
     let _ = std::fs::remove_file(dst);
-    if let (Ok(s), Ok(d)) = (
+    let cloned = match (
         CString::new(src.as_os_str().as_bytes()),
         CString::new(dst.as_os_str().as_bytes()),
     ) {
         // SAFETY: valid NUL-terminated paths. CLONE_NOFOLLOW clones a
         // symlink itself, like `std::fs::copy` would not: never set it.
-        if unsafe { libc::clonefile(s.as_ptr(), d.as_ptr(), 0) } == 0 {
-            return true;
-        }
+        (Ok(s), Ok(d)) => (unsafe { libc::clonefile(s.as_ptr(), d.as_ptr(), 0) }) == 0,
+        _ => false,
+    };
+    if !cloned && std::fs::copy(src, dst).is_err() {
+        return false;
     }
-    std::fs::copy(src, dst).is_ok()
+    std::fs::File::options()
+        .write(true)
+        .open(dst)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()))
+        .is_ok()
 }
 
 #[cfg(test)]

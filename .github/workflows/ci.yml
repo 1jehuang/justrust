@@ -112,24 +112,15 @@ jobs:
           JCODE_SESSION_ID=other "$bin" test 2>&1 | tee slot.txt
           grep -E "slot [0-9]+ \((new|sticky|reused)\)" slot.txt
           grep -q "1 passed" slot.txt
-          # Diagnosis: why a freshly seeded slot rebuilds dependencies.
-          touch src/main.rs
-          JCODE_SESSION_ID=third "$bin" test > /dev/null 2>&1 || true
-          s=$(ls -d target/justrust-slots/*/ | tail -1)
-          rm -rf "$RUNNER_TEMP/probe" && mkdir -p "$RUNNER_TEMP/probe"
-          cp -c -R "${s}debug" "$RUNNER_TEMP/probe/debug"
-          CARGO_TARGET_DIR="$RUNNER_TEMP/probe" CARGO_LOG=cargo::core::compiler::fingerprint=info \
-            cargo test --no-run 2>&1 | grep -E "stale|dirty|Dirty|changed|mtime" | head -30 || true
-          f=$(ls target/debug/deps/libquote-*.rlib | head -1)
-          stat -f "%N %Fm" "$f" target/justrust-slots/*/debug/deps/$(basename "$f") || true
-          stat -f "%N %Fm" target/debug/.fingerprint/quote-*/* | head -6
+          # A seeded slot reuses every dependency: only the edited crate builds.
+          grep -E "units +1 compiled \(1 local, 0 deps" slot.txt
           # Pinned toolchain for the host triple (download, sha256 via shasum).
-          printf '[toolchain]\nchannel = "stable"\n' > justrust.toml
-          "$bin" toolchain install 2>&1 | tail -5
-          "$bin" toolchain status 2>&1 | tee tc.txt
+          printf '[toolchain]\nchannel = "1.98.1"\n' > justrust.toml
+          "$bin" toolchain install 2>&1 | tail -3
           "$bin" test 2>&1 | tee pinned.txt
           grep -q "1 passed" pinned.txt
-          grep -E "pinned toolchain" pinned.txt
+          grep -E "pinned toolchain 1\.98\.1" pinned.txt
+          ls ~/.justrust/toolchains/1.98.1/lib/rustlib | grep -E "apple-darwin"
           rm justrust.toml
       # The release binary (thin LTO, stripped), as the installer ships it.
       - name: Release build runs
