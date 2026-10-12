@@ -534,7 +534,8 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
            "stack_defs": [{"name": s.name, "what": s.what, "env": s.env, "justrust": s.justrust} for s in stacks]}
     only = {int(x) for x in args.only_points.split(",")} if args.only_points else None
     res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait,
-                                 partial=suite.RESULTS / "partial" / f"synth{args.synth}.json", only=only)
+                                 partial=suite.RESULTS / "partial" / f"synth{args.synth}.json", only=only,
+                                 resume=args.resume)
     if only:  # a subset is for debugging, never a result to compare
         print(synth_run.table(res["synth"]))
         return
@@ -614,6 +615,8 @@ def main() -> None:
                    help="run the synthetic usage-weighted workload (bench/synth/) instead of the named "
                         "workloads; -n is then repetitions per point")
     r.add_argument("--points", type=int, default=40, help="synthetic points (default 40)")
+    r.add_argument("--resume", action="store_true",
+                   help="synthetic: keep the points of an interrupted run of the same seed and stacks")
     r.add_argument("--only-points", metavar="I,J",
                    help="synthetic: run only these point indices (debugging, nothing saved)")
     r.set_defaults(fn=cmd_run)

@@ -817,7 +817,7 @@ def cmd_run_synth(args) -> None:
                       {} if TOOLCHAIN == "system" else {"JUSTRUST_TOOLCHAIN": TOOLCHAIN}, private_cache=True)
     info = env_info()
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
-              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json")}
+              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume)}
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
         f"synth{args.synth}-" + time.strftime("%Y%m%d-%H%M%S")
@@ -916,6 +916,8 @@ def main() -> None:
                    help="run the synthetic usage-weighted workload (bench/synth/) instead of the named "
                         "scenarios; -n is then runs per point")
     r.add_argument("--points", type=int, default=40, help="synthetic points (default 40)")
+    r.add_argument("--resume", action="store_true",
+                   help="synthetic: keep the points of an interrupted run of the same seed")
     r.add_argument("--toolchain", default="system", metavar="SPEC",
                    help="pinned toolchain (nightly-YYYY-MM-DD) via JUSTRUST_TOOLCHAIN, own target dir; "
                         "default: the system rustc")

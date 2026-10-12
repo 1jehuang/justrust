@@ -83,7 +83,7 @@ start)
   ssh_t 'mkdir -p ~/bench-bin'
   rsync_t "$(readlink -f "$(command -v "$JR")")" R:bench-bin/.justrust.upload
   ssh_t 'chmod +x ~/bench-bin/.justrust.upload && mv -f ~/bench-bin/.justrust.upload ~/bench-bin/justrust'
-  rsync_t --delete --exclude target/ --exclude .git/ --exclude 'bench/results/*.json' ./ R:bench-justrust/
+  rsync_t --delete --exclude target/ --exclude .git/ --exclude 'bench/results/*.json' --exclude 'bench/results/partial/' ./ R:bench-justrust/
   ssh_t 'mkdir -p bench-justrust/bench/results bench-src'
   # Pinned snapshot trees, as `git archive` tarballs (only what is missing).
   python3 - <<'PY' >"${TMPDIR:-/tmp}/on-remote-pins.$$"

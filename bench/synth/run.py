@@ -106,9 +106,11 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
 
 
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
-        partial: Path | None = None, only: set[int] | None = None) -> dict:
+        partial: Path | None = None, only: set[int] | None = None, resume: bool = False) -> dict:
     """`partial`: rewritten after every point, so a killed run keeps what it measured.
-    `only`: run just these point indices (debugging one point; not a comparable result)."""
+    `only`: run just these point indices (debugging one point; not a comparable result).
+    `resume`: keep the points already in `partial` when it is the same seed, size,
+    generator and stacks (a spot interruption killed the run), run the rest."""
     pts, info = gen.sample(seed, points)
     plans = [gen.plan(p, seed) for p in pts]
     if only:
@@ -117,8 +119,19 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
         gen.restore_all(snap)
     base = int(time.time()) % 100000 * 100
     res_points = []
+    if resume and partial and partial.exists():
+        old = json.loads(partial.read_text())
+        if (old.get("seed"), old.get("points"), old.get("reps"), old.get("generator"), old.get("stack_names")) == \
+                (seed, points, reps, gen.fingerprint(), [s.name for s in stacks]):
+            res_points = old["results"]
+            print(f"  synth: resuming after {len(res_points)} measured points", file=sys.stderr)
+        else:
+            print("  synth: partial result is from another run, starting over", file=sys.stderr)
+    done = {p["i"] for p in res_points}
     t_start = time.monotonic()
     for k, plan in enumerate(plans):
+        if plan.point.i in done:
+            continue
         samples: dict[str, list[dict]] = {st.name: [] for st in stacks}
         errors: dict[str, str] = {}
         for rep in range(reps):
