@@ -79,12 +79,12 @@ jobs:
             JUSTRUST_DEPCACHE_EXPLAIN="$RUNNER_TEMP/explain-$d" "$bin" test 2>&1 | tee out.txt
             cd -
           done
-          # Units whose key inputs differ between the two checkouts.
-          (cd "$RUNNER_TEMP/explain-a" && ls) | sed 's/-[0-9a-f]*\.txt$//' | sort > a.lst
-          (cd "$RUNNER_TEMP/explain-b" && ls) | sed 's/-[0-9a-f]*\.txt$//' | sort > b.lst
-          diff <(ls "$RUNNER_TEMP/explain-a") <(ls "$RUNNER_TEMP/explain-b") || true
+          # Which units missed in the second checkout, and why their keys differ.
+          run=$(ls -td ~/.justrust/runs/*/ | head -1)
+          grep '"depcache":"miss"' "$run/units.jsonl" | grep -o '"crate_name":"[^"]*"' || true
+          ls "$RUNNER_TEMP/explain-a" "$RUNNER_TEMP/explain-b" | sort | uniq -u || true
           for f in $(ls "$RUNNER_TEMP/explain-b"); do
-            [ -f "$RUNNER_TEMP/explain-a/$f" ] || { n=${f%-*}; diff "$RUNNER_TEMP"/explain-a/"$n"-* "$RUNNER_TEMP/explain-b/$f" | head -20; }
+            [ -f "$RUNNER_TEMP/explain-a/$f" ] || { n=${f%-*}; echo "== $f"; diff "$RUNNER_TEMP"/explain-a/"$n"-* "$RUNNER_TEMP/explain-b/$f" | head -20; }
           done
           grep -E "depcache [0-9]+ hit" "$RUNNER_TEMP/dc-b/out.txt"
           grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
