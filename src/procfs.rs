@@ -506,10 +506,18 @@ mod tests {
         let lock = |f: &std::fs::File| unsafe {
             libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0
         };
-        let spawn_sleeper = |close: bool| {
+        let spawn_sleeper = |p: &std::path::Path, close: bool| {
             use std::os::unix::process::CommandExt;
-            let f = std::fs::File::create(&p).unwrap();
-            assert!(lock(&f));
+            let f = std::fs::File::create(p).unwrap();
+            // A concurrent test's fork may share an earlier descriptor of
+            // this file for a moment (macOS forks for pre_exec spawns).
+            assert!((0..100).any(|_| {
+                let ok = lock(&f);
+                if !ok {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                ok
+            }));
             let fd = f.as_raw_fd();
             let mut c = std::process::Command::new("sleep");
             c.arg("5");
@@ -529,14 +537,16 @@ mod tests {
             drop(f);
             child
         };
-        let mut leaky = spawn_sleeper(false);
+        let mut leaky = spawn_sleeper(&p, false);
         assert!(
             !lock(&std::fs::File::open(&p).unwrap()),
             "control: plain spawn keeps the lock"
         );
         leaky.kill().unwrap();
         leaky.wait().unwrap();
-        let mut clean = spawn_sleeper(true);
+        // Its own file: the killed control child's lock cannot interfere.
+        let p = p.with_extension("clean");
+        let mut clean = spawn_sleeper(&p, true);
         // Another test thread that forks shares our descriptor until its
         // child execs, so the lock can look held for a moment. A leak into
         // the sleeper holds it for its whole 5 s: poll for up to 1 s.
@@ -551,6 +561,7 @@ mod tests {
         clean.kill().unwrap();
         clean.wait().unwrap();
         let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(p.with_extension(""));
     }
 
     #[test]
