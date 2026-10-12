@@ -34,6 +34,7 @@ mod procfs;
 mod record;
 mod remote;
 mod remote_agent;
+mod remote_artifacts;
 mod remote_backend;
 mod remote_build;
 mod remote_daemon;
@@ -537,6 +538,7 @@ pub fn main() -> anyhow::Result<()> {
         ),
         Some(buildd::DAEMON_ARG) => buildd::daemon_main(),
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
+        Some(remote_artifacts::ARG) => remote_artifacts::serve_main(),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
             std::env::args_os()
                 .nth(2)

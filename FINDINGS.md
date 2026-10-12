@@ -3601,3 +3601,23 @@ jcode_base 7.2 s alone). So the next wins for cold targets are:
 
 Shipped: the GC cap now defaults to a quarter of the free disk, 30 to 150
 GB (here 150 GB, cache at 27 GB). At 30 GB it evicted 3-5 GB every 1-3 h.
+
+### 45b. Shipped: optimized `build` routes remote, binary comes back as a delta
+
+`src/remote_artifacts.rs`, routing in `src/route.rs` (`routable_build`).
+Same laptop (load 20-22, other agents building), justrust repo, one-line
+edit to `src/summary.rs` then `justrust build --release`, interleaved:
+
+| round | remote (client wall, incl. fetch) | local |
+|---|---:|---:|
+| 1 | 18.0 s | 25.0 s |
+| 2 | 17.5 s | 30.7 s |
+| 3 | 17.0 s | 37.9 s |
+
+Remote median 17.5 s vs local 30.7 s, **1.75x**, disjoint ranges. Fetch:
+full zstd copy 3.5 MB in 0.8-1.6 s after a local build; consecutive
+remote builds come back as a 0.1 MB delta in 0.4-1.0 s (the comment-only
+edit barely changes the binary; a real code edit measured 2.2 MB in
+FINDINGS 45). No-op remote build: 1.7 s, artifact check 0.38 s. Run ids
+20261011-235746732-770608 (local 1), 20261011-235817389-780593,
+20261011-235834417-782823, remote runs 20261011-235919370-786512 onward.

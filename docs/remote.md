@@ -300,10 +300,15 @@ starts a stopped machine) so its shims can fetch from the machine.
 ## Routing
 
 `src/route.rs`. Every agent-mode `check`, `clippy`, and `test` asks the
-router first. `build` and `run` always stay local because their artifacts
-are needed here. FINDINGS 45 measured bringing them back: `build
---release` would win (about 1.6-2x with a zstd `--patch-from` delta of
-~2 MB), dev builds lose to the 100 MB debug binary.
+router first. `run` and debug `build` always stay local because their artifacts
+are needed here and a debug binary (100 MB, mostly debug info) costs more
+to bring back than to link. An optimized `build` (`--release` or a custom
+profile, host target) routes on history like `check`: tried remotely once
+the local build takes over 5 s, kept remote while it wins, and its
+binaries come back through `src/remote_artifacts.rs` (`justrust
+__artifacts` on the machine): a zstd `--patch-from` delta against the
+copy fetched last time, or a full zstd copy after a local build. The
+fetch is part of the client wall the router compares. FINDINGS 45.
 
 `JUSTRUST_REMOTE` controls it:
 

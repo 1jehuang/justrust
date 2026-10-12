@@ -239,8 +239,14 @@ fn capacity() -> usize {
 /// The shared target dir for the workspace, as cargo resolves it (config,
 /// workspace root). About 20 ms.
 fn shared_target_dir(args: &[OsString]) -> Option<PathBuf> {
+    target_dir_in(Path::new("."), args)
+}
+
+/// [`shared_target_dir`] for a build run in `cwd`.
+pub fn target_dir_in(cwd: &Path, args: &[OsString]) -> Option<PathBuf> {
     let cargo = paths::real_cargo().ok()?;
     let mut cmd = Command::new(cargo);
+    cmd.current_dir(cwd);
     cmd.args([
         "metadata",
         "--no-deps",

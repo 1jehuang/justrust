@@ -320,6 +320,7 @@ pub fn run_remote(
     start: bool,
 ) -> Result<std::result::Result<Outcome, Infra>> {
     let total = Instant::now();
+    let started_at = crate::paths::now();
     let cwd = std::env::current_dir()?;
     let infra = |m: String| Ok(Err(Infra(m)));
     let roots = match source_roots(&cwd) {
@@ -397,7 +398,7 @@ pub fn run_remote(
         &Msg::Run {
             id: 0,
             cwd: cwd.display().to_string(),
-            args: full,
+            args: full.clone(),
             env,
             roots: roots.iter().map(|r| r.display().to_string()).collect(),
             start,
@@ -452,6 +453,18 @@ pub fn run_remote(
             (Msg::RunFiles { .. }, data) => run_files = data,
             (Msg::Exit { code, .. }, summary) => {
                 report("done", Some(code));
+                // A build is only done once its outputs are here. Counted in
+                // the client wall the router compares against local.
+                if code == 0 && sub == "build" {
+                    match crate::remote_artifacts::fetch(&full, started_at) {
+                        Ok(line) => eprintln!("justrust remote: {line}"),
+                        Err(e) => {
+                            return Ok(Err(Infra(format!(
+                                "built remotely, but bringing the binary back failed: {e:#}"
+                            ))));
+                        }
+                    }
+                }
                 let (files, ms, machine) = sync.unwrap_or((0, 0.0, String::new()));
                 record_remote(
                     &run_id,

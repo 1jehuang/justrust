@@ -6,7 +6,9 @@
 //!
 //! Robustness first. Local is the default and costs nothing extra:
 //! - `JUSTRUST_REMOTE=0|off`: always local, nothing is read.
-//! - `build` and `run` are always local (their artifacts are needed here).
+//! - `run` and debug `build` are always local (their artifacts are needed
+//!   here). An optimized `build` routes on history like the rest and brings
+//!   its binaries back as zstd deltas (`remote_artifacts.rs`).
 //! - No backend configured, or the machine is not known to be up: local,
 //!   with no network call, no daemon start, and no machine start.
 //! - `JUSTRUST_REMOTE=1|force`: remote for check, clippy and test, starting
@@ -32,6 +34,8 @@ use crate::summary::IndexEntry;
 
 /// Local median above which a command with no remote sample tries remote.
 const EXPLORE_LOCAL_SECS: f64 = 3.0;
+/// Same for an optimized `build`, which also pays the artifact download.
+const EXPLORE_BUILD_SECS: f64 = 5.0;
 /// Samples per side used for the median.
 const RECENT: usize = 5;
 /// Local samples older than this are ignored (seconds).
@@ -77,6 +81,25 @@ fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
 }
 
+/// A `build` whose outputs come back cheaply enough to be worth building
+/// remotely (FINDINGS 45): an optimized profile for the host, so the
+/// binary is small and a delta of it comes back in under a second. Debug
+/// binaries (100 MB, mostly debug info) and cross builds stay local.
+fn routable_build(args: &[String]) -> bool {
+    if args.first().map(String::as_str) != Some("build") {
+        return false;
+    }
+    let cargo: Vec<&String> = args.iter().take_while(|a| *a != "--").collect();
+    if cargo
+        .iter()
+        .any(|a| *a == "--target" || a.starts_with("--target=") || a.contains("target-dir"))
+    {
+        return false;
+    }
+    let os: Vec<OsString> = args.iter().map(OsString::from).collect();
+    crate::slots::profile_dir(&os) != Path::new("debug")
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Choice {
     Local(String),
@@ -109,8 +132,9 @@ pub fn decide(
     let Some(sub) = args.first() else {
         return Choice::Local("no subcommand".into());
     };
-    if !routable(sub) {
-        return Choice::Local(format!("`{sub}` always runs locally"));
+    let build = routable_build(args);
+    if !routable(sub) && !build {
+        return Choice::Local(local_only(sub));
     }
     let same: Vec<&IndexEntry> = entries
         .iter()
@@ -142,9 +166,17 @@ pub fn decide(
     );
     match (local, remote) {
         (None, None) => Choice::Local(NO_HISTORY.into()),
-        (Some(l), None) if l > EXPLORE_LOCAL_SECS => Choice::Remote(format!(
-            "trying remote: local ~{l:.1}s, no recent remote sample for this command"
-        )),
+        (Some(l), None)
+            if l > if build {
+                EXPLORE_BUILD_SECS
+            } else {
+                EXPLORE_LOCAL_SECS
+            } =>
+        {
+            Choice::Remote(format!(
+                "trying remote: local ~{l:.1}s, no recent remote sample for this command"
+            ))
+        }
         (Some(l), None) => Choice::Local(format!(
             "local ~{l:.1}s, too short to be worth trying remote"
         )),
@@ -178,6 +210,15 @@ fn cold_rule(c: Choice, cold: bool) -> Choice {
 }
 
 const NO_HISTORY: &str = "no history for this command";
+
+fn local_only(sub: &str) -> String {
+    match sub {
+        "build" => {
+            "debug and cross `build` run locally (only optimized builds come back cheaply)".into()
+        }
+        _ => format!("`{sub}` always runs locally"),
+    }
+}
 
 /// Ask the sync daemon to connect to the machine in the background (never
 /// starts a stopped one), so this build's rustc shims can fetch dependency
@@ -424,11 +465,16 @@ pub fn maybe_remote(full: &[OsString]) {
     if !cfg!(target_os = "linux") && m != Mode::Force {
         return say_local("remote machines build for Linux, this host is not Linux");
     }
-    if !routable(sub) {
-        // `build` and `run` stay here, but their dependencies may come from
-        // the machine's cache.
+    let build = routable_build(&args);
+    if build && !(cfg!(target_os = "linux") && crate::remote_artifacts::available()) {
         warm_if_up(full);
-        return say_local(&format!("`{sub}` always runs locally"));
+        return say_local("remote `build` needs Linux and `zstd` here to bring the binary back");
+    }
+    if !routable(sub) && !build {
+        // `run` and debug `build` stay here, but their dependencies may
+        // come from the machine's cache.
+        warm_if_up(full);
+        return say_local(&local_only(sub));
     }
     let Some(backend) = remote_backend::load() else {
         if m == Mode::Force {
@@ -439,8 +485,12 @@ pub fn maybe_remote(full: &[OsString]) {
         return say_local("no remote machine configured");
     };
     let now = crate::paths::now();
-    let hosted_default =
-        m == Mode::Default && backend == Backend::Hosted && crate::remote_hosted::signed_in();
+    // Optimized builds always go through the router: whether bringing
+    // the binary back pays off depends on the project.
+    let hosted_default = m == Mode::Default
+        && backend == Backend::Hosted
+        && crate::remote_hosted::signed_in()
+        && !build;
     let reason = if m == Mode::Force {
         "JUSTRUST_REMOTE=force".to_string()
     } else if hosted_default {
@@ -619,6 +669,46 @@ mod tests {
         ];
         assert!(!is_remote(&run(&["build"], &h)));
         assert!(!is_remote(&run(&["run"], &h)));
+    }
+
+    #[test]
+    fn optimized_builds_route_on_history() {
+        let rel = |w: f64, remote: bool| e(&["build", "--release"], w, remote, 10.0);
+        // Slow local release build, no remote sample: explore.
+        assert!(is_remote(&run(
+            &["build", "--release"],
+            &[rel(20.0, false)]
+        )));
+        // Between the check and build thresholds: stay local.
+        assert!(!is_remote(&run(
+            &["build", "--release"],
+            &[rel(4.0, false)]
+        )));
+        // Remote measured slower: local.
+        let h = vec![rel(20.0, false), rel(25.0, true)];
+        assert!(!is_remote(&run(&["build", "--release"], &h)));
+        // Remote clearly faster: remote.
+        let h = vec![rel(25.0, false), rel(12.0, true)];
+        assert!(is_remote(&run(&["build", "--release"], &h)));
+        // Custom optimized profile counts, cross and debug builds do not.
+        let p = vec![e(&["build", "--profile", "dist"], 30.0, false, 10.0)];
+        assert!(is_remote(&run(&["build", "--profile", "dist"], &p)));
+        let x = vec![e(
+            &["build", "--release", "--target", "wasm32-unknown-unknown"],
+            30.0,
+            false,
+            10.0,
+        )];
+        assert!(!is_remote(&run(
+            &["build", "--release", "--target", "wasm32-unknown-unknown"],
+            &x
+        )));
+        let d = vec![e(&["build", "--profile", "dev"], 30.0, false, 10.0)];
+        assert!(!is_remote(&run(&["build", "--profile", "dev"], &d)));
+        // `run --release` stays local (the binary must run here after a
+        // local cargo freshness check that would rebuild it).
+        let r = vec![e(&["run", "--release"], 30.0, false, 10.0)];
+        assert!(!is_remote(&run(&["run", "--release"], &r)));
     }
 
     #[test]
