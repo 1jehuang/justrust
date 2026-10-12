@@ -6,7 +6,7 @@ rust-version = "1.91"
 readme = "README.md"
 keywords = ["cargo", "build", "compile", "agents", "profiling"]
 categories = ["development-tools", "development-tools::build-utils"]
-description = "Fast Rust compile for coding agents"
+description = "Rust compile as a service for coding agents"
 license = "MIT"
 repository = "https://github.com/1jehuang/justrust"
 # server/ is FSL-licensed and must never ship inside the MIT crate.

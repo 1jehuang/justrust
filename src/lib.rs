@@ -1,4 +1,4 @@
-//! justrust: fast Rust compile for coding agents.
+//! justrust: Rust compile as a service for coding agents.
 //!
 //! One binary, three entry points chosen by the name it is run as:
 //! - `cargo` (via `justrust install`): records the build, then behaves like cargo.
