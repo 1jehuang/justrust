@@ -82,6 +82,10 @@ jobs:
           # Which units missed in the second checkout, and why their keys differ.
           run=$(ls -td ~/.justrust/runs/*/ | head -1)
           grep '"depcache":"miss"' "$run/units.jsonl" | grep -o '"crate_name":"[^"]*"' || true
+          for f in "$RUNNER_TEMP"/dc-a/target/debug/deps/libserde_derive-*.dylib; do
+            echo "== $f"; strings -a "$f" | grep -n "dc-a" | head -5
+            otool -l "$f" | grep -A3 "LC_ID_DYLIB\|LC_RPATH" | head -10
+          done
           ls "$RUNNER_TEMP/explain-a" "$RUNNER_TEMP/explain-b" | sort | uniq -u || true
           for f in $(ls "$RUNNER_TEMP/explain-b"); do
             [ -f "$RUNNER_TEMP/explain-a/$f" ] || { n=${f%-*}; echo "== $f"; diff "$RUNNER_TEMP"/explain-a/"$n"-* "$RUNNER_TEMP/explain-b/$f" | head -20; }
