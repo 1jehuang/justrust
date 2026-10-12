@@ -269,12 +269,30 @@ fn clear_pending() {
     }
 }
 
-/// After a login: select hosted if nothing is configured.
+/// After a login: select hosted.
 fn finish(tok: &Value) -> Result<()> {
     save_creds(tok)?;
     clear_pending();
-    if crate::remote_backend::load().is_none() {
-        crate::remote_backend::save(&crate::remote_backend::Backend::Hosted)?;
+    select_hosted()
+}
+
+/// Signing in is the explicit way onto hosted builds, so it selects hosted
+/// even over the legacy own-AWS machine, saying so once. `remote use aws`
+/// switches back. `remote use off` (no backend.json, no AWS state) stays a
+/// fresh start that login also fills in.
+fn select_hosted() -> Result<()> {
+    use crate::remote_backend::{Backend, load, save};
+    match load() {
+        Some(Backend::Hosted) => {}
+        Some(Backend::Aws) => {
+            save(&Backend::Hosted)?;
+            // stderr: login_link runs inside `justrust mcp`, whose stdout is
+            // the protocol.
+            eprintln!(
+                "remote builds now use hosted (were: your own AWS machine, `justrust remote use aws` to switch back)"
+            );
+        }
+        None => save(&Backend::Hosted)?,
     }
     Ok(())
 }
@@ -327,9 +345,7 @@ pub fn login(no_wait: bool) -> Result<()> {
             "already signed in to Jcode ({}). `justrust logout` to switch accounts.",
             env_path()?.display()
         );
-        if crate::remote_backend::load().is_none() {
-            crate::remote_backend::save(&crate::remote_backend::Backend::Hosted)?;
-        }
+        select_hosted()?;
         print_builds();
         return Ok(());
     }
@@ -365,9 +381,7 @@ pub fn login(no_wait: bool) -> Result<()> {
 pub fn login_link() -> Result<Option<String>> {
     poll_pending();
     if hosted::signed_in() {
-        if crate::remote_backend::load().is_none() {
-            crate::remote_backend::save(&crate::remote_backend::Backend::Hosted)?;
-        }
+        select_hosted()?;
         return Ok(None);
     }
     let p = match load_pending() {

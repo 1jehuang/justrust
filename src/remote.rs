@@ -808,6 +808,12 @@ fn render_aws_header(o: &mut String, s: &Status) {
             other => other,
         }
     );
+    if s.signed_in {
+        let _ = writeln!(
+            o,
+            "  (legacy own-AWS backend. Signed in to Jcode: `justrust remote use hosted` for hosted builds)"
+        );
+    }
     if !s.configured {
         return;
     }

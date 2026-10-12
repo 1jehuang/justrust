@@ -430,8 +430,26 @@ pub fn me(c: &Creds) -> Result<Me> {
 
 /// Signed in and entitled to build hosts.
 pub fn check_access(c: &Creds) -> Result<Me> {
-    let m = me(c)?;
+    let mut m = me(c)?;
     if !m.build_hosts {
+        // /me can lag the fleet (an older API deploy without the capability
+        // flags). The fleet is the source of truth: a 200 from build/host
+        // means entitled, and a fleet outage is reported as one, not as an
+        // account problem.
+        match request(c, "GET", "build/host", None) {
+            Ok(r) if r.code == 200 => {
+                m.build_hosts = true;
+                if m.builds.is_none() {
+                    m.builds = Builds::from(&r.body["builds"]);
+                }
+                return Ok(m);
+            }
+            Ok(r) if r.code >= 500 || r.body["error"]["code"] == "build_unavailable" => {
+                bail!(UNAVAILABLE)
+            }
+            Ok(r) if r.code == 402 || r.code == 429 => return Err(api_error(&r)),
+            _ => {}
+        }
         // A paying subscriber on a server that does not offer hosted builds
         // yet must not be told to subscribe.
         let paid = m
@@ -1210,6 +1228,43 @@ mod tests {
         let s = check_access(&c).unwrap_err().to_string();
         assert!(s.contains("not available on your Jcode account yet"), "{s}");
         assert!(!s.contains("upgrade"), "{s}");
+    }
+
+    /// /me without capability flags (older API deploy) but the fleet says 200:
+    /// entitled, with builds taken from the fleet.
+    #[test]
+    fn fleet_200_overrides_stale_me_capabilities() {
+        let (c, seen) = mock(vec![
+            (
+                200,
+                r#"{"email":"a@b","tier":"plus","status":"active","capabilities":{"remote_compile":false}}"#,
+            ),
+            (
+                200,
+                r#"{"state":"stopped","builds":{"trial_remaining":15,"can_build":true}}"#,
+            ),
+        ]);
+        let m = check_access(&c).unwrap();
+        assert!(m.build_hosts);
+        assert_eq!(m.builds.unwrap().left(), 15);
+        assert!(seen.lock().unwrap()[1].path.ends_with("/build/host"));
+    }
+
+    /// Fleet down while /me lacks the flag: an outage, not an account problem.
+    #[test]
+    fn fleet_503_is_unavailable_not_not_offered() {
+        let (c, _) = mock(vec![
+            (
+                200,
+                r#"{"email":"a@b","tier":"plus","status":"active","capabilities":{}}"#,
+            ),
+            (
+                503,
+                r#"{"error":{"code":"build_unavailable","message":"x"}}"#,
+            ),
+        ]);
+        let s = check_access(&c).unwrap_err().to_string();
+        assert!(s.contains("unavailable right now"), "{s}");
     }
 
     /// Unreachable fleet: the error names the fleet host, not the API.
