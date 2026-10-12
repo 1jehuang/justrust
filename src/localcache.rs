@@ -35,7 +35,7 @@
 //! - **Off with hot patching** (`JUSTRUST_HOTPATCH=1`): the patcher tracks
 //!   the binaries it linked.
 //!
-//! `JUSTRUST_LOCALCACHE=0|1` (default: see `enabled`), cache dir
+//! On by default, `JUSTRUST_LOCALCACHE=0` turns it off, cache dir
 //! `JUSTRUST_LOCALCACHE_DIR`, size cap `JUSTRUST_LOCALCACHE_MAX` (default
 //! 10G, LRU like depcache). Every error means "compile normally".
 //!
@@ -64,8 +64,9 @@ pub fn enabled() -> bool {
     }
 }
 
-/// Off until a measured win (FINDINGS 46).
-const DEFAULT_ON: bool = false;
+/// On: revert 10.6 -> 0.7 s and a fresh target dir 66 -> 6.3 s on the
+/// Desktop snapshot, loop overhead within noise (FINDINGS 50).
+const DEFAULT_ON: bool = true;
 
 pub fn cache_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("JUSTRUST_LOCALCACHE_DIR") {
@@ -260,7 +261,7 @@ fn stage_with(
 /// Stored this many times with the same sources but other values of a
 /// tracked env var: the var changes on every build (a build script stamping
 /// the build time, like Jcode Desktop's `JCODE_DESKTOP_BUILD_ID`), so new
-/// entries can never hit. Stop storing them (FINDINGS 46).
+/// entries can never hit. Stop storing them (FINDINGS 50).
 const VOLATILE_AFTER: usize = 2;
 
 fn volatile(manifest: &Path, entry: &Entry) -> bool {

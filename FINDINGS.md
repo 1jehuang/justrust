@@ -3621,3 +3621,98 @@ edit barely changes the binary; a real code edit measured 2.2 MB in
 FINDINGS 45). No-op remote build: 1.7 s, artifact check 0.38 s. Run ids
 20261011-235746732-770608 (local 1), 20261011-235817389-780593,
 20261011-235834417-782823, remote runs 20261011-235919370-786512 onward.
+
+## 50. Local crate cache: workspace crates restored by content, revert 10.6 -> 0.7 s, fresh target dir 66 -> 6.3 s (2026-10-12)
+
+Code: `src/localcache.rs` (239bef0 and follow-ups to 8f1aff6+), shim wiring
+in `src/shim.rs`, `depcache::plan_with`. Factors `localcache-revert`,
+`-revert-sde`, `-revert-small`, `-loop`, `-fresh` in `bench/factors.py`
+(new samplers `revert` and `fresh`). Measured with a pinned copy of the
+justrust binary (`JUSTRUST=<copy>`): other agents reinstalled justrust
+mid-run three times.
+
+**What it is.** depcache only took registry and git units. Workspace and
+path crates now go through the same two-level key (args with the profile
+dir normalized, `--extern`s by crate metadata, then every dep-info source
+and tracked env var by content), plus the link args the shim adds (wild).
+Differences from depcache: no extra rustc args (local units compile
+exactly as cargo asked, so recording never changes outputs, incremental
+state, or fingerprints, and the key includes the working dir: a worktree
+at another path misses, measured), `-C incremental` accepted (a hit leaves
+the incremental dir alone), and the store is off the critical path. The
+shim hard-links the outputs into `s/` and a niced, idle-io
+`justrust __localcache-finish` copies, hashes, runs the target-path guard
+and commits. Off with `JUSTRUST_HOTPATCH=1`. Own cache dir, 10 GB LRU cap.
+
+**Results** (Desktop snapshot unless noted, ABBA, medians, min-max):
+
+| factor | workload | on | off | |
+|---|---|---:|---:|---|
+| localcache-revert | edit fps_counter.rs, build, undo, build (measured) | 12.00 s (10.6-14.0) | 12.76 s (12.1-15.1) | 0/5 hits, see below |
+| localcache-revert-sde | same with `SOURCE_DATE_EPOCH` fixed | **0.70 s (0.68-0.73)** | 10.61 s (10.4-11.3) | 5/5 hits, -93% |
+| localcache-revert-small | justrust snapshot, full `test` | **0.88 s (0.80-2.14)** | 2.41 s (2.15-3.70) | 4 of 5 units hit |
+| localcache-fresh | fresh target dir, unchanged sources, deps from depcache both sides | **6.27 s (5.4-6.7)** | 66.14 s (59.7-88.8) | 54/54 local units restored |
+| localcache-loop | plain reference loop (every build misses) | 8.93 s (8.5-9.2) | 8.70 s (8.4-11.7) | within noise |
+
+Results: `factors-20261011-230158-adeeaebe403f-dirty.json` (revert-sde,
+revert-small), `factors-20261011-233833-2b487ca729a9-dirty.json` (fresh),
+`factors-20261012-001556-fc0cd2778c87-dirty.json` (loop),
+`factors-20261011-221705-a2c6ad1308d2-dirty.json` (plain revert). Example
+runs: revert-sde on 20261011-230734816-3809690194 / off
+20261011-230713186-3809690629, fresh on 20261011-234637064-336728534 / off
+20261011-234507388-336728483.
+
+**Why the plain Desktop revert never hits.** `jcode-desktop-ui`'s build.rs
+stamps `JCODE_DESKTOP_BUILD_ID` (build time in ms) into the crate with
+`cargo:rustc-env`, read by `env!`. Every build is a new input, so every
+result is unique (20 entries, same sources, 20 build ids). It is correct
+to miss: the restored binary would report another build's id. Options
+measured or considered:
+
+- Set `SOURCE_DATE_EPOCH` by default: makes Desktop hit (revert-sde), but
+  changes what the project's binaries say about themselves, and it is a
+  build input of every registry build script that reads it (all
+  dependency keys would move once). Not done: the user's choice, not ours.
+  Mentioned to the project instead.
+- Detect volatile inputs and skip storing (shipped): a tracked env value
+  that parses as a Unix time from the last ten minutes, or a unit whose
+  sources match two stored entries with other env values, is not staged.
+  Desktop's UI test unit now stages nothing (`staged:false`), so it costs
+  only the lookup.
+
+**Miss-path cost on the loop** (`<run>/localcache.jsonl`, 10 samples):
+plan (key, lookup) 14-18 ms after memoizing lib-dir hashes (85 ms before),
+stage 17-27 ms. A reflink of the just-written 285 MB test binary took
+~170 ms because btrfs flushes dirty pages before cloning, so staging uses a
+hard link and the finisher copies it and checks the inode/size/mtime
+stamp, dropping the entry if a later build rewrote the file. The
+remaining loop delta (+0.23 s median, rustc wall 8.19 vs 8.10 s) is
+within the factor's noise. The finisher measured 0.72-0.93 s wall,
+0.59-0.79 s CPU per 240 MB UI binary, niced. Disk: 240 MB per stored UI
+test binary, ~15 GB after two hours of benchmark edits before the
+volatile guard (every edit stores a new result), capped at 10 GB by GC.
+Units whose sources are back to a stored state are what the cache is for.
+The loop's normal edit is a new state, so the stored copy only pays off on
+revert, branch switch back, or a new target dir.
+
+**Correctness.**
+- Restored outputs are byte-identical to a compile (justrust test binary,
+  `cmp`), and the tests pass on them: 157/157 justrust, 3/3 Desktop
+  fps_counter in every hit sample, the same counts as the off side.
+- No `Dirty` units: after a hit, a `-v` no-op is all Fresh. Toggling
+  `JUSTRUST_LOCALCACHE` on and off in one target dir leaves 48/48 Fresh.
+- Key poisoning (`include_str!` data file, a build-script
+  `cargo:rustc-env` read by `env!`, `option_env!`): each change misses and
+  the test prints the new value, going back to the original inputs hits
+  and prints the old one.
+- Refused, as designed: integration tests that embed
+  `env!("CARGO_BIN_EXE_*")` (the target dir as data), so justrust's
+  `remote_agent` test always recompiles.
+
+**Decision: on by default** (`JUSTRUST_LOCALCACHE=0` turns it off). The
+win scenarios are large (fresh dir -90%, revert -64% to -93%) and the
+miss path costs ~35 ms in the shim, with correctness checks clean. Not
+yet measured on the synthetic workload. A fresh worktree at another path
+and second checkouts do not hit (absolute paths in local outputs). Making
+those hit needs `--remap-path-prefix` for the workspace, which changes
+panic paths and debuginfo the user sees: a follow-up to measure.

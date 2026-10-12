@@ -311,7 +311,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             let lines = std::mem::take(&mut *captured.lock().unwrap());
             let t = paths::now();
             let staged = crate::localcache::stage(lp, start, end - start, &lines).is_some();
-            // Where the cache's own time goes (FINDINGS 46).
+            // Where the cache's own time goes (FINDINGS 50).
             let line = serde_json::json!({
                 "crate": unit.crate_name, "test": unit.test, "plan": plan_secs,
                 "stage": paths::now() - t, "staged": staged,
