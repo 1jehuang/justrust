@@ -991,6 +991,26 @@ impl State {
             let Ok(text) = std::fs::read_to_string(&p) else {
                 continue;
             };
+            if self.texts.get(&p) == Some(&text) {
+                // Touched, not changed (a restore, a checkout of the same
+                // text): not a file the agent changed. Opened once so its
+                // baseline is known before a real edit.
+                if !self.versions.contains_key(&p)
+                    && self
+                        .lsp
+                        .notify(
+                            "textDocument/didOpen",
+                            json!({"textDocument": {"uri": file_uri(&p), "languageId": "rust",
+                                   "version": 1, "text": text}}),
+                        )
+                        .is_ok()
+                {
+                    self.versions.insert(p.clone(), 1);
+                    let b = self.baseline_of(&p);
+                    self.baseline.insert(p.clone(), b);
+                }
+                continue;
+            }
             if let Some(old) = self.texts.get(&p) {
                 sig_names.extend(changed_signatures(old, &text));
             }
@@ -1099,13 +1119,19 @@ impl State {
         files.extend(self.erroring.iter().cloned());
         files.extend(extra.iter().cloned());
         let files: Vec<PathBuf> = files.into_iter().collect();
-        let mut r = self.pull(&files, timeout, raw);
+        let mut r = self.pull(&files, timeout, raw, !extra.is_empty());
         r.ms = t.elapsed().as_secs_f64() * 1000.0;
         r.callers = self.callers.len();
         r
     }
 
-    fn pull(&mut self, files: &[PathBuf], timeout: Duration, raw: bool) -> Reply {
+    fn pull(
+        &mut self,
+        files: &[PathBuf],
+        timeout: Duration,
+        raw: bool,
+        unedited_is_baseline: bool,
+    ) -> Reply {
         let t = Instant::now();
         let mut rxs = Vec::new();
         for f in files {
@@ -1135,6 +1161,21 @@ impl State {
                 }));
             }
             let mut errs: Vec<Diag> = items.iter().filter_map(|d| to_diag(&f, d)).collect();
+            if unedited_is_baseline && !self.versions.contains_key(&f) {
+                // `pull` of a file never edited since the daemon started
+                // (the accuracy sweep): what rust-analyzer says about it is
+                // its baseline, never an answer. Caller files (second
+                // phase) are unedited too but stay reported.
+                if !errs.is_empty() {
+                    self.baseline.insert(
+                        f.clone(),
+                        errs.iter()
+                            .map(|d| (d.code.clone(), d.message.clone()))
+                            .collect(),
+                    );
+                }
+                errs.clear();
+            }
             if let Some(b) = self.baseline.get(&f) {
                 drop_baseline(&mut errs, b);
             }
@@ -1180,7 +1221,7 @@ impl State {
         while !self.callers.is_empty() && t.elapsed() < timeout {
             let n = self.callers.len().min(CALLER_BATCH);
             let batch: Vec<PathBuf> = self.callers.drain(..n).collect();
-            let r = self.pull(&batch, timeout.saturating_sub(t.elapsed()), raw);
+            let r = self.pull(&batch, timeout.saturating_sub(t.elapsed()), raw, false);
             out.files.extend(r.files);
             out.raw.extend(r.raw);
             let found = !r.diags.is_empty();
@@ -1385,6 +1426,14 @@ fn to_diag(file: &Path, d: &Value) -> Option<Diag> {
     // could not compute. On the Desktop snapshot these were the only
     // errors it reported on sources rustc accepts (FINDINGS 28).
     if code == "E0282" || message.contains("{unknown}") {
+        return None;
+    }
+    // Errors about the never type `!` follow from another error that
+    // rust-analyzer typed as `!` (an unresolved path at another line):
+    // `no method `x` on type `!``, `the trait bound `!: Trait``. rustc
+    // reports only the cause (mutation bench: E0433 at 239, rust-analyzer
+    // E0599 on `!` at 250; Jcode's dev-dependency cycle).
+    if message.contains("type `!`") || message.contains("`!:") || message.contains("`!`,") {
         return None;
     }
     // A fn item passed where a closure is expected: rust-analyzer says

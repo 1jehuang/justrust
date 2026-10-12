@@ -17,6 +17,7 @@ every error carries a rustc code (`early::exit_eligible`). Per mutation:
   wrong          fired but rustc passed, or an early error rustc did not report
   partial        correct, but rustc reported more errors in the changed file
   near           same file and code, rustc's line within 5 (same expression)
+  superset       every rustc error of the file, plus ones rustc did not report
 Clean edits (should compile) and a clean sweep of every file count
 false exits on code that compiles.
 
@@ -29,6 +30,7 @@ Usage: mutations.py [--n 70] [--seed 1] [--only desktop|jcode]
 Writes bench/results/early-exit-mutations-<time>.json.
 """
 import argparse
+import signal
 import json
 import os
 import random
@@ -242,7 +244,13 @@ def classify(diags, rerr, rc, path):
         # (rust-analyzer marks the end of a method chain, rustc its start).
         near = all(any(f == d["file"] and c == d["code"] and abs(l - d["line"]) <= 5 for f, l, c in rerr)
                    for d in diags)
-        return "near" if near else "wrong_location"
+        if near:
+            return "near"
+        # Every rustc error of the file found, plus errors rustc did not
+        # report (rust-analyzer's set is bigger): right place, extra noise.
+        if in_file and in_file <= eset:
+            return "superset"
+        return "wrong_location"
     if in_file - eset:
         return "partial"
     return "correct"
@@ -352,9 +360,10 @@ def summarize(rows):
             "correct": sum(r["verdict"] == "correct" for r in rs),
             "partial": sum(r["verdict"] == "partial" for r in rs),
             "near": sum(r["verdict"] == "near" for r in rs),
+            "superset": sum(r["verdict"] == "superset" for r in rs),
             "wrong_build_passed": sum(r["verdict"] == "wrong_build_passed" for r in rs),
             "wrong_location": sum(r["verdict"] == "wrong_location" for r in rs),
-            "recall": round(sum(r["verdict"] in ("correct", "partial", "near") for r in failing) / max(1, len(failing)), 3),
+            "recall": round(sum(r["verdict"] in ("correct", "partial", "near", "superset") for r in failing) / max(1, len(failing)), 3),
             "clean_edits": sum(r["clean"] for r in rs),
             "clean_false_exits": sum(r["clean"] and r["verdict"] != "no_exit" for r in rs),
             "ra_ms_median": sorted(r["ra_ms"] for r in rs)[len(rs) // 2] if rs else None,
@@ -369,12 +378,13 @@ def summarize(rows):
     for r in rows:
         if r["clean"]:
             continue
-        b = by_op.setdefault(r["op"], {"n": 0, "rustc_failed": 0, "fired_correct": 0, "partial": 0, "near": 0, "wrong": 0})
+        b = by_op.setdefault(r["op"], {"n": 0, "rustc_failed": 0, "fired_correct": 0, "partial": 0, "near": 0, "superset": 0, "wrong": 0})
         b["n"] += 1
         b["rustc_failed"] += r["rc"] != 0
         b["fired_correct"] += r["verdict"] == "correct"
         b["partial"] += r["verdict"] == "partial"
         b["near"] += r["verdict"] == "near"
+        b["superset"] += r["verdict"] == "superset"
         b["wrong"] += r["verdict"].startswith("wrong")
     out["by_op"] = by_op
     return out
@@ -383,9 +393,13 @@ def summarize(rows):
 def sweep(kind):
     files = [str(p) for _, p in files_of(kind)]
     t = time.monotonic()
-    r = daemon(WS[kind], {"op": "pull", "files": files}, timeout=900)
+    r = daemon(WS[kind], {"op": "pull", "files": files, "raw": True}, timeout=900)
     secs = time.monotonic() - t
-    ex = r.get("diags", [])
+    # The daemon treats errors in never-edited files as their baseline and
+    # returns none; the raw list shows what rust-analyzer flags (coded
+    # severity-1 errors, before justrust's filters).
+    ex = [d for d in r.get("raw", []) if d.get("severity") == 1
+          and re.fullmatch(r"E\d{4}", str(d.get("code") or ""))]
     print(f"clean sweep {kind}: {len(r.get('files', []))}/{len(files)} files in {secs:.0f}s, "
           f"{len(ex)} coded errors on unedited sources", flush=True)
     for d in ex[:20]:
@@ -417,6 +431,10 @@ def ws_of(p: Path) -> Path:
 
 
 def main():
+    # A kill (pkill, a server restart) must still restore the mutated file:
+    # SIGTERM/SIGHUP unwind through the `finally` that writes it back.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: sys.exit(1))
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=70)
     ap.add_argument("--clean", type=int, default=12)

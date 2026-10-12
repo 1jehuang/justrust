@@ -37,7 +37,7 @@ def main():
     by = defaultdict(lambda: [0, 0, 0])  # ok, wrong, total
     for r in rows:
         c = r["rustc"][0][2] if r["rustc"] else ""
-        ok = r["verdict"] in ("correct", "partial", "near")
+        ok = r["verdict"] in ("correct", "partial", "near", "superset")
         wrong = r["verdict"].startswith("wrong")
         for k in (c, "*"):
             by[k][0] += ok
