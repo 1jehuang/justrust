@@ -398,6 +398,13 @@ pub fn maybe_remote(full: &[OsString]) {
     {
         return;
     }
+    if let Some(a) = full
+        .iter()
+        .map(|a| a.to_str())
+        .collect::<Option<Vec<&str>>>()
+    {
+        let _ = ROUTED_CMD.set(a.join(" "));
+    }
     if m == Mode::Off {
         // Building here was asked for, but this build's dependencies may
         // still come from the machine's cache.
@@ -412,7 +419,6 @@ pub fn maybe_remote(full: &[OsString]) {
         return say_local("non-UTF-8 arguments");
     };
     let Some(sub) = args.first() else { return };
-    let _ = ROUTED_CMD.set(args.join(" "));
     // Remote machines are Linux: a check there sees Linux cfgs and tests
     // run on the wrong OS. Only an explicit force sends a macOS build.
     if !cfg!(target_os = "linux") && m != Mode::Force {
