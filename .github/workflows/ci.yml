@@ -114,11 +114,15 @@ jobs:
           grep -q "1 passed" slot.txt
           # Diagnosis: why a freshly seeded slot rebuilds dependencies.
           touch src/main.rs
-          JCODE_SESSION_ID=third CARGO_LOG=cargo::core::compiler::fingerprint=info \
-            "$bin" test 2>&1 | grep -iE "stale|dirty|fingerprint|mtime|slot" | head -30 || true
-          s=target/justrust-slots; ls $s
+          JCODE_SESSION_ID=third "$bin" test > /dev/null 2>&1 || true
+          s=$(ls -d target/justrust-slots/*/ | tail -1)
+          rm -rf "$RUNNER_TEMP/probe" && mkdir -p "$RUNNER_TEMP/probe"
+          cp -c -R "${s}debug" "$RUNNER_TEMP/probe/debug"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/probe" CARGO_LOG=cargo::core::compiler::fingerprint=info \
+            cargo test --no-run 2>&1 | grep -E "stale|dirty|Dirty|changed|mtime" | head -30 || true
           f=$(ls target/debug/deps/libquote-*.rlib | head -1)
-          stat -f "%N %Fm" "$f" $s/*/debug/deps/$(basename "$f") || true
+          stat -f "%N %Fm" "$f" target/justrust-slots/*/debug/deps/$(basename "$f") || true
+          stat -f "%N %Fm" target/debug/.fingerprint/quote-*/* | head -6
           # Pinned toolchain for the host triple (download, sha256 via shasum).
           printf '[toolchain]\nchannel = "stable"\n' > justrust.toml
           "$bin" toolchain install 2>&1 | tail -5
