@@ -24,7 +24,7 @@ use crate::remote_hosted as hosted;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const ACCOUNT_URL: &str = "https://jcode.sh/account";
-const PRICING_URL: &str = "https://jcode.sh/pricing#builds";
+const PRICING_URL: &str = "https://jcode.sh/rust#subscribe";
 
 /// The account operations the tools need. Split out so the protocol is
 /// tested without the network.

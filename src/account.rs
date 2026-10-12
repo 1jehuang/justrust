@@ -408,7 +408,7 @@ pub fn upgrade(plan: u32, no_wait: bool) -> Result<()> {
         }
         let e = hosted::api_error(&r);
         bail!(
-            "{e}\njustrust: checkout could not start here. Ask your user to subscribe at https://jcode.sh/pricing#builds (same account), then keep working: builds go remote once it is active."
+            "{e}\njustrust: checkout could not start here. Ask your user to subscribe at https://jcode.sh/rust#subscribe (same account, $20 plan or higher), then keep working: builds go remote once it is active."
         );
     }
     let url = r.body["url"].as_str().unwrap_or("");

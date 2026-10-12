@@ -267,10 +267,10 @@ enum Command {
         #[arg(long, hide = true)]
         quiet: bool,
     },
-    /// Subscribe for more hosted builds ($10/mo per plan unit, 500 builds).
+    /// Subscribe for hosted builds (from $20/mo, 2,500 builds per $10).
     Upgrade {
         /// Plan in USD per month.
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, default_value_t = 20)]
         plan: u32,
         /// Print the checkout URL and exit. Remote builds resume by
         /// themselves once paid.

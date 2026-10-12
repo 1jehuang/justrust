@@ -48,7 +48,7 @@ justrust check                             # slow builds now go to a build machi
 
 Agents without a browser: `justrust login --no-wait` prints the link for the
 user and returns at once. Builds stay local until it is approved. After the
-free builds, `justrust upgrade` ($10/mo, 500 builds). Out of builds, offline,
+free builds, `justrust upgrade` (from $20/mo, 5,000 builds). Out of builds, offline,
 or signed out: every build runs locally, with one line saying why.
 Signed in (API key or subscription), check, clippy, and test run remote by
 default. The agent picks per command: `--local`, `--remote`, or `--auto` (the

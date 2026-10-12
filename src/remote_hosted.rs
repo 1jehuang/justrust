@@ -46,7 +46,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 const RECENT_READY_S: u64 = 60;
 
 pub const SIGNED_OUT: &str = "not signed in for hosted builds. Run `justrust login --no-wait` and ask your user to open the URL it prints (builds stay local until then).";
-pub const SUBSCRIBE: &str = "free builds used up. Subscribe ($10/mo, 500 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
+pub const SUBSCRIBE: &str = "free builds used up. Subscribe ($20/mo, 5,000 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
+pub const UPGRADE_PLAN: &str = "remote builds need the $20 plan or higher (5,000 builds a month): ask your user to switch plans at https://jcode.sh/rust#subscribe. Builds run locally until then.";
 pub const RAISE_LIMIT: &str = "monthly usage limit reached: ask your user to raise it at https://jcode.sh/account. Builds run locally until then.";
 pub const NO_CREDITS: &str = "out of Jcode cloud-compute credits (shared with cloud agents). Builds run locally until credits renew. There are no automatic top-ups.";
 pub const UNAVAILABLE: &str = "the hosted build service is unavailable right now. This is not a problem with your subscription. Builds run locally, retry later.";
@@ -318,6 +319,9 @@ pub fn api_error(r: &Resp) -> anyhow::Error {
         (402, _) if r.body["error"]["next_step"].as_str() == Some("raise_limit") => {
             return anyhow!(RAISE_LIMIT);
         }
+        (402, _) if r.body["error"]["next_step"].as_str() == Some("upgrade_plan") => {
+            return anyhow!(UPGRADE_PLAN);
+        }
         (402, _) | (403, "build_not_entitled") => return anyhow!(SUBSCRIBE),
         (429, _) => RATE_LIMITED.into(),
         (503, _) | (_, "build_unavailable") => UNAVAILABLE.into(),
@@ -397,6 +401,7 @@ impl Builds {
         match self.next_step.as_deref() {
             Some("subscribe") => s.push_str(". Subscribe: `justrust upgrade`"),
             Some("raise_limit") => s.push_str(". Raise the limit at https://jcode.sh/account"),
+            Some("upgrade_plan") => s.push_str(". Remote builds need the $20 plan: https://jcode.sh/rust#subscribe"),
             _ => {}
         }
         s
@@ -1147,19 +1152,25 @@ mod tests {
                 402,
                 r#"{"error":{"code":"builds_exhausted","message":"no","next_step":"raise_limit"}}"#,
             ),
+            (
+                402,
+                r#"{"error":{"code":"builds_exhausted","message":"no","next_step":"upgrade_plan"}}"#,
+            ),
         ]);
         let api = c.base.clone();
         // Fleet paths use the build base, account paths stay on the API.
         c.set_build_base(format!("{api}/fleet")).unwrap();
         assert_eq!(charge_run(&c, "r1").unwrap().unwrap().left(), 24);
         let sub = charge_run(&c, "r2").unwrap_err();
-        assert!(sub.starts_with("free builds used up. Subscribe ($10/mo, 500 builds)"));
+        assert!(sub.starts_with("free builds used up. Subscribe ($20/mo, 5,000 builds)"));
         assert!(
             sub.contains("justrust upgrade") && !sub.contains('\n'),
             "{sub}"
         );
         let lim = charge_run(&c, "r3").unwrap_err();
         assert!(lim.contains("https://jcode.sh/account"), "{lim}");
+        let up = charge_run(&c, "r4").unwrap_err();
+        assert!(up.contains("$20 plan") && up.contains("jcode.sh/rust#subscribe"), "{up}");
         let s = seen.lock().unwrap();
         assert_eq!(s[0].path, "/v1/fleet/build/runs");
         assert_eq!(s[0].body, r#"{"run_id":"r1"}"#);
