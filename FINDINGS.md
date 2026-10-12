@@ -3194,3 +3194,37 @@ remote machine's per-thread speed and justrust's ~80 ms per call
 Next for the harness: detect a stock pre-build that recompiles more than
 the previous point left warm (a cache invalidation) and flag the point,
 and run -n 2 so single outliers do not move the means.
+
+## 44. Prebuilt store: fetch only what beats compiling, then it wins by default (2026-10-11)
+
+Finding 43's per-unit numbers (same laptop, 105-crate seed project): fetch
+median 1.18 s, compile median 0.18 s. Fetching was faster for only 34 of
+455 units. So the store now publishes `v1/costs` (`<key> <compile ms>
+<bundle bytes>`, written by `justrust cache --publish`, sizes equal to the
+real S3 bundles for 615/615 keys) and the client fetches a unit only when
+`0.7 s + bytes / rate < compile ms`, with `rate` an EWMA of this
+machine's measured bundle downloads (5 MB/s until measured; it settled at
+5.7-6.0 MB/s here). Unpriced keys are not fetched from the public store.
+`JUSTRUST_PREBUILT_ALWAYS=1` restores fetch-all.
+
+Quiet laptop (load 6-14), cold `check`, empty depcache and target dir,
+CloudFront store, interleaved:
+
+| round | cost-aware store | fetch all | compile only |
+|---|---:|---:|---:|
+| 1 | **22.0 s** (76 fetched) | 32.7 s (615) | 35.1 s |
+| 2 | **19.0 s** (71) | 55.4 s (615) | 35.3 s |
+| 3 | **25.8 s** (63) | | 34.0 s |
+| default build, var unset (load 16-20) | **28.9 s** (77) | | 43.5 s |
+
+-30 to -45% wall against compiling, fetching ~12% of the units (the
+long-compiling ones: tokio, axum, syn, zerocopy, h2, ...). A project the
+store knows nothing about (nalgebra + bevy_ecs, 102 units, 0 hits): 12.4,
+12.8, 16.3 s with the store vs 11.1, 12.3, 12.8 s without, within noise;
+the index and costs downloads are 77 KB, ~0.25 s once per 10 minutes.
+
+Shipped on by default again (`JUSTRUST_PREBUILT=off` disables), the fleet
+publishes `v1/costs` every run. Remaining: one HTTP/2 connection instead
+of a curl process per request (the 0.7 s fixed cost is most of a fetch),
+rmeta-only bundles for check, and pricing by this machine's own compile
+speed instead of the fleet's.

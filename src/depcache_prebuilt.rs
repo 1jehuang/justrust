@@ -16,8 +16,8 @@
 //! ```
 //!
 //! `<base>` is `JUSTRUST_PREBUILT` (`https://...`, `http://...`, `file:///dir`
-//! or an absolute path), or `default` for justrust's public store
-//! ([`DEFAULT_STORE`], CloudFront + S3). Unset or `0`/`off` means off. Lookups happen after a
+//! or an absolute path), or `default`/unset for justrust's public store
+//! ([`DEFAULT_STORE`], CloudFront + S3). `0`/`off` means off. Lookups happen after a
 //! local miss and before the account cache. The index, when the store has
 //! one, is fetched once per 10 minutes and answers most misses without a
 //! request: a cold build of 900 units makes one request per unit the store
@@ -74,12 +74,11 @@ pub(crate) fn note_success(root: &Path) {
 }
 
 /// justrust's public prebuilt store: CloudFront in front of the S3 bucket
-/// (justrust-cloud `infra/prebuilt-store.yaml`, filled by the scheduled
-/// prebuild fleet). Opt-in: `JUSTRUST_PREBUILT=default` (or the URL).
-/// Not on by default: on a quiet 16-core laptop over ~10 MB/s a cold check
-/// of 105 popular crates took 80-138 s from the store against 36-39 s
-/// compiling locally (FINDINGS 43). It wins only where the CPU is the
-/// bottleneck, so it needs a per-unit cost decision before it can default.
+/// (justrust-cloud `infra/prebuilt-store.yaml`, filled daily by the prebuild
+/// fleet). Used when `JUSTRUST_PREBUILT` is unset; `off` disables it.
+/// Only units whose download beats compiling them here are fetched
+/// (`worth_fetching`): fetching everything was 2-3x slower than compiling
+/// on a quiet laptop, fetching selectively 19-26 s vs 34-35 s (FINDINGS 43).
 pub const DEFAULT_STORE: &str = "https://d1j555vqgf2xkj.cloudfront.net";
 
 /// The store base, without a trailing slash, or `None` when off.
@@ -87,7 +86,9 @@ pub fn base() -> Option<String> {
     if !depcache::enabled() {
         return None;
     }
-    let v = std::env::var("JUSTRUST_PREBUILT").ok()?;
+    let Ok(v) = std::env::var("JUSTRUST_PREBUILT") else {
+        return Some(DEFAULT_STORE.to_owned());
+    };
     if matches!(v.trim(), "default" | "1" | "on" | "public") {
         return Some(DEFAULT_STORE.to_owned());
     }
@@ -212,7 +213,10 @@ fn worth_fetching(root: &Path, base: &str, key: &str) -> bool {
         return true;
     }
     let Some((compile_ms, bytes)) = cost_of(root, base, key) else {
-        return true;
+        // Unpriced: a private store (`JUSTRUST_PREBUILT=<url>`) is fetched as
+        // before; the public default store is not, since fetching everything
+        // is what made it slower than compiling (FINDINGS 43).
+        return base != DEFAULT_STORE;
     };
     let rate = download_rate(root);
     // Per-unit fixed cost: a curl process, TLS, manifest round trip.
@@ -587,7 +591,7 @@ fn write_index(v1: &Path) -> anyhow::Result<()> {
 /// One status line for `justrust cache`.
 pub fn status_line(root: &Path) -> String {
     match base() {
-        None => "prebuilt  off (JUSTRUST_PREBUILT=default turns on the public store)".into(),
+        None => "prebuilt  off (JUSTRUST_PREBUILT=off or the depcache is off)".into(),
         Some(b) if fresh_file(&breaker(root), BREAKER_SECS) => format!(
             "prebuilt  {b}: paused after an error ({}), retrying within 10 min",
             std::fs::read_to_string(breaker(root))
