@@ -1192,6 +1192,8 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
         for (key, mut req, roots) in wanted {
             let cwd = PathBuf::from(&req.cwd);
             let (stamp, _) = source_stamp(&roots, &cwd, &req.env);
+            // An unclaimed prebuild of older sources is useless now.
+            cancel_stale_prebuild(dm, &key, &stamp);
             let mut st = dm.state.lock().unwrap();
             if let Some(b) = st.builds.get(&key) {
                 if b.stamp != stamp {
