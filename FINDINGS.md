@@ -3239,3 +3239,22 @@ after 6 failures. A fleet run triggered through the real scheduler
 installed alpha.7 and rewrote `v1/costs` (1177 keys; sizes equal to the
 real bundles for 1145/1145 checked; fleet compile times are 0.86x the
 laptop's, so its prices err toward compiling).
+
+## 45. macOS: recording, sampling, and the depcache on real Macs (2026-10-12)
+
+Issue #1. GitHub Actions `macos-latest` (arm64) and `macos-15-intel`, CI
+run 38196948040. Cross-checking from Linux compiled clean but missed every
+runtime difference below; only runs on real Macs found them.
+
+- `ru_maxrss` is bytes on macOS, KiB on Linux: the first report showed an
+  81,552 MB rustc. Fixed, now 67-80 MB for the smoke crate.
+- ld64 writes a dylib's output path (inside the target dir) into
+  `LC_ID_DYLIB`, so the store refused every proc macro as carrying the
+  target dir: a second checkout of a serde-derive crate got 16 hit/1 miss
+  (serde_derive). With `-Wl,-install_name,@rpath/...` on proc-macro
+  misses: 17 hit/0 miss, ~14.4 s of rustc saved, and the restored proc
+  macro loads (the test passes). Linux on the same crate: 17 hit/0 miss.
+- A lock probe released by close can stay held by a child another thread
+  is forking (it shares the open file until exec). Flaky slot tests on
+  both platforms; probes now unlock explicitly.
+- Pressure stall info does not exist on macOS: reports say "not measured".
