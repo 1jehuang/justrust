@@ -92,6 +92,12 @@ fn env_ignored(name: &str) -> bool {
     IGNORED_ENV.contains(&name) || IGNORED_ENV_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+/// This process is a build the daemon runs: an early answer can end the
+/// client's request while the build goes on (`early::EXIT_MARKER`).
+pub fn is_child() -> bool {
+    std::env::var_os(CHILD_ENV).is_some()
+}
+
 /// On by default; `JUSTRUST_BUILDD=0` builds in the client as before.
 pub fn enabled() -> bool {
     // CI runs and test harnesses would leave a daemon behind per job.
@@ -171,6 +177,13 @@ pub struct Exit {
     /// It was a prebuild that had already finished: its result was replayed.
     #[serde(default)]
     pub replayed: bool,
+    /// Answered early from rust-analyzer (`JUSTRUST_EARLY_EXIT`): the build
+    /// keeps running in the daemon, nobody waits for it.
+    #[serde(default)]
+    pub early: bool,
+    /// The replayed build is one that continued after an early answer.
+    #[serde(default)]
+    pub after_early: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -316,7 +329,20 @@ fn run_request(req: &Request) -> std::result::Result<i32, Fallback> {
                     ..Default::default()
                 });
                 let _ = out.flush();
-                if x.replayed {
+                if x.early {
+                    eprintln!(
+                        "justrust: returned early on rust-analyzer's errors (JUSTRUST_EARLY_EXIT=1); \
+                         cargo continues in the background: the next identical run replays its \
+                         verdict, `justrust log` has it once it finishes"
+                    );
+                } else if x.replayed && x.after_early {
+                    link_run(x.run_id.as_deref());
+                    eprintln!(
+                        "justrust: rustc's verdict from the build that continued after the early \
+                         answer, finished {:.1}s before you asked",
+                        -x.joined_after
+                    );
+                } else if x.replayed {
                     link_run(x.run_id.as_deref());
                     eprintln!(
                         "justrust: result of a prebuild of these exact sources, finished {:.1}s \
@@ -609,6 +635,12 @@ struct Log {
     sharers: usize,
     /// An agent request attached at some point (its result was seen).
     claimed: bool,
+    /// Index in `chunks` right after the early-exit marker
+    /// ([`crate::early::EXIT_MARKER`]), when the build printed one.
+    early_at: Option<usize>,
+    /// A client already took the early answer: later clients wait for
+    /// rustc, and nobody is left to stop the build when it is gone.
+    early_served: bool,
 }
 
 struct Build {
@@ -941,7 +973,8 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let res = stream(&build, &mut s, attached, replayed, joined_after, lookup_ms);
     let mut l = build.log.lock().unwrap();
     l.clients -= 1;
-    let orphaned = l.clients == 0 && l.exit.is_none() && !*build.prebuild.lock().unwrap();
+    let orphaned =
+        l.clients == 0 && l.exit.is_none() && !l.early_served && !*build.prebuild.lock().unwrap();
     drop(l);
     if orphaned {
         // Everyone who asked is gone (killed or timed out): stop the build
@@ -962,9 +995,12 @@ fn stream(
 ) -> Result<()> {
     let mut next = 0usize;
     loop {
-        let (batch, exit, sharers) = {
+        let (batch, exit, sharers, early) = {
             let mut l = build.log.lock().unwrap();
-            while next >= l.chunks.len() && l.exit.is_none() {
+            while next >= l.chunks.len()
+                && l.exit.is_none()
+                && !l.early_at.is_some_and(|e| e <= next && !l.early_served)
+            {
                 // A client killed while the build is quiet is noticed
                 // within a second, not at the next output.
                 let (g, t) = build.cv.wait_timeout(l, Duration::from_secs(1)).unwrap();
@@ -973,16 +1009,42 @@ fn stream(
                     bail!("client went away");
                 }
             }
-            let batch: Vec<(u8, Vec<u8>)> = l.chunks[next..].to_vec();
-            next = l.chunks.len();
+            // The first client to reach the marker of a running build gets
+            // the early answer: output up to the marker, then exit 101.
+            let early = l.exit.is_none() && !l.early_served && l.early_at.is_some();
+            let upto = match l.early_at {
+                Some(e) if early => e.max(next),
+                _ => l.chunks.len(),
+            };
+            let batch: Vec<(u8, Vec<u8>)> = l.chunks[next..upto].to_vec();
+            next = upto;
+            let early = early && next >= l.early_at.unwrap_or(usize::MAX);
+            if early {
+                l.early_served = true;
+            }
             (
                 batch,
                 if next >= l.chunks.len() { l.exit } else { None },
                 l.sharers,
+                early,
             )
         };
         for (k, b) in &batch {
             write_msg(s, *k, b)?;
+        }
+        if early {
+            let x = Exit {
+                code: 101,
+                attached,
+                joined_after,
+                sharers,
+                lookup_ms,
+                run_id: build.run_id.clone(),
+                early: true,
+                ..Default::default()
+            };
+            write_msg(s, b'X', &serde_json::to_vec(&x)?)?;
+            return Ok(());
         }
         if let Some(code) = exit {
             let x = Exit {
@@ -993,6 +1055,8 @@ fn stream(
                 lookup_ms,
                 run_id: build.run_id.clone(),
                 replayed,
+                after_early: replayed && build.log.lock().unwrap().early_served,
+                early: false,
             };
             write_msg(s, b'X', &serde_json::to_vec(&x)?)?;
             return Ok(());
@@ -1108,7 +1172,22 @@ fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
                 match r.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        b.log.lock().unwrap().chunks.push((k, buf[..n].to_vec()));
+                        let mut l = b.log.lock().unwrap();
+                        match crate::early::split_exit_marker(&buf[..n]) {
+                            Some((before, after)) if k == b'E' => {
+                                if !before.is_empty() {
+                                    l.chunks.push((k, before.to_vec()));
+                                }
+                                if l.early_at.is_none() {
+                                    l.early_at = Some(l.chunks.len());
+                                }
+                                if !after.is_empty() {
+                                    l.chunks.push((k, after.to_vec()));
+                                }
+                            }
+                            _ => l.chunks.push((k, buf[..n].to_vec())),
+                        }
+                        drop(l);
                         b.cv.notify_all();
                     }
                 }
@@ -1143,12 +1222,26 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
         st.builds
             .get(key)
             .filter(|b| {
-                b.stamp != stamp && *b.prebuild.lock().unwrap() && !b.log.lock().unwrap().claimed
+                let l = b.log.lock().unwrap();
+                // A build that already answered early is as stale as an
+                // unclaimed prebuild: nobody waits for it, and it holds the
+                // target dir the new request needs.
+                b.stamp != stamp
+                    && l.exit.is_none()
+                    && ((*b.prebuild.lock().unwrap() && !l.claimed) || l.early_served)
             })
             .cloned()
     };
     let Some(b) = stale else { return };
-    log(&format!("sources changed, stopping prebuild pid {}", b.pid));
+    log(&format!(
+        "sources changed, stopping {} pid {}",
+        if b.log.lock().unwrap().early_served {
+            "build that answered early,"
+        } else {
+            "prebuild"
+        },
+        b.pid
+    ));
     crate::sys::terminate_group(b.pid, false);
     let mut l = b.log.lock().unwrap();
     let t = Instant::now();
@@ -1226,10 +1319,11 @@ fn cancel_wrong_guess(dm: &Daemon, key: &str, session: &str) {
         st.builds
             .iter()
             .filter(|(k, b)| {
+                let l = b.log.lock().unwrap();
                 k.as_str() != key
                     && b.session == session
-                    && *b.prebuild.lock().unwrap()
-                    && !b.log.lock().unwrap().claimed
+                    && l.exit.is_none()
+                    && ((*b.prebuild.lock().unwrap() && !l.claimed) || l.early_served)
             })
             .map(|(_, b)| b.clone())
             .collect()
@@ -1404,7 +1498,10 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
         st.builds.remove(key);
     }
     // Nobody saw it: keep it for the request it was started for.
-    if !b.log.lock().unwrap().claimed && *b.prebuild.lock().unwrap() {
+    let l = b.log.lock().unwrap();
+    let (claimed, early_served) = (l.claimed, l.early_served);
+    drop(l);
+    if (!claimed && *b.prebuild.lock().unwrap()) || early_served {
         st.finished.insert(key.to_owned(), b.clone());
     }
     st.last_request = Some(Instant::now());
@@ -1494,6 +1591,81 @@ mod tests {
             v(&["test", "--no-run"])
         );
         assert!(is_test(&v(&["t"])) && !is_test(&v(&["check"])));
+    }
+
+    fn fake_build() -> Build {
+        Build {
+            stamp: "s".into(),
+            compile_only: Mutex::default(),
+            session: String::new(),
+            run_id: None,
+            started: Instant::now(),
+            finished: Mutex::default(),
+            pid: 0,
+            prebuild: Mutex::new(false),
+            log: Mutex::default(),
+            cv: Condvar::new(),
+        }
+    }
+
+    /// Frames a client gets from `stream`, until `X`.
+    fn client_frames(b: &Build) -> Vec<(u8, Vec<u8>)> {
+        let (mut a, mut c) = UnixStream::pair().unwrap();
+        stream(b, &mut a, false, false, 0.0, 0.0).unwrap();
+        drop(a);
+        let mut v = Vec::new();
+        while let Some(m) = read_msg(&mut c).unwrap() {
+            v.push(m);
+        }
+        v
+    }
+
+    #[test]
+    fn early_marker_ends_the_first_request_only() {
+        let b = fake_build();
+        {
+            let mut l = b.log.lock().unwrap();
+            l.chunks.push((b'E', b"early block\n".to_vec()));
+            l.early_at = Some(1);
+            l.chunks.push((b'E', b"rustc error\n".to_vec()));
+        }
+        let first = client_frames(&b);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].1, b"early block\n");
+        let x: Exit = serde_json::from_slice(&first[1].1).unwrap();
+        assert!(x.early && x.code == 101);
+        assert!(b.log.lock().unwrap().early_served);
+        // The next client (an identical rerun) waits for rustc's verdict.
+        b.log.lock().unwrap().exit = Some(101);
+        let second = client_frames(&b);
+        assert_eq!(second.len(), 3);
+        let x: Exit = serde_json::from_slice(&second[2].1).unwrap();
+        assert!(!x.early && x.code == 101);
+    }
+
+    #[test]
+    fn finished_build_ignores_its_marker() {
+        let b = fake_build();
+        {
+            let mut l = b.log.lock().unwrap();
+            l.chunks.push((b'E', b"early block\n".to_vec()));
+            l.early_at = Some(1);
+            l.chunks.push((b'E', b"done\n".to_vec()));
+            l.exit = Some(0);
+        }
+        let f = client_frames(&b);
+        let x: Exit = serde_json::from_slice(&f.last().unwrap().1).unwrap();
+        assert!(!x.early && x.code == 0 && f.len() == 3);
+    }
+
+    #[test]
+    fn marker_splits_a_chunk() {
+        let mut c = b"before\n".to_vec();
+        c.extend_from_slice(crate::early::EXIT_MARKER);
+        c.extend_from_slice(b"after\n");
+        let (a, z) = crate::early::split_exit_marker(&c).unwrap();
+        assert_eq!((a, z), (&b"before\n"[..], &b"after\n"[..]));
+        assert!(crate::early::split_exit_marker(b"plain").is_none());
     }
 
     #[test]

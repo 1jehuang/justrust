@@ -104,6 +104,42 @@ pub struct EarlyInfo {
     /// rustc errors in the queried files that early missed.
     #[serde(default)]
     pub rustc_only: usize,
+    /// The agent's request returned on these errors (`JUSTRUST_EARLY_EXIT`)
+    /// while cargo went on in the background.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exited: bool,
+}
+
+/// Printed alone on stderr by a build the daemon runs, right after the early
+/// block, to end the client's request early (`buildd` strips it). An OSC
+/// sequence: a terminal would ignore it if it ever leaked.
+pub const EXIT_MARKER: &[u8] = b"\x1b]justrust;early-exit\x07\n";
+
+/// `chunk` split around the exit marker, when it contains one.
+pub fn split_exit_marker(chunk: &[u8]) -> Option<(&[u8], &[u8])> {
+    let i = chunk
+        .windows(EXIT_MARKER.len())
+        .position(|w| w == EXIT_MARKER)?;
+    Some((&chunk[..i], &chunk[i + EXIT_MARKER.len()..]))
+}
+
+/// `JUSTRUST_EARLY_EXIT=1`: return rust-analyzer's errors in the changed
+/// files at once, before rustc confirms them. Needs the build daemon, which
+/// keeps cargo running so the next identical request and `justrust log`
+/// get rustc's verdict. Turns early diagnostics on (`JUSTRUST_EARLY`
+/// defaults to on with it).
+pub fn exit_wanted() -> bool {
+    matches!(
+        std::env::var("JUSTRUST_EARLY_EXIT").as_deref(),
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+    )
+}
+
+/// Whether an answer may end the request: every error carries a rustc
+/// code (a hard error rustc reports the same way, not a parser guess), and
+/// it is in a file the agent changed (the first phase only queries those).
+pub fn exit_eligible(diags: &[Diag]) -> bool {
+    !diags.is_empty() && diags.iter().all(|d| !d.code.is_empty())
 }
 
 /// `JUSTRUST_EARLY`: unset or `0` = off, `auto` = query a running daemon
@@ -118,6 +154,7 @@ pub enum Mode {
 
 pub fn mode() -> Mode {
     match std::env::var("JUSTRUST_EARLY").as_deref() {
+        Err(_) if exit_wanted() => Mode::On,
         Ok("0") | Ok("off") | Ok("no") | Ok("false") | Err(_) => Mode::Off,
         Ok("auto") => Mode::Auto,
         Ok(_) => Mode::On,
@@ -290,9 +327,22 @@ fn early_for_build(
         };
         let done = || build_done.load(std::sync::atomic::Ordering::SeqCst);
         if info.ready && !info.diags.is_empty() && !done() {
-            let text = format_block(&info.diags, &cwd, secs, "");
+            let exit = exit_wanted() && crate::buildd::is_child() && exit_eligible(&info.diags);
+            let text = if exit {
+                format_exit_block(&info.diags, &cwd, secs)
+            } else {
+                format_block(&info.diags, &cwd, secs, "")
+            };
             // One write: lines from cargo's tee never land inside the block.
-            let _ = std::io::stderr().lock().write_all(text.as_bytes());
+            let mut e = std::io::stderr().lock();
+            let _ = e.write_all(text.as_bytes());
+            let _ = e.flush();
+            if exit {
+                // Alone, after the block: one pipe write the daemon sees whole.
+                let _ = e.write_all(EXIT_MARKER);
+                let _ = e.flush();
+                info.exited = true;
+            }
             info.shown = true;
         }
         // Second phase: a signature changed, so files that use the item
@@ -347,6 +397,29 @@ fn format_block(diags: &[Diag], cwd: &Path, secs: f64, what: &str) -> String {
         ));
     }
     o.push_str("justrust: end of early errors\n");
+    o
+}
+
+/// The block an early exit ends with: the agent gets nothing else.
+fn format_exit_block(diags: &[Diag], cwd: &Path, secs: f64) -> String {
+    let mut o = format!(
+        "justrust: errors from rust-analyzer after {secs:.2}s, NOT YET CONFIRMED BY RUSTC \
+         (JUSTRUST_EARLY_EXIT=1):\n"
+    );
+    for d in diags {
+        o.push_str(&format!(
+            "error[{}]: {}\n  --> {}:{}:{}\n",
+            d.code,
+            d.message,
+            rel(&d.file, cwd),
+            d.line,
+            d.col
+        ));
+    }
+    o.push_str(
+        "justrust: end of rust-analyzer errors. Fix them and rerun; if they look wrong, rerun \
+         the same command unchanged for rustc's verdict (cargo is finishing in the background)\n",
+    );
     o
 }
 
@@ -446,6 +519,9 @@ pub fn report_line(e: &EarlyInfo, compile_failed: bool) -> Option<String> {
         e.secs,
         e.matched
     );
+    if e.exited {
+        s.push_str(" (the request returned on them; this is rustc's later verdict)");
+    }
     if e.early_only > 0 {
         s.push_str(&format!(
             ", {} NOT reported by rustc{}",
