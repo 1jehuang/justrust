@@ -219,6 +219,31 @@ build). If that fails the build runs on the system toolchain, says so, and
 does not retry for 10 minutes. On a pinned nightly, every local crate gets
 rustc's per-pass timings (no `RUSTC_BOOTSTRAP` cache flip needed).
 
+### justrust's compiler (jr-rustc) and the proc-macro cache
+
+```sh
+justrust toolchain jr-install ~/jr-rustc/build/jr/pgo-bolt-stage2   # package a jr-rustc build as jr-<commit>
+justrust toolchain                                                # "default jr-... ; proc-macro cache on"
+```
+
+When a jr toolchain is installed and nothing is pinned, recorded builds use
+the newest one (rustc, rustdoc and clippy from the jr-rustc build, cargo and
+rustfmt from the official nightly it is based on). Every incremental
+(local) crate then gets `-Zcache-proc-macros`: jr-rustc reuses derive and
+attribute proc-macro output between edits when the macro input tokens are
+unchanged. On the Jcode Desktop reference loop that is 724 to 1
+`#[gpui::test]` expansions per edit and -23% wall time (FINDINGS 29).
+Dependencies are not incremental and keep their cache keys.
+
+Limitation: a proc macro whose output depends on something other than its
+input tokens (a file it reads, an environment variable) is not re-run when
+only that changes. Rebuild with the cache off when that matters.
+
+Opt out: `JUSTRUST_CACHE_PROC_MACROS=0` (the jr compiler without the cache)
+or `JUSTRUST_TOOLCHAIN=system` (the system rustc). A `justrust.toml` pin wins
+over the default. Remote builds are unaffected (they use the remote host's
+toolchain).
+
 ## wild linker
 
 ```sh

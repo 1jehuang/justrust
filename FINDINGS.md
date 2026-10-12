@@ -3028,3 +3028,38 @@ The rest is the first rsync of a new checkout: 40 to 121 s for ~45 MB of source
 upload or seeding the remote tree from the same git commit (fetch on the machine,
 then sync only the diff) would put remote at ~20 s here, 2.7x local.
 Logs: ~/.jcode/scratch/uvbench/final.txt.
+
+## 30. jr-rustc and the proc-macro cache on by default (2026-10-11)
+
+`justrust toolchain jr-install` packages a jr-rustc build (stage 2
+PGO+BOLT driver, rustdoc and clippy built against the same driver, cargo
+and rustfmt from nightly-2026-10-08, rust-src) as toolchain `jr-<commit>`.
+With no `justrust.toml` pin, recorded local builds now use the newest
+installed jr toolchain, and the shim adds `-Zcache-proc-macros` to
+incremental units whose real rustc is that toolchain's. Opt out:
+`JUSTRUST_CACHE_PROC_MACROS=0` or `JUSTRUST_TOOLCHAIN=system`. Remote builds
+are unchanged. Installed here as `jr-ac20de5e7921`.
+
+Checked with the default (no env) through `justrust` on real projects:
+
+- justrust itself: `test` 263 passed, `clippy` clean, doctests pass, run
+  meta shows `real_rustc` = the jr toolchain.
+- The shim adds the flag to an incremental unit and not with
+  `JUSTRUST_CACHE_PROC_MACROS=0` (observed through a wrapper rustc), nor for
+  a non-jr rustc or a non-incremental dependency (unit test).
+- jcode-desktop-ui full lib suite: 1279 passed, 1 failed:
+  `panel::selection_tests::pinned_task_selection_copies_without_collapsing_card`.
+  It fails with the system rustc too (`JUSTRUST_TOOLCHAIN=system`, 1 of 1
+  failed): the checkout has another session's uncommitted `panel.rs` edit,
+  not a toolchain effect. Doctests pass.
+- jcode `check -p jcode-core` ok.
+- Reference loop on the real `~/jcode-desktop` (one-line edit in
+  fps_counter.rs, `justrust test -p jcode-desktop-ui --lib -- fps_counter`,
+  file restored from a backup copy), 8 alternating pairs: **default 5.70 s
+  median (5.2-8.8) vs system rustc 8.65 s (8.2-10.1), faster in 8 of 8.**
+  That combines the newer nightly, PGO+BOLT build and the proc-macro cache
+  versus the distro's stable rustc 1.98.
+
+Caveat that ships with it: a proc macro whose output depends on files or
+environment variables (not its input tokens) is not re-run when only those
+change.
