@@ -76,8 +76,15 @@ jobs:
             cd "$RUNNER_TEMP/dc-$d"
             printf 'serde = { version = "1", features = ["derive"] }\nserde_json = "1"\n' >> Cargo.toml
             printf '#[derive(serde::Serialize)]\nstruct S { a: u8 }\n#[test]\nfn t() { assert_eq!(serde_json::to_string(&S { a: 1 }).unwrap(), "{\\"a\\":1}"); }\nfn main() {}\n' > src/main.rs
-            "$bin" test 2>&1 | tee out.txt
+            JUSTRUST_DEPCACHE_EXPLAIN="$RUNNER_TEMP/explain-$d" "$bin" test 2>&1 | tee out.txt
             cd -
+          done
+          # Units whose key inputs differ between the two checkouts.
+          (cd "$RUNNER_TEMP/explain-a" && ls) | sed 's/-[0-9a-f]*\.txt$//' | sort > a.lst
+          (cd "$RUNNER_TEMP/explain-b" && ls) | sed 's/-[0-9a-f]*\.txt$//' | sort > b.lst
+          diff <(ls "$RUNNER_TEMP/explain-a") <(ls "$RUNNER_TEMP/explain-b") || true
+          for f in $(ls "$RUNNER_TEMP/explain-b"); do
+            [ -f "$RUNNER_TEMP/explain-a/$f" ] || { n=${f%-*}; diff "$RUNNER_TEMP"/explain-a/"$n"-* "$RUNNER_TEMP/explain-b/$f" | head -20; }
           done
           grep -E "depcache [0-9]+ hit" "$RUNNER_TEMP/dc-b/out.txt"
           grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
