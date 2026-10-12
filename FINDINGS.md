@@ -4289,3 +4289,116 @@ resident rustc): reply to cargo after the link and persist in the
 background, preloading the next session's dep graph off the critical path
 (estimated +0.3 s; the 0.25 s dep-graph and query-cache load at startup
 is the remaining target).
+
+## 59. Early exit: return rust-analyzer's errors before rustc (`JUSTRUST_EARLY_EXIT=1`): type-error loop 3.20 -> 0.08 s; 78/79 exits right on 120 agent-weighted mutations (2026-10-12)
+
+Builds on findings 28-29 (`src/early.rs`): the warm rust-analyzer already
+printed the first error at ~0.1 s, but the command still waited for cargo.
+Now, with `JUSTRUST_EARLY_EXIT=1`, a build run by the build daemon
+(`src/buildd.rs`) whose early answer is non-empty and fully coded
+(`early::exit_eligible`: hard errors with a rustc `Exxxx` code, in files
+changed since the last query, no parser errors) prints the block labelled
+`NOT YET CONFIRMED BY RUSTC`, then a marker on stderr. The daemon strips the
+marker and sends the client exit 101 at once. Cargo keeps running in the
+daemon: the next identical request attaches to it (or replays its result,
+`rustc's verdict from the build that continued after the early answer`),
+`justrust log` has the full rustc output, and the run's report says
+`early: ... (the request returned on them; this is rustc's later verdict)`.
+An edit stops the background build like a stale prebuild (seen in the
+e2e: `sources changed, stopping build that answered early`, the fix
+rebuilt in 2.1 s). Without the daemon, or when the answer is empty,
+uncoded, or not ready, nothing changes (fail open). Commits 741619d,
+023a708, 181e4a7.
+
+**Speed** (`bench/factors.py run early-exit`, n=8 ABBA, Desktop
+`check -p jcode-desktop-ui` after the `desktop-type-error` edit, warm early
+daemon on both sides, `factors-20261012-074711-5cad19f84eb6-dirty.json`):
+
+| | median | range |
+|---|---:|---:|
+| off: early block printed, wait for cargo | 3.20 s | 2.95-3.36 |
+| on: return on the early answer | **0.08 s** | 0.07-0.29 |
+
+Every sample's rustc verdict (recorded by the background build) confirmed
+the early error (`matched` 1, `early_only` 0 in all 16 runs). The off
+column is higher than the suite's 1.96 s (FINDINGS 28) because the factor
+runs `check` through the build daemon on a busy machine (all samples flagged
+noisy, other agents' builds); the on side does not depend on it.
+
+**Accuracy at scale** (`bench/early_exit/mutations.py`, seed 3,
+`early-exit-mutations-20261012-074445.json`). Mutations of the error kinds
+agents hit, weighted by the mined first-error mix of the 486 recorded
+agent compile-error runs with a location (`bench/early_exit/mine_codes.py`:
+E0308 52%, syntax 7%, E0425 5%, E0063 5%, E0433 4%, E0599 3%, E0061 3%,
+E0432 2%...), 60 per workspace, at random sites in 6 Desktop and 8 Jcode
+crates, each checked with `check -p <crate> --all-targets`:
+
+| | Desktop | Jcode | total |
+|---|---:|---:|---:|
+| mutations (rustc failed) | 60 (58) | 60 (58) | 120 (116) |
+| early exit fired | 41 | 38 | 79 |
+| right file, line, code | 38 | 32 | 70 |
+| right file and code, line within 5 (same expression) | 3 | 5 | 8 |
+| wrong | 0 | 1 | **1** |
+| exit on a build rustc passed | 0 | 0 | **0** |
+| recall (exits that are right / rustc failures) | 70.7% | 63.8% | 67.2% |
+| clean edits (should compile), false exits | 0/12 | 0/12 | **0/24** |
+| clean sweep, files / false exits after a clean edit | 257 / 0 | 923 / 0 | 1,180 / 0 |
+| rust-analyzer answer, median | 0.25 s | 0.41 s | 0.35 s |
+| rustc `check -p`, median where it fired | 6.1 s | 5.1 s | 5.9 s |
+
+The wrong exit: a misspelled type path (rustc E0433 at line 84), which
+rust-analyzer reports as two E0599 `no method arg on type Command` two
+lines later. Right file, wrong error; the agent's next run gets rustc's
+verdict. Misses (37, no exit, the build waits for rustc as before): a
+dropped `;` or `)` (19: parser errors have no code and never exit),
+E0384 assign-to-immutable (7: rust-analyzer does not report it),
+misspelled type paths (6), others 5.
+
+Fixed on the way, found by the first runs (before: Jcode 19 wrong of 72,
+Desktop 38 wrong of 46 in a run that also restored files):
+- **Per-file baseline.** On Jcode rust-analyzer reports 9 coded errors on
+  sources rustc accepts (unresolved import and `!: Provider` through a
+  dev-dependency cycle in `jcode-base/src/provider/tests*.rs`). The daemon
+  now opens a file with its pre-edit text first and records its errors;
+  those never count. Files touched but unchanged (a restore, a checkout)
+  are not "changed" any more, only baselined.
+- **Never type.** Errors about type `!` are follow-ons of an error
+  elsewhere (duckling's review); dropped in `to_diag`.
+
+**Replay on the recorded runs** (`bench/early_exit/replay_savings.py`,
+`early-exit-replay-20261012.json`). Per run of the 563 agent runs that
+ended in `could not compile` (16,344 s of wall), first error code from its
+output; per code the bench's rate of right and wrong exits (codes with
+fewer than 3 mutations: `pooled` uses the overall rate, `conservative`
+never fires). A right exit saves the wall minus 0.38 s (client plus
+rust-analyzer median), a wrong one is charged a whole extra run:
+
+| runs | wall | net saved, conservative | net saved, pooled |
+|---|---:|---:|---:|
+| all 563 | 16,344 s | 1,911 s (11.7%) | 2,824 s (17.3%) |
+| 119 outside bench and scratch copies | 2,105 s | 618 s (29.3%) | 1,144 s (54.3%) |
+
+Wrong-exit cost in the model: 61 s. 444 of the 563 are bench and scratch
+runs of the Desktop type-error scenarios (fast 2 s checks), which is why
+the real-agent share is higher.
+
+**Ending at rustc's `could not compile` instead** (the first worker's
+measurement, handoff): 209 s of 4.54 h (1.3%), and 38 of 563 runs report
+further errors after it, which an early return would hide. Not
+implemented: too small for an output change, and the rust-analyzer exit
+covers the same runs ~2 s sooner.
+
+**Memory**: rust-analyzer 4.8 GB (Desktop) and 5.4 GB (Jcode after a
+sweep) per workspace, 11-35 s to ready with its target warm.
+
+Verdict: **opt-in** locally (`JUSTRUST_EARLY_EXIT=1`, which turns early
+diagnostics on): 1 wrong exit in 79 and 5 GB per workspace are the
+user's to accept, and `auto` early mode only starts daemons for busy
+workspaces. Recommended **default on the hosted service** where memory
+is the service's: plan in `docs/early-exit-hosted.md` (switch, 6 GB
+cgroup cap per tenant workspace, at most 8 per 64 GB VM, idle / LRU /
+memory-pressure eviction), not deployed. Next: codes for parser errors
+(rustc's `expected ;` is reliable enough to exit on, measure first),
+E0384 from rust-analyzer, and buildd under `JUSTRUST_ON_REMOTE_AGENT` for
+hosted.

@@ -51,6 +51,7 @@ replaced.
 | buildd-prebuild-interference | desktop-two-agents-prebuild | 9.19s (8.8-9.4) | 8.84s (8.4-9.1) | -0.35s (-4%) | 1/1 | 743/743 | 0s | within noise |
 | shadow | desktop-test-edit | 0.79s (0.7-0.8) | 7.36s (6.9-9.9) | +6.57s (+89%) | 1/1 | 743/743 | 0s | helps |
 | jr-overlap-persist | desktop-test-edit | 4.61s (3.8-6.3) | 4.93s (4.4-6.5) | +0.32s (+6%) | 1/1 | 743/743 | 0s | within noise |
+| early-exit | desktop-type-error-early | 0.08s (0.1-0.3) | 3.20s (3.0-3.4) | +3.12s (+97%) | 1/1 | 743/743 | 0s | helps |
 
 ## Factors and workloads
 
@@ -94,6 +95,7 @@ replaced.
 - **nightly-flags-combo**: -Zcache-proc-macros on the UI crate plus -Zshare-generics=y on dependencies. Workload `desktop-test-edit` (loop): the two flags with a positive (within-noise) median alone. Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08'}`. Result: not run yet.
 - **frontend-threads-16**: rustc -Zthreads=16 instead of 8 for local crates (Desktop's wrapper). Workload `desktop-test-edit` (loop): 16 hardware threads here; -Zthreads is untracked, so incremental state is the same. Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08'}`. Result: `factors-20261011-045132-nightly-flags-a.json` (justrust 3f0919d77000).
 - **frontend-threads-4**: rustc -Zthreads=4 instead of 8 for local crates (Desktop's wrapper). Workload `desktop-test-edit` (loop). Off: `{'JUSTRUST_TOOLCHAIN': 'nightly-2026-10-08'}`. Result: `factors-20261011-045132-nightly-flags-a.json` (justrust 3f0919d77000).
+- **early-exit**: return rust-analyzer's coded errors in the changed file at once (JUSTRUST_EARLY_EXIT=1) while cargo finishes under the build daemon, vs printing them early and waiting for cargo. Workload `desktop-type-error-early` (early): type-error edit in fps_counter.rs, `check -p jcode-desktop-ui`, warm early daemon (started untimed) on both sides; wall is until the command returns. The on side waits (untimed) for the background build. Off: `{'JUSTRUST_EARLY': '1', 'JUSTRUST_BUILDD': '1', 'JUSTRUST_BUILDD_PREBUILD': '0'}`. Result: `factors-20261012-074711-5cad19f84eb6-dirty.json` (justrust 5cad19f84eb6).
 
 Not here: the scheduler under contention (`bench/sched-contention.sh`),
 remote builds, crate splits (`bench/split-*.sh`, they change the source).
