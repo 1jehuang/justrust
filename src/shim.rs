@@ -5,11 +5,13 @@
 //!
 //! Incremental-cache safety: rustc keys its incremental cache on whether
 //! unstable options are allowed (`RUSTC_BOOTSTRAP`), but not on `-Ztime-passes`.
-//! So the shim only adds `-Ztime-passes` when the unit already runs with
+//! So pass timing is only ever added to units that already run with
 //! `RUSTC_BOOTSTRAP=1` (for example via the Jcode Desktop parallel-frontend
-//! wrapper). Other units are timed from the outside only. Set
-//! `JUSTRUST_PASSES=always` to force pass timing everywhere, at the cost of one
-//! cold incremental rebuild whenever the mode flips.
+//! wrapper) or on a pinned nightly. It is off by default: `-Ztime-passes`
+//! made a type-error `check -p jcode-app-core --tests` ~0.4 s (10%) slower
+//! (FINDINGS 41). `JUSTRUST_PASSES=on` turns it on where it is cache-safe,
+//! `JUSTRUST_PASSES=always` everywhere, at the cost of one cold incremental
+//! rebuild whenever the mode flips.
 
 use crate::paths;
 use serde::Serialize;
@@ -136,9 +138,8 @@ fn want_passes(args: &[OsString], local: bool) -> (bool, bool) {
         return (false, false);
     }
     match std::env::var("JUSTRUST_PASSES").as_deref() {
-        Ok("0") | Ok("off") | Ok("never") => (false, false),
         Ok("always") => (true, true),
-        _ => (
+        Ok("1") | Ok("on") | Ok("true") => (
             std::env::var("RUSTC_BOOTSTRAP").as_deref() == Ok("1")
                 // A pinned nightly accepts -Z without RUSTC_BOOTSTRAP, so
                 // the cache key does not move. Local crates only: units
@@ -146,6 +147,7 @@ fn want_passes(args: &[OsString], local: bool) -> (bool, bool) {
                 || (local && std::env::var_os("JUSTRUST_TOOLCHAIN_NIGHTLY").is_some()),
             false,
         ),
+        _ => (false, false),
     }
 }
 

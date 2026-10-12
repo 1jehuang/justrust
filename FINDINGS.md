@@ -3005,6 +3005,28 @@ flush removes most of the effect but not all of it. `sync()` changes the
 generator-independent harness only, so synth1 to synth3 stay comparable
 with each other but not exactly with later runs.
 
+synth4 with the `sync()` (`versus-synth1-20261012-053402-7556b5ad52f7-dirty-remote-c7i.8xlarge.json`,
+same AWS c7i, 40/40): **justrust 0.97x of stock** (13.28 vs 12.88 s),
+jr-nocache 0.97x. The rerun outliers are gone (rerun points 1.31x
+*faster* than stock). Remaining losses, in order of size: release builds
+(+4 to 6 s of 63 to 69 s), check 0.83x, type-error points 0.71x. Two
+were followed up on the machine:
+
+- Release build (`build --release -p jcode-desktop` after a jcode-base
+  edit, 3 rounds): stock 62.4 / 62.1 / 62.5 s, justrust 71.1 / 62.2 /
+  61.9 s, `JUSTRUST_SCHED=0` 62.0 / 61.7 / 62.3 s. Same instructions on
+  both stacks. No steady gap: one slow justrust round, as in the synth.
+  Not pursued further without more rounds.
+- Type-error check (`check -p jcode-app-core --tests` with a type error,
+  6 rounds): stock 3.67 to 3.75 s, justrust 4.11 to 4.15 s,
+  `JUSTRUST_PASSES=0` 3.73 to 3.80 s. **`-Ztime-passes` costs ~0.4 s
+  (10%)** on this unit. The shim added it to every local unit compiled
+  with `RUSTC_BOOTSTRAP=1`, which Jcode's parallel-frontend wrapper
+  sets, and its output only fills the per-phase split in the report.
+  Now off by default (`JUSTRUST_PASSES=on` restores it). After: justrust
+  3.77 to 3.88 s, opt-in 4.06 to 4.19 s, stock 3.69 to 3.75 s. Flipping
+  it compiles 0 units on jcode-desktop-ui (no Dirty).
+
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
 Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
