@@ -175,32 +175,10 @@ jobs:
             printf 'serde = { version = "1", features = ["derive"] }\nserde_json = "1"\n' >> Cargo.toml
             printf '#[derive(serde::Serialize)]\nstruct S { a: u8 }\n#[test]\nfn t() { assert_eq!(serde_json::to_string(&S { a: 1 }).unwrap(), "{\\"a\\":1}"); }\nfn main() {}\n' > src/main.rs
             JUSTRUST_DEPCACHE_EXPLAIN="$RUNNER_TEMP/explain-$d" "$bin" test 2>&1 | tee out.txt
-            "$bin" log | tail -40
             cd -
           done
-          # Which key inputs differ between the two checkouts' misses.
-          diff -r "$RUNNER_TEMP/explain-a" "$RUNNER_TEMP/explain-b" | head -60 || true
-          # Manifests with more than one line: same base key, different
-          # inputs or env between the checkouts.
-          for m in ~/.justrust/cache/depcache/m/*.jsonl; do
-            if [ "$(wc -l < "$m")" -gt 1 ]; then echo "== $m"; cut -c1-1500 "$m"; fi
-          done
-          # Units the second checkout missed, and whether the first stored them.
-          for d in a b; do
-            run=$(ls -td ~/.justrust/runs/*/ | sed -n "$([ $d = b ] && echo 1 || echo 2)p")
-            echo "== $d $run"
-            python -c "import json,sys; [print(u['crate_name'], u.get('depcache'), u.get('crate_types')) for u in map(json.loads, open(sys.argv[1])) if u.get('depcache') not in (None, '', 'local', 'local-miss')]" "$run/units.jsonl"
-          done
-          ls ~/.justrust/cache/depcache/m | wc -l
-          cat "$RUNNER_TEMP"/explain-*/refused.txt || true
-          # What in the refused outputs names the target dir.
-          cd "$RUNNER_TEMP/dc-b/target/debug"
-          ls deps | grep -i serde_derive || true
-          for f in deps/serde_derive-*.dll build/serde-*/build_script_build-*.exe; do
-            [ -f "$f" ] || continue
-            echo "== $f"; strings -a "$f" | grep -i -E "dc-b|_temp" | head -5 || true
-          done
-          cd -
+          # Why a unit was not stored, if any was (MSVC side files, ...).
+          cat "$RUNNER_TEMP"/explain-*/refused.txt 2>/dev/null || true
           grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
           grep -E "depcache [0-9]+ hit/0 miss" "$RUNNER_TEMP/dc-b/out.txt"
       # One check per Windows path the port changed (FINDINGS 52 maps them).
