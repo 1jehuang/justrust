@@ -4140,3 +4140,68 @@ Ranking for parallelization work:
    with -Zthreads on the Desktop loop, but not on jcode_base (flat), which
    suggests its query graph is a single long dependency chain there.
 4. -Zthreads 16 is never better than 8 on these loops and costs more CPU.
+
+## 57. Shadow leaf crates as a product (`JUSTRUST_SHADOW=1`): reference loop 7.8 -> 1.8 s; which upstream splits would pay most (2026-10-12)
+
+Productizes 47 (`src/shadow.rs`, opt-in). `justrust test -p <big> --lib --
+<m>` where `<m>` is a top-level leaf module (no `crate::`, top-level
+`super::`, `#[path]`, child module files, macros, `env!`, feature cfgs) and
+the filter cannot match tests elsewhere: when nothing in `<big>` except
+`<m>.rs` changed since its last good normal build (mtime/size snapshot),
+the tests run in `~/.justrust/shadow/<ws hash>/jr-shadow-<m>`, whose lib.rs
+is `#[path = "<real file>"] pub mod <m>;`. Same test names, same target
+dir, the user's `[patch]`, `[profile]` and `.cargo/config.toml`. The user's
+tree is never written. Anything else: normal build, which refreshes the
+snapshot on success. Caveat: the big crate's own uses of the leaf are only
+rechecked by the next normal build.
+
+Suite, same binary c9374f1, shadow off vs on (n=6,
+`bench/results/shadow-{off,on}-c9374f1.json`):
+
+| scenario | off | on | compile off -> on |
+|---|---:|---:|---:|
+| desktop-test-edit (reference loop) | 7.76 s | 1.77 s | 7.15 -> 0.54 s |
+| desktop-body-test | 8.82 s | 1.57 s | 8.01 -> 0.48 s |
+
+`compare`: -77% ("within noise" only because the first on-sample,
+20261012-055159860-324787111, was 103.65 s: the shadow's first build
+compiles its own copy of the dependencies, since a one-member workspace
+unifies features differently), -82% "faster". Steady-state run ids: off
+20261012-054948415-324789782 (7.68 s), on 20261012-055349133-324787401
+(1.54 s), 20261012-055402543-324787952 (1.42 s). On the live checkout,
+three leaf edits ran in 0.4 s each (3 fps_counter tests). Remaining cost
+is routing overhead: startup 0.48 -> 0.92 s (cargo metadata, the snapshot
+walk, an extra process). Next: cache metadata by Cargo.toml mtimes.
+
+Candidates (`justrust shadow`, recorded edits plus git churn, because
+jcode-desktop-ui's build script watches all of `src/` so rebuild reasons
+never name a file): of the UI crate's most-edited files (panel 134
+commits, workspace 126, input 36) none is a leaf, and most `panel_*` files
+are children of `panel`. Qualifying leaves are small and rarely edited
+(commands 5, preview_state 4, memory 3, fps_counter 1). In jcode,
+jcode-base has one qualifying leaf (image_normalize). So the shadow helps
+the leaf-module test loop but the hot files need real splits.
+
+Upstream splits that would pay most (recorded single-rustc time from 53,
+`justrust split` estimates; a note, no changes made to those repos):
+
+1. **jcode-desktop-ui (120k lines, test unit 448 s over 49 runs, ~8.8 s per
+   edit).** 214 of 315 Desktop edit runs land here. The hot code is
+   `panel*` and `workspace*` (260 commits in 30 days), not leaves: move
+   pure state and formatting out of them (`panel` view-model, live tabs,
+   voice overlay) into crates below the UI crate so their tests stop
+   linking the 8.8 s unit. Also `rerun-if-changed=src` in its build.rs
+   reruns the build script on every edit.
+2. **jcode-base (134k lines, 257 s).** 11 crates depend on it; every edit
+   rebuilds them. `split` names session::persistence, soft_interrupt_store,
+   scratch_maintenance, browser (each ~3.5 s per edit), but most files use
+   `crate::`, so the first job is untangling config/storage helpers.
+3. **jcode-config-types root: 883 s, 808 s of it cascade, 54 runs**, the
+   single most expensive edit site in jcode. Splitting `display` out of it
+   is the top config move; better, keep often-edited defaults out of the
+   crate everything depends on.
+4. jcode-tui (225k lines, test 64 s) and jcode-app-core (164k lines, 43 s):
+   tui::app::remote::server_events (3092 lines, ~3 s per edit); app-core
+   pays mostly for the `docs` build-script input (214 s over 24 runs).
+5. justrust itself (251 s): one crate, 300 tests; splitting depcache/remote
+   from the CLI would let most edits skip relinking the test binary.
