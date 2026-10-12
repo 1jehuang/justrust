@@ -575,7 +575,41 @@ pub fn report_local_build(reason: &str, cmd: Option<&str>) {
 
 /// A detached curl POST that never delays or fails the build.
 fn post_detached(c: &Creds, path: &str, body: &Value) {
-    let (mut cmd, config) = curl(c, "POST", path, Some(body));
+    spawn_detached(curl(c, "POST", path, Some(body)));
+}
+
+/// An unauthenticated detached POST to the build service (`{build}/<path>`,
+/// e.g. the anonymous install funnel). No key is sent.
+pub fn post_anonymous_detached(path: &str, body: &Value) {
+    let Ok(c) = Creds::anonymous(build_base()) else {
+        return;
+    };
+    let url = format!("{}/{}", c.build_base, path.trim_start_matches('/'));
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "--proto",
+        "=https,http",
+        "--max-redirs",
+        "0",
+        "--connect-timeout",
+        "5",
+        "--max-time",
+        "10",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "--data-binary",
+        "@-",
+        "-o",
+        "/dev/null",
+        &url,
+    ]);
+    spawn_detached((cmd, body.to_string()));
+}
+
+fn spawn_detached((mut cmd, stdin_text): (Command, String)) {
     let Ok(mut child) = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -585,7 +619,7 @@ fn post_detached(c: &Creds, path: &str, body: &Value) {
         return;
     };
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(config.as_bytes());
+        let _ = stdin.write_all(stdin_text.as_bytes());
     }
     // Reap in the background so no zombie outlives a long build. The
     // process exits right after a final event, and curl finishes on its own.

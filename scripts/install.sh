@@ -8,13 +8,74 @@
 #   JUSTRUST_NO_LOGIN     if set, skip running `justrust login`
 #   JUSTRUST_NO_AGENTS    if set, do not add justrust instructions to the
 #                         global CLAUDE.md / AGENTS.md of installed agents
+#   JUSTRUST_NO_TELEMETRY or DO_NOT_TRACK
+#                         if set, send no install events. Otherwise the
+#                         installer reports installer_start and
+#                         installer_finish (success, or the failed step) with
+#                         a random install id, OS, and CPU arch to
+#                         build.jcode.sh, and saves the id in
+#                         ~/.justrust/install_id so `justrust login` can tie
+#                         the sign-in to it. Nothing else is sent.
 set -eu
 
 BASE_URL="${JUSTRUST_BASE_URL:-https://github.com/1jehuang/justrust/releases/latest/download}"
 INSTALL_DIR="${JUSTRUST_INSTALL_DIR:-$HOME/.local/bin}"
+EVENT_URL="${JUSTRUST_INSTALL_EVENT_URL:-https://build.jcode.sh/v1/install/event}"
+STAGE=start
+FINISHED=
 
 say() { printf 'justrust: %s\n' "$*"; }
 err() { printf 'justrust: error: %s\n' "$*" >&2; exit 1; }
+
+telemetry_off() {
+    [ -n "${JUSTRUST_NO_TELEMETRY:-}" ] && return 0
+    [ -n "${DO_NOT_TRACK:-}" ] && [ "${DO_NOT_TRACK}" != 0 ]
+}
+
+# A random v4 uuid, or nothing. The website passes one in (JUSTRUST_INSTALL_ID)
+# so the copied command and this install are the same funnel row.
+new_install_id() {
+    if [ -r /proc/sys/kernel/random/uuid ]; then
+        cat /proc/sys/kernel/random/uuid
+    elif command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    fi
+}
+
+valid_install_id() {
+    printf '%s' "$1" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+}
+
+# report STAGE OUTCOME DETAIL: fire and forget, never fails or delays the
+# install by more than 3 seconds.
+report() {
+    telemetry_off && return 0
+    [ -n "${INSTALL_ID:-}" ] || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    body=$(printf '{"install_id":"%s","stage":"%s","outcome":"%s","source":"installer","detail":"%s","os":"%s","arch":"%s"}' \
+        "$INSTALL_ID" "$1" "$2" "$3" "$(uname -s 2>/dev/null | tr -cd 'A-Za-z0-9_.-')" "$(uname -m 2>/dev/null | tr -cd 'A-Za-z0-9_.-')")
+    curl -fsS -m 3 -o /dev/null -H 'Content-Type: application/json' -d "$body" "$EVENT_URL" >/dev/null 2>&1 || true
+}
+
+setup_install_id() {
+    INSTALL_ID="${JUSTRUST_INSTALL_ID:-}"
+    valid_install_id "$INSTALL_ID" || INSTALL_ID=$(new_install_id)
+    valid_install_id "$INSTALL_ID" || INSTALL_ID=
+    telemetry_off && return 0
+    [ -n "$INSTALL_ID" ] || return 0
+    jr_home="${JUSTRUST_HOME:-$HOME/.justrust}"
+    (umask 077; mkdir -p "$jr_home" && printf '%s\n' "$INSTALL_ID" > "$jr_home/install_id") 2>/dev/null || true
+}
+
+on_exit() {
+    code=$?
+    rm -rf "${tmp:-/nonexistent}"
+    if [ -z "$FINISHED" ]; then
+        FINISHED=1
+        if [ "$code" = 0 ]; then report installer_finish success ""; else report installer_finish failure "$STAGE"; fi
+    fi
+    exit "$code"
+}
 
 detect_target() {
     os=$(uname -s)
@@ -58,6 +119,7 @@ sha256_of() {
 }
 
 cargo_fallback() {
+    STAGE=cargo_install
     say "no prebuilt binary for this platform ($1); building from source with cargo"
     command -v cargo >/dev/null 2>&1 || err "cargo not found. Install Rust from https://rustup.rs and rerun."
     cargo install justrust --locked
@@ -66,18 +128,25 @@ cargo_fallback() {
 
 main() {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT INT TERM
+    trap on_exit EXIT
+    trap 'exit 130' INT TERM
+    setup_install_id
+    report installer_start success ""
 
     if target=$(detect_target); then
         asset="justrust-${target}.tar.gz"
         say "downloading $asset"
+        STAGE=download
         if fetch "$BASE_URL/$asset" "$tmp/$asset" && fetch "$BASE_URL/$asset.sha256" "$tmp/$asset.sha256"; then
+            STAGE=verify
             expected=$(cut -d ' ' -f 1 "$tmp/$asset.sha256")
             actual=$(sha256_of "$tmp/$asset")
             [ "$expected" = "$actual" ] || err "checksum mismatch for $asset (expected $expected, got $actual)"
+            STAGE=extract
             tar -xzf "$tmp/$asset" -C "$tmp"
             src="$tmp/justrust-${target}/justrust"
             [ -f "$src" ] || err "archive did not contain justrust"
+            STAGE=copy
             mkdir -p "$INSTALL_DIR"
             cp "$src" "$INSTALL_DIR/justrust.tmp"
             chmod 755 "$INSTALL_DIR/justrust.tmp"
@@ -97,6 +166,10 @@ main() {
     else
         cargo_fallback "$(uname -s)/$(uname -m)"
     fi
+    # The binary is in place: that is a successful install, whatever the
+    # sign-in below does (it is tracked separately as login_start).
+    FINISHED=1
+    report installer_finish success ""
 
     # Tell installed coding agents to use justrust (global CLAUDE.md /
     # AGENTS.md, a marked block that `justrust agents --remove` takes out).

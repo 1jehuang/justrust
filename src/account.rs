@@ -184,14 +184,65 @@ pub fn start(base: &str) -> Result<Pending> {
     if code.is_empty() || !url.starts_with("https://") && !url.starts_with("http://") {
         bail!("the Jcode API returned an unusable sign-in flow");
     }
-    Ok(Pending {
+    let p = Pending {
         base: c.base.clone(),
         device_code: code.to_string(),
         url: url.chars().filter(|c| !c.is_control()).collect(),
         interval: b["interval"].as_u64().unwrap_or(5).clamp(1, 60),
         expires_at: now() + b["expires_in"].as_u64().unwrap_or(600),
         last_poll: 0,
-    })
+    };
+    report_login_start(&p.url);
+    Ok(p)
+}
+
+/// The install id the installer saved (`~/.justrust/install_id`), if any.
+fn install_id() -> Option<String> {
+    let s = std::fs::read_to_string(crate::paths::home().ok()?.join("install_id")).ok()?;
+    let s = s.trim();
+    is_uuid(s).then(|| s.to_string())
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// `flow=<uuid>` from the sign-in URL: joins the install to the device flow.
+fn flow_id(url: &str) -> Option<&str> {
+    let q = url.split_once('?')?.1;
+    q.split('&')
+        .find_map(|kv| kv.strip_prefix("flow="))
+        .filter(|f| is_uuid(f))
+}
+
+fn login_start_body(install_id: &str, url: &str) -> Value {
+    let mut b = json!({
+        "install_id": install_id,
+        "stage": "login_start",
+        "source": "cli",
+        "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    });
+    if let Some(f) = flow_id(url) {
+        b["flow_id"] = json!(f);
+    }
+    b
+}
+
+/// Anonymous `login_start` install event (see scripts/install.sh): only when
+/// the installer saved an install id, so opted-out and source installs send
+/// nothing. Fire and forget.
+fn report_login_start(url: &str) {
+    if cfg!(test) {
+        return;
+    }
+    let Some(id) = install_id() else { return };
+    hosted::post_anonymous_detached("install/event", &login_start_body(&id, url));
 }
 
 #[derive(Debug)]
@@ -512,6 +563,24 @@ mod tests {
             }
         });
         (base, seen)
+    }
+
+    #[test]
+    fn login_start_joins_install_and_flow() {
+        let id = "0b7c3c1e-1111-4abc-8def-0123456789ab";
+        let b = login_start_body(
+            id,
+            "https://jcode.sh/account?flow=fe8c4a11-a358-47bc-aaf3-96eb7fc10165&client=justrust",
+        );
+        assert_eq!(b["install_id"], id);
+        assert_eq!(b["stage"], "login_start");
+        assert_eq!(b["flow_id"], "fe8c4a11-a358-47bc-aaf3-96eb7fc10165");
+        assert!(b["client"].as_str().unwrap().starts_with("justrust "));
+        let b = login_start_body(id, "https://jcode.sh/account?flow=../../x");
+        assert!(b.get("flow_id").is_none());
+        assert!(is_uuid(id));
+        assert!(!is_uuid("0b7c3c1e-1111-4abc-8def-0123456789a"));
+        assert!(!is_uuid("0b7c3c1e_1111-4abc-8def-0123456789ab"));
     }
 
     #[test]

@@ -47,6 +47,14 @@ Prebuilt for Linux and macOS (x86_64, aarch64); a few Linux-only features
 are listed under [Status](#status). Installs to
 `~/.local/bin` (`JUSTRUST_INSTALL_DIR` to change it), verifies the sha256,
 and runs `justrust login` when interactive (`JUSTRUST_NO_LOGIN=1` skips it).
+
+What the installer sends: a random install id, the OS and CPU
+architecture, and whether the install succeeded (or which step failed), to
+build.jcode.sh. `justrust login` sends the same id with its sign-in flow id
+so a sign-in can be matched to its install. Nothing else is sent before you
+sign in, and no IP address is stored. `JUSTRUST_NO_TELEMETRY=1` or
+`DO_NOT_TRACK=1` turns it off. Signed in, hosted builds also report each
+remote run (command, exit code, time) and why a build stayed local.
 From source: `cargo install justrust --locked` (Rust 1.91 or newer).
 
 Then tell your agents to use it:
