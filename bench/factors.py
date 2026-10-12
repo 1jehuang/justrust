@@ -518,7 +518,8 @@ def sample_fresh_dir(f: Factor, v: str, i: int, base_n: int) -> dict:
     second checkout at the same path). Both caches are private and shared
     by both variants, so dependencies hit either way."""
     s = variant_scenario(f, v)
-    s = dataclasses.replace(s, env={**s.env, **cache_env(f)})
+    # cold: no forced -Ztime-passes, which keeps units out of the depcache.
+    s = dataclasses.replace(s, env={**s.env, **cache_env(f)}, cold=True)
     root = suite.prepare(s.snapshot)
     target = FACTOR_WORK / "target" / f"{f.name}-{v}-fresh-{os.getpid()}-{i}"
     try:
