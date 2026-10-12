@@ -112,6 +112,13 @@ jobs:
           JCODE_SESSION_ID=other "$bin" test 2>&1 | tee slot.txt
           grep -E "slot [0-9]+ \((new|sticky|reused)\)" slot.txt
           grep -q "1 passed" slot.txt
+          # Diagnosis: why a freshly seeded slot rebuilds dependencies.
+          touch src/main.rs
+          JCODE_SESSION_ID=third CARGO_LOG=cargo::core::compiler::fingerprint=info \
+            "$bin" test 2>&1 | grep -iE "stale|dirty|fingerprint|mtime|slot" | head -30 || true
+          s=target/justrust-slots; ls $s
+          f=$(ls target/debug/deps/libquote-*.rlib | head -1)
+          stat -f "%N %Fm" "$f" $s/*/debug/deps/$(basename "$f") || true
           # Pinned toolchain for the host triple (download, sha256 via shasum).
           printf '[toolchain]\nchannel = "stable"\n' > justrust.toml
           "$bin" toolchain install 2>&1 | tail -5
