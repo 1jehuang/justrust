@@ -1,6 +1,6 @@
 # Agent Instructions for justrust
 
-justrust is fast Rust compile for coding agents. Every change should make
+justrust is Rust compile as a service for coding agents. Every change should make
 the agent edit, check, and test loop faster or more informative, and be
 backed by measurements.
 

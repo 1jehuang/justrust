@@ -7,7 +7,7 @@
 
 # justrust
 
-**Rust compile as a service. Cargo for coding agents.**
+**Rust compile as a service for coding agents.**
 
 Faster `check` and `test` on your laptop or on our build machines,
 with output an agent can act on.
