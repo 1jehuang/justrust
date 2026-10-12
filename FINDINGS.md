@@ -3045,6 +3045,19 @@ stall. Rerun 3 times with its predecessor (`--only-points 6,7`) it took
 is not a steady cost; the cause of the occasional startup stall is still
 open.
 
+The `test -p jcode-tui --lib` gap (machine, warm, 4 rounds each): stock
+20.0 to 20.8 s, justrust 20.7 to 22.0 s, `JUSTRUST_TEST_PARALLEL=0` 20.4
+to 20.6 s, `JUSTRUST_TEST_TIMES=0` 20.4 to 20.6 s. Timeline of one
+justrust run: the "failed last time" group (4 tests) is done at 0.14 s,
+the main group (2,482 tests) at 20.07 s, about the same as stock's single
+process. Then the pool spends 0.9 s rerunning, alone, the tests that
+failed only beside other test processes, before it reports them as
+parallel-only. That faithfulness check costs ~1 s only on suites with
+order-dependent tests (jcode-tui has several; the failure count varies
+from 5 to 14 between runs). It is the price of not reporting a flaky
+failure as real, so I left it. Making it cheaper would mean reporting
+first and confirming after, which changes what the agent sees.
+
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
 Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
