@@ -3063,3 +3063,19 @@ Checked with the default (no env) through `justrust` on real projects:
 Caveat that ships with it: a proc macro whose output depends on files or
 environment variables (not its input tokens) is not re-run when only those
 change.
+
+End-to-end over the whole default path, installed binary, no settings
+(`bench/e2e-default-toolchain.sh`, fixture `bench/e2e`: a workspace with
+its own attribute, derive and env-reading proc macros), 15/15 PASS: default
+toolchain is jr; body edit, attribute-arguments-only change, derive-input
+change and revert each produce the right values; a type error inside an
+attributed fn is reported, and the fix passes; doctests through jr's
+rustdoc pass, also after an attribute change; clippy through jr's clippy;
+`JUSTRUST_TOOLCHAIN=system` uses the system rustc; a `justrust.toml` pin to
+an uninstalled jr toolchain fails open to the system rustc with a message;
+the documented caveat is real (an env-reading macro keeps its cached
+output after an unrelated edit) and `JUSTRUST_CACHE_PROC_MACROS=0` re-runs
+it. Also rerun after the change: justrust's own 263 tests and clippy at the
+committed HEAD, `jcode check -p jcode-core`. Toggling the cache flag does
+not rebuild an up-to-date crate (cargo does not fingerprint the flag the
+shim adds), and the next edit compiles with the current setting.
