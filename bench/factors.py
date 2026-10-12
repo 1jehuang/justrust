@@ -340,6 +340,20 @@ FACTORS = [
          "desktop-jcode-core-body", 8, "the 15-crate cascade of FINDINGS (jcode_base 5.6 s)"),
         ("jr-cutoff-sig", "same, but the edit adds a pub item: the interface changes, nothing may be cut off",
          "desktop-upstream-sig", 6, "control: on must equal off"),
+        ("jr-cutoff-cost", "same, on the UI crate's own body-check loop: nothing to cut off, measures what "
+         "the interface hash costs (hashing, larger rmeta of every dependency with padded spans)",
+         "desktop-body-check", 12, "cost side: on should equal off"),
+    ]],
+    *[Factor(
+        name, what, "loop", scenario,
+        on={"JUSTRUST_TOOLCHAIN": CUTOFF_TOOLCHAIN, "JUSTRUST_TEST_FILTER_COMPILE": "1"},
+        off={"JUSTRUST_TOOLCHAIN": CUTOFF_TOOLCHAIN},
+        n=n, slow=True, note=note,
+    ) for name, what, scenario, n, note in [
+        ("jr-test-filter", "test-filter-aware compilation: jr-rustc's harness holds only the tests the "
+         "libtest filter selects (JUSTRUST_RUSTC_TEST_FILTER); the other 1311 are type-checked, not codegened",
+         "desktop-test-edit", 10, "reference loop, filter fps_counter (3 of 1314 tests)"),
+        ("jr-test-filter-body", "same, body edit in non-test code", "desktop-body-test", 8, ""),
     ]],
     Factor(
         "jr-overlap-persist", "jr-rustc persists the incremental state (dep graph, query cache) on one "
