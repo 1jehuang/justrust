@@ -78,14 +78,17 @@ try:
         time.sleep(1.0)
         idle()  # the prebuild ran and finished
         c1, o1, e1 = run("daemon", True)
-        replayed = "result of a prebuild" in e1
+        # `test` prebuilds compile only (--no-run): the agent's run must find
+        # every unit Fresh and run the tests itself.
+        m = re.search(r"units\s+(\d+) compiled", e1)
+        replayed = "result of a prebuild" in e1 or (m is not None and m.group(1) == "0")
         c2, o2, e2 = run("direct", False)
         same = norm(o1, e1) == norm(o2, e2)
         # After both: a plain build of the same sources compiles nothing.
         _, _, e3 = run("daemon", False)
         dirty = re.search(r"units\s+(\d+) compiled", e3)
         nodirty = dirty is not None and dirty.group(1) == "0"
-        print(f"{name}: replayed={replayed} exit daemon={c1} direct={c2} same_output={same} "
+        print(f"{name}: prebuilt={replayed} exit daemon={c1} direct={c2} same_output={same} "
               f"no_dirty_after={nodirty}")
         if not same:
             a, b = norm(o1, e1), norm(o2, e2)

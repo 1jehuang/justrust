@@ -614,6 +614,9 @@ struct Log {
 
 struct Build {
     stamp: String,
+    /// A `test` prebuilt as `test --no-run`: requests wait for it, then run
+    /// for real (on Fresh units), never take its output.
+    compile_only: Mutex<bool>,
     /// Agent session that asked (`JUSTRUST_SLOT_SESSION`).
     session: String,
     run_id: Option<String>,
@@ -842,7 +845,9 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     if !req.prebuild {
         cancel_stale_prebuild(dm, &key, &stamp);
         cancel_wrong_guess(dm, &key, &session_of(&req));
+        settle_compile_only(dm, &key, &stamp);
     }
+    let waited_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let (build, attached, replayed) = {
         let mut st = dm.state.lock().unwrap();
         st.served += 1;
@@ -850,15 +855,21 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         let running = st
             .builds
             .get(&key)
-            .filter(|b| b.stamp == stamp && b.log.lock().unwrap().exit.is_none())
+            .filter(|b| {
+                b.stamp == stamp
+                    && b.log.lock().unwrap().exit.is_none()
+                    && !*b.compile_only.lock().unwrap()
+            })
             .cloned();
         // A prebuild of exactly this request finished before it arrived.
         let done = if req.prebuild || running.is_some() {
             None
         } else {
-            st.finished
-                .remove(&key)
-                .filter(|b| b.stamp == stamp && b.started.elapsed() < FINISHED_MAX_AGE)
+            st.finished.remove(&key).filter(|b| {
+                b.stamp == stamp
+                    && b.started.elapsed() < FINISHED_MAX_AGE
+                    && !*b.compile_only.lock().unwrap()
+            })
         };
         if !req.prebuild && wants_prebuild(&req) {
             st.recent.insert(
@@ -916,7 +927,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         return Ok(());
     }
     log(&format!(
-        "{} {} in {} ({:.1} ms, stamp {})",
+        "{} {} in {} ({:.1} ms, {:.0} ms waiting for a compile-only prebuild, stamp {})",
         if replayed {
             "replay"
         } else if attached {
@@ -927,6 +938,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         req.argv.join(" "),
         req.cwd,
         lookup_ms,
+        waited_ms,
         &build.stamp[..8]
     ));
     let res = stream(&build, &mut s, attached, replayed, joined_after, lookup_ms);
@@ -1039,6 +1051,7 @@ fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
     let mut child = c.spawn().context("starting the build")?;
     let b = Arc::new(Build {
         stamp,
+        compile_only: Mutex::default(),
         session: session_of(req),
         run_id: req
             .env
@@ -1125,6 +1138,52 @@ fn wants_prebuild(req: &Request) -> bool {
     !req.env.iter().any(|(k, v)| {
         k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "0" | "off" | "false")
     })
+}
+
+fn is_test(argv: &[String]) -> bool {
+    matches!(argv.first().map(String::as_str), Some("test" | "t"))
+}
+
+/// `test ARGS -- FILTERS` -> `test ARGS --no-run`: the same units, no run.
+fn no_run_argv(argv: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = argv.iter().take_while(|a| *a != "--").cloned().collect();
+    if !out.iter().any(|a| a == "--no-run") {
+        out.push("--no-run".into());
+    }
+    out
+}
+
+/// A compile-only prebuild of this request and these sources is running:
+/// wait for it (the agent's build would wait on its slot anyway), so the
+/// real run that follows finds every unit Fresh. A finished one is dropped.
+fn settle_compile_only(dm: &Daemon, key: &str, stamp: &str) {
+    let b = {
+        let mut st = dm.state.lock().unwrap();
+        if st
+            .finished
+            .get(key)
+            .is_some_and(|b| *b.compile_only.lock().unwrap())
+        {
+            st.finished.remove(key);
+        }
+        st.builds
+            .get(key)
+            .filter(|b| b.stamp == stamp && *b.compile_only.lock().unwrap())
+            .cloned()
+    };
+    let Some(b) = b else { return };
+    b.log.lock().unwrap().claimed = true;
+    log(&format!("waiting for compile-only prebuild pid {}", b.pid));
+    let mut l = b.log.lock().unwrap();
+    while l.exit.is_none() {
+        l = b.cv.wait(l).unwrap();
+    }
+    drop(l);
+    // `reap` forgets it; make sure it is gone before we look up `key`.
+    let mut st = dm.state.lock().unwrap();
+    if st.builds.get(key).is_some_and(|x| Arc::ptr_eq(x, &b)) {
+        st.builds.remove(key);
+    }
 }
 
 fn session_of(req: &Request) -> String {
@@ -1271,6 +1330,13 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
                 continue;
             }
             req.prebuild = true;
+            // Never run an agent's tests on a guess: they may touch files,
+            // sockets or processes, and a cancelled prebuild would kill
+            // them mid-run. Compile the same units only.
+            let compile_only = is_test(&req.argv);
+            if compile_only {
+                req.argv = no_run_argv(&req.argv);
+            }
             // Its own run id: never the pinned id of the request it copies.
             // A pinned id also keeps the router from sending it remote.
             req.env.retain(|(k, _)| k != "JUSTRUST_RUN_ID_OVERRIDE");
@@ -1281,6 +1347,7 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             req.env.retain(|(k, _)| k != "JCODE_SESSION_ID");
             match start(&req, stamp, &cwd) {
                 Ok(b) => {
+                    *b.compile_only.lock().unwrap() = compile_only;
                     log(&format!(
                         "prebuild {} in {} (stamp {})",
                         req.argv.join(" "),
@@ -1382,6 +1449,28 @@ mod tests {
         assert_ne!(k, request_key(&flags));
         assert_ne!(k, request_key(&filter));
         assert_ne!(k, request_key(&frontend));
+    }
+
+    #[test]
+    fn test_prebuilds_never_run_tests() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            no_run_argv(&v(&[
+                "test",
+                "-p",
+                "x",
+                "--lib",
+                "--",
+                "fps",
+                "--nocapture"
+            ])),
+            v(&["test", "-p", "x", "--lib", "--no-run"])
+        );
+        assert_eq!(
+            no_run_argv(&v(&["test", "--no-run"])),
+            v(&["test", "--no-run"])
+        );
+        assert!(is_test(&v(&["t"])) && !is_test(&v(&["check"])));
     }
 
     #[test]

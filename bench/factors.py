@@ -194,6 +194,15 @@ FACTORS = [
              "measured. Both sides wait the same",
     ),
     Factor(
+        "buildd-prebuild-interference", "cost of another agent's prebuild: agent A edits a ui-core body and its "
+                                        "prebuild of `build -p jcode-desktop-ui` starts; agent B (other checkout) "
+                                        "runs the reference loop meanwhile",
+        "interference", "desktop-two-agents-prebuild",
+        on={"JUSTRUST_BUILDD": "1"}, off={"JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "0"}, n=5,
+        note="B's wall is measured. A never asks for its build in the sample: the worst case, a wrong guess that "
+             "runs to completion (niced 10)",
+    ),
+    Factor(
         "parallel-frontend", "rustc -Zthreads=8 for local crates (Desktop's rustc wrapper)",
         "loop", "desktop-test-edit",
         on={}, off={"JCODE_PARALLEL_FRONTEND": "0"},
@@ -602,7 +611,34 @@ def sample_prebuild(f: Factor, v: str, i: int, base_n: int) -> dict:
     return r
 
 
-SAMPLERS = {"prebuild": sample_prebuild, "coalesce": sample_coalesce, "loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
+def sample_interference(f: Factor, v: str, i: int, base_n: int) -> dict:
+    venv = f.on if v == "on" else f.off
+    a_root = concurrent_root("ia")
+    s = variant_scenario(f, v) if False else suite.BY_NAME["desktop-test-edit"]
+    s = dataclasses.replace(s, env={**s.env, "JUSTRUST_BUILDD": "0"})
+    b_root = suite.prepare("desktop")
+    target = FACTOR_WORK / "target" / "interference-b"
+    a_edit = suite.BY_NAME["desktop-upstream-body"].edit
+    n = base_n + 2 * i + (v == "off")
+    try:
+        buildd_idle()
+        # Teach the daemon A's request (unmeasured).
+        pa, _, _ = run_agent(["build", "-p", "jcode-desktop-ui"], a_root / "jcode-desktop",
+                             {"JCODE_SESSION_ID": "bench-agent-a", **venv})
+        pa.communicate()
+        buildd_idle()
+        suite.apply_edit(a_root, a_edit, n)  # A's prebuild starts 0.4 s later (on)
+        time.sleep(0.5)
+        suite.apply_edit(b_root, s.edit, n)
+        r = suite.run_once(s, b_root, target)
+    finally:
+        suite.restore(b_root, s.edit)
+        suite.restore(a_root, a_edit)
+        buildd_idle(300)
+    return r
+
+
+SAMPLERS = {"interference": sample_interference, "prebuild": sample_prebuild, "coalesce": sample_coalesce, "loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
             "revert": sample_revert, "fresh": sample_fresh_dir}
 
 
