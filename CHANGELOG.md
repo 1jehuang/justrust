@@ -3,6 +3,16 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## Unreleased
+
+- **Remote optimized builds.** `justrust build --release` (or any
+  optimized profile, host target) routes like `check`: it goes remote once
+  the local build takes over 5 s and stays there while it wins. The binary
+  comes back into `target/<profile>/` as a zstd delta against the last one
+  fetched (0.1-2 MB, under a second), checked with `ldd` before it replaces
+  the local file. Debug `build` and `run` stay local. 1.75x on the justrust
+  release edit loop (FINDINGS 45b).
+
 ## 0.1.0-alpha.10
 
 - `justrust login` honours `JUSTRUST_NO_TELEMETRY` and `DO_NOT_TRACK` even
