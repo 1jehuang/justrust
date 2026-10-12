@@ -587,6 +587,13 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     wall = time.monotonic() - t0
     p.stderr = "".join(err_lines)
     summ_path = JR_HOME / "runs" / rid / "summary.json"
+    if env.get("JUSTRUST_EARLY_EXIT") == "1":
+        # An early exit returns before cargo finishes; the run's summary is
+        # written by the build the daemon keeps running. Wait for it
+        # (untimed) so samples never overlap.
+        deadline = time.monotonic() + 300
+        while not summ_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
     if not summ_path.exists():
         sys.exit(f"bench: {s.name}: no summary for run {rid} (exit {p.returncode})\n{p.stderr[-3000:]}")
     sm = json.loads(summ_path.read_text())

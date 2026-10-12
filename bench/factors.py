@@ -165,6 +165,15 @@ FACTORS = [
              "reference loop (test-fn edit, `test --lib -- fps_counter`); B's wall is measured",
     ),
     Factor(
+        "early-exit", "return rust-analyzer's coded errors in the changed file at once (JUSTRUST_EARLY_EXIT=1) while "
+                      "cargo finishes under the build daemon, vs printing them early and waiting for cargo",
+        "early", "desktop-type-error-early",
+        on={"JUSTRUST_EARLY": "1", "JUSTRUST_EARLY_EXIT": "1", "JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "0"},
+        off={"JUSTRUST_EARLY": "1", "JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "0"}, n=8,
+        note="type-error edit in fps_counter.rs, `check -p jcode-desktop-ui`, warm early daemon (started untimed) on "
+             "both sides; wall is until the command returns. The on side waits (untimed) for the background build",
+    ),
+    Factor(
         "buildd-coalesce", "resident build daemon: a second agent asking for the identical build attaches to the "
                            "running one instead of waiting for its slot and re-running cargo and the tests "
                            "(default on; JUSTRUST_BUILDD=0)",
@@ -641,6 +650,27 @@ def sample_prebuild(f: Factor, v: str, i: int, base_n: int) -> dict:
     return r
 
 
+def sample_early(f: Factor, v: str, i: int, base_n: int) -> dict:
+    s = variant_scenario(f, v)
+    root = suite.prepare(s.snapshot)
+    key = hashlib.sha1(json.dumps([s.snapshot, "early-exit"]).encode()).hexdigest()[:10]
+    # One target for both sides: the background build of `on` and the
+    # foreground build of `off` compile the same thing.
+    target = FACTOR_WORK / "target" / f"early-{s.snapshot}-{key}"
+    cwd = root / suite.SNAPSHOTS[s.snapshot]["cwd"]
+    if i == 0:
+        suite.restore(root, s.edit)
+        subprocess.run([suite.J, "early", "start"], cwd=cwd, check=True)
+    try:
+        buildd_idle()
+        suite.apply_edit(root, s.edit, base_n + 2 * i + (v == "off"))
+        r = suite.run_once(s, root, target)
+    finally:
+        suite.restore(root, s.edit)
+    buildd_idle()
+    return r
+
+
 def sample_interference(f: Factor, v: str, i: int, base_n: int) -> dict:
     venv = f.on if v == "on" else f.off
     a_root = concurrent_root("ia")
@@ -668,7 +698,7 @@ def sample_interference(f: Factor, v: str, i: int, base_n: int) -> dict:
     return r
 
 
-SAMPLERS = {"interference": sample_interference, "prebuild": sample_prebuild, "coalesce": sample_coalesce, "loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
+SAMPLERS = {"early": sample_early, "interference": sample_interference, "prebuild": sample_prebuild, "coalesce": sample_coalesce, "loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
             "revert": sample_revert, "fresh": sample_fresh_dir}
 
 
