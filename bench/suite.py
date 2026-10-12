@@ -512,6 +512,21 @@ def prebuilt_store(s: Scenario, root: Path) -> None:
     PREBUILT_URL = f"http://127.0.0.1:{srv.server_address[1]}"
 
 
+def hotpatch_outcomes(run_dir: Path) -> list[str] | None:
+    """Outcome of each hot-patchable link in a run (None: hot patching off)."""
+    p = run_dir / "hotpatch.jsonl"
+    if not p.exists():
+        return None
+    out = []
+    for line in p.read_text().splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        out.append(f"patched {d['ms']:.0f}ms" if d["outcome"] == "patched" else f"{d['outcome']}: {d['detail'][:80]}")
+    return out
+
+
 def run_once(s: Scenario, root: Path, target: Path) -> dict:
     rid = new_id()
     env = dict(os.environ)
@@ -610,6 +625,8 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         "reuse": reuse_ledger(sm, JR_HOME / "runs" / rid),
         "split": {k: round(v, 3) for k, v in split.items()},
         "link_secs": round(sm.get("link", {}).get("link_pass_secs", 0.0), 3),
+        # JUSTRUST_HOTPATCH=1: "patched 41ms", "full-link: <why>" per link.
+        "hotpatch": hotpatch_outcomes(JR_HOME / "runs" / rid),
         "tests_passed": sm.get("tests", {}).get("passed", 0),
         "tests_failed": tests_failed,
         "other_cores": round(res.get("avg_other_cores", 0.0), 2),

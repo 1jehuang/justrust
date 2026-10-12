@@ -482,7 +482,10 @@ def run_factor(f: Factor, n: int | None, warmup: int | None, quiet_wait: float) 
             r = sampler(f, v, i, base_n)
             measured = i >= warmup
             print(f"  {f.name} {v:3s} {i + 1}/{warmup + n}: {r['wall']:.2f}s units {r['units']} "
-                  f"reuse {r['reuse']} id {r['id']}{' noisy' if r['noisy'] else ''}{'' if measured else ' (warmup)'}",
+                  f"reuse {r['reuse']} id {r['id']}"
+                  f"{' link %.2fs' % r['split']['link'] if 'split' in r else ''}"
+                  f"{' hotpatch %s' % r['hotpatch'] if r.get('hotpatch') else ''}"
+                  f"{' noisy' if r['noisy'] else ''}{'' if measured else ' (warmup)'}",
                   file=sys.stderr)
             if measured:
                 samples[v].append(r)
