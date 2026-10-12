@@ -163,6 +163,9 @@ fn stage_with(
         append_once(&manifest, &line)?;
         return Some(entry.out);
     }
+    if volatile(&manifest, &entry) {
+        return None;
+    }
 
     let mut stderr_lines = Vec::new();
     let mut artifacts = Vec::new();
@@ -252,6 +255,23 @@ fn stage_with(
         return None;
     }
     Some(out)
+}
+
+/// Stored this many times with the same sources but other values of a
+/// tracked env var: the var changes on every build (a build script stamping
+/// the build time, like Jcode Desktop's `JCODE_DESKTOP_BUILD_ID`), so new
+/// entries can never hit. Stop storing them (FINDINGS 46).
+const VOLATILE_AFTER: usize = 2;
+
+fn volatile(manifest: &Path, entry: &Entry) -> bool {
+    let Ok(text) = std::fs::read_to_string(manifest) else {
+        return false;
+    };
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
+        .filter(|e| e.inputs == entry.inputs && e.env != entry.env)
+        .count()
+        >= VOLATILE_AFTER
 }
 
 fn spawn_finisher(dir: &Path) -> bool {
