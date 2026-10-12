@@ -3313,3 +3313,34 @@ says the local build takes over ~5 s, ship the binary as a zstd
 `--patch-from` delta against the last binary fetched (a full zstd copy
 when there is none), and keep dev `build`/`run` local until split
 debuginfo is in place.
+
+Later the same night (CI run 38199891022, both Macs green), more runtime
+bugs found only by exercising the workflows on real runners:
+
+- clonefile keeps the cache entry's mtime, so restored rlibs looked older
+  than the unit's `invoked.timestamp`: a seeded slot rebuilt 8-10
+  dependency units ("quote changed"). Restores now get a fresh mtime;
+  a new slot after a one-line edit builds 1 unit, 11 fresh.
+- Pinned toolchains failed to install on every Mac: 1.98.1 ships no
+  cranelift for apple-darwin. Optional components are now skipped;
+  `1.98.1` installs and builds on both Macs.
+- `peer_cache_serves_and_installs_entries` failed twice in Linux CI: each
+  CachePut chunk was appended on its own thread, so a last chunk could
+  complete the bundle before an earlier one landed. Chunks now append on
+  the reader thread. Not reproduced locally (0/60 before and after).
+
+Requirement to evidence (macos-latest / macos-15-intel, run 38199891022):
+
+| Requirement | Check | Observed |
+|---|---|---|
+| builds on macOS | clippy -D warnings, cargo test | 254 passed / 254 passed |
+| xattr arity | depcache key memo tests | pass |
+| reflink | depcache restore + slot seed | 17 hit/0 miss; slot seeded 0.0-0.1 s |
+| affinity, cgroups | sched off, builds succeed | ok |
+| sampler | `show --json` asserts | build cores 1.56 / 1.50, rustc 111 / 63 MB, avail 3.6 / 10.4 GB |
+| no silent zeroes | report text, `psi_unavailable` | "stalls not measured" |
+| pid guard | `status --json` after a run | `active: []` |
+| proc macros cached | 2nd checkout of serde-derive | 17 hit/0 miss, test passes |
+| routing | `show` where line | local, reason given |
+| toolchain pin | 1.98.1 install + test | "pinned toolchain 1.98.1", 1 passed |
+| release packaging | thin-LTO stripped build runs a test | 1 passed |
