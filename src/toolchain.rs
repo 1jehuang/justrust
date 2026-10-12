@@ -798,10 +798,20 @@ fn install_into(
     {
         bail!("manifest for {} is dated {}", spec.id(), manifest.date);
     }
-    let pkgs: Vec<Package> = components
-        .iter()
-        .map(|c| manifest.package(c))
-        .collect::<Result<_>>()?;
+    // rustc, cargo, and std are required. The rest (cranelift, rustc-dev,
+    // llvm-tools, ...) are not built for every target and release (no
+    // cranelift for aarch64-apple-darwin 1.98.1): skip what is missing.
+    let required = ["rustc", "cargo", "rust-std"];
+    let mut pkgs: Vec<Package> = Vec::new();
+    for c in components {
+        match manifest.package(c) {
+            Ok(p) => pkgs.push(p),
+            Err(e) if required.contains(c) => return Err(e),
+            Err(e) => {
+                let _ = writeln!(log, "justrust: skipping {c}: {e}");
+            }
+        }
+    }
     let _ = writeln!(
         log,
         "justrust: downloading {} components of {} ({})",
