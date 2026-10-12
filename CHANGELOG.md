@@ -3,6 +3,16 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.7
+
+- **Prebuilt store on by default, cost-aware.** A dependency is downloaded
+  only when that beats compiling it here, from the store's price list
+  (compile time and size per unit) and this machine's measured download
+  rate. Quiet 16-core laptop, cold check of 105 popular crates: 19-26 s
+  vs 34-35 s compiling; projects the store does not cover are unaffected.
+  `JUSTRUST_PREBUILT=off` disables it, `JUSTRUST_PREBUILT_ALWAYS=1`
+  fetches every hit.
+
 ## 0.1.0-alpha.6
 
 - **Prebuilt store is opt-in again** (`JUSTRUST_PREBUILT=default`, now
