@@ -691,6 +691,19 @@ pub fn candidates_command(days: f64, top: usize) -> Result<()> {
             *counts.entry((pkg, f)).or_default() += 1;
         }
     }
+    // A build script watching a whole directory (`rerun-if-changed=src`)
+    // hides which file changed: add commits touching each file as well.
+    for (f, n) in git_churn(&ws.root, days) {
+        // The deepest crate dir: a root package's dir contains every member.
+        if let Some(k) = ws
+            .crates
+            .values()
+            .filter(|k| f.starts_with(&k.dir))
+            .max_by_key(|k| k.dir.components().count())
+        {
+            *counts.entry((k.name.clone(), f)).or_default() += n;
+        }
+    }
     let rows = rank_candidates(&ws, counts);
     if rows.is_empty() {
         println!("no recorded edits in the last {days} days");
@@ -715,6 +728,38 @@ pub fn candidates_command(days: f64, top: usize) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Files changed per commit in the last `days` days, for `root` and every
+/// git repository a workspace path dependency lives in (absolute paths).
+fn git_churn(root: &Path, days: f64) -> BTreeMap<PathBuf, usize> {
+    let mut out = BTreeMap::new();
+    let Ok(o) = Command::new("git")
+        .args([
+            "log",
+            "--name-only",
+            "--format=",
+            &format!("--since={}.days", days.ceil() as u64),
+        ])
+        .current_dir(root)
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return out;
+    };
+    let top = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+        .unwrap_or_else(|| root.to_path_buf());
+    for l in String::from_utf8_lossy(&o.stdout).lines() {
+        if l.ends_with(".rs") {
+            *out.entry(top.join(l)).or_default() += 1;
+        }
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -924,6 +969,47 @@ mod tests {
                 .unwrap()
                 .contains_key("winapi")
         );
+    }
+
+    #[test]
+    fn ranks_leaf_candidates_by_edits() {
+        let dir = std::env::temp_dir().join(format!("jr-shadow-rank-{}", std::process::id()));
+        let src = dir.join("big/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lib.rs"), "mod leaf;\nmod tangled;\n").unwrap();
+        std::fs::write(src.join("leaf.rs"), "pub fn f() {}\n").unwrap();
+        std::fs::write(src.join("tangled.rs"), "use crate::leaf::f;\n").unwrap();
+        std::fs::write(src.join("orphan.rs"), "pub fn g() {}\n").unwrap();
+        let mut ws = crate::split::Workspace::default();
+        ws.crates.insert(
+            "big".into(),
+            crate::split::Krate {
+                name: "big".into(),
+                ident: "big".into(),
+                dir: dir.join("big"),
+                root_file: Some(src.join("lib.rs")),
+                deps: Default::default(),
+            },
+        );
+        let mut counts = BTreeMap::new();
+        counts.insert(("big".to_owned(), src.join("leaf.rs")), 2);
+        counts.insert(("big".to_owned(), src.join("tangled.rs")), 9);
+        counts.insert(("big".to_owned(), src.join("orphan.rs")), 1);
+        counts.insert(("big".to_owned(), src.join("lib.rs")), 50);
+        let rows = rank_candidates(&ws, counts);
+        let got: Vec<(&str, usize, bool)> = rows
+            .iter()
+            .map(|r| (r.module.as_str(), r.edits, r.blocker.is_none()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("tangled", 9, false),
+                ("leaf", 2, true),
+                ("orphan", 1, false)
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

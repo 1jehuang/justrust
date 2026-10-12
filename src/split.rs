@@ -131,7 +131,13 @@ impl Workspace {
             };
             let root_file = targets
                 .iter()
-                .find(|t| kind_is(t, "lib") || kind_is(t, "proc-macro"))
+                .find(|t| {
+                    // `crate-type = ["rlib", "cdylib"]` lists those kinds
+                    // instead of "lib".
+                    ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"]
+                        .iter()
+                        .any(|k| kind_is(t, k))
+                })
                 .or_else(|| targets.iter().find(|t| kind_is(t, "bin")))
                 .and_then(|t| t["src_path"].as_str())
                 .map(PathBuf::from);
