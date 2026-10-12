@@ -16,8 +16,8 @@
 //! ```
 //!
 //! `<base>` is `JUSTRUST_PREBUILT` (`https://...`, `http://...`, `file:///dir`
-//! or an absolute path). Unset means justrust's public store
-//! ([`DEFAULT_STORE`], S3); `0`/`off` turns it off. Lookups happen after a
+//! or an absolute path), or `default` for justrust's public store
+//! ([`DEFAULT_STORE`], CloudFront + S3). Unset or `0`/`off` means off. Lookups happen after a
 //! local miss and before the account cache. The index, when the store has
 //! one, is fetched once per 10 minutes and answers most misses without a
 //! request: a cold build of 900 units makes one request per unit the store
@@ -73,21 +73,25 @@ pub(crate) fn note_success(root: &Path) {
     }
 }
 
-/// justrust's public prebuilt store (justrust-cloud `infra/prebuilt-store.yaml`,
-/// filled by the scheduled prebuild fleet). Used when `JUSTRUST_PREBUILT`
-/// is unset.
-pub const DEFAULT_STORE: &str =
-    "https://jcode-justrust-prebuilt-production-280196252242.s3.us-east-1.amazonaws.com";
+/// justrust's public prebuilt store: CloudFront in front of the S3 bucket
+/// (justrust-cloud `infra/prebuilt-store.yaml`, filled by the scheduled
+/// prebuild fleet). Opt-in: `JUSTRUST_PREBUILT=default` (or the URL).
+/// Not on by default: on a quiet 16-core laptop over ~10 MB/s a cold check
+/// of 105 popular crates took 80-138 s from the store against 36-39 s
+/// compiling locally (FINDINGS 43). It wins only where the CPU is the
+/// bottleneck, so it needs a per-unit cost decision before it can default.
+pub const DEFAULT_STORE: &str = "https://d1j555vqgf2xkj.cloudfront.net";
 
 /// The store base, without a trailing slash, or `None` when off.
 pub fn base() -> Option<String> {
     if !depcache::enabled() {
         return None;
     }
-    match std::env::var("JUSTRUST_PREBUILT") {
-        Ok(v) => parse_base(&v),
-        Err(_) => Some(DEFAULT_STORE.to_owned()),
+    let v = std::env::var("JUSTRUST_PREBUILT").ok()?;
+    if matches!(v.trim(), "default" | "1" | "on" | "public") {
+        return Some(DEFAULT_STORE.to_owned());
     }
+    parse_base(&v)
 }
 
 fn parse_base(v: &str) -> Option<String> {
@@ -425,7 +429,7 @@ fn write_index(v1: &Path) -> anyhow::Result<()> {
 /// One status line for `justrust cache`.
 pub fn status_line(root: &Path) -> String {
     match base() {
-        None => "prebuilt  off (JUSTRUST_PREBUILT=off or the depcache is off)".into(),
+        None => "prebuilt  off (JUSTRUST_PREBUILT=default turns on the public store)".into(),
         Some(b) if fresh_file(&breaker(root), BREAKER_SECS) => format!(
             "prebuilt  {b}: paused after an error ({}), retrying within 10 min",
             std::fs::read_to_string(breaker(root))

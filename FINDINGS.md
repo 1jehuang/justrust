@@ -3106,3 +3106,48 @@ it. Also rerun after the change: justrust's own 263 tests and clippy at the
 committed HEAD, `jcode check -p jcode-core`. Toggling the cache flag does
 not rebuild an up-to-date crate (cargo does not fingerprint the flag the
 shim adds), and the next edit compiles with the current setting.
+
+## 43. Public prebuilt store: fleet on AWS works, but downloading loses to compiling on a quiet laptop (2026-10-11)
+
+Deployed: daily prebuild fleet (justrust-cloud `infra/prebuild-fleet.yaml`,
+EventBridge Scheduler -> one egress-only c7i.8xlarge with the prebuild role,
+latest justrust release, `prebuild/run.sh`, self-terminates, log to
+`fleet/logs/`), and CloudFront in front of the bucket
+(`https://d1j555vqgf2xkj.cloudfront.net`). Seeds 43 -> 105 crates. Two
+fleet runs triggered through the real scheduler role: 1486 manifests,
+1.47 GB in the store, ~2 min per run on 32 cores.
+
+Bug found: the static musl release keyed proc macros by `cfg!(target_env)`
+("musl") instead of the host's C library, so release-built keys of every
+proc macro and its dependents never matched a glibc build's: 86 of 647
+misses on fleet artifacts from the laptop. Fixed (host libc detected at
+runtime, glibc version via getconf), released as 0.1.0-alpha.5: 615/647
+prebuilt.
+
+Then the speed. 105-crate seed project, cold `check`, empty depcache,
+fresh target dir, alpha.5 binary, laptop in San Francisco on ~10 MB/s,
+interleaved:
+
+| run | CloudFront | S3 direct | no store (compile) | load |
+|---|---:|---:|---:|---:|
+| 1 | 80.7 s (615 hits) | 126.5 s | 36.3 s | 8-16 |
+| 2 | 112.1 s | 138.2 s | 39.2 s | 4-14 |
+
+Earlier on a busy machine (load 24-48) the store won (finding 42: 39-43 s
+vs 60-70 s, 43 crates), and a second busy round here was mixed (73-78 s vs
+63-86 s). What it costs: 615 bundles, 343 MB compressed (gzip fast) for a
+`check` that compiles in ~280 CPU-seconds; ~34 s of pure transfer at
+10 MB/s, plus a curl process, TLS handshake and manifest round trip per
+unit (median restore 1.2 s, p90 2.9 s, ~11 in flight). On 16 free cores
+compiling those crates is cheaper than moving their outputs. CloudFront
+helps (edge hit 0.13 s vs 1.3 s for a 1.6 MB bundle) but not enough.
+
+Decision: the store stays **opt-in** (`JUSTRUST_PREBUILT=default`); the
+alpha.4 default is reverted. It pays off where CPU is scarce (busy
+machines, small VMs, CI) or the network is fast. What would make it a
+default win, in order: (1) fetch only units whose recorded compile cost
+beats their size at the measured bandwidth (per-unit cost decision, the
+same rule as the remote route), (2) one persistent HTTP/2 connection
+instead of a curl process per request, (3) zstd and no rlib for `check`
+(rmeta is enough), (4) sizes in the index so the client can decide without
+a manifest request.
