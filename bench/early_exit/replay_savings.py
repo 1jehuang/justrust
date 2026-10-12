@@ -9,8 +9,9 @@ Inputs:
            per rustc error code, how often early exit fired correctly,
            wrongly, or not at all, and rust-analyzer's latency
 
-Model per run with first error code C (rates from the mutation bench for C,
-the pooled rate when C has fewer than 3 mutations):
+Model per run with first error code C (rates from the mutation bench for C;
+when C has fewer than 3 mutations, `pooled` uses the pooled rate and
+`conservative` assumes early exit never fires for C):
   fires correctly (p_ok):   the agent waits t_early = client overhead +
                             rust-analyzer's answer, instead of `wall`
   fires wrongly (p_wrong):  the agent acts on a wrong error. Charged as a
@@ -46,9 +47,17 @@ def main():
     ra_s = st.median(r["ra_ms"] for r in bench["rows"]) / 1000
     t_early = CLIENT_S + ra_s
 
-    def rates(c):
+    def pooled(c):
         b = by[c] if by[c][2] >= 3 else by["*"]
         return b[0] / b[2], b[1] / b[2]
+
+    def conservative(c):
+        # Codes the bench did not produce at least 3 times never fire
+        # (E0463 missing crate, E0583 missing module file, E0282 which
+        # early filters out...), but still cost the pooled wrong rate.
+        if by[c][2] >= 3:
+            return by[c][0] / by[c][2], by[c][1] / by[c][2]
+        return 0.0, by["*"][1] / by["*"][2]
 
     out = {"t_early_s": round(t_early, 3),
            "pooled": {"ok": by["*"][0], "wrong": by["*"][1], "n": by["*"][2]}}
@@ -56,7 +65,9 @@ def main():
     # Desktop type-error scenarios are a large share of the 563).
     for name, keep in (("all", lambda c: True),
                        ("real", lambda c: c is not None and "/bench/" not in c["cwd"] and "/scratch/" not in c["cwd"])):
-        out[name] = model({k: v for k, v in replay.items() if keep(codes.get(k))}, codes, rates, t_early)
+        for rname, rates in (("pooled", pooled), ("conservative", conservative)):
+            out[f"{name}_{rname}"] = model({k: v for k, v in replay.items() if keep(codes.get(k))},
+                                           codes, rates, t_early)
     print(json.dumps(out, indent=1))
 
 
