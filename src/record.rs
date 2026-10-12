@@ -496,7 +496,8 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     let done: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
     let sampler = {
         let done = done.clone();
-        std::thread::spawn(move || sample_loop(pid, &done))
+        let daemon_pid = run_dir.join(DAEMON_PID_FILE);
+        std::thread::spawn(move || sample_loop(pid, &daemon_pid, &done))
     };
 
     let (mut code, mut cpu_user, cpu_sys) = wait_child(&mut child, job.as_ref());
@@ -843,10 +844,16 @@ struct Tracked {
     last_cpu_ticks: u64,
 }
 
+/// A jr-cargo daemon child (`JUSTRUST_CARGO_DAEMON=1`) runs the build
+/// outside cargo's process tree and writes its pid here.
+const DAEMON_PID_FILE: &str = "cargo-daemon.pid";
+
 fn sample_loop(
     root: i32,
+    daemon_pid: &Path,
     done: &(Mutex<bool>, std::sync::Condvar),
 ) -> (Vec<Sample>, Vec<ProcRecord>) {
+    let mut daemon: Option<i32> = None;
     let hz = procfs::clk_tck();
     let page_mb = procfs::page_size() as f64 / 1_048_576.0;
     let ncpu = procfs::ncpu() as f64;
@@ -864,6 +871,14 @@ fn sample_loop(
             .filter_map(procfs::read_stat)
             .collect();
         let mut tree = tree_of(root, &all);
+        if daemon.is_none() {
+            daemon = std::fs::read_to_string(daemon_pid)
+                .ok()
+                .and_then(|s| s.trim().parse().ok());
+        }
+        if let Some(d) = daemon {
+            tree.extend(tree_of(d, &all));
+        }
         // Test binaries the pool runs are our children, not cargo's.
         for p in crate::test_pool::live_pids() {
             tree.extend(tree_of(p, &all));
