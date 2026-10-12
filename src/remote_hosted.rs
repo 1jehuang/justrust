@@ -540,12 +540,42 @@ pub fn report_run_event(run_id: &str, event: &str, exit_code: Option<i32>, wall_
     if let Some(w) = wall_s {
         body["wall_s"] = json!((w * 100.0).round() / 100.0);
     }
-    let (mut cmd, config) = curl(
-        &c,
-        "POST",
-        &format!("build/runs/{run_id}/event"),
-        Some(&body),
-    );
+    post_detached(&c, &format!("build/runs/{run_id}/event"), &body);
+}
+
+/// Body of `POST {build}/build/local`: why a signed-in client kept a build
+/// local, which command, which client version and machine.
+fn local_build_body(reason: &str, cmd: Option<&str>) -> Value {
+    let mut body = json!({
+        "reason": run_label(reason, 200),
+        "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
+    });
+    if let Some(cmd) = cmd {
+        body["cmd"] = json!(run_label(cmd, 160));
+    }
+    let h = crate::procfs::hostname();
+    if !h.is_empty() {
+        body["machine"] = json!(run_label(&h, 64));
+    }
+    body
+}
+
+/// `POST {build}/build/local` when a signed-in client builds locally, so the
+/// operator sees setups that never reach the remote machine (and why).
+/// Fire and forget like `report_run_event`. Signed out: nothing is sent.
+pub fn report_local_build(reason: &str, cmd: Option<&str>) {
+    if cfg!(test) || !signed_in() {
+        return;
+    }
+    let Ok(c) = creds() else {
+        return;
+    };
+    post_detached(&c, "build/local", &local_build_body(reason, cmd));
+}
+
+/// A detached curl POST that never delays or fails the build.
+fn post_detached(c: &Creds, path: &str, body: &Value) {
+    let (mut cmd, config) = curl(c, "POST", path, Some(body));
     let Ok(mut child) = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -1228,6 +1258,26 @@ mod tests {
         let s = check_access(&c).unwrap_err().to_string();
         assert!(s.contains("not available on your Jcode account yet"), "{s}");
         assert!(!s.contains("upgrade"), "{s}");
+    }
+
+    #[test]
+    fn local_build_body_is_bounded_and_labelled() {
+        let b = local_build_body(
+            "remote failed\n in the last 10 minutes",
+            Some("test -p a\t--lib"),
+        );
+        assert_eq!(b["reason"], "remote failed in the last 10 minutes");
+        assert_eq!(b["cmd"], "test -p a --lib");
+        assert!(b["client"].as_str().unwrap().starts_with("justrust "));
+        let long = "x".repeat(500);
+        assert_eq!(
+            local_build_body(&long, None)["reason"]
+                .as_str()
+                .unwrap()
+                .len(),
+            200
+        );
+        assert!(local_build_body("r", None).get("cmd").is_none());
     }
 
     /// /me without capability flags (older API deploy) but the fleet says 200:

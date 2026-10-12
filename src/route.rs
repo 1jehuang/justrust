@@ -365,11 +365,22 @@ pub fn local_reason() -> Option<String> {
     LOCAL_REASON.get().cloned()
 }
 
+/// The routed command (`check -p a`), for the local-build report.
+static ROUTED_CMD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 fn say_local(why: &str) {
     let _ = LOCAL_REASON.set(why.to_string());
     if explain() {
         eprintln!("justrust: local ({why})");
     }
+    if reportable(why) {
+        crate::remote_hosted::report_local_build(why, ROUTED_CMD.get().map(String::as_str));
+    }
+}
+
+/// Local by design (`build`, `run`): not worth telling the operator about.
+fn reportable(why: &str) -> bool {
+    !why.ends_with("always runs locally")
 }
 
 /// Set by the remote agent on the builds it runs: they never route again.
@@ -401,6 +412,7 @@ pub fn maybe_remote(full: &[OsString]) {
         return say_local("non-UTF-8 arguments");
     };
     let Some(sub) = args.first() else { return };
+    let _ = ROUTED_CMD.set(args.join(" "));
     // Remote machines are Linux: a check there sees Linux cfgs and tests
     // run on the wrong OS. Only an explicit force sends a macOS build.
     if !cfg!(target_os = "linux") && m != Mode::Force {
@@ -491,11 +503,21 @@ pub fn maybe_remote(full: &[OsString]) {
             if let Some(f) = fail_file() {
                 let _ = std::fs::write(f, format!("{now} {msg}\n"));
             }
-            if Infra(msg.clone()).is_billing() {
+            let billing = Infra(msg.clone()).is_billing();
+            if billing {
                 eprintln!("{msg}");
             } else {
                 eprintln!("justrust: remote unavailable ({msg}), building locally");
             }
+            let kind = if billing {
+                "billing"
+            } else {
+                "remote unavailable"
+            };
+            crate::remote_hosted::report_local_build(
+                &format!("{kind}: {msg}"),
+                ROUTED_CMD.get().map(String::as_str),
+            );
         }
         Err(e) => {
             // Output may already have been shown: a local rerun would
