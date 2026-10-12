@@ -3,6 +3,15 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.9
+
+- **Install funnel.** The installer reports installer_start and
+  installer_finish (or the step that failed) with a random install id, OS,
+  and CPU arch, and saves the id in `~/.justrust/install_id`.
+  `justrust login` sends that id with its sign-in flow id, so an install
+  can be followed to its account. No IP is stored, nothing else is sent
+  before sign-in. `JUSTRUST_NO_TELEMETRY=1` or `DO_NOT_TRACK=1` turns it off.
+
 ## 0.1.0-alpha.8
 
 - **Hosted builds are the remote path.** `justrust login` selects hosted
