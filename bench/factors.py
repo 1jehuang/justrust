@@ -185,6 +185,15 @@ FACTORS = [
         on={"JUSTRUST_BUILDD": "1"}, off={}, n=6,
     ),
     Factor(
+        "buildd-prebuild", "resident build daemon prebuilds the agent's last request when its sources change "
+                           "(opt-in JUSTRUST_BUILDD=1 JUSTRUST_BUILDD_PREBUILD=1)",
+        "prebuild", "desktop-test-edit",
+        on={"JUSTRUST_BUILDD": "1", "JUSTRUST_BUILDD_PREBUILD": "1"}, off={}, n=6,
+        note="reference loop with agent think time: edit, wait BUILDD_THINK seconds (default 4.6, the median gap "
+             "between an agent's last edit and its build call in 2,241 mined calls), then the build; its wall is "
+             "measured. Both sides wait the same",
+    ),
+    Factor(
         "parallel-frontend", "rustc -Zthreads=8 for local crates (Desktop's rustc wrapper)",
         "loop", "desktop-test-edit",
         on={}, off={"JCODE_PARALLEL_FRONTEND": "0"},
@@ -558,7 +567,40 @@ def sample_coalesce(f: Factor, v: str, i: int, base_n: int) -> dict:
     }
 
 
-SAMPLERS = {"coalesce": sample_coalesce, "loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
+def buildd_idle(timeout: float = 120.0) -> None:
+    """Wait until the build daemon runs nothing (a prebuild of the restored
+    file must not overlap the next sample)."""
+    t = time.monotonic()
+    while time.monotonic() - t < timeout:
+        out = subprocess.run([suite.J, "daemon", "status"], capture_output=True, text=True).stdout
+        if " 0 running" in out or "no build daemon" in out:
+            return
+        time.sleep(0.5)
+
+
+def sample_prebuild(f: Factor, v: str, i: int, base_n: int) -> dict:
+    s = variant_scenario(f, v)
+    root = suite.prepare(s.snapshot)
+    key = hashlib.sha1(json.dumps([s.snapshot, sorted(s.env.items()), "prebuild"]).encode()).hexdigest()[:10]
+    target = FACTOR_WORK / "target" / f"prebuild-{s.snapshot}-{key}"
+    think = float(os.environ.get("BUILDD_THINK", "4.6"))
+    try:
+        buildd_idle()
+        # The daemon prebuilds requests it has seen: one unmeasured run first.
+        suite.apply_edit(root, s.edit, base_n + 4 * i + 2 * (v == "off"))
+        suite.run_once(s, root, target)
+        buildd_idle()
+        suite.apply_edit(root, s.edit, base_n + 4 * i + 2 * (v == "off") + 1)
+        time.sleep(think)
+        r = suite.run_once(s, root, target)
+    finally:
+        suite.restore(root, s.edit)
+    buildd_idle()
+    r["think"] = think
+    return r
+
+
+SAMPLERS = {"prebuild": sample_prebuild, "coalesce": sample_coalesce, "loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
             "revert": sample_revert, "fresh": sample_fresh_dir}
 
 
