@@ -169,6 +169,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     };
     // Workspace and path crates: the local cache (`localcache.rs`), keyed
     // with the link arguments the shim adds, since they change the output.
+    let plan_t0 = paths::now();
     let local_plan = (described.local && plan.is_none() && crate::localcache::enabled())
         .then(|| {
             let env: Vec<(String, String)> = std::env::vars().collect();
@@ -179,6 +180,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             crate::localcache::plan(real, args, &env, salt)
         })
         .flatten();
+    let plan_secs = paths::now() - plan_t0;
     if let Some(lp) = &local_plan {
         let start = paths::now();
         if let Some(hit) = lp.restore(&mut std::io::stderr()) {
@@ -307,7 +309,14 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
             // Pass timings are filtered out of the capture, and
             // -Ztime-passes does not change a local unit's outputs.
             let lines = std::mem::take(&mut *captured.lock().unwrap());
-            crate::localcache::stage(lp, start, end - start, &lines);
+            let t = paths::now();
+            let staged = crate::localcache::stage(lp, start, end - start, &lines).is_some();
+            // Where the cache's own time goes (FINDINGS 46).
+            let line = serde_json::json!({
+                "crate": unit.crate_name, "test": unit.test, "plan": plan_secs,
+                "stage": paths::now() - t, "staged": staged,
+            });
+            let _ = paths::append_line(&run_dir.join("localcache.jsonl"), &line.to_string());
         }
     }
     unit.start = start;

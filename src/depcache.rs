@@ -992,7 +992,9 @@ fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
     files.sort();
     for f in files {
         h.field(f.file_name()?.as_bytes());
-        h.field(file_hash(&f, false)?.as_bytes());
+        // Memoized: build-script archives (`libfoo.a`) are hashed for every
+        // dependent unit otherwise.
+        h.field(file_hash(&f, true)?.as_bytes());
     }
     Some(())
 }

@@ -210,7 +210,15 @@ fn stage_with(
                 .and_then(|t| std::fs::write(dir.join(name), plan.norm.norm(&t)).ok())
                 .is_some()
         } else {
-            depcache::reflink_or_copy(&src, &dir.join(name))
+            // A hard link, not a reflink: btrfs flushes a file's dirty
+            // pages before cloning it, ~170 ms for the fresh 285 MB Desktop
+            // test binary. The finisher copies it out and checks it did not
+            // change meanwhile.
+            std::fs::hard_link(&src, dir.join(name)).is_ok()
+                && std::fs::metadata(&src)
+                    .ok()
+                    .and_then(|m| std::fs::write(dir.join(format!("{name}.stamp")), stamp(&m)).ok())
+                    .is_some()
         }
     });
     let target_inputs = entry
@@ -304,6 +312,9 @@ fn finish(dir: &Path) -> Option<()> {
     for name in &staged.files {
         let p = dir.join(name);
         let text = name.ends_with(".d");
+        if !text && !unlink_copy(&p)? {
+            return None;
+        }
         if !text {
             let bytes = std::fs::read(&p).ok()?;
             if !depcache::target_refs_are_inputs(&bytes, &staged.target, &staged.target_inputs) {
@@ -338,6 +349,33 @@ fn finish(dir: &Path) -> Option<()> {
         &staged.manifest,
         &serde_json::to_string(&staged.entry).ok()?,
     )
+}
+
+fn stamp(m: &std::fs::Metadata) -> String {
+    format!("{}:{}:{}:{}", m.ino(), m.len(), m.mtime(), m.mtime_nsec())
+}
+
+/// Replace a staged hard link with a private copy. `Some(false)` when the
+/// build dir's file changed after staging (rewritten in place by a later
+/// build): its content no longer matches the key.
+fn unlink_copy(p: &Path) -> Option<bool> {
+    let stamp_file = PathBuf::from(format!("{}.stamp", p.display()));
+    let want = std::fs::read_to_string(&stamp_file).ok()?;
+    let _ = std::fs::remove_file(&stamp_file);
+    if stamp(&std::fs::metadata(p).ok()?) != want {
+        return Some(false);
+    }
+    let tmp = PathBuf::from(format!("{}.copy", p.display()));
+    if !depcache::reflink_or_copy(p, &tmp) {
+        return None;
+    }
+    // Checked again after the copy: any write in between moves the mtime.
+    if stamp(&std::fs::metadata(p).ok()?) != want {
+        let _ = std::fs::remove_file(&tmp);
+        return Some(false);
+    }
+    std::fs::rename(&tmp, p).ok()?;
+    Some(true)
 }
 
 fn max_bytes() -> u64 {
