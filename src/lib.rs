@@ -12,6 +12,7 @@
 mod account;
 mod agent_output;
 mod agents;
+mod buildd;
 mod buildscript;
 mod depcache;
 mod depcache_gc;
@@ -194,6 +195,15 @@ enum Command {
         /// start | stop | status
         #[arg(default_value = "status")]
         action: String,
+    },
+    /// Resident build daemon (opt-in with JUSTRUST_BUILDD=1): status,
+    /// start, stop, or `prebuild -- check -p x` to start a build early.
+    Daemon {
+        /// status | start | stop | prebuild
+        #[arg(default_value = "status")]
+        action: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
     },
     /// Pinned Rust toolchain (justrust.toml `[toolchain] channel`):
     /// status, install, pin, unpin, remove.
@@ -472,6 +482,11 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
     }
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
+    // Opt-in resident daemon (JUSTRUST_BUILDD=1): identical concurrent
+    // requests share one build. Falls through when it cannot serve.
+    if let Some(code) = buildd::maybe_run(&full) {
+        std::process::exit(code);
+    }
     // check, clippy and test may run on the remote machine when that is
     // predicted faster. Returns when the build should run here.
     route::maybe_remote(&full);
@@ -520,6 +535,7 @@ pub fn main() -> anyhow::Result<()> {
                 .map(PathBuf::from)
                 .unwrap_or_default(),
         ),
+        Some(buildd::DAEMON_ARG) => buildd::daemon_main(),
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
             std::env::args_os()
@@ -600,6 +616,7 @@ pub fn main() -> anyhow::Result<()> {
             publish,
         } => depcache_gc::command(prune, clear, auto, sync, publish)?,
         Command::Early { action } => early::command(&action)?,
+        Command::Daemon { action, args } => buildd::command(&action, args)?,
         Command::Toolchain { cmd } => match cmd.unwrap_or(ToolchainCmd::Status) {
             ToolchainCmd::Status => toolchain::status()?,
             ToolchainCmd::Install { spec } => toolchain::install_command(spec)?,

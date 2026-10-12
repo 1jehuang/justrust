@@ -212,6 +212,12 @@ pub fn profile_dir(args: &[OsString]) -> PathBuf {
 
 /// The session a run belongs to. Runs from one agent session share a slot.
 pub fn session_key() -> String {
+    // Set by the build daemon's client: the agent that asked owns the slot.
+    if let Ok(s) = std::env::var("JUSTRUST_SLOT_SESSION")
+        && !s.is_empty()
+    {
+        return s;
+    }
     if let Ok(s) = std::env::var("JCODE_SESSION_ID")
         && !s.is_empty()
     {
