@@ -196,8 +196,15 @@ pub fn start(base: &str) -> Result<Pending> {
     Ok(p)
 }
 
-/// The install id the installer saved (`~/.justrust/install_id`), if any.
+/// The install id the installer saved (`~/.justrust/install_id`), if any and
+/// not opted out (`JUSTRUST_NO_TELEMETRY`, `DO_NOT_TRACK` other than 0).
 fn install_id() -> Option<String> {
+    let set = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty());
+    if set("JUSTRUST_NO_TELEMETRY")
+        || std::env::var("DO_NOT_TRACK").is_ok_and(|v| !v.is_empty() && v != "0")
+    {
+        return None;
+    }
     let s = std::fs::read_to_string(crate::paths::home().ok()?.join("install_id")).ok()?;
     let s = s.trim();
     is_uuid(s).then(|| s.to_string())
