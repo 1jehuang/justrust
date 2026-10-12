@@ -758,6 +758,10 @@ pub(crate) fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+pub(crate) fn edited_files_pub(s: &Summary, root: &Path) -> Vec<(String, PathBuf)> {
+    edited_files(s, root)
+}
+
 pub(crate) fn normalize_pub(p: &Path) -> PathBuf {
     normalize(p)
 }

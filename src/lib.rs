@@ -78,6 +78,7 @@ mod remote_watch;
 mod route;
 mod runs;
 mod sched;
+mod shadow;
 mod shim;
 mod slots;
 mod split;
@@ -256,6 +257,14 @@ enum Command {
     Uninstall {
         #[arg(long)]
         dir: Option<PathBuf>,
+    },
+    /// Modules `JUSTRUST_SHADOW=1` can route to a shadow leaf crate, ranked
+    /// by recorded edits in this workspace.
+    Shadow {
+        #[arg(long, default_value_t = 30.0)]
+        days: f64,
+        #[arg(long, default_value_t = 15)]
+        top: usize,
     },
     /// Which code to move into its own crate to stop rebuild cascades,
     /// from recorded runs in this workspace and its module graph.
@@ -524,6 +533,9 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
     }
     // check, clippy and test may run on the remote machine when that is
     // predicted faster. Returns when the build should run here.
+    // Opt-in (JUSTRUST_SHADOW=1): a leaf module's tests in a tiny shadow
+    // crate when only that file changed. Returns for the normal build.
+    shadow::maybe_route(&full);
     route::maybe_remote(&full);
     let max_warnings = std::env::var("JUSTRUST_MAX_WARNINGS")
         .ok()
@@ -622,6 +634,7 @@ pub fn main() -> anyhow::Result<()> {
             waybar,
             watch,
         } => status::command(json, waybar, watch)?,
+        Command::Shadow { days, top } => shadow::candidates_command(days, top)?,
         Command::Split {
             days,
             top,
