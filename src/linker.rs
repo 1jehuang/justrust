@@ -92,7 +92,8 @@ pub fn rustc_args(args: &[OsString], local: bool, nightly: bool) -> Vec<OsString
 
 /// wild links Linux ELF only, and `-B` is a gcc/clang driver flag: rust-lld
 /// in wasm or other flavors rejects it outright (`unknown argument: -B`).
-/// No `--target` means the host, which is Linux here.
+/// No `--target` means the host, so only a Linux host links that with wild
+/// (macOS links Mach-O with Apple's ld).
 fn host_like_target(args: &[OsString]) -> bool {
     let s: Vec<String> = args
         .iter()
@@ -105,7 +106,10 @@ fn host_like_target(args: &[OsString]) -> bool {
             a.strip_prefix("--target=").map(str::to_owned)
         }
     });
-    target.is_none_or(|t| t.contains("-linux"))
+    match target {
+        None => cfg!(target_os = "linux"),
+        Some(t) => t.contains("-linux"),
+    }
 }
 
 /// Does this rustc invocation run a linker? (`--emit` with `link` and a

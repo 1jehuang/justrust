@@ -37,7 +37,16 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const TARGET: &str = "x86_64-unknown-linux-gnu";
+/// The host triple pinned toolchains are downloaded for.
+pub const TARGET: &str = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    "aarch64-apple-darwin"
+} else if cfg!(target_os = "macos") {
+    "x86_64-apple-darwin"
+} else if cfg!(target_arch = "aarch64") {
+    "aarch64-unknown-linux-gnu"
+} else {
+    "x86_64-unknown-linux-gnu"
+};
 pub const CONFIG_FILE: &str = "justrust.toml";
 const MARKER: &str = "justrust-toolchain.json";
 /// After a failed automatic install, builds use the system toolchain without
@@ -448,10 +457,15 @@ pub(crate) fn curl(url: &str, dest: &Path) -> Result<()> {
 }
 
 pub(crate) fn sha256(path: &Path) -> Result<String> {
-    let out = Command::new("sha256sum")
-        .arg(path)
-        .output()
-        .context("running sha256sum")?;
+    // coreutils on Linux; macOS ships perl's shasum instead.
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = Command::new("shasum");
+        c.args(["-a", "256"]);
+        c
+    } else {
+        Command::new("sha256sum")
+    };
+    let out = cmd.arg(path).output().context("running sha256sum")?;
     if !out.status.success() {
         bail!("sha256sum {} failed", path.display());
     }
@@ -1258,7 +1272,8 @@ to = "clippy-preview"
 
     #[test]
     fn reads_manifest_packages() {
-        let m = Manifest::parse(MANIFEST, "h".into()).unwrap();
+        let manifest = MANIFEST.replace("x86_64-unknown-linux-gnu", TARGET);
+        let m = Manifest::parse(&manifest, "h".into()).unwrap();
         assert_eq!(m.date, "2026-10-08");
         assert_eq!(
             m.version("rustc").unwrap(),

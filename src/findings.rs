@@ -124,8 +124,7 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
             "busy_machine",
             cost,
             format!(
-                "machine was busy: other processes used {:.0} of {} cores on average{} \
-                 and tasks stalled {:.1}s waiting for CPU",
+                "machine was busy: other processes used {:.0} of {} cores on average{}{}",
                 r.avg_other_cores,
                 s.ncpu,
                 if r.max_foreign_rustc > 0 {
@@ -133,7 +132,11 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
                 } else {
                     String::new()
                 },
-                r.psi_cpu_secs
+                if r.psi_unavailable {
+                    String::new()
+                } else {
+                    format!(" and tasks stalled {:.1}s waiting for CPU", r.psi_cpu_secs)
+                }
             ),
         ));
     }

@@ -277,6 +277,24 @@ pub struct Resources {
     pub psi_cpu_secs: f64,
     pub psi_mem_secs: f64,
     pub psi_io_secs: f64,
+    /// No pressure stall info on this machine: the stalls above were not
+    /// measured (macOS, or a kernel without PSI).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub psi_unavailable: bool,
+}
+
+impl Resources {
+    /// The stall part of the report's memory line.
+    pub fn stalls_line(&self) -> String {
+        if self.psi_unavailable {
+            "stalls not measured (no PSI on this machine)".into()
+        } else {
+            format!(
+                "stalls cpu {:.2}s mem {:.2}s io {:.2}s",
+                self.psi_cpu_secs, self.psi_mem_secs, self.psi_io_secs
+            )
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -842,6 +860,7 @@ pub fn build(
         psi_cpu_secs: s.iter().map(|x| x.psi_cpu_ms).sum::<f64>() / 1000.0,
         psi_mem_secs: s.iter().map(|x| x.psi_mem_ms).sum::<f64>() / 1000.0,
         psi_io_secs: s.iter().map(|x| x.psi_io_ms).sum::<f64>() / 1000.0,
+        psi_unavailable: !samples.is_empty() && samples.iter().all(|x| x.psi_unavailable),
     };
 
     // Diagnostics. "error: test failed" and "error: N target failed" are test
@@ -1155,13 +1174,11 @@ impl Summary {
         );
         let _ = writeln!(
             o,
-            "  memory  peak {:.0} MB build, {:.0} MB largest rustc, {:.1} GB free; stalls cpu {:.2}s mem {:.2}s io {:.2}s",
+            "  memory  peak {:.0} MB build, {:.0} MB largest rustc, {:.1} GB free; {}",
             r.peak_build_rss_mb,
             r.peak_unit_rss_mb,
             r.min_mem_available_mb as f64 / 1024.0,
-            r.psi_cpu_secs,
-            r.psi_mem_secs,
-            r.psi_io_secs
+            r.stalls_line()
         );
         if hidden.warnings_hidden > 0 || hidden.warnings_shown > 0 {
             let _ = writeln!(

@@ -1,12 +1,16 @@
-//! Minimal inotify watcher (libc only, no extra dependency). Sends the
-//! directory of every changed file to a channel. Overflow sends every
-//! watched directory so a full rescan follows: the scan, not these events,
-//! decides what is pushed.
+//! Minimal directory watcher (libc only, no extra dependency): inotify on
+//! Linux, kqueue on macOS. Sends the directory of every changed file to a
+//! channel. Overflow sends every watched directory so a full rescan
+//! follows: the scan, not these events, decides what is pushed.
 //!
 //! A directory created (or moved in) under a watched one is watched at once,
 //! together with any subdirectories it already has, so files written into a
 //! brand-new module directory are pushed without waiting for a build. The
 //! daemon also refreshes the watch set from the manifest after every push.
+//!
+//! kqueue watches a directory's entries, not its files' contents: a file
+//! rewritten in place (no rename) is pushed by the run's rescan instead of
+//! early. Editors that save atomically (write and rename) are seen at once.
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;
@@ -15,6 +19,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+
+#[cfg(target_os = "linux")]
+use inotify as sys;
+#[cfg(target_os = "macos")]
+use kqueue as sys;
 
 #[derive(Default)]
 struct Watches {
@@ -26,13 +35,6 @@ pub struct Watcher {
     fd: i32,
     w: Arc<Mutex<Watches>>,
 }
-
-const MASK: u32 = libc::IN_CLOSE_WRITE
-    | libc::IN_MOVED_TO
-    | libc::IN_MOVED_FROM
-    | libc::IN_CREATE
-    | libc::IN_DELETE
-    | libc::IN_ATTRIB;
 
 /// Directories never worth watching: build output and VCS internals churn
 /// constantly and are never mirrored.
@@ -47,11 +49,9 @@ fn add(fd: i32, w: &Mutex<Watches>, d: &Path) -> bool {
     let Ok(c) = CString::new(d.as_os_str().as_bytes()) else {
         return false;
     };
-    // SAFETY: valid fd and NUL-terminated path.
-    let wd = unsafe { libc::inotify_add_watch(fd, c.as_ptr(), MASK) };
-    if wd < 0 {
+    let Some(wd) = sys::watch(fd, &c) else {
         return false;
-    }
+    };
     let mut g = w.lock().unwrap();
     // The kernel returns the existing wd for an inode already watched under
     // another path (a directory that was renamed): forget the old path.
@@ -76,10 +76,7 @@ fn remove_tree(fd: i32, w: &Mutex<Watches>, d: &Path) {
     for (p, wd) in gone {
         g.by_path.remove(&p);
         g.by_wd.remove(&wd);
-        // SAFETY: valid fd; a stale wd only makes this fail.
-        unsafe {
-            libc::inotify_rm_watch(fd, wd);
-        }
+        sys::unwatch(fd, wd);
     }
 }
 
@@ -101,14 +98,12 @@ fn add_tree(fd: i32, w: &Mutex<Watches>, d: &Path) {
 
 impl Watcher {
     pub fn new(tx: Sender<PathBuf>) -> Result<Self> {
-        // SAFETY: plain syscall.
-        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
-        if fd < 0 {
-            bail!("inotify_init1 failed");
-        }
+        let Some(fd) = sys::init() else {
+            bail!("cannot create a file watcher");
+        };
         let w: Arc<Mutex<Watches>> = Arc::default();
         let w2 = w.clone();
-        std::thread::spawn(move || read_loop(fd, w2, tx));
+        std::thread::spawn(move || sys::read_loop(fd, w2, tx));
         Ok(Watcher { fd, w })
     }
 
@@ -126,60 +121,227 @@ impl Watcher {
     }
 }
 
-fn read_loop(fd: i32, w: Arc<Mutex<Watches>>, tx: Sender<PathBuf>) {
-    let mut buf = vec![0u8; 64 << 10];
-    loop {
-        // SAFETY: reading into a buffer we own.
-        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-        if n <= 0 {
-            return;
+#[cfg(target_os = "linux")]
+mod inotify {
+    use super::*;
+
+    const MASK: u32 = libc::IN_CLOSE_WRITE
+        | libc::IN_MOVED_TO
+        | libc::IN_MOVED_FROM
+        | libc::IN_CREATE
+        | libc::IN_DELETE
+        | libc::IN_ATTRIB;
+
+    pub fn init() -> Option<i32> {
+        // SAFETY: plain syscall.
+        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+        (fd >= 0).then_some(fd)
+    }
+
+    pub fn watch(fd: i32, path: &CString) -> Option<i32> {
+        // SAFETY: valid fd and NUL-terminated path.
+        let wd = unsafe { libc::inotify_add_watch(fd, path.as_ptr(), MASK) };
+        (wd >= 0).then_some(wd)
+    }
+
+    pub fn unwatch(fd: i32, wd: i32) {
+        // SAFETY: valid fd; a stale wd only makes this fail.
+        unsafe {
+            libc::inotify_rm_watch(fd, wd);
         }
-        let mut off = 0usize;
-        let hdr = std::mem::size_of::<libc::inotify_event>();
-        while off + hdr <= n as usize {
-            // SAFETY: the kernel wrote a whole event at `off`.
-            let ev: libc::inotify_event =
-                unsafe { std::ptr::read_unaligned(buf.as_ptr().add(off).cast()) };
-            let name_bytes = &buf[off + hdr..off + hdr + ev.len as usize];
-            let name = std::ffi::OsStr::from_bytes(
-                name_bytes.split(|b| *b == 0).next().unwrap_or_default(),
-            );
-            off += hdr + ev.len as usize;
-            if ev.mask & libc::IN_Q_OVERFLOW != 0 {
-                // Lost events: every root gets rescanned.
-                let all: Vec<PathBuf> = w.lock().unwrap().by_wd.values().cloned().collect();
-                for d in all {
-                    let _ = tx.send(d);
-                }
-                continue;
-            }
-            if ev.mask & libc::IN_IGNORED != 0 {
-                // The directory is gone (or unmounted): forget it, so a
-                // directory re-created at the same path is watched again.
-                let mut g = w.lock().unwrap();
-                if let Some(p) = g.by_wd.remove(&ev.wd) {
-                    g.by_path.remove(&p);
-                }
-                continue;
-            }
-            let dir = w.lock().unwrap().by_wd.get(&ev.wd).cloned();
-            let Some(d) = dir else { continue };
-            if ev.mask & libc::IN_ISDIR != 0
-                && ev.mask & libc::IN_MOVED_FROM != 0
-                && !name.is_empty()
-            {
-                remove_tree(fd, &w, &d.join(name));
-            }
-            if ev.mask & libc::IN_ISDIR != 0
-                && ev.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
-                && !name.is_empty()
-                && !ignored(name)
-            {
-                add_tree(fd, &w, &d.join(name));
-            }
-            // Our own editors' temp files still trigger a scan; cheap.
-            if tx.send(d).is_err() {
+    }
+
+    pub fn read_loop(fd: i32, w: Arc<Mutex<Watches>>, tx: Sender<PathBuf>) {
+        let mut buf = vec![0u8; 64 << 10];
+        loop {
+            // SAFETY: reading into a buffer we own.
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n <= 0 {
                 return;
+            }
+            let mut off = 0usize;
+            let hdr = std::mem::size_of::<libc::inotify_event>();
+            while off + hdr <= n as usize {
+                // SAFETY: the kernel wrote a whole event at `off`.
+                let ev: libc::inotify_event =
+                    unsafe { std::ptr::read_unaligned(buf.as_ptr().add(off).cast()) };
+                let name_bytes = &buf[off + hdr..off + hdr + ev.len as usize];
+                let name = std::ffi::OsStr::from_bytes(
+                    name_bytes.split(|b| *b == 0).next().unwrap_or_default(),
+                );
+                off += hdr + ev.len as usize;
+                if ev.mask & libc::IN_Q_OVERFLOW != 0 {
+                    // Lost events: every root gets rescanned.
+                    let all: Vec<PathBuf> = w.lock().unwrap().by_wd.values().cloned().collect();
+                    for d in all {
+                        let _ = tx.send(d);
+                    }
+                    continue;
+                }
+                if ev.mask & libc::IN_IGNORED != 0 {
+                    // The directory is gone (or unmounted): forget it, so a
+                    // directory re-created at the same path is watched again.
+                    let mut g = w.lock().unwrap();
+                    if let Some(p) = g.by_wd.remove(&ev.wd) {
+                        g.by_path.remove(&p);
+                    }
+                    continue;
+                }
+                let dir = w.lock().unwrap().by_wd.get(&ev.wd).cloned();
+                let Some(d) = dir else { continue };
+                if ev.mask & libc::IN_ISDIR != 0
+                    && ev.mask & libc::IN_MOVED_FROM != 0
+                    && !name.is_empty()
+                {
+                    remove_tree(fd, &w, &d.join(name));
+                }
+                if ev.mask & libc::IN_ISDIR != 0
+                    && ev.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
+                    && !name.is_empty()
+                    && !ignored(name)
+                {
+                    add_tree(fd, &w, &d.join(name));
+                }
+                // Our own editors' temp files still trigger a scan; cheap.
+                if tx.send(d).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// kqueue: one `O_EVTONLY` descriptor per watched directory (the "wd"),
+/// registered for vnode events. A directory's entries changed: watch new
+/// subdirectories, drop vanished ones, report it.
+#[cfg(target_os = "macos")]
+mod kqueue {
+    use super::*;
+
+    const FFLAGS: u32 = libc::NOTE_WRITE
+        | libc::NOTE_EXTEND
+        | libc::NOTE_ATTRIB
+        | libc::NOTE_DELETE
+        | libc::NOTE_RENAME
+        | libc::NOTE_REVOKE;
+
+    pub fn init() -> Option<i32> {
+        // SAFETY: plain syscalls.
+        let kq = unsafe { libc::kqueue() };
+        if kq < 0 {
+            return None;
+        }
+        unsafe { libc::fcntl(kq, libc::F_SETFD, libc::FD_CLOEXEC) };
+        Some(kq)
+    }
+
+    fn change(kq: i32, wd: i32, flags: u16) -> bool {
+        let ev = libc::kevent {
+            ident: wd as libc::uintptr_t,
+            filter: libc::EVFILT_VNODE,
+            flags,
+            fflags: FFLAGS,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        // SAFETY: one change, no events out, no wait.
+        unsafe { libc::kevent(kq, &ev, 1, std::ptr::null_mut(), 0, std::ptr::null()) == 0 }
+    }
+
+    pub fn watch(kq: i32, path: &CString) -> Option<i32> {
+        // SAFETY: NUL-terminated path; O_EVTONLY does not keep the volume busy.
+        let wd = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_EVTONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if wd < 0 {
+            return None;
+        }
+        if !change(kq, wd, libc::EV_ADD | libc::EV_CLEAR | libc::EV_ENABLE) {
+            unsafe { libc::close(wd) };
+            return None;
+        }
+        Some(wd)
+    }
+
+    pub fn unwatch(_kq: i32, wd: i32) {
+        // SAFETY: we own wd; closing it removes its kevent.
+        unsafe { libc::close(wd) };
+    }
+
+    pub fn read_loop(kq: i32, w: Arc<Mutex<Watches>>, tx: Sender<PathBuf>) {
+        let mut evs: Vec<libc::kevent> = (0..256)
+            .map(|_| unsafe { std::mem::zeroed::<libc::kevent>() })
+            .collect();
+        loop {
+            // SAFETY: the event buffer is writable for its length.
+            let n = unsafe {
+                libc::kevent(
+                    kq,
+                    std::ptr::null(),
+                    0,
+                    evs.as_mut_ptr(),
+                    evs.len() as i32,
+                    std::ptr::null(),
+                )
+            };
+            if n < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return;
+            }
+            for ev in &evs[..n as usize] {
+                let wd = ev.ident as i32;
+                let dir = w.lock().unwrap().by_wd.get(&wd).cloned();
+                let Some(d) = dir else { continue };
+                if ev.fflags & (libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_REVOKE) != 0 {
+                    // Gone or moved: forget it and everything below, so a
+                    // directory re-created at the path is watched again and
+                    // the new location is picked up from its parent.
+                    remove_tree(kq, &w, &d);
+                    if let Some(p) = d.parent()
+                        && tx.send(p.to_path_buf()).is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                if ev.fflags & libc::NOTE_WRITE != 0 {
+                    sync_children(kq, &w, &d);
+                }
+                if tx.send(d).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// `d`'s entries changed: watch new subdirectories, drop the watches of
+    /// subdirectories no longer there.
+    fn sync_children(kq: i32, w: &Mutex<Watches>, d: &Path) {
+        let gone: Vec<PathBuf> = w
+            .lock()
+            .unwrap()
+            .by_path
+            .keys()
+            .filter(|p| p.parent() == Some(d) && !p.is_dir())
+            .cloned()
+            .collect();
+        for p in gone {
+            remove_tree(kq, w, &p);
+        }
+        let Ok(rd) = std::fs::read_dir(d) else {
+            return;
+        };
+        for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir())
+                && !ignored(&e.file_name())
+                && !w.lock().unwrap().by_path.contains_key(&e.path())
+            {
+                add_tree(kq, w, &e.path());
             }
         }
     }

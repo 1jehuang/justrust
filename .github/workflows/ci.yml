@@ -36,12 +36,41 @@ jobs:
           if "$bin" check; then echo "expected a compile error"; exit 1; fi
       - run: cargo package --locked && rm -rf target/package
 
+  macos:
+    name: ${{ matrix.os }} (clippy, test, smoke)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --locked
+      - run: cargo test --locked
+      # The recorder, sampler, and report on a real macOS build.
+      - name: Smoke test the binary
+        run: |
+          cargo build --locked
+          bin="$PWD/target/debug/justrust"
+          cargo new -q "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke"
+          "$bin" check
+          "$bin" test
+          "$bin" show | tee show.txt
+          grep -q "not measured" show.txt
+          echo 'fn main() { let _x: u32 = "a"; }' > src/main.rs
+          if "$bin" check; then echo "expected a compile error"; exit 1; fi
+
   passthrough:
     name: ${{ matrix.os }} (passthrough build)
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5

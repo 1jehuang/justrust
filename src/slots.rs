@@ -333,12 +333,28 @@ fn pick(
     (None, busy)
 }
 
+/// `cp` flags for a copy-on-write clone that fails rather than copying:
+/// GNU `--reflink=always`, macOS `-c` (clonefile on APFS).
+const CP_CLONE: &str = if cfg!(target_os = "macos") {
+    "-c"
+} else {
+    "--reflink=always"
+};
+
+/// `cp` flag to unlink the destination first instead of writing through
+/// it: GNU `--remove-destination`; BSD `-f` does exactly that.
+const CP_REMOVE_DESTINATION: &str = if cfg!(target_os = "macos") {
+    "-f"
+} else {
+    "--remove-destination"
+};
+
 fn reflink_supported(dir: &Path) -> bool {
     let a = dir.join(format!(".reflink-probe-{}", std::process::id()));
     let b = dir.join(format!(".reflink-probe-{}.copy", std::process::id()));
     let ok = std::fs::write(&a, b"probe").is_ok()
         && Command::new("cp")
-            .arg("--reflink=always")
+            .arg(CP_CLONE)
             .arg(&a)
             .arg(&b)
             .stderr(Stdio::null())
@@ -356,7 +372,7 @@ fn cp_reflink(srcs: &[PathBuf], dst: &Path, extra: &[&str]) -> bool {
     srcs.chunks(500).all(|chunk| {
         Command::new("cp")
             .arg("-a")
-            .arg("--reflink=always")
+            .arg(CP_CLONE)
             .args(extra)
             .args(chunk)
             .arg(dst)
@@ -667,11 +683,11 @@ fn refresh(shared: &Path, slot: &Path) -> Option<Refresh> {
         .collect();
     // --remove-destination: never write through a hardlink (deps files are
     // hardlinked to uplifted outputs) or into a mapped binary.
-    if !cp_parallel(&jobs, &["--remove-destination"]) {
+    if !cp_parallel(&jobs, &[CP_REMOVE_DESTINATION]) {
         return None;
     }
     // Then the fingerprints that vouch for them.
-    if !cp_parallel(&fp_jobs, &["--remove-destination"]) {
+    if !cp_parallel(&fp_jobs, &[CP_REMOVE_DESTINATION]) {
         for u in &units {
             std::fs::remove_dir_all(fp_dst.join(u)).ok();
         }
@@ -1102,8 +1118,14 @@ fn slot_size(dir: &Path) -> Option<(u64, u64)> {
             return Some((excl, total));
         }
     }
+    // Apparent bytes (GNU `-b`); BSD du has no such flag: allocated KiB.
+    let (flag, unit) = if cfg!(target_os = "macos") {
+        ("-sk", 1024)
+    } else {
+        ("-sb", 1)
+    };
     let out = Command::new("du")
-        .arg("-sb")
+        .arg(flag)
         .arg(dir)
         .stderr(Stdio::null())
         .output()
@@ -1111,8 +1133,9 @@ fn slot_size(dir: &Path) -> Option<(u64, u64)> {
     let b: u64 = String::from_utf8_lossy(&out.stdout)
         .split_whitespace()
         .next()?
-        .parse()
-        .ok()?;
+        .parse::<u64>()
+        .ok()?
+        * unit;
     Some((b, b))
 }
 

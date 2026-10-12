@@ -1,13 +1,13 @@
-//! Entry point. The implementation lives in `lib.rs` and is Linux only.
+//! Entry point. The implementation lives in `lib.rs` (Linux and macOS).
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> anyhow::Result<()> {
     justrust::main()
 }
 
-/// Not Linux: fail open. `justrust check|test|build|clippy|run|cargo ...` and
-/// the `cargo` proxy name run the real cargo unchanged, without recording.
-#[cfg(not(target_os = "linux"))]
+/// Elsewhere: fail open. `justrust check|test|build|clippy|run|cargo ...`
+/// and the `cargo` proxy name run the real cargo unchanged, without recording.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();

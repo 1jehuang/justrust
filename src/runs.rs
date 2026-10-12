@@ -350,11 +350,18 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         r.peak_unit_rss_mb,
         r.min_mem_available_mb as f64 / 1024.0
     );
-    let _ = writeln!(
-        o,
-        "  stalls  cpu {:.2}s, memory {:.2}s, io {:.2}s (Linux pressure stall info, machine-wide)",
-        r.psi_cpu_secs, r.psi_mem_secs, r.psi_io_secs
-    );
+    if r.psi_unavailable {
+        let _ = writeln!(
+            o,
+            "  stalls  not measured: this machine has no pressure stall info (PSI)"
+        );
+    } else {
+        let _ = writeln!(
+            o,
+            "  stalls  cpu {:.2}s, memory {:.2}s, io {:.2}s (Linux pressure stall info, machine-wide)",
+            r.psi_cpu_secs, r.psi_mem_secs, r.psi_io_secs
+        );
+    }
     if r.max_foreign_rustc > 0 {
         let _ = writeln!(
             o,

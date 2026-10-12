@@ -529,6 +529,11 @@ fn system_stamp() -> String {
         "/var/lib/dpkg/status",
         "/var/lib/rpm",
         "/nix/var/nix/db/db.sqlite",
+        // macOS: OS and Command Line Tools updates, Homebrew installs.
+        "/System/Library/CoreServices/SystemVersion.plist",
+        "/Library/Developer/CommandLineTools/usr/bin",
+        "/opt/homebrew/Cellar",
+        "/usr/local/Cellar",
     ] {
         if let Ok(m) = std::fs::metadata(p) {
             s.push_str(&format!("{p}:{}.{};", m.mtime(), m.mtime_nsec()));

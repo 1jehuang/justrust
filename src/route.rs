@@ -401,6 +401,11 @@ pub fn maybe_remote(full: &[OsString]) {
         return say_local("non-UTF-8 arguments");
     };
     let Some(sub) = args.first() else { return };
+    // Remote machines are Linux: a check there sees Linux cfgs and tests
+    // run on the wrong OS. Only an explicit force sends a macOS build.
+    if !cfg!(target_os = "linux") && m != Mode::Force {
+        return say_local("remote machines build for Linux, this host is not Linux");
+    }
     if !routable(sub) {
         // `build` and `run` stay here, but their dependencies may come from
         // the machine's cache.

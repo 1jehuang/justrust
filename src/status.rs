@@ -75,9 +75,12 @@ fn pid_alive(pid: u32, since: f64) -> bool {
         return false;
     };
     // Rule out a reused pid: the process must have started before the run.
-    let boot = crate::procfs::boot_time().unwrap_or(0.0);
+    // Without a boot time the start cannot be placed: trust the pid.
+    let Some(boot) = crate::procfs::boot_time() else {
+        return true;
+    };
     let started = boot + st.start_ticks as f64 / crate::procfs::clk_tck();
-    boot == 0.0 || started <= since + 2.0
+    started <= since + 2.0
 }
 
 /// Short name for a run: the `-p` package if there is exactly one, else the

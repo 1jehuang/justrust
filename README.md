@@ -43,8 +43,8 @@ Remote builds leave no `target/` and use no rustc RAM or CPU on your machine.
 curl -fsSL https://jcode.sh/rust.sh | sh
 ```
 
-Prebuilt for Linux and macOS (x86_64, aarch64), though everything beyond
-plain cargo passthrough is Linux only for now ([Status](#status)). Installs to
+Prebuilt for Linux and macOS (x86_64, aarch64); a few Linux-only features
+are listed under [Status](#status). Installs to
 `~/.local/bin` (`JUSTRUST_INSTALL_DIR` to change it), verifies the sha256,
 and runs `justrust login` when interactive (`JUSTRUST_NO_LOGIN=1` skips it).
 From source: `cargo install justrust --locked` (Rust 1.91 or newer).
@@ -240,9 +240,16 @@ Alpha (`0.1.0-alpha.7`). Output formats, `~/.justrust`, and environment
 variables may change between releases ([CHANGELOG.md](CHANGELOG.md)).
 
 - **Linux:** everything.
-- **macOS and Windows:** `justrust check|test|build|clippy|run` run plain
-  cargo unchanged (no recording, speedups, or remote builds yet). Other
-  commands, including `login`, are Linux only for now.
+- **macOS:** everything except what has no macOS counterpart: CPU priority
+  between concurrent builds (cgroups), pressure-stall reporting (reports
+  say "not measured" instead of showing zeros), the wild linker and hot
+  patching (ELF only), and automatic remote routing (the build machines
+  are Linux, so a Mac builds locally unless `JUSTRUST_REMOTE=force`).
+  Process sampling uses libproc and Mach, dependency-cache restores and
+  build slots clone with APFS `clonefile`, and the sync daemon watches
+  with kqueue.
+- **Windows:** `justrust check|test|build|clippy|run` run plain cargo
+  unchanged (no recording or speedups yet).
 
 ## Where this is going
 

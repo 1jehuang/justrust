@@ -6,8 +6,8 @@
 //! - `justrust`: the CLI below. `justrust check|test|build|clippy|run` is the
 //!   interface agents should use. It takes the same arguments as cargo.
 //!
-//! Linux only. On other platforms `src/main.rs` runs cargo unchanged.
-#![cfg(target_os = "linux")]
+//! Linux and macOS. Elsewhere `src/main.rs` runs cargo unchanged.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 mod account;
 mod agent_output;

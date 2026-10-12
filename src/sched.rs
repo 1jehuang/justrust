@@ -28,6 +28,7 @@
 //!
 //! Fails open: no systemd user bus, no `busctl`, a slow move, or
 //! `JUSTRUST_SCHED=0` just run cargo where justrust already runs.
+//! On macOS (no cgroups, no settable affinity) it is off.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -127,7 +128,10 @@ fn parse_usage_secs(cpu_stat: &str) -> Option<f64> {
 
 /// Move this process into a new scope (call before spawning cargo).
 pub fn enter(run_id: &str) -> Option<Scope> {
-    if !enabled() || std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+    if !cfg!(target_os = "linux")
+        || !enabled()
+        || std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none()
+    {
         return None;
     }
     let t0 = Instant::now();
@@ -334,6 +338,7 @@ fn young_siblings(
 }
 
 /// Pin every thread in the cgroup (children inherit it from their parent).
+#[cfg(target_os = "linux")]
 fn set_affinity(cgroup: &std::path::Path, cpus: &[usize]) {
     let Ok(tids) = std::fs::read_to_string(cgroup.join("cgroup.threads")) else {
         return;
@@ -353,6 +358,11 @@ fn set_affinity(cgroup: &std::path::Path, cpus: &[usize]) {
         }
     }
 }
+
+/// macOS cannot pin threads to CPUs (affinity tags are hints, ignored on
+/// Apple silicon), and `enter` never starts a scope there.
+#[cfg(not(target_os = "linux"))]
+fn set_affinity(_cgroup: &std::path::Path, _cpus: &[usize]) {}
 
 #[cfg(test)]
 mod tests {

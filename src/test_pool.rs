@@ -226,6 +226,38 @@ pub struct Outcome {
 
 static LIVE_PIDS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 
+/// The same pids, readable from a signal handler (no lock). macOS has no
+/// `PR_SET_PDEATHSIG`: the recorder forwards a SIGTERM it gets to these.
+/// A full table only means an extra process is not signalled.
+static SIGNAL_PIDS: [std::sync::atomic::AtomicI32; 64] =
+    [const { std::sync::atomic::AtomicI32::new(0) }; 64];
+
+fn track_signal_pid(pid: i32, add: bool) {
+    use std::sync::atomic::Ordering;
+    let (from, to) = if add { (0, pid) } else { (pid, 0) };
+    for slot in &SIGNAL_PIDS {
+        if slot
+            .compare_exchange(from, to, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return;
+        }
+    }
+}
+
+/// Send `sig` to every test process the pool is running. Async-signal-safe.
+pub fn signal_live(sig: libc::c_int) {
+    for slot in &SIGNAL_PIDS {
+        let pid = slot.load(std::sync::atomic::Ordering::SeqCst);
+        if pid > 0 {
+            // SAFETY: kill is async-signal-safe.
+            unsafe {
+                libc::kill(pid, sig);
+            }
+        }
+    }
+}
+
 /// Test processes the pool is running, for the recorder's sampler (they are
 /// children of the recorder, not of cargo).
 pub fn live_pids() -> Vec<i32> {
@@ -435,6 +467,8 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
         .stderr(Stdio::piped());
     // SAFETY: prctl is async-signal-safe. The test process dies with the
     // recorder (Ctrl-C, a killed agent) instead of running on unseen.
+    // Elsewhere the recorder forwards its signals (`signal_live`).
+    #[cfg(target_os = "linux")]
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
@@ -460,6 +494,7 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
     };
     let pid = child.id() as i32;
     LIVE_PIDS.lock().unwrap().push(pid);
+    track_signal_pid(pid, true);
     let read = |r: Box<dyn Read + Send>, s: &'static str| {
         std::thread::spawn(move || {
             let mut out = Vec::new();
@@ -484,6 +519,7 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
     lines.extend(te.join().unwrap_or_default());
     lines.sort_by(|a, b| a.0.total_cmp(&b.0));
     LIVE_PIDS.lock().unwrap().retain(|&p| p != pid);
+    track_signal_pid(pid, false);
     inner.state.lock().unwrap().cpu_secs += cpu;
     let outcomes = lines
         .iter()

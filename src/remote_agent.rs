@@ -309,14 +309,9 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
         return None;
     }
     let cpus = std::thread::available_parallelism().ok()?.get();
-    let mem_gib = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("MemTotal:"))
-                .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
-        })
-        .map(|kb| (kb >> 20) as usize);
+    let mem_gib = crate::procfs::meminfo()
+        .filter(|m| m.total_mb > 0)
+        .map(|m| (m.total_mb >> 10) as usize);
     Some(jobs_for(cpus, mem_gib))
 }
 

@@ -466,6 +466,9 @@ fn libc_family() -> &'static str {
 }
 
 fn detect_libc_family() -> &'static str {
+    if cfg!(target_os = "macos") {
+        return "darwin";
+    }
     if cfg!(target_env = "gnu") {
         return "glibc";
     }
@@ -715,7 +718,8 @@ fn key_extern(
 /// changes them, so mismatched artifacts can never meet (E0460).
 /// - `.rmeta`: the whole file;
 /// - `.rlib`: the `lib.rmeta` archive member;
-/// - `.so` (proc macro, dylib): the ELF `.rustc` section.
+/// - `.so` (proc macro, dylib): the ELF `.rustc` section;
+/// - `.dylib` on macOS: the Mach-O `__DATA,.rustc` section.
 ///
 /// Anything unparsable falls back to the whole-file content hash. Memoized
 /// in the `user.justrust.m` xattr, validated like `file_hash`.
@@ -751,9 +755,64 @@ pub(crate) fn metadata_bytes(path: &Path) -> Option<Vec<u8>> {
             b.starts_with(b"rust").then_some(b)
         }
         "rlib" => ar_member(path, "lib.rmeta"),
-        "so" | "dylib" => elf_section(path, ".rustc"),
+        "so" | "dylib" => {
+            elf_section(path, ".rustc").or_else(|| macho_section(path, "__DATA", ".rustc"))
+        }
         _ => None,
     }
+}
+
+/// Content of a section of a 64-bit little-endian Mach-O file (thin, not
+/// universal: rustc writes one architecture per proc macro).
+fn macho_section(path: &Path, seg: &str, want: &str) -> Option<Vec<u8>> {
+    use std::os::unix::fs::FileExt;
+    const LC_SEGMENT_64: u32 = 0x19;
+    let f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut mh = [0u8; 32];
+    f.read_exact_at(&mut mh, 0).ok()?;
+    let u32_at = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let u64_at = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
+    if u32_at(&mh, 0) != 0xfeed_facf {
+        return None;
+    }
+    let ncmds = u32_at(&mh, 16);
+    let sizeofcmds = u64::from(u32_at(&mh, 20));
+    if 32 + sizeofcmds > len {
+        return None;
+    }
+    let mut cmds = vec![0u8; usize::try_from(sizeofcmds).ok()?];
+    f.read_exact_at(&mut cmds, 32).ok()?;
+    let name16 = |b: &[u8]| {
+        let end = b.iter().position(|c| *c == 0).unwrap_or(16);
+        b[..end].to_vec()
+    };
+    let mut o = 0usize;
+    for _ in 0..ncmds {
+        let head = cmds.get(o..o + 8)?;
+        let (cmd, size) = (u32_at(head, 0), u32_at(head, 4) as usize);
+        if size < 8 || o + size > cmds.len() {
+            return None;
+        }
+        if cmd == LC_SEGMENT_64 && size >= 72 {
+            let c = &cmds[o..o + size];
+            let nsects = u32_at(c, 64) as usize;
+            for s in 0..nsects {
+                let sh = c.get(72 + s * 80..72 + (s + 1) * 80)?;
+                if name16(&sh[..16]) == want.as_bytes() && name16(&sh[16..32]) == seg.as_bytes() {
+                    let (size, off) = (u64_at(sh, 40), u64::from(u32_at(sh, 48)));
+                    if off.checked_add(size)? > len {
+                        return None;
+                    }
+                    let mut buf = vec![0u8; usize::try_from(size).ok()?];
+                    f.read_exact_at(&mut buf, off).ok()?;
+                    return Some(buf);
+                }
+            }
+        }
+        o += size;
+    }
+    None
 }
 
 /// Content of a named member of an `ar` archive (GNU or BSD short names).
@@ -891,12 +950,25 @@ pub(crate) fn xattr_get(path: &Path, attr: &str) -> Option<String> {
     let name = CString::new(attr).ok()?;
     let mut buf = [0u8; 128];
     // SAFETY: valid NUL-terminated strings and a buffer of the stated length.
+    #[cfg(target_os = "linux")]
     let n = unsafe {
         libc::getxattr(
             p.as_ptr(),
             name.as_ptr(),
             buf.as_mut_ptr().cast(),
             buf.len(),
+        )
+    };
+    // SAFETY: as above; macOS adds a resource-fork offset and options.
+    #[cfg(target_os = "macos")]
+    let n = unsafe {
+        libc::getxattr(
+            p.as_ptr(),
+            name.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            0,
+            0,
         )
     };
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
@@ -910,12 +982,25 @@ pub(crate) fn xattr_set(path: &Path, attr: &str, value: &str) {
         return;
     };
     // SAFETY: valid NUL-terminated strings and a value buffer of stated length.
+    #[cfg(target_os = "linux")]
     unsafe {
         libc::setxattr(
             p.as_ptr(),
             name.as_ptr(),
             value.as_ptr().cast(),
             value.len(),
+            0,
+        );
+    }
+    // SAFETY: as above; macOS adds a resource-fork offset before the flags.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        libc::setxattr(
+            p.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
             0,
         );
     }
@@ -1358,8 +1443,9 @@ fn split_escaped(s: &str) -> Vec<String> {
     out
 }
 
-/// Copy-on-write clone when the filesystem supports it (btrfs, xfs), else a
-/// plain copy. Keeps the source's permissions.
+/// Copy-on-write clone when the filesystem supports it (btrfs, xfs, APFS),
+/// else a plain copy. Keeps the source's permissions.
+#[cfg(target_os = "linux")]
 pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
     use std::os::fd::AsRawFd;
     let _ = std::fs::remove_file(dst);
@@ -1370,6 +1456,24 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
             if let Ok(m) = s.metadata() {
                 let _ = d.set_permissions(m.permissions());
             }
+            return true;
+        }
+    }
+    std::fs::copy(src, dst).is_ok()
+}
+
+/// Copy-on-write clone on APFS (`clonefile`, which keeps permissions), else
+/// a plain copy.
+#[cfg(target_os = "macos")]
+pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
+    let _ = std::fs::remove_file(dst);
+    if let (Ok(s), Ok(d)) = (
+        CString::new(src.as_os_str().as_bytes()),
+        CString::new(dst.as_os_str().as_bytes()),
+    ) {
+        // SAFETY: valid NUL-terminated paths. CLONE_NOFOLLOW clones a
+        // symlink itself, like `std::fs::copy` would not: never set it.
+        if unsafe { libc::clonefile(s.as_ptr(), d.as_ptr(), 0) } == 0 {
             return true;
         }
     }

@@ -81,6 +81,10 @@ pub struct Sample {
     pub psi_cpu_ms: f64,
     pub psi_mem_ms: f64,
     pub psi_io_ms: f64,
+    /// The machine has no pressure stall info (macOS, a kernel without
+    /// PSI): the `psi_*` fields are not measured, not zero.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub psi_unavailable: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -113,6 +117,7 @@ extern "C" fn forward_signal(sig: libc::c_int) {
             libc::kill(pid, sig);
         }
     }
+    crate::test_pool::signal_live(sig);
 }
 
 fn install_signal_forwarding() {
@@ -912,6 +917,10 @@ fn sample_loop(
 
         let cpu = procfs::cpu_times();
         let psi = procfs::pressure();
+        let stall = |f: fn(&procfs::Pressure) -> u64| match (&psi, &prev_psi) {
+            (Some(b), Some(a)) => f(b).saturating_sub(f(a)) as f64 / 1000.0,
+            _ => 0.0,
+        };
         let dt = (t - prev_t).max(1e-3);
         let sys_cores = match (prev_cpu, cpu) {
             (Some(a), Some(b)) if b.total > a.total => {
@@ -930,9 +939,10 @@ fn sample_loop(
                 mem_available_mb: procfs::meminfo().map(|m| m.available_mb).unwrap_or(0),
                 rustc_procs,
                 foreign_rustc_procs: foreign,
-                psi_cpu_ms: psi.cpu_us.saturating_sub(prev_psi.cpu_us) as f64 / 1000.0,
-                psi_mem_ms: psi.memory_us.saturating_sub(prev_psi.memory_us) as f64 / 1000.0,
-                psi_io_ms: psi.io_us.saturating_sub(prev_psi.io_us) as f64 / 1000.0,
+                psi_cpu_ms: stall(|p| p.cpu_us),
+                psi_mem_ms: stall(|p| p.memory_us),
+                psi_io_ms: stall(|p| p.io_us),
+                psi_unavailable: psi.is_none(),
             });
         } else {
             // First pass only establishes baselines.
@@ -947,6 +957,7 @@ fn sample_loop(
                 psi_cpu_ms: 0.0,
                 psi_mem_ms: 0.0,
                 psi_io_ms: 0.0,
+                psi_unavailable: psi.is_none(),
             });
         }
         prev_cpu = cpu;
