@@ -421,6 +421,11 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         if tc.id.starts_with("jr-") {
             // justrust's compiler: the shim enables its caches.
             cmd.env("JUSTRUST_TOOLCHAIN_JR", "1");
+            if matches!(meta.subcommand.as_str(), "test" | "t")
+                && let Some(f) = compile_test_filter(&cargo_args)
+            {
+                cmd.env("JUSTRUST_RUSTC_TEST_FILTER", f);
+            }
         }
     }
     if let Some(p) = &pool {
@@ -1047,6 +1052,67 @@ fn git_info() -> GitInfo {
 ///
 /// Off with `JUSTRUST_UNIFY_FEATURES=0`. Respects an explicit
 /// `CARGO_RESOLVER_FEATURE_UNIFICATION` (`selected` restores cargo's default).
+/// Test-filter-aware compilation (jr-rustc `JUSTRUST_RUSTC_TEST_FILTER`): the
+/// libtest name filters of a `test` command (positional arguments after `--`,
+/// and `--exact`), one per line, so jr-rustc builds a harness with only the
+/// tests they select and code-generates nothing else. `None` when there is no
+/// filter (or a libtest flag we do not know). Opt-in with
+/// `JUSTRUST_TEST_FILTER_COMPILE=1`: the test binary then depends on the filter,
+/// so changing the filter rebuilds it, and the build daemon's unfiltered
+/// prebuilds no longer match.
+fn compile_test_filter(cargo_args: &[OsString]) -> Option<String> {
+    if !matches!(
+        std::env::var("JUSTRUST_TEST_FILTER_COMPILE").as_deref(),
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+    ) {
+        return None;
+    }
+    test_filter_lines(cargo_args)
+}
+
+fn test_filter_lines(cargo_args: &[OsString]) -> Option<String> {
+    let dash = cargo_args.iter().position(|a| a == "--")?;
+    let args: Vec<String> = cargo_args[dash + 1..]
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let mut filters = Vec::new();
+    let mut exact = false;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        match a {
+            "--exact" => exact = true,
+            // Runtime-only: the harness keeps a superset, libtest applies them.
+            "--skip" | "--test-threads" | "--color" | "--format" | "--logfile"
+            | "--shuffle-seed" | "-Z" => i += 1,
+            "--ignored"
+            | "--include-ignored"
+            | "--nocapture"
+            | "--no-capture"
+            | "--show-output"
+            | "-q"
+            | "--quiet"
+            | "--report-time"
+            | "--ensure-time"
+            | "--test"
+            | "--shuffle"
+            | "--force-run-in-process" => {}
+            _ if a.starts_with("--") && a.contains('=') => {}
+            _ if a.starts_with('-') => return None,
+            _ => filters.push(a.to_owned()),
+        }
+        i += 1;
+    }
+    if filters.is_empty() {
+        return None;
+    }
+    if exact {
+        filters.insert(0, "--exact".to_owned());
+    }
+    Some(filters.join("\n"))
+}
+
 fn unify_features(cmd: &mut Command) {
     if matches!(
         std::env::var("JUSTRUST_UNIFY_FEATURES").as_deref(),
@@ -1065,6 +1131,43 @@ fn unify_features(cmd: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_filter_lines_from_libtest_args() {
+        let f = |v: &[&str]| test_filter_lines(&os(v));
+        assert_eq!(f(&["test", "-p", "x"]), None, "no `--`");
+        assert_eq!(f(&["test", "--", "--nocapture"]), None, "no filter");
+        assert_eq!(f(&["test", "--", "fps"]).as_deref(), Some("fps"));
+        assert_eq!(
+            f(&[
+                "test",
+                "--lib",
+                "--",
+                "a",
+                "--skip",
+                "b",
+                "c",
+                "--test-threads",
+                "1"
+            ])
+            .as_deref(),
+            Some("a\nc"),
+            "skip and value flags are runtime-only"
+        );
+        assert_eq!(
+            f(&["test", "--", "--exact", "m::t"]).as_deref(),
+            Some("--exact\nm::t")
+        );
+        assert_eq!(
+            f(&["test", "--", "x", "--weird"]),
+            None,
+            "unknown flag: no filtering"
+        );
+        assert_eq!(
+            f(&["test", "--", "--format=json", "x"]).as_deref(),
+            Some("x")
+        );
+    }
 
     fn os(v: &[&str]) -> Vec<OsString> {
         v.iter().map(OsString::from).collect()

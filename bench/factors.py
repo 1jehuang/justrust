@@ -45,6 +45,9 @@ import suite  # noqa: E402
 FACTOR_WORK = Path(os.environ.get("JUSTRUST_FACTORS_WORK", suite.JR_HOME / "bench" / "factors"))
 FACTORS_MD = suite.ROOT / "bench" / "FACTORS.md"
 NIGHTLY = "nightly-2026-10-08"  # the pinned toolchain (docs/toolchain.md)
+# Cross-crate cutoff needs a jr toolchain built with -Zjr-iface-hash and jr-cargo
+# with the cutoff (JR_CUTOFF_TOOLCHAIN overrides).
+CUTOFF_TOOLCHAIN = os.environ.get("JR_CUTOFF_TOOLCHAIN", "jr-4d093f107dfb")
 # Cargo reads per-package profile rustflags and hint-mostly-unused only with
 # these unstable features (the pinned nightly's cargo accepts them).
 UNSTABLE_PROFILE = {"CARGO_UNSTABLE_PROFILE_RUSTFLAGS": "true",
@@ -322,6 +325,21 @@ FACTORS = [
          "desktop-test-edit", "self-profile: all threads blocked 285 ms on upstream_drop_glue_for (623 crates)"),
         ("jr-par-upstream-mono-deep", "same, jcode-core body edit (16 crates rebuilt)",
          "desktop-jcode-core-body", ""),
+    ]],
+    *[Factor(
+        name, what, "loop", scenario,
+        on={"JUSTRUST_TOOLCHAIN": CUTOFF_TOOLCHAIN},
+        off={"JUSTRUST_TOOLCHAIN": CUTOFF_TOOLCHAIN, "JUSTRUST_CUTOFF": "0", "JUSTRUST_CARGO_CUTOFF": "0"},
+        n=n, slow=True, note=note,
+    ) for name, what, scenario, n, note in [
+        ("jr-cutoff", "cross-crate early cutoff: jr-rustc records each crate's interface hash "
+         "(-Zjr-iface-hash, metadata minus spans), jr-cargo skips dependents of a crate whose "
+         "interface did not change, jr-rustc loads them against the new build",
+         "desktop-upstream-body", 8, "body edit in jcode-desktop-ui-core: 2 sibling dependents cut off"),
+        ("jr-cutoff-deep", "same, body edit in jcode-core (Jcode repo, 15 dependents)",
+         "desktop-jcode-core-body", 8, "the 15-crate cascade of FINDINGS (jcode_base 5.6 s)"),
+        ("jr-cutoff-sig", "same, but the edit adds a pub item: the interface changes, nothing may be cut off",
+         "desktop-upstream-sig", 6, "control: on must equal off"),
     ]],
     Factor(
         "jr-overlap-persist", "jr-rustc persists the incremental state (dep graph, query cache) on one "
