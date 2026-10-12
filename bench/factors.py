@@ -112,6 +112,26 @@ FACTORS = [
         note="fresh target dir with the depcache warm in both variants",
     ),
     Factor(
+        "localcache-revert", "local crate cache: restore workspace crates whose sources match an earlier build "
+                             "(JUSTRUST_LOCALCACHE=1), on undoing an edit",
+        "revert", "desktop-test-edit",
+        on={"JUSTRUST_LOCALCACHE": "1", "JUSTRUST_LOCALCACHE_DIR": str(FACTOR_WORK / "cache" / "localcache-warm")}, off={"JUSTRUST_LOCALCACHE": "0"}, n=5,
+        note="edit fps_counter.rs, build (unmeasured, `edit_wall` = the miss path with staging), undo, build "
+             "(measured); each variant keeps its own warm target dir",
+    ),
+    Factor(
+        "localcache-loop", "same cache, cost on the plain edit loop (every build misses and stages its outputs)",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_LOCALCACHE": "1", "JUSTRUST_LOCALCACHE_DIR": str(FACTOR_WORK / "cache" / "localcache-warm")}, off={"JUSTRUST_LOCALCACHE": "0"}, n=6,
+        note="the background finisher hashes the 285 MB test binary niced while the next sample may start",
+    ),
+    Factor(
+        "localcache-fresh", "same cache, on a fresh target dir of unchanged sources (new slot, cargo clean)",
+        "fresh", "desktop-test-edit",
+        on={"JUSTRUST_LOCALCACHE": "1"}, off={"JUSTRUST_LOCALCACHE": "0"}, n=3, private_cache=True,
+        note="no edit; dependencies come from the private depcache in both variants, the warmup round fills both caches",
+    ),
+    Factor(
         "feature-unify", "resolve dependency features once per workspace, so -p switches reuse builds",
         "sequence", "desktop-pkg-switch",
         on={}, off={"JUSTRUST_UNIFY_FEATURES": "0"},
@@ -296,7 +316,8 @@ def variant_scenario(f: Factor, v: str) -> suite.Scenario:
 def cache_env(f: Factor) -> dict[str, str]:
     if not f.private_cache:
         return {}
-    return {"JUSTRUST_DEPCACHE_DIR": str(FACTOR_WORK / "cache" / f.name)}
+    return {"JUSTRUST_DEPCACHE_DIR": str(FACTOR_WORK / "cache" / f.name),
+            "JUSTRUST_LOCALCACHE_DIR": str(FACTOR_WORK / "cache" / f"{f.name}-local")}
 
 
 def sample_loop(f: Factor, v: str, i: int, base_n: int) -> dict:
@@ -426,7 +447,43 @@ def sample_concurrent(f: Factor, v: str, i: int, base_n: int) -> dict:
     }
 
 
-SAMPLERS = {"loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent}
+def sample_revert(f: Factor, v: str, i: int, base_n: int) -> dict:
+    """Edit, build (unmeasured, its wall is kept as `edit_wall`: the miss
+    path), undo the edit, build again (measured). The undo writes the
+    original text with a fresh mtime, as an editor or `git checkout` does,
+    so cargo sees a change."""
+    s = variant_scenario(f, v)
+    root = suite.prepare(s.snapshot)
+    key = hashlib.sha1(json.dumps([s.snapshot, sorted(s.env.items()), "revert"]).encode()).hexdigest()[:10]
+    target = FACTOR_WORK / "target" / f"revert-{s.snapshot}-{key}"
+    try:
+        suite.apply_edit(root, s.edit, base_n + 2 * i + (v == "off"))
+        first = suite.run_once(s, root, target)
+        (root / s.edit.file).write_text(suite.pristine(root, s.edit.file).read_text())
+        r = suite.run_once(s, root, target)
+    finally:
+        suite.restore(root, s.edit)
+    r["edit_wall"] = first["wall"]
+    r["edit_id"] = first["id"]
+    return r
+
+
+def sample_fresh_dir(f: Factor, v: str, i: int, base_n: int) -> dict:
+    """A fresh target dir of the same sources (new slot, `cargo clean`, a
+    second checkout at the same path). Both caches are private and shared
+    by both variants, so dependencies hit either way."""
+    s = variant_scenario(f, v)
+    s = dataclasses.replace(s, env={**s.env, **cache_env(f)})
+    root = suite.prepare(s.snapshot)
+    target = FACTOR_WORK / "target" / f"{f.name}-{v}-fresh-{os.getpid()}-{i}"
+    try:
+        return suite.run_once(s, root, target)
+    finally:
+        shutil.rmtree(target, ignore_errors=True)
+
+
+SAMPLERS = {"loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
+            "revert": sample_revert, "fresh": sample_fresh_dir}
 
 
 def vstats(samples: list[dict]) -> dict:

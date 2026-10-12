@@ -456,6 +456,8 @@ def reuse_ledger(sm: dict, run_dir: Path) -> dict:
         "script_hits": s_hits,
         "script_saved_secs": round(s_saved, 2),
         "slot_refreshed_units": slot.get("refreshed_units", 0) or 0,
+        "local_hits": u.get("localcache_hits", 0),
+        "local_saved_secs": round(u.get("localcache_saved_secs", 0.0), 2),
     }
 
 
