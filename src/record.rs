@@ -423,6 +423,9 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
             cmd.env("JUSTRUST_TOOLCHAIN_JR", "1");
         }
     }
+    if let Some(p) = &pool {
+        cmd.env(crate::test_pool::POOL_ENV, p.sock());
+    }
     cmd.args(&cargo_args)
         .env("RUSTC", &shim)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)

@@ -48,6 +48,9 @@ use std::time::Duration;
 const SOCK: &str = "tests.sock";
 /// Prefix of the runner argument that names the pool socket.
 pub const POOL_ARG: &str = "--pool=";
+/// `--pool=env`: the socket path is in this variable.
+pub const POOL_FROM_ENV: &str = "env";
+pub const POOL_ENV: &str = "JUSTRUST_TEST_POOL";
 
 /// Where the pool prints and records a line (implemented by the recorder).
 pub trait Sink: Send + Sync {
@@ -309,9 +312,16 @@ impl Pool {
         })
     }
 
-    /// The runner argument that points at this pool.
+    /// The runner argument that points at this pool: a constant, with the
+    /// socket in [`POOL_ENV`], so cargo's argv is the same every run (a
+    /// jr-cargo daemon keys its parked state on argv).
     pub fn runner_arg(&self) -> String {
-        format!("{POOL_ARG}{}", self.sock.display())
+        format!("{POOL_ARG}{POOL_FROM_ENV}")
+    }
+
+    /// The socket, for [`POOL_ENV`].
+    pub fn sock(&self) -> &Path {
+        &self.sock
     }
 
     /// After cargo exited: stop accepting, wait for every binary, confirm

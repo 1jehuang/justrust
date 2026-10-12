@@ -139,7 +139,15 @@ pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
         .as_ref()
         .and_then(|b| b.to_str())
         .and_then(|b| b.strip_prefix(crate::test_pool::POOL_ARG))
-        .map(std::path::PathBuf::from);
+        .map(|p| {
+            if p == crate::test_pool::POOL_FROM_ENV {
+                std::env::var_os(crate::test_pool::POOL_ENV)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_default()
+            } else {
+                std::path::PathBuf::from(p)
+            }
+        });
     if pool.is_some() {
         bin = args.next();
     }
@@ -153,6 +161,7 @@ pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
     // Hand plain libtest runs to the recorder's pool, which runs binaries in
     // parallel. Anything else (or a pool that does not answer) runs here.
     if let Some(sock) = &pool
+        && !sock.as_os_str().is_empty()
         && libtest
         && let Some(user_s) = user
             .iter()
