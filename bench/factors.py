@@ -120,6 +120,21 @@ FACTORS = [
              "(measured); each variant keeps its own warm target dir",
     ),
     Factor(
+        "localcache-revert-sde", "same, with SOURCE_DATE_EPOCH fixed (Desktop's build.rs then stops stamping the "
+                                 "build time into the UI crate through env!)",
+        "revert", "desktop-test-edit",
+        on={"JUSTRUST_LOCALCACHE": "1", "JUSTRUST_LOCALCACHE_DIR": str(FACTOR_WORK / "cache" / "localcache-warm"),
+            "SOURCE_DATE_EPOCH": "1791700000"},
+        off={"JUSTRUST_LOCALCACHE": "0", "SOURCE_DATE_EPOCH": "1791700000"}, n=5,
+        note="without it, JCODE_DESKTOP_BUILD_ID (build time in ms) differs every build and the UI crate never hits",
+    ),
+    Factor(
+        "localcache-revert-small", "same, on this repo's snapshot (one crate, full `test`)",
+        "revert", "justrust-body-test",
+        on={"JUSTRUST_LOCALCACHE": "1", "JUSTRUST_LOCALCACHE_DIR": str(FACTOR_WORK / "cache" / "localcache-warm")},
+        off={"JUSTRUST_LOCALCACHE": "0"}, n=5,
+    ),
+    Factor(
         "localcache-loop", "same cache, cost on the plain edit loop (every build misses and stages its outputs)",
         "loop", "desktop-test-edit",
         on={"JUSTRUST_LOCALCACHE": "1", "JUSTRUST_LOCALCACHE_DIR": str(FACTOR_WORK / "cache" / "localcache-warm")}, off={"JUSTRUST_LOCALCACHE": "0"}, n=6,
@@ -128,7 +143,8 @@ FACTORS = [
     Factor(
         "localcache-fresh", "same cache, on a fresh target dir of unchanged sources (new slot, cargo clean)",
         "fresh", "desktop-test-edit",
-        on={"JUSTRUST_LOCALCACHE": "1"}, off={"JUSTRUST_LOCALCACHE": "0"}, n=3, private_cache=True,
+        on={"JUSTRUST_LOCALCACHE": "1", "SOURCE_DATE_EPOCH": "1791700000"},
+        off={"JUSTRUST_LOCALCACHE": "0", "SOURCE_DATE_EPOCH": "1791700000"}, n=3, private_cache=True,
         note="no edit; dependencies come from the private depcache in both variants, the warmup round fills both caches",
     ),
     Factor(
