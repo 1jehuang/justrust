@@ -471,6 +471,14 @@ pub fn charge_run_labeled(
         body["project"] = json!(run_label(p, 160));
     }
     body["client"] = json!(concat!("justrust ", env!("CARGO_PKG_VERSION")));
+    // Who: the account is the key. Machine and Jcode agent session tell the
+    // operator which laptop and which agent the run came from.
+    if let Ok(h) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
+        body["machine"] = json!(run_label(h.trim(), 64));
+    }
+    if let Ok(s) = std::env::var("JCODE_SESSION_ID") {
+        body["session"] = json!(run_label(&s, 96));
+    }
     let r = request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?;
     if r.code == 200 {
         Ok(Builds::from(&r.body["builds"]))
