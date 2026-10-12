@@ -344,8 +344,8 @@ time no longer goes to learning about a type error.
    and a hermetic C sysroot.
 4. **Remote compile service** that is chosen per build when it is faster.
    Experimental. Working: `check`, `clippy`, and `test` route to a remote machine when
-   measured faster (a machine in your AWS account via `justrust remote up`,
-   or any ssh host via `justrust remote use ssh`), with a sync daemon that
+   measured faster (hosted builds after `justrust login`, or a legacy
+   machine in your AWS account via `justrust remote up`), with a sync daemon that
    pushes edits on save. Cold Jcode Desktop `check` 44 s vs ~180 s local.
    Hosted builds with a Jcode subscription (`justrust remote use hosted`)
    are built client side, waiting on the server

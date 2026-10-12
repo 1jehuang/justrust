@@ -417,18 +417,15 @@ enum RemoteCmd {
     /// `justrust clippy` on the machine.
     #[command(disable_help_flag = true)]
     Clippy(RemoteArgs),
-    /// Choose where remote builds run: aws (the machine `remote up`
-    /// creates), ssh HOST (a machine you already have), hosted (Jcode
-    /// account, see `justrust login`), or off.
-    Use {
-        kind: String,
-        host: Option<String>,
-        #[arg(long)]
-        port: Option<u16>,
-        /// ssh private key for the host.
-        #[arg(long)]
-        identity: Option<String>,
-    },
+    /// Choose where remote builds run: hosted (Jcode account, see
+    /// `justrust login`), aws (legacy: the machine `remote up` creates in
+    /// your AWS account), or off.
+    Use { kind: String },
+    /// Shell assignments for scripts (`eval "$(justrust remote env)"`):
+    /// JR_REMOTE_KIND, JR_REMOTE_DEST, JR_REMOTE_SSH (ssh with the shared
+    /// connection's options, also usable as `rsync -e`). Starts the machine
+    /// if needed.
+    Env,
 }
 
 #[derive(clap::Args)]
@@ -660,12 +657,8 @@ pub fn main() -> anyhow::Result<()> {
             RemoteCmd::Test(a) => remote_build::run("test", a.args)?,
             RemoteCmd::Build(a) => remote_build::run("build", a.args)?,
             RemoteCmd::Clippy(a) => remote_build::run("clippy", a.args)?,
-            RemoteCmd::Use {
-                kind,
-                host,
-                port,
-                identity,
-            } => remote_backend::use_command(&kind, host, port, identity)?,
+            RemoteCmd::Use { kind } => remote_backend::use_command(&kind)?,
+            RemoteCmd::Env => remote_backend::env_command()?,
         },
         Command::Export {
             out,

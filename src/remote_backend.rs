@@ -2,26 +2,26 @@
 //! protocol, routing) only needs "an ssh-reachable machine with a shell".
 //!
 //! ```text
-//! ~/.justrust/remote/backend.json   {"kind": "aws"} | {"kind": "ssh", ...} | {"kind": "hosted"}
+//! ~/.justrust/remote/backend.json   {"kind": "hosted"} | {"kind": "aws"}
 //! ```
 //!
-//! - `aws`: the machine `justrust remote up` creates in the user's own AWS
-//!   account (see `remote`). The default when that machine exists.
-//! - `ssh`: any machine the user already has (`justrust remote use ssh
-//!   user@host`). Needs a shell, a C toolchain, and rustup. justrust installs
-//!   itself there.
 //! - `hosted`: justrust's own build fleet, tied to a Jcode subscription
-//!   (see `remote_hosted`). The user there is `ubuntu` without general
-//!   sudo: mirrored paths outside /home and /Users are created with
-//!   `sudo -n /usr/local/sbin/jcode-mkdir`.
+//!   (see `remote_hosted`). The one remote path going forward. The user
+//!   there is `ubuntu` without general sudo: mirrored paths outside /home
+//!   and /Users are created with `sudo -n /usr/local/sbin/jcode-mkdir`.
+//! - `aws`: the machine `justrust remote up` creates in the user's own AWS
+//!   account (see `remote`). Legacy: kept until hosted matches it, then
+//!   removed. The default when that machine exists.
+//!
+//! A `backend.json` naming the removed `ssh` backend reads as no backend.
 //!
 //! With no backend configured nothing remote ever happens: the router costs
 //! one failed `stat`.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use crate::remote;
 
@@ -29,14 +29,6 @@ use crate::remote;
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Backend {
     Aws,
-    Ssh {
-        /// `user@host` or a Host alias from ~/.ssh/config.
-        host: String,
-        #[serde(default)]
-        port: Option<u16>,
-        #[serde(default)]
-        identity: Option<String>,
-    },
     Hosted,
 }
 
@@ -86,7 +78,6 @@ impl Backend {
     pub fn label(&self) -> String {
         match self {
             Backend::Aws => remote::describe_short().unwrap_or_else(|| "aws".into()),
-            Backend::Ssh { host, .. } => host.clone(),
             Backend::Hosted => "hosted".into(),
         }
     }
@@ -102,27 +93,6 @@ impl Backend {
                     opts: remote::ssh_opts()?,
                 })
             }
-            Backend::Ssh {
-                host,
-                port,
-                identity,
-            } => {
-                let t = ssh_target(host, *port, identity.as_deref())?;
-                let ok = t
-                    .command()
-                    .arg("true")
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::piped())
-                    .output()
-                    .context("ssh")?;
-                if !ok.status.success() {
-                    bail!(
-                        "cannot reach {host} over ssh: {}",
-                        String::from_utf8_lossy(&ok.stderr).trim()
-                    );
-                }
-                Ok(t)
-            }
             Backend::Hosted => crate::remote_hosted::ensure_ready(),
         }
     }
@@ -131,29 +101,7 @@ impl Backend {
     pub fn kind(&self) -> &'static str {
         match self {
             Backend::Aws => "aws",
-            Backend::Ssh { .. } => "ssh",
             Backend::Hosted => "hosted",
-        }
-    }
-
-    /// The ssh destination without connecting or starting anything: the
-    /// configured host for `ssh`, the last known IP for `aws` (None when the
-    /// machine is not known to be running), the cached session for `hosted`.
-    pub fn target_no_start(&self) -> Result<Option<Target>> {
-        match self {
-            Backend::Aws => match remote::cached_ip() {
-                Some(ip) => Ok(Some(Target {
-                    dest: format!("{}@{ip}", remote::SSH_USER),
-                    opts: remote::ssh_opts()?,
-                })),
-                None => Ok(None),
-            },
-            Backend::Ssh {
-                host,
-                port,
-                identity,
-            } => Ok(Some(ssh_target(host, *port, identity.as_deref())?)),
-            Backend::Hosted => Ok(crate::remote_hosted::cached_target()),
         }
     }
 
@@ -161,7 +109,6 @@ impl Backend {
     pub fn probably_up(&self) -> bool {
         match self {
             Backend::Aws => remote::cached_ip().is_some(),
-            Backend::Ssh { .. } => true,
             Backend::Hosted => crate::remote_hosted::probably_up(),
         }
     }
@@ -213,43 +160,30 @@ pub(crate) fn control_path(dir: &std::path::Path) -> String {
     format!("{}/%C", short.display())
 }
 
-fn ssh_target(host: &str, port: Option<u16>, identity: Option<&str>) -> Result<Target> {
-    let d = remote::dir()?;
-    let mut opts: Vec<String> = vec![
-        "-o".into(),
-        "BatchMode=yes".into(),
-        "-o".into(),
-        "ConnectTimeout=5".into(),
-        "-o".into(),
-        "LogLevel=ERROR".into(),
-        "-o".into(),
-        "ControlMaster=auto".into(),
-        "-o".into(),
-        format!("ControlPath={}", control_path(&d)),
-        "-o".into(),
-        "ControlPersist=600".into(),
-        "-o".into(),
-        "ServerAliveInterval=15".into(),
-    ];
-    if let Some(p) = port {
-        opts.extend(["-p".into(), p.to_string()]);
-    }
-    if let Some(i) = identity {
-        opts.extend(["-i".into(), i.to_string()]);
-    }
-    Ok(Target {
-        dest: host.to_string(),
-        opts,
-    })
+/// `justrust remote env`: the ssh destination of the current backend as
+/// shell assignments, so scripts (bench/on-remote.sh) reach whichever
+/// machine remote builds use without knowing keys or addresses.
+pub fn env_command() -> Result<()> {
+    let Some(b) = load() else {
+        bail!("no remote machine configured. Sign in to hosted builds: `justrust login`");
+    };
+    let t = b.ensure_ready()?;
+    print!("{}", env_lines(&b, &t));
+    Ok(())
 }
 
-/// `justrust remote use <aws|ssh HOST|hosted|off>`.
-pub fn use_command(
-    kind: &str,
-    host: Option<String>,
-    port: Option<u16>,
-    identity: Option<String>,
-) -> Result<()> {
+fn env_lines(b: &Backend, t: &Target) -> String {
+    use crate::remote_build::shell_quote as q;
+    format!(
+        "JR_REMOTE_KIND={}\nJR_REMOTE_DEST={}\nJR_REMOTE_SSH={}\n",
+        b.kind(),
+        q(&t.dest),
+        q(&t.rsync_shell())
+    )
+}
+
+/// `justrust remote use <hosted|aws|off>`.
+pub fn use_command(kind: &str) -> Result<()> {
     let b = match kind {
         "aws" => {
             if remote::instance_id().is_none() {
@@ -257,12 +191,9 @@ pub fn use_command(
             }
             Backend::Aws
         }
-        "ssh" => Backend::Ssh {
-            host: host
-                .context("usage: justrust remote use ssh user@host [--port N] [--identity KEY]")?,
-            port,
-            identity,
-        },
+        "ssh" => bail!(
+            "the ssh backend was removed: use hosted builds (`justrust login`, then `justrust remote use hosted`)"
+        ),
         "hosted" => {
             crate::remote_hosted::check_use()?;
             Backend::Hosted
@@ -273,12 +204,8 @@ pub fn use_command(
             println!("remote builds off: every build runs locally");
             return Ok(());
         }
-        other => bail!("unknown backend {other}: use aws, ssh, hosted, or off"),
+        other => bail!("unknown backend {other}: use hosted, aws, or off"),
     };
-    if let Backend::Ssh { host, .. } = &b {
-        println!("checking {host}...");
-        b.ensure_ready()?;
-    }
     crate::remote_daemon::stop();
     save(&b)?;
     println!("remote builds use {}", b.label());
@@ -291,13 +218,8 @@ mod tests {
 
     #[test]
     fn backend_json_shapes() {
-        let s = serde_json::to_string(&Backend::Ssh {
-            host: "me@box".into(),
-            port: None,
-            identity: None,
-        })
-        .unwrap();
-        assert!(s.contains("\"kind\":\"ssh\""), "{s}");
+        let s = serde_json::to_string(&Backend::Hosted).unwrap();
+        assert_eq!(s, r#"{"kind":"hosted"}"#);
         let b: Backend = serde_json::from_str(r#"{"kind":"aws"}"#).unwrap();
         assert_eq!(b, Backend::Aws);
         let b: Backend = serde_json::from_str(r#"{"kind":"hosted"}"#).unwrap();
@@ -305,14 +227,37 @@ mod tests {
     }
 
     #[test]
+    fn env_lines_eval_in_a_shell() {
+        let t = Target {
+            dest: "ubuntu@203.0.113.7".into(),
+            opts: vec![
+                "-i".into(),
+                "/home/me/my keys/id".into(),
+                "-o".into(),
+                "ControlPath=/run/x/cm-%C".into(),
+            ],
+        };
+        let lines = env_lines(&Backend::Hosted, &t);
+        let out = Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "{lines}printf '%s|%s|' \"$JR_REMOTE_KIND\" \"$JR_REMOTE_DEST\"; eval \"set -- $JR_REMOTE_SSH\"; printf '%s;' \"$@\""
+            ))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "hosted|ubuntu@203.0.113.7|ssh;-i;/home/me/my keys/id;-o;ControlPath=/run/x/cm-%C;"
+        );
+    }
+
+    #[test]
     fn env_api_key_selects_hosted_only_when_unconfigured() {
         assert_eq!(resolve(None, false, false), None);
         assert_eq!(resolve(None, false, true), Some(Backend::Hosted));
         assert_eq!(resolve(None, true, true), Some(Backend::Aws));
+        // The removed ssh backend reads as unconfigured.
         let ssh = br#"{"kind":"ssh","host":"me@box"}"#.to_vec();
-        assert!(matches!(
-            resolve(Some(ssh), false, true),
-            Some(Backend::Ssh { .. })
-        ));
+        assert_eq!(resolve(Some(ssh), false, true), None);
     }
 }

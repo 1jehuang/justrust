@@ -61,10 +61,18 @@ pub struct Probe {
     #[serde(default)]
     pub temp_c: Option<f64>,
     pub error: Option<String>,
-    /// ssh destination probed (ssh backends), so a cached probe of another
+    /// ssh destination probed (hosted), so a cached probe of another
     /// host is never shown.
     #[serde(default)]
     pub dest: Option<String>,
+    /// EC2 instance metadata from the machine itself (IMDSv2), so every
+    /// backend reports what it ran on.
+    #[serde(default)]
+    pub instance_type: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub spot: bool,
 }
 
 /// The local sync daemon, from its socket (no network).
@@ -81,9 +89,9 @@ pub struct DaemonState {
 #[derive(Serialize, Debug, Default)]
 pub struct Status {
     pub configured: bool,
-    /// aws, ssh, hosted, or none.
+    /// hosted or aws (legacy), or none.
     pub backend: String,
-    /// ssh backends: the configured `user@host`.
+    /// hosted: the machine's address.
     pub host: Option<String>,
     pub instance_id: Option<String>,
     pub region: Option<String>,
@@ -298,7 +306,6 @@ pub fn collect(probe: bool) -> Status {
             ..Default::default()
         },
         Some(Backend::Aws) => collect_aws(probe),
-        Some(b @ Backend::Ssh { .. }) => collect_ssh(&b, probe),
         Some(Backend::Hosted) => collect_hosted(probe),
     };
     out.daemon = daemon_state();
@@ -350,40 +357,21 @@ fn collect_hosted(probe: bool) -> Status {
             save_probe(HOSTED_PROBE, &p);
             p
         }));
+    } else if probe {
+        // Machine identity outlives the session: keep the last one seen.
+        out.probe = cached_probe_file(HOSTED_PROBE).map(|mut p| {
+            p.ok = false;
+            p.error = Some("no session open (`justrust remote up`)".into());
+            p
+        });
+    }
+    if let Some(p) = &out.probe {
+        out.instance_type = p.instance_type.clone();
+        out.region = p.region.clone();
+        out.spot = p.spot;
+        out.public_ip = h.address.clone();
     }
     out.hosted = Some(h);
-    out
-}
-
-fn collect_ssh(b: &Backend, probe: bool) -> Status {
-    let Backend::Ssh { host, .. } = b else {
-        unreachable!()
-    };
-    let mut out = Status {
-        configured: true,
-        backend: b.kind().into(),
-        host: Some(host.clone()),
-        state: "unknown".into(),
-        ..Default::default()
-    };
-    let cached = cached_probe_file(SSH_PROBE).filter(|p| p.dest.as_deref() == Some(host));
-    let p = match cached {
-        Some(p) if !probe || now() - p.at < PROBE_TTL => Some(p),
-        _ if probe => match b.target_no_start() {
-            Ok(Some(t)) => Some(run_probe_ssh(&t)),
-            Ok(None) => None,
-            Err(e) => {
-                out.error = Some(first_line(&e.to_string()));
-                None
-            }
-        },
-        other => other,
-    };
-    if let Some(p) = &p {
-        out.state = if p.ok { "running" } else { "unreachable" }.into();
-        out.running_s = None;
-    }
-    out.probe = p;
     out
 }
 
@@ -459,7 +447,6 @@ fn first_line(s: &str) -> String {
 }
 
 const AWS_PROBE: &str = "probe.json";
-const SSH_PROBE: &str = "probe-ssh.json";
 const HOSTED_PROBE: &str = "probe-hosted.json";
 
 fn cached_probe() -> Option<Probe> {
@@ -600,10 +587,17 @@ cut -d' ' -f1 /proc/loadavg
 awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf "%.2f %.2f\n", t/1048576, (t-a)/1048576}' /proc/meminfo
 df --output=pcent / | tail -1 | tr -dc 0-9; echo
 (~/.cargo/bin/rustc --version 2>/dev/null || rustc --version 2>/dev/null || echo none)
-test -f /var/lib/justrust/ready && echo ready || echo setup
-cat /var/lib/justrust/idle-left 2>/dev/null || echo -
+test -f /var/lib/justrust/ready -o -f /opt/jcode-build/ready && echo ready || echo setup
+if [ -f /var/lib/justrust/idle-left ]; then cat /var/lib/justrust/idle-left
+elif [ -x /opt/jcode-build/idle.sh ]; then s=$(cat /run/jcode-build-idle-since 2>/dev/null || date +%s); echo $(( (1800 - $(date +%s) + s) / 60 ))
+else echo -; fi
 cut -d' ' -f1 /proc/uptime
 cat /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input 2>/dev/null | awk '$1>1000&&$1<150000{if($1>m)m=$1}END{if(m)printf "%.1f\n",m/1000; else print "-"}'
+t=$(curl -sf -m 1 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null)
+m() { [ -n "$t" ] && curl -sf -m 1 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$1" 2>/dev/null; echo; }
+m instance-type
+m placement/region
+m instance-life-cycle
 "#;
 
 fn run_probe(ip: &str) -> Probe {
@@ -623,9 +617,9 @@ fn run_probe(ip: &str) -> Probe {
     p
 }
 
-/// Probe any ssh machine. The host may be an alias from ~/.ssh/config, so
-/// the round trip is one `ssh true` over the shared connection the probe
-/// just opened (one network round trip plus ssh process startup).
+/// Probe the hosted machine. The round trip is one `ssh true` over the
+/// shared connection the probe just opened (one network round trip plus ssh
+/// process startup).
 fn run_probe_ssh(t: &crate::remote_backend::Target) -> Probe {
     let mut p = Probe {
         at: now(),
@@ -640,7 +634,7 @@ fn run_probe_ssh(t: &crate::remote_backend::Target) -> Probe {
         .output()
         .map_err(anyhow::Error::from);
     fill_probe(&mut p, res);
-    // No cloud-init on a machine the user brought: nothing to wait for.
+    // The fleet hands out a session only once the host is ready.
     p.ready = p.ok;
     if p.ok {
         let t0 = Instant::now();
@@ -655,7 +649,6 @@ fn run_probe_ssh(t: &crate::remote_backend::Target) -> Probe {
             p.rtt_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
         }
     }
-    save_probe(SSH_PROBE, &p);
     p
 }
 
@@ -683,6 +676,10 @@ fn fill_probe(p: &mut Probe, res: Result<std::process::Output>) {
             p.idle_left_min = get(6).parse().ok();
             p.uptime_s = get(7).parse().ok();
             p.temp_c = get(8).parse().ok();
+            let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
+            p.instance_type = some(get(9));
+            p.region = some(get(10));
+            p.spot = get(11) == "spot";
         }
         Ok(o) => p.error = Some(first_line(&String::from_utf8_lossy(&o.stderr))),
         Err(e) => p.error = Some(first_line(&e.to_string())),
@@ -711,38 +708,18 @@ pub fn render_text(s: &Status) -> String {
         );
     }
     match s.backend.as_str() {
-        "ssh" => {
-            let _ = writeln!(
-                o,
-                "remote builds: ssh {} ({})",
-                s.host.as_deref().unwrap_or("?"),
-                match s.state.as_str() {
-                    "running" => "reachable",
-                    "unreachable" => "not reachable",
-                    _ => "not probed yet",
-                }
-            );
-        }
         "hosted" => render_hosted(&mut o, s),
         _ if !s.configured => {
             let _ = writeln!(o, "remote builds: not set up (every build runs locally)");
             let _ = writeln!(
                 o,
-                "  justrust remote up                  a machine in your AWS account"
-            );
-            let _ = writeln!(
-                o,
-                "  justrust remote use ssh user@host   a machine you already have"
-            );
-            let _ = writeln!(
-                o,
-                "  justrust remote use hosted          a Jcode subscription build machine"
+                "  justrust login                      a Jcode subscription build machine"
             );
         }
         _ => render_aws_header(&mut o, s),
     }
     if let Some(p) = &s.probe
-        && (s.state == "running" || s.backend == "ssh" || s.backend == "hosted")
+        && (s.state == "running" || s.backend == "hosted")
     {
         render_probe(&mut o, s, p);
     }
@@ -780,6 +757,14 @@ fn render_hosted(o: &mut String, s: &Status) {
     }
     if let Some(a) = &s.host {
         let _ = writeln!(o, "  address: {a}");
+    }
+    if let Some(t) = &s.instance_type {
+        let _ = writeln!(
+            o,
+            "  machine: {t} in {}{}",
+            s.region.as_deref().unwrap_or("?"),
+            if s.spot { " (spot)" } else { "" }
+        );
     }
 }
 
@@ -847,7 +832,6 @@ fn render_aws_header(o: &mut String, s: &Status) {
 }
 
 fn render_probe(o: &mut String, s: &Status, p: &Probe) {
-    let ssh = s.backend == "ssh";
     {
         if p.ok {
             if let Some(r) = p.rtt_ms {
@@ -866,22 +850,20 @@ fn render_probe(o: &mut String, s: &Status, p: &Probe) {
                 Some(t) => {
                     let _ = writeln!(o, "  temperature {t:.0}°C");
                 }
-                None if !ssh => {
+                None => {
                     let _ = writeln!(o, "  temperature not exposed by the VM");
                 }
-                None => {}
             }
-            if ssh && let Some(u) = p.uptime_s {
+            // The AWS header already shows uptime from the launch time.
+            if s.running_s.is_none()
+                && let Some(u) = p.uptime_s
+            {
                 let _ = writeln!(o, "  up {}", dur(u));
             }
             let _ = writeln!(
                 o,
                 "  toolchain {}",
-                p.rustc.as_deref().unwrap_or(if ssh {
-                    "none found (install rustup on the host)"
-                } else {
-                    "not installed yet"
-                })
+                p.rustc.as_deref().unwrap_or("not installed yet")
             );
             // idle-left can be stale right after a wake (written before the
             // last shutdown, before the first timer tick of this boot).
@@ -892,13 +874,9 @@ fn render_probe(o: &mut String, s: &Status, p: &Probe) {
         } else {
             let _ = writeln!(
                 o,
-                "  ssh not reachable{}: {}",
-                if ssh { "" } else { " yet" },
+                "  ssh not reachable yet: {}",
                 p.error.as_deref().unwrap_or("?")
             );
-            if ssh {
-                let _ = writeln!(o, "  probed {} ago", dur(now() - p.at));
-            }
         }
     }
 }
@@ -935,36 +913,29 @@ fn metrics_line(p: &Probe, running_s: Option<f64>, at: f64) -> String {
 
 pub fn render_waybar(s: &Status) -> String {
     let icon = "\u{f233}"; // server
-    let ssh_name = s.host.as_deref().map(short_host).unwrap_or_default();
     let (mut text, class) = if !s.configured {
         (String::new(), "unconfigured")
     } else if s.backend == "hosted" {
-        let hrs = s
+        let left = s
             .hosted
             .as_ref()
-            .and_then(|h| h.hours_left)
-            .map(|h| format!(" {h:.0}h"))
+            .and_then(|h| match (&h.builds, h.hours_left) {
+                (Some(b), _) => Some(format!(" {}b", b.left())),
+                (None, Some(h)) => Some(format!(" {h:.0}h")),
+                _ => None,
+            })
             .unwrap_or_default();
         match (&s.probe, s.state.as_str()) {
             _ if s.error.is_some() => (format!("{icon} hosted ?"), "error"),
             (Some(p), _) if p.ok => (
-                format!("{icon} hosted {}{hrs}", metrics_line(p, None, now())),
+                format!("{icon} hosted {}{left}", metrics_line(p, None, now())),
                 busy_class(p),
             ),
-            (_, "running") => (format!("{icon} hosted on{hrs}"), "running"),
+            (_, "running") => (format!("{icon} hosted on{left}"), "running"),
             (_, "provisioning" | "starting" | "booting") => {
                 (format!("{icon} hosted starting"), "pending")
             }
-            _ => (format!("{icon} hosted off{hrs}"), "stopped"),
-        }
-    } else if s.backend == "ssh" {
-        match &s.probe {
-            Some(p) if p.ok => (
-                format!("{icon} {ssh_name} {}", metrics_line(p, None, now())),
-                busy_class(p),
-            ),
-            Some(_) => (format!("{icon} {ssh_name} unreachable"), "error"),
-            None => (format!("{icon} {ssh_name} ?"), "pending"),
+            _ => (format!("{icon} hosted off{left}"), "stopped"),
         }
     } else {
         match s.state.as_str() {
@@ -1003,15 +974,6 @@ fn busy_class(p: &Probe) -> &'static str {
         _ => 0.0,
     };
     if busy >= 10.0 { "busy" } else { "running" }
-}
-
-/// `me@build.example.com` -> `build`.
-fn short_host(h: &str) -> String {
-    let h = h.rsplit('@').next().unwrap_or(h);
-    if h.parse::<std::net::IpAddr>().is_ok() {
-        return h.to_string();
-    }
-    h.split('.').next().unwrap_or(h).to_string()
 }
 
 /// Bar badge for the sync daemon: `sync 2r 14↑` while it holds a session
@@ -1233,13 +1195,8 @@ touch /var/lib/justrust/ready
 }
 
 pub fn up(opts: UpOptions) -> Result<()> {
-    match crate::remote_backend::load() {
-        Some(b @ Backend::Ssh { .. }) => bail!(
-            "remote builds use ssh {}. `up` creates or starts the machine in your AWS account: run `justrust remote use aws` first",
-            b.label()
-        ),
-        Some(Backend::Hosted) => return crate::remote_hosted::up(),
-        _ => {}
+    if crate::remote_backend::load() == Some(Backend::Hosted) {
+        return crate::remote_hosted::up();
     }
     if let Some(st) = load_state()? {
         let d = describe(&st)?;
@@ -1376,10 +1333,6 @@ fn wait_running(st: &State) -> Result<()> {
 fn not_aws_note(cmd: &str) -> Option<String> {
     match crate::remote_backend::load()? {
         Backend::Aws => None,
-        b @ Backend::Ssh { .. } => Some(format!(
-            "`remote {cmd}` applies to the AWS machine (`justrust remote up`). Remote builds use ssh {}, which justrust does not power on or off. To build locally: justrust remote use off",
-            b.label()
-        )),
         Backend::Hosted => Some(format!(
             "`remote {cmd}` applies to the AWS machine (`justrust remote up`). Remote builds use the hosted machine: `justrust remote down` stops it, and it is never destroyed from here"
         )),
@@ -1476,10 +1429,6 @@ pub fn destroy() -> Result<()> {
 
 pub fn ssh(cmd: Vec<String>) -> Result<()> {
     let mut c = match crate::remote_backend::load() {
-        Some(b @ Backend::Ssh { .. }) => b
-            .target_no_start()?
-            .context("ssh backend has no destination")?
-            .command(),
         Some(Backend::Hosted) => crate::remote_hosted::ensure_ready()?.command(),
         _ => aws_ssh_command()?,
     };
@@ -1492,9 +1441,8 @@ pub fn ssh(cmd: Vec<String>) -> Result<()> {
 }
 
 fn aws_ssh_command() -> Result<Command> {
-    let st = load_state()?.context(
-        "no remote machine: create one with `justrust remote up` or use your own with `justrust remote use ssh user@host`",
-    )?;
+    let st = load_state()?
+        .context("no remote machine: sign in to hosted builds with `justrust login`")?;
     let d = describe(&st)?;
     let ip = d.ip.with_context(|| {
         format!(
@@ -1604,55 +1552,9 @@ mod tests {
         };
         let t = render_text(&s);
         assert!(t.contains("not set up"), "{t}");
-        assert!(t.contains("justrust remote up"), "{t}");
-        assert!(t.contains("remote use ssh user@host"), "{t}");
-        assert!(t.contains("remote use hosted"), "{t}");
+        assert!(t.contains("justrust login"), "{t}");
+        assert!(!t.contains("ssh"), "{t}");
         assert!(!t.contains("sync daemon"), "{t}");
-    }
-
-    #[test]
-    fn text_ssh_shows_host_probe_and_daemon() {
-        let s = Status {
-            configured: true,
-            backend: "ssh".into(),
-            host: Some("me@build.example.com".into()),
-            state: "running".into(),
-            probe: Some(ok_probe()),
-            daemon: Some(daemon(true)),
-            ..Default::default()
-        };
-        let t = render_text(&s);
-        assert!(t.contains("ssh me@build.example.com (reachable)"), "{t}");
-        assert!(t.contains("round trip 12 ms"), "{t}");
-        assert!(t.contains("16 cores, load 0.50"), "{t}");
-        assert!(t.contains("toolchain rustc 1.90.0"), "{t}");
-        assert!(t.contains("up 2h00m"), "{t}");
-        assert!(!t.contains("not exposed by the VM"), "{t}");
-        assert!(
-            t.contains("sync daemon: connected to box, 2 roots mirrored, 14 files pushed"),
-            "{t}"
-        );
-        assert!(t.contains("  /home/me/a"), "{t}");
-    }
-
-    #[test]
-    fn text_ssh_unreachable() {
-        let s = Status {
-            configured: true,
-            backend: "ssh".into(),
-            host: Some("me@box".into()),
-            state: "unreachable".into(),
-            probe: Some(Probe {
-                at: now(),
-                error: Some("Connection refused".into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let t = render_text(&s);
-        assert!(t.contains("(not reachable)"), "{t}");
-        assert!(t.contains("ssh not reachable: Connection refused"), "{t}");
-        assert!(t.contains("sync daemon: not running"), "{t}");
     }
 
     #[test]
@@ -1694,6 +1596,76 @@ mod tests {
     }
 
     #[test]
+    fn hosted_probe_waybar_shows_metrics_builds_and_sync_badge() {
+        let s = Status {
+            configured: true,
+            backend: "hosted".into(),
+            state: "running".into(),
+            probe: Some(ok_probe()),
+            daemon: Some(daemon(true)),
+            hosted: Some(crate::remote_hosted::HostedStatus {
+                builds: Some(crate::remote_hosted::Builds {
+                    included: Some(5000),
+                    included_used: Some(10),
+                    can_build: true,
+                    ..Default::default()
+                }),
+                connected: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::from_str(&render_waybar(&s)).unwrap();
+        let text = v["text"].as_str().unwrap();
+        assert!(text.contains("hosted 12ms"), "{text}");
+        assert!(text.contains("4990b"), "{text}");
+        assert!(text.ends_with("sync 2r 14↑"), "{text}");
+        assert_eq!(v["class"], "running");
+        let t = render_text(&s);
+        assert!(t.contains("round trip 12 ms"), "{t}");
+        assert!(t.contains("16 cores, load 0.50"), "{t}");
+        assert!(t.contains("up 2h00m"), "{t}");
+        assert!(t.contains("sync daemon: connected to box"), "{t}");
+        let s = Status {
+            instance_type: Some("c7i.8xlarge".into()),
+            region: Some("us-west-2".into()),
+            ..s
+        };
+        assert!(render_text(&s).contains("machine: c7i.8xlarge in us-west-2\n"));
+    }
+
+    #[test]
+    fn probe_parses_instance_metadata() {
+        let out = "32\n1.5\n61.77 2.00\n55\nrustc 1.90.0\nready\n29\n100.5\n-\nc7i.8xlarge\nus-west-2\nspot\n";
+        let mut p = Probe::default();
+        fill_probe(
+            &mut p,
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: out.into(),
+                stderr: vec![],
+            }),
+        );
+        assert!(p.ok && p.ready);
+        assert_eq!(p.idle_left_min, Some(29.0));
+        assert_eq!(p.instance_type.as_deref(), Some("c7i.8xlarge"));
+        assert_eq!(p.region.as_deref(), Some("us-west-2"));
+        assert!(p.spot);
+        // No metadata service (not EC2): empty lines.
+        let mut q = Probe::default();
+        fill_probe(
+            &mut q,
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: "4\n0.1\n8 1\n10\nnone\nsetup\n-\n5\n-\n\n\n\n".into(),
+                stderr: vec![],
+            }),
+        );
+        assert_eq!(q.instance_type, None);
+        assert!(!q.spot && !q.ready);
+    }
+
+    #[test]
     fn text_aws_keeps_machine_details_and_daemon() {
         let s = Status {
             configured: true,
@@ -1715,42 +1687,6 @@ mod tests {
     }
 
     #[test]
-    fn waybar_ssh_short_host_and_sync_badge() {
-        let s = Status {
-            configured: true,
-            backend: "ssh".into(),
-            host: Some("me@build.example.com".into()),
-            state: "running".into(),
-            probe: Some(ok_probe()),
-            daemon: Some(daemon(true)),
-            ..Default::default()
-        };
-        let w = render_waybar(&s);
-        let v: serde_json::Value = serde_json::from_str(&w).unwrap();
-        let text = v["text"].as_str().unwrap();
-        assert!(text.contains(" build 12ms"), "{text}");
-        assert!(text.ends_with("sync 2r 14↑"), "{text}");
-        assert_eq!(v["class"], "running");
-        assert!(v["tooltip"].as_str().unwrap().contains("sync daemon"));
-    }
-
-    #[test]
-    fn waybar_ssh_unreachable_and_idle_daemon() {
-        let s = Status {
-            configured: true,
-            backend: "ssh".into(),
-            host: Some("10.0.0.5".into()),
-            state: "unreachable".into(),
-            probe: Some(Probe::default()),
-            daemon: Some(daemon(false)),
-            ..Default::default()
-        };
-        let v: serde_json::Value = serde_json::from_str(&render_waybar(&s)).unwrap();
-        assert_eq!(v["text"], "\u{f233} 10.0.0.5 unreachable · sync idle");
-        assert_eq!(v["class"], "error");
-    }
-
-    #[test]
     fn waybar_unconfigured_ignores_daemon() {
         let s = Status {
             backend: "none".into(),
@@ -1760,13 +1696,6 @@ mod tests {
         };
         let v: serde_json::Value = serde_json::from_str(&render_waybar(&s)).unwrap();
         assert_eq!(v["text"], "");
-    }
-
-    #[test]
-    fn short_host_forms() {
-        assert_eq!(short_host("me@build.example.com"), "build");
-        assert_eq!(short_host("devbox"), "devbox");
-        assert_eq!(short_host("u@192.168.1.4"), "192.168.1.4");
     }
 
     #[test]

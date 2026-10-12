@@ -493,9 +493,7 @@ fn record_remote(
 /// it is stopped). Infrastructure failures are errors here, not fallbacks.
 pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
     if remote_backend::load().is_none() {
-        bail!(
-            "no remote machine configured. Create one with `justrust remote up`, or use one you have: `justrust remote use ssh user@host`"
-        );
+        bail!("no remote machine configured. Sign in to hosted builds: `justrust login`");
     }
     match run_remote(sub, &args, true)? {
         Ok(o) => std::process::exit(o.code),

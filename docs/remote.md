@@ -5,15 +5,20 @@ stream the compact output back, choosing local or remote per build from
 measured walls. Phase 4 of [toolchain.md](toolchain.md). Why remote, the
 shared cache, and licensing are in [remote-strategy.md](remote-strategy.md).
 
+Hosted builds (the Jcode build fleet) are the remote path going forward.
+The `aws` backend (a machine in your own AWS account) is legacy and is
+removed once hosted matches it. The `ssh` backend (any machine you have)
+was removed: a `backend.json` naming it reads as no backend.
+
 ```text
-justrust remote up                  create the AWS machine, or start it if stopped
-justrust remote use ssh user@host   build on a machine you already have
-                    [--port N] [--identity KEY]
-justrust remote use aws|off         switch back to the AWS machine, or turn remote off
+justrust login                      sign in: selects hosted builds
+justrust remote up                  start the machine (hosted, or create the AWS one)
+justrust remote use hosted|aws|off  choose the backend, or turn remote off
+justrust remote env                 JR_REMOTE_KIND/DEST/SSH for scripts (starts the machine)
 justrust remote status              backend, machine health, sync daemon, routing
                     --json, --waybar for a Waybar module, --watch N to refresh
 justrust remote ssh [cmd]           shell on the current backend, or run one command
-justrust remote down                stop the AWS machine (disk and caches are kept)
+justrust remote down                stop the machine (disk and caches are kept)
 justrust remote destroy --yes       terminate the AWS machine and delete its disk
 justrust remote check|test|build|clippy <cargo args>
                                     run there explicitly (starts the machine if needed)
@@ -54,9 +59,11 @@ Two questions, two tools:
   bench/versus.py run --synth 1` runs any benchmark *on* the machine:
   it copies the justrust binary and the repo, ships the pinned snapshot
   trees as `git archive` tarballs (`JUSTRUST_BENCH_SRC`), enables perf
-  counters, keeps the idle watchdog from stopping the machine, and runs
-  in tmux. `status`, `attach`, and `fetch` (copies results back as
-  `*-remote-<type>.json`).
+  counters (aws), keeps the idle stop from firing, and runs in tmux.
+  `status`, `attach`, and `fetch` (copies results back as
+  `*-remote-<type>.json`, the type read from the machine's instance
+  metadata). It reaches the machine through `justrust remote env`, so it
+  works on hosted and aws alike.
 
 The first `--remote` run found two bugs that made every remote build of
 the Desktop snapshot slower than local, now fixed: a workspace outside
@@ -75,7 +82,6 @@ routing) only needs an ssh-reachable machine with a shell.
 | backend | what | set up with | status |
 |---|---|---|---|
 | `aws` | one machine in your own AWS account, created and controlled through the `aws` CLI | `justrust remote up` | built |
-| `ssh` | any machine you already have. Needs a shell, a C toolchain, and rustup. justrust installs itself there | `justrust remote use ssh user@host` | built |
 | `hosted` | justrust's own build fleet, billed per build (25 free, then from $20/mo for 5,000, 2,500 per $10) (`src/remote_hosted.rs`, `src/account.rs`) | `justrust login` | client built against HOSTED_BUILDS.md |
 | none | every build is local | `justrust remote use off` | |
 
@@ -133,11 +139,11 @@ build POST /build/host/stop     {state}
   `/home` and `/Users` are plain `mkdir -p`. Other absolute paths go through
   `sudo -n /usr/local/sbin/jcode-mkdir <path>`.
 
-`up` and `down` work for `aws` and `hosted`. `destroy` manages the AWS machine only. With an `ssh`
-backend they say so and change nothing (`up` refuses, `down` and
-`destroy` only act on an AWS machine that still exists). justrust never
-powers an ssh host on or off. `remote ssh` and `remote status` work for
-both.
+`up`, `down`, `ssh`, `env`, and `status` work for `aws` and `hosted`.
+`destroy` manages the AWS machine only. `remote status` on hosted shows
+the machine type, region, and spot from the machine's own instance
+metadata (IMDSv2, read by the probe), the same fields `--json` reports
+for aws (`instance_type`, `region`, `spot`, `public_ip`).
 
 ### The AWS machine
 
@@ -343,13 +349,12 @@ Local is always the safe answer.
 
 ```text
 ~/.justrust/remote/
-  backend.json    aws | ssh {host, port, identity} | hosted
+  backend.json    hosted | aws
   state.json      AWS: instance id, region, type, spot, idle minutes
   id_ed25519      AWS: ssh key for the machine
   known_hosts     AWS: its host key
   ip              AWS: last known IP of the running machine (cleared on down)
   probe.json      AWS: last ssh probe, reused by status for 30 s
-  probe-ssh.json  ssh backend: last probe, reused by status for 30 s
   probe-hosted.json  hosted: last probe of the hosted machine
   hosted/         hosted: id_ed25519 (fresh per connect), known_hosts (pinned),
                   state.json {address, user, port, ready_at}, status.json (30 s)
@@ -367,7 +372,7 @@ Local is always the safe answer.
 round trip, temperature when the machine exposes one, cpu, ram, disk,
 uptime, probe age, and the sync daemon badge (`sync 3r 17↑` means
 connected, 3 roots mirrored, 17 files pushed, `sync idle` means the daemon
-holds no session). An ssh backend is prefixed with its short host name.
+holds no session). Hosted shows `hosted` and the builds left (`4990b`).
 Nothing is shown when remote builds are not set up. The probe is cached for
 30 s and the daemon part reads only the local socket, so a 15 s interval
 is cheap. Classes: `unconfigured`, `pending`, `setup`, `running`, `busy`,

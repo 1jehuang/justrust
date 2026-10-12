@@ -50,6 +50,7 @@ pub const SUBSCRIBE: &str = "free builds used up. Subscribe ($20/mo, 5,000 build
 pub const UPGRADE_PLAN: &str = "remote builds need the $20 plan or higher (5,000 builds a month): ask your user to switch plans at https://jcode.sh/rust#subscribe. Builds run locally until then.";
 pub const RAISE_LIMIT: &str = "monthly usage limit reached: ask your user to raise it at https://jcode.sh/account. Builds run locally until then.";
 pub const NO_CREDITS: &str = "out of Jcode cloud-compute credits (shared with cloud agents). Builds run locally until credits renew. There are no automatic top-ups.";
+pub const TIME_EXHAUSTED: &str = "hosted build machine time for this month is used up (it grows with each charged build). Builds run locally until it resets.";
 pub const UNAVAILABLE: &str = "the hosted build service is unavailable right now. This is not a problem with your subscription. Builds run locally, retry later.";
 pub const NOT_OFFERED: &str = "hosted builds are not available on your Jcode account yet. This is not a problem with your subscription. Builds run locally.";
 pub const RATE_LIMITED: &str = "the Jcode API is rate limiting requests. Retry in a moment.";
@@ -316,6 +317,7 @@ pub fn api_error(r: &Resp) -> anyhow::Error {
     let g = match (r.code, code.as_str()) {
         (401, _) => "the Jcode sign-in is missing or expired. Run `justrust login --no-wait` and ask your user to open the URL it prints.".into(),
         (402, "insufficient_compute_credits") => NO_CREDITS.into(),
+        (402, "build_time_exhausted") => return anyhow!(TIME_EXHAUSTED),
         (402, _) if r.body["error"]["next_step"].as_str() == Some("raise_limit") => {
             return anyhow!(RAISE_LIMIT);
         }
@@ -1078,6 +1080,10 @@ mod tests {
                 r#"{"error":{"code":"insufficient_compute_credits","message":"no"}}"#,
             ),
             (
+                402,
+                r#"{"error":{"code":"build_time_exhausted","message":"used up","next_step":null}}"#,
+            ),
+            (
                 503,
                 r#"{"error":{"code":"build_unavailable","message":"down"}}"#,
             ),
@@ -1092,6 +1098,12 @@ mod tests {
         let s = e(me(&c));
         assert!(s.contains("justrust upgrade"), "{s}");
         assert!(e(me(&c)).contains("credits"));
+        // A paying account out of machine time is not told to subscribe.
+        let s = e(me(&c));
+        assert!(
+            s.contains("machine time") && !s.contains("Subscribe"),
+            "{s}"
+        );
         let s = e(me(&c));
         assert!(
             s.contains("unavailable") && s.contains("not a problem"),
