@@ -1220,6 +1220,31 @@ mod relay_tests {
         (relay, queries)
     }
 
+    /// Chunks of a put are assembled in arrival order, synchronously: with
+    /// a thread per chunk (the old code) earlier chunks could land after
+    /// later ones. Checked before the last chunk, so no serving thread runs.
+    #[test]
+    fn put_chunks_assemble_in_arrival_order() {
+        let r = Relay::new(true, |_, _| true);
+        for round in 0..200u64 {
+            let mut want = Vec::new();
+            for i in 0..50u32 {
+                let chunk: Vec<u8> = (0..64).map(|j| (i * 7 + j) as u8).collect();
+                want.extend_from_slice(&chunk);
+                let m = Msg::CachePut {
+                    id: round,
+                    base: String::new(),
+                    line: String::new(),
+                    out: String::new(),
+                    last: false,
+                };
+                assert!(r.on_frame(&m, &chunk));
+            }
+            let got = r.puts.lock().unwrap().remove(&round).unwrap();
+            assert_eq!(got, want, "round {round}");
+        }
+    }
+
     #[test]
     fn fresh_key_set_rules_out_misses_but_stale_one_never_does() {
         let (r, q) = relay_with_peer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
