@@ -2,12 +2,15 @@
 # Full-suite equivalence for cross-crate cutoff: after a body edit deep in the
 # graph (jcode-core), run every Desktop workspace test with the cutoff on and
 # off (separate target dirs) and compare the per-test results.
-# Usage: bench/cutoff_suites.sh <toolchain> [justrust]
+# Usage: bench/cutoff_suites.sh <toolchain> [justrust] [desktop|jcode]
+# jcode: run the Jcode workspace's tests from the same snapshot (same edit).
 set -euo pipefail
 TC=${1:?toolchain}
 J=${2:-justrust}
 ROOT=$HOME/.justrust/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7
+WHICH=${3:-desktop}
 D=$ROOT/jcode-desktop
+[ "$WHICH" = jcode ] && D=$ROOT/jcode
 F=$ROOT/jcode/crates/jcode-core/src/id.rs
 OUT=$(mktemp -d "${JCODE_SCRATCH_DIR:-/tmp}/cutoff-suites.XXXXXX")
 cp "$F" "$OUT/id.rs.bak"
@@ -32,9 +35,9 @@ run() { # name, extra env
   # (Going from the pristine source to the first edit can change the interface:
   # a small fn is cross-crate inlinable, its MIR is exported.)
   cp "$OUT/id.rs.bak" "$F"; edit
-  (cd "$D" && env "$@" CARGO_TARGET_DIR=$ROOT/target-suites-$name "$J" test --workspace --no-fail-fast --no-run >/dev/null 2>&1) || true
+  (cd "$D" && env "$@" CARGO_TARGET_DIR=$ROOT/target-suites-$WHICH-$name "$J" test --workspace --no-fail-fast --no-run >/dev/null 2>&1) || true
   cp "$OUT/id.rs.bak" "$F"; edit
-  (cd "$D" && env "$@" CARGO_TARGET_DIR=$ROOT/target-suites-$name JUSTRUST_CARGO_CUTOFF_LOG=$OUT/cutoff-$name.log \
+  (cd "$D" && env "$@" CARGO_TARGET_DIR=$ROOT/target-suites-$WHICH-$name JUSTRUST_CARGO_CUTOFF_LOG=$OUT/cutoff-$name.log \
     "$J" test --workspace --no-fail-fast >"$OUT/$name.out" 2>&1) || true
   "$J" log >"$OUT/$name.log" 2>&1 || true
   grep -aE '^test .* \.\.\. ' "$OUT/$name.log" >"$OUT/$name.tests" || true
