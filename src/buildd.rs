@@ -162,6 +162,9 @@ pub struct Exit {
     /// The shared build's pinned run id, when its starter pinned one.
     #[serde(default)]
     pub run_id: Option<String>,
+    /// It was a prebuild that had already finished: its result was replayed.
+    #[serde(default)]
+    pub replayed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -308,7 +311,14 @@ fn run_request(req: &Request) -> std::result::Result<i32, Fallback> {
                     ..Default::default()
                 });
                 let _ = out.flush();
-                if x.attached {
+                if x.replayed {
+                    link_run(x.run_id.as_deref());
+                    eprintln!(
+                        "justrust: result of a prebuild of these exact sources, finished {:.1}s \
+                         before you asked (JUSTRUST_BUILDD_PREBUILD=0 disables)",
+                        -x.joined_after
+                    );
+                } else if x.attached {
                     link_run(x.run_id.as_deref());
                     eprintln!(
                         "justrust: shared an identical build that was already running \
@@ -590,12 +600,15 @@ struct Log {
     exit: Option<i32>,
     clients: usize,
     sharers: usize,
+    /// An agent request attached at some point (its result was seen).
+    claimed: bool,
 }
 
 struct Build {
     stamp: String,
     run_id: Option<String>,
     started: Instant,
+    finished: Mutex<Option<Instant>>,
     pid: i32,
     prebuild: Mutex<bool>,
     log: Mutex<Log>,
@@ -606,13 +619,45 @@ struct Build {
 struct State {
     /// In-flight builds by request key.
     builds: HashMap<String, Arc<Build>>,
+    /// Prebuilds that finished before anyone asked, by request key. The
+    /// first identical request with the same source stamp takes the result
+    /// (once: a deliberate rerun after that runs again).
+    finished: HashMap<String, Arc<Build>>,
+    /// Requests to prebuild when their sources change, by request key.
+    recent: HashMap<String, Recent>,
     served: u64,
     coalesced: u64,
+    prebuilt: u64,
     last_request: Option<Instant>,
 }
 
+/// A request whose agent opted in to prebuilding (`JUSTRUST_BUILDD_PREBUILD=1`).
+struct Recent {
+    req: Request,
+    roots: Vec<PathBuf>,
+    used: Instant,
+    /// Prebuilds left until the agent asks again. Bounds the loop of a
+    /// build that writes into its own sources (snapshot tests, generated
+    /// files): each of its writes would otherwise start another prebuild.
+    budget: u8,
+}
+
+const PREBUILDS_PER_REQUEST: u8 = 3;
+
+/// Prebuild only what was asked for lately, and few of them.
+const RECENT_MAX_AGE: Duration = Duration::from_secs(1800);
+const RECENT_MAX: usize = 3;
+/// Quiet time after the last file event before prebuilding: an agent's
+/// multi-file edit lands as one burst.
+const DEBOUNCE: Duration = Duration::from_millis(400);
+/// An unclaimed finished prebuild is dropped after this long.
+const FINISHED_MAX_AGE: Duration = Duration::from_secs(1800);
+
 struct Daemon {
     state: Mutex<State>,
+    /// File watcher for prebuilds, and the roots it covers.
+    watcher: Option<crate::remote_watch::Watcher>,
+    watched: Mutex<std::collections::HashSet<PathBuf>>,
     /// (path, dev, ino) of our socket: removed on exit only if still ours.
     sock: (PathBuf, u64, u64),
     draining: std::sync::atomic::AtomicBool,
@@ -658,11 +703,17 @@ fn daemon() -> Result<()> {
         "build daemon up, build {}",
         crate::remote_daemon::build_id()
     ));
+    let (wtx, wrx) = std::sync::mpsc::channel::<PathBuf>();
+    let watcher = crate::remote_watch::Watcher::new(wtx)
+        .map_err(|e| log(&format!("no file watcher, prebuilds off: {e:#}")))
+        .ok();
     let dm = Arc::new(Daemon {
         state: Mutex::new(State {
             last_request: Some(Instant::now()),
             ..Default::default()
         }),
+        watcher,
+        watched: Mutex::default(),
         sock: (sock, md.dev(), md.ino()),
         draining: Default::default(),
     });
@@ -682,6 +733,10 @@ fn daemon() -> Result<()> {
                 }
             }
         });
+    }
+    {
+        let dm = dm.clone();
+        std::thread::spawn(move || prebuild_loop(&dm, wrx));
     }
     for conn in listener.incoming() {
         let Ok(s) = conn else { continue };
@@ -714,7 +769,7 @@ fn info(dm: &Daemon, attached: bool) -> Info {
         pid: std::process::id(),
         running: st.builds.len(),
         served: st.served,
-        coalesced: st.coalesced,
+        coalesced: st.coalesced + st.prebuilt,
         attached,
     }
 }
@@ -772,7 +827,10 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let key = request_key(&req);
     let roots = source_roots(&cwd);
     let (stamp, _files) = source_stamp(&roots, &cwd, &req.env);
-    let (build, attached) = {
+    if !req.prebuild {
+        cancel_stale_prebuild(dm, &key, &stamp);
+    }
+    let (build, attached, replayed) = {
         let mut st = dm.state.lock().unwrap();
         st.served += 1;
         st.last_request = Some(Instant::now());
@@ -781,31 +839,62 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
             .get(&key)
             .filter(|b| b.stamp == stamp && b.log.lock().unwrap().exit.is_none())
             .cloned();
-        match running {
+        // A prebuild of exactly this request finished before it arrived.
+        let done = if req.prebuild || running.is_some() {
+            None
+        } else {
+            st.finished
+                .remove(&key)
+                .filter(|b| b.stamp == stamp && b.started.elapsed() < FINISHED_MAX_AGE)
+        };
+        if !req.prebuild && wants_prebuild(&req) {
+            st.recent.insert(
+                key.clone(),
+                Recent {
+                    req: req.clone(),
+                    roots: roots.clone(),
+                    used: Instant::now(),
+                    budget: PREBUILDS_PER_REQUEST,
+                },
+            );
+            prune_recent(&mut st.recent);
+        }
+        if done.is_some() {
+            st.prebuilt += 1;
+        }
+        let replayed = done.is_some();
+        match running.or(done) {
             Some(b) => {
-                st.coalesced += 1;
-                (b, true)
+                if !replayed {
+                    st.coalesced += 1;
+                }
+                (b, true, replayed)
             }
             _ => {
                 let b = start(&req, stamp, &cwd)?;
                 st.builds.insert(key.clone(), b.clone());
                 let (dm2, key2, b2) = (dm.clone(), key.clone(), b.clone());
                 std::thread::spawn(move || reap(&dm2, &key2, &b2));
-                (b, false)
+                (b, false, false)
             }
         }
     };
     let lookup_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    let joined_after = if attached {
-        build.started.elapsed().as_secs_f64()
-    } else {
-        0.0
+    if !req.prebuild && wants_prebuild(&req) {
+        watch_roots(dm, &roots);
+    }
+    let joined_after = match *build.finished.lock().unwrap() {
+        // Negative: seconds since the replayed prebuild finished.
+        Some(t) if replayed => -t.elapsed().as_secs_f64(),
+        _ if attached => build.started.elapsed().as_secs_f64(),
+        _ => 0.0,
     };
     {
         let mut l = build.log.lock().unwrap();
         l.sharers += 1;
         if !req.prebuild {
             l.clients += 1;
+            l.claimed = true;
         }
     }
     if req.prebuild {
@@ -814,13 +903,20 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         return Ok(());
     }
     log(&format!(
-        "{} {} in {} ({:.1} ms)",
-        if attached { "attach" } else { "start" },
+        "{} {} in {} ({:.1} ms, stamp {})",
+        if replayed {
+            "replay"
+        } else if attached {
+            "attach"
+        } else {
+            "start"
+        },
         req.argv.join(" "),
         req.cwd,
-        lookup_ms
+        lookup_ms,
+        &build.stamp[..8]
     ));
-    let res = stream(&build, &mut s, attached, joined_after, lookup_ms);
+    let res = stream(&build, &mut s, attached, replayed, joined_after, lookup_ms);
     let mut l = build.log.lock().unwrap();
     l.clients -= 1;
     let orphaned = l.clients == 0 && l.exit.is_none() && !*build.prebuild.lock().unwrap();
@@ -839,6 +935,7 @@ fn stream(
     build: &Build,
     s: &mut UnixStream,
     attached: bool,
+    replayed: bool,
     joined_after: f64,
     lookup_ms: f64,
 ) -> Result<()> {
@@ -874,6 +971,7 @@ fn stream(
                 sharers,
                 lookup_ms,
                 run_id: build.run_id.clone(),
+                replayed,
             };
             write_msg(s, b'X', &serde_json::to_vec(&x)?)?;
             return Ok(());
@@ -924,6 +1022,7 @@ fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
             .find(|(k, _)| k == "JUSTRUST_RUN_ID_OVERRIDE")
             .map(|(_, v)| v.clone()),
         started: Instant::now(),
+        finished: Mutex::default(),
         pid: child.id() as i32,
         prebuild: Mutex::new(req.prebuild),
         log: Mutex::default(),
@@ -966,10 +1065,168 @@ fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
             }),
             Err(_) => 1,
         };
+        *b2.finished.lock().unwrap() = Some(Instant::now());
         b2.log.lock().unwrap().exit = Some(code);
         b2.cv.notify_all();
     });
     Ok(b)
+}
+
+/// A prebuild of this request for older sources, that no agent attached
+/// to, is stopped (and awaited, so it releases its slot) before the real
+/// request starts: it would only compete for the slot and the CPU.
+fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
+    let stale = {
+        let st = dm.state.lock().unwrap();
+        st.builds
+            .get(key)
+            .filter(|b| {
+                b.stamp != stamp && *b.prebuild.lock().unwrap() && !b.log.lock().unwrap().claimed
+            })
+            .cloned()
+    };
+    let Some(b) = stale else { return };
+    log(&format!("sources changed, stopping prebuild pid {}", b.pid));
+    // SAFETY: plain syscall on the prebuild's process group.
+    unsafe { libc::kill(-b.pid, libc::SIGTERM) };
+    let mut l = b.log.lock().unwrap();
+    let t = Instant::now();
+    while l.exit.is_none() && t.elapsed() < Duration::from_secs(10) {
+        l = b.cv.wait_timeout(l, Duration::from_millis(100)).unwrap().0;
+    }
+}
+
+fn wants_prebuild(req: &Request) -> bool {
+    req.env
+        .iter()
+        .any(|(k, v)| k == "JUSTRUST_BUILDD_PREBUILD" && matches!(v.as_str(), "1" | "on" | "true"))
+}
+
+fn prune_recent(recent: &mut HashMap<String, Recent>) {
+    recent.retain(|_, r| r.used.elapsed() < RECENT_MAX_AGE);
+    while recent.len() > RECENT_MAX {
+        let Some(oldest) = recent
+            .iter()
+            .min_by_key(|(_, r)| r.used)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        recent.remove(&oldest);
+    }
+}
+
+/// Watch every source directory under `roots` (build output and hidden
+/// directories excluded, like the source stamp).
+fn watch_roots(dm: &Daemon, roots: &[PathBuf]) {
+    let Some(w) = &dm.watcher else { return };
+    let mut watched = dm.watched.lock().unwrap();
+    for r in roots {
+        if !watched.insert(r.clone()) {
+            continue;
+        }
+        let mut dirs = Vec::new();
+        let mut stack = vec![r.clone()];
+        while let Some(d) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let n = e.file_name();
+                let n = n.to_string_lossy();
+                if e.file_type().is_ok_and(|t| t.is_dir())
+                    && n != "target"
+                    && !n.starts_with("target-")
+                    && !n.starts_with('.')
+                {
+                    stack.push(e.path());
+                }
+            }
+            dirs.push(d);
+        }
+        let n = w.watch_all(&dirs);
+        log(&format!("watching {} ({n} directories)", r.display()));
+    }
+}
+
+/// The prebuild seam: when sources under a remembered request's roots
+/// change, start that request as a prebuild once the burst of events is
+/// over. A request whose previous build is still running is retried after
+/// it finishes (its sources are already stale).
+fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
+    let mut dirty: Vec<PathBuf> = Vec::new();
+    let mut retry: Vec<String> = Vec::new();
+    loop {
+        let timeout = if dirty.is_empty() && retry.is_empty() {
+            Duration::from_secs(3600)
+        } else {
+            DEBOUNCE
+        };
+        match rx.recv_timeout(timeout) {
+            Ok(p) => {
+                dirty.push(p);
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        let wanted: Vec<(String, Request, Vec<PathBuf>)> = {
+            let mut st = dm.state.lock().unwrap();
+            prune_recent(&mut st.recent);
+            st.finished
+                .retain(|_, b| b.started.elapsed() < FINISHED_MAX_AGE);
+            st.recent
+                .iter()
+                .filter(|(k, r)| {
+                    r.budget > 0
+                        && (retry.contains(k)
+                            || dirty
+                                .iter()
+                                .any(|d| r.roots.iter().any(|x| d.starts_with(x))))
+                })
+                .map(|(k, r)| (k.clone(), r.req.clone(), r.roots.clone()))
+                .collect()
+        };
+        dirty.clear();
+        retry.clear();
+        for (key, mut req, roots) in wanted {
+            let cwd = PathBuf::from(&req.cwd);
+            let (stamp, _) = source_stamp(&roots, &cwd, &req.env);
+            let mut st = dm.state.lock().unwrap();
+            if let Some(b) = st.builds.get(&key) {
+                if b.stamp != stamp {
+                    retry.push(key);
+                }
+                continue;
+            }
+            if st.finished.get(&key).is_some_and(|b| b.stamp == stamp) {
+                continue;
+            }
+            req.prebuild = true;
+            // Its own run id: never the pinned id of the request it copies.
+            // A pinned id also keeps the router from sending it remote.
+            req.env.retain(|(k, _)| k != "JUSTRUST_RUN_ID_OVERRIDE");
+            let id = format!("{}-pre", crate::record::new_run_id());
+            req.env.push(("JUSTRUST_RUN_ID_OVERRIDE".into(), id));
+            match start(&req, stamp, &cwd) {
+                Ok(b) => {
+                    log(&format!(
+                        "prebuild {} in {} (stamp {})",
+                        req.argv.join(" "),
+                        req.cwd,
+                        &b.stamp[..8]
+                    ));
+                    if let Some(r) = st.recent.get_mut(&key) {
+                        r.budget = r.budget.saturating_sub(1);
+                    }
+                    st.builds.insert(key.clone(), b.clone());
+                    let (dm2, b2) = (dm.clone(), b.clone());
+                    std::thread::spawn(move || reap(&dm2, &key, &b2));
+                }
+                Err(e) => log(&format!("prebuild failed to start: {e:#}")),
+            }
+        }
+    }
 }
 
 /// Forget the build once it finished, so later requests start a new one.
@@ -984,6 +1241,10 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
     let mut st = dm.state.lock().unwrap();
     if st.builds.get(key).is_some_and(|x| Arc::ptr_eq(x, b)) {
         st.builds.remove(key);
+    }
+    // Nobody saw it: keep it for the request it was started for.
+    if !b.log.lock().unwrap().claimed && *b.prebuild.lock().unwrap() {
+        st.finished.insert(key.to_owned(), b.clone());
     }
     st.last_request = Some(Instant::now());
     drop(st);
