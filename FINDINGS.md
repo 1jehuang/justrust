@@ -3439,3 +3439,73 @@ the command whenever its own files changed, and always add the leaf
 package when the target package had modules split out so moved tests do
 not vanish from the filter. The productized opt-in is `JUSTRUST_SHADOW=1`
 (below, once measured).
+
+## 48. Hot patching through `justrust test`: fires on every edit, link 0.33 -> 0.12 s, wall within noise; a test-process zygote cannot pay (2026-10-12)
+
+Follow-up to 35 (prototype) and the opt-in port in 8ec1f42
+(`JUSTRUST_HOTPATCH=1`, `src/hotpatch.rs`). The first factor run of that
+port (`factors-20261011-165959-...`, -2%) never patched: it predates the
+response-file fix.
+
+**It fires.** On a private copy of the Desktop snapshot through
+`justrust test -p jcode-desktop-ui --lib -- fps_counter`, outcomes in
+`<run dir>/hotpatch.jsonl`: the reference test edit and the non-test body
+edit both patch 5-6 of 257 units (361-526 functions redirected). One edit
+fell back: a regenerated unit held a `thread_local!` access
+(`R_X86_64_TPOFF32` to `PREVIEW_CACHE`, `panel_diff.rs`). 12 TPOFF32 and 1
+GOTTPOFF sites exist across the UI crate's 256 units.
+
+**Fixed: thread-locals bound to the base** (ea4bae1). In an executable a
+thread-local's offset from `%fs` is a link-time constant
+(`st_value - round_up(PT_TLS memsz, align)`), so the changed object is
+copied, each local-exec site gets the base's offset written in, and
+initial-exec `mov x@gottpoff(%rip),%r` is relaxed to `mov $off,%r` the
+way ld relaxes IE to LE; the relocations become `R_X86_64_NONE`. Dynamic
+TLS models (never emitted for an executable's own code) still fall back.
+An edit inside the `PREVIEW_CACHE.with` closure now patches (`1 tls`), and
+the `panel_diff` tests that exercise that cache pass on the patched binary.
+
+**Fixed: base symbol index cached** (ea4bae1). Reading the base's 962k
+symbols was 130-160 ms of every patch step. Now an on-disk index
+(`<exe>.jrhot/index`, 43 MB: name hashes sorted, pointing into the
+base's own string table, keyed by inode, size and a hash of the section
+headers) is built by a detached niced child right after each base link
+(0.3 s, nobody waits) and mapped by every patch. Patch step 150-350 ms ->
+36-58 ms quiet (`basesyms 0`, lld on 5-6 objects 23-39 ms is now most of
+it). Unit test: the index resolves every symbol of a real binary exactly
+like the in-memory table.
+
+**Correctness** (`~/.jcode/scratch/hp/loop.py`, private target dir):
+full `jcode-desktop-ui --lib` suite, patched (2 runs, 6/257 units
+patched): 1303 passed, 0 failed, 10 ignored; normal relink (2 runs): 1303
+passed, 0 failed, 10 ignored (one parallel-only flake in a patched run,
+`workspace::tests::the_hint_chip_uses_only_spare_tab_space`, passed alone,
+as the pool reports it). Failing edit (expected value of an existing
+`assert_eq!` changed), patched: 2 passed, 1 failed with the right
+`left: "FPS · idle"` message; the fix, patched: 3 passed; repeated twice
+(runs 20261011-214133-hp2998720 fail, -214141 fix, -214148 fail, -214156 fix).
+An edit that adds a new `assert_eq!` (a new generic instance) or adds a
+line before other code regenerates 131-146 of 257 units (CGU
+repartitioning, span shifts), which is above the half-of-units limit and
+relinks normally: correct, just not patched.
+
+**Measured**, `bench/factors.py run hotpatch hotpatch-body -n 8 --warmup 2
+--quiet-wait 60` (ABBA, frozen binary for body after other agents
+reinstalled justrust mid-run twice; every `on` sample patched, per-sample
+link pass and outcome now recorded by the bench):
+
+| factor | on | off | link pass on / off (median) | patch step |
+|---|---:|---:|---:|---:|
+| hotpatch (test edit) | 8.23 s (7.8-17.3, 3 noisy) | 8.39 s (7.0-10.3) | 0.12 / 0.33 s, disjoint | 47-105 ms |
+| hotpatch-body | 7.78 s (7.5-8.9) | 7.93 s (7.7-8.5) | 0.10 / 0.32 s, disjoint | 40-52 ms |
+
+Results `bench/results/factors-20261011-214238-891dfea50aae.json`,
+`factors-20261011-221526-239bef0338bc-dirty.json` (sample run ids, e.g.
+hotpatch on 20261011-214813385-3005003103, off 20261011-214921978-3005003856).
+The link pass drops by 0.2 s in every sample, but that is 2.5% of a loop
+whose frontend (3.9-4.2 s) and codegen + incremental persist (~2.2 s) are
+untouched, so wall is within noise. Cost: each patched process pays ~2 ms
+more startup in the loader (map parse, 6k relocations, 361 jumps: 9.2 vs
+7.2 ms no-match run). **Stays opt-in**: no measurable wall win today; it
+becomes worth turning on when a resident compiler makes the frontend
+small (35's argument still holds).
