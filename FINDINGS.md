@@ -3395,3 +3395,47 @@ loop. Test execution is only 0.67 h of the 13.7 h.
 LLVM in local-edit runs: 22-32% of rustc time in test/build (jcode test
 0.39 of 1.39 h), more than the reference loop's ~2% because jcode's edits
 regenerate more codegen units. Check runs have none.
+
+## 47. Shadow split: moving one leaf module out of the giant crate makes its test loop 12x faster (2026-10-12)
+
+Manual prototype (`~/.jcode/scratch/shadow-proto`, `ab.py` alternates
+variants, each iteration edits the file then runs `justrust`). `orig/` is the
+Desktop snapshot, `man/` moves `fps_counter.rs` from `jcode-desktop-ui`
+(the big crate) into a leaf crate `jr-shadow-fps`. Direction: the leaf is a
+dependency of the old crate, which re-exports it under the old path
+(`pub(crate) use jr_shadow_fps::fps_counter;`), so `crate::fps_counter::*`
+in `workspace.rs` keeps working and test names stay
+`fps_counter::tests::*`.
+
+Edit `fps_counter.rs`, run its tests (n=6, ab-run2):
+
+| variant | command | median | range |
+|---|---|---:|---:|
+| orig | `test -p jcode-desktop-ui --lib -- fps_counter` | 6.0 s | 5.23-7.3 |
+| man | `test -p jr-shadow-fps --lib -- fps_counter` | 0.49 s | 0.47-0.53 |
+
+Earlier pass (ab-run): 7.97 s vs 0.69 s. About 12x. Run ids: orig
+20261011-214107008-2994872 (6.0 s), 20261011-214117810-2996443 (5.23 s);
+man 20261011-214117316-2996324 (0.49 s), 20261011-214100356-2993688 (0.47 s).
+
+After a leaf edit, `check -p jcode-desktop-ui` in man costs 2.14 s median
+(1.83-2.15 warm, run 20261011-214058213-2993551): the UI crate must be
+re-checked because it depends on the leaf.
+
+Edits that stay in the big crate (ab-run3, n=6): the split costs a little.
+
+| command | orig | man |
+|---|---:|---:|
+| `check -p jcode-desktop-ui` | 2.33 s | 2.56 s |
+| `check -p jcode-desktop-ui --lib --profile test` | 3.33 s | 3.88 s |
+
+(orig 20261011-215144495-3054752 / man 20261011-215039775-3045639;
+orig 20261011-215156485-3056267 / man 20261011-215149468-3055296.)
+
+So the win needs command routing: when the agent runs
+`test -p jcode-desktop-ui -- fps_counter` and only leaf files changed, run
+`test -p jr-shadow-fps -- fps_counter` in the shadow; keep the big crate in
+the command whenever its own files changed, and always add the leaf
+package when the target package had modules split out so moved tests do
+not vanish from the filter. The productized opt-in is `JUSTRUST_SHADOW=1`
+(below, once measured).
