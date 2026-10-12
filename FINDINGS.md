@@ -3440,7 +3440,7 @@ package when the target package had modules split out so moved tests do
 not vanish from the filter. The productized opt-in is `JUSTRUST_SHADOW=1`
 (below, once measured).
 
-## 48. Hot patching through `justrust test`: fires on every edit, link 0.33 -> 0.12 s, wall within noise; a test-process zygote cannot pay (2026-10-12)
+## 48. Hot patching through `justrust test`: fires on every edit, link 0.33 -> 0.12 s, wall within noise; a test-process zygote would save under 0.5% (2026-10-12)
 
 Follow-up to 35 (prototype) and the opt-in port in 8ec1f42
 (`JUSTRUST_HOTPATCH=1`, `src/hotpatch.rs`). The first factor run of that
@@ -3509,3 +3509,29 @@ more startup in the loader (map parse, 6k relocations, 361 jumps: 9.2 vs
 7.2 ms no-match run). **Stays opt-in**: no measurable wall win today; it
 becomes worth turning on when a resident compiler makes the frontend
 small (35's argument still holds).
+
+**Zygote (fork per run after the loader patched): not built, measured
+first.** A zygote saves at most what a test process spends before `main`:
+exec, ld.so relocation (587k relative relocations in the UI binary, 93% of
+ld.so's 2.3M cycles), the hot patch loader, and static init. Measured by
+timing exec up to an `LD_PRELOAD` constructor that `_exit`s (40 runs,
+medians) vs a full no-match run, and counting test-binary processes per
+`justrust test` with a preload that logs each pid
+(`~/.jcode/scratch/hp/zy/`, runs 20261011-zy-tui-3428028-{1,2,3}):
+
+| binary | exec to preload ctor | full no-match run | fork+exit+wait instead | processes per warm full-suite run | suite test_run | startup share |
+|---|---:|---:|---:|---:|---:|---:|
+| jcode_tui lib (2,518 tests) | 4.2 ms | 5.1 ms | 0.17 ms | 10 | 13.6-13.8 s | ~50 ms, 0.4% |
+| jcode_desktop_ui lib (1,313), patched | 8.5 ms | 9.2 ms | 0.29 ms | 2 | 10.8-11.3 s | ~18 ms, 0.2% |
+
+The pool does not start a process per test: libtest runs a whole group
+per process, and the pool splits a binary into at most ~6 groups plus a
+`--list` and the by-name confirmation reruns of failures seen next to
+other processes. The jcode-tui suite's time is test bodies (27 s CPU,
+libtest-reported 16.8 s across processes), and its 2.5 s `tail` is the
+confirmation rerun of 2-4 overlapped failures alone (test bodies again),
+not startup. So a zygote could save at most ~50 ms of a 16.6 s run, and it
+would need a fork-safe point before `main` in arbitrary test binaries
+(threads started by static init, open fds, `/proc/self/exe` users).
+Not worth building. What would pay on big suites is less test work (run
+only affected tests, cheaper confirmation), not cheaper processes.
