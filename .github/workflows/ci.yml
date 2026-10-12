@@ -66,6 +66,21 @@ jobs:
           if grep -E "largest rustc [0-9]{5,} MB" show.txt; then exit 1; fi
           echo 'fn main() { let _x: u32 = "a"; }' > src/main.rs
           if "$bin" check; then echo "expected a compile error"; exit 1; fi
+      # Dependency cache across target dirs, including a proc-macro dylib
+      # (keyed by its Mach-O .rustc section) that must load after restore.
+      - name: Depcache across checkouts
+        run: |
+          bin="$PWD/target/debug/justrust"
+          for d in a b; do
+            cargo new -q "$RUNNER_TEMP/dc-$d"
+            cd "$RUNNER_TEMP/dc-$d"
+            printf 'serde = { version = "1", features = ["derive"] }\nserde_json = "1"\n' >> Cargo.toml
+            printf '#[derive(serde::Serialize)]\nstruct S { a: u8 }\n#[test]\nfn t() { assert_eq!(serde_json::to_string(&S { a: 1 }).unwrap(), "{\\"a\\":1}"); }\nfn main() {}\n' > src/main.rs
+            "$bin" test 2>&1 | tee out.txt
+            cd -
+          done
+          grep -E "depcache [0-9]+ hit" "$RUNNER_TEMP/dc-b/out.txt"
+          grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
 
   passthrough:
     name: ${{ matrix.os }} (passthrough build)
