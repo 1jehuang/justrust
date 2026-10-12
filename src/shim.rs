@@ -75,7 +75,7 @@ fn real_rustc() -> PathBuf {
 pub fn main() -> ! {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let real = real_rustc();
-    args.extend(cache_proc_macro_args(&args));
+    args.extend(cache_proc_macro_args(&real, &args));
     let run_dir = std::env::var_os("JUSTRUST_RUN_DIR").map(PathBuf::from);
     let is_unit =
         std::env::var_os("CARGO_CRATE_NAME").is_some() && args.iter().any(|a| a == "--crate-name");
@@ -101,8 +101,17 @@ fn exec(real: &PathBuf, args: &[OsString]) -> ! {
 /// run, because the flag is part of rustc's incremental key: it depends only
 /// on the environment and the unit's own arguments.
 /// `JUSTRUST_CACHE_PROC_MACROS=0` turns it off.
-fn cache_proc_macro_args(args: &[OsString]) -> Option<OsString> {
-    if std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none()
+fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<OsString> {
+    // The variable is inherited by nested cargo invocations (build scripts,
+    // xtasks) that may run another rustc: also require that the compiler
+    // really is a jr toolchain's (`.../toolchains/jr-*/bin/rustc`).
+    let is_jr = real
+        .parent()
+        .and_then(|b| b.parent())
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n.to_string_lossy().starts_with("jr-"));
+    if !is_jr
+        || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none()
         || matches!(
             std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref(),
             Ok("0") | Ok("off") | Ok("false") | Ok("no")
@@ -427,6 +436,8 @@ mod tests {
     #[test]
     fn cache_proc_macros_only_for_incremental_units_on_jr() {
         let os = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        let jr = std::path::Path::new("/h/.justrust/toolchains/jr-ac20de5e7921/bin/rustc");
+        let other = std::path::Path::new("/usr/bin/rustc");
         let incr = os(&["--crate-name", "ui", "-C", "incremental=/t/incremental"]);
         let incr2 = os(&["--crate-name", "ui", "-Cincremental=/t/incremental"]);
         let dep = os(&["--crate-name", "serde", "-C", "opt-level=2"]);
@@ -437,21 +448,26 @@ mod tests {
             std::env::remove_var("JUSTRUST_TOOLCHAIN_JR");
             std::env::remove_var("JUSTRUST_CACHE_PROC_MACROS");
         }
-        assert_eq!(cache_proc_macro_args(&incr), None, "not jr: never");
+        assert_eq!(cache_proc_macro_args(jr, &incr), None, "not jr: never");
         unsafe { std::env::set_var("JUSTRUST_TOOLCHAIN_JR", "1") };
         assert_eq!(
-            cache_proc_macro_args(&incr).as_deref(),
+            cache_proc_macro_args(jr, &incr).as_deref(),
             Some("-Zcache-proc-macros".as_ref())
         );
-        assert!(cache_proc_macro_args(&incr2).is_some());
         assert_eq!(
-            cache_proc_macro_args(&dep),
+            cache_proc_macro_args(other, &incr),
+            None,
+            "inherited var, other rustc"
+        );
+        assert!(cache_proc_macro_args(jr, &incr2).is_some());
+        assert_eq!(
+            cache_proc_macro_args(jr, &dep),
             None,
             "non-incremental deps keep their key"
         );
-        assert_eq!(cache_proc_macro_args(&has), None, "no duplicate");
+        assert_eq!(cache_proc_macro_args(jr, &has), None, "no duplicate");
         unsafe { std::env::set_var("JUSTRUST_CACHE_PROC_MACROS", "0") };
-        assert_eq!(cache_proc_macro_args(&incr), None, "opt-out");
+        assert_eq!(cache_proc_macro_args(jr, &incr), None, "opt-out");
         unsafe {
             std::env::remove_var("JUSTRUST_TOOLCHAIN_JR");
             std::env::remove_var("JUSTRUST_CACHE_PROC_MACROS");
