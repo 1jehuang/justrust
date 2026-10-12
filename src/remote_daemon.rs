@@ -361,6 +361,10 @@ fn log(msg: &str) {
 }
 
 fn daemon() -> Result<()> {
+    // Long-lived: never pin the cwd of whichever (possibly temporary)
+    // worktree spawned us. Once it is deleted, every child rsync fails with
+    // "getcwd(): No such file or directory".
+    let _ = std::env::set_current_dir("/");
     let backend = remote_backend::load().context("no remote backend configured")?;
     let sock = sock_path()?;
     // Exclusive: a second daemon exits instead of stealing the socket.
@@ -785,9 +789,11 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     let dest = st.backend.kind();
     let mut known = known_roots(dest);
     known.extend(st.roots.keys().cloned());
+    let mut seeded = false;
     if let Some(from) = remote_sync::pick_seed(root, known.iter())
         && link.mirror.seed(root, &from)
     {
+        seeded = true;
         log(&format!(
             "seeded {} from {} on the machine in {:.2}s",
             root.display(),
@@ -795,7 +801,7 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
             t.elapsed().as_secs_f64()
         ));
     }
-    let n = link.mirror.rsync(root)?;
+    let n = link.mirror.rsync_with(root, seeded)?;
     remember_root(dest, root);
     link.send(
         &Msg::Synced {

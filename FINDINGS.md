@@ -3997,3 +3997,32 @@ in a fresh `git worktree add` of jcode-desktop plus its sibling jcode (2924 file
 rsync still itemizes every file (worktree mtimes differ), but each one moves as a
 near-empty delta. Next step if this matters: also copy mtimes from the
 local base, or use `--checksum`-free size-only matching for seeded roots.
+
+### 54b. Checksum on the first sync after a seed, and the daemon's deleted cwd (2026-10-12)
+
+The first rsync after a seed now runs with `--checksum` (`Mirror::rsync_with`).
+The seeded copy has the seed's mtimes, so the quick check delta-transferred
+every file (2156 + 768 "sent", each costing a block-checksum round trip).
+With `--checksum`, both sides compare full-file hashes. Equal files only get
+their mtime fixed, so later syncs take the quick path. Same-size edits still
+transfer because content is compared, not size alone (unit test
+`seeds_from_worktree_then_clone_and_copies_sources_only`).
+
+While measuring I hit a bug: the daemon inherited the cwd of whichever
+worktree started it. Once that worktree was deleted, every rsync failed with
+`getcwd(): No such file or directory` and remote silently fell back to local.
+The daemon now does `chdir("/")` when it starts.
+
+Fresh `git worktree add` of jcode + jcode-desktop, warm daemon, hosted, seed+rsync per root (daemon.log):
+
+| | jcode | jcode-desktop | total | files sent |
+|---|---|---|---|---|
+| before 1/2/3 | 1.47/1.52/1.56 s | 0.97/1.01/1.00 s | 2.44/2.53/2.56 s | 2156 + 768 |
+| after 1/2/3 | 1.16/1.96/2.26 s | 1.55/0.96/1.08 s | 2.71/2.92/3.34 s | 1 + 19 |
+
+Wall time is a wash (hosted WAN jitter plus hashing ~3k small files on both
+sides), but the bytes on the wire and the itemized list are now limited to
+real differences, and the next sync of the root is a pure mtime quick check.
+The remaining ~1 s per root is ssh round trips plus the file-list exchange.
+Removing that needs a manifest-based push that skips rsync entirely, which
+the daemon already uses for flushes.

@@ -397,6 +397,16 @@ impl Mirror {
     /// `target/` dirs are protected from deletion so they stay warm.
     /// Oversized files are skipped here: the caller deletes them remotely.
     pub fn rsync(&self, root: &Path) -> Result<usize> {
+        self.rsync_with(root, false)
+    }
+
+    /// `rsync`, but with `checksum` set, files are compared by content
+    /// (size, then a full-file hash on both sides) instead of size+mtime.
+    /// Used for the first sync after `seed`: the seeded copy has the seed's
+    /// mtimes, so the quick check would delta-transfer every file. Content
+    /// equality is exact, so a same-size edit still transfers, and matching
+    /// files only get their mtime fixed, so later syncs take the quick path.
+    pub fn rsync_with(&self, root: &Path, checksum: bool) -> Result<usize> {
         let src = format!("{}/", root.display());
         let remote = self.remote(root);
         let mut c = Command::new("rsync");
@@ -414,6 +424,9 @@ impl Mirror {
             "--include=Cargo.lock",
             "--filter=:- .gitignore",
         ]);
+        if checksum {
+            c.arg("--checksum");
+        }
         let dst = match &self.target {
             Some(t) => {
                 c.args(["-z", "-e", &t.rsync_shell()]);
@@ -698,6 +711,41 @@ mod tests {
         std::fs::write(src.join("lib.rs"), "newer").unwrap();
         assert!(!m.seed(&wt, &main));
         assert_eq!(std::fs::read_to_string(dst.join("lib.rs")).unwrap(), "seed");
+
+        // Checksum sync after a seed: a same-size, same-mtime edit still
+        // transfers, and matching files take the client's mtime.
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("lib.rs"), "SEED").unwrap();
+        std::fs::write(wt.join("same.rs"), "same").unwrap();
+        std::fs::write(dst.join("same.rs"), "same").unwrap();
+        let mt = std::fs::metadata(dst.join("lib.rs"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        for f in ["lib.rs", "same.rs"] {
+            std::fs::File::options()
+                .write(true)
+                .open(wt.join(f))
+                .unwrap()
+                .set_modified(mt)
+                .unwrap();
+        }
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000);
+        std::fs::File::options()
+            .write(true)
+            .open(dst.join("same.rs"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(m.rsync_with(&wt, true).unwrap(), 1);
+        assert_eq!(std::fs::read_to_string(dst.join("lib.rs")).unwrap(), "SEED");
+        assert_eq!(
+            std::fs::metadata(dst.join("same.rs"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            mt
+        );
         std::fs::remove_dir_all(&d).unwrap();
     }
 }
