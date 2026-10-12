@@ -357,12 +357,13 @@ fn wait4(pid: i32) -> (i32, f64, f64, f64) {
         1
     };
     let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
-    (
-        code,
-        tv(ru.ru_utime),
-        tv(ru.ru_stime),
-        ru.ru_maxrss as f64 / 1024.0,
-    )
+    // ru_maxrss is KiB on Linux and bytes on macOS.
+    let rss_mb = if cfg!(target_os = "macos") {
+        ru.ru_maxrss as f64 / 1_048_576.0
+    } else {
+        ru.ru_maxrss as f64 / 1024.0
+    };
+    (code, tv(ru.ru_utime), tv(ru.ru_stime), rss_mb)
 }
 
 fn describe(args: &[OsString]) -> Unit {

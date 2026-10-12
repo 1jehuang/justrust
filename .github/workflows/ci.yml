@@ -62,6 +62,8 @@ jobs:
           "$bin" test
           "$bin" show | tee show.txt
           grep -q "not measured" show.txt
+          # Memory in MB, not bytes read as KiB (ru_maxrss units differ).
+          if grep -E "largest rustc [0-9]{5,} MB" show.txt; then exit 1; fi
           echo 'fn main() { let _x: u32 = "a"; }' > src/main.rs
           if "$bin" check; then echo "expected a compile error"; exit 1; fi
 
