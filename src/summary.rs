@@ -656,8 +656,10 @@ pub fn build(
                         return None;
                     }
                 }
-                let is_test =
-                    exe.contains("/deps/") && !exe.ends_with("rustc") && !exe.contains("rustdoc");
+                let is_test = crate::sys::has_dir(exe, "deps") && {
+                    let name = crate::sys::program_name(exe.as_ref());
+                    name != "rustc" && !name.contains("rustdoc")
+                };
                 is_test.then_some(exe)
             } else {
                 r.ends_with(')').then_some(r)
@@ -671,7 +673,7 @@ pub fn build(
                 .rsplit('(')
                 .next()
                 .map(|s| s.trim_end_matches(')'))
-                .and_then(|p| p.rsplit('/').next())
+                .map(crate::sys::last_component)
                 .unwrap_or(rest)
                 .to_owned();
             let name = if text.starts_with("Doc-tests") {

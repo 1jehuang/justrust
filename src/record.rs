@@ -816,13 +816,17 @@ fn classify_proc(comm: &str, cmdline: &str) -> &'static str {
         | "ld.gold" | "mold" | "wild" | "collect2" | "lld" | "fast-linker" => return "linker",
         _ => {}
     }
-    if comm.starts_with("build-script") || exe.contains("/build/") && exe.contains("build-script") {
+    if comm.starts_with("build-script")
+        || crate::sys::has_dir(exe, "build") && exe.contains("build-script")
+    {
         return "build-script";
     }
-    if exe.contains("/target/") || exe.contains("/deps/") {
+    if crate::sys::has_dir(exe, "target") || crate::sys::has_dir(exe, "deps") {
         return "target-binary";
     }
-    if exe.ends_with("/rustc") || cmdline.contains("rustc-parallel-frontend") {
+    if crate::sys::program_name(exe.as_ref()) == "rustc" && exe.contains(['/', '\\'])
+        || cmdline.contains("rustc-parallel-frontend")
+    {
         return "rustc";
     }
     "other"

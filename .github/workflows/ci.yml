@@ -163,7 +163,7 @@ jobs:
           if "$bin" check 2>&1 | tee err.txt; then echo "expected a compile error"; exit 1; fi
           grep -q "E0308" err.txt
       # Dependency cache across target dirs, including a proc-macro DLL
-      # (keyed by its whole content: no ELF/Mach-O section) that must load
+      # (keyed by its PE .rustc section) that must load
       # after restore.
       - name: Depcache across checkouts
         shell: bash

@@ -225,6 +225,18 @@ pub fn user_tag() -> String {
 
 // ------------------------------------------------------------------ files
 
+/// Does `path` (as text) contain the directory component `dir`, with
+/// either separator? `has_dir(p, "deps")` matches `/x/deps/y` and
+/// `C:\x\deps\y`.
+pub fn has_dir(path: &str, dir: &str) -> bool {
+    path.split(['/', '\\']).any(|c| c == dir) && last_component(path) != dir
+}
+
+/// The last component of `path` (as text), with either separator.
+pub fn last_component(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
 /// The null device, for tools that take a path (`curl -o`, ssh options).
 pub const DEV_NULL: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
@@ -692,6 +704,16 @@ fn process_cpu(child: &std::process::Child) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_components_with_either_separator() {
+        assert!(has_dir("/w/target/debug/deps/app-1", "deps"));
+        assert!(has_dir(r"D:\w\target\debug\deps\app-1.exe", "deps"));
+        assert!(!has_dir("/w/target/debug/deps", "deps"));
+        assert!(!has_dir("/w/deps-x/app", "deps"));
+        assert_eq!(last_component(r"C:\t\deps\x-1.exe"), "x-1.exe");
+        assert_eq!(last_component("t/deps/x-1"), "x-1");
+    }
 
     #[test]
     fn program_name_strips_exe_only_on_windows() {
