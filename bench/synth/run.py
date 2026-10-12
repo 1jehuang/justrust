@@ -85,6 +85,13 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
         if plan.prev:
             prev = _run(st, plan, plan.prev, "prev")
             _keep_log(prev)
+        # The unmeasured steps above can leave a GB of dirty pages (a
+        # depcache restore writes faster than a compile). Without a flush the
+        # measured call's cargo startup paid 0.5-1.1 s of io stall in some
+        # runs, on both justrust stacks (FINDINGS 41). An agent has think
+        # time between calls, so writeback is done by then; same for every
+        # stack.
+        os.sync()
         r = _run(st, plan, plan.cmd, "run")
     finally:
         gen.restore(plan, created)

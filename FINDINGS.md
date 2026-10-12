@@ -2979,6 +2979,32 @@ removed, gave 373 to 396 ms either way, so it is not the cause. A clean
 rerun of synth with nothing else on the machine is needed before a
 headline number is quoted.
 
+Clean synth3 (`versus-synth1-20261012-030041-6e924fb57e90-dirty-remote-c7i.8xlarge.json`,
+nothing else on the machine, 40/40 points): **justrust 0.98x of stock**
+(13.80 vs 13.55 s per call), jr-nocache 13.51 s. By command: test
+--workspace 1.30x, build 0.96x, test 0.95x, build --release 0.95x,
+test-filtered 0.90x, check 0.85x. The losses are now a handful of
+sub-second calls that took 0.6 to 1 s longer than stock, all spent in
+`cargo startup` with 0.5 to 0.8 s of io stall (points 16, 17, 22, 32, 35:
+stock 0.44 / 0.97 / 0.36 / 0.41 / 1.54 s, justrust 1.11 / 1.75 / 1.04 /
+1.34 / 2.17 s). They did not reproduce by hand, not even with the same
+repo switch, output to a file, or an edited-then-restored file with its
+old mtime (0.38 to 0.40 s every time), and only sometimes through
+`--only-points` (point 22: 1.35, 1.06, then 0.40 s; the jr-nocache stack
+too). Their unmeasured pre-builds restore hundreds of depcache artifacts
+(~1.2 GB dirty after a jcode-tui pre-build), so the measured call
+competes with writeback.
+
+Harness fix: `run.py` now calls `sync()` before the measured call, since
+an agent's think time between calls covers the writeback. Every stack
+gets the same treatment. With it, the five points with their predecessor
+(`--only-points 15,16 16,17 21,22 31,32 34,35`, one run each): justrust
+0.48 / 0.92 / 0.40 / 0.46 / 1.57 s vs stock 0.42 / 0.72 / 0.39 / 0.51 /
+1.51 s. One jr-nocache sample (point 32, 1.06 s) was still slow, so the
+flush removes most of the effect but not all of it. `sync()` changes the
+generator-independent harness only, so synth1 to synth3 stay comparable
+with each other but not exactly with later runs.
+
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
 Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
