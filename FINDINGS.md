@@ -3370,3 +3370,28 @@ Requirement to evidence (macos-latest / macos-15-intel, run 38199891022):
 | routing | `show` where line | local, reason given |
 | toolchain pin | 1.98.1 install + test | "pinned toolchain 1.98.1", 1 passed |
 | release packaging | thin-LTO stripped build runs a test | 1 passed |
+
+## 46. Five days of agent builds: where 13.7 h went and what the ceiling saves (2026-10-12)
+
+`bench/runlog.py` over `~/.justrust/runs` (5785 runs, 2026-10-06 to
+2026-10-11). Bench snapshot runs excluded (3270, 15.1 h) and one hung
+jr-cargo test (6985 s, run 20261011-083315454-3785807): 2514 agent runs,
+13.7 h wall, median 5.0 s.
+
+| kind | runs | wall | median | ceiling assumed | saved |
+|---|---:|---:|---:|---|---:|
+| dependencies rebuilt | 369 | 6.34 h | 37.6 s | deps from cache, 5 s + local (max 2 s) + tests | 5.57 h (88%) |
+| local crates only | 1233 | 5.09 h | 7.1 s | 0.5 s + tests | 4.66 h (91%) |
+| compile error | 202 | 1.88 h | 10.3 s | first error in 0.2 s | 1.87 h (99%) |
+| no-op | 710 | 0.38 h | 0.5 s | 0.05 s + tests | 0.18 h (48%) |
+| **total** | 2514 | 13.7 h | | | **12.3 h (90%)** |
+
+Dependency rebuilds are the largest bucket and almost all cold targets:
+173 runs (3.1 h) with zero fresh units and no rebuild reason, 11 more
+(0.75 h) cold release builds, despite 34k depcache hits in these runs.
+That is the cold-build path (prebuilt store, remote), not the incremental
+loop. Test execution is only 0.67 h of the 13.7 h.
+
+LLVM in local-edit runs: 22-32% of rustc time in test/build (jcode test
+0.39 of 1.39 h), more than the reference loop's ~2% because jcode's edits
+regenerate more codegen units. Check runs have none.
