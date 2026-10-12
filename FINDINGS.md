@@ -4217,3 +4217,27 @@ Upstream splits that would pay most (recorded single-rustc time from 53,
    pays mostly for the `docs` build-script input (214 s over 24 runs).
 5. justrust itself (251 s): one crate, 300 tests; splitting depcache/remote
    from the CLI would let most edits skip relinking the test binary.
+
+Addendum (factor `shadow`, `bench/factors.py run shadow`, n=6 interleaved,
+`bench/results/factors-20261012-060141-2501cadf6e90-dirty.json`): on
+0.79 s (0.7-0.8) vs off 7.36 s (6.9-9.9), +6.57 s (-89%), "helps"
+(on 20261012-060157748-432792792, off 20261012-060150553-432792924). The
+factor has a warm shadow on both sides, so it excludes the one-time
+~100 s first build noted above.
+Verified on the live Desktop checkout: the shadow run's test lines match
+the normal run's exactly (3 fps_counter tests, only the "filtered out"
+count differs, 0 vs 1292), and an extra edit to lib.rs falls back
+("changed outside fps_counter.rs; normal build", 7.6 s). Leaves found by
+`justrust shadow --days 365`: Desktop UI has 12 (performance, commands,
+preview_state, fps_counter, memory, clipboard_image, ack, effort,
+native_mermaid, persisted_history, test_input, ui_actions), 35 of 2209
+recorded edits. jcode-base has 14 (console, output_style,
+session_metrics, util, ...), 23 of 1198 edits. About 2% of edits route.
+
+Default-on: not yet. The gain is large when it routes, but (a) it routes
+~2% of edits, (b) the first use costs a ~100 s dependency rebuild with
+different feature unification, and (c) the parent crate's uses of the
+leaf go unchecked until the next normal build, so a passing shadow run
+can hide a break in the big crate. Revisit when the feature set is copied
+exactly (shared dependency units with the normal build) and a background
+`check -p <big>` runs after each routed test.

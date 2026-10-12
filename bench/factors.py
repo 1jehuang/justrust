@@ -52,7 +52,7 @@ UNSTABLE_PROFILE = {"CARGO_UNSTABLE_PROFILE_RUSTFLAGS": "true",
 # The jr-rustc build fork-change factors run on both sides
 # (JR_RUSTC_MODE picks another saved mode under ~/jr-rustc/build/jr).
 JR_RUSTC_ENV = {"JUSTRUST_TOOLCHAIN": "system",
-                "RUSTC": str(Path.home() / "jr-rustc/build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-bolt-stage2") / "bin/rustc")}
+                "RUSTC": str(Path(os.environ.get("JR_RUSTC_DIR", Path.home() / "jr-rustc")) / "build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-bolt-stage2") / "bin/rustc")}
 # The slowest dependencies of a cold Desktop UI test build (run
 # 20261011-043427013-426230: gpui 115 s, aws-sdk-bedrock 68 s, wgpu-core 67 s, ...).
 BIG_DEPS = ["gpui", "aws-sdk-bedrock", "wgpu-core", "gpui_linux", "read-fonts", "wgpu-hal",
@@ -246,6 +246,13 @@ FACTORS = [
         on={}, off={"CARGO_INCREMENTAL": "0"}, n=4,
     ),
     Factor(
+        "shadow", "shadow leaf crate (JUSTRUST_SHADOW=1): a test filter naming a leaf module whose file is the only "
+                  "change runs in a generated one-file crate instead of the 118k-line UI crate",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_SHADOW": "1"}, off={"JUSTRUST_SHADOW": "0"}, n=6,
+        note="warmup is a normal build that records the snapshot; every measured edit touches only fps_counter.rs",
+    ),
+    Factor(
         "pinned-nightly", "justrust's pinned nightly toolchain instead of the system stable rustc",
         "loop", "desktop-test-edit",
         on={"JUSTRUST_TOOLCHAIN": NIGHTLY}, off={"JUSTRUST_TOOLCHAIN": "system"}, slow=True,
@@ -279,6 +286,19 @@ FACTORS = [
         ("jr-attr-cache", "jr-rustc caches attribute proc-macro expansions (#[gpui::test]) under -Zcache-proc-macros",
          "desktop-test-edit", "FINDINGS 40: 724 #[gpui::test] expansions per edit, 0.96 s; on runs 1"),
         ("jr-attr-cache-check", "same, on the check-only loop", "desktop-body-check", ""),
+    ]],
+    *[Factor(
+        name, what, "loop", scenario,
+        on={**JR_RUSTC_ENV, **UNSTABLE_PROFILE},
+        off={**JR_RUSTC_ENV, **UNSTABLE_PROFILE, "JUSTRUST_RUSTC_PAR_UPSTREAM_MONO": "0"},
+        on_args=ui_rustflags("-Zcache-proc-macros"), off_args=ui_rustflags("-Zcache-proc-macros"),
+        n=8, slow=True, note=note,
+    ) for name, what, scenario, note in [
+        ("jr-par-upstream-mono", "jr-rustc decodes upstream crates' exported generics in parallel, "
+         "started during lints (upstream_monomorphizations) instead of serially at the start of the mono walk",
+         "desktop-test-edit", "self-profile: all threads blocked 285 ms on upstream_drop_glue_for (623 crates)"),
+        ("jr-par-upstream-mono-deep", "same, jcode-core body edit (16 crates rebuilt)",
+         "desktop-jcode-core-body", ""),
     ]],
     Factor(
         "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-bolt-stage2) vs the official nightly at the same commit",
