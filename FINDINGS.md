@@ -3860,8 +3860,7 @@ without the waste), and serve `check` from early rust-analyzer state.
 ## 52. Windows: recording, sampling, and the depcache on Windows (2026-10-12)
 
 Windows went from plain-cargo passthrough to the same recorder, agent
-output, reports, depcache, test pool, pinned toolchains and build daemon
-as Linux and macOS. One platform layer (`src/sys.rs`) carries every
+output, reports, depcache, test pool and pinned toolchains as Linux. One platform layer (`src/sys.rs`) carries every
 operation whose Unix and Windows forms differ. Unix keeps its exact calls,
 so on Linux nothing changes. Map from each changed path to the check that
 covers it (`windows-latest` CI job, "Windows integration paths", unless
@@ -3878,11 +3877,13 @@ noted):
 | depcache restore | copy with a fresh mtime (no reflink on NTFS); no xattr hash memo (an NTFS stream would bump mtime) | depcache across checkouts |
 | depcache proc-macro key | PE `.rustc` section of the DLL. The whole-file hash missed in every second checkout: the DLL embeds its target dir (PDB path), so serde_derive and its dependents (9 hit/8 miss) | `0 miss` in the second checkout |
 | depcache libc family | `msvc`/`mingw` (wine showed the host's glibc loader leaking into the key) | `libc_family_is_the_hosts` |
-| sockets (build daemon, test pool, sync daemon, peer cache) | AF_UNIX via `uds_windows` (Windows 10 1803+) | test pool in every `test` |
+| sockets (test pool; also compiled for the sync daemon, peer cache, early diagnostics) | AF_UNIX via `uds_windows` (Windows 10 1803+) | test pool in every `test`; the others are not exercised on Windows yet |
 | ssh to hosted machines | `NUL` instead of `/dev/null`, no ControlMaster (Windows OpenSSH lacks it) | `ssh_target_is_strict` |
 | split: Cargo.toml relative paths | always `/` (a `\` in a TOML basic string is an escape) | `relative_paths` |
 
-Not on Windows, failing open: build slots (need copy-on-write clones, so
+Not on Windows, failing open: the resident build daemon (gated to Linux
+in `buildd::maybe_run`; its process-group signalling is ported but
+unexercised), build slots (need copy-on-write clones, so
 builds share the target dir), cgroup priority, wild and hot patching
 (ELF), the sync daemon's watcher (pushes ride the per-run rescan), and
 automatic remote routing (the machines are Linux). The remote agent and
