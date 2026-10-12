@@ -39,9 +39,11 @@ run() { # name, extra env
   "$J" log >"$OUT/$name.log" 2>&1 || true
   grep -aE '^test .* \.\.\. ' "$OUT/$name.log" >"$OUT/$name.tests" || true
   grep -a 'test result' "$OUT/$name.log" >"$OUT/$name.results" || true
-  # Drop timings; known timing-sensitive tests are reported separately.
-  sed -E 's/ <[0-9.]+s>//' "$OUT/$name.tests" | grep -v 'the_hint_chip_uses_only_spare_tab_space' | sort >"$OUT/$name.sorted"
-  grep -a 'the_hint_chip_uses_only_spare_tab_space' "$OUT/$name.tests" | sed "s/^/  flaky ($name): /" || true
+  # Drop timings; known timing-sensitive tests (they fail now and then with the
+  # cutoff on or off, and pass on rerun) are reported separately.
+  flaky='the_hint_chip_uses_only_spare_tab_space|bundled_github_applet_renders_valid_documents'
+  sed -E 's/ <[0-9.]+s>//' "$OUT/$name.tests" | grep -vE "$flaky" | sort >"$OUT/$name.sorted"
+  grep -aE "$flaky" "$OUT/$name.tests" | sed "s/^/  flaky ($name): /" || true
   echo "$name: $(wc -l <"$OUT/$name.sorted") tests, $(grep -c ' ok$' "$OUT/$name.sorted" || true) ok, $(grep -c 'FAILED' "$OUT/$name.sorted" || true) failed, cut off: $(sort -u "$OUT/cutoff-$name.log" 2>/dev/null | wc -l) units"
 }
 run on
