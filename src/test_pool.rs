@@ -36,10 +36,10 @@
 //! turns the pool off, `JUSTRUST_TEST_SPLIT=0` only the per-binary split.
 
 use crate::paths;
+use crate::sys::net::{UnixListener, UnixStream};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
@@ -246,6 +246,7 @@ fn track_signal_pid(pid: i32, add: bool) {
 }
 
 /// Send `sig` to every test process the pool is running. Async-signal-safe.
+#[cfg(unix)]
 pub fn signal_live(sig: libc::c_int) {
     for slot in &SIGNAL_PIDS {
         let pid = slot.load(std::sync::atomic::Ordering::SeqCst);
@@ -492,6 +493,7 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
             };
         }
     };
+    let job = crate::sys::Job::for_child(&child);
     let pid = child.id() as i32;
     LIVE_PIDS.lock().unwrap().push(pid);
     track_signal_pid(pid, true);
@@ -514,7 +516,8 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
     };
     let to = read(Box::new(child.stdout.take().unwrap()), "o");
     let te = read(Box::new(child.stderr.take().unwrap()), "e");
-    let (exit, cpu) = wait4(pid);
+    let u = crate::sys::wait_usage(&mut child, job.as_ref());
+    let (exit, cpu) = (u.code, u.user + u.sys);
     let mut lines = to.join().unwrap_or_default();
     lines.extend(te.join().unwrap_or_default());
     lines.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -535,32 +538,6 @@ fn execute(inner: &Inner, req: &Request, args: &[String], stem: &str) -> Finishe
         outcomes,
         hide_filtered: None,
     }
-}
-
-/// Exit code (signals as 128+n, like a shell) and CPU seconds of `pid`.
-fn wait4(pid: i32) -> (i32, f64) {
-    let mut status = 0;
-    // SAFETY: rusage is plain data written by wait4.
-    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
-    loop {
-        // SAFETY: pointers to valid local storage.
-        let r = unsafe { libc::wait4(pid, &mut status, 0, &mut ru) };
-        if r == pid {
-            break;
-        }
-        if r < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-            return (1, 0.0);
-        }
-    }
-    let code = if libc::WIFEXITED(status) {
-        libc::WEXITSTATUS(status)
-    } else if libc::WIFSIGNALED(status) {
-        128 + libc::WTERMSIG(status)
-    } else {
-        1
-    };
-    let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
-    (code, tv(ru.ru_utime) + tv(ru.ru_stime))
 }
 
 /// Print one finished process as a block: a `Running` header (the summary
@@ -1171,13 +1148,13 @@ const KEEP_TEST_SECS: f64 = 0.2;
 
 impl History {
     fn load(cwd: &Path) -> History {
-        use std::os::unix::ffi::OsStrExt;
         let Ok(home) = paths::home() else {
             return History::default();
         };
-        let path = home
-            .join("tests")
-            .join(format!("{:016x}.json", fnv(cwd.as_os_str().as_bytes())));
+        let path = home.join("tests").join(format!(
+            "{:016x}.json",
+            fnv(cwd.as_os_str().as_encoded_bytes())
+        ));
         let mut h: History = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
@@ -1442,7 +1419,9 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct VecSink(Mutex<Vec<String>>);
+    #[cfg(unix)]
     impl Sink for VecSink {
         fn emit_block(&self, lines: &[(f64, &'static str, Vec<u8>)]) {
             let mut v = self.0.lock().unwrap();
@@ -1457,8 +1436,8 @@ mod tests {
     /// Cargo stops at the first failing test binary unless --no-fail-fast.
     /// Running every binary anyway made `test --workspace` on Jcode run
     /// 8,911 tests against stock's 1,862 (FINDINGS 41).
+    #[cfg(unix)]
     fn pool_run(fail_fast: bool) -> (bool, Vec<String>, Vec<String>) {
-        use std::os::unix::fs::PermissionsExt;
         struct TmpDir(PathBuf);
         impl TmpDir {
             fn path(&self) -> &Path {
@@ -1485,7 +1464,7 @@ mod tests {
                 ),
             )
             .unwrap();
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::sys::set_mode(&p, 0o755).unwrap();
             p.to_string_lossy().into_owned()
         };
         let bad = mk("bad", "echo 'test t::a ... FAILED'; exit 101");
@@ -1518,6 +1497,8 @@ mod tests {
         (o.any_failed, ran, out)
     }
 
+    // Runs `sh` scripts.
+    #[cfg(unix)]
     #[test]
     fn pool_stops_after_a_failing_binary_like_cargo() {
         let (failed, ran, out) = pool_run(true);

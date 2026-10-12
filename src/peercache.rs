@@ -45,9 +45,9 @@
 use crate::depcache::{self, Plan};
 use crate::paths;
 use crate::remote_proto::{Msg, OfferItem, OutInfo, read_frame, write_frame};
+use crate::sys::net::{UnixListener, UnixStream};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, BufWriter, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};

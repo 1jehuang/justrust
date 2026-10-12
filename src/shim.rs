@@ -17,7 +17,6 @@ use crate::paths;
 use serde::Serialize;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -91,7 +90,7 @@ pub fn main() -> ! {
 }
 
 fn exec(real: &PathBuf, args: &[OsString]) -> ! {
-    let err = Command::new(real).args(args).exec();
+    let err = crate::sys::exec(Command::new(real).args(args));
     eprintln!("justrust: failed to exec {}: {err}", real.display());
     std::process::exit(127);
 }
@@ -267,6 +266,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     }
     let start = paths::now();
     let mut child = cmd.spawn().ok()?;
+    let job = crate::sys::Job::for_child(&child);
     let stderr = child.stderr.take()?;
     let rmeta_at: Arc<Mutex<Option<f64>>> = Arc::default();
     let passes: Arc<Mutex<Vec<Pass>>> = Arc::default();
@@ -281,7 +281,12 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         })
     };
 
-    let (exit, user, sys, max_rss_mb) = wait4(child.id() as i32);
+    let crate::sys::Usage {
+        code: exit,
+        user,
+        sys,
+        max_rss_mb,
+    } = crate::sys::wait_usage(&mut child, job.as_ref());
     let end = paths::now();
     let _ = reader.join();
 
@@ -392,41 +397,6 @@ fn parse_pass(json: &[u8]) -> Option<Pass> {
     })
 }
 
-/// Wait for `pid`, returning (exit code, user secs, sys secs, max RSS MiB).
-/// Linux reports the child's own usage plus its waited-for descendants
-/// (linker, `cc`), so link time is included.
-fn wait4(pid: i32) -> (i32, f64, f64, f64) {
-    let mut status = 0;
-    // SAFETY: rusage is plain data and fully written by wait4 on success.
-    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
-    loop {
-        // SAFETY: valid pointers to local storage.
-        let r = unsafe { libc::wait4(pid, &mut status, 0, &mut ru) };
-        if r == pid {
-            break;
-        }
-        if r == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-            continue;
-        }
-        return (1, 0.0, 0.0, 0.0);
-    }
-    let code = if libc::WIFEXITED(status) {
-        libc::WEXITSTATUS(status)
-    } else if libc::WIFSIGNALED(status) {
-        128 + libc::WTERMSIG(status)
-    } else {
-        1
-    };
-    let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
-    // ru_maxrss is KiB on Linux and bytes on macOS.
-    let rss_mb = if cfg!(target_os = "macos") {
-        ru.ru_maxrss as f64 / 1_048_576.0
-    } else {
-        ru.ru_maxrss as f64 / 1024.0
-    };
-    (code, tv(ru.ru_utime), tv(ru.ru_stime), rss_mb)
-}
-
 fn describe(args: &[OsString]) -> Unit {
     let s: Vec<String> = args
         .iter()
@@ -488,7 +458,7 @@ fn describe(args: &[OsString]) -> Unit {
 
 /// Shim entry check: was this process started as `rustc` by justrust?
 pub fn invoked_as_shim(argv0: &OsStr) -> bool {
-    std::path::Path::new(argv0).file_name() == Some(OsStr::new("rustc"))
+    crate::sys::program_name(argv0) == "rustc"
 }
 
 #[cfg(test)]

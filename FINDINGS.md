@@ -3856,3 +3856,54 @@ effects run on a guess (as with any `cargo check` from rust-analyzer), and
 a prebuild holds the session's slot until stopped. Next: prebuild the next
 command from history instead of the last one (the 68% ceiling of last 3
 without the waste), and serve `check` from early rust-analyzer state.
+
+## 52. Windows: recording, sampling, and the depcache on Windows (2026-10-12)
+
+Windows went from plain-cargo passthrough to the same recorder, agent
+output, reports, depcache, test pool, pinned toolchains and build daemon
+as Linux and macOS. One platform layer (`src/sys.rs`) carries every
+operation whose Unix and Windows forms differ. Unix keeps its exact calls,
+so on Linux nothing changes. Map from each changed path to the check that
+covers it (`windows-latest` CI job, "Windows integration paths", unless
+noted):
+
+| Path | Windows form | Check |
+|---|---|---|
+| process exec (shim, cargo, test runner, linker) | spawn, inherit stdio, exit with the child's code, ignore Ctrl+C meanwhile | smoke: check/test/compile error |
+| unit and build CPU, max RSS | job object around the child (whole tree), `GetProcessTimes` fallback, peak working set | sampler: `avg_build_cores > 0`, `peak_unit_rss_mb` sane |
+| sampler (`procfs`) | Toolhelp snapshot (one per sample), `GetSystemTimes`, `GlobalMemoryStatusEx`, command line via `NtQueryInformationProcess`; no PSI | `psi_unavailable`, `procfs::tests::reads_child_process` |
+| locks | `std::fs::File::lock`/`try_lock` everywhere (flock on Unix, as before) | unit tests, status |
+| rustc shim, `cargo` proxy | hard link or copy of `justrust.exe` plus a per-file `.justrust` sidecar (symlinks need developer mode) | install/uninstall in CI |
+| toolchain paths | `.exe` on every `bin/` tool; host triple `x86_64-pc-windows-msvc`; sha256 via `certutil` | pinned 1.98.1 install and test |
+| depcache restore | copy with a fresh mtime (no reflink on NTFS); no xattr hash memo (an NTFS stream would bump mtime) | depcache across checkouts |
+| depcache proc-macro key | PE `.rustc` section of the DLL. The whole-file hash missed in every second checkout: the DLL embeds its target dir (PDB path), so serde_derive and its dependents (9 hit/8 miss) | `0 miss` in the second checkout |
+| depcache libc family | `msvc`/`mingw` (wine showed the host's glibc loader leaking into the key) | `libc_family_is_the_hosts` |
+| sockets (build daemon, test pool, sync daemon, peer cache) | AF_UNIX via `uds_windows` (Windows 10 1803+) | test pool in every `test` |
+| ssh to hosted machines | `NUL` instead of `/dev/null`, no ControlMaster (Windows OpenSSH lacks it) | `ssh_target_is_strict` |
+| split: Cargo.toml relative paths | always `/` (a `\` in a TOML basic string is an escape) | `relative_paths` |
+
+Not on Windows, failing open: build slots (need copy-on-write clones, so
+builds share the target dir), cgroup priority, wild and hot patching
+(ELF), the sync daemon's watcher (pushes ride the per-run rescan), and
+automatic remote routing (the machines are Linux). The remote agent and
+hot patching compile out.
+
+Validation before CI: cross clippy for msvc, gnu and darwin; the lib
+suite under wine (x86_64-pc-windows-gnu, mingw linker) 250/251, the one
+left needing a real rustc on PATH; end-to-end under wine with the Windows
+Rust 1.98.1 toolchain: `check`, `test` with a failing test shown in full,
+`show`, `log`, `runs`, `install`, and the depcache across two checkouts
+(17/17 hits, saved 40 s of rustc). Wine quirks that are not justrust's:
+rustc ICEs with incremental on (plain `cargo.exe` too), no process CPU
+times (`GetProcessTimes` returns 0), no command line query.
+
+Linux unchanged. Recorded and unrecorded builds still share artifacts (a
+serde crate after `JUSTRUST_DISABLE=1 cargo build`: 1 local unit
+compiled, 2 fresh, 0 Dirty, same as main). Suite A/B, main at merge-base
+`dcbed51` vs the port, run twice interleaved on a busy machine (other
+agents' benches, 2-8 foreign cores):
+`bench/results/20261012-windows-port-ab-{main,win}-{1,2}.json`. Round 1
+reads +15..54% slower, round 2 -17..+3%: the order flipped with the load,
+every sample of both flagged noisy. A quieter direct measure, no-op
+`justrust check` of this repo, 15 interleaved pairs: main 0.158 s median
+(0.103 min), port 0.155 s (0.106 min). No regression measurable.

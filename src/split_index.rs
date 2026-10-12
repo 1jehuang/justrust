@@ -22,6 +22,7 @@
 
 use crate::paths;
 use crate::summary::{RebuildReason, Resources, Summary, UnitBreakdown};
+use crate::sys::Detach;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -229,12 +230,11 @@ pub struct Facts {
 }
 
 fn stamp(p: &Path) -> Option<(u64, i128)> {
-    use std::os::unix::fs::MetadataExt;
     let m = std::fs::metadata(p).ok()?;
-    Some((
-        m.len(),
-        m.mtime() as i128 * 1_000_000_000 + m.mtime_nsec() as i128,
-    ))
+    Some((m.len(), {
+        let (s, ns) = crate::sys::mtime(&m);
+        s as i128 * 1_000_000_000 + ns as i128
+    }))
 }
 
 impl Facts {
@@ -527,7 +527,6 @@ pub fn maybe_refresh(s: &Summary) {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    use std::os::unix::process::CommandExt;
     let _ = std::process::Command::new(exe)
         .args(["split", "--refresh-hints"])
         .current_dir(&s.cwd)
@@ -535,14 +534,13 @@ pub fn maybe_refresh(s: &Summary) {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .process_group(0)
+        .detached()
         .spawn();
 }
 
 /// Held while a refresh of `root` runs, so concurrent builds do not stack
 /// refreshes.
 pub fn refresh_lock(root: &Path) -> Option<std::fs::File> {
-    use std::os::fd::AsRawFd;
     let d = dir().ok()?;
     std::fs::create_dir_all(&d).ok()?;
     let f = std::fs::OpenOptions::new()
@@ -551,9 +549,7 @@ pub fn refresh_lock(root: &Path) -> Option<std::fs::File> {
         .write(true)
         .open(d.join(format!("refresh-{}.lock", workspace_key(root))))
         .ok()?;
-    // SAFETY: flock on a valid fd.
-    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    (r == 0).then_some(f)
+    f.try_lock().is_ok().then_some(f)
 }
 
 #[cfg(test)]

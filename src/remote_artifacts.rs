@@ -25,7 +25,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
@@ -80,11 +79,12 @@ struct Record {
 }
 
 fn mtime_of(m: &std::fs::Metadata) -> f64 {
-    m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9
+    crate::sys::mtime_f64(m)
 }
 
 fn id_of(m: &std::fs::Metadata) -> String {
-    format!("{}-{}{:09}", m.len(), m.mtime(), m.mtime_nsec())
+    let (s, ns) = crate::sys::mtime(m);
+    format!("{}-{s}{ns:09}", m.len())
 }
 
 /// `foo-0123456789abcdef` (cargo's hashed copies in `examples/`).
@@ -124,7 +124,10 @@ fn candidates(dir: &Path) -> Vec<(String, std::fs::Metadata)> {
                 continue;
             };
             let n = e.file_name().to_string_lossy().into_owned();
-            if !m.is_file() || !artifact_name(&n, m.mode()) || (!sub.is_empty() && is_hashed(&n)) {
+            if !m.is_file()
+                || !artifact_name(&n, crate::sys::mode(&m, &e.path()))
+                || (!sub.is_empty() && is_hashed(&n))
+            {
                 continue;
             }
             out.push((
@@ -243,7 +246,7 @@ fn serve_dir(dir: &Path, req: &Request, sent_root: &Path, out: impl Write) -> Re
             &Frame::File {
                 name: name.clone(),
                 id: rid.clone(),
-                mode: m.mode() & 0o7777,
+                mode: crate::sys::mode(&m, &path) & 0o7777,
                 size: m.len(),
                 patch,
                 len: data.len() as u64,
@@ -355,7 +358,7 @@ fn apply(
         if got != size {
             bail!("{name}: {got} bytes, expected {size}");
         }
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        crate::sys::set_mode(&tmp, mode)?;
         if mode & 0o111 != 0 || name.contains(".so") {
             check_libs(&tmp)?;
         }
@@ -536,7 +539,9 @@ mod tests {
     }
 
     /// Full round trip through serve and apply, then a delta against the
-    /// copy sent the first time. Needs `zstd`.
+    /// copy sent the first time. Needs `zstd`. Unix only: artifacts are
+    /// picked by their executable bit, which Windows files do not have.
+    #[cfg(unix)]
     #[test]
     fn round_trip_full_then_delta() {
         if !available() {
@@ -553,7 +558,7 @@ mod tests {
             .collect();
         let write = |p: &Path, b: &[u8]| {
             std::fs::write(p, b).unwrap();
-            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::sys::set_mode(p, 0o755).unwrap();
         };
         write(&remote.join("app"), &body);
         std::fs::write(remote.join("app.d"), b"dep info").unwrap();

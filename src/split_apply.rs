@@ -1009,20 +1009,22 @@ pub fn add_glob_alias(
 // ---------------------------------------------------------------------------
 // Manifests.
 
+/// Relative path for a Cargo.toml `path = ...`: always `/`-separated (a
+/// `\` in a TOML basic string is an escape, and cargo accepts `/` on
+/// every platform).
 fn rel_path(from_dir: &Path, to: &Path) -> String {
     // Both absolute and normalized: walk up from `from_dir` to the common
     // prefix, then down to `to`.
     let f: Vec<_> = from_dir.components().collect();
     let t: Vec<_> = to.components().collect();
     let common = f.iter().zip(&t).take_while(|(a, b)| a == b).count();
-    let mut p = PathBuf::new();
-    for _ in common..f.len() {
-        p.push("..");
-    }
-    for c in &t[common..] {
-        p.push(c);
-    }
-    p.to_string_lossy().into_owned()
+    let mut parts: Vec<String> = vec!["..".into(); f.len() - common];
+    parts.extend(
+        t[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
 }
 
 /// Identifiers of external crates a source uses (`foo::` at path start,

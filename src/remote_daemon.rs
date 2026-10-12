@@ -26,11 +26,11 @@
 //! the machine is in sync: after a reconnect every root is mirrored again
 //! with rsync, and a write the agent could not apply fails the next barrier.
 
+use crate::sys::Detach;
+use crate::sys::net::{UnixListener, UnixStream};
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufReader, BufWriter, Read};
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,7 +59,7 @@ pub fn build_id() -> String {
     ID.get_or_init(|| {
         std::env::current_exe()
             .and_then(std::fs::metadata)
-            .map(|m| format!("{}-{}", m.len(), m.mtime()))
+            .map(|m| format!("{}-{}", m.len(), crate::sys::mtime(&m).0))
             .unwrap_or_default()
     })
     .clone()
@@ -192,9 +192,8 @@ fn spawn() -> Result<()> {
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    use std::os::unix::process::CommandExt;
     // Own session: survives the agent's terminal and its Ctrl+C.
-    c.process_group(0);
+    c.detached();
     crate::procfs::close_inherited_fds(&mut c);
     c.spawn().context("starting the sync daemon")?;
     Ok(())
@@ -270,7 +269,7 @@ struct Daemon {
     watcher: Watcher,
     /// Device and inode of our socket, to remove it on exit only if it is
     /// still ours.
-    sock: (PathBuf, u64, u64),
+    sock: (PathBuf, (u64, u64)),
     /// The daemon lock. Released when draining so a replacement can start.
     lock: Mutex<Option<std::fs::File>>,
     /// Shut down but still relaying runs that were in flight.
@@ -278,7 +277,7 @@ struct Daemon {
     /// The relay of the current link, for this machine's rustc shims.
     peer: peercache::Current,
     /// Our `peer.sock` (path, device, inode), removed on exit if still ours.
-    peer_sock: Mutex<Option<(PathBuf, u64, u64)>>,
+    peer_sock: Mutex<Option<(PathBuf, (u64, u64))>>,
 }
 
 impl Daemon {
@@ -295,12 +294,12 @@ impl Daemon {
     /// Stop being the daemon: remove our socket (if a replacement has not
     /// already bound a new one) and release the lock.
     fn retire(&self) {
-        let (p, dev, ino) = &self.sock;
-        if std::fs::metadata(p).is_ok_and(|m| m.dev() == *dev && m.ino() == *ino) {
+        let (p, id) = &self.sock;
+        if std::fs::metadata(p).is_ok_and(|m| crate::sys::file_id(&m) == *id) {
             let _ = std::fs::remove_file(p);
         }
-        if let Some((p, dev, ino)) = self.peer_sock.lock().ok().and_then(|mut s| s.take())
-            && std::fs::metadata(&p).is_ok_and(|m| m.dev() == dev && m.ino() == ino)
+        if let Some((p, id)) = self.peer_sock.lock().ok().and_then(|mut s| s.take())
+            && std::fs::metadata(&p).is_ok_and(|m| crate::sys::file_id(&m) == id)
         {
             let _ = std::fs::remove_file(&p);
         }
@@ -370,9 +369,7 @@ fn daemon() -> Result<()> {
         .truncate(false)
         .write(true)
         .open(crate::remote::dir()?.join("daemon.lock"))?;
-    use std::os::fd::AsRawFd;
-    // SAFETY: flock on a file descriptor we own.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if lock.try_lock().is_err() {
         bail!("another daemon is running");
     }
     let _ = std::fs::remove_file(&sock);
@@ -397,7 +394,7 @@ fn daemon() -> Result<()> {
         }),
         next_id: AtomicU64::new(1),
         watcher: Watcher::new(wtx)?,
-        sock: (sock.clone(), md.dev(), md.ino()),
+        sock: (sock.clone(), crate::sys::file_id(&md)),
         lock: Mutex::new(Some(lock)),
         draining: AtomicBool::new(false),
         peer: Arc::default(),
@@ -409,7 +406,7 @@ fn daemon() -> Result<()> {
         match peercache::listen(&p, d.peer.clone()) {
             Ok(()) => {
                 if let (Ok(m), Ok(mut s)) = (std::fs::metadata(&p), d.peer_sock.lock()) {
-                    *s = Some((p, m.dev(), m.ino()));
+                    *s = Some((p, crate::sys::file_id(&m)));
                 }
             }
             Err(e) => log(&format!("peer cache socket {}: {e}", p.display())),

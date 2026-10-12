@@ -37,13 +37,13 @@
 //! client: `O`/`E` stdout/stderr bytes, `X` exit JSON, `I` info JSON (pong
 //! and prebuild acks), `F` refusal (the client builds itself).
 
+use crate::sys::Detach;
+use crate::sys::net::{UnixListener, UnixStream};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
@@ -188,8 +188,7 @@ pub struct Info {
 // ------------------------------------------------------------------ client
 
 fn isatty(fd: i32) -> bool {
-    // SAFETY: isatty has no memory-safety preconditions.
-    unsafe { libc::isatty(fd) == 1 }
+    crate::sys::isatty(fd)
 }
 
 /// Build the request for `full` (`sub args...`) from this process, or
@@ -374,7 +373,7 @@ fn link_run(shared: Option<&str>) {
         return;
     }
     if let Ok(d) = crate::paths::runs_dir() {
-        let _ = std::os::unix::fs::symlink(shared, d.join(&mine));
+        let _ = crate::sys::symlink(Path::new(shared), &d.join(&mine));
     }
 }
 
@@ -391,9 +390,8 @@ fn spawn() -> Result<()> {
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    use std::os::unix::process::CommandExt;
     // Own process group: survives the agent's Ctrl+C.
-    c.process_group(0);
+    c.detached();
     crate::procfs::close_inherited_fds(&mut c);
     c.spawn().context("starting the build daemon")?;
     Ok(())
@@ -528,9 +526,10 @@ pub fn source_stamp(roots: &[PathBuf], cwd: &Path, env: &[(String, String)]) -> 
     let mut add = |p: &Path, m: &std::fs::Metadata| {
         h.field(p.as_os_str().as_encoded_bytes());
         h.field(&m.len().to_le_bytes());
-        h.field(&m.mtime().to_le_bytes());
-        h.field(&m.mtime_nsec().to_le_bytes());
-        h.field(&m.ino().to_le_bytes());
+        let (s, ns) = crate::sys::mtime(m);
+        h.field(&s.to_le_bytes());
+        h.field(&ns.to_le_bytes());
+        h.field(&crate::sys::file_id(m).1.to_le_bytes());
     };
     for r in roots {
         let mut stack = vec![r.clone()];
@@ -674,7 +673,7 @@ struct Daemon {
     watcher: Option<crate::remote_watch::Watcher>,
     watched: Mutex<std::collections::HashSet<PathBuf>>,
     /// (path, dev, ino) of our socket: removed on exit only if still ours.
-    sock: (PathBuf, u64, u64),
+    sock: (PathBuf, (u64, u64)),
     draining: std::sync::atomic::AtomicBool,
 }
 
@@ -705,9 +704,7 @@ fn daemon() -> Result<()> {
         .truncate(false)
         .write(true)
         .open(d.join("lock"))?;
-    use std::os::fd::AsRawFd;
-    // SAFETY: flock on a file descriptor we own.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if lock.try_lock().is_err() {
         bail!("another build daemon is running");
     }
     let sock = sock_path()?;
@@ -729,7 +726,7 @@ fn daemon() -> Result<()> {
         }),
         watcher,
         watched: Mutex::default(),
-        sock: (sock, md.dev(), md.ino()),
+        sock: (sock, crate::sys::file_id(&md)),
         draining: Default::default(),
     });
     {
@@ -771,8 +768,8 @@ fn daemon() -> Result<()> {
 }
 
 fn remove_sock(dm: &Daemon) {
-    let (p, dev, ino) = &dm.sock;
-    if std::fs::metadata(p).is_ok_and(|m| m.dev() == *dev && m.ino() == *ino) {
+    let (p, id) = &dm.sock;
+    if std::fs::metadata(p).is_ok_and(|m| crate::sys::file_id(&m) == *id) {
         let _ = std::fs::remove_file(p);
     }
 }
@@ -950,8 +947,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         // Everyone who asked is gone (killed or timed out): stop the build
         // like their Ctrl+C or kill would have without the daemon.
         log(&format!("no clients left, stopping pid {}", build.pid));
-        // SAFETY: plain syscall on the child's process group.
-        unsafe { libc::kill(-build.pid, libc::SIGTERM) };
+        crate::sys::terminate_group(build.pid, false);
     }
     res
 }
@@ -1005,6 +1001,7 @@ fn stream(
 }
 
 /// The client closed its end (it never sends after the request).
+#[cfg(unix)]
 fn peer_closed(s: &UnixStream) -> bool {
     use std::os::fd::AsRawFd;
     let mut b = [0u8; 1];
@@ -1025,6 +1022,25 @@ fn peer_closed(s: &UnixStream) -> bool {
             ))
 }
 
+/// Windows: a non-blocking peek; 0 bytes means the client closed.
+#[cfg(windows)]
+fn peer_closed(s: &UnixStream) -> bool {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        MSG_PEEK, WSAEWOULDBLOCK, WSAGetLastError, recv,
+    };
+    if s.set_nonblocking(true).is_err() {
+        return false;
+    }
+    let mut b = [0u8; 1];
+    // SAFETY: recv into a local buffer on a socket we own.
+    let n = unsafe { recv(s.as_raw_socket() as usize, b.as_mut_ptr(), 1, MSG_PEEK) };
+    // SAFETY: no arguments.
+    let err = (n < 0).then(|| unsafe { WSAGetLastError() });
+    let _ = s.set_nonblocking(false);
+    n == 0 || err.is_some_and(|e| e != WSAEWOULDBLOCK)
+}
+
 fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
     let mut c = Command::new(std::env::current_exe()?);
     c.args(&req.argv)
@@ -1035,16 +1051,28 @@ fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    use std::os::unix::process::CommandExt;
-    c.process_group(0);
+    c.detached();
     if req.prebuild {
         // A guess: below every build an agent is waiting for.
-        // SAFETY: setpriority is async-signal-safe.
-        unsafe {
-            c.pre_exec(|| {
-                libc::setpriority(libc::PRIO_PROCESS, 0, 10);
-                Ok(())
-            });
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: setpriority is async-signal-safe.
+            unsafe {
+                c.pre_exec(|| {
+                    libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+                    Ok(())
+                });
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(
+                windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
+                    | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
+                    | windows_sys::Win32::System::Threading::BELOW_NORMAL_PRIORITY_CLASS,
+            );
         }
     }
     crate::procfs::close_inherited_fds(&mut c);
@@ -1096,10 +1124,7 @@ fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
             let _ = p.join();
         }
         let code = match status {
-            Ok(s) => s.code().unwrap_or_else(|| {
-                use std::os::unix::process::ExitStatusExt;
-                128 + s.signal().unwrap_or(0)
-            }),
+            Ok(s) => crate::sys::exit_code(s),
             Err(_) => 1,
         };
         *b2.finished.lock().unwrap() = Some(Instant::now());
@@ -1124,8 +1149,7 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
     };
     let Some(b) = stale else { return };
     log(&format!("sources changed, stopping prebuild pid {}", b.pid));
-    // SAFETY: plain syscall on the prebuild's process group.
-    unsafe { libc::kill(-b.pid, libc::SIGTERM) };
+    crate::sys::terminate_group(b.pid, false);
     let mut l = b.log.lock().unwrap();
     let t = Instant::now();
     while l.exit.is_none() && t.elapsed() < Duration::from_secs(10) {
@@ -1215,8 +1239,7 @@ fn cancel_wrong_guess(dm: &Daemon, key: &str, session: &str) {
             "agent asked for another build, stopping prebuild pid {}",
             b.pid
         ));
-        // SAFETY: plain syscall on the prebuild's process group.
-        unsafe { libc::kill(-b.pid, libc::SIGTERM) };
+        crate::sys::terminate_group(b.pid, false);
     }
 }
 

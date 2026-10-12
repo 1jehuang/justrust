@@ -19,7 +19,6 @@
 
 use anyhow::{Context, Result, bail};
 use std::ffi::{OsStr, OsString};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -58,8 +57,7 @@ pub fn is_installed() -> bool {
 }
 
 fn is_executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    crate::sys::is_executable(p)
 }
 
 /// Extra rustc args for a unit: `-B <ld dir>` when wild should link it.
@@ -159,10 +157,7 @@ fn ensure_ld_dir() -> Result<PathBuf> {
 /// Started as one of the `ld*` names? justrust is never installed under
 /// those names other than in the `-B` dir (a driver may pass a bare name).
 pub fn invoked_as_ld(argv0: &OsStr) -> bool {
-    Path::new(argv0)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| LD_NAMES.contains(&n))
+    LD_NAMES.contains(&crate::sys::program_name(argv0).as_str())
 }
 
 /// The `ld` entry point: link with wild, fall back to the requested linker.
@@ -193,7 +188,7 @@ pub fn ld_main() -> ! {
         }
     }
     let real = fallback(&name);
-    let err = Command::new(&real).args(&args).exec();
+    let err = crate::sys::exec(Command::new(&real).args(&args));
     eprintln!("justrust: could not run linker {}: {err}", real.display());
     std::process::exit(127);
 }

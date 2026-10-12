@@ -24,12 +24,13 @@
 //! early start` (later runs in that workspace then use the running daemon).
 //! Fail open: any problem means no early output, the build is untouched.
 
+use crate::sys::Detach;
+use crate::sys::net::{UnixListener, UnixStream};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Sender, channel};
@@ -211,10 +212,9 @@ fn fnv(s: &[u8]) -> u64 {
 }
 
 fn state_dir(root: &Path) -> Result<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
     Ok(crate::paths::home()?
         .join("early")
-        .join(format!("{:016x}", fnv(root.as_os_str().as_bytes()))))
+        .join(format!("{:016x}", fnv(root.as_os_str().as_encoded_bytes()))))
 }
 
 // ------------------------------------------------------------------ client
@@ -492,8 +492,7 @@ fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
             c.env_remove(k.as_ref());
         }
     }
-    use std::os::unix::process::CommandExt;
-    c.process_group(0);
+    c.detached();
     crate::procfs::close_inherited_fds(&mut c);
     c.spawn().context("starting the early diagnostics daemon")?;
     Ok(())
@@ -1268,9 +1267,7 @@ fn daemon(root: &Path) -> Result<()> {
         .truncate(false)
         .write(true)
         .open(dir.join("lock"))?;
-    use std::os::fd::AsRawFd;
-    // SAFETY: flock on a descriptor we own.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if lock.try_lock().is_err() {
         return Ok(());
     }
     let sock = dir.join("sock");
@@ -1421,8 +1418,16 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("/w/desk/crates/a/src/x.rs".into(), 20, "E0308".into()),
-                ("/w/jcode/crates/b/src/z.rs".into(), 7, "".into()),
+                (
+                    normalize(Path::new("/w/desk/crates/a/src/x.rs")),
+                    20,
+                    "E0308".into()
+                ),
+                (
+                    normalize(Path::new("/w/jcode/crates/b/src/z.rs")),
+                    7,
+                    "".into()
+                ),
             ]
         );
     }

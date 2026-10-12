@@ -130,13 +130,9 @@ jobs:
           cd "$RUNNER_TEMP/dc-a" && "$GITHUB_WORKSPACE/target/release/justrust" test 2>&1 | tee rel.txt
           grep -q "1 passed" rel.txt
 
-  passthrough:
-    name: ${{ matrix.os }} (passthrough build)
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-    runs-on: ${{ matrix.os }}
+  windows:
+    name: windows-latest (clippy, test, smoke)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -144,15 +140,95 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --locked
-      - run: cargo build --locked
-      - name: Passthrough runs plain cargo
+      - run: cargo test --locked
+      # The recorder, sampler, and report on a real Windows build.
+      - name: Smoke test the binary
         shell: bash
         run: |
-          bin="$PWD/target/debug/justrust"
+          set -x
+          cargo build --locked
+          bin="$PWD/target/debug/justrust.exe"
           cargo new -q "$RUNNER_TEMP/smoke"
           cd "$RUNNER_TEMP/smoke"
-          "$bin" check
-          "$bin" --version
+          "$bin" check 2>&1 | tee check.txt
+          grep -E "^justrust: ok" check.txt
+          "$bin" test 2>&1 | tee test.txt
+          grep -E "^justrust: ok" test.txt
+          "$bin" show | tee show.txt
+          grep -q "not measured" show.txt
+          grep -E "^where +local" show.txt
+          "$bin" log --tail 3
+          "$bin" runs
+          echo 'fn main() { let _x: u32 = "a"; }' > src/main.rs
+          if "$bin" check 2>&1 | tee err.txt; then echo "expected a compile error"; exit 1; fi
+          grep -q "E0308" err.txt
+      # Dependency cache across target dirs, including a proc-macro DLL
+      # (keyed by its PE .rustc section) that must load
+      # after restore.
+      - name: Depcache across checkouts
+        shell: bash
+        run: |
+          bin="$PWD/target/debug/justrust.exe"
+          for d in a b; do
+            cargo new -q "$RUNNER_TEMP/dc-$d"
+            cd "$RUNNER_TEMP/dc-$d"
+            printf 'serde = { version = "1", features = ["derive"] }\nserde_json = "1"\n' >> Cargo.toml
+            printf '#[derive(serde::Serialize)]\nstruct S { a: u8 }\n#[test]\nfn t() { assert_eq!(serde_json::to_string(&S { a: 1 }).unwrap(), "{\\"a\\":1}"); }\nfn main() {}\n' > src/main.rs
+            JUSTRUST_DEPCACHE_EXPLAIN="$RUNNER_TEMP/explain-$d" "$bin" test 2>&1 | tee out.txt
+            cd -
+          done
+          # Why a unit was not stored, if any was (MSVC side files, ...).
+          cat "$RUNNER_TEMP"/explain-*/refused.txt 2>/dev/null || true
+          grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
+          grep -E "depcache [0-9]+ hit/0 miss" "$RUNNER_TEMP/dc-b/out.txt"
+      # One check per Windows path the port changed (FINDINGS 52 maps them).
+      - name: Windows integration paths
+        shell: bash
+        run: |
+          set -x
+          bin="$PWD/target/debug/justrust.exe"
+          cd "$RUNNER_TEMP/dc-b"
+          # Sampler: build CPU (job object) and per-process data are measured.
+          "$bin" show --json > show.json
+          python - <<'EOF'
+          import json
+          s = json.load(open("show.json"))
+          r = s["resources"]
+          assert r["psi_unavailable"] is True, r
+          assert r["avg_build_cores"] > 0, r
+          assert 0 < r["peak_unit_rss_mb"] < 4096, r
+          assert r["min_mem_available_mb"] > 0, r
+          print("sampler ok", r)
+          EOF
+          "$bin" status --json | tee status.json
+          python -c "import json; s=json.load(open('status.json')); assert s['active']==[], s"
+          # Slots need copy-on-write clones: a second session builds in the
+          # shared target dir, and only the edited crate rebuilds.
+          touch src/main.rs
+          JCODE_SESSION_ID=other "$bin" test 2>&1 | tee slot.txt
+          grep -q "1 passed" slot.txt
+          grep -E "units +1 compiled \(1 local, 0 deps" slot.txt
+          # Proxy install: cargo.exe next to a sidecar, recognized as ours.
+          "$bin" install --dir "$RUNNER_TEMP/jrbin"
+          ls "$RUNNER_TEMP/jrbin"
+          test -f "$RUNNER_TEMP/jrbin/cargo.exe.justrust"
+          "$bin" uninstall --dir "$RUNNER_TEMP/jrbin"
+          test ! -f "$RUNNER_TEMP/jrbin/cargo.exe"
+          # Pinned toolchain for the host triple (download, sha256 via certutil).
+          printf '[toolchain]\nchannel = "1.98.1"\n' > justrust.toml
+          "$bin" toolchain install 2>&1 | tail -3
+          "$bin" test 2>&1 | tee pinned.txt
+          grep -q "1 passed" pinned.txt
+          grep -E "pinned toolchain 1\.98\.1" pinned.txt
+          ls ~/.justrust/toolchains/1.98.1/lib/rustlib | grep -E "windows-msvc"
+          rm justrust.toml
+      - name: Release build runs
+        shell: bash
+        run: |
+          cargo build --release --locked --config profile.release.lto='"thin"' \
+            --config profile.release.codegen-units=1 --config profile.release.strip=true
+          cd "$RUNNER_TEMP/dc-a" && "$GITHUB_WORKSPACE/target/release/justrust.exe" test 2>&1 | tee rel.txt
+          grep -q "1 passed" rel.txt
 
   msrv:
     name: MSRV (rust-version in Cargo.toml)

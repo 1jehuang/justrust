@@ -9,7 +9,6 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -84,12 +83,14 @@ pub fn scan(root: &Path) -> Result<Scan> {
             out.oversized.push(rel);
             continue;
         }
+        let (s, ns) = crate::sys::mtime(&md);
+        let mode = crate::sys::mode(&md, &root.join(&rel)) & 0o777;
         out.files.insert(
             rel,
             Stamp {
-                mtime_ns: md.mtime() as i128 * 1_000_000_000 + md.mtime_nsec() as i128,
+                mtime_ns: s as i128 * 1_000_000_000 + ns as i128,
                 size: md.len(),
-                mode: md.permissions().mode() & 0o777,
+                mode,
             },
         );
     }
@@ -403,6 +404,8 @@ mod tests {
         assert!(diff(&new, &new).is_empty());
     }
 
+    // Runs `sh` scripts.
+    #[cfg(unix)]
     #[test]
     fn prepare_script_fallback_chain() {
         let d = std::env::temp_dir().join(format!("jr-prep-{}", std::process::id()));
@@ -415,7 +418,7 @@ mod tests {
         let script = |name: &str, body: &str| {
             let p = bin.join(name);
             std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::sys::set_mode(&p, 0o755).unwrap();
             p
         };
         script(
@@ -450,7 +453,7 @@ mod tests {
         // Read-only parent: mkdir fails, the wrapper runs under sudo.
         let ro = d.join("ro");
         std::fs::create_dir_all(&ro).unwrap();
-        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+        crate::sys::set_mode(&ro, 0o555).unwrap();
         let target = ro.join("proj");
         // As root (CI containers) mkdir succeeds anyway: nothing to check.
         if Command::new("mkdir")
@@ -467,10 +470,10 @@ mod tests {
             // here since the fake sudo is not root).
             assert!(!ok);
             assert!(log1.contains("sudo install -d"), "{log1}");
-            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::sys::set_mode(&ro, 0o755).unwrap();
             // With the wrapper present it is tried first. Make the parent
             // writable only for the wrapper by letting it chmod.
-            std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+            crate::sys::set_mode(&ro, 0o555).unwrap();
             let wrapper2 = script(
                 "jcode-mkdir2",
                 "chmod 755 \"$(dirname \"$1\")\" && mkdir -p \"$1\"",
@@ -484,7 +487,7 @@ mod tests {
             assert!(!log2.contains("install -d"), "{log2}");
             assert!(target.is_dir());
         }
-        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::sys::set_mode(&ro, 0o755).unwrap();
         std::fs::remove_dir_all(&d).unwrap();
     }
 
@@ -509,6 +512,8 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
+    // Runs `sh` scripts.
+    #[cfg(unix)]
     #[test]
     fn gitignored_lockfiles_are_still_mirrored() {
         let d = std::env::temp_dir().join(format!("jr-scan-lock-{}", std::process::id()));

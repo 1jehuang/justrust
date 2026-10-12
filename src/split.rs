@@ -1279,10 +1279,7 @@ pub(crate) fn hints_from(
 /// `justrust split --refresh-hints` (spawned in the background after runs
 /// with edits): recompute every hint for the workspace at the cwd.
 pub fn refresh_hints(days: f64) -> Result<()> {
-    // SAFETY: plain syscall on the current process.
-    unsafe {
-        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
-    }
+    crate::sys::lower_priority();
     let ws = Workspace::load(&std::env::current_dir()?)?;
     let Some(_lock) = split_index::refresh_lock(&ws.root) else {
         return Ok(()); // another refresh of this workspace is running
@@ -2085,6 +2082,7 @@ mod tests {
         let b = &all[&root.join("docs/guide.md")];
         assert!(
             b.text
+                .replace('\\', "/")
                 .starts_with("docs/guide.md is an input of base's build script"),
             "{}",
             b.text

@@ -1,13 +1,13 @@
-//! Entry point. The implementation lives in `lib.rs` (Linux and macOS).
+//! Entry point. The implementation lives in `lib.rs` (Linux, macOS, Windows).
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn main() -> anyhow::Result<()> {
     justrust::main()
 }
 
 /// Elsewhere: fail open. `justrust check|test|build|clippy|run|cargo ...`
 /// and the `cargo` proxy name run the real cargo unchanged, without recording.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn main() {
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();
@@ -27,7 +27,7 @@ fn main() {
             }
             _ => {
                 eprintln!(
-                    "justrust {}: only Linux is supported for now. On this platform \
+                    "justrust {}: only Linux, macOS, and Windows are supported. On this platform \
                      `justrust check|test|build|clippy|run` run plain cargo without \
                      recording, and the other commands are unavailable.",
                     env!("CARGO_PKG_VERSION")
@@ -37,7 +37,7 @@ fn main() {
         }
     };
     if invoked_as_cargo {
-        eprintln!("justrust: cargo proxy is Linux only, running cargo unchanged");
+        eprintln!("justrust: cargo proxy is not supported here, running cargo unchanged");
     } else {
         eprintln!("justrust: not on Linux, running plain cargo without recording");
     }

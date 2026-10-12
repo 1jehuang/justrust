@@ -44,9 +44,9 @@
 
 use crate::depcache::{self, Entry, H128, LocalKey, OutFile, Outputs, Plan};
 use crate::paths;
+use crate::sys::Detach;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 pub const FINISH_ARG: &str = "__localcache-finish";
@@ -188,7 +188,7 @@ fn stage_with(
             continue;
         }
         let m = e.metadata().ok()?;
-        let mtime = m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9;
+        let mtime = crate::sys::mtime_f64(&m);
         if m.is_file() && mtime + 1.0 >= start {
             files.push(name);
         }
@@ -301,7 +301,6 @@ fn spawn_finisher(dir: &Path) -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    use std::os::unix::process::CommandExt;
     // Null stdio: cargo reads the shim's stderr until EOF, so the finisher
     // must not hold it.
     std::process::Command::new(exe)
@@ -310,7 +309,7 @@ fn spawn_finisher(dir: &Path) -> bool {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .process_group(0)
+        .detached()
         .spawn()
         .is_ok()
 }
@@ -326,11 +325,11 @@ fn append_once(manifest: &Path, line: &str) -> Option<()> {
 
 /// `justrust __localcache-finish <staged dir>`: background commit.
 pub fn finish_main(dir: PathBuf) -> ! {
-    // SAFETY: plain syscalls on the current process.
+    crate::sys::lower_priority();
+    // IOPRIO_WHO_PROCESS, class idle.
+    // SAFETY: plain syscall on the current process.
+    #[cfg(target_os = "linux")]
     unsafe {
-        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
-        // IOPRIO_WHO_PROCESS, class idle.
-        #[cfg(target_os = "linux")]
         libc::syscall(libc::SYS_ioprio_set, 1, 0, 3 << 13);
     }
     let t0 = paths::now();
@@ -339,13 +338,7 @@ pub fn finish_main(dir: PathBuf) -> ! {
         let _ = std::fs::remove_dir_all(&dir);
     }
     if let Some(root) = dir.parent().and_then(Path::parent) {
-        // SAFETY: getrusage fills a plain struct.
-        let cpu = unsafe {
-            let mut ru: libc::rusage = std::mem::zeroed();
-            libc::getrusage(libc::RUSAGE_SELF, &mut ru);
-            let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
-            tv(ru.ru_utime) + tv(ru.ru_stime)
-        };
+        let cpu = crate::sys::self_cpu();
         let line = serde_json::json!({
             "t": t0, "secs": paths::now() - t0, "cpu": cpu, "ok": ok,
         });
@@ -408,7 +401,8 @@ fn finish(dir: &Path) -> Option<()> {
 }
 
 fn stamp(m: &std::fs::Metadata) -> String {
-    format!("{}:{}:{}:{}", m.ino(), m.len(), m.mtime(), m.mtime_nsec())
+    let (s, ns) = crate::sys::mtime(m);
+    format!("{}:{}:{s}:{ns}", crate::sys::file_id(m).1, m.len())
 }
 
 /// Replace a staged hard link with a private copy. `Some(false)` when the
@@ -445,7 +439,7 @@ fn max_bytes() -> u64 {
 fn maybe_gc(root: &Path) {
     let stamp = root.join("gc.stamp");
     if let Ok(m) = std::fs::metadata(&stamp) {
-        let age = paths::now() - (m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9);
+        let age = paths::now() - crate::sys::mtime_f64(&m);
         if age < GC_INTERVAL_SECS {
             return;
         }
@@ -460,7 +454,7 @@ fn maybe_gc(root: &Path) {
         .flatten()
     {
         if let Ok(m) = e.metadata()
-            && paths::now() - (m.mtime() as f64) > 3600.0
+            && paths::now() - crate::sys::mtime_f64(&m) > 3600.0
         {
             let _ = std::fs::remove_dir_all(e.path());
         }
@@ -553,11 +547,12 @@ mod tests {
         assert_eq!(hit.saved_secs, 1.5);
         assert_eq!(String::from_utf8_lossy(&err), "warning: x\n");
         let d = std::fs::read_to_string(ws.join("t2/debug/deps/w-0123456789abcdef.d")).unwrap();
-        assert!(
-            d.contains(&format!("{}/t2/debug/deps", ws.display())),
-            "{d}"
-        );
-        assert!(!d.contains("/t1/"), "{d}");
+        // Paths as cargo wrote them: `/` inside the target dir on every
+        // platform, the native separator in the workspace prefix.
+        let norm = d.replace('\\', "/");
+        let ws_norm = ws.display().to_string().replace('\\', "/");
+        assert!(norm.contains(&format!("{ws_norm}/t2/debug/deps")), "{d}");
+        assert!(!norm.contains("/t1/"), "{d}");
         assert!(
             ws.join("t2/debug/deps/libw-0123456789abcdef.rlib")
                 .is_file()

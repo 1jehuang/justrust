@@ -13,7 +13,6 @@
 //! Anything unexpected runs the binary unchanged (fail open).
 
 use std::ffi::OsString;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -163,7 +162,7 @@ pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
         && let Some(bin_s) = bin.to_str()
         // Cargo's test targets only. rustdoc also runs doc-test binaries
         // through the runner, from a temp dir, and reads their result itself.
-        && bin_s.contains("/deps/")
+        && crate::sys::has_dir(bin_s, "deps")
     {
         let mut all: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
         all.extend(user_s);
@@ -189,7 +188,7 @@ pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
         cmd.args(&extra);
     }
     cmd.args(&user);
-    let err = cmd.exec();
+    let err = crate::sys::exec(&mut cmd);
     eprintln!(
         "justrust: failed to run {}: {err}",
         Path::new(&bin).display()

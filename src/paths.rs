@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 /// Cargo runs `<home>/bin/shim/rustc` as `RUSTC`. The binary dispatches on
 /// its file name, so the shim must be named exactly `rustc`.
-pub const RUSTC_SHIM_NAME: &str = "rustc";
+pub const RUSTC_SHIM_NAME: &str = if cfg!(windows) { "rustc.exe" } else { "rustc" };
 
 pub fn home() -> Result<PathBuf> {
     if let Some(h) = std::env::var_os("JUSTRUST_HOME") {
@@ -56,9 +56,24 @@ pub fn ensure_rustc_shim() -> Result<PathBuf> {
     Ok(link)
 }
 
-/// Atomically point `link` at `target`.
+/// Windows: the shim and the `cargo` proxy are hard links (or copies) of
+/// justrust.exe, not symlinks (those need developer mode). Their names do
+/// not say justrust, so each gets a sidecar file (`cargo.exe` ->
+/// `cargo.exe.justrust`) that marks it as ours.
+pub fn copy_mark(link: &Path) -> PathBuf {
+    let mut s = link.as_os_str().to_owned();
+    s.push(".justrust");
+    PathBuf::from(s)
+}
+
+/// Atomically point `link` at `target`. On Windows a hard link or copy
+/// of `target` (replaced only when it differs), marked as justrust's.
 pub fn replace_symlink(target: &Path, link: &Path) -> Result<()> {
     if std::fs::read_link(link).ok().as_deref() == Some(target) {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    if same_file_contents(target, link) {
         return Ok(());
     }
     let dir = link.parent().context("link has no parent")?;
@@ -68,9 +83,33 @@ pub fn replace_symlink(target: &Path, link: &Path) -> Result<()> {
         .to_string_lossy();
     let tmp = dir.join(format!(".{name}.{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
-    std::os::unix::fs::symlink(target, &tmp)?;
-    std::fs::rename(&tmp, link)?;
+    crate::sys::symlink(target, &tmp)?;
+    if let Err(e) = std::fs::rename(&tmp, link) {
+        // Windows cannot replace a running executable: move it aside first.
+        #[cfg(windows)]
+        {
+            let old = dir.join(format!(".{name}.old.{}", std::process::id()));
+            if std::fs::rename(link, &old).is_ok() && std::fs::rename(&tmp, link).is_ok() {
+                let _ = std::fs::remove_file(&old);
+                let _ = std::fs::write(copy_mark(link), b"");
+                return Ok(());
+            }
+        }
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    #[cfg(windows)]
+    let _ = std::fs::write(copy_mark(link), b"");
     Ok(())
+}
+
+/// Same size and modification time, or the same file (a hard link).
+#[cfg(windows)]
+fn same_file_contents(a: &Path, b: &Path) -> bool {
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.len() == y.len() && x.modified().ok() == y.modified().ok(),
+        _ => false,
+    }
 }
 
 /// Find the real `cargo` on PATH, skipping any entry that resolves to justrust.
@@ -84,16 +123,10 @@ pub fn real_cargo() -> Result<PathBuf> {
 
 pub fn find_on_path(name: &str, skip: &Path) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
+    let name = crate::sys::exe_name(name);
     for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        let Ok(meta) = std::fs::metadata(&candidate) else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
-        use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o111 == 0 {
+        let candidate = dir.join(&name);
+        if !crate::sys::is_executable(&candidate) {
             continue;
         }
         if candidate.canonicalize().ok().as_deref() == Some(skip) || is_justrust(&candidate) {
@@ -107,6 +140,9 @@ pub fn find_on_path(name: &str, skip: &Path) -> Option<PathBuf> {
 /// True if `path` resolves to a justrust binary (for example the `cargo` proxy
 /// installed by `justrust install`), so it is never mistaken for the real tool.
 pub fn is_justrust(path: &Path) -> bool {
+    if cfg!(windows) && copy_mark(path).exists() {
+        return true;
+    }
     path.canonicalize()
         .ok()
         .and_then(|p| {

@@ -28,3 +28,19 @@ flate2 = "1.1.10"
 memchr = "2"
 object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "std"] }
 memmap2 = "0.9.11"
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1.2.1"
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }

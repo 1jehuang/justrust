@@ -149,8 +149,7 @@ pub(crate) fn control_path(dir: &std::path::Path) -> String {
     if p.len() - 2 + 40 + 17 < 108 {
         return p;
     }
-    // SAFETY: getuid has no preconditions.
-    let uid = unsafe { libc::getuid() };
+    let uid = crate::sys::user_tag();
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|d| d.is_dir())
@@ -226,6 +225,8 @@ mod tests {
         assert_eq!(b, Backend::Hosted);
     }
 
+    // Runs `sh` scripts.
+    #[cfg(unix)]
     #[test]
     fn env_lines_eval_in_a_shell() {
         let t = Target {
