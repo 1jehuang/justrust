@@ -4110,7 +4110,11 @@ toolchain), median wall per pass at -Zthreads 1 / 8 / 16:
 | jcode_base check | 2.28 / 2.28 / 2.30 s | nothing: every pass is flat |
 | jcode_base build | 3.80 / 3.73 / 3.80 s | mono 0.40 -> 0.30, otherwise flat; CPU rises 3.5 -> 5.4 s for no wall gain |
 
-(-Z8 desktop has n=1 clean sample, -Z16 n=2. Treat as indicative.)
+(Thread counts verified per run in units.jsonl `frontend_threads`. But
+the Desktop -Z8 column is n=1 clean sample (4 of 5 flagged noisy) and
+-Z16 n=2, so the 6.30 -> 4.66 s gain is not established. The jcode_base
+rows have n=3-5 and are solid. Rerun Desktop with more samples on a quiet
+machine before acting on it.)
 
 Ranking for parallelization work:
 
@@ -4118,8 +4122,13 @@ Ranking for parallelization work:
    not threads inside rustc but not compiling them: the depcache and prebuilt
    store (FINDINGS 55: hosted keys never match until the fleet publishes
    debug=0 and nightly keys).
-2. **Whole-crate granularity, 18% + the solo column.** Giant local crates
-   have no pass data and run alone: split them (shadow split, FINDINGS 47).
+2. **Whole-crate granularity, 18% + the solo column.** "Local crates without
+   pass data" are local crates built without `-Ztime-passes` (off by
+   default), not a separate kind of crate: by wall since 10-10 justrust
+   4305 s, jcode_base 2004 s, jcode_desktop_ui 1820 s, cargo 1635 s,
+   jcode_app_core 802 s, jcode_tui 535 s. 76% of their share was solo
+   (8398 of 11009 s). The same giant crates: split them (shadow split,
+   FINDINGS 47).
 3. **Inside rustc, what -Zthreads does not already parallelize in warm
    loops:** macro expansion (1.13 s/run, 2606 s solo, serial by design,
    already cut by the attr-macro cache), incr persist (0.33 s/run, can
