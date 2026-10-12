@@ -1,0 +1,2684 @@
+{
+ "started": "2026-10-12T06:58:21-0700",
+ "seed": 1,
+ "root": "/home/jeremy/.justrust/bench/early-exit-work",
+ "justrust": "a5a4809",
+ "sweep": {
+  "jcode": {
+   "files": 923,
+   "pulled": 923,
+   "secs": 48.9,
+   "flagged_unedited": 9,
+   "flagged_files": 2,
+   "false_exits": 1,
+   "false_exit_files": [
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests.rs",
+     "diags": [
+      {
+       "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+       "line": 23,
+       "col": 17,
+       "code": "E0432",
+       "message": "unresolved import"
+      },
+      {
+       "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+       "line": 36,
+       "col": 51,
+       "code": "E0277",
+       "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+      },
+      {
+       "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+       "line": 37,
+       "col": 70,
+       "code": "E0277",
+       "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+      },
+      {
+       "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+       "line": 40,
+       "col": 73,
+       "code": "E0277",
+       "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+      }
+     ]
+    }
+   ],
+   "diags": [
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+     "line": 23,
+     "col": 17,
+     "code": "E0432",
+     "message": "unresolved import"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+     "line": 36,
+     "col": 51,
+     "code": "E0277",
+     "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+     "line": 37,
+     "col": 70,
+     "code": "E0277",
+     "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests/issue_534_profile_preservation.rs",
+     "line": 40,
+     "col": 73,
+     "code": "E0277",
+     "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests.rs",
+     "line": 983,
+     "col": 13,
+     "code": "E0432",
+     "message": "unresolved import"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests.rs",
+     "line": 985,
+     "col": 47,
+     "code": "E0277",
+     "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests.rs",
+     "line": 987,
+     "col": 17,
+     "code": "E0277",
+     "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests.rs",
+     "line": 989,
+     "col": 66,
+     "code": "E0277",
+     "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+    },
+    {
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider/tests.rs",
+     "line": 992,
+     "col": 69,
+     "code": "E0277",
+     "message": "the trait bound `!: Provider` is not satisfied\nrequired by the bound `!: Unsize<dyn Provider>`\nrequired by the bound `Arc<!, Global>: CoerceUnsized<Arc<dyn Provider, Global>>`\n"
+    }
+   ]
+  }
+ },
+ "rows": [
+  {
+   "kind": "jcode",
+   "op": "extra_arg",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/onboarding_flow.rs",
+   "line": 359,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 409.7,
+   "rustc_s": 10.99,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/onboarding_flow.rs",
+     359,
+     "E0061"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/onboarding_flow.rs",
+     359,
+     "E0061"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0061",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/onboarding_flow.rs",
+     "line": 359,
+     "message": "expected 1 argument, found 2",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "unwrap_some",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/keybind.rs",
+   "line": 410,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 334.0,
+   "rustc_s": 9.05,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/keybind.rs",
+     410,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/keybind.rs",
+     410,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/keybind.rs",
+     "line": 410,
+     "message": "expected Option<char>, found char",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_fn_call",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/provider_activity.rs",
+   "line": 90,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 641.0,
+   "rustc_s": 2.4,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/provider_activity.rs",
+     123,
+     "E0425"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/provider_activity.rs",
+     123,
+     "E0425"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/provider_activity.rs",
+     "line": 123,
+     "message": "no such value in this scope",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_paren",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/tests/command_suggestions_cache.rs",
+   "line": 109,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 3900.3,
+   "rustc_s": 5.09,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests/command_suggestions_cache.rs",
+     109,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests/command_suggestions_cache.rs",
+     109,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/tests/command_suggestions_cache.rs",
+     "line": 109,
+     "message": "Syntax Error: expected expression",
+     "severity": 1
+    },
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/tests/command_suggestions_cache.rs",
+     "line": 109,
+     "message": "Syntax Error: expected R_PAREN",
+     "severity": 1
+    },
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/tests/command_suggestions_cache.rs",
+     "line": 109,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "ok_unit_to_unit",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/conversation_state.rs",
+   "line": 320,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 551.2,
+   "rustc_s": 7.92,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/conversation_state.rs",
+     320,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/conversation_state.rs",
+     320,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/conversation_state.rs",
+     "line": 320,
+     "message": "expected Result<(), Error>, found ()",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "assign_immutable",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/comm_session.rs",
+   "line": 1422,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 920.6,
+   "rustc_s": 12.74,
+   "rc": 101,
+   "early": [],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/comm_session.rs",
+     1423,
+     "E0384"
+    ]
+   ],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_method",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/bridge_reload.rs",
+   "line": 325,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 560.7,
+   "rustc_s": 12.18,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/bridge_reload.rs",
+     325,
+     "E0599"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/bridge_reload.rs",
+     325,
+     "E0599"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0599",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/bridge_reload.rs",
+     "line": 325,
+     "message": "no method `has_exited_x` on type `&SpawnedBridge`",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_to_string",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/test_harness.rs",
+   "line": 807,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 504.1,
+   "rustc_s": 10.57,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/test_harness.rs",
+     807,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/test_harness.rs",
+     807,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/test_harness.rs",
+     "line": 807,
+     "message": "expected String, found &'static str",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_to_string",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/swarm_cascade_tests.rs",
+   "line": 31,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 304.4,
+   "rustc_s": 11.94,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/server/swarm_cascade_tests.rs",
+     31,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/swarm_cascade_tests.rs",
+     31,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/swarm_cascade_tests.rs",
+     "line": 31,
+     "message": "expected String, found &'static str",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_field",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/replace.rs",
+   "line": 79,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 568.5,
+   "rustc_s": 11.99,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/replace.rs",
+     79,
+     "E0559"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/replace.rs",
+     79,
+     "E0609"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/tool/replace.rs",
+     79,
+     "E0609"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0559",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/replace.rs",
+     "line": 79,
+     "message": "no field `regexx` on type `&Matcher`",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_to_string",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/process_title.rs",
+   "line": 201,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 314.1,
+   "rustc_s": 11.12,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/process_title.rs",
+     201,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/process_title.rs",
+     201,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/process_title.rs",
+     "line": 201,
+     "message": "expected String, found &'static str",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_field_init",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/memory_tests.rs",
+   "line": 978,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 540.5,
+   "rustc_s": 11.27,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/memory_tests.rs",
+     974,
+     "E0063"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/memory_tests.rs",
+     974,
+     "E0063"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0063",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/memory_tests.rs",
+     "line": 974,
+     "message": "missing structure fields:\n- is_error\n",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/gateway_tests.rs",
+   "line": 46,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 313.8,
+   "rustc_s": 8.2,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/gateway_tests.rs",
+     46,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/gateway_tests.rs",
+     46,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/gateway_tests.rs",
+     "line": 46,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_as_cast",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/usage_display.rs",
+   "line": 92,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 292.5,
+   "rustc_s": 11.86,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_type_path",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/comm_control_tests/assign_ready_agent.rs",
+   "line": 34,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 608.9,
+   "rustc_s": 15.36,
+   "rc": 101,
+   "early": [],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/comm_control_tests/assign_ready_agent.rs",
+     34,
+     "E0433"
+    ]
+   ],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/memory_agent.rs",
+   "line": 308,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 372.8,
+   "rustc_s": 2.23,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/memory_agent.rs",
+     308,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/memory_agent.rs",
+     308,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/memory_agent.rs",
+     "line": 308,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_type_path",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/shortcut_hints.rs",
+   "line": 239,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 338.1,
+   "rustc_s": 10.49,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/shortcut_hints.rs",
+     250,
+     "E0599"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/shortcut_hints.rs",
+     239,
+     "E0433"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0599",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/shortcut_hints.rs",
+     "line": 250,
+     "message": "no method `phrase` on type `!`",
+     "severity": 1
+    }
+   ],
+   "verdict": "wrong_location"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_local",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/tests/image_placeholder_commands.rs",
+   "line": 16,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 2156.5,
+   "rustc_s": 19.85,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests/image_placeholder_commands.rs",
+     16,
+     "E0425"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests/image_placeholder_commands.rs",
+     16,
+     "E0425"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/tests/image_placeholder_commands.rs",
+     "line": 16,
+     "message": "no such value in this scope",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/client_state_tests.rs",
+   "line": 562,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 1321.7,
+   "rustc_s": 11.48,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_state_tests.rs",
+     562,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_state_tests.rs",
+     562,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/client_state_tests.rs",
+     "line": 562,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "bool_to_int",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/debug_cmds.rs",
+   "line": 1120,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 8016.5,
+   "rustc_s": 20.79,
+   "rc": 101,
+   "early": [],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/debug_cmds.rs",
+     1120,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_fn_call",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/client_target_attach_tests.rs",
+   "line": 181,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 678.9,
+   "rustc_s": 42.21,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_target_attach_tests.rs",
+     181,
+     "E0425"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_target_attach_tests.rs",
+     181,
+     "E0425"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/client_target_attach_tests.rs",
+     "line": 181,
+     "message": "no such value in this scope",
+     "severity": 1
+    },
+    {
+     "code": "E0282",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/client_target_attach_tests.rs",
+     "line": 149,
+     "message": "type annotations needed\nfull type: `fn new<RwLock<HashMap<{unknown}, Arc<Mutex<Agent>, Global>, RandomState, Global>>>(RwLock<HashMap<{unknown}, Arc<Mutex<Agent>, Global>, RandomState, Global>>) -> Arc<RwLock<HashMap<{unknown}, Arc<Mutex<Agent>, Global>, RandomState, Global>>, Global>`\n",
+     "severity": 1
+    },
+    {
+     "code": "E0282",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/client_target_attach_tests.rs",
+     "line": 153,
+     "message": "type annotations needed\nfull type: `fn new<RwLock<HashMap<{unknown}, SwarmMember, RandomState, Global>>>(RwLock<HashMap<{unknown}, SwarmMember, RandomState, Global>>) -> Arc<RwLock<HashMap<{unknown}, SwarmMember, RandomState, Global>>, Global>`\n",
+     "severity": 1
+    },
+    {
+     "code": "E0282",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/client_target_attach_tests.rs",
+     "line": 179,
+     "message": "type annotations needed\nfull type: `Result<{unknown}, Elapsed>`\n",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_to_string",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/browser_tests.rs",
+   "line": 213,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 814.6,
+   "rustc_s": 8.95,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/browser_tests.rs",
+     214,
+     "E0599"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/browser_tests.rs",
+     214,
+     "E0599"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0599",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/browser_tests.rs",
+     "line": 214,
+     "message": "no method `contains` on type `Error`",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_to_string",
+   "clean": false,
+   "file": "jcode/crates/jcode-provider-core/src/catalog_refresh.rs",
+   "line": 51,
+   "crate": "jcode-provider-core",
+   "ready": true,
+   "ra_ms": 527.0,
+   "rustc_s": 1.24,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-provider-core/src/catalog_refresh.rs",
+     51,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-provider-core/src/catalog_refresh.rs",
+     51,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-provider-core/src/catalog_refresh.rs",
+     "line": 51,
+     "message": "expected String, found &str",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "unwrap_some",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/mission.rs",
+   "line": 116,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 447.1,
+   "rustc_s": 11.24,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/mission.rs",
+     116,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/mission.rs",
+     116,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/mission.rs",
+     "line": 116,
+     "message": "expected Option<Mission>, found Mission",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_local",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/auth/external.rs",
+   "line": 559,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 886.9,
+   "rustc_s": 15.8,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/auth/external.rs",
+     559,
+     "E0560"
+    ],
+    [
+     "jcode/crates/jcode-base/src/auth/external.rs",
+     559,
+     "E0425"
+    ],
+    [
+     "jcode/crates/jcode-base/src/auth/external.rs",
+     556,
+     "E0063"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/auth/external.rs",
+     559,
+     "E0425"
+    ],
+    [
+     "jcode/crates/jcode-base/src/auth/external.rs",
+     559,
+     "E0560"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0560",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/auth/external.rs",
+     "line": 559,
+     "message": "no such field",
+     "severity": 1
+    },
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/auth/external.rs",
+     "line": 559,
+     "message": "no such value in this scope",
+     "severity": 1
+    },
+    {
+     "code": "E0063",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/auth/external.rs",
+     "line": 556,
+     "message": "missing structure fields:\n- expires_at\n",
+     "severity": 1
+    }
+   ],
+   "verdict": "wrong_location"
+  },
+  {
+   "kind": "jcode",
+   "op": "bad_import",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/compile_remote/source.rs",
+   "line": 9,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 2419.2,
+   "rustc_s": 36.13,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/compile_remote/source.rs",
+     9,
+     "E0432"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/compile_remote/source.rs",
+     9,
+     "E0432"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0432",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/compile_remote/source.rs",
+     "line": 9,
+     "message": "unresolved import",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/selfdev/reload.rs",
+   "line": 47,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 1224.9,
+   "rustc_s": 11.73,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/selfdev/reload.rs",
+     47,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/selfdev/reload.rs",
+     47,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/selfdev/reload.rs",
+     "line": 47,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "unwrap_some",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/input_help.rs",
+   "line": 245,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 1154.3,
+   "rustc_s": 30.85,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/input_help.rs",
+     245,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/input_help.rs",
+     245,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/input_help.rs",
+     "line": 245,
+     "message": "expected Option<String>, found String",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_field_init",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/side_panel_tests.rs",
+   "line": 46,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 613.0,
+   "rustc_s": 10.09,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/side_panel_tests.rs",
+     41,
+     "E0063"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/side_panel_tests.rs",
+     41,
+     "E0063"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0063",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/side_panel_tests.rs",
+     "line": 41,
+     "message": "missing structure fields:\n- stdin_request_tx\n",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "bool_to_int",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/replay.rs",
+   "line": 193,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 2334.7,
+   "rustc_s": 15.1,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/replay.rs",
+     193,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/replay.rs",
+     193,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/replay.rs",
+     "line": 193,
+     "message": "expected bool, found i32",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "let_u32_str",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/file_lock.rs",
+   "line": 25,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 1065.1,
+   "rustc_s": 11.22,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/file_lock.rs",
+     26,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/file_lock.rs",
+     26,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/file_lock.rs",
+     "line": 26,
+     "message": "expected u32, found &'static str",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "bool_to_int",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/debug.rs",
+   "line": 25,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 1161.3,
+   "rustc_s": 32.01,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/debug.rs",
+     33,
+     "E0308"
+    ],
+    [
+     "jcode/crates/jcode-tui/src/tui/app/debug.rs",
+     56,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/debug.rs",
+     33,
+     "E0308"
+    ],
+    [
+     "jcode/crates/jcode-tui/src/tui/app/debug.rs",
+     56,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/debug.rs",
+     "line": 33,
+     "message": "expected i32, found bool",
+     "severity": 1
+    },
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/debug.rs",
+     "line": 56,
+     "message": "expected bool, found i32",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_local",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/open_tests.rs",
+   "line": 161,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 869.5,
+   "rustc_s": 11.35,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/open_tests.rs",
+     161,
+     "E0425"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/open_tests.rs",
+     161,
+     "E0425"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/open_tests.rs",
+     "line": 161,
+     "message": "no such value in this scope",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_to_string",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/state_ui_maintenance.rs",
+   "line": 516,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 1101.6,
+   "rustc_s": 25.09,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/state_ui_maintenance.rs",
+     516,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/state_ui_maintenance.rs",
+     516,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/state_ui_maintenance.rs",
+     "line": 516,
+     "message": "expected String, found Display<'_>",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-plan/src/dag/ops.rs",
+   "line": 304,
+   "crate": "jcode-plan",
+   "ready": true,
+   "ra_ms": 516.4,
+   "rustc_s": 1.25,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-plan/src/dag/ops.rs",
+     304,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-plan/src/dag/ops.rs",
+     304,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-plan/src/dag/ops.rs",
+     "line": 304,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "ok_unit_to_unit",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/gmail.rs",
+   "line": 644,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 1630.4,
+   "rustc_s": 7.31,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/gmail.rs",
+     644,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/gmail.rs",
+     644,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/gmail.rs",
+     "line": 644,
+     "message": "expected Result<(), Error>, found ()",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_method",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/ui_inline.rs",
+   "line": 55,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 768.2,
+   "rustc_s": 25.38,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/ui_inline.rs",
+     55,
+     "E0599"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/ui_inline.rs",
+     55,
+     "E0599"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0599",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/ui_inline.rs",
+     "line": 55,
+     "message": "no method `max_x` on type `usize`",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_to_string",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/ui_tests/tools.rs",
+   "line": 420,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 1263.7,
+   "rustc_s": 15.69,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/ui_tests/tools.rs",
+     420,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/ui_tests/tools.rs",
+     420,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/ui_tests/tools.rs",
+     "line": 420,
+     "message": "expected String, found &'static str",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/tests_input_scroll.rs",
+   "line": 328,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 399.4,
+   "rustc_s": 9.88,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests_input_scroll.rs",
+     328,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests_input_scroll.rs",
+     328,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/tests_input_scroll.rs",
+     "line": 328,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_question_mark",
+   "clean": false,
+   "file": "jcode/crates/jcode-telemetry-core/src/state_support.rs",
+   "line": 403,
+   "crate": "jcode-telemetry-core",
+   "ready": true,
+   "ra_ms": 533.0,
+   "rustc_s": 1.24,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-telemetry-core/src/state_support.rs",
+     404,
+     "E0599"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-telemetry-core/src/state_support.rs",
+     404,
+     "E0599"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0599",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-telemetry-core/src/state_support.rs",
+     "line": 404,
+     "message": "no method `as_secs` on type `Option<Duration>`",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "unwrap_some",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/commands_overnight.rs",
+   "line": 412,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 734.6,
+   "rustc_s": 13.56,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/commands_overnight.rs",
+     412,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/commands_overnight.rs",
+     412,
+     "E0308"
+    ],
+    [
+     "jcode/crates/jcode-tui/src/tui/app/commands_overnight.rs",
+     412,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/commands_overnight.rs",
+     "line": 412,
+     "message": "expected Option<OvernightAutoPokeState>, found OvernightAutoPokeState",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "ok_unit_to_unit",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs",
+   "line": 171,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 2686.7,
+   "rustc_s": 10.51,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs",
+     171,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs",
+     171,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/tests/support_failover/part_01.rs",
+     "line": 171,
+     "message": "expected Result<(), Error>, found ()",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "unwrap_some",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/voice/streaming_capture.rs",
+   "line": 537,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 673.2,
+   "rustc_s": 2.17,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/voice/streaming_capture.rs",
+     537,
+     "E0308"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/voice/streaming_capture.rs",
+     537,
+     "E0308"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0308",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/voice/streaming_capture.rs",
+     "line": 537,
+     "message": "expected Option<StopHandle>, found StopHandle",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_wildcard_arm",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/auth/transfer.rs",
+   "line": 492,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 567.3,
+   "rustc_s": 2.43,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-base/src/auth/transfer.rs",
+     489,
+     "E0004"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-base/src/auth/transfer.rs",
+     489,
+     "E0004"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0004",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-base/src/auth/transfer.rs",
+     "line": 489,
+     "message": "missing match arm: `Prefix(_)` and `ParentDir` not covered",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_paren",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/agent_tests/concurrency.rs",
+   "line": 106,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 360.7,
+   "rustc_s": 3.17,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/agent_tests/concurrency.rs",
+     106,
+     ""
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/agent_tests/concurrency.rs",
+     97,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/agent_tests/concurrency.rs",
+     106,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/agent_tests/concurrency.rs",
+     "line": 106,
+     "message": "Syntax Error: expected R_PAREN",
+     "severity": 1
+    },
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/agent_tests/concurrency.rs",
+     "line": 97,
+     "message": "Syntax Error in Expansion: expected R_PAREN",
+     "severity": 1
+    },
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/agent_tests/concurrency.rs",
+     "line": 97,
+     "message": "Syntax Error in Expansion: expected expression, item or let statement",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_fn_call",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/model_context.rs",
+   "line": 881,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 675.0,
+   "rustc_s": 10.0,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_field_init",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/agent/model_usage_tests.rs",
+   "line": 9,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 389.6,
+   "rustc_s": 4.57,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/agent/model_usage_tests.rs",
+     70,
+     "E0560"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/agent/model_usage_tests.rs",
+     37,
+     "E0559"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/agent/model_usage_tests.rs",
+     70,
+     "E0560"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/agent/model_usage_tests.rs",
+     37,
+     "E0609"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0560",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/agent/model_usage_tests.rs",
+     "line": 70,
+     "message": "no such field",
+     "severity": 1
+    },
+    {
+     "code": "E0559",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/agent/model_usage_tests.rs",
+     "line": 37,
+     "message": "no field `fail` on type `&UsageProvider`",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_type_path",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/comm_control_tests/dag_e2e.rs",
+   "line": 909,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 1051.3,
+   "rustc_s": 15.1,
+   "rc": 101,
+   "early": [],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/comm_control_tests/dag_e2e.rs",
+     909,
+     "E0433"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0282",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/comm_control_tests/dag_e2e.rs",
+     "line": 909,
+     "message": "type annotations needed\nfull type: `fn new<HashMap<{unknown}, {unknown}, RandomState, Global>>(HashMap<{unknown}, {unknown}, RandomState, Global>) -> RwLock<HashMap<{unknown}, {unknown}, RandomState, Global>>`\n",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_paren",
+   "clean": false,
+   "file": "jcode/crates/jcode-plan/src/dag/mod.rs",
+   "line": 164,
+   "crate": "jcode-plan",
+   "ready": true,
+   "ra_ms": 307.7,
+   "rustc_s": 0.32,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-plan/src/dag/mod.rs",
+     164,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-plan/src/dag/mod.rs",
+     164,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-plan/src/dag/mod.rs",
+     "line": 164,
+     "message": "Syntax Error: expected R_PAREN",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_paren",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/remote_diff.rs",
+   "line": 184,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 270.5,
+   "rustc_s": 4.29,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/remote_diff.rs",
+     184,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/remote_diff.rs",
+     184,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/remote_diff.rs",
+     "line": 184,
+     "message": "Syntax Error: expected expression",
+     "severity": 1
+    },
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/remote_diff.rs",
+     "line": 184,
+     "message": "Syntax Error: expected R_PAREN",
+     "severity": 1
+    },
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/remote_diff.rs",
+     "line": 184,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_field_init",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/swarm_channels.rs",
+   "line": 27,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 342.2,
+   "rustc_s": 16.99,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/server/swarm_channels.rs",
+     30,
+     "E0425"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/swarm_channels.rs",
+     30,
+     "E0425"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server.rs",
+     301,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server.rs",
+     200,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server/client_actions.rs",
+     554,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server/comm_session.rs",
+     1181,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server/client_session.rs",
+     1099,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server/client_session.rs",
+     1638,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server/client_session.rs",
+     250,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server/client_disconnect_cleanup.rs",
+     347,
+     "E0061"
+    ],
+    [
+     "jcode/crates/jcode-app-core/src/server/client_session.rs",
+     692,
+     "E0061"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/swarm_channels.rs",
+     "line": 30,
+     "message": "no such value in this scope",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "extra_arg",
+   "clean": false,
+   "file": "jcode/crates/jcode-provider-core/src/reasoning.rs",
+   "line": 135,
+   "crate": "jcode-provider-core",
+   "ready": true,
+   "ra_ms": 323.2,
+   "rustc_s": 0.99,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-provider-core/src/reasoning.rs",
+     135,
+     "E0061"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-provider-core/src/reasoning.rs",
+     135,
+     "E0061"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0061",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-provider-core/src/reasoning.rs",
+     "line": 135,
+     "message": "expected 1 argument, found 2",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/client_lightweight_control.rs",
+   "line": 125,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 441.9,
+   "rustc_s": 7.21,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_lightweight_control.rs",
+     125,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_lightweight_control.rs",
+     125,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/client_lightweight_control.rs",
+     "line": 125,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "let_u32_str",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/info_widget_timeline.rs",
+   "line": 246,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 289.9,
+   "rustc_s": 6.98,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_paren",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/tool/batch.rs",
+   "line": 160,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 478.9,
+   "rustc_s": 0.7,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/batch.rs",
+     160,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/tool/batch.rs",
+     160,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/tool/batch.rs",
+     "line": 160,
+     "message": "Syntax Error: expected R_PAREN",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "bad_import",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/client_session_tests/resume.rs",
+   "line": 3,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 1121.3,
+   "rustc_s": 11.94,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_session_tests/resume.rs",
+     3,
+     "E0432"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/client_session_tests/resume.rs",
+     3,
+     "E0432"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0432",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/client_session_tests/resume.rs",
+     "line": 3,
+     "message": "unresolved import",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "syntax_drop_semicolon",
+   "clean": false,
+   "file": "jcode/crates/jcode-tui/src/tui/app/commands_colors.rs",
+   "line": 130,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 404.3,
+   "rustc_s": 3.42,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/commands_colors.rs",
+     130,
+     ""
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-tui/src/tui/app/commands_colors.rs",
+     130,
+     ""
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "syntax-error",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-tui/src/tui/app/commands_colors.rs",
+     "line": 130,
+     "message": "Syntax Error: expected SEMICOLON",
+     "severity": 1
+    }
+   ],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "typo_fn_call",
+   "clean": false,
+   "file": "jcode/crates/jcode-app-core/src/server/comm_control_tests/assign_next_dependency.rs",
+   "line": 24,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 1245.2,
+   "rustc_s": 15.23,
+   "rc": 101,
+   "early": [
+    [
+     "jcode/crates/jcode-app-core/src/server/comm_control_tests/assign_next_dependency.rs",
+     24,
+     "E0425"
+    ]
+   ],
+   "rustc": [
+    [
+     "jcode/crates/jcode-app-core/src/server/comm_control_tests/assign_next_dependency.rs",
+     24,
+     "E0425"
+    ]
+   ],
+   "ra_raw_sev1": [
+    {
+     "code": "E0425",
+     "file": "/home/jeremy/.justrust/bench/early-exit-work/jcode/crates/jcode-app-core/src/server/comm_control_tests/assign_next_dependency.rs",
+     "line": 24,
+     "message": "no such value in this scope",
+     "severity": 1
+    }
+   ],
+   "verdict": "correct"
+  },
+  {
+   "kind": "jcode",
+   "op": "drop_field_init",
+   "clean": false,
+   "file": "jcode/crates/jcode-base/src/todo.rs",
+   "line": 1276,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 695.2,
+   "rustc_s": 12.47,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "assign_immutable",
+   "clean": false,
+   "file": "jcode/crates/jcode-protocol/src/lib.rs",
+   "line": 772,
+   "crate": "jcode-protocol",
+   "ready": true,
+   "ra_ms": 516.4,
+   "rustc_s": 2.15,
+   "rc": 101,
+   "early": [],
+   "rustc": [
+    [
+     "jcode/crates/jcode-protocol/src/lib.rs",
+     773,
+     "E0384"
+    ]
+   ],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "new_private_fn",
+   "clean": true,
+   "file": "jcode/crates/jcode-app-core/src/tool/memory.rs",
+   "line": null,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 1242.5,
+   "rustc_s": 12.43,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "comment_line",
+   "clean": true,
+   "file": "jcode/crates/jcode-tui-markdown/src/markdown_render_support.rs",
+   "line": null,
+   "crate": "jcode-tui-markdown",
+   "ready": true,
+   "ra_ms": 332.2,
+   "rustc_s": 0.92,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "new_private_fn",
+   "clean": true,
+   "file": "jcode/crates/jcode-app-core/src/tool/edit.rs",
+   "line": null,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 816.7,
+   "rustc_s": 5.02,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "comment_line",
+   "clean": true,
+   "file": "jcode/crates/jcode-base/src/provider_activity_oauth.rs",
+   "line": null,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 392.4,
+   "rustc_s": 7.65,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "black_box_stmt",
+   "clean": true,
+   "file": "jcode/crates/jcode-base/src/prompt.rs",
+   "line": null,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 398.9,
+   "rustc_s": 7.56,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "black_box_stmt",
+   "clean": true,
+   "file": "jcode/crates/jcode-tui/src/tui/app/run_shell.rs",
+   "line": null,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 868.0,
+   "rustc_s": 10.09,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "black_box_stmt",
+   "clean": true,
+   "file": "jcode/crates/jcode-tui/src/tui/app/todos_view.rs",
+   "line": null,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 404.7,
+   "rustc_s": 4.57,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "black_box_stmt",
+   "clean": true,
+   "file": "jcode/crates/jcode-app-core/src/tool/file_lock.rs",
+   "line": null,
+   "crate": "jcode-app-core",
+   "ready": true,
+   "ra_ms": 128.4,
+   "rustc_s": 5.02,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "new_private_fn",
+   "clean": true,
+   "file": "jcode/crates/jcode-tui/src/tui/ui_pinned_utils.rs",
+   "line": null,
+   "crate": "jcode-tui",
+   "ready": true,
+   "ra_ms": 516.0,
+   "rustc_s": 7.25,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "comment_line",
+   "clean": true,
+   "file": "jcode/crates/jcode-base/src/auth/codex.rs",
+   "line": null,
+   "crate": "jcode-base",
+   "ready": true,
+   "ra_ms": 376.7,
+   "rustc_s": 7.99,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  },
+  {
+   "kind": "jcode",
+   "op": "new_private_fn",
+   "clean": true,
+   "file": "jcode/crates/jcode-protocol/src/protocol_tests/comm_requests.rs",
+   "line": null,
+   "crate": "jcode-protocol",
+   "ready": true,
+   "ra_ms": 862.3,
+   "rustc_s": 2.08,
+   "rc": 0,
+   "early": [],
+   "rustc": [],
+   "ra_raw_sev1": [],
+   "verdict": "no_exit"
+  }
+ ],
+ "totals": {
+  "all": {
+   "mutations": 60,
+   "rustc_failed": 56,
+   "fired": 38,
+   "correct": 36,
+   "partial": 0,
+   "near": 0,
+   "wrong_build_passed": 0,
+   "wrong_location": 2,
+   "recall": 0.643,
+   "clean_edits": 11,
+   "clean_false_exits": 0,
+   "ra_ms_median": 567.3,
+   "rustc_s_median_fired": 11.27
+  },
+  "jcode": {
+   "mutations": 60,
+   "rustc_failed": 56,
+   "fired": 38,
+   "correct": 36,
+   "partial": 0,
+   "near": 0,
+   "wrong_build_passed": 0,
+   "wrong_location": 2,
+   "recall": 0.643,
+   "clean_edits": 11,
+   "clean_false_exits": 0,
+   "ra_ms_median": 567.3,
+   "rustc_s_median_fired": 11.27
+  },
+  "by_op": {
+   "extra_arg": {
+    "n": 2,
+    "rustc_failed": 2,
+    "fired_correct": 2,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "unwrap_some": {
+    "n": 5,
+    "rustc_failed": 5,
+    "fired_correct": 5,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "typo_fn_call": {
+    "n": 4,
+    "rustc_failed": 3,
+    "fired_correct": 3,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "syntax_drop_paren": {
+    "n": 5,
+    "rustc_failed": 5,
+    "fired_correct": 0,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "ok_unit_to_unit": {
+    "n": 3,
+    "rustc_failed": 3,
+    "fired_correct": 3,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "assign_immutable": {
+    "n": 2,
+    "rustc_failed": 2,
+    "fired_correct": 0,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "typo_method": {
+    "n": 2,
+    "rustc_failed": 2,
+    "fired_correct": 2,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "drop_to_string": {
+    "n": 7,
+    "rustc_failed": 7,
+    "fired_correct": 7,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "typo_field": {
+    "n": 1,
+    "rustc_failed": 1,
+    "fired_correct": 1,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "drop_field_init": {
+    "n": 5,
+    "rustc_failed": 4,
+    "fired_correct": 4,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "syntax_drop_semicolon": {
+    "n": 8,
+    "rustc_failed": 8,
+    "fired_correct": 0,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "drop_as_cast": {
+    "n": 1,
+    "rustc_failed": 0,
+    "fired_correct": 0,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "typo_type_path": {
+    "n": 3,
+    "rustc_failed": 3,
+    "fired_correct": 0,
+    "partial": 0,
+    "near": 0,
+    "wrong": 1
+   },
+   "typo_local": {
+    "n": 3,
+    "rustc_failed": 3,
+    "fired_correct": 2,
+    "partial": 0,
+    "near": 0,
+    "wrong": 1
+   },
+   "bool_to_int": {
+    "n": 3,
+    "rustc_failed": 3,
+    "fired_correct": 2,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "bad_import": {
+    "n": 2,
+    "rustc_failed": 2,
+    "fired_correct": 2,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "let_u32_str": {
+    "n": 2,
+    "rustc_failed": 1,
+    "fired_correct": 1,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "drop_question_mark": {
+    "n": 1,
+    "rustc_failed": 1,
+    "fired_correct": 1,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   },
+   "drop_wildcard_arm": {
+    "n": 1,
+    "rustc_failed": 1,
+    "fired_correct": 1,
+    "partial": 0,
+    "near": 0,
+    "wrong": 0
+   }
+  }
+ }
+}

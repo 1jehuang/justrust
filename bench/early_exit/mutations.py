@@ -387,11 +387,33 @@ def sweep(kind):
     secs = time.monotonic() - t
     ex = r.get("diags", [])
     print(f"clean sweep {kind}: {len(r.get('files', []))}/{len(files)} files in {secs:.0f}s, "
-          f"{len(ex)} coded errors (each a false exit)", flush=True)
+          f"{len(ex)} coded errors on unedited sources", flush=True)
     for d in ex[:20]:
-        print(f"  FP {d['code']} {d['file'].replace(str(ROOT) + '/', '')}:{d['line']} {d['message'][:90]}")
+        print(f"  flagged {d['code']} {d['file'].replace(str(ROOT) + '/', '')}:{d['line']} {d['message'][:90]}")
+    # What an agent sees: a clean edit (a comment line) of each flagged
+    # file, asked as a build asks. The daemon's per-file baseline (errors
+    # before the first edit) should cancel them.
+    false_exits = []
+    for f in sorted({d["file"] for d in ex}):
+        p = Path(f)
+        orig = p.read_text()
+        try:
+            p.write_text("// early-exit sweep\n" + orig)
+            a = daemon(ws_of(p), {"op": "diagnostics"}, timeout=60)
+        finally:
+            p.write_text(orig)
+        daemon(ws_of(p), {"op": "diagnostics"})
+        if a.get("ready") and eligible(a.get("diags", [])):
+            false_exits.append({"file": f, "diags": a["diags"]})
+            print(f"  FALSE EXIT after a clean edit: {f}")
+    print(f"  clean edits of the {len({d['file'] for d in ex})} flagged files: {len(false_exits)} false exits")
     return {"files": len(files), "pulled": len(r.get("files", [])), "secs": round(secs, 1),
-            "false_exits": len(ex), "diags": ex[:50]}
+            "flagged_unedited": len(ex), "flagged_files": len({d["file"] for d in ex}),
+            "false_exits": len(false_exits), "false_exit_files": false_exits, "diags": ex[:50]}
+
+
+def ws_of(p: Path) -> Path:
+    return WS["desktop"] if WS["desktop"] in p.parents else WS["jcode"]
 
 
 def main():

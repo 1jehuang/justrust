@@ -941,9 +941,17 @@ struct State {
     /// Last seen text of every source file, to tell signature edits from
     /// body edits and to find the files that mention a changed item.
     texts: HashMap<PathBuf, String>,
+    /// Text before the edit, for files rust-analyzer has not opened yet
+    /// (filled by `sync` and taken when the file is opened).
+    texts_before: HashMap<PathBuf, String>,
     /// Files that mention an item whose signature changed in the last
     /// sync: pulled by the `callers` op, after the first answer.
     callers: Vec<PathBuf>,
+    /// Errors rust-analyzer reported for a file before the first edit the
+    /// daemon saw (code, message). Sources that compile can still get
+    /// them (on Jcode: unresolved imports through a dev-dependency cycle,
+    /// 9 on 923 files), so they are never part of an answer.
+    baseline: HashMap<PathBuf, Vec<(String, String)>>,
 }
 
 impl State {
@@ -986,7 +994,11 @@ impl State {
             if let Some(old) = self.texts.get(&p) {
                 sig_names.extend(changed_signatures(old, &text));
             }
-            self.texts.insert(p.clone(), text.clone());
+            if let Some(old) = self.texts.insert(p.clone(), text.clone())
+                && !self.versions.contains_key(&p)
+            {
+                self.texts_before.insert(p.clone(), old);
+            }
             let uri = file_uri(&p);
             let r = match self.versions.get_mut(&p) {
                 Some(v) => {
@@ -998,12 +1010,36 @@ impl State {
                     )
                 }
                 None => {
-                    self.versions.insert(p.clone(), 1);
-                    self.lsp.notify(
-                        "textDocument/didOpen",
-                        json!({"textDocument": {"uri": uri, "languageId": "rust",
-                               "version": 1, "text": text}}),
-                    )
+                    // First edit of this file: learn what rust-analyzer says
+                    // about the text before it, then switch to the new text.
+                    let old = self.texts_before.remove(&p);
+                    match &old {
+                        Some(old) if *old != text => self
+                            .lsp
+                            .notify(
+                                "textDocument/didOpen",
+                                json!({"textDocument": {"uri": uri, "languageId": "rust",
+                                       "version": 1, "text": old}}),
+                            )
+                            .and_then(|()| {
+                                let b = self.baseline_of(&p);
+                                self.baseline.insert(p.clone(), b);
+                                self.versions.insert(p.clone(), 2);
+                                self.lsp.notify(
+                                    "textDocument/didChange",
+                                    json!({"textDocument": {"uri": uri, "version": 2},
+                                           "contentChanges": [{"text": text}]}),
+                                )
+                            }),
+                        _ => {
+                            self.versions.insert(p.clone(), 1);
+                            self.lsp.notify(
+                                "textDocument/didOpen",
+                                json!({"textDocument": {"uri": uri, "languageId": "rust",
+                                       "version": 1, "text": text}}),
+                            )
+                        }
+                    }
                 }
             };
             if r.is_ok() {
@@ -1012,6 +1048,33 @@ impl State {
         }
         self.callers = mentioning(&self.texts, &sig_names, &rs, MAX_CALLER_FILES);
         rs
+    }
+
+    /// The coded errors of `p` as rust-analyzer has it open now (the text
+    /// before the first edit): the file's baseline.
+    fn baseline_of(&mut self, p: &Path) -> Vec<(String, String)> {
+        let Ok(m) = self.lsp.request(
+            "textDocument/diagnostic",
+            json!({"textDocument": {"uri": file_uri(p)}}),
+            Duration::from_secs(4),
+        ) else {
+            return Vec::new();
+        };
+        let b: Vec<(String, String)> = m["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| to_diag(p, d))
+            .map(|d| (d.code, d.message))
+            .collect();
+        if !b.is_empty() {
+            log(&format!(
+                "baseline: {} errors in {} before any edit, never reported",
+                b.len(),
+                p.display()
+            ));
+        }
+        b
     }
 
     /// `extra`: files to pull besides the changed ones (`pull` op, used by
@@ -1072,6 +1135,9 @@ impl State {
                 }));
             }
             let mut errs: Vec<Diag> = items.iter().filter_map(|d| to_diag(&f, d)).collect();
+            if let Some(b) = self.baseline.get(&f) {
+                drop_baseline(&mut errs, b);
+            }
             let mut seen = BTreeSet::new();
             errs.retain(|d| !d.code.is_empty() || seen.insert(d.line));
             // A file that does not parse has unreliable type errors.
@@ -1127,6 +1193,24 @@ impl State {
         out.ms = t.elapsed().as_secs_f64() * 1000.0;
         out
     }
+}
+
+/// Remove errors present before the first edit: each baseline entry
+/// (code, message) cancels one matching error, wherever it moved to.
+fn drop_baseline(errs: &mut Vec<Diag>, baseline: &[(String, String)]) {
+    let mut left: Vec<&(String, String)> = baseline.iter().collect();
+    errs.retain(|d| {
+        match left
+            .iter()
+            .position(|(c, m)| *c == d.code && *m == d.message)
+        {
+            Some(i) => {
+                left.swap_remove(i);
+                false
+            }
+            None => true,
+        }
+    });
 }
 
 /// At most this many files are pulled for a changed signature, the ones
@@ -1376,7 +1460,9 @@ fn daemon(root: &Path) -> Result<()> {
         manifest_changed: false,
         queries: 0,
         texts,
+        texts_before: HashMap::new(),
         callers: Vec::new(),
+        baseline: HashMap::new(),
     }));
     let idle_secs: u64 = std::env::var("JUSTRUST_EARLY_IDLE_SECS")
         .ok()
@@ -1505,6 +1591,27 @@ mod tests {
                     "".into()
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn baseline_errors_are_dropped_once_each() {
+        let d = |l, c: &str, m: &str| Diag {
+            file: "/w/a.rs".into(),
+            line: l,
+            col: 1,
+            code: c.into(),
+            message: m.into(),
+        };
+        let mut errs = vec![
+            d(30, "E0432", "unresolved import"),
+            d(31, "E0432", "unresolved import"),
+            d(40, "E0308", "expected u32, found &str"),
+        ];
+        drop_baseline(&mut errs, &[("E0432".into(), "unresolved import".into())]);
+        assert_eq!(
+            errs.iter().map(|e| e.line).collect::<Vec<_>>(),
+            vec![31, 40]
         );
     }
 
