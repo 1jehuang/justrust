@@ -3,6 +3,20 @@
 All notable changes. Versions follow [semver](https://semver.org); while in
 0.x, output formats and the `~/.justrust` layout may change in any release.
 
+## 0.1.0-alpha.8
+
+- **Hosted builds are the remote path.** `justrust login` selects hosted
+  builds and switches off the legacy AWS backend. The ssh backend is
+  removed. Entitlement is confirmed with the build fleet, so a fleet outage
+  is reported as an outage, not an account problem.
+- **Operator visibility for hosted builds.** Each remote run reports its
+  command, project, client version, machine, and agent session, then
+  running/done/abandoned with exit code and wall time. A signed-in client
+  that keeps a build local reports why (router rule, remote unavailable,
+  billing). Both are detached and never delay or fail a build.
+- **macOS support**: real recording, sampling, depcache, slots, and the
+  sync daemon instead of plain cargo passthrough.
+
 ## 0.1.0-alpha.7
 
 - **Prebuilt store on by default, cost-aware.** A dependency is downloaded
