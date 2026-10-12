@@ -3037,8 +3037,13 @@ best and two worst points gives 0.99x. The per-point geomean is 0.94x, and
 justrust is faster on only 9 of 40 points. So on most calls justrust still
 costs a few percent: the per-call overhead of finding 26 (~0.05-0.1 s
 recording, shim per unit) plus `jcode-tui --lib` test runs ~1.3 s (5%)
-slower. Point 7 (no-op `build` on jcode-desktop, 0.38 vs 1.16 s) is the
-largest relative loss left.
+slower. Point 7 (no-op `build` on jcode-desktop, 0.38 vs 1.16 s) looked
+like the largest relative loss, but it is intermittent. Across synth3 to
+synth5 justrust took 0.39, 0.99 and 1.16 s, all in `cargo startup` with io
+stall. Rerun 3 times with its predecessor (`--only-points 6,7`) it took
+0.39 s (jr-nocache 0.39, stock 0.36), and 3 times by hand 0.38 s. So it
+is not a steady cost; the cause of the occasional startup stall is still
+open.
 
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
