@@ -102,21 +102,16 @@ pub fn strip_keys(old: &str) -> String {
 
 fn write_0600(p: &Path, content: &str) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d)?;
     }
     let tmp = p.with_extension("tmp");
     let _ = std::fs::remove_file(&tmp);
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
+    let mut f = crate::sys::create_private(&tmp)?;
     f.write_all(content.as_bytes())?;
     drop(f);
     std::fs::rename(&tmp, p)?;
-    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
+    let _ = crate::sys::set_mode(p, 0o600);
     Ok(())
 }
 

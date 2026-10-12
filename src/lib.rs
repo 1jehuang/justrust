@@ -6,8 +6,8 @@
 //! - `justrust`: the CLI below. `justrust check|test|build|clippy|run` is the
 //!   interface agents should use. It takes the same arguments as cargo.
 //!
-//! Linux and macOS. Elsewhere `src/main.rs` runs cargo unchanged.
-#![cfg(any(target_os = "linux", target_os = "macos"))]
+//! Linux, macOS, and Windows. Elsewhere `src/main.rs` runs cargo unchanged.
+#![cfg(any(target_os = "linux", target_os = "macos", windows))]
 
 mod account;
 mod agent_output;
@@ -22,7 +22,26 @@ mod early;
 mod export;
 mod findings;
 mod history;
+#[cfg(unix)]
 mod hotpatch;
+/// Hot patching rewrites ELF binaries: nothing to do on Windows.
+#[cfg(windows)]
+mod hotpatch {
+    use std::ffi::OsString;
+    pub fn enabled() -> bool {
+        false
+    }
+    pub fn rustc_args(_local: bool, _test: bool, _linker_args: bool) -> Vec<OsString> {
+        Vec::new()
+    }
+    pub fn link_env() -> (&'static str, &'static str) {
+        ("JUSTRUST_HOTPATCH_LINK", "1")
+    }
+    pub fn before_link(_raw: &[OsString]) -> Option<i32> {
+        None
+    }
+    pub fn after_link(_raw: &[OsString]) {}
+}
 mod install;
 mod linker;
 mod live;
@@ -33,14 +52,28 @@ mod peercache;
 mod procfs;
 mod record;
 mod remote;
+#[cfg(unix)]
 mod remote_agent;
+/// The remote agent runs on the (Linux) build machines only.
+#[cfg(windows)]
+mod remote_agent {
+    pub const CLIENT_CARGO_HOME: &str = "JUSTRUST_CLIENT_CARGO_HOME";
+    pub fn main(_prefix: Option<String>) -> ! {
+        eprintln!("justrust: the remote build agent runs on Linux machines only");
+        std::process::exit(2);
+    }
+}
 mod remote_artifacts;
 mod remote_backend;
 mod remote_build;
 mod remote_daemon;
 mod remote_hosted;
+// Parts are used only by the remote agent, which is not built on Windows.
+#[cfg_attr(windows, allow(dead_code))]
 mod remote_proto;
 mod remote_sync;
+// Windows has no watcher backend yet (see the module docs).
+#[cfg_attr(windows, allow(dead_code))]
 mod remote_watch;
 mod route;
 mod runs;
@@ -52,6 +85,7 @@ mod split_apply;
 mod split_index;
 mod status;
 mod summary;
+mod sys;
 mod test_pool;
 mod test_runner;
 mod toolchain;
@@ -506,10 +540,7 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
 
 pub fn main() -> anyhow::Result<()> {
     let argv0 = std::env::args_os().next().unwrap_or_default();
-    let name = std::path::Path::new(&argv0)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let name = sys::program_name(&argv0);
     // `justrust __build-script <real> ...`: the build-script run wrapper.
     let mut rest = std::env::args_os().skip(1);
     if rest.next().as_deref() == Some(std::ffi::OsStr::new("__build-script"))

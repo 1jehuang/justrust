@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -109,6 +108,7 @@ pub struct OutputLine {
 
 static CHILD_PID: AtomicI32 = AtomicI32::new(0);
 
+#[cfg(unix)]
 extern "C" fn forward_signal(sig: libc::c_int) {
     let pid = CHILD_PID.load(Ordering::SeqCst);
     if pid > 0 {
@@ -120,6 +120,7 @@ extern "C" fn forward_signal(sig: libc::c_int) {
     crate::test_pool::signal_live(sig);
 }
 
+#[cfg(unix)]
 fn install_signal_forwarding() {
     // SAFETY: installing a handler that only calls async-signal-safe functions.
     unsafe {
@@ -134,6 +135,14 @@ fn install_signal_forwarding() {
         // Ignore it here so the summary still gets written.
         libc::signal(libc::SIGINT, libc::SIG_IGN);
     }
+}
+
+/// Windows: the console delivers Ctrl+C and Ctrl+Break to cargo and the
+/// test processes too (one console); ignore them here so the summary still
+/// gets written. Closing the console ends the whole tree anyway.
+#[cfg(windows)]
+fn install_signal_forwarding() {
+    crate::sys::ignore_ctrl_c();
 }
 
 /// Find the cargo subcommand, skipping `+toolchain` and global options.
@@ -193,7 +202,7 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         }
     }
     let cargo = PathBuf::from(cmd.get_program());
-    let err = cmd.args(args).exec();
+    let err = crate::sys::exec(cmd.args(args));
     eprintln!("justrust: failed to exec {}: {err}", cargo.display());
     std::process::exit(127);
 }
@@ -251,16 +260,11 @@ pub fn new_run_id() -> String {
 }
 
 fn isatty(fd: i32) -> bool {
-    // SAFETY: isatty has no memory-safety preconditions.
-    unsafe { libc::isatty(fd) == 1 }
+    crate::sys::isatty(fd)
 }
 
 fn term_width(fd: i32) -> Option<u16> {
-    // SAFETY: winsize is plain data and only written by the ioctl.
-    unsafe {
-        let mut ws: libc::winsize = std::mem::zeroed();
-        (libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0).then_some(ws.ws_col)
-    }
+    crate::sys::term_width(fd)
 }
 
 /// Run cargo from a pinned toolchain: its `bin/` goes first on `PATH`, so
@@ -459,6 +463,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
+    let job = crate::sys::Job::for_child(&child);
     let pid = child.id() as i32;
     CHILD_PID.store(pid, Ordering::SeqCst);
     install_signal_forwarding();
@@ -491,7 +496,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         std::thread::spawn(move || sample_loop(pid, &done))
     };
 
-    let (mut code, mut cpu_user, cpu_sys) = wait_child(pid);
+    let (mut code, mut cpu_user, cpu_sys) = wait_child(&mut child, job.as_ref());
     let _ = t_out.join();
     let _ = t_err.join();
     if let Some(p) = pool {
@@ -622,37 +627,16 @@ fn write_jsonl<T: Serialize>(path: &Path, items: &[T]) -> Result<()> {
 }
 
 /// Wait for cargo. Returns (exit code, user CPU, system CPU) where CPU covers
-/// cargo and every descendant it waited for (rustc, linkers, tests).
-fn wait_child(pid: i32) -> (i32, f64, f64) {
-    let mut status = 0;
-    // SAFETY: rusage is plain data written by wait4.
-    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
-    loop {
-        // SAFETY: pointers to valid local storage.
-        let r = unsafe { libc::wait4(pid, &mut status, 0, &mut ru) };
-        if r == pid {
-            break;
-        }
-        if r == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-            continue;
-        }
-        return (1, 0.0, 0.0);
-    }
-    let code = if libc::WIFEXITED(status) {
-        libc::WEXITSTATUS(status)
-    } else if libc::WIFSIGNALED(status) {
-        128 + libc::WTERMSIG(status)
-    } else {
-        1
-    };
-    // ru only covers the cargo process itself. Children totals come from getrusage.
-    // SAFETY: as above.
-    let mut kids: libc::rusage = unsafe { std::mem::zeroed() };
-    unsafe {
-        libc::getrusage(libc::RUSAGE_CHILDREN, &mut kids);
-    }
-    let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
-    (code, tv(kids.ru_utime), tv(kids.ru_stime))
+/// cargo and every descendant it waited for (rustc, linkers, tests): from
+/// `RUSAGE_CHILDREN` on Unix, from the job object holding cargo's tree on
+/// Windows.
+fn wait_child(child: &mut std::process::Child, job: Option<&crate::sys::Job>) -> (i32, f64, f64) {
+    let u = crate::sys::wait_usage(child, job);
+    #[cfg(unix)]
+    let (user, sys) = crate::sys::children_cpu();
+    #[cfg(windows)]
+    let (user, sys) = (u.user, u.sys);
+    (u.code, user, sys)
 }
 
 fn spawn_tee<R: Read + Send + 'static, W: Write + Send + 'static>(

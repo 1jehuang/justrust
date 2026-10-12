@@ -1,6 +1,7 @@
 //! Process and machine readers for build-wide resource sampling: `/proc` on
-//! Linux, libproc, Mach, and sysctl on macOS. One API for both, so the
-//! sampler, `status`, and the reports never branch on the platform.
+//! Linux, libproc, Mach, and sysctl on macOS, Toolhelp and the process and
+//! system information APIs on Windows. One API for all, so the sampler,
+//! `status`, and the reports never branch on the platform.
 //!
 //! Units are the platform's, read through the helpers here: process CPU is
 //! in ticks of `clk_tck()` per second, resident memory in pages of
@@ -13,16 +14,25 @@ use serde::Serialize;
 use linux as imp;
 #[cfg(target_os = "macos")]
 use macos as imp;
+#[cfg(windows)]
+use windows as imp;
 
 pub use imp::{
     all_pids, boot_time, cgroup, clk_tck, close_inherited_fds, cmdline, cpu_times, meminfo,
     pressure, read_stat,
 };
 
+#[cfg(unix)]
 pub fn page_size() -> u64 {
     // SAFETY: sysconf has no preconditions.
     let v = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if v > 0 { v as u64 } else { 4096 }
+}
+
+/// Windows reports working sets in bytes: `read_stat` divides by this.
+#[cfg(windows)]
+pub fn page_size() -> u64 {
+    4096
 }
 
 pub fn ncpu() -> usize {
@@ -32,6 +42,7 @@ pub fn ncpu() -> usize {
 }
 
 /// This machine's name (`gethostname`), empty if it cannot be read.
+#[cfg(unix)]
 pub fn hostname() -> String {
     let mut buf = [0u8; 256];
     // SAFETY: the buffer is writable for its stated length.
@@ -41,6 +52,15 @@ pub fn hostname() -> String {
     }
     let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
     String::from_utf8_lossy(&buf[..end]).trim().to_string()
+}
+
+/// This machine's NetBIOS name (`COMPUTERNAME`), empty if unset.
+#[cfg(windows)]
+pub fn hostname() -> String {
+    std::env::var("COMPUTERNAME")
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase()
 }
 
 /// Aggregate CPU time, busy and total, in arbitrary but consistent units:
@@ -86,10 +106,10 @@ mod linux {
     /// keeps the flock's fd, and with it the lock, for hours after the build
     /// that started it exited (a bench lock was held by `justrust __daemon`).
     pub fn close_inherited_fds(cmd: &mut std::process::Command) {
-        use std::os::unix::process::CommandExt;
         // SAFETY: close_range is async-signal-safe and touches only fds >= 3,
         // which the child does not use (stdio is set up before pre_exec runs).
         unsafe {
+            use std::os::unix::process::CommandExt;
             cmd.pre_exec(|| {
                 libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
                 Ok(())
@@ -483,8 +503,224 @@ mod macos {
     }
 }
 
+#[cfg(windows)]
+mod windows {
+    //! Toolhelp snapshots for the process tree, `GetProcessTimes` and the
+    //! working set for each process, `GetSystemTimes` and
+    //! `GlobalMemoryStatusEx` for the machine. Times are FILETIME ticks
+    //! (100 ns). No pressure stall info and no cgroups exist on Windows.
+
+    use super::{CpuTimes, MemInfo, Pressure, ProcStat};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    /// FILETIME ticks per second.
+    const TICKS: f64 = 1e7;
+    /// FILETIME ticks between 1601-01-01 and the Unix epoch.
+    const EPOCH_DIFF: u64 = 116_444_736_000_000_000;
+
+    fn ft(t: FILETIME) -> u64 {
+        (t.dwHighDateTime as u64) << 32 | t.dwLowDateTime as u64
+    }
+
+    /// Nothing to do: std creates every handle non-inheritable, and a
+    /// child gets only its stdio.
+    pub fn close_inherited_fds(_cmd: &mut std::process::Command) {}
+
+    pub fn clk_tck() -> f64 {
+        TICKS
+    }
+
+    pub fn cgroup(_pid: u32) -> Option<String> {
+        None
+    }
+
+    /// Now minus the milliseconds since boot.
+    pub fn boot_time() -> Option<f64> {
+        // SAFETY: no arguments.
+        let up = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() };
+        let now = crate::paths::now();
+        (now > 0.0).then(|| now - up as f64 / 1000.0)
+    }
+
+    /// Kernel time includes idle time.
+    pub fn cpu_times() -> Option<CpuTimes> {
+        let (mut idle, mut kernel, mut user) = Default::default();
+        // SAFETY: three FILETIME out parameters.
+        let ok = unsafe {
+            windows_sys::Win32::System::Threading::GetSystemTimes(&mut idle, &mut kernel, &mut user)
+        };
+        if ok == 0 {
+            return None;
+        }
+        let total = ft(kernel) + ft(user);
+        Some(CpuTimes {
+            busy: total.saturating_sub(ft(idle)),
+            total,
+        })
+    }
+
+    pub fn meminfo() -> Option<MemInfo> {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        // SAFETY: the struct is plain data sized by dwLength.
+        unsafe {
+            let mut m: MEMORYSTATUSEX = std::mem::zeroed();
+            m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+            if GlobalMemoryStatusEx(&mut m) == 0 {
+                return None;
+            }
+            Some(MemInfo {
+                total_mb: m.ullTotalPhys >> 20,
+                available_mb: m.ullAvailPhys >> 20,
+            })
+        }
+    }
+
+    pub fn pressure() -> Option<Pressure> {
+        None
+    }
+
+    /// pid -> (parent pid, executable name without `.exe`).
+    type Table = HashMap<i32, (i32, String)>;
+
+    /// The sampler asks for every pid and then each one's stat: one
+    /// snapshot serves a whole sample.
+    static SNAPSHOT: Mutex<Option<(Instant, Table)>> = Mutex::new(None);
+    const SNAPSHOT_TTL: Duration = Duration::from_millis(100);
+
+    fn snapshot() -> Table {
+        let mut t = Table::new();
+        // SAFETY: the snapshot handle is checked and closed; the entry
+        // struct is sized by dwSize.
+        unsafe {
+            let h = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if h == INVALID_HANDLE_VALUE || h.is_null() {
+                return t;
+            }
+            let mut e: PROCESSENTRY32W = std::mem::zeroed();
+            e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut ok = Process32FirstW(h, &mut e);
+            while ok != 0 {
+                let end = e.szExeFile.iter().position(|c| *c == 0).unwrap_or(260);
+                let name = String::from_utf16_lossy(&e.szExeFile[..end]);
+                let name = crate::sys::program_name(name.as_ref());
+                t.insert(e.th32ProcessID as i32, (e.th32ParentProcessID as i32, name));
+                ok = Process32NextW(h, &mut e);
+            }
+            CloseHandle(h);
+        }
+        t
+    }
+
+    fn with_table<T>(fresh: bool, f: impl FnOnce(&Table) -> T) -> T {
+        let mut g = SNAPSHOT.lock().unwrap_or_else(|e| e.into_inner());
+        let stale = fresh || g.as_ref().is_none_or(|(at, _)| at.elapsed() > SNAPSHOT_TTL);
+        if stale {
+            *g = Some((Instant::now(), snapshot()));
+        }
+        f(&g.as_ref().unwrap().1)
+    }
+
+    pub fn all_pids() -> Vec<i32> {
+        with_table(true, |t| t.keys().copied().filter(|p| *p > 0).collect())
+    }
+
+    struct Proc(HANDLE);
+    impl Drop for Proc {
+        fn drop(&mut self) {
+            // SAFETY: we own the handle.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    fn open(pid: i32) -> Option<Proc> {
+        // SAFETY: plain call; the handle is checked.
+        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
+        (!h.is_null()).then_some(Proc(h))
+    }
+
+    pub fn read_stat(pid: i32) -> Option<ProcStat> {
+        let (ppid, comm) = with_table(false, |t| t.get(&pid).cloned())
+            .or_else(|| with_table(true, |t| t.get(&pid).cloned()))?;
+        let p = open(pid)?;
+        let (mut c, mut e, mut k, mut u) = Default::default();
+        // SAFETY: four FILETIME out parameters.
+        if unsafe { GetProcessTimes(p.0, &mut c, &mut e, &mut k, &mut u) } == 0 {
+            return None;
+        }
+        let rss = {
+            use windows_sys::Win32::System::ProcessStatus::{
+                K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+            };
+            // SAFETY: the counters struct is plain data sized by cb.
+            unsafe {
+                let mut m: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+                m.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+                if K32GetProcessMemoryInfo(p.0, &mut m, m.cb) != 0 {
+                    m.WorkingSetSize as u64
+                } else {
+                    0
+                }
+            }
+        };
+        let created_unix = ft(c).saturating_sub(EPOCH_DIFF) as f64 / TICKS;
+        let since_boot = (created_unix - boot_time().unwrap_or(0.0)).max(0.0);
+        Some(ProcStat {
+            pid,
+            ppid,
+            comm,
+            cpu_ticks: ft(k) + ft(u),
+            rss_pages: rss / super::page_size(),
+            start_ticks: (since_boot * TICKS) as u64,
+        })
+    }
+
+    /// The command line from the process's own parameters.
+    pub fn cmdline(pid: i32) -> String {
+        use windows_sys::Wdk::System::Threading::{
+            NtQueryInformationProcess, ProcessCommandLineInformation,
+        };
+        use windows_sys::Win32::Foundation::UNICODE_STRING;
+        let Some(p) = open(pid) else {
+            return String::new();
+        };
+        let mut buf = vec![0u64; 4096];
+        let mut len = 0u32;
+        // SAFETY: the buffer is writable for its stated byte length and
+        // 8-aligned; on success it starts with a UNICODE_STRING pointing
+        // into itself.
+        unsafe {
+            let st = NtQueryInformationProcess(
+                p.0,
+                ProcessCommandLineInformation,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * 8) as u32,
+                &mut len,
+            );
+            if st < 0 {
+                return String::new();
+            }
+            let us = &*(buf.as_ptr() as *const UNICODE_STRING);
+            if us.Buffer.is_null() || us.Length == 0 {
+                return String::new();
+            }
+            let s = std::slice::from_raw_parts(us.Buffer, us.Length as usize / 2);
+            String::from_utf16_lossy(s)
+        }
+    }
+}
+
 /// NUL-separated arguments as one space-separated line.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn join_args(b: &[u8]) -> String {
     b.split(|c| *c == 0)
         .filter(|p| !p.is_empty())
@@ -499,6 +735,7 @@ mod tests {
 
     /// A child spawned through `close_inherited_fds` does not keep a flock
     /// its parent held (the bench-lock leak through `justrust __daemon`).
+    #[cfg(unix)]
     #[test]
     fn daemon_child_does_not_keep_inherited_flock() {
         use std::os::fd::AsRawFd;
@@ -507,7 +744,6 @@ mod tests {
             libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0
         };
         let spawn_sleeper = |p: &std::path::Path, close: bool| {
-            use std::os::unix::process::CommandExt;
             let f = std::fs::File::create(p).unwrap();
             // A concurrent test's fork may share an earlier descriptor of
             // this file for a moment (macOS forks for pre_exec spawns).
@@ -525,6 +761,7 @@ mod tests {
             // its command (dup2 clears CLOEXEC on the copy). The parent's fd
             // stays CLOEXEC, so other tests' children never get it.
             unsafe {
+                use std::os::unix::process::CommandExt;
                 c.pre_exec(move || {
                     libc::dup2(fd, 50);
                     Ok(())
@@ -583,6 +820,7 @@ mod tests {
 
     /// A child's tree link, CPU, start, and argv are read like `record`
     /// and `status` use them.
+    #[cfg(unix)]
     #[test]
     fn reads_child_process() {
         // `exec` keeps the pid while the arguments become sleep's own.
@@ -611,6 +849,34 @@ mod tests {
             .unwrap()
             .as_secs_f64();
         assert!((now - started).abs() < 60.0, "start {started} vs now {now}");
+        c.kill().unwrap();
+        c.wait().unwrap();
+    }
+
+    /// Windows: the child's parent, name, argv, and start are read.
+    #[cfg(windows)]
+    #[test]
+    fn reads_child_process() {
+        let mut c = std::process::Command::new("ping")
+            .args(["-n", "5", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = c.id() as i32;
+        let st = read_stat(pid).expect("child stat");
+        assert_eq!(st.ppid, std::process::id() as i32);
+        assert_eq!(st.comm.to_lowercase(), "ping");
+        assert!(all_pids().contains(&pid));
+        // Wine has no ProcessCommandLineInformation: empty there, never wrong.
+        let argv = cmdline(pid);
+        let wine =
+            std::env::var_os("WINEPREFIX").is_some() || std::env::var_os("WINELOADER").is_some();
+        assert!(
+            argv.contains("127.0.0.1") || (wine && argv.is_empty()),
+            "{argv}"
+        );
+        let started = boot_time().unwrap() + st.start_ticks as f64 / clk_tck();
+        assert!((crate::paths::now() - started).abs() < 60.0);
         c.kill().unwrap();
         c.wait().unwrap();
     }

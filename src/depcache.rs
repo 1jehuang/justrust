@@ -50,11 +50,11 @@
 use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::ffi::{CString, OsString};
+#[cfg(unix)]
+use std::ffi::CString;
+use std::ffi::OsString;
 use std::hash::Hasher;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Bump to invalidate every entry when the key scheme changes.
@@ -470,6 +470,13 @@ fn detect_libc_family() -> &'static str {
     if cfg!(target_os = "macos") {
         return "darwin";
     }
+    // Proc macros are DLLs built against rustc's own C runtime.
+    if cfg!(all(windows, target_env = "msvc")) {
+        return "msvc";
+    }
+    if cfg!(windows) {
+        return "mingw";
+    }
     if cfg!(target_env = "gnu") {
         return "glibc";
     }
@@ -613,6 +620,20 @@ pub(crate) fn plan_with(
             "link-arg=-Wl,-install_name,@rpath/lib{}{}.dylib",
             s.crate_name, s.extra
         ));
+    }
+    // Windows MSVC: link.exe writes the PDB's full path, inside this target
+    // dir, into every DLL and EXE it links (the debug directory), so proc
+    // macros and build scripts were refused as carrying the target dir.
+    // `/PDBALTPATH:%_PDB%` writes the file name only; debuggers still find
+    // the PDB next to the binary.
+    if cfg!(all(windows, target_env = "msvc"))
+        && !extra_args.is_empty()
+        && args.iter().any(|a| {
+            a == "proc-macro" || a == "bin" || a.ends_with("=proc-macro") || a.ends_with("=bin")
+        })
+    {
+        extra_args.push("-C".into());
+        extra_args.push("link-arg=/PDBALTPATH:%_PDB%".into());
     }
     key_remaps(&extra_args, &mut h);
     // Proc macros and bins are dynamically linked against the C library.
@@ -771,7 +792,8 @@ fn key_extern(
 /// - `.rmeta`: the whole file;
 /// - `.rlib`: the `lib.rmeta` archive member;
 /// - `.so` (proc macro, dylib): the ELF `.rustc` section;
-/// - `.dylib` on macOS: the Mach-O `__DATA,.rustc` section.
+/// - `.dylib` on macOS: the Mach-O `__DATA,.rustc` section;
+/// - `.dll` on Windows: the PE `.rustc` section.
 ///
 /// Anything unparsable falls back to the whole-file content hash. Memoized
 /// in the `user.justrust.m` xattr, validated like `file_hash`.
@@ -810,19 +832,66 @@ pub(crate) fn metadata_bytes(path: &Path) -> Option<Vec<u8>> {
         "so" | "dylib" => {
             elf_section(path, ".rustc").or_else(|| macho_section(path, "__DATA", ".rustc"))
         }
+        // Windows proc macros: the PE `.rustc` section. The rest of the DLL
+        // names its target dir (PDB path), which differs per checkout.
+        "dll" => pe_section(path, ".rustc"),
         _ => None,
     }
+}
+
+/// Content of a section of a PE/COFF image (a Windows DLL), by name.
+fn pe_section(path: &Path, want: &str) -> Option<Vec<u8>> {
+    let f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let mut dos = [0u8; 64];
+    crate::sys::read_exact_at(&f, &mut dos, 0).ok()?;
+    if &dos[..2] != b"MZ" {
+        return None;
+    }
+    let pe = u64::from(u32::from_le_bytes(dos[60..64].try_into().unwrap()));
+    let mut hdr = [0u8; 24];
+    crate::sys::read_exact_at(&f, &mut hdr, pe).ok()?;
+    if &hdr[..4] != b"PE\0\0" {
+        return None;
+    }
+    let nsec = u16::from_le_bytes([hdr[6], hdr[7]]) as u64;
+    let opt = u16::from_le_bytes([hdr[20], hdr[21]]) as u64;
+    let table = pe + 24 + opt;
+    if table + nsec * 40 > len {
+        return None;
+    }
+    let mut secs = vec![0u8; usize::try_from(nsec * 40).ok()?];
+    crate::sys::read_exact_at(&f, &mut secs, table).ok()?;
+    for sh in secs.as_chunks::<40>().0 {
+        let end = sh[..8].iter().position(|c| *c == 0).unwrap_or(8);
+        if &sh[..end] != want.as_bytes() {
+            continue;
+        }
+        let u32_at = |o: usize| u32::from_le_bytes(sh[o..o + 4].try_into().unwrap());
+        // The section's bytes in the file; VirtualSize trims the alignment
+        // padding of SizeOfRawData.
+        let raw = u64::from(u32_at(16));
+        let virt = u64::from(u32_at(8));
+        let size = if virt > 0 { virt.min(raw) } else { raw };
+        let off = u64::from(u32_at(20));
+        if off + size > len {
+            return None;
+        }
+        let mut buf = vec![0u8; usize::try_from(size).ok()?];
+        crate::sys::read_exact_at(&f, &mut buf, off).ok()?;
+        return Some(buf);
+    }
+    None
 }
 
 /// Content of a section of a 64-bit little-endian Mach-O file (thin, not
 /// universal: rustc writes one architecture per proc macro).
 fn macho_section(path: &Path, seg: &str, want: &str) -> Option<Vec<u8>> {
-    use std::os::unix::fs::FileExt;
     const LC_SEGMENT_64: u32 = 0x19;
     let f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let mut mh = [0u8; 32];
-    f.read_exact_at(&mut mh, 0).ok()?;
+    crate::sys::read_exact_at(&f, &mut mh, 0).ok()?;
     let u32_at = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let u64_at = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
     if u32_at(&mh, 0) != 0xfeed_facf {
@@ -834,7 +903,7 @@ fn macho_section(path: &Path, seg: &str, want: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut cmds = vec![0u8; usize::try_from(sizeofcmds).ok()?];
-    f.read_exact_at(&mut cmds, 32).ok()?;
+    crate::sys::read_exact_at(&f, &mut cmds, 32).ok()?;
     let name16 = |b: &[u8]| {
         let end = b.iter().position(|c| *c == 0).unwrap_or(16);
         b[..end].to_vec()
@@ -857,7 +926,7 @@ fn macho_section(path: &Path, seg: &str, want: &str) -> Option<Vec<u8>> {
                         return None;
                     }
                     let mut buf = vec![0u8; usize::try_from(size).ok()?];
-                    f.read_exact_at(&mut buf, off).ok()?;
+                    crate::sys::read_exact_at(&f, &mut buf, off).ok()?;
                     return Some(buf);
                 }
             }
@@ -869,18 +938,17 @@ fn macho_section(path: &Path, seg: &str, want: &str) -> Option<Vec<u8>> {
 
 /// Content of a named member of an `ar` archive (GNU or BSD short names).
 fn ar_member(path: &Path, want: &str) -> Option<Vec<u8>> {
-    use std::os::unix::fs::FileExt;
     let f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let mut magic = [0u8; 8];
-    f.read_exact_at(&mut magic, 0).ok()?;
+    crate::sys::read_exact_at(&f, &mut magic, 0).ok()?;
     if &magic != b"!<arch>\n" {
         return None;
     }
     let mut off = 8u64;
     while off + 60 <= len {
         let mut hdr = [0u8; 60];
-        f.read_exact_at(&mut hdr, off).ok()?;
+        crate::sys::read_exact_at(&f, &mut hdr, off).ok()?;
         if &hdr[58..60] != b"`\n" {
             return None;
         }
@@ -896,7 +964,7 @@ fn ar_member(path: &Path, want: &str) -> Option<Vec<u8>> {
         }
         if name.trim_end_matches('/') == want {
             let mut buf = vec![0u8; usize::try_from(size).ok()?];
-            f.read_exact_at(&mut buf, data).ok()?;
+            crate::sys::read_exact_at(&f, &mut buf, data).ok()?;
             return Some(buf);
         }
         off = data + size + (size & 1);
@@ -906,11 +974,10 @@ fn ar_member(path: &Path, want: &str) -> Option<Vec<u8>> {
 
 /// Content of a named section of a 64-bit little-endian ELF file.
 fn elf_section(path: &Path, want: &str) -> Option<Vec<u8>> {
-    use std::os::unix::fs::FileExt;
     let f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let mut eh = [0u8; 64];
-    f.read_exact_at(&mut eh, 0).ok()?;
+    crate::sys::read_exact_at(&f, &mut eh, 0).ok()?;
     // ELF magic, ELFCLASS64, little endian.
     if &eh[..4] != b"\x7fELF" || eh[4] != 2 || eh[5] != 1 {
         return None;
@@ -926,7 +993,7 @@ fn elf_section(path: &Path, want: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut shdrs = vec![0u8; usize::try_from(shnum * shentsize).ok()?];
-    f.read_exact_at(&mut shdrs, shoff).ok()?;
+    crate::sys::read_exact_at(&f, &mut shdrs, shoff).ok()?;
     let sh = |i: u64| {
         let o = usize::try_from(i * shentsize).unwrap();
         (
@@ -940,7 +1007,7 @@ fn elf_section(path: &Path, want: &str) -> Option<Vec<u8>> {
             return None;
         }
         let mut buf = vec![0u8; usize::try_from(size).ok()?];
-        f.read_exact_at(&mut buf, off).ok()?;
+        crate::sys::read_exact_at(&f, &mut buf, off).ok()?;
         Some(buf)
     };
     let (_, str_off, str_size) = sh(shstrndx);
@@ -991,7 +1058,7 @@ fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
         .collect();
     files.sort();
     for f in files {
-        h.field(f.file_name()?.as_bytes());
+        h.field(f.file_name()?.as_encoded_bytes());
         // Memoized: build-script archives (`libfoo.a`) are hashed for every
         // dependent unit otherwise.
         h.field(file_hash(&f, true)?.as_bytes());
@@ -999,8 +1066,9 @@ fn key_lib_dir(v: &str, norm: &Norm, cwd: &Path, h: &mut H128) -> Option<()> {
     Some(())
 }
 
+#[cfg(unix)]
 pub(crate) fn xattr_get(path: &Path, attr: &str) -> Option<String> {
-    let p = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let p = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
     let name = CString::new(attr).ok()?;
     let mut buf = [0u8; 128];
     // SAFETY: valid NUL-terminated strings and a buffer of the stated length.
@@ -1028,9 +1096,20 @@ pub(crate) fn xattr_get(path: &Path, attr: &str) -> Option<String> {
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
 }
 
+/// Windows: no memo. NTFS alternate data streams would be the place, but
+/// writing one bumps the file's modification time, which cargo watches.
+#[cfg(windows)]
+pub(crate) fn xattr_get(_path: &Path, _attr: &str) -> Option<String> {
+    None
+}
+
+#[cfg(windows)]
+pub(crate) fn xattr_set(_path: &Path, _attr: &str, _value: &str) {}
+
+#[cfg(unix)]
 pub(crate) fn xattr_set(path: &Path, attr: &str, value: &str) {
     let (Ok(p), Ok(name)) = (
-        CString::new(path.as_os_str().as_bytes()),
+        CString::new(path.as_os_str().as_encoded_bytes()),
         CString::new(attr),
     ) else {
         return;
@@ -1061,7 +1140,8 @@ pub(crate) fn xattr_set(path: &Path, attr: &str, value: &str) {
 }
 
 fn stamp(m: &std::fs::Metadata) -> String {
-    format!("{}:{}:{}:{}", m.ino(), m.len(), m.mtime(), m.mtime_nsec())
+    let (s, ns) = crate::sys::mtime(m);
+    format!("{}:{}:{s}:{ns}", crate::sys::file_id(m).1, m.len())
 }
 
 /// Content hash of a file. With `memo`, reuse a hash stored in an xattr when
@@ -1249,6 +1329,17 @@ impl Plan {
             })
     }
 
+    /// Why a compile was not stored, under `JUSTRUST_DEPCACHE_EXPLAIN`.
+    fn explain_refusal(&self, why: &str) {
+        if let Some(dir) = std::env::var_os("JUSTRUST_DEPCACHE_EXPLAIN") {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = paths::append_line(
+                &Path::new(&dir).join("refused.txt"),
+                &format!("{}{}: {why}", self.crate_name, self.extra),
+            );
+        }
+    }
+
     /// Store the outputs of a successful compile that started at `start`.
     /// Returns the manifest line (for the remote upload queue).
     pub fn store(&self, start: f64, wall: f64, stderr: &[Vec<u8>]) -> Option<String> {
@@ -1299,11 +1390,11 @@ impl Plan {
         let mut files = Vec::new();
         for e in std::fs::read_dir(&self.out_dir).ok()?.flatten() {
             let name = e.file_name().to_str()?.to_owned();
-            if name.starts_with('.') || !name.contains(&self.extra) {
+            if name.starts_with('.') || !name.contains(&self.extra) || debug_side_file(&name) {
                 continue;
             }
             let m = e.metadata().ok()?;
-            let mtime = m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9;
+            let mtime = crate::sys::mtime_f64(&m);
             if m.is_file() && mtime + 1.0 >= start {
                 files.push(name);
             }
@@ -1313,6 +1404,7 @@ impl Plan {
         for a in &artifacts {
             let name = a.file_name()?.to_str()?;
             if a.parent() != Some(self.out_dir.as_path()) || !files.iter().any(|f| f == name) {
+                self.explain_refusal(&format!("artifact {} not in {files:?}", a.display()));
                 return None;
             }
         }
@@ -1327,6 +1419,7 @@ impl Plan {
         for name in files.iter().filter(|n| !n.ends_with(".d")) {
             let bytes = std::fs::read(self.out_dir.join(name)).ok()?;
             if !target_refs_are_inputs(&bytes, &self.norm.target, &input_paths) {
+                self.explain_refusal(&format!("{name} names the target dir"));
                 return None;
             }
         }
@@ -1395,6 +1488,14 @@ impl Plan {
         }
         std::fs::write(dir.join("meta.json"), serde_json::to_vec(&out).ok()?).ok()
     }
+}
+
+/// MSVC linker side outputs that name the target dir by design and that no
+/// build reads: the PDB debug database and the DLL export file. They are
+/// not stored: a restored unit has no PDB (the binary names it by file name
+/// only, see `/PDBALTPATH`), which costs debugging into that dependency.
+fn debug_side_file(name: &str) -> bool {
+    cfg!(windows) && (name.ends_with(".pdb") || name.ends_with(".exp"))
 }
 
 /// True when every occurrence of the target dir in a compiled output is the
@@ -1525,8 +1626,8 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
 pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
     let _ = std::fs::remove_file(dst);
     let cloned = match (
-        CString::new(src.as_os_str().as_bytes()),
-        CString::new(dst.as_os_str().as_bytes()),
+        CString::new(src.as_os_str().as_encoded_bytes()),
+        CString::new(dst.as_os_str().as_encoded_bytes()),
     ) {
         // SAFETY: valid NUL-terminated paths. CLONE_NOFOLLOW clones a
         // symlink itself, like `std::fs::copy` would not: never set it.
@@ -1534,6 +1635,22 @@ pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
         _ => false,
     };
     if !cloned && std::fs::copy(src, dst).is_err() {
+        return false;
+    }
+    std::fs::File::options()
+        .write(true)
+        .open(dst)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()))
+        .is_ok()
+}
+
+/// A plain copy with a fresh mtime (like a new file on Linux, so cargo
+/// never sees a restored rlib as older than its dependents). ReFS block
+/// cloning would be the copy-on-write equivalent; NTFS has none.
+#[cfg(windows)]
+pub(crate) fn reflink_or_copy(src: &Path, dst: &Path) -> bool {
+    let _ = std::fs::remove_file(dst);
+    if std::fs::copy(src, dst).is_err() {
         return false;
     }
     std::fs::File::options()
@@ -1557,7 +1674,9 @@ mod tests {
             .flatten()
             .flatten()
             .any(|e| e.file_name().to_string_lossy().starts_with("ld-linux"));
-        if host_has_glibc_loader {
+        if cfg!(windows) {
+            assert!(matches!(detect_libc_family(), "msvc" | "mingw"));
+        } else if host_has_glibc_loader {
             assert_eq!(detect_libc_family(), "glibc");
             assert!(host_glibc().is_some_and(|v| v >= (2, 17)));
         }
@@ -1636,6 +1755,13 @@ mod tests {
         {
             assert!(macho_section(&me, "__TEXT", "__text").is_some());
             assert!(macho_section(&me, "__DATA", ".rustc").is_none());
+            assert!(elf_section(&me, ".text").is_none());
+        }
+        if let Ok(me) = std::env::current_exe()
+            && cfg!(windows)
+        {
+            assert!(pe_section(&me, ".text").is_some_and(|t| !t.is_empty()));
+            assert!(pe_section(&me, ".rustc").is_none());
             assert!(elf_section(&me, ".text").is_none());
         }
         let _ = std::fs::remove_dir_all(&d);
@@ -1825,6 +1951,7 @@ mod tests {
         assert_ne!(key("t1", "opt-level=0"), key("t1", "opt-level=1"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn remaps_make_keys_independent_of_cargo_home_and_symlinks() {
         let dir = std::env::temp_dir().join(format!("jr-depcache-remap-{}", std::process::id()));
@@ -2026,7 +2153,10 @@ mod tests {
 
         // Unusable cache root: store and restore just fail.
         let mut p3 = mk("t1");
-        p3.root = PathBuf::from("/proc/justrust-no-such-dir");
+        // A file where the root directory should be: nothing can be created.
+        let blocker = dir.join("not-a-dir");
+        std::fs::write(&blocker, b"").unwrap();
+        p3.root = blocker.join("root");
         assert!(p3.store(0.0, 1.0, &[]).is_none());
         assert!(p3.restore(&mut Vec::new()).is_none());
         let _ = std::fs::remove_dir_all(&dir);

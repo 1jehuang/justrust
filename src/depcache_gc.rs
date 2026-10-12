@@ -21,8 +21,8 @@
 
 use crate::depcache;
 use crate::paths;
+use crate::sys::Detach;
 use anyhow::{Context, Result};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Cap floor, and the cap when free space cannot be read.
@@ -82,15 +82,7 @@ pub(crate) fn default_cap(free: Option<u64>) -> u64 {
 /// Bytes available to this user on the filesystem holding `dir` (or its
 /// nearest existing ancestor).
 fn free_bytes(dir: &Path) -> Option<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let dir = dir.ancestors().find(|p| p.exists())?;
-    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
-    // SAFETY: statvfs fills the zeroed struct; the path is NUL-terminated.
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return None;
-    }
-    Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+    crate::sys::free_bytes(dir.ancestors().find(|p| p.exists())?)
 }
 
 #[derive(Debug, Clone)]
@@ -109,7 +101,7 @@ pub struct Scan {
 }
 
 fn mtime(m: &std::fs::Metadata) -> f64 {
-    m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9
+    crate::sys::mtime_f64(m)
 }
 
 /// Disk blocks actually allocated (reflinked extents still count in full),
@@ -122,7 +114,7 @@ fn dir_bytes(dir: &Path) -> u64 {
         .filter_map(|e| Some((e.path(), e.metadata().ok()?)))
         .map(|(p, m)| match m.is_dir() {
             true => dir_bytes(&p),
-            false => m.blocks() * 512,
+            false => crate::sys::disk_bytes(&m),
         })
         .sum()
 }
@@ -165,7 +157,7 @@ pub fn scan(root: &Path) -> Scan {
     {
         if let Ok(m) = e.metadata() {
             s.manifests += 1;
-            s.manifest_bytes += m.blocks() * 512;
+            s.manifest_bytes += crate::sys::disk_bytes(&m);
         }
     }
     s.bytes += s.manifest_bytes;
@@ -279,16 +271,13 @@ fn drop_dead_manifest_lines(root: &Path) {
 }
 
 fn try_lock(path: &Path) -> Option<std::fs::File> {
-    use std::os::fd::AsRawFd;
     let f = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(path)
         .ok()?;
-    // SAFETY: flock on a valid fd.
-    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    (r == 0).then_some(f)
+    f.try_lock().is_ok().then_some(f)
 }
 
 /// Called after every recorded run. Costs one `stat` unless a collection is
@@ -312,22 +301,18 @@ pub fn maybe_spawn() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    use std::os::unix::process::CommandExt;
     let _ = std::process::Command::new(exe)
         .args(["cache", "--auto"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .process_group(0)
+        .detached()
         .spawn();
 }
 
 /// Background collection: nice, lock, prune to the cap, log what happened.
 fn auto(root: &Path) {
-    // SAFETY: plain syscalls on the current process.
-    unsafe {
-        libc::setpriority(libc::PRIO_PROCESS, 0, 19);
-    }
+    crate::sys::lower_priority();
     let Some(_lock) = try_lock(&root.join("gc.lock")) else {
         return;
     };

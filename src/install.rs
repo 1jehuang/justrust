@@ -24,15 +24,16 @@ pub fn install(dir: Option<PathBuf>) -> Result<()> {
     };
     std::fs::create_dir_all(&dir)?;
     let exe = std::env::current_exe()?.canonicalize()?;
-    let link = dir.join("cargo");
+    let link = dir.join(crate::sys::exe_name("cargo"));
     if link.exists() && std::fs::read_link(&link).ok().as_deref() != Some(exe.as_path()) {
-        let is_ours = std::fs::read_link(&link)
-            .ok()
-            .and_then(|t| {
-                t.file_name()
-                    .map(|n| n.to_string_lossy().starts_with("justrust"))
-            })
-            .unwrap_or(false);
+        let is_ours = paths::is_justrust(&link)
+            || std::fs::read_link(&link)
+                .ok()
+                .and_then(|t| {
+                    t.file_name()
+                        .map(|n| n.to_string_lossy().starts_with("justrust"))
+                })
+                .unwrap_or(false);
         if !is_ours {
             bail!(
                 "{} already exists and is not a justrust proxy. Remove it or pass --dir.",
@@ -72,8 +73,15 @@ pub fn uninstall(dir: Option<PathBuf>) -> Result<()> {
         Some(d) => d,
         None => default_dir()?,
     };
-    let link = dir.join("cargo");
+    let link = dir.join(crate::sys::exe_name("cargo"));
     let exe = std::env::current_exe()?.canonicalize()?;
+    // Windows: a copy or hard link, marked by its sidecar.
+    if cfg!(windows) && paths::copy_mark(&link).exists() {
+        std::fs::remove_file(&link)?;
+        let _ = std::fs::remove_file(paths::copy_mark(&link));
+        println!("Removed {}", link.display());
+        return Ok(());
+    }
     match std::fs::read_link(&link) {
         Ok(t)
             if t == exe

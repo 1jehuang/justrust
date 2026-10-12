@@ -11,11 +11,13 @@
 //! kqueue watches a directory's entries, not its files' contents: a file
 //! rewritten in place (no rename) is pushed by the run's rescan instead of
 //! early. Editors that save atomically (write and rename) are seen at once.
+//!
+//! Windows has no backend yet: nothing is watched, and every change is
+//! pushed by the run's rescan.
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -24,6 +26,8 @@ use std::sync::{Arc, Mutex};
 use inotify as sys;
 #[cfg(target_os = "macos")]
 use kqueue as sys;
+#[cfg(windows)]
+use unwatched as sys;
 
 #[derive(Default)]
 struct Watches {
@@ -46,7 +50,7 @@ fn add(fd: i32, w: &Mutex<Watches>, d: &Path) -> bool {
     if w.lock().unwrap().by_path.contains_key(d) {
         return false;
     }
-    let Ok(c) = CString::new(d.as_os_str().as_bytes()) else {
+    let Ok(c) = CString::new(d.as_os_str().as_encoded_bytes()) else {
         return false;
     };
     let Some(wd) = sys::watch(fd, &c) else {
@@ -121,9 +125,29 @@ impl Watcher {
     }
 }
 
+/// Windows: no watch is ever added, so `add` reports nothing watched and
+/// the daemon falls back to the rescan every run does.
+#[cfg(windows)]
+mod unwatched {
+    use super::*;
+
+    pub fn init() -> Option<i32> {
+        Some(0)
+    }
+
+    pub fn watch(_fd: i32, _path: &CString) -> Option<i32> {
+        None
+    }
+
+    pub fn unwatch(_fd: i32, _wd: i32) {}
+
+    pub fn read_loop(_fd: i32, _w: Arc<Mutex<Watches>>, _tx: Sender<PathBuf>) {}
+}
+
 #[cfg(target_os = "linux")]
 mod inotify {
     use super::*;
+    use std::os::unix::ffi::OsStrExt;
 
     const MASK: u32 = libc::IN_CLOSE_WRITE
         | libc::IN_MOVED_TO
@@ -362,7 +386,7 @@ mod kqueue {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Duration;

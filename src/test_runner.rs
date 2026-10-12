@@ -13,7 +13,6 @@
 //! Anything unexpected runs the binary unchanged (fail open).
 
 use std::ffi::OsString;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -189,7 +188,7 @@ pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
         cmd.args(&extra);
     }
     cmd.args(&user);
-    let err = cmd.exec();
+    let err = crate::sys::exec(&mut cmd);
     eprintln!(
         "justrust: failed to run {}: {err}",
         Path::new(&bin).display()

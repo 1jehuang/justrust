@@ -42,6 +42,12 @@ pub const TARGET: &str = if cfg!(all(target_os = "macos", target_arch = "aarch64
     "aarch64-apple-darwin"
 } else if cfg!(target_os = "macos") {
     "x86_64-apple-darwin"
+} else if cfg!(all(windows, target_env = "gnu")) {
+    "x86_64-pc-windows-gnu"
+} else if cfg!(all(windows, target_arch = "aarch64")) {
+    "aarch64-pc-windows-msvc"
+} else if cfg!(windows) {
+    "x86_64-pc-windows-msvc"
 } else if cfg!(target_arch = "aarch64") {
     "aarch64-unknown-linux-gnu"
 } else {
@@ -262,8 +268,9 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
+    /// `bin/<name>` (`bin/<name>.exe` on Windows).
     pub fn bin(&self, name: &str) -> PathBuf {
-        self.dir.join("bin").join(name)
+        self.dir.join("bin").join(crate::sys::exe_name(name))
     }
     /// The cargo builds with this toolchain run: justrust's fork
     /// (`bin/jr-cargo`, installed by `justrust toolchain cargo-fork`) when
@@ -292,8 +299,7 @@ fn cargo_fork_enabled() -> bool {
 }
 
 fn is_executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    crate::sys::is_executable(p)
 }
 
 /// `cargo 1.101.0-nightly (f3865b2a4 2026-09-29)` -> `f3865b2a4`.
@@ -457,6 +463,23 @@ pub(crate) fn curl(url: &str, dest: &Path) -> Result<()> {
 }
 
 pub(crate) fn sha256(path: &Path) -> Result<String> {
+    // Windows: certutil prints the hash on the second line.
+    if cfg!(windows) {
+        let out = Command::new("certutil")
+            .args(["-hashfile"])
+            .arg(path)
+            .arg("SHA256")
+            .output()
+            .context("running certutil")?;
+        if !out.status.success() {
+            bail!("certutil -hashfile {} failed", path.display());
+        }
+        return String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().replace(' ', "").to_ascii_lowercase())
+            .find(|l| l.len() == 64 && l.bytes().all(|b| b.is_ascii_hexdigit()))
+            .context("certutil printed no SHA256");
+    }
     // coreutils on Linux; macOS ships perl's shasum instead.
     let mut cmd = if cfg!(target_os = "macos") {
         let mut c = Command::new("shasum");
@@ -582,20 +605,14 @@ pub fn fetch_manifest(spec: &Spec, scratch: &Path) -> Result<Manifest> {
 }
 
 fn lock_exclusive(path: &Path) -> Result<std::fs::File> {
-    use std::os::fd::AsRawFd;
     let f = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(path)?;
-    // SAFETY: flock on a valid fd; blocks until the other installer finishes.
-    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
-    if r != 0 {
-        bail!(
-            "locking {}: {}",
-            path.display(),
-            std::io::Error::last_os_error()
-        );
+    // Blocks until the other installer finishes.
+    if let Err(e) = f.lock() {
+        bail!("locking {}: {e}", path.display());
     }
     Ok(f)
 }
@@ -657,9 +674,9 @@ pub fn install(
 /// official toolchain, the one the fork is based on). Copied, not linked:
 /// rebuilding the fork never changes an installed toolchain under a build.
 pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
-    let rustc = sysroot.join("bin/rustc");
+    let rustc = sysroot.join("bin").join(crate::sys::exe_name("rustc"));
     for b in ["rustc", "rustdoc", "clippy-driver", "cargo-clippy"] {
-        if !is_executable(&sysroot.join("bin").join(b)) {
+        if !is_executable(&sysroot.join("bin").join(crate::sys::exe_name(b))) {
             bail!(
                 "{} has no bin/{b}: build it (`./x build --stage 2 compiler/rustc src/tools/rustdoc src/tools/clippy`)",
                 sysroot.display()
@@ -710,7 +727,7 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
     for b in ["cargo", "rustfmt", "cargo-fmt", JR_CARGO] {
         let from = cargo_from.bin(b);
         if is_executable(&from) {
-            std::fs::copy(&from, prefix.join("bin").join(b))?;
+            std::fs::copy(&from, prefix.join("bin").join(crate::sys::exe_name(b)))?;
         }
     }
     let info = Installed {
@@ -842,7 +859,7 @@ fn install_into(
     for (p, r) in pkgs.iter().zip(results) {
         r.with_context(|| format!("component {}", p.name))?;
     }
-    let rustc = prefix.join("bin/rustc");
+    let rustc = prefix.join("bin").join(crate::sys::exe_name("rustc"));
     let out = Command::new(&rustc)
         .arg("-vV")
         .output()
@@ -1003,7 +1020,6 @@ pub fn list_installed() -> Vec<Toolchain> {
 }
 
 fn dir_bytes(dir: &Path) -> u64 {
-    use std::os::unix::fs::MetadataExt;
     std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -1013,7 +1029,7 @@ fn dir_bytes(dir: &Path) -> u64 {
             if m.is_dir() {
                 dir_bytes(&p)
             } else {
-                m.blocks() * 512
+                crate::sys::disk_bytes(&m)
             }
         })
         .sum()
@@ -1203,7 +1219,6 @@ mod tests {
 
     #[test]
     fn toolchain_prefers_installed_cargo_fork() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("jr-tc-fork-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         let tc = Toolchain {
@@ -1211,12 +1226,17 @@ mod tests {
             dir: dir.clone(),
             nightly: true,
         };
-        assert_eq!(tc.cargo(), dir.join("bin/cargo"));
-        let fork = dir.join("bin").join(JR_CARGO);
+        assert_eq!(tc.cargo(), tc.bin("cargo"));
+        let fork = tc.bin(JR_CARGO);
+        // Not there: ignored.
+        assert_eq!(tc.cargo(), tc.bin("cargo"));
         std::fs::write(&fork, "#!/bin/sh\n").unwrap();
-        // Not executable: ignored.
-        assert_eq!(tc.cargo(), dir.join("bin/cargo"));
-        std::fs::set_permissions(&fork, std::fs::Permissions::from_mode(0o755)).unwrap();
+        #[cfg(unix)]
+        {
+            // Not executable: ignored.
+            assert_eq!(tc.cargo(), tc.bin("cargo"));
+            crate::sys::set_mode(&fork, 0o755).unwrap();
+        }
         if cargo_fork_enabled() {
             assert_eq!(tc.cargo(), fork);
         }

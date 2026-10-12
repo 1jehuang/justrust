@@ -1311,6 +1311,8 @@ mod tests {
         );
     }
 
+    // Parses this test binary as ELF.
+    #[cfg(target_os = "linux")]
     #[test]
     fn base_index_resolves_like_the_symbol_table() {
         // This test binary is a real executable with a full symbol table.

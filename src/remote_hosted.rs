@@ -603,7 +603,7 @@ pub fn post_anonymous_detached(path: &str, body: &Value) {
         "--data-binary",
         "@-",
         "-o",
-        "/dev/null",
+        crate::sys::DEV_NULL,
         &url,
     ]);
     spawn_detached((cmd, body.to_string()));
@@ -846,19 +846,13 @@ pub fn dir() -> Result<PathBuf> {
 }
 
 fn set_mode(p: &Path, mode: u32) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode));
+    let _ = crate::sys::set_mode(p, mode);
 }
 
 fn write_private(p: &Path, content: &[u8]) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     let tmp = p.with_extension("tmp");
     let _ = std::fs::remove_file(&tmp);
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
+    let mut f = crate::sys::create_private(&tmp)?;
     f.write_all(content)?;
     drop(f);
     std::fs::rename(&tmp, p)?;
@@ -873,17 +867,25 @@ pub fn target(d: &Path, user: &str, address: &str, port: u16) -> Target {
     for s in [
         "IdentitiesOnly=yes".to_string(),
         format!("UserKnownHostsFile={}", d.join("known_hosts").display()),
-        "GlobalKnownHostsFile=/dev/null".into(),
+        format!("GlobalKnownHostsFile={}", crate::sys::DEV_NULL),
         "StrictHostKeyChecking=yes".into(),
         "BatchMode=yes".into(),
         "ConnectTimeout=10".into(),
         "LogLevel=ERROR".into(),
-        "ControlMaster=auto".into(),
-        format!("ControlPath={}", crate::remote_backend::control_path(d)),
-        "ControlPersist=600".into(),
         "ServerAliveInterval=15".into(),
     ] {
         opts.extend(o(s));
+    }
+    // Windows OpenSSH has no connection multiplexing (it rejects
+    // ControlMaster): each command opens its own connection there.
+    if cfg!(unix) {
+        for s in [
+            "ControlMaster=auto".to_string(),
+            format!("ControlPath={}", crate::remote_backend::control_path(d)),
+            "ControlPersist=600".into(),
+        ] {
+            opts.extend(o(s));
+        }
     }
     opts.extend(["-p".into(), port.to_string()]);
     Target {
@@ -952,14 +954,12 @@ struct Lock(#[allow(dead_code)] std::fs::File);
 
 impl Lock {
     fn take(d: &Path) -> Result<Lock> {
-        use std::os::fd::AsRawFd;
         let f = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
             .open(d.join("lock"))?;
-        // SAFETY: valid fd owned by f for the duration of the call.
-        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+        let _ = f.lock();
         Ok(Lock(f))
     }
 }
@@ -1523,22 +1523,30 @@ mod tests {
 
     #[test]
     fn ssh_target_is_strict() {
-        let t = target(Path::new("/h"), "ubuntu", "203.0.113.7", 2222);
+        let h = Path::new("/h");
+        let t = target(h, "ubuntu", "203.0.113.7", 2222);
         assert_eq!(t.dest, "ubuntu@203.0.113.7");
         let o = t.opts.join(" ");
-        for want in [
-            "-i /h/id_ed25519",
-            "StrictHostKeyChecking=yes",
-            "UserKnownHostsFile=/h/known_hosts",
-            "GlobalKnownHostsFile=/dev/null",
-            "BatchMode=yes",
-            "ControlMaster=auto",
-            "ControlPath=/h/cm-%C",
-            "ControlPersist=600",
-            "ServerAliveInterval=15",
-            "-p 2222",
-        ] {
-            assert!(o.contains(want), "{want} in {o}");
+        let mut wants = vec![
+            format!("-i {}", h.join("id_ed25519").display()),
+            "StrictHostKeyChecking=yes".into(),
+            format!("UserKnownHostsFile={}", h.join("known_hosts").display()),
+            format!("GlobalKnownHostsFile={}", crate::sys::DEV_NULL),
+            "BatchMode=yes".into(),
+            "ServerAliveInterval=15".into(),
+            "-p 2222".into(),
+        ];
+        if cfg!(unix) {
+            wants.extend([
+                "ControlMaster=auto".into(),
+                "ControlPath=/h/cm-%C".into(),
+                "ControlPersist=600".into(),
+            ]);
+        } else {
+            assert!(!o.contains("ControlMaster"), "{o}");
+        }
+        for want in wants {
+            assert!(o.contains(&want), "{want} in {o}");
         }
         assert!(!o.contains("accept-new"));
     }

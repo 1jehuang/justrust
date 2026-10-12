@@ -44,8 +44,6 @@ use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -106,8 +104,7 @@ fn wrap_with(out_dir: &Path, crate_name: &str, extra: &str, me: &Path) -> Option
     let real = out_dir.join(format!("{REAL_PREFIX}{name}"));
     let tmp = out_dir.join(format!(".jr-wrap-{name}.{}", std::process::id()));
     std::fs::write(&tmp, script).ok()?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).ok()?;
+    crate::sys::set_mode(&tmp, 0o755).ok()?;
     if std::fs::rename(&bin, &real).is_err() {
         let _ = std::fs::remove_file(&tmp);
         return None;
@@ -540,7 +537,8 @@ fn system_stamp() -> String {
         "/usr/local/Cellar",
     ] {
         if let Ok(m) = std::fs::metadata(p) {
-            s.push_str(&format!("{p}:{}.{};", m.mtime(), m.mtime_nsec()));
+            let (s_, ns) = crate::sys::mtime(&m);
+            s.push_str(&format!("{p}:{s_}.{ns};"));
         }
     }
     s
@@ -574,7 +572,8 @@ fn input_sig(path: &Path, cargo_home: &Path) -> Option<String> {
         return Some(h.hex());
     }
     if in_cargo_home(path, cargo_home) && !std::fs::symlink_metadata(path).ok()?.is_symlink() {
-        return Some(format!("m:{}:{}.{}", m.len(), m.mtime(), m.mtime_nsec()));
+        let (s, ns) = crate::sys::mtime(&m);
+        return Some(format!("m:{}:{s}.{ns}", m.len()));
     }
     depcache::file_hash(path, false)
 }
@@ -989,7 +988,7 @@ fn directives(stdout: &str) -> (Vec<String>, Vec<String>) {
 }
 
 fn exec_real(real: &Path, args: &[OsString]) -> ! {
-    let err = Command::new(real).args(args).exec();
+    let err = crate::sys::exec(Command::new(real).args(args));
     eprintln!("justrust: failed to exec {}: {err}", real.display());
     std::process::exit(127);
 }
@@ -1086,13 +1085,18 @@ pub fn main(real: PathBuf, args: Vec<OsString>) -> ! {
     }
     // Killed by a signal: die the same way so cargo reports what it would
     // have reported for the real script.
-    use std::os::unix::process::ExitStatusExt;
-    let sig = status.signal().unwrap_or(libc::SIGKILL);
-    unsafe {
-        libc::signal(sig, libc::SIG_DFL);
-        libc::raise(sig);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        let sig = status.signal().unwrap_or(libc::SIGKILL);
+        unsafe {
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+        std::process::exit(128 + sig);
     }
-    std::process::exit(128 + sig);
+    #[cfg(not(unix))]
+    std::process::exit(1);
 }
 
 #[cfg(test)]
@@ -1203,6 +1207,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Runs `sh` scripts.
+    #[cfg(unix)]
     #[test]
     fn wrapper_replaces_elf_and_falls_back() {
         let dir = std::env::temp_dir().join(format!("jr-bs-wrap-{}", std::process::id()));
@@ -1224,6 +1230,8 @@ mod tests {
 
     /// The wrapper must behave like the real script when justrust is gone:
     /// same stdout, stderr, args, cwd, and exit code.
+    // Runs `sh` scripts.
+    #[cfg(unix)]
     #[test]
     fn wrapper_runs_real_script_when_justrust_is_missing() {
         let dir = std::env::temp_dir().join(format!("jr-bs-open-{}", std::process::id()));
@@ -1261,8 +1269,7 @@ mod tests {
         // With a justrust that exists but has the cache disabled: same.
         let jr = dir.join("fake-justrust");
         std::fs::write(&jr, "#!/bin/sh\n[ \"$1\" = __build-script ] || exit 99\nshift\nr=$1\nshift\nexec \"$r\" \"$@\"\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&jr, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::sys::set_mode(&jr, 0o755).unwrap();
         std::fs::copy("/bin/sh", &bin).unwrap();
         std::fs::remove_file(&real).unwrap();
         wrap_with(&dir, "build_script_build", "-abc", &jr).unwrap();
@@ -1275,6 +1282,7 @@ mod tests {
 
     /// Exec a file this test just wrote. A test forking concurrently can
     /// briefly inherit our write fd, which makes exec fail with ETXTBSY.
+    #[cfg(unix)]
     fn retry_busy(
         mut f: impl FnMut() -> std::io::Result<std::process::Output>,
     ) -> std::process::Output {
@@ -1331,12 +1339,15 @@ mod tests {
                 .is_none()
         );
         // Symlink in OUT_DIR.
-        std::os::unix::fs::symlink("/etc/hostname", out_dir.join("link")).unwrap();
-        assert!(
-            p.store(b"cargo:rerun-if-changed=in.txt\n", b"", 1.0)
-                .is_none()
-        );
-        std::fs::remove_file(out_dir.join("link")).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc/hostname", out_dir.join("link")).unwrap();
+            assert!(
+                p.store(b"cargo:rerun-if-changed=in.txt\n", b"", 1.0)
+                    .is_none()
+            );
+            std::fs::remove_file(out_dir.join("link")).unwrap();
+        }
         assert!(!p.manifest().exists());
         // Clean run: stored, and an env-only directive keys on the value.
         let ok = b"cargo:rerun-if-env-changed=JR_BS_TEST_UNSET_VAR\n";
@@ -1359,10 +1370,13 @@ mod tests {
         let s3 = input_sig(&dir.join("d"), &ch).unwrap();
         assert!(s1 != s2 && s2 != s3);
         // Symlinked file: content of the target counts.
-        std::os::unix::fs::symlink(dir.join("d/sub/a"), dir.join("l")).unwrap();
-        let l1 = input_sig(&dir.join("l"), &ch).unwrap();
-        std::fs::write(dir.join("d/sub/a"), "3").unwrap();
-        assert_ne!(l1, input_sig(&dir.join("l"), &ch).unwrap());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("d/sub/a"), dir.join("l")).unwrap();
+            let l1 = input_sig(&dir.join("l"), &ch).unwrap();
+            std::fs::write(dir.join("d/sub/a"), "3").unwrap();
+            assert_ne!(l1, input_sig(&dir.join("l"), &ch).unwrap());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

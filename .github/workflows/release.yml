@@ -40,6 +40,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             zig: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            zig: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,7 +75,7 @@ jobs:
         run: |
           name="justrust-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/justrust" "dist/$name/"
+          cp "target/${{ matrix.target }}/release/justrust$( [[ "${{ matrix.target }}" == *windows* ]] && echo .exe )" "dist/$name/"
           cp README.md "dist/$name/" 2>/dev/null || true
           cp LICENSE* "dist/$name/" 2>/dev/null || true
           cd dist

@@ -41,6 +41,7 @@
 use crate::depcache::{self, Entry, Outputs, Plan};
 use crate::paths;
 use crate::remote_hosted::{self, Creds};
+use crate::sys::Detach;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -193,7 +194,6 @@ fn rand_suffix() -> u64 {
 
 /// Pack `dir` (one `o/<out>` entry) into a gzip bundle at `dst`.
 pub(crate) fn pack(dir: &Path, dst: &Path) -> Option<()> {
-    use std::os::unix::fs::PermissionsExt;
     let meta: Outputs = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
     let mut names: Vec<String> = meta.files.iter().map(|f| f.name.clone()).collect();
     names.push("meta.json".into());
@@ -206,7 +206,7 @@ pub(crate) fn pack(dir: &Path, dst: &Path) -> Option<()> {
         let m = std::fs::metadata(&p).ok()?;
         gz.write_all(&(name.len() as u32).to_le_bytes()).ok()?;
         gz.write_all(name.as_bytes()).ok()?;
-        gz.write_all(&(m.permissions().mode() & 0o777).to_le_bytes())
+        gz.write_all(&(crate::sys::mode(&m, &p) & 0o777).to_le_bytes())
             .ok()?;
         gz.write_all(&m.len().to_le_bytes()).ok()?;
         std::io::copy(&mut std::fs::File::open(&p).ok()?, &mut gz).ok()?;
@@ -217,7 +217,6 @@ pub(crate) fn pack(dir: &Path, dst: &Path) -> Option<()> {
 /// Unpack a bundle into a fresh `dst` dir, verifying names, the file list
 /// against `meta.json`, and every binary output's content hash.
 pub(crate) fn unpack(src: &Path, dst: &Path) -> Option<()> {
-    use std::os::unix::fs::PermissionsExt;
     let f = std::fs::File::open(src).ok()?;
     let mut r = flate2::read::GzDecoder::new(std::io::BufReader::new(f)).take(4 * MAX_BUNDLE);
     let mut magic = [0u8; 6];
@@ -259,7 +258,7 @@ pub(crate) fn unpack(src: &Path, dst: &Path) -> Option<()> {
             return None;
         }
         let mode = u32::from_le_bytes(mode) & 0o755;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode | 0o600)).ok()?;
+        crate::sys::set_mode(&p, mode | 0o600).ok()?;
         seen.push(name);
     }
     let meta: Outputs = serde_json::from_slice(&std::fs::read(dst.join("meta.json")).ok()?).ok()?;
@@ -383,13 +382,12 @@ pub fn maybe_spawn_sync() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    use std::os::unix::process::CommandExt;
     let _ = Command::new(exe)
         .args(["cache", "--sync"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .process_group(0)
+        .detached()
         .spawn();
 }
 
@@ -403,15 +401,13 @@ pub struct Synced {
 /// Upload the queue. Single instance (lock). Items that fail with a server
 /// or network error stay queued and the breaker trips.
 pub fn sync(root: &Path) -> Option<Synced> {
-    use std::os::fd::AsRawFd;
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(root.join("upload.lock"))
         .ok()?;
-    // SAFETY: flock on a valid fd.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if lock.try_lock().is_err() {
         return None;
     }
     let client = Client::new()?;
@@ -536,16 +532,11 @@ mod tests {
     }
 
     fn entry_dir(root: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let dir = root.join("o/x");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("libx-abc.rlib"), b"rlib bytes").unwrap();
         std::fs::write(dir.join("build_script_build-abc"), b"\x7fELF").unwrap();
-        std::fs::set_permissions(
-            dir.join("build_script_build-abc"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+        crate::sys::set_mode(&dir.join("build_script_build-abc"), 0o755).unwrap();
         std::fs::write(
             dir.join("x-abc.d"),
             "@@JUSTRUST_PROFILE_DIR@@/deps/x: a.rs\n",
@@ -566,7 +557,6 @@ mod tests {
 
     #[test]
     fn bundle_round_trip_keeps_bytes_and_modes() {
-        use std::os::unix::fs::PermissionsExt;
         let root = tmpdir("rt");
         let dir = entry_dir(&root);
         let b = root.join("b.gz");
@@ -585,11 +575,11 @@ mod tests {
                 "{n}"
             );
         }
-        let mode = std::fs::metadata(out.join("build_script_build-abc"))
-            .unwrap()
-            .permissions()
-            .mode();
+        let p = out.join("build_script_build-abc");
+        let mode = crate::sys::mode(&std::fs::metadata(&p).unwrap(), &p);
+        #[cfg(unix)]
         assert_eq!(mode & 0o111, 0o111);
+        let _ = mode;
         let _ = std::fs::remove_dir_all(&root);
     }
 

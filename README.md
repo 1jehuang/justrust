@@ -256,8 +256,16 @@ variables may change between releases ([CHANGELOG.md](CHANGELOG.md)).
   Process sampling uses libproc and Mach, dependency-cache restores and
   build slots clone with APFS `clonefile`, and the sync daemon watches
   with kqueue.
-- **Windows:** `justrust check|test|build|clippy|run` run plain cargo
-  unchanged (no recording or speedups yet).
+- **Windows:** recording, agent output, reports, the depcache (plain
+  copies with a fresh mtime, no hash memo since NTFS has no xattrs that
+  leave mtime alone), the test pool, pinned toolchains, and the build
+  daemon. Build CPU comes from a job object around cargo,
+  processes from Toolhelp. Not on Windows: per-agent build slots (they
+  need copy-on-write clones; builds share the target dir), cgroup priority, pressure-stall
+  reporting, wild and hot patching (ELF only), the sync daemon's file
+  watcher (pushes fall back to the per-run rescan), ssh connection reuse
+  (Windows OpenSSH has no ControlMaster), and automatic remote routing
+  (the build machines are Linux).
 
 ## Where this is going
 

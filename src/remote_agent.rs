@@ -13,11 +13,10 @@
 //! Paths arrive absolute. With a non-empty prefix (a machine where the local
 //! paths cannot be created) every path is rebased under it.
 
+use crate::sys::Detach;
 use anyhow::{Result, bail};
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufWriter, Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -88,9 +87,7 @@ fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
         path.file_name().unwrap_or_default().to_string_lossy()
     ));
     let res = std::fs::write(&tmp, data)
-        .and_then(|()| {
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode & 0o777))
-        })
+        .and_then(|()| crate::sys::set_mode(&tmp, mode & 0o777))
         .and_then(|()| std::fs::rename(&tmp, path));
     if res.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -418,7 +415,7 @@ fn start_run(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0);
+        .detached();
     if !run_id.is_empty() {
         c.env("JUSTRUST_RUN_ID_OVERRIDE", run_id);
     }

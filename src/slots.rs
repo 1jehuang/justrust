@@ -26,10 +26,10 @@
 //! - Fails open: any error means "use the shared target dir".
 
 use crate::paths;
+use crate::sys::Detach;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs::File;
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
@@ -223,9 +223,7 @@ pub fn session_key() -> String {
     {
         return s;
     }
-    // SAFETY: getsid has no memory-safety preconditions.
-    let sid = unsafe { libc::getsid(0) };
-    format!("sid-{sid}")
+    format!("sid-{}", crate::sys::session_id())
 }
 
 fn capacity() -> usize {
@@ -283,9 +281,7 @@ fn try_lock(path: &Path) -> Option<File> {
         .write(true)
         .open(path)
         .ok()?;
-    // SAFETY: flock on a valid fd.
-    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    (r == 0).then_some(f)
+    f.try_lock().is_ok().then_some(f)
 }
 
 fn read_meta(path: &Path) -> Option<SlotMeta> {
@@ -851,9 +847,7 @@ fn try_lock_shared(path: &Path) -> Option<File> {
         .write(true)
         .open(path)
         .ok()?;
-    // SAFETY: flock on a valid fd.
-    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
-    (r == 0).then_some(f)
+    f.try_lock_shared().is_ok().then_some(f)
 }
 
 /// Identity of a build request for joining: working dir, cargo arguments
@@ -942,8 +936,7 @@ fn try_lock_probe(path: &Path) -> bool {
             // is forking shares this open file until it execs, and would
             // hold the probe's lock until then (seen in CI as a slot that
             // looked busy right after an idle probe).
-            // SAFETY: flock on a valid fd.
-            unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN) };
+            let _ = f.unlock();
             false
         }
         None => path.exists(),
@@ -1308,7 +1301,6 @@ pub fn maybe_gc_background(info: &SlotInfo) {
     let Ok(me) = std::env::current_exe() else {
         return;
     };
-    use std::os::unix::process::CommandExt;
     let _ = Command::new(me)
         .arg("slots")
         .arg("--gc-root")
@@ -1316,7 +1308,7 @@ pub fn maybe_gc_background(info: &SlotInfo) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .process_group(0)
+        .detached()
         .spawn();
 }
 
