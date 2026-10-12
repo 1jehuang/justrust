@@ -285,6 +285,20 @@ FACTORS = [
         on={"JUSTRUST_TOOLCHAIN": NIGHTLY},
         off={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JUSTRUST_CARGO_FORK": "0"}, n=8,
     ),
+    # jr-cargo fork server (jr-cargo src/jr_daemon.rs): a parked process per
+    # exact invocation that already ran create_bcx forks per request. The
+    # first `on` run (warmup) starts the server.
+    *[Factor(
+        name, what, "loop", scenario,
+        on={"JUSTRUST_TOOLCHAIN": NIGHTLY, "JUSTRUST_CARGO_DAEMON": "1"},
+        off={"JUSTRUST_TOOLCHAIN": NIGHTLY}, n=n,
+        note="opt-in JUSTRUST_CARGO_DAEMON=1; needs jr-cargo with jr_daemon installed in the nightly toolchain",
+    ) for name, what, scenario, n in [
+        ("cargo-daemon", "jr-cargo daemon: fork a parked post-create_bcx cargo per request (no-op test)",
+         "desktop-noop-test", 12),
+        ("cargo-daemon-check", "same, one-line body edit then `check`", "desktop-body-check", 8),
+        ("cargo-daemon-loop", "same, on the reference edit loop", "desktop-test-edit", 8),
+    ]],
     # jr-rustc fork changes: both sides run the same jr-rustc build, `on`
     # enables the change.
     *[Factor(
