@@ -264,6 +264,12 @@ fn stage_with(
 const VOLATILE_AFTER: usize = 2;
 
 fn volatile(manifest: &Path, entry: &Entry) -> bool {
+    if entry.env.iter().any(|(_, v)| {
+        v.as_deref()
+            .is_some_and(|v| is_fresh_stamp(v, paths::now()))
+    }) {
+        return true;
+    }
     let Ok(text) = std::fs::read_to_string(manifest) else {
         return false;
     };
@@ -272,6 +278,22 @@ fn volatile(manifest: &Path, entry: &Entry) -> bool {
         .filter(|e| e.inputs == entry.inputs && e.env != entry.env)
         .count()
         >= VOLATILE_AFTER
+}
+
+/// A Unix time in seconds or milliseconds from the last ten minutes: a
+/// build script stamped the build time into the crate (`env!`), so this
+/// result is never seen again. A stable value (`SOURCE_DATE_EPOCH`, a build
+/// script that ran long ago) is older and still stored.
+fn is_fresh_stamp(v: &str, now: f64) -> bool {
+    let Ok(n) = v.trim().parse::<u64>() else {
+        return false;
+    };
+    let secs = if n > 100_000_000_000 {
+        n as f64 / 1000.0
+    } else {
+        n as f64
+    };
+    (now - secs).abs() < 600.0
 }
 
 fn spawn_finisher(dir: &Path) -> bool {
@@ -451,6 +473,19 @@ fn maybe_gc(root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_time_stamps_are_volatile() {
+        let now = 1_791_789_578.0;
+        assert!(is_fresh_stamp("1791789570", now));
+        assert!(is_fresh_stamp("1791789570123", now));
+        assert!(
+            !is_fresh_stamp("1791700000", now),
+            "SOURCE_DATE_EPOCH a day ago"
+        );
+        assert!(!is_fresh_stamp("0.5.1", now));
+        assert!(!is_fresh_stamp("42", now));
+    }
 
     /// A local unit stored by one target dir is restored into another one,
     /// with its dep-info rewritten and stderr replayed, and misses once a
