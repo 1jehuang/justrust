@@ -4074,3 +4074,60 @@ Changes:
   Upload `prebuild/` there (`aws s3 cp prebuild/run.sh .../fleet/run.sh`, same for
   seeds.toml), then rerun the jcode-tui cold check above.
   I left this undone because it is a production change.
+
+## 56. Which part of the toolchain to parallelize: ledger over every recorded unit plus a -Zthreads sweep (2026-10-12)
+
+`bench/pass_ledger.py --filter agent` (2696 agent runs, 23,388 units with
+`-Ztime-passes`, 73,712 s run wall). Each unit's passes go into exclusive
+buckets, weighted by the share of run wall the unit owned (1/k when k units
+ran at once). `solo` = seconds when it was the only rustc running.
+
+| bucket | share s | % | solo s | per run |
+|---|---:|---:|---:|---:|
+| dependency crates (no passes) | 22,894 | 37.5 | 4,589 | 8.49 |
+| local crates without pass data | 11,009 | 18.0 | 8,398 | 4.08 |
+| codegen to LLVM IR (main thread) | 5,427 | 8.9 | 3,744 | 2.01 |
+| type check | 4,190 | 6.9 | 2,674 | 1.55 |
+| macro expansion | 3,058 | 5.0 | 2,606 | 1.13 |
+| borrow check | 2,888 | 4.7 | 1,751 | 1.07 |
+| mono collector | 2,851 | 4.7 | 2,158 | 1.06 |
+| coherence | 1,896 | 3.1 | 1,273 | 0.70 |
+| incr persist (serialize_dep_graph) | 887 | 1.5 | 777 | 0.33 |
+| name resolution | 886 | 1.4 | 750 | 0.33 |
+| linker | 784 | 1.3 | 702 | 0.29 |
+| partition_and_assert_distinct_symbols | 650 | 1.1 | 543 | 0.24 |
+| metadata encode | 407 | 0.7 | 288 | 0.15 |
+
+Outside rustc, per run: test run 3.33 s, remote sync 0.75 s, build gaps
+0.49 s, startup 0.43 s, lock wait 0.33 s.
+
+`bench/threads_sweep.py` (`threads-20261012-051915.json`, laptop, jr
+toolchain), median wall per pass at -Zthreads 1 / 8 / 16:
+
+| loop | wall | what moved with threads |
+|---|---|---|
+| Desktop test edit (reference loop) | 6.30 / 4.66 / 5.02 s | mono collector 0.83 -> 0.50, partition 0.61 -> 0.33, type check 0.24 -> 0.12, persist 0.75 -> 0.57. Macro expansion 0.82 -> 0.61 is noise-level, name resolution 0.51 -> 0.40 |
+| jcode_base check | 2.28 / 2.28 / 2.30 s | nothing: every pass is flat |
+| jcode_base build | 3.80 / 3.73 / 3.80 s | mono 0.40 -> 0.30, otherwise flat; CPU rises 3.5 -> 5.4 s for no wall gain |
+
+(-Z8 desktop has n=1 clean sample, -Z16 n=2. Treat as indicative.)
+
+Ranking for parallelization work:
+
+1. **Dependency crates, 37.5%.** Each one compiles serially, so the lever is
+   not threads inside rustc but not compiling them: the depcache and prebuilt
+   store (FINDINGS 55: hosted keys never match until the fleet publishes
+   debug=0 and nightly keys).
+2. **Whole-crate granularity, 18% + the solo column.** Giant local crates
+   have no pass data and run alone: split them (shadow split, FINDINGS 47).
+3. **Inside rustc, what -Zthreads does not already parallelize in warm
+   loops:** macro expansion (1.13 s/run, 2606 s solo, serial by design,
+   already cut by the attr-macro cache), incr persist (0.33 s/run, can
+   overlap with codegen/link: being implemented as
+   `JUSTRUST_RUSTC_OVERLAP_PERSIST` by another session), name resolution,
+   misc_checking_3 lints, metadata encode. Codegen to LLVM IR main thread
+   (2.0 s/run) is the largest single rustc bucket and is serial per CGU
+   assignment. Type check, borrow check, mono and partition already scale
+   with -Zthreads on the Desktop loop, but not on jcode_base (flat), which
+   suggests its query graph is a single long dependency chain there.
+4. -Zthreads 16 is never better than 8 on these loops and costs more CPU.
