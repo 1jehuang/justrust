@@ -149,6 +149,26 @@ FACTORS = [
              "reference loop (test-fn edit, `test --lib -- fps_counter`); B's wall is measured",
     ),
     Factor(
+        "buildd-coalesce", "resident build daemon: a second agent asking for the identical build attaches to the "
+                           "running one instead of waiting for its slot and re-running cargo and the tests "
+                           "(opt-in JUSTRUST_BUILDD=1)",
+        "coalesce", "desktop-two-agents-same",
+        on={"JUSTRUST_BUILDD": "1"}, off={}, n=6,
+        note="one test-fn edit, then agent A and, 1s later, agent B run the identical reference-loop command; "
+             "B's wall is measured. Off, B joins A's slot (slots.rs join_identical) and runs a no-op cargo after it",
+    ),
+    Factor(
+        "buildd-noop", "same daemon, its cost on a lone no-op `test` (client, socket, source stamp, extra exec)",
+        "loop", "desktop-noop-test",
+        on={"JUSTRUST_BUILDD": "1"}, off={}, n=10,
+        note="opt-in, so `on` is the non-default side; nothing to coalesce, pure overhead",
+    ),
+    Factor(
+        "buildd-loop", "same daemon on the reference loop (one agent, nothing to coalesce)",
+        "loop", "desktop-test-edit",
+        on={"JUSTRUST_BUILDD": "1"}, off={}, n=6,
+    ),
+    Factor(
         "parallel-frontend", "rustc -Zthreads=8 for local crates (Desktop's rustc wrapper)",
         "loop", "desktop-test-edit",
         on={}, off={"JCODE_PARALLEL_FRONTEND": "0"},
@@ -482,7 +502,47 @@ def sample_fresh_dir(f: Factor, v: str, i: int, base_n: int) -> dict:
         shutil.rmtree(target, ignore_errors=True)
 
 
-SAMPLERS = {"loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
+def sample_coalesce(f: Factor, v: str, i: int, base_n: int) -> dict:
+    """Two agents, identical request: one edit, A starts, B 1s later with
+    the same command. B's wall is measured (A's is kept as wall_a)."""
+    root = concurrent_root(v)
+    cwd = root / "jcode-desktop"
+    venv = f.on if v == "on" else f.off
+    edit = suite.BY_NAME["desktop-test-edit"].edit
+    cmd = ["test", "-p", "jcode-desktop-ui", "--lib", "--", "fps_counter"]
+    _, rustc = suite.foreign_load()
+    try:
+        suite.apply_edit(root, edit, base_n + 2 * i + (v == "off"))
+        pa, ra, ta = run_agent(cmd, cwd, {"JCODE_SESSION_ID": "bench-agent-a", **venv})
+        time.sleep(1.0)
+        pb, rb, tb = run_agent(cmd, cwd, {"JCODE_SESSION_ID": "bench-agent-b", **venv})
+        _, err_b = pb.communicate()
+        wall_b = time.monotonic() - tb
+        _, err_a = pa.communicate()
+        wall_a = time.monotonic() - ta
+        if pa.returncode or pb.returncode:
+            sys.exit(f"factors: {f.name}: agent exit A={pa.returncode} B={pb.returncode}\n{err_a[-2000:]}\n{err_b[-2000:]}")
+    finally:
+        suite.restore(root, edit)
+    sa, sb = summary(ra), summary(rb)
+    res = sb.get("resources", {})
+    shared = "shared an identical build" in err_b
+    return {
+        "id": f"{ra},{rb}",
+        "wall": round(wall_b, 3),
+        "wall_a": round(wall_a, 3),
+        # CPU of both agents' runs (one run when B attached).
+        "cpu": round(sa.get("cpu_secs", 0.0) + (0.0 if shared else sb.get("cpu_secs", 0.0)), 2),
+        "units": sb["units"]["compiled"],
+        "shared": shared,
+        "slot": (sb.get("slot") or {}).get("how") or "none",
+        "reuse": suite.reuse_ledger(sb, suite.JR_HOME / "runs" / rb),
+        "noisy": rustc > 0,
+        "other_cores": round(res.get("avg_other_cores", 0.0), 2),
+    }
+
+
+SAMPLERS = {"coalesce": sample_coalesce, "loop": sample_loop, "cold": sample_cold, "sequence": sample_sequence, "concurrent": sample_concurrent,
             "revert": sample_revert, "fresh": sample_fresh_dir}
 
 
