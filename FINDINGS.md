@@ -3058,6 +3058,19 @@ from 5 to 14 between runs). It is the price of not reporting a flaky
 failure as real, so I left it. Making it cheaper would mean reporting
 first and confirming after, which changes what the agent sees.
 
+Before and after, `bench/versus.py compare` synth1 (21e7712) vs synth5
+(1aabb66), same seed and machine, the 38 points both measured:
+
+| stack | synth1 | synth5 | wall | instructions |
+|---|---:|---:|---:|---:|
+| stock | 14.55 s | 13.28 s | -9% | -0.1% |
+| jr-nocache | 18.99 s | 13.62 s | -28% | -23.3% |
+| justrust | 18.00 s | 13.06 s | **-27%** | **-23.6%** |
+
+Stock's instructions did not move, so its -9% is machine variance. Most
+of justrust's gain shows in instructions too (less test work through the
+pool, fail-fast, no `-Ztime-passes`), not only in wall time.
+
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
 Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
