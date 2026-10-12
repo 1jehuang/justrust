@@ -201,6 +201,86 @@ fn index_path(root: &Path, base: &str) -> PathBuf {
     root.join(format!("prebuilt-index-{}", &h.hex()[..12]))
 }
 
+/// Whether downloading the unit should beat compiling it here, from the
+/// store's `v1/costs` (fleet compile time, bundle size) and this machine's
+/// measured download rate. `true` when the store has no costs file or the
+/// key is not priced (old behavior: always fetch). Measured on an idle
+/// 16-core laptop at ~10 MB/s: median fetch 1.2 s vs median compile 0.18 s,
+/// and fetching all 615 hits made a cold check 2-3x slower (FINDINGS 43).
+fn worth_fetching(root: &Path, base: &str, key: &str) -> bool {
+    if std::env::var("JUSTRUST_PREBUILT_ALWAYS").is_ok_and(|v| v == "1") {
+        return true;
+    }
+    let Some((compile_ms, bytes)) = cost_of(root, base, key) else {
+        return true;
+    };
+    let rate = download_rate(root);
+    // Per-unit fixed cost: a curl process, TLS, manifest round trip.
+    let fetch_ms = FETCH_OVERHEAD_MS + bytes as f64 * 1000.0 / rate;
+    // The fleet machine compiles ~1.5x faster per thread than a laptop under
+    // agent load; leaving that out errs toward compiling, which is safe.
+    fetch_ms < compile_ms as f64
+}
+
+/// Fixed time one store hit costs beyond its transfer.
+const FETCH_OVERHEAD_MS: f64 = 700.0;
+
+fn costs_path(root: &Path, base: &str) -> PathBuf {
+    index_path(root, base).with_extension("costs")
+}
+
+/// `(compile ms, bundle bytes)` of `key`, from a local copy of `v1/costs`
+/// refreshed every 10 minutes.
+fn cost_of(root: &Path, base: &str, key: &str) -> Option<(u64, u64)> {
+    let p = costs_path(root, base);
+    let none = p.with_extension("costs-none");
+    if fresh_file(&none, INDEX_SECS) {
+        return None;
+    }
+    if !fresh_file(&p, INDEX_SECS) {
+        let t = tmp(root, "costs");
+        match get(base, "costs", &t, 20, MAX_INDEX) {
+            Got::Ok => {
+                let _ = std::fs::rename(&t, &p);
+            }
+            _ => {
+                let _ = std::fs::remove_file(&t);
+                let _ = std::fs::write(&none, b"");
+                return None;
+            }
+        }
+    }
+    let text = std::fs::read_to_string(&p).ok()?;
+    let line = text.lines().find(|l| l.starts_with(key))?;
+    let mut it = line.split(' ').skip(1);
+    Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+}
+
+fn rate_path(root: &Path) -> PathBuf {
+    root.join("prebuilt.rate")
+}
+
+/// Bytes per second this machine downloads bundles at (EWMA), 5 MB/s until
+/// measured.
+fn download_rate(root: &Path) -> f64 {
+    std::fs::read_to_string(rate_path(root))
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|r| *r > 1000.0)
+        .unwrap_or(5e6)
+}
+
+/// Fold one bundle download into the rate estimate. Bundles under 256 KB
+/// say more about latency than bandwidth and are skipped.
+fn note_download(root: &Path, bytes: u64, secs: f64) {
+    if bytes < 256 * 1024 || secs <= 0.0 {
+        return;
+    }
+    let sample = bytes as f64 / secs;
+    let r = 0.8 * download_rate(root) + 0.2 * sample;
+    let _ = std::fs::write(rate_path(root), format!("{r:.0}"));
+}
+
 /// Whether the store may have `key`. `true` when it has no index (every
 /// lookup asks the store) or the index cannot be read.
 fn may_have(root: &Path, base: &str, key: &str) -> bool {
@@ -262,7 +342,10 @@ pub fn fetch(plan: &Plan, err: &mut dyn Write) -> Option<depcache::Hit> {
 
 fn fetch_from(base: &str, plan: &Plan, err: &mut dyn Write) -> Option<depcache::Hit> {
     let root = &plan.root;
-    if fresh_file(&breaker(root), BREAKER_SECS) || !may_have(root, base, &plan.base) {
+    if fresh_file(&breaker(root), BREAKER_SECS)
+        || !may_have(root, base, &plan.base)
+        || !worth_fetching(root, base, &plan.base)
+    {
         return None;
     }
     let m = tmp(root, "m");
@@ -288,10 +371,15 @@ fn fetch_from(base: &str, plan: &Plan, err: &mut dyn Write) -> Option<depcache::
         let stage = root
             .join("o")
             .join(format!(".{out}.pb{}", std::process::id()));
+        let t0 = std::time::Instant::now();
         let ok = matches!(
             get(base, &format!("o/{out}.jrdc"), &bundle, 120, 95 << 20),
             Got::Ok
-        ) && unpack(&bundle, &stage).is_some();
+        ) && {
+            let n = std::fs::metadata(&bundle).map(|m| m.len()).unwrap_or(0);
+            note_download(root, n, t0.elapsed().as_secs_f64());
+            unpack(&bundle, &stage).is_some()
+        };
         let _ = std::fs::remove_file(&bundle);
         if !ok || std::fs::rename(&stage, &final_dir).is_err() {
             let _ = std::fs::remove_dir_all(&stage);
@@ -397,10 +485,80 @@ pub fn publish(root: &Path, dst: &Path) -> anyhow::Result<Published> {
         }
     }
     write_index(&v1)?;
+    write_costs(root, &v1)?;
     if v1.join("s/m").is_dir() {
         write_index(&v1.join("s"))?;
     }
     Ok(p)
+}
+
+/// `v1/costs`: one line per base key, `<key> <compile ms> <bundle bytes>`,
+/// for the newest entry of each manifest, so a client can decide before any
+/// request whether downloading a unit beats compiling it. Lines for keys
+/// this publisher cannot price (bundles published earlier from another
+/// machine) are kept from the existing file.
+fn write_costs(root: &Path, v1: &Path) -> anyhow::Result<()> {
+    let mut costs: std::collections::BTreeMap<String, String> =
+        std::fs::read_to_string(v1.join("costs"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| Some((l.split(' ').next()?.to_owned(), l.to_owned())))
+            .collect();
+    for m in std::fs::read_dir(v1.join("m"))?.flatten() {
+        let name = m.file_name().to_string_lossy().into_owned();
+        let Some(key) = name.strip_suffix(".jsonl").filter(|k| valid_key(k)) else {
+            continue;
+        };
+        let text = std::fs::read_to_string(m.path()).unwrap_or_default();
+        let outs: Vec<String> = text
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<Entry>(l).ok().map(|e| e.out))
+            .collect();
+        // Size of what a client would download (newest line), compile time
+        // from any line this publisher built itself (a fresh fleet machine
+        // compiles everything, but its outputs need not hash the same).
+        // When the newest bundle was published earlier and is only in the
+        // bucket, pack our own output to measure it: same format and
+        // compression, so the same size up to a few bytes.
+        let packed_size = |o: &str| -> Option<u64> {
+            let t = v1.join(format!(".size.{}", std::process::id()));
+            let n = pack(&root.join("o").join(o), &t).and_then(|_| std::fs::metadata(&t).ok());
+            let _ = std::fs::remove_file(&t);
+            n.map(|m| m.len())
+        };
+        let Some(bytes) = outs
+            .first()
+            .and_then(|o| {
+                std::fs::metadata(v1.join("o").join(format!("{o}.jrdc")))
+                    .ok()
+                    .map(|m| m.len())
+            })
+            .or_else(|| outs.iter().find_map(|o| packed_size(o)))
+        else {
+            continue;
+        };
+        let Some(wall) = outs.iter().find_map(|o| {
+            let b = std::fs::read(root.join("o").join(o).join("meta.json")).ok()?;
+            serde_json::from_slice::<serde_json::Value>(&b)
+                .ok()?
+                .get("wall")?
+                .as_f64()
+        }) else {
+            continue;
+        };
+        let ms = (wall * 1000.0).round() as u64;
+        costs.insert(key.to_owned(), format!("{key} {ms} {bytes}"));
+    }
+    let mut s = String::new();
+    for line in costs.values() {
+        s.push_str(line);
+        s.push('\n');
+    }
+    let t = v1.join(format!(".costs.{}", std::process::id()));
+    std::fs::write(&t, s)?;
+    std::fs::rename(&t, v1.join("costs"))?;
+    Ok(())
 }
 
 /// `v1/index`: sorted base keys that have a manifest, 33 bytes per line.
@@ -508,6 +666,12 @@ mod tests {
         assert!(p2.restore(&mut Vec::new()).is_none());
         let hit = fetch_from(&base, &p2, &mut Vec::new()).expect("prebuilt hit");
         assert_eq!(hit.saved_secs, 2.5);
+        // Published with its price: compile ms and bundle bytes.
+        let costs = std::fs::read_to_string(store.join("v1/costs")).unwrap();
+        assert!(
+            costs.starts_with(&format!("{} 2500 ", "b".repeat(32))),
+            "{costs}"
+        );
         assert_eq!(
             std::fs::read(p2.out_dir.join("libx-abc.rmeta")).unwrap(),
             b"rmeta"
@@ -536,6 +700,38 @@ mod tests {
         assert!(fetch_from(&base, &p5, &mut Vec::new()).is_none());
         assert!(p5.restore(&mut Vec::new()).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fetches_only_units_that_cost_more_to_compile() {
+        let root = std::env::temp_dir().join(format!("jr-worth-{}", std::process::id()));
+        let store = root.join("store");
+        std::fs::create_dir_all(store.join("v1")).unwrap();
+        let (cheap, slow, big, unpriced) = (
+            "1".repeat(32),
+            "2".repeat(32),
+            "3".repeat(32),
+            "4".repeat(32),
+        );
+        std::fs::write(
+            store.join("v1/costs"),
+            format!("{cheap} 180 50000\n{slow} 9000 400000\n{big} 3000 200000000\n"),
+        )
+        .unwrap();
+        let base = format!("file://{}", store.display());
+        std::fs::write(rate_path(&root), "10000000").unwrap(); // 10 MB/s
+        // 180 ms to compile vs 0.7 s fixed fetch cost: compile.
+        assert!(!worth_fetching(&root, &base, &cheap));
+        // 9 s to compile vs 0.7 s + 40 ms transfer: fetch.
+        assert!(worth_fetching(&root, &base, &slow));
+        // 3 s to compile vs 20 s of transfer: compile.
+        assert!(!worth_fetching(&root, &base, &big));
+        // Not priced by the store: fetch, as before costs existed.
+        assert!(worth_fetching(&root, &base, &unpriced));
+        // Measured downloads move the rate.
+        note_download(&root, 4_000_000, 4.0);
+        assert!(download_rate(&root) < 10_000_000.0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
