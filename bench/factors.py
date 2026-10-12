@@ -301,6 +301,16 @@ FACTORS = [
          "desktop-jcode-core-body", ""),
     ]],
     Factor(
+        "jr-overlap-persist", "jr-rustc persists the incremental state (dep graph, query cache) on one "
+        "thread while joining codegen and linking on another, instead of persisting before the link",
+        "loop", "desktop-test-edit",
+        on={**JR_RUSTC_ENV, **UNSTABLE_PROFILE},
+        off={**JR_RUSTC_ENV, **UNSTABLE_PROFILE, "JUSTRUST_RUSTC_OVERLAP_PERSIST": "0"},
+        on_args=ui_rustflags("-Zcache-proc-macros"), off_args=ui_rustflags("-Zcache-proc-macros"),
+        n=8, slow=True,
+        note="profile: serialize_dep_graph 0.57 s + link 0.56 s, serial, of a 4.73 s warm rustc",
+    ),
+    Factor(
         "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-bolt-stage2) vs the official nightly at the same commit",
         "loop", "desktop-test-edit",
         on={"JUSTRUST_TOOLCHAIN": "system",

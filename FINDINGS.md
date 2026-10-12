@@ -4241,3 +4241,51 @@ leaf go unchecked until the next normal build, so a passing shadow run
 can hide a break in the big crate. Revisit when the feature set is copied
 exactly (shared dependency units with the normal build) and a background
 `check -p <big>` runs after each routed test.
+
+## 58. jr-rustc: overlap the incremental persist with the link: warm Desktop rustc 4.45 -> 4.20 s (2026-10-12)
+
+Profile of the reference loop's one hot rustc (jcode_desktop_ui test,
+warm one-line edit, `-Zthreads=8`, 4.73 s): after codegen, rustc ran
+`TyCtxt::finish` (serialize dep graph + query result cache, 0.57-0.73 s)
+and only then, with the `GlobalCtxt` freed, joined codegen and linked
+(0.5 s). Both only read finished state. jr-rustc 913df80fb7a1 runs them
+with `par_join`: one thread persists, the other joins codegen, saves the
+work-product index and links. The session directory is renamed after both
+finish, and only when no error was emitted (a failed link leaves the
+session unpublished, so the next build reuses the previous one: slower,
+never wrong). Taken only with incremental on, a parallel frontend
+(`-Zthreads` > 1), and a plain exe/metadata output.
+`JUSTRUST_RUSTC_OVERLAP_PERSIST=0` turns it off.
+
+Factor `jr-overlap-persist` (same jr-rustc release build both sides, env
+switch only, `JR_RUSTC_MODE=release`):
+
+| measurement | on | off | saved |
+|---|---:|---:|---:|
+| factor wall, n=14 (`factors-20261012-062620-4ef2709df70e-dirty.json`) | 4.61 s | 4.93 s | 0.32 s (6%) |
+| rustc unit wall from the same runs | 4.20 s | 4.45 s | 0.25 s |
+| direct rustc replay, n=20 interleaved (`rustc-ab-overlap-persist-20261012.json`) | 4.18 s | 4.52 s | 0.33 s |
+| first factor try, n=8 (`factors-20261012-060634-...`, machine load 6-12) | 4.95 s | 5.01 s | noise |
+
+Run ids: on 20261012-062640660-661386954 .. 20261012-062843082-661386542,
+off 20261012-062634197-661386337 .. 20261012-062847487-661386832. Pass
+order confirms the overlap (on: link, serialize_dep_graph, finalize;
+off: serialize_dep_graph, finalize, link). The persist itself gets slower
+under contention (0.57 -> 0.67 s, both threads compete with the linker),
+so the win is about half of link + persist.
+
+Correctness: compile errors byte-identical on vs off; warning output is
+the same set but ordered differently from run to run in both modes (the
+parallel frontend's lint order, 3 of 3 orders distinct with the switch
+off), and the "on by default" note attaches to whichever warning comes
+first. `-Zincremental-verify-ich` clean on both sides; error then fix
+builds stay incremental (3.4-3.8 s). Full `jcode-desktop-ui --lib` suite
+through justrust with the fork: 1303 passed with the overlap on; the one
+failure seen (`the_hint_chip_uses_only_spare_tab_space`, an animation
+timing test) also failed with it off.
+
+Default on in jr-rustc (no effect on the stock toolchain). Next (step 2b,
+resident rustc): reply to cargo after the link and persist in the
+background, preloading the next session's dep graph off the critical path
+(estimated +0.3 s; the 0.25 s dep-graph and query-cache load at startup
+is the remaining target).
