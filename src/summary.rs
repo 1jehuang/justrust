@@ -1003,9 +1003,14 @@ impl UnitStats {
         if self.localcache_hits + self.localcache_misses == 0 {
             return String::new();
         }
+        let saved = if self.localcache_hits > 0 {
+            format!(" (saved ~{:.1}s of rustc)", self.localcache_saved_secs)
+        } else {
+            String::new()
+        };
         format!(
-            ", localcache {} hit/{} miss (saved ~{:.1}s)",
-            self.localcache_hits, self.localcache_misses, self.localcache_saved_secs
+            ", localcache {} hit/{} miss{saved}",
+            self.localcache_hits, self.localcache_misses
         )
     }
 }
