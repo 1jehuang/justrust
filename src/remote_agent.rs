@@ -312,6 +312,33 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
     Some(jobs_for(cpus, mem_gib))
 }
 
+/// The toolchain a build on this machine uses when the project pins none:
+/// the one the prebuilt store is compiled with
+/// ([`crate::depcache_prebuilt::STORE_TOOLCHAIN`]). Keys include rustc
+/// `-vV`, so a machine building with its system stable rustc could never
+/// hit the store (0 prebuilt hits in every hosted run before, FINDINGS
+/// 55). `None` (leave the choice alone) when the client sent
+/// `JUSTRUST_TOOLCHAIN`, the project pins one (`justrust.toml`, or a
+/// `rust-toolchain` file rustup would honor), or
+/// `JUSTRUST_REMOTE_TOOLCHAIN` says otherwise (`system` keeps the machine's
+/// rustc, any other value is used as the default spec).
+fn store_toolchain(cwd: &Path, env: &[(String, String)]) -> Option<String> {
+    if env.iter().any(|(k, _)| k == "JUSTRUST_TOOLCHAIN") {
+        return None;
+    }
+    let want = std::env::var("JUSTRUST_REMOTE_TOOLCHAIN")
+        .unwrap_or_else(|_| crate::depcache_prebuilt::STORE_TOOLCHAIN.to_owned());
+    if matches!(want.trim(), "" | "system" | "off" | "0" | "none") {
+        return None;
+    }
+    let pinned = cwd.ancestors().any(|d| {
+        d.join(crate::toolchain::CONFIG_FILE).is_file()
+            || d.join("rust-toolchain.toml").is_file()
+            || d.join("rust-toolchain").is_file()
+    });
+    (!pinned).then_some(want)
+}
+
 fn jobs_for(cpus: usize, mem_gib: Option<usize>) -> usize {
     mem_gib.map_or(cpus, |m| cpus.min(m / 2)).max(1)
 }
@@ -421,6 +448,9 @@ fn start_run(
     }
     // Never route a build the agent runs back to another machine.
     c.env(crate::route::ON_AGENT, "1");
+    if let Some(tc) = store_toolchain(cwd, env) {
+        c.env("JUSTRUST_TOOLCHAIN", tc);
+    }
     if let Some(j) = machine_jobs(args, env) {
         c.env("CARGO_BUILD_JOBS", j.to_string());
     }
@@ -480,6 +510,22 @@ fn start_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unpinned_projects_build_with_the_store_toolchain() {
+        let d = std::env::temp_dir().join(format!("jr-store-tc-{}", std::process::id()));
+        let sub = d.join("a/b");
+        std::fs::create_dir_all(&sub).unwrap();
+        let want = Some(crate::depcache_prebuilt::STORE_TOOLCHAIN.to_owned());
+        assert_eq!(store_toolchain(&sub, &[]), want);
+        // The client chose one: keep it.
+        let env = [("JUSTRUST_TOOLCHAIN".to_string(), "system".to_string())];
+        assert_eq!(store_toolchain(&sub, &env), None);
+        // The project pins one (rustup file or justrust.toml): keep it.
+        std::fs::write(d.join("a/rust-toolchain.toml"), "").unwrap();
+        assert_eq!(store_toolchain(&sub, &[]), None);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 
     #[test]
     fn jobs_use_the_whole_machine_within_memory() {

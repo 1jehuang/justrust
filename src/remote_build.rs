@@ -373,6 +373,8 @@ pub fn run_remote(
         "JUSTRUST_DEPCACHE_EXPLAIN",
         "JUSTRUST_DEPCACHE",
         "JUSTRUST_PEER_CACHE",
+        "JUSTRUST_TOOLCHAIN",
+        "JUSTRUST_PREBUILT",
     ] {
         if let Ok(v) = std::env::var(var) {
             env.push((var.to_string(), v));

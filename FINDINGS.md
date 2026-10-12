@@ -4026,3 +4026,51 @@ real differences, and the next sync of the root is a pure mtime quick check.
 The remaining ~1 s per root is ssh round trips plus the file-list exchange.
 Removing that needs a manifest-based push that skips rsync entirely, which
 the daemon already uses for flushes.
+
+## 55. Why remote hosts almost never hit the dependency cache (2026-10-12)
+
+Question: only 22 of 351 remote runs had a depcache hit (53). Measured on the
+hosted c7i.8xlarge (us-east-1), fresh target dir and fresh `JUSTRUST_DEPCACHE_DIR`
+per run unless noted.
+
+1. **The local depcache on the host works.** It lives on the persistent EBS root
+   (`~/.justrust/cache/depcache`, 5.8 GB, survives stop/start, `remote down` keeps
+   the disk). `check` of justrust: fresh target, warm host cache: 66/66 hits,
+   10.0 -> 4.8 s (runs 20261012-115829195-2345, -115839236-5557 on the host).
+   Keys are path-stable (cargo home and target dir are placeholders). Misses in
+   hosted history are first builds of each dependency set on that host, plus
+   the host being replaced (a new host starts empty).
+2. **The shared tier can never hit hosted builds, for two reasons.**
+   - Toolchain: the prebuilt store (S3 + CloudFront, the AWS move is done and
+     on by default, `depcache_prebuilt.rs`) is compiled with `nightly-2026-10-08`.
+     Hosted hosts build with rustup stable 1.99.0. rustc `-vV` is in every key:
+     0 of 75 justrust dep keys in the store index (system) vs 32 of 75
+     (nightly). The worker's account cache (`CACHE_ENABLED=false`, R2) is still
+     off and stays off (compute and cache moved off Cloudflare). The S3 store
+     is the shared tier.
+   - Profile: jcode sets `[profile.dev] debug = 0`, so every dependency gets
+     `-C strip=debuginfo`. The fleet builds default profiles only: 0 of 608
+     jcode-tui keys in the index, even on the nightly.
+3. Cost model on a server: with the nightly, justrust `check` fetched 1-2 of
+   32 available units by default and 32 with `JUSTRUST_PREBUILT_ALWAYS=1`
+   (8.9 s vs 9.9 s). The host measured 11 MB/s through CloudFront, so the
+   700 ms per-fetch overhead dominates. Follow-up: measure the overhead on
+   hosts and lower it there.
+
+Cold `check -p jcode-tui` on the host, 651 units, 575 dependency misses in
+every run: system 91.9 s (20261012-120834155-26986), nightly 89.0 s (-121006113-55408),
+system 85.2 s (-121135161-80017), nightly + fetch-always 87.8 s
+(-121339190-118835). So there is no hit and no win until the fleet publishes debug=0 keys.
+
+Changes:
+- justrust: the remote agent builds unpinned projects with the store toolchain
+  (`STORE_TOOLCHAIN`, `JUSTRUST_REMOTE_TOOLCHAIN=system` opts out). A project's
+  `justrust.toml` or `rust-toolchain(.toml)` or a client `JUSTRUST_TOOLCHAIN`
+  wins. The client now forwards `JUSTRUST_TOOLCHAIN` and `JUSTRUST_PREBUILT`.
+  The nightly installs in 10 s, once per host.
+- justrust-cloud `prebuild/run.sh`: a second `debug=0` pass per profile, plus
+  aws-sdk seeds (bedrock and friends, on the cold critical path in 53).
+  **Not live yet:** the fleet reads `s3://jcode-justrust-prebuilt-production-280196252242/fleet/`.
+  Upload `prebuild/` there (`aws s3 cp prebuild/run.sh .../fleet/run.sh`, same for
+  seeds.toml), then rerun the jcode-tui cold check above.
+  I left this undone because it is a production change.

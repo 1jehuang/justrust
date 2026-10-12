@@ -81,6 +81,12 @@ pub(crate) fn note_success(root: &Path) {
 /// on a quiet laptop, fetching selectively 19-26 s vs 34-35 s (FINDINGS 43).
 pub const DEFAULT_STORE: &str = "https://d1j555vqgf2xkj.cloudfront.net";
 
+/// The toolchain the public store is compiled with (justrust-cloud
+/// `prebuild/run.sh` default). Keys include rustc `-vV`, so only builds
+/// with this toolchain can hit the store. Remote build machines use it
+/// unless the project pins another (`remote_agent::store_toolchain`).
+pub const STORE_TOOLCHAIN: &str = "nightly-2026-10-08";
+
 /// The store base, without a trailing slash, or `None` when off.
 pub fn base() -> Option<String> {
     if !depcache::enabled() {
