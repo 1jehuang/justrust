@@ -76,21 +76,11 @@ jobs:
             cd "$RUNNER_TEMP/dc-$d"
             printf 'serde = { version = "1", features = ["derive"] }\nserde_json = "1"\n' >> Cargo.toml
             printf '#[derive(serde::Serialize)]\nstruct S { a: u8 }\n#[test]\nfn t() { assert_eq!(serde_json::to_string(&S { a: 1 }).unwrap(), "{\\"a\\":1}"); }\nfn main() {}\n' > src/main.rs
-            JUSTRUST_DEPCACHE_EXPLAIN="$RUNNER_TEMP/explain-$d" "$bin" test 2>&1 | tee out.txt
+            "$bin" test 2>&1 | tee out.txt
             cd -
           done
-          # Which units missed in the second checkout, and why their keys differ.
-          run=$(ls -td ~/.justrust/runs/*/ | head -1)
-          grep '"depcache":"miss"' "$run/units.jsonl" | grep -o '"crate_name":"[^"]*"' || true
-          for f in "$RUNNER_TEMP"/dc-a/target/debug/deps/libserde_derive-*.dylib; do
-            echo "== $f"; strings -a "$f" | grep -n "dc-a" | head -5
-            otool -l "$f" | grep -A3 "LC_ID_DYLIB\|LC_RPATH" | head -10
-          done
-          ls "$RUNNER_TEMP/explain-a" "$RUNNER_TEMP/explain-b" | sort | uniq -u || true
-          for f in $(ls "$RUNNER_TEMP/explain-b"); do
-            [ -f "$RUNNER_TEMP/explain-a/$f" ] || { n=${f%-*}; echo "== $f"; diff "$RUNNER_TEMP"/explain-a/"$n"-* "$RUNNER_TEMP/explain-b/$f" | head -20; }
-          done
-          grep -E "depcache [0-9]+ hit" "$RUNNER_TEMP/dc-b/out.txt"
+          # Every dependency, proc macro included, restored in the second.
+          grep -E "depcache [0-9]+ hit/0 miss" "$RUNNER_TEMP/dc-b/out.txt"
           grep -q "1 passed" "$RUNNER_TEMP/dc-b/out.txt"
 
   passthrough:

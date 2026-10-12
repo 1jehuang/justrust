@@ -561,7 +561,22 @@ pub fn plan(real: &Path, args: &[OsString], env: &[(String, String)]) -> Option<
     h.field(rustc_version(real)?.as_bytes());
     h.field(norm.norm(cwd.to_str()?).as_bytes());
     key_args(&args, &norm, &cwd, &mut h)?;
-    let extra_args = remap_args(&args, &norm);
+    let mut extra_args = remap_args(&args, &norm);
+    // macOS: ld64 writes a dylib's output path, inside this target dir,
+    // into its LC_ID_DYLIB install name, and the store then (rightly)
+    // refuses it as carrying the target dir. rustc loads proc macros by
+    // path, so the install name is never used: make it fixed.
+    if cfg!(target_os = "macos")
+        && args
+            .iter()
+            .any(|a| a == "proc-macro" || a == "--crate-type=proc-macro")
+    {
+        extra_args.push("-C".into());
+        extra_args.push(format!(
+            "link-arg=-Wl,-install_name,@rpath/lib{}{}.dylib",
+            s.crate_name, s.extra
+        ));
+    }
     key_remaps(&extra_args, &mut h);
     // Proc macros and bins are dynamically linked against the C library.
     // Only its family is keyed: the version an output needs is recorded
