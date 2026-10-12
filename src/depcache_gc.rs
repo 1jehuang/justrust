@@ -7,7 +7,7 @@
 //! Eviction runs in a detached background process after a recorded run, at
 //! most once per [`GC_INTERVAL_SECS`], so builds never wait for it. Only one
 //! collector runs at a time (`gc.lock` flock). When the cache exceeds the cap
-//! (default 30 GB, `JUSTRUST_DEPCACHE_MAX`, e.g. `50G`, `800M`, `0` = no cap),
+//! (default a quarter of the free disk, 30 to 150 GB, `JUSTRUST_DEPCACHE_MAX`, e.g. `50G`, `800M`, `0` = no cap),
 //! the least recently used entries are removed until it is under 90% of it.
 //!
 //! Safety with concurrent builds:
@@ -25,7 +25,10 @@ use anyhow::{Context, Result};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+/// Cap floor, and the cap when free space cannot be read.
 pub const DEFAULT_MAX_BYTES: u64 = 30 * 1024 * 1024 * 1024;
+/// Largest default cap on a roomy disk.
+const ROOMY_MAX_BYTES: u64 = 150 * 1024 * 1024 * 1024;
 const GC_INTERVAL_SECS: f64 = 600.0;
 /// Entries used this recently are never evicted (`JUSTRUST_DEPCACHE_GRACE`
 /// overrides it, for stress tests).
@@ -59,7 +62,35 @@ pub fn max_bytes() -> u64 {
     std::env::var("JUSTRUST_DEPCACHE_MAX")
         .ok()
         .and_then(|v| parse_size(&v))
-        .unwrap_or(DEFAULT_MAX_BYTES)
+        .unwrap_or_else(|| {
+            let free = depcache::cache_dir().and_then(|d| free_bytes(&d));
+            default_cap(free)
+        })
+}
+
+/// Default cap: a quarter of the free space on the cache's filesystem,
+/// between 30 GB and 150 GB. A fixed 30 GB evicted 1.8k dependency units
+/// (0.9 h of rustc) in five days on a disk with 2.5 TB free (FINDINGS 49):
+/// a few toolchains times a few projects times debug/release does not fit.
+pub(crate) fn default_cap(free: Option<u64>) -> u64 {
+    match free {
+        Some(f) => (f / 4).clamp(DEFAULT_MAX_BYTES, ROOMY_MAX_BYTES),
+        None => DEFAULT_MAX_BYTES,
+    }
+}
+
+/// Bytes available to this user on the filesystem holding `dir` (or its
+/// nearest existing ancestor).
+fn free_bytes(dir: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = dir.ancestors().find(|p| p.exists())?;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // SAFETY: statvfs fills the zeroed struct; the path is NUL-terminated.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +482,22 @@ mod tests {
         assert_eq!(parse_size("30G"), Some(30 << 30));
         assert_eq!(parse_size("512m"), Some(512 << 20));
         assert_eq!(parse_size("1.5GiB"), Some(3 << 29));
+    }
+
+    #[test]
+    fn default_cap_follows_free_space() {
+        const G: u64 = 1 << 30;
+        assert_eq!(default_cap(None), 30 * G);
+        // Small disk: the old fixed cap.
+        assert_eq!(default_cap(Some(40 * G)), 30 * G);
+        assert_eq!(default_cap(Some(400 * G)), 100 * G);
+        // Roomy disk: bounded.
+        assert_eq!(default_cap(Some(2500 * G)), 150 * G);
+        assert!(free_bytes(&std::env::temp_dir().join("no/such/dir")).is_some());
+    }
+
+    #[test]
+    fn parses_plain_and_invalid_sizes() {
         assert_eq!(parse_size("1234"), Some(1234));
         assert_eq!(parse_size("0"), Some(0));
         assert_eq!(parse_size("lots"), None);

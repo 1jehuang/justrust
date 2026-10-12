@@ -3557,3 +3557,47 @@ would need a fork-safe point before `main` in arbitrary test binaries
 (threads started by static init, open fds, `/proc/self/exe` users).
 Not worth building. What would pay on big suites is less test work (run
 only affected tests, cheaper confirmation), not cheaper processes.
+
+## 49. Why agents rebuild dependencies: cold targets and depcache misses (2026-10-12)
+
+Follow-up to 46 (dependency rebuilds: 6.3 h of 13.7 h agent wall). Mined
+`~/.justrust/runs` (`bench/runlog_misses.py`), agent runs only.
+
+**Cold target dirs** (184 runs, 3.8 h, zero fresh units):
+
+| cause | runs | wall |
+|---|---:|---:|
+| experiments in throwaway target dirs (`~/.jcode/scratch/...`) | 125 | 2.09 h |
+| target dir emptied (cargo clean / deleted) | 32 | 0.63 h |
+| first release/profile build | 7 | 0.57 h |
+| toolchain switched in the same target dir | 22 | 0.46 h |
+| first build of a checkout | 10 | 0.20 h |
+
+**Every dependency miss** (repeat the same rustc + package + version +
+opt level + emit, 10.6 h of rustc):
+
+| cause | units | rustc |
+|---|---:|---:|
+| key changed for the same crate and rustc (upstream metadata cascade: a git dep like gpui at a new rev, feature unification, scheme-era churn) | 16.6k | 5.73 h (54%) |
+| first time with this rustc (system -> nightly -> jr toolchains this week) | 6.7k | 3.33 h (31%) |
+| evicted by the 30 GB GC cap | 1.8k | 0.89 h (8%) |
+| justrust key scheme bumped (8 bumps in 2 days) | 1.6k | 0.65 h (6%) |
+
+Most of the churn was the week's own work (toolchain switches, scheme
+bumps, cache experiments). Live check today, two fresh target dirs on
+Desktop, `check -p jcode-desktop-ui`, local: first 818 hit / 14 miss (gpui
+and its 13 workspace crates: Desktop's gpui git rev moved), second 832/0.
+**The cache works now, but a fully hit cold check still takes 29.5 s**
+(run 20261011-232856920-140417): dependency restore spans 13.3 s (832
+restores, up to 57 at once; the machine had 22 other rustc running, 19 s
+CPU stall), then 57 local crates are compiled from scratch (58.7 s rustc,
+jcode_base 7.2 s alone). So the next wins for cold targets are:
+
+1. local crates from a cache (`localcache.rs`, opt-in, not yet hitting on
+   Desktop: build.rs stamps time via `env!`), or cloning a warm slot's
+   target dir instead of starting empty;
+2. restoring the whole dependency set as one reflink of a prepared
+   target tree, not 832 shim round trips through cargo's scheduler.
+
+Shipped: the GC cap now defaults to a quarter of the free disk, 30 to 150
+GB (here 150 GB, cache at 27 GB). At 30 GB it evicted 3-5 GB every 1-3 h.

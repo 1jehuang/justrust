@@ -170,7 +170,7 @@ enum Command {
     /// Show the shared dependency cache: size, entries, hit rate.
     Cache {
         /// Evict least recently used entries down to the size cap
-        /// (`JUSTRUST_DEPCACHE_MAX`, default 30G).
+        /// (`JUSTRUST_DEPCACHE_MAX`, default a quarter of free disk, 30G to 150G).
         #[arg(long)]
         prune: bool,
         /// Remove every entry not used in the last 10 minutes.
