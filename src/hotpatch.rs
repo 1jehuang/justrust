@@ -31,8 +31,8 @@
 //! `~/.justrust/hotpatch.jsonl`.
 
 use object::elf;
-use object::read::elf::{ElfFile64, FileHeader, Rela, SectionHeader, Sym};
-use object::{Object, ObjectSection, ObjectSymbol, RelocationFlags, SectionKind, SymbolKind};
+use object::read::elf::{ElfFile64, FileHeader, ProgramHeader, Rela, SectionHeader, Sym};
+use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -289,7 +289,41 @@ pub fn after_link(raw: &[OsString]) {
         return;
     }
     if let Some(la) = parse(&expand(raw)) {
-        let _ = record_base(&la, &state_dir(&la.out));
+        let dir = state_dir(&la.out);
+        if record_base(&la, &dir).is_ok() {
+            prebuild_index(&la.out, &dir);
+        }
+    }
+}
+
+/// Build the base's symbol index in a detached child (~0.3 s for the
+/// Desktop UI test binary), so the first patch after a full link does not
+/// pay for it. Nothing waits for it: a patch that starts first builds its
+/// own copy (both renames are atomic). The child's stdio goes to
+/// /dev/null so rustc, which reads the linker's output to EOF, does not
+/// wait either.
+fn prebuild_index(out: &Path, dir: &Path) {
+    if std::env::var_os("JUSTRUST_HOTPATCH_SYNC_INDEX").is_some() {
+        let _ = mmap(out).and_then(|m| index_for(out, &m, dir));
+        return;
+    }
+    // SAFETY: the ld dispatcher is single-threaded here; the child only
+    // redirects fds, builds the index and exits without unwinding.
+    unsafe {
+        let pid = libc::fork();
+        if pid != 0 {
+            return;
+        }
+        libc::setsid();
+        let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+        if null >= 0 {
+            for fd in 0..3 {
+                libc::dup2(null, fd);
+            }
+        }
+        libc::nice(10);
+        let _ = mmap(out).and_then(|m| index_for(out, &m, dir));
+        libc::_exit(0);
     }
 }
 
@@ -421,6 +455,231 @@ fn mmap(p: &Path) -> Res<memmap2::Mmap> {
     unsafe { memmap2::Mmap::map(&f) }.map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------- base index
+
+/// On-disk symbol index of a base executable (`<exe>.jrhot/index`), built
+/// on the first patch after a base link and mapped by every later patch.
+/// Names are not copied: entries point at the base's own string table.
+///
+/// Layout (little-endian u64s): header `MAGIC, inode, size, shdr hash,
+/// tls block size, n entries, n starts`, then entries `hash(name), value,
+/// name offset, group offset (u64::MAX: none), flags` sorted by hash, then
+/// the sorted start addresses of every function.
+const INDEX_MAGIC: u64 = u64::from_le_bytes(*b"JRHIDX02");
+const HDR: usize = 7;
+const ENT: usize = 5;
+const F_GLOBAL: u64 = 1;
+const F_TLS: u64 = 2;
+
+fn fnv(b: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &c in b {
+        h = (h ^ c as u64).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// What ties an index to one base binary: inode, size and a hash of its
+/// section header table (offsets and sizes of everything).
+fn base_key(out: &Path, base: &[u8]) -> Res<[u64; 3]> {
+    let m = std::fs::metadata(out).map_err(|e| e.to_string())?;
+    let shoff = u64::from_le_bytes(base.get(0x28..0x30).ok_or("short ELF")?.try_into().unwrap());
+    let n = u16::from_le_bytes(base.get(0x3c..0x3e).ok_or("short ELF")?.try_into().unwrap());
+    let shdrs = base
+        .get(shoff as usize..shoff as usize + n as usize * 64)
+        .ok_or("bad section headers")?;
+    Ok([m.ino(), m.size(), fnv(shdrs)])
+}
+
+fn build_index(base_mm: &[u8], key: [u64; 3]) -> Res<Vec<u8>> {
+    let base = ElfFile64::<object::Endianness>::parse(base_mm).map_err(|e| e.to_string())?;
+    let endian = base.endian();
+    // x86_64 TLS variant II: a thread-local at offset `v` of the TLS
+    // segment lives at %fs:(v - round_up(memsz, align)).
+    let mut tls_size = 0u64;
+    for ph in base
+        .elf_program_headers()
+        .iter()
+        .filter(|p| p.p_type(endian) == elf::PT_TLS)
+    {
+        let al = ph.p_align(endian).max(1);
+        tls_size = ph.p_memsz(endian).div_ceil(al) * al;
+    }
+    let off = |s: &[u8]| s.as_ptr() as u64 - base_mm.as_ptr() as u64;
+    let mut ents: Vec<[u64; ENT]> = Vec::with_capacity(base.symbols().size_hint().0);
+    let mut starts = Vec::new();
+    let mut group: Option<&[u8]> = None;
+    for sym in base.symbols() {
+        let Ok(name) = sym.name_bytes() else { continue };
+        if sym.kind() == SymbolKind::File {
+            group = Some(name);
+            continue;
+        }
+        if sym.is_undefined() || name.is_empty() || sym.kind() == SymbolKind::Section {
+            continue;
+        }
+        let a = sym.address();
+        if sym.kind() == SymbolKind::Text && a != 0 {
+            starts.push(a);
+        }
+        let global = sym.is_global() || sym.is_weak();
+        let flags = if global { F_GLOBAL } else { 0 }
+            | if sym.kind() == SymbolKind::Tls {
+                F_TLS
+            } else {
+                0
+            };
+        ents.push([
+            fnv(name),
+            a,
+            off(name),
+            group.filter(|_| !global).map_or(u64::MAX, off),
+            flags,
+        ]);
+    }
+    ents.sort_unstable_by_key(|e| e[0]);
+    starts.sort_unstable();
+    starts.dedup();
+    let hdr = [
+        INDEX_MAGIC,
+        key[0],
+        key[1],
+        key[2],
+        tls_size,
+        ents.len() as u64,
+        starts.len() as u64,
+    ];
+    let mut v = Vec::with_capacity(8 * (HDR + ents.len() * ENT + starts.len()));
+    for x in hdr.iter().chain(ents.iter().flatten()).chain(&starts) {
+        v.extend_from_slice(&x.to_le_bytes());
+    }
+    Ok(v)
+}
+
+/// The index for this base: mapped from `<dir>/index` when it matches,
+/// else built and saved. `true` when it was built now.
+fn index_for(out: &Path, base_mm: &[u8], dir: &Path) -> Res<(memmap2::Mmap, bool)> {
+    let key = base_key(out, base_mm)?;
+    let p = dir.join("index");
+    if let Ok(m) = mmap(&p)
+        && m.len() >= HDR * 8
+        && u64s(&m, 0, 4) == [INDEX_MAGIC, key[0], key[1], key[2]]
+    {
+        return Ok((m, false));
+    }
+    let v = build_index(base_mm, key)?;
+    let tmp = dir.join(format!("index.{}", std::process::id()));
+    std::fs::write(&tmp, &v).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
+    Ok((mmap(&p)?, true))
+}
+
+fn u64s(b: &[u8], at: usize, n: usize) -> Vec<u64> {
+    (0..n)
+        .map(|i| u64::from_le_bytes(b[(at + i) * 8..(at + i) * 8 + 8].try_into().unwrap()))
+        .collect()
+}
+
+/// Lookups in a mapped base index (see `build_index`).
+struct Index<'a> {
+    idx: &'a [u8],
+    base: &'a [u8],
+    tls_size: u64,
+    n: usize,
+    nstarts: usize,
+}
+
+impl<'a> Index<'a> {
+    fn new(idx: &'a [u8], base: &'a [u8]) -> Res<Index<'a>> {
+        let h = u64s(idx, 0, HDR);
+        let (n, nstarts) = (h[5] as usize, h[6] as usize);
+        if idx.len() != 8 * (HDR + n * ENT + nstarts) {
+            return Err("truncated base index".into());
+        }
+        Ok(Index {
+            idx,
+            base,
+            tls_size: h[4],
+            n,
+            nstarts,
+        })
+    }
+
+    fn word(&self, i: usize) -> u64 {
+        u64::from_le_bytes(self.idx[i * 8..i * 8 + 8].try_into().unwrap())
+    }
+
+    fn ent(&self, i: usize) -> [u64; ENT] {
+        std::array::from_fn(|k| self.word(HDR + i * ENT + k))
+    }
+
+    fn cstr(&self, off: u64) -> &'a [u8] {
+        let s = self.base.get(off as usize..).unwrap_or(b"");
+        &s[..memchr::memchr(0, s).unwrap_or(s.len())]
+    }
+
+    /// Every entry named `name`.
+    fn named(&self, name: &[u8]) -> impl Iterator<Item = [u64; ENT]> + '_ {
+        let h = fnv(name);
+        let (mut lo, mut hi) = (0, self.n);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.word(HDR + mid * ENT) < h {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let name = name.to_vec();
+        (lo..self.n)
+            .map(|i| self.ent(i))
+            .take_while(move |e| e[0] == h)
+            .filter(move |e| self.cstr(e[2]) == name.as_slice())
+    }
+
+    /// Same resolution as `Syms::find`: the local of this CGU group, else
+    /// the global, else the only definition with this name.
+    fn pick(&self, group: &[u8], name: &[u8], tls: bool) -> Option<u64> {
+        let (mut global, mut any, mut count) = (None, None, 0);
+        for e in self.named(name).filter(|e| (e[4] & F_TLS != 0) == tls) {
+            if e[4] & F_GLOBAL == 0 && e[3] != u64::MAX && self.cstr(e[3]) == group {
+                return Some(e[1]);
+            }
+            if e[4] & F_GLOBAL != 0 {
+                global = Some(e[1]);
+            }
+            any = Some(e[1]);
+            count += 1;
+        }
+        global.or(if count == 1 { any } else { None })
+    }
+
+    fn find(&self, group: &[u8], name: &[u8]) -> Option<u64> {
+        self.pick(group, name, false)
+    }
+
+    /// Thread-pointer offset of a thread-local of the base.
+    fn tpoff(&self, group: &[u8], name: &[u8]) -> Option<i64> {
+        let v = self.pick(group, name, true)?;
+        Some(v as i64 - self.tls_size as i64)
+    }
+
+    /// The first function start after `a`.
+    fn next_start(&self, a: u64) -> Option<u64> {
+        let at = HDR + self.n * ENT;
+        let (mut lo, mut hi) = (0, self.nstarts);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.word(at + mid) <= a {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo < self.nstarts).then(|| self.word(at + lo))
+    }
+}
+
 fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
     let base_txt = std::fs::read_to_string(dir.join("base")).map_err(|_| "no recorded base")?;
     let mut lines = base_txt.lines();
@@ -464,44 +723,15 @@ fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
     // (cgu group, name) of functions to redirect, and writable data to bind.
     let mut funcs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     let mut data: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    // Thread-local accesses, per changed object (rewritten in a copy below).
+    let mut tls: Vec<Vec<TlsFix>> = Vec::with_capacity(maps.len());
     for (p, mm) in changed.iter().zip(&maps) {
         let obj = ElfFile64::<object::Endianness>::parse(&**mm)
             .map_err(|e| format!("{}: {e}", p.display()))?;
         let mut group = Vec::new();
-        for sec in obj.sections() {
-            let n = sec.name().unwrap_or("");
-            // A thread-local *definition* is harmless: the base keeps its copy
-            // and nothing in the patch can reach the patch's copy without a
-            // TLS relocation, which falls back below.
-            let _ = n;
-            for (_, r) in sec.relocations() {
-                if let RelocationFlags::Elf { r_type } = r.flags()
-                    && matches!(
-                        r_type,
-                        elf::R_X86_64_TPOFF32
-                            | elf::R_X86_64_TPOFF64
-                            | elf::R_X86_64_GOTTPOFF
-                            | elf::R_X86_64_TLSGD
-                            | elf::R_X86_64_TLSLD
-                            | elf::R_X86_64_DTPOFF32
-                            | elf::R_X86_64_DTPOFF64
-                    )
-                {
-                    let target = match r.target() {
-                        object::RelocationTarget::Symbol(i) => obj
-                            .symbol_by_index(i)
-                            .ok()
-                            .and_then(|s| s.name().ok().map(str::to_owned))
-                            .unwrap_or_default(),
-                        _ => String::new(),
-                    };
-                    return Err(format!(
-                        "thread-local access (type {r_type}) to {target} in {}",
-                        p.display()
-                    ));
-                }
-            }
-        }
+        // A thread-local *definition* is harmless: the base keeps its copy,
+        // and every access in the patch is rewritten to the base's offset.
+        tls.push(tls_fixups(&obj).map_err(|e| format!("{e} in {}", p.display()))?);
         for sym in obj.symbols() {
             let Ok(name) = sym.name_bytes() else { continue };
             if sym.kind() == SymbolKind::File {
@@ -543,21 +773,33 @@ fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
         }
     }
 
-    // Base executable: addresses of everything the patch needs.
+    // Base executable: addresses of everything the patch needs, from the
+    // symbol index built once per base (reading the base's 960k-symbol
+    // table on every patch was 130-160 ms of a ~200 ms patch step).
     let base_mm = mmap(&la.out)?;
     let base = ElfFile64::<object::Endianness>::parse(&*base_mm).map_err(|e| e.to_string())?;
     if base.elf_header().e_type(base.endian()) != elf::ET_DYN {
         return Err("base executable is not PIE".into());
     }
     lap("objs", &mut t);
-    let wanted: HashSet<&[u8]> = need
-        .iter()
-        .chain(funcs.iter().map(|(_, n)| n))
-        .chain(data.iter().map(|(_, n)| n))
-        .map(|v| v.as_slice())
-        .collect();
-    let bsyms = Syms::read(&base, Some(&wanted));
-    lap("basesyms", &mut t);
+    let (idx_mm, built) = index_for(&la.out, &base_mm, dir)?;
+    let bsyms = Index::new(&idx_mm, &base_mm)?;
+    lap(if built { "basesyms(built)" } else { "basesyms" }, &mut t);
+    // Objects with thread-local accesses are linked from a rewritten copy.
+    let tls_names: HashSet<&[u8]> = tls.iter().flatten().map(|f| f.name.as_slice()).collect();
+    let mut inputs = changed.clone();
+    let mut tls_fixed = 0;
+    for (i, fixes) in tls.iter().enumerate() {
+        if fixes.is_empty() {
+            continue;
+        }
+        let mut bytes = maps[i].to_vec();
+        apply_tls(&mut bytes, fixes, &|g, n| bsyms.tpoff(g, n))?;
+        let p = dir.join(format!("tls-{i}.o"));
+        std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+        inputs[i] = p;
+        tls_fixed += fixes.len();
+    }
     let patch_base = PIE_BASE - PATCH_SPAN;
     let mut script = String::new();
     let mut dyn_imports = 0;
@@ -577,7 +819,7 @@ fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
         .map(|n| n.split(|&b| b == b'@').next().unwrap_or(n).to_vec())
         .collect();
     for n in &need {
-        if defined.contains(n) {
+        if defined.contains(n) || tls_names.contains(n.as_slice()) {
             continue;
         }
         match bsyms.find(b"", n) {
@@ -639,7 +881,7 @@ fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
         .arg(format!("--image-base=0x{patch_base:x}"))
         .arg("-o")
         .arg(&image)
-        .args(&changed)
+        .args(&inputs)
         .arg(&script_path)
         .output()
         .map_err(|e| format!("ld.lld: {e}"))?;
@@ -664,7 +906,6 @@ fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
     relocs(&pf, &mut map)?;
 
     let psyms = Syms::read(&pf, None);
-    let starts = &bsyms.starts;
     let mut redirected = 0;
     let mut new_fns = 0;
     let mut seen = HashSet::new();
@@ -679,8 +920,7 @@ fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
         let new = psyms
             .find(group, name)
             .ok_or_else(|| format!("{} missing from patch", String::from_utf8_lossy(name)))?;
-        let next = starts.partition_point(|&a| a <= old);
-        let room = starts.get(next).map_or(u64::MAX, |n| n - old);
+        let room = bsyms.next_start(old).map_or(u64::MAX, |n| n - old);
         if room < 5 {
             // Too small for `jmp rel32`, and too small to hold any rel32
             // reference, so its bytes are position-independent: identical
@@ -716,10 +956,166 @@ fn patch(la: &LinkArgs, dir: &Path) -> Res<String> {
         let _ = std::fs::remove_file(dir.join(format!("patch-{}.so", seq - 1)));
     }
     Ok(format!(
-        "{}/{} units, {redirected} functions redirected, {new_fns} new, {bound} statics bound, {dyn_imports} imports, ms:{phases}",
+        "{}/{} units, {redirected} functions redirected, {new_fns} new, {bound} statics bound, {tls_fixed} tls, {dyn_imports} imports, ms:{phases}",
         changed.len(),
         la.cgus.len()
     ))
+}
+
+/// One thread-local access in a changed object, to be bound to the base
+/// executable's TLS block. Offsets are into the object file.
+#[derive(Debug, Clone, PartialEq)]
+struct TlsFix {
+    /// The `Elf64_Rela` entry (its type becomes `R_X86_64_NONE`).
+    rela: usize,
+    /// The bytes the relocation applies to.
+    site: usize,
+    ty: u32,
+    addend: i64,
+    group: Vec<u8>,
+    name: Vec<u8>,
+}
+
+/// Thread-local relocations of an object. Local-exec (`TPOFF32/64`) and
+/// initial-exec (`GOTTPOFF`) accesses are bound statically: in an
+/// executable a thread-local's offset from the thread pointer is a link-time
+/// constant, so the patch can use the base's. General/local-dynamic models
+/// (never emitted for an executable's own code) are refused.
+fn tls_fixups(obj: &ElfFile64<object::Endianness>) -> Res<Vec<TlsFix>> {
+    let endian = obj.endian();
+    let data = obj.data();
+    let sections = obj.elf_section_table();
+    let mut out = Vec::new();
+    let mut groups: Option<Vec<Vec<u8>>> = None;
+    for sh in sections.iter() {
+        if sh.sh_type(endian) != elf::SHT_RELA {
+            continue;
+        }
+        let relas = sh
+            .data_as_array::<elf::Rela64<object::Endianness>, _>(endian, data)
+            .map_err(|e| e.to_string())?;
+        let target = sections
+            .section(object::SectionIndex(sh.sh_info(endian) as usize))
+            .map_err(|e| e.to_string())?;
+        let symtab = sections
+            .symbol_table_by_index(
+                endian,
+                data,
+                object::SectionIndex(sh.sh_link(endian) as usize),
+            )
+            .map_err(|e| e.to_string())?;
+        for (k, r) in relas.iter().enumerate() {
+            let ty = r.r_type(endian, false);
+            match ty {
+                elf::R_X86_64_TPOFF32 | elf::R_X86_64_TPOFF64 | elf::R_X86_64_GOTTPOFF => {}
+                elf::R_X86_64_TLSGD
+                | elf::R_X86_64_TLSLD
+                | elf::R_X86_64_DTPOFF32
+                | elf::R_X86_64_DTPOFF64
+                | elf::R_X86_64_GOTPC32_TLSDESC
+                | elf::R_X86_64_TLSDESC_CALL => {
+                    return Err(format!("dynamic thread-local access (type {ty})"));
+                }
+                _ => continue,
+            }
+            let si = r.r_sym(endian, false) as usize;
+            let sym = symtab
+                .symbol(object::SymbolIndex(si))
+                .map_err(|e| e.to_string())?;
+            let name = symtab
+                .symbol_name(endian, sym)
+                .map_err(|e| e.to_string())?
+                .to_vec();
+            // The CGU group of a local: the last FILE symbol before it.
+            let g = groups.get_or_insert_with(|| {
+                let mut cur = Vec::new();
+                symtab
+                    .iter()
+                    .map(|s| {
+                        if s.st_type() == elf::STT_FILE {
+                            cur = symtab.symbol_name(endian, s).unwrap_or(b"").to_vec();
+                        }
+                        cur.clone()
+                    })
+                    .collect()
+            });
+            let group = if sym.st_bind() == elf::STB_LOCAL {
+                g.get(si).cloned().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            out.push(TlsFix {
+                rela: sh.sh_offset(endian) as usize
+                    + k * std::mem::size_of::<elf::Rela64<object::Endianness>>(),
+                site: target.sh_offset(endian) as usize + r.r_offset(endian) as usize,
+                ty,
+                addend: r.r_addend(endian),
+                group,
+                name,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Thread-pointer offset of a base thread-local by (CGU group, name).
+type TpOff<'a> = dyn Fn(&[u8], &[u8]) -> Option<i64> + 'a;
+
+/// Apply TLS fixups to a copy of an object: write the thread-pointer
+/// offset (`tpoff(group, name)`) into the code and neutralize the
+/// relocation. `GOTTPOFF` loads are relaxed to immediates the way linkers
+/// relax initial-exec to local-exec (`mov x@gottpoff(%rip),%r` ->
+/// `mov $off,%r`, `add x@gottpoff(%rip),%r` -> `add $off,%r`).
+fn apply_tls(obj: &mut [u8], fixes: &[TlsFix], tpoff: &TpOff) -> Res<()> {
+    for f in fixes {
+        let off = tpoff(&f.group, &f.name).ok_or_else(|| {
+            format!(
+                "thread-local {} is not in the base binary",
+                String::from_utf8_lossy(&f.name)
+            )
+        })?;
+        let site = f.site;
+        match f.ty {
+            elf::R_X86_64_TPOFF32 => {
+                let v = i32::try_from(off + f.addend).map_err(|_| "TLS offset out of range")?;
+                obj.get_mut(site..site + 4)
+                    .ok_or("TLS site out of range")?
+                    .copy_from_slice(&v.to_le_bytes());
+            }
+            elf::R_X86_64_TPOFF64 => {
+                obj.get_mut(site..site + 8)
+                    .ok_or("TLS site out of range")?
+                    .copy_from_slice(&(off + f.addend).to_le_bytes());
+            }
+            elf::R_X86_64_GOTTPOFF => {
+                let ins = obj
+                    .get_mut(site.checked_sub(3).ok_or("TLS site")?..site + 4)
+                    .ok_or("TLS site out of range")?;
+                let (rex, op, modrm) = (ins[0], ins[1], ins[2]);
+                if rex & 0xf0 != 0x40 || modrm & 0xc7 != 0x05 {
+                    return Err("unexpected initial-exec TLS instruction".into());
+                }
+                let reg = (modrm >> 3) & 7;
+                ins[0] = (rex & !0x04) | ((rex & 0x04) >> 2);
+                ins[1] = match op {
+                    0x8b => 0xc7,
+                    0x03 => 0x81,
+                    _ => return Err(format!("unexpected initial-exec TLS opcode {op:#x}")),
+                };
+                ins[2] = 0xc0 | reg;
+                let v = i32::try_from(off).map_err(|_| "TLS offset out of range")?;
+                ins[3..7].copy_from_slice(&v.to_le_bytes());
+            }
+            _ => return Err(format!("unexpected TLS relocation {}", f.ty)),
+        }
+        // r_info: symbol in the high 32 bits, type in the low 32.
+        let info = obj
+            .get_mut(f.rela + 8..f.rela + 16)
+            .ok_or("TLS rela out of range")?;
+        let sym = u64::from_le_bytes(info.try_into().unwrap()) >> 32;
+        info.copy_from_slice(&((sym << 32) | elf::R_X86_64_NONE as u64).to_le_bytes());
+    }
+    Ok(())
 }
 
 /// Bytes at a virtual address of an ELF image.
@@ -857,6 +1253,104 @@ mod tests {
         assert!(rustc_args(true, false, true).is_empty());
         assert!(rustc_args(true, true, false).is_empty());
         unsafe { std::env::remove_var("JUSTRUST_HOTPATCH") };
+    }
+
+    fn rela(sym: u64, ty: u32) -> Vec<u8> {
+        let mut v = vec![0u8; 24];
+        v[8..16].copy_from_slice(&((sym << 32) | ty as u64).to_le_bytes());
+        v
+    }
+
+    #[test]
+    fn rewrites_thread_local_accesses_to_base_offsets() {
+        // mov x@gottpoff(%rip),%rax ; lea x@tpoff(%rax),%rdi ; then 2 relas.
+        let mut obj = vec![0x48, 0x8b, 0x05, 0, 0, 0, 0, 0x48, 0x8d, 0xb8, 0, 0, 0, 0];
+        let r0 = obj.len();
+        obj.extend(rela(7, elf::R_X86_64_GOTTPOFF));
+        obj.extend(rela(9, elf::R_X86_64_TPOFF32));
+        let fix = |rela, site, ty, addend| TlsFix {
+            rela,
+            site,
+            ty,
+            addend,
+            group: b"g".to_vec(),
+            name: b"x".to_vec(),
+        };
+        let fixes = [
+            fix(r0, 3, elf::R_X86_64_GOTTPOFF, -4),
+            fix(r0 + 24, 10, elf::R_X86_64_TPOFF32, 0),
+        ];
+        apply_tls(&mut obj, &fixes, &|g, n| {
+            (g == b"g" && n == b"x").then_some(-0xa70)
+        })
+        .unwrap();
+        // Relaxed to `mov $-0xa70,%rax` (48 c7 c0 imm32), like ld's IE->LE.
+        assert_eq!(&obj[..7], &[0x48, 0xc7, 0xc0, 0x90, 0xf5, 0xff, 0xff]);
+        assert_eq!(&obj[10..14], &(-0xa70i32).to_le_bytes());
+        // Both relocations are now R_X86_64_NONE, symbols kept.
+        assert_eq!(&obj[r0 + 8..r0 + 16], &(7u64 << 32).to_le_bytes());
+        assert_eq!(&obj[r0 + 32..r0 + 40], &(9u64 << 32).to_le_bytes());
+        // %r9 destination: REX.R moves to REX.B.
+        let mut o2 = vec![0x4c, 0x8b, 0x0d, 0, 0, 0, 0];
+        o2.extend(rela(1, elf::R_X86_64_GOTTPOFF));
+        apply_tls(
+            &mut o2,
+            &[fix(7, 3, elf::R_X86_64_GOTTPOFF, -4)],
+            &|_, _| Some(-8),
+        )
+        .unwrap();
+        assert_eq!(&o2[..3], &[0x49, 0xc7, 0xc1]);
+        // A thread-local the base does not have: fall back to a relink.
+        assert!(
+            apply_tls(
+                &mut o2.clone(),
+                &[fix(7, 3, elf::R_X86_64_TPOFF32, 0)],
+                &|_, _| None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn base_index_resolves_like_the_symbol_table() {
+        // This test binary is a real executable with a full symbol table.
+        let exe = std::env::current_exe().unwrap();
+        let mm = mmap(&exe).unwrap();
+        let file = ElfFile64::<object::Endianness>::parse(&*mm).unwrap();
+        let syms = Syms::read(&file, None);
+        let dir = std::env::temp_dir().join(format!("jrhot-idx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (im, built) = index_for(&exe, &mm, &dir).unwrap();
+        assert!(built);
+        let idx = Index::new(&im, &mm).unwrap();
+        let mut checked = 0;
+        let mut group: &[u8] = b"";
+        for sym in file.symbols() {
+            let name = sym.name_bytes().unwrap_or(b"");
+            if sym.kind() == SymbolKind::File {
+                group = name;
+                continue;
+            }
+            if name.is_empty() || sym.is_undefined() || sym.kind() == SymbolKind::Tls {
+                continue;
+            }
+            assert_eq!(
+                idx.find(group, name),
+                syms.find(group, name),
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+            checked += 1;
+            if sym.kind() == SymbolKind::Text && sym.address() != 0 {
+                let i = syms.starts.partition_point(|&a| a <= sym.address());
+                assert_eq!(idx.next_start(sym.address()), syms.starts.get(i).copied());
+            }
+        }
+        assert!(checked > 1000);
+        // A second patch maps the saved index instead of rebuilding it.
+        drop(im);
+        assert!(!index_for(&exe, &mm, &dir).unwrap().1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
