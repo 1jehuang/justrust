@@ -265,6 +265,64 @@ fn prepare_script_with(remote: &str, wrapper: &str) -> String {
     )
 }
 
+/// Git identity of a root: its common git dir (shared by every worktree of
+/// one repository) and its root commits (shared by clones).
+#[derive(Debug, PartialEq, Eq)]
+pub struct RepoId {
+    pub common_dir: PathBuf,
+    pub root_commits: BTreeSet<String>,
+}
+
+pub fn repo_id(root: &Path) -> Option<RepoId> {
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+    let roots = git(&["rev-list", "--max-parents=0", "HEAD"]).unwrap_or_default();
+    Some(RepoId {
+        common_dir: std::fs::canonicalize(&common).unwrap_or_else(|_| common.into()),
+        root_commits: roots.lines().map(str::to_string).collect(),
+    })
+}
+
+/// The best already-mirrored root to seed a new mirror of `root` from:
+/// a worktree of the same repository first, then a clone sharing a root
+/// commit. None outside git or without a relative.
+pub fn pick_seed<'a>(
+    root: &Path,
+    mirrored: impl IntoIterator<Item = &'a PathBuf>,
+) -> Option<PathBuf> {
+    let me = repo_id(root)?;
+    let mut best: Option<(u8, PathBuf)> = None;
+    for m in mirrored {
+        if m == root || m.starts_with(root) || root.starts_with(m) {
+            continue;
+        }
+        let Some(id) = repo_id(m) else { continue };
+        let score = if id.common_dir == me.common_dir {
+            2
+        } else if !me.root_commits.is_disjoint(&id.root_commits) {
+            1
+        } else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(s, _)| score > *s) {
+            best = Some((score, m.clone()));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 /// Where roots are mirrored: an ssh target (or, in tests, this machine)
 /// plus the prefix every remote path gets.
 #[derive(Clone, Debug)]
@@ -299,6 +357,40 @@ impl Mirror {
             bail!("cannot create {remote} on the remote machine");
         }
         Ok(())
+    }
+
+    /// Seed the (new, empty) mirror of `root` from the machine's existing
+    /// mirror of `from` with a machine-local copy, so the following rsync
+    /// only sends what differs. Copies sources only: the machine's `target/`
+    /// dirs hold path-keyed cargo fingerprints and are left alone. Returns
+    /// whether a seed was copied. Fail open: any problem means no seed.
+    pub fn seed(&self, root: &Path, from: &Path) -> bool {
+        let (src, dst) = (
+            shell_quote(&self.remote(from)),
+            shell_quote(&self.remote(root)),
+        );
+        // Only into a mirror holding nothing but build output.
+        let script = format!(
+            "test -d {src} && test -d {dst} && test -z \"$(ls -A {dst} | grep -vx -e target -e .justrust)\" \
+             && rsync -a --exclude=target/ --exclude=.justrust/ {src}/ {dst}/"
+        );
+        let mut c = match &self.target {
+            Some(t) => {
+                let mut c = t.command();
+                c.arg(script);
+                c
+            }
+            None => {
+                let mut c = Command::new("sh");
+                c.arg("-c").arg(script);
+                c
+            }
+        };
+        c.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
     }
 
     /// Mirror `root` with rsync. Returns files sent. The machine's own
@@ -537,6 +629,75 @@ mod tests {
             assert!(keys.contains(&PathBuf::from(want)), "{want}: {keys:?}");
         }
         assert!(!keys.contains(&PathBuf::from("x.log")));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn seeds_from_worktree_then_clone_and_copies_sources_only() {
+        let d = std::env::temp_dir().join(format!("jr-seed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let o = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{args:?}: {o:?}");
+        };
+        let (main, wt, clone, other) = (
+            d.join("main"),
+            d.join("wt"),
+            d.join("clone"),
+            d.join("other"),
+        );
+        for r in [&main, &other] {
+            std::fs::create_dir_all(r).unwrap();
+            git(r, &["init", "-q"]);
+            std::fs::write(r.join("lib.rs"), r.display().to_string()).unwrap();
+            git(r, &["add", "."]);
+            git(r, &["commit", "-qm", "x"]);
+        }
+        git(
+            &main,
+            &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+        );
+        git(
+            &d,
+            &[
+                "clone",
+                "-q",
+                main.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        let all = vec![other.clone(), clone.clone(), main.clone()];
+        assert_eq!(pick_seed(&wt, &all), Some(main.clone()));
+        assert_eq!(
+            pick_seed(&wt, &[other.clone(), clone.clone()]),
+            Some(clone.clone())
+        );
+        assert_eq!(pick_seed(&other, &all[1..]), None);
+        assert_eq!(pick_seed(&d.join("nogit"), &all), None);
+
+        // A local "machine": mirrors under a prefix.
+        let m = Mirror {
+            target: None,
+            prefix: d.join("machine").display().to_string(),
+        };
+        let (src, dst) = (PathBuf::from(m.remote(&main)), PathBuf::from(m.remote(&wt)));
+        std::fs::create_dir_all(src.join("target")).unwrap();
+        std::fs::write(src.join("lib.rs"), "seed").unwrap();
+        std::fs::write(src.join("target/big"), "x").unwrap();
+        std::fs::create_dir_all(dst.join("target")).unwrap();
+        assert!(m.seed(&wt, &main));
+        assert_eq!(std::fs::read_to_string(dst.join("lib.rs")).unwrap(), "seed");
+        assert!(!dst.join("target/big").exists());
+        // Never over an existing mirror.
+        std::fs::write(src.join("lib.rs"), "newer").unwrap();
+        assert!(!m.seed(&wt, &main));
+        assert_eq!(std::fs::read_to_string(dst.join("lib.rs")).unwrap(), "seed");
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

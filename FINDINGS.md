@@ -3962,3 +3962,38 @@ Conclusions for picking the CPU and the work:
    parallel macro expansion is hard, but parallel metadata encoding,
    dep-graph persist and the mono collector are tractable, (d) splitting
    giant crates (finding 47) turns serial crates into parallel units.
+
+## 54. Seeding a new worktree's remote mirror from a mirrored sibling: first sync 45.7 -> 3.5 s (2026-10-12)
+
+FINDINGS 53: first syncs of fresh worktrees/clones (up to 359 s) cost more
+than all warm remote compile time. A fresh worktree is a new absolute path,
+so rsync sent the whole tree over the WAN even though the machine already
+had a near-identical copy.
+
+Now `add_root` (remote_daemon) looks for a related root that has already
+been mirrored: the in-memory roots, plus `~/.justrust/remote/mirrored.json`
+(new, every root mirrored per backend, newest 64) and the legacy
+`prepared.json`. A worktree of the same repo (same `git-common-dir`) wins,
+then a clone sharing a root commit. Before the rsync, one ssh command copies
+that mirror into the new, still-empty mirror on the machine
+(`rsync -a --exclude=target/`, local to the machine). The real rsync then
+sends only deltas. Sources only. The machine's `target/` is not copied,
+because cargo fingerprints and dep-info are keyed by absolute path, so a
+copied target dir would be rebuilt anyway (and the shared depcache/peercache
+already makes dependencies cheap). Fail open: no relative found, a missing
+source mirror, or a destination that already holds sources means no seed,
+and the normal full rsync runs. No protocol change: this is plain ssh and
+rsync, so the hosted service is unchanged.
+
+Measured on hosted, `JUSTRUST_REMOTE=force justrust check -p jcode-desktop-model`
+in a fresh `git worktree add` of jcode-desktop plus its sibling jcode (2924 files):
+
+| run | seed | sync |
+|---|---|---|
+| 20261012-050045469-30871 | none (before) | 45.7 s (jcode 37.6 s, desktop 1.6 s) |
+| 20261012-050544068-47967 | from ~/jcode, ~/jcode-desktop (daemon restart + agent reinstall in this run) | 12.6 s (seed 2.3 + 1.0 s, rsync 4.2 + 2.1 s) |
+| 20261012-050606782-49143 | from seed2 worktrees, warm daemon | 3.5 s (seed 0.3 + 0.3 s, rsync 2.0 + 1.0 s) |
+
+rsync still itemizes every file (worktree mtimes differ), but each one moves as a
+near-empty delta. Next step if this matters: also copy mtimes from the
+local base, or use `--checksum`-free size-only matching for seeded roots.

@@ -730,6 +730,49 @@ fn refresh_watches(d: &Daemon, root: &Path, m: &Manifest) {
     }
 }
 
+/// Roots this client ever mirrored to `dest` (`mirrored.json`), so a new
+/// worktree can be seeded from one even after the daemon restarted.
+fn known_roots(dest: &str) -> Vec<PathBuf> {
+    let dir = crate::remote::dir().ok();
+    // Roots mirrored before `mirrored.json` existed ("instance:/path").
+    let prepared: Vec<PathBuf> = dir
+        .as_ref()
+        .and_then(|d| std::fs::read(d.join("prepared.json")).ok())
+        .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| s.split_once(':').map(|(_, p)| PathBuf::from(p)))
+        .collect();
+    dir.and_then(|d| std::fs::read(d.join("mirrored.json")).ok())
+        .and_then(|b| serde_json::from_slice::<BTreeMap<String, Vec<PathBuf>>>(&b).ok())
+        .and_then(|mut m| m.remove(dest))
+        .unwrap_or_default()
+        .into_iter()
+        .chain(prepared)
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+fn remember_root(dest: &str, root: &Path) {
+    let Ok(d) = crate::remote::dir() else { return };
+    let path = d.join("mirrored.json");
+    let mut m: BTreeMap<String, Vec<PathBuf>> = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let list = m.entry(dest.to_string()).or_default();
+    if list.iter().any(|p| p == root) {
+        return;
+    }
+    list.push(root.to_path_buf());
+    // Keep the newest 64: candidates are probed with git on each new root.
+    let excess = list.len().saturating_sub(64);
+    list.drain(..excess);
+    if let Ok(s) = serde_json::to_vec(&m) {
+        let _ = std::fs::write(&path, s);
+    }
+}
+
 /// Start tracking a root: rsync it once, then remember its manifest.
 fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     link.mirror.prepare(root)?;
@@ -737,7 +780,23 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     // the manifest and is pushed again by the next flush.
     let scan = remote_sync::scan(root)?;
     let t = Instant::now();
+    // Keyed by backend, not address: hosted machines change addresses, and
+    // a seed whose source is gone on the machine is simply skipped.
+    let dest = st.backend.kind();
+    let mut known = known_roots(dest);
+    known.extend(st.roots.keys().cloned());
+    if let Some(from) = remote_sync::pick_seed(root, known.iter())
+        && link.mirror.seed(root, &from)
+    {
+        log(&format!(
+            "seeded {} from {} on the machine in {:.2}s",
+            root.display(),
+            from.display(),
+            t.elapsed().as_secs_f64()
+        ));
+    }
     let n = link.mirror.rsync(root)?;
+    remember_root(dest, root);
     link.send(
         &Msg::Synced {
             path: root.display().to_string(),
