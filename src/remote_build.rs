@@ -169,9 +169,58 @@ pub fn shell_quote(s: &str) -> String {
     }
 }
 
+/// Release asset this binary would be, when it is a release build. The
+/// machine downloads it from GitHub (0.3 s from us-east-1) instead of us
+/// uploading 11 MB over a home uplink (40-130 s measured, FINDINGS 65).
+fn release_asset_url() -> Option<String> {
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        return None;
+    }
+    Some(format!(
+        "https://github.com/1jehuang/justrust/releases/download/v{}/justrust-x86_64-unknown-linux-musl.tar.gz",
+        env!("CARGO_PKG_VERSION")
+    ))
+}
+
+/// Install this exact binary on the machine from its GitHub release, if the
+/// release asset is byte-identical to the running executable (sha256). A
+/// dev build never matches and falls back to the upload. Never errors.
+fn fetch_release_on_machine(t: &Target) -> bool {
+    if std::env::var("JUSTRUST_REMOTE_FETCH_RELEASE").as_deref() == Ok("0") {
+        return false;
+    }
+    let Some(url) = release_asset_url() else {
+        return false;
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(want) = crate::toolchain::sha256(&exe) else {
+        return false;
+    };
+    let script = format!(
+        "set -e; d=$(mktemp -d); trap 'rm -rf \"$d\"' EXIT; \
+         curl -fsSL --max-time 30 {url} | tar xz -C \"$d\"; \
+         f=$(find \"$d\" -type f -name justrust | head -1); \
+         [ \"$(sha256sum \"$f\" | cut -d' ' -f1)\" = {want} ]; \
+         mkdir -p ~/.cargo/bin; chmod +x \"$f\"; mv \"$f\" ~/.cargo/bin/.justrust.upload; \
+         mv ~/.cargo/bin/.justrust.upload ~/.cargo/bin/justrust",
+        url = shell_quote(&url),
+        want = shell_quote(&want),
+    );
+    t.command()
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Make sure the machine runs this exact justrust binary. Same OS and
-/// architecture (the common case): copy it. Otherwise build it there from
-/// crates.io at this version.
+/// architecture (the common case): fetch it from its release on the
+/// machine, else copy it. Otherwise build it there from crates.io at this
+/// version.
 pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
     let id = crate::remote_daemon::build_id();
     let stamp = crate::remote::dir()?.join("remote-justrust");
@@ -196,7 +245,14 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
         std::env::consts::ARCH
     );
     let t0 = Instant::now();
-    if remote_arch == local_arch {
+    if remote_arch == local_arch && fetch_release_on_machine(t) {
+        crate::remote::log_event(&format!(
+            "justrust {} fetched from its release on {} in {:.1}s",
+            env!("CARGO_PKG_VERSION"),
+            t.dest,
+            t0.elapsed().as_secs_f64()
+        ));
+    } else if remote_arch == local_arch {
         let exe = std::env::current_exe()?;
         let tmp = ".cargo/bin/.justrust.upload";
         let ok = Command::new("rsync")
@@ -557,6 +613,18 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_asset_url_names_this_version() {
+        if let Some(u) = release_asset_url() {
+            assert!(
+                u.contains(&format!("/v{}/", env!("CARGO_PKG_VERSION"))),
+                "{u}"
+            );
+            assert!(u.ends_with("justrust-x86_64-unknown-linux-musl.tar.gz"));
+            assert_eq!(shell_quote(&u), u, "URL must need no quoting");
+        }
+    }
 
     #[test]
     fn workspace_dir_finds_the_enclosing_workspace() {
