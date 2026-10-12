@@ -2952,6 +2952,33 @@ justrust 59.1 s, jr-nocache 57.7 s, where synth1 had justrust 93.8 s
 against stock 70.5 s. Justrust's samples are flagged noisy, so wait for the
 full result before quoting it.
 
+Full synth2 (`versus-synth1-20261012-002025-9ab215affbd3-dirty-remote-c7i.8xlarge.json`,
+justrust 9ab215a: pool rerun fix + fail-fast + /bin/sh fix): **40/40
+points measured** (synth1: 38). The report's headline, justrust 1.14x
+stock (16.01 vs 14.10 s), is wrong. Stock's points 7 (`build`, 70.2 s)
+and 8 (`check -p jcode-desktop-motion`, 30.0 s) ran while I was timing
+by hand on the machine. Without those two: stock 14.22 s,
+justrust 14.45 s, **0.98x** (synth1 was 0.81x). Per command against
+synth1:
+
+| | synth1 stock / justrust | synth2 stock / justrust |
+|---|---:|---:|
+| `test -p jcode-tui --lib` (3 points) | 22.6/41.3, 29.8/51.0, 38.3/63.3 | 22.0/22.6, 29.2/30.9, 35.5/37.3 |
+| `test --workspace` | 70.5 / 93.8 | 74.5 / 59.1, 11.2 / 7.7 |
+| `command: test` (no filter, 7) | 22.19 / 34.08 (0.65x) | 20.62 / 21.80 (0.95x) |
+| rerun points (excl. 7, 8; synth2 adds `test --workspace` rerun) | 0.74 / 1.22 | 2.10 / 1.95 |
+
+So the test-suite loss of finding 41 is gone, and what is left is a 2 to
+10% overhead on most warm points. Remaining outliers: point 22 (a no-op
+filtered test, 0.36 vs 1.43 s) was 1.40 s of `cargo startup` with 1.11 s of
+machine-wide io stall in that run. On the idle machine afterwards it is
+0.38 s justrust vs 0.35 s stock (3 rounds). I tested one hypothesis, that
+the detached `split --refresh-hints` after an edited build slows the next
+call: 4 paired rounds with `JUSTRUST_SPLIT_HINTS=0` vs on, refresh stamp
+removed, gave 373 to 396 ms either way, so it is not the cause. A clean
+rerun of synth with nothing else on the machine is needed before a
+headline number is quoted.
+
 ## 42. Public prebuilt store on S3: one timeout paused it for the whole build (2026-10-11)
 
 Deployed `infra/prebuilt-store.yaml` (justrust-cloud) as stack
