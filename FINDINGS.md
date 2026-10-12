@@ -3162,3 +3162,35 @@ std: `error[E0463]: can't find crate for core`. The system toolchain
 build` succeeds. Fix in justrust: when `--target` names a target the pinned
 toolchain lacks, either add it to the pin or fall through to the system
 rustc, and say so in one line instead of failing the build.
+
+### Rerun after the fixes (2026-10-12)
+
+Same seed, generator and machine,
+`versus-synth1-20261012-002025-9ab215affbd3-dirty-remote-c7i.8xlarge.json`,
+`bench/VERSUS-SYNTH.md`. Fixes since the first run: the test pool settles
+parallel-only failures by rerunning those names, not the whole binary
+(7138120); it honors cargo's fail-fast (9ab215a); `/bin/sh` is bash on the
+machine (1c50a2b), so points 2 and 28 now build (40/40 points, no errors).
+
+| | stock | justrust | justrust vs stock |
+|---|---:|---:|---:|
+| before, 36 shared points | 15.34 s | 18.98 s | 0.81x |
+| after, same 36 points | 14.34 s | 14.69 s | 0.98x |
+| after, all 40 points (raw headline) | 16.01 s | 14.10 s | 1.14x |
+
+The raw 1.14x overstates it: on points 7 (`build`, rerun) and 8
+(`check -p jcode-desktop-motion` after `check -p jcode-desktop`) stock's
+own warm target dir was invalidated by the unmeasured pre-build (70.2 s and
+30.0 s, against 0.37 s and 0.18 s in the first run), a harness artifact,
+not something justrust did better. Leaving those out (and 2 and 28, which
+had no data before), justrust moved from 19% slower than stock to even.
+By command (all 40): check 2.41 s vs 5.41 s (stock includes point 8),
+test-filtered 0.95x, test 0.95x, build --release 0.93x, test --workspace
+1.28x. justrust is now close to stock on warm loops and still a few
+percent behind on test and release builds; the remaining gap is the
+remote machine's per-thread speed and justrust's ~80 ms per call
+(`bench/noop-overhead.py`), not test-runner bugs.
+
+Next for the harness: detect a stock pre-build that recompiles more than
+the previous point left warm (a cache invalidation) and flag the point,
+and run -n 2 so single outliers do not move the means.
