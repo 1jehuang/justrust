@@ -77,6 +77,7 @@ pub fn main() -> ! {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let real = real_rustc();
     args.extend(cache_proc_macro_args(&real, &args));
+    jr_iface_hash_env(&real);
     let run_dir = std::env::var_os("JUSTRUST_RUN_DIR").map(PathBuf::from);
     let is_unit =
         std::env::var_os("CARGO_CRATE_NAME").is_some() && args.iter().any(|a| a == "--crate-name");
@@ -127,6 +128,33 @@ fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<Os
         || args.iter().any(|a| s(a).starts_with("-Cincremental="));
     let already = args.iter().any(|a| s(a).contains("cache-proc-macros"));
     (incremental && !already).then(|| OsString::from("-Zcache-proc-macros"))
+}
+
+/// Cross-crate early cutoff (jr-rustc `-Zjr-iface-hash` + jr-cargo, see
+/// `docs/integrations.md`): on a jr toolchain, ask jr-rustc to write the
+/// interface hash of every crate (`<rmeta>.jriface`) through its
+/// `JUSTRUST_RUSTC_IFACE_HASH` switch, which is not part of any cache key, so
+/// cargo fingerprints and rustc's incremental state are the same either way.
+/// jr-cargo then skips dependents of a crate whose interface did not change.
+/// `JUSTRUST_CUTOFF=0` turns it off (and jr-cargo's half with
+/// `JUSTRUST_CARGO_CUTOFF=0`).
+fn jr_iface_hash_env(real: &std::path::Path) {
+    let is_jr = real
+        .parent()
+        .and_then(|b| b.parent())
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n.to_string_lossy().starts_with("jr-"));
+    let off = matches!(
+        std::env::var("JUSTRUST_CUTOFF").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    );
+    if is_jr
+        && std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_some()
+        && std::env::var_os("JUSTRUST_RUSTC_IFACE_HASH").is_none()
+    {
+        // SAFETY: single-threaded here, before any thread or child is spawned.
+        unsafe { std::env::set_var("JUSTRUST_RUSTC_IFACE_HASH", if off { "0" } else { "1" }) };
+    }
 }
 
 fn want_passes(args: &[OsString], local: bool) -> (bool, bool) {
@@ -264,8 +292,13 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     if force_bootstrap {
         cmd.env("RUSTC_BOOTSTRAP", "1");
     }
+    let early = (plan.is_none() && described.local && described.incremental && early_reply_on())
+        .then(|| EarlyReply::attach(&mut cmd))
+        .flatten();
     let start = paths::now();
-    let mut child = cmd.spawn().ok()?;
+    let spawned = cmd.spawn();
+    let early = early.map(EarlyReply::spawned);
+    let mut child = spawned.ok()?;
     let job = crate::sys::Job::for_child(&child);
     let stderr = child.stderr.take()?;
     let rmeta_at: Arc<Mutex<Option<f64>>> = Arc::default();
@@ -281,14 +314,27 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         })
     };
 
+    // jr-rustc replied after the link (outputs complete, no errors, all
+    // diagnostics printed) and is still persisting its incremental state:
+    // report success now. The next rustc of this crate waits for the
+    // persist (jr-rustc `jr_wait_for_persisting`).
+    let replied = early.as_ref().is_some_and(EarlyReply::wait);
     let crate::sys::Usage {
         code: exit,
         user,
         sys,
         max_rss_mb,
-    } = crate::sys::wait_usage(&mut child, job.as_ref());
+    } = if replied {
+        crate::sys::Usage::default()
+    } else {
+        crate::sys::wait_usage(&mut child, job.as_ref())
+    };
     let end = paths::now();
     let _ = reader.join();
+    if replied {
+        // Not reaped: cargo never waits for it, init adopts it on exit.
+        std::mem::forget(child);
+    }
 
     let mut unit = described;
     if let (Some(plan), Some(captured)) = (&plan, &captured) {
@@ -337,6 +383,74 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
         let _ = paths::append_line(&run_dir.join("units.jsonl"), &line);
     }
     Some(exit)
+}
+
+/// `JUSTRUST_RUSTC_EARLY_REPLY=1`: let jr-rustc reply after the link
+/// and persist its incremental state after the shim returned (opt-in,
+/// FINDINGS 60). Only rustc builds that know `JUSTRUST_RUSTC_EARLY_REPLY_FD`
+/// use the pipe; any other rustc ignores it and is waited for as usual.
+fn early_reply_on() -> bool {
+    cfg!(target_os = "linux")
+        && matches!(
+            std::env::var("JUSTRUST_RUSTC_EARLY_REPLY").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+}
+
+/// The pipe jr-rustc writes one byte to once it can be considered done.
+struct EarlyReply {
+    read: std::fs::File,
+    write: Option<std::os::fd::OwnedFd>,
+}
+
+impl EarlyReply {
+    #[cfg(target_os = "linux")]
+    fn attach(cmd: &mut Command) -> Option<EarlyReply> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        let mut fds = [0; 2];
+        // SAFETY: pipe2 writes two descriptors into the array on success.
+        // Both start close-on-exec; only the write end is then inherited.
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return None;
+        }
+        // SAFETY: fresh descriptors owned by nobody else.
+        let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        // SAFETY: clearing FD_CLOEXEC on our own descriptor.
+        unsafe { libc::fcntl(write.as_raw_fd(), libc::F_SETFD, 0) };
+        cmd.env(
+            "JUSTRUST_RUSTC_EARLY_REPLY_FD",
+            write.as_raw_fd().to_string(),
+        );
+        Some(EarlyReply {
+            read: std::fs::File::from(read),
+            write: Some(write),
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn attach(_cmd: &mut Command) -> Option<EarlyReply> {
+        None
+    }
+
+    /// Close our copy of the write end once the child has it, so a rustc
+    /// that exits without replying shows up as EOF.
+    fn spawned(mut self) -> EarlyReply {
+        self.write = None;
+        self
+    }
+
+    /// True if rustc replied; false on EOF (it exited, or never knew the fd).
+    fn wait(&self) -> bool {
+        use std::io::Read;
+        let mut b = [0u8; 1];
+        loop {
+            match (&self.read).read(&mut b) {
+                Ok(1) => return b[0] == 1,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                _ => return false,
+            }
+        }
+    }
 }
 
 fn forward_stderr(

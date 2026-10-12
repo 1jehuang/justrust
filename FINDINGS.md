@@ -4402,3 +4402,64 @@ memory-pressure eviction), not deployed. Next: codes for parser errors
 (rustc's `expected ;` is reliable enough to exit on, measure first),
 E0384 from rust-analyzer, and buildd under `JUSTRUST_ON_REMOTE_AGENT` for
 hosted.
+
+## 60. jr-rustc early reply: answer cargo after the link, persist in the background (`JUSTRUST_RUSTC_EARLY_REPLY=1`): reference loop 4.32 -> 4.10 s, within noise, opt-in (2026-10-12)
+
+Step 2b of the resident-rustc track (58 was 2a). With the overlap of 58,
+the hot rustc's link finishes about 0.4 s before the process exits (the
+rest of the dep-graph and query-cache persist, plus the session rename
+and garbage collection). Direct replay: link done 3.41 s, exit 3.82 s.
+
+Mechanism (jr-rustc 7f5a85180621, 9c3c3ab5531a). The shim opens a pipe
+and passes the write end as `JUSTRUST_RUSTC_EARLY_REPLY_FD`, only for
+local incremental units and only under `JUSTRUST_RUSTC_EARLY_REPLY=1`.
+After a successful link with no errors, rustc runs `finish_diagnostics`
+(now idempotent), points fds 1 and 2 at /dev/null so the shim's stderr
+relay sees EOF, writes one byte, and keeps persisting. The shim returns
+0 without reaping. Before replying, rustc drops a `jr-persisting` marker
+in its `-working` session dir, and removes it only after the rename and
+GC have released the lock. `prepare_session_directory` waits until no
+locked session dir of the crate carries a marker (60 s cap; a dead owner
+has no lock and is not waited for). Errors and any other path never
+reply early, so the shim falls back to `wait4`. A rustc without the
+feature never writes the byte (EOF), and the shim waits normally.
+
+The first version removed the marker before the rename. A next session
+started in that window got `WouldBlock` on the source dir's lock, warned,
+and started from scratch: 17-19 s instead of 4 s, two of fourteen samples
+in `factors-20261012-072936-181e4a7e9e98-dirty.json`. The fix keeps the
+marker until unlock.
+
+| measurement | on | off |
+|---|---:|---:|
+| factor `jr-early-reply`, n=14 (`factors-20261012-080154-9c747bcafaa4-dirty.json`), wall | 4.10 s | 4.32 s |
+| same runs, recorded jcode_desktop_ui unit | 3.63 s | 3.85 s |
+| direct replay, n=14, under load 10-15 (`early-*.json` in scratch) | 4.54 s done | 5.73 s |
+| back-to-back replay (next edit right after the reply) | wait 0.3-0.5 s, build 3.7-4.2 s, incremental | |
+
+Run ids: on 20261012-080405429-1491534431 .. 20261012-080547653-1491534345,
+off 20261012-080401328-1491534884 .. 20261012-080551782-1491534835.
+
+Correctness: diagnostics identical with and without (normalized for the
+parallel frontend's lint order, see 58). A type error never replies early
+(rc 1, full output). `-Zincremental-verify-ich` is clean on a session
+that waited. Full `jcode-desktop-ui --lib` suite through justrust with
+early reply on, two edits in a row: 1303 passed both times, second edit
+incremental (1 unit).
+
+Verdict: opt-in. The saving is real but small (0.2 s, inside run-to-run
+noise at n=14), and it only reaches the agent when the persist tail is
+not immediately needed. An agent that edits again within ~0.4 s gets it
+back as wait time. Costs: an unreaped rustc can outlive the shim by about
+0.5 s, and justrust's recorded rustc CPU/RSS is 0 for replied units.
+Default-on would need the shim to record usage from /proc before
+returning, plus a larger n on a quiet machine.
+
+Side finding: my direct-replay scripts edited the shared bench snapshot
+without the bench lock and restored from a copy read at start. That
+raced kikazaru's early-exit factor and left a stale injected type error
+in `fps_counter.rs`. Replays now edit from a private base copy under the
+bench lock (`flock -o ~/.justrust/bench/work/.bench.lock`). Also, cargo
+caches `rustc -vV` by the rustc binary's mtime, so a rebuilt
+librustc_driver needs `touch bin/rustc` and fresh factor target dirs,
+or every unit fails with E0514.

@@ -320,6 +320,17 @@ FACTORS = [
         note="profile: serialize_dep_graph 0.57 s + link 0.56 s, serial, of a 4.73 s warm rustc",
     ),
     Factor(
+        "jr-early-reply", "jr-rustc replies to justrust's shim after the link and persists its incremental "
+        "state in the background (JUSTRUST_RUSTC_EARLY_REPLY=1); the next session waits for it",
+        "loop", "desktop-test-edit",
+        on={**JR_RUSTC_ENV, **UNSTABLE_PROFILE, "JUSTRUST_RUSTC_EARLY_REPLY": "1"},
+        off={**JR_RUSTC_ENV, **UNSTABLE_PROFILE},
+        on_args=ui_rustflags("-Zcache-proc-macros"), off_args=ui_rustflags("-Zcache-proc-macros"),
+        n=10, slow=True,
+        note="needs JR_RUSTC_MODE with the early-reply commit; overlap persist on both sides; "
+        "replay: link done 3.41 s, exit 3.82 s",
+    ),
+    Factor(
         "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-bolt-stage2) vs the official nightly at the same commit",
         "loop", "desktop-test-edit",
         on={"JUSTRUST_TOOLCHAIN": "system",
