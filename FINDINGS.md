@@ -3228,3 +3228,14 @@ publishes `v1/costs` every run. Remaining: one HTTP/2 connection instead
 of a curl process per request (the 0.7 s fixed cost is most of a fetch),
 rmeta-only bundles for check, and pricing by this machine's own compile
 speed instead of the fleet's.
+
+Verification of the released 0.1.0-alpha.7 (installed with the public
+installer into a scratch dir, var unset), interleaved on the seed project:
+store 23.0 s / 32.1 s (78 / 65 fetched) vs off 46.8 s / 43.1 s (load
+14-20). Fail open: unreachable store, a garbage `JUSTRUST_PREBUILT` value,
+and a private store without `v1/costs` all built the uncovered project in
+11.7-12.9 s (baseline 11.1-12.8 s); the dead store tripped the breaker
+after 6 failures. A fleet run triggered through the real scheduler
+installed alpha.7 and rewrote `v1/costs` (1177 keys; sizes equal to the
+real bundles for 1145/1145 checked; fleet compile times are 0.86x the
+laptop's, so its prices err toward compiling).
