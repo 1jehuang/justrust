@@ -56,6 +56,7 @@ pub const TIME_EXHAUSTED: &str = "hosted build machine time for this month is us
 pub const UNAVAILABLE: &str = "the hosted build service is unavailable right now. This is not a problem with your subscription. Builds run locally, retry later.";
 pub const NOT_OFFERED: &str = "hosted builds are not available on your Jcode account yet. This is not a problem with your subscription. Builds run locally.";
 pub const RATE_LIMITED: &str = "the Jcode API is rate limiting requests. Retry in a moment.";
+pub const AT_CAPACITY: &str = "every hosted build machine is busy right now (the fleet is at capacity). This is not a problem with your subscription. Builds run locally and remote is retried in a few minutes.";
 
 // ---------------------------------------------------------------- credentials
 
@@ -334,6 +335,7 @@ pub fn api_error(r: &Resp) -> anyhow::Error {
         }
         (402, _) | (403, "build_not_entitled") => return anyhow!(SUBSCRIBE),
         (429, _) => RATE_LIMITED.into(),
+        (_, "build_capacity") => return anyhow!(AT_CAPACITY),
         (503, _) | (_, "build_unavailable") => UNAVAILABLE.into(),
         _ if !msg.is_empty() => return anyhow!("Jcode API error {} ({code}): {msg}", r.code),
         _ => format!("Jcode API error {}", r.code),
@@ -835,8 +837,24 @@ pub fn connect_with(
                 timeout.as_secs()
             );
         }
-        std::thread::sleep(poll);
+        std::thread::sleep(poll_wait(
+            &r.body,
+            poll,
+            timeout.saturating_sub(start.elapsed()),
+        ));
     }
+}
+
+/// How long to wait before the next connect poll: the server's
+/// `retry_after_ms` hint (a fresh launch takes minutes, so it asks for 10 s
+/// instead of 2 s), clamped to [`poll`, 15 s] and to the time left.
+fn poll_wait(body: &Value, poll: Duration, left: Duration) -> Duration {
+    let hint = body["retry_after_ms"]
+        .as_u64()
+        .map(Duration::from_millis)
+        .unwrap_or(poll);
+    hint.clamp(poll, Duration::from_secs(15).max(poll))
+        .min(left)
 }
 
 /// One line per host key, pinned to `address` (and port when not 22).
@@ -1236,6 +1254,45 @@ mod tests {
         assert_eq!(seen[0].auth.as_deref(), Some("Bearer sk-secret-123"));
         let b: Value = serde_json::from_str(&seen[0].body).unwrap();
         assert_eq!(b["public_key"], "ssh-ed25519 AAAA me");
+    }
+
+    #[test]
+    fn poll_wait_honors_server_hint_within_bounds() {
+        let p = Duration::from_secs(2);
+        let left = Duration::from_secs(300);
+        assert_eq!(poll_wait(&json!({}), p, left), p);
+        assert_eq!(
+            poll_wait(&json!({"retry_after_ms": 10000}), p, left),
+            Duration::from_secs(10)
+        );
+        // Never faster than the client's own poll, never past 15 s or the deadline.
+        assert_eq!(poll_wait(&json!({"retry_after_ms": 1}), p, left), p);
+        assert_eq!(
+            poll_wait(&json!({"retry_after_ms": 600000}), p, left),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            poll_wait(&json!({"retry_after_ms": 10000}), p, Duration::from_secs(3)),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn capacity_is_its_own_message() {
+        let (c, _) = mock(vec![(
+            503,
+            r#"{"error":{"code":"build_capacity","message":"busy","retry_after":120}}"#,
+        )]);
+        let e = connect_with(
+            &c,
+            "k",
+            Duration::from_millis(5),
+            Duration::from_secs(5),
+            |_| {},
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(e, AT_CAPACITY);
     }
 
     #[test]
