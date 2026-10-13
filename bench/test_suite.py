@@ -11,6 +11,13 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_requested_pool_fallback_is_not_a_pooled_measurement(self):
+        for text in ("", "justrust hosted: HTTP pool unavailable, using curl", "justrust hosted: HTTP pool bypassed for custom proxy/certificate configuration"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                suite.admission_transport(text, True)
+        self.assertEqual(suite.admission_transport("justrust trace: pooled hosted admission", True), "pooled")
+        self.assertEqual(suite.admission_transport("", False), "curl")
+
     def test_remote_sample_reports_transport_and_host_separately(self):
         sample = suite.remote_measurement({"wall": 2.0, "remote": {
             "machine": "hosted", "client_wall": 2.8, "sync_ms": 120.0,

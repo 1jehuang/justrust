@@ -149,6 +149,26 @@ pub fn build_base() -> String {
 }
 
 impl Creds {
+    #[cfg(unix)]
+    pub(crate) fn local_auth(&self) -> crate::remote_proto::HostedAuth {
+        crate::remote_proto::HostedAuth {
+            base: self.base.clone(),
+            build_base: self.build_base.clone(),
+            key: self.key.clone(),
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn from_local_auth(auth: crate::remote_proto::HostedAuth) -> Result<Self> {
+        let mut c = Self::new(auth.base, auth.key)?;
+        c.set_build_base(auth.build_base)?;
+        Ok(c)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn bearer(&self) -> String {
+        format!("Bearer {}", self.key)
+    }
     pub fn new(base: String, key: String) -> Result<Self> {
         if key.chars().any(|c| c.is_control() || c == ' ') {
             bail!(
@@ -537,12 +557,36 @@ pub fn charge_run_labeled(
     if let Ok(s) = std::env::var("JCODE_SESSION_ID") {
         body["session"] = json!(run_label(&s, 96));
     }
-    let r = request(c, "POST", "build/runs", Some(&body)).map_err(|e| e.to_string())?;
+    let r = admission_request(c, &body).map_err(|e| e.to_string())?;
     if r.code == 200 {
         Ok(Builds::from(&r.body["builds"]))
     } else {
         Err(api_error(&r).to_string())
     }
+}
+
+fn admission_request(c: &Creds, body: &Value) -> Result<Resp> {
+    #[cfg(unix)]
+    if crate::hosted_http::enabled() {
+        if crate::hosted_http::custom_transport() {
+            eprintln!(
+                "justrust hosted: HTTP pool bypassed for custom proxy/certificate configuration"
+            );
+        } else {
+            match crate::hosted_http::via_daemon(c, body) {
+                Ok(r) => {
+                    if std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some() {
+                        eprintln!("justrust trace: pooled hosted admission");
+                    }
+                    return Ok(r);
+                }
+                Err(_) => eprintln!("justrust hosted: HTTP pool unavailable, using curl"),
+            }
+        }
+    }
+    // A transport failure may have reached billing already. Retry only this
+    // exact request, whose run_id is the server's idempotency key.
+    request(c, "POST", "build/runs", Some(body))
 }
 
 /// Printable ASCII, one line, at most `max` chars: the server applies the

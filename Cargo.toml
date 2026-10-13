@@ -44,3 +44,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
 ] }
+
+[target."cfg(unix)".dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }

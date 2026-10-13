@@ -544,6 +544,14 @@ def hotpatch_outcomes(run_dir: Path) -> list[str] | None:
     return out
 
 
+def admission_transport(stderr: str, requested: bool) -> str:
+    if not requested:
+        return "curl"
+    if "justrust trace: pooled hosted admission" not in stderr:
+        raise ValueError("requested pooled admission was not used, not a pooled measurement")
+    return "pooled"
+
+
 def run_once(s: Scenario, root: Path, target: Path) -> dict:
     rid = new_id()
     env = dict(os.environ)
@@ -571,6 +579,8 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     env.update(s.env)
     if REMOTE:
         env["JUSTRUST_REMOTE"] = "force"
+        if env.get("JUSTRUST_HOSTED_HTTP_POOL") in ("1", "on", "true"):
+            env["JUSTRUST_REMOTE_TRACE"] = "1"
     if s.prebuilt:
         # A new machine: nothing in the local depcache, the store has it.
         cache = target.with_name(target.name + "-depcache")
@@ -615,9 +625,11 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         sys.exit(f"bench: {s.name}: no summary for run {rid} (exit {p.returncode})\n{p.stderr[-3000:]}")
     sm = json.loads(summ_path.read_text())
     remote = None
+    admission = None
     if REMOTE:
         try:
             remote = remote_measurement(sm)
+            admission = admission_transport(p.stderr, env.get("JUSTRUST_HOSTED_HTTP_POOL") in ("1", "on", "true"))
         except ValueError as e:
             sys.exit(f"bench: {s.name}: {e} (justrust log {rid})\n{p.stderr[-3000:]}")
     failed = p.returncode != 0
@@ -651,6 +663,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         if early else None,
         "recorded_wall": round(sm["wall"], 3),
         **({"remote": remote} if remote is not None else {}),
+        **({"admission_transport": admission} if admission is not None else {}),
         "cpu": round(sm.get("cpu_secs", 0.0), 2),
         "startup": round(sm["phases"]["startup"], 3),
         "compile": round(sm["phases"]["compile"], 3),
@@ -782,6 +795,7 @@ def optimization_env() -> dict:
         "JUSTRUST_CUTOFF", "JUSTRUST_CARGO_CUTOFF", "JUSTRUST_CARGO_FORK",
         "JUSTRUST_CARGO_DAEMON", "JUSTRUST_CARGO_DAEMON_TRACE",
         "JUSTRUST_UNIFY_FEATURES",
+        "JUSTRUST_HOSTED_HTTP_POOL",
     )
     return {name: os.environ[name] for name in names if name in os.environ}
 
