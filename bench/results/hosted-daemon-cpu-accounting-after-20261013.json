@@ -1,0 +1,181 @@
+{
+ "started": "2026-10-13T09:38:56-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.16",
+  "justrust_rev": "198209d0d3ce",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (b7907f1fe 2026-10-12)",
+  "toolchain": "jr-b7907f1fe8f7",
+  "optimization_env": {
+   "JUSTRUST_TEST_FILTER_COMPILE": "1",
+   "JUSTRUST_CARGO_DAEMON": "1"
+  },
+  "cargo": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 08fc34c92)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "execution": "remote",
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 2,
+ "scenarios": {
+  "desktop-test-edit": {
+   "what": "THE reference loop: one line inside a #[test] fn of the 118k-line UI crate, run its tests",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "samples": [
+    {
+     "id": "20261013-093914796-1440678111",
+     "wall": 6.088,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 5.284,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 92.447522,
+      "client_wall": 6.085854427,
+      "host_wall": 5.2836689949035645,
+      "toolchain": "jr-b7907f1fe8f7",
+      "target_state": "persistent remote target"
+     },
+     "cpu": 6.72,
+     "startup": 0.12,
+     "compile": 5.084,
+     "test_run": 0.004,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 0.48,
+     "foreign_rustc_before": 0,
+     "load_before": 5.83,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui (test)"
+    },
+    {
+     "id": "20261013-093920906-1440678992",
+     "wall": 6.12,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 5.308,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 93.134543,
+      "client_wall": 6.11649707,
+      "host_wall": 5.308173894882202,
+      "toolchain": "jr-b7907f1fe8f7",
+      "target_state": "persistent remote target"
+     },
+     "cpu": 8.44,
+     "startup": 0.117,
+     "compile": 5.11,
+     "test_run": 0.004,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 0.21,
+     "foreign_rustc_before": 0,
+     "load_before": 5.52,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui (test)"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 2,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 6.104,
+    "min": 6.088,
+    "max": 6.12,
+    "quiet_n": 2,
+    "quiet_median": 6.104,
+    "phases": {
+     "startup": 0.118,
+     "compile": 5.097,
+     "test_run": 0.004,
+     "cpu": 7.58,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 1.0
+   }
+  }
+ },
+ "finished": "2026-10-13T09:39:27-0700"
+}

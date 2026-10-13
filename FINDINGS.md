@@ -5465,3 +5465,40 @@ Local-only unpromoted compiler validation passed18 interface/link/load
 checks,12 test-filter checks and40 deterministic interface stress cases.
 Live ABI verification and actual887-unit Desktop warmup also passed. The
 benchmark excludes this cold warmup, never conflates cold build and reuse.
+
+
+## Hosted follow-up measurements and truthful reporting, 2026-10-13
+
+Exact commands, controlled comparisons and limitations are documented in
+`docs/hosted-speed-20261013.md`. The ten follow-up benchmark files record
+explicit opt-ins, deployed admission changes, restored parallel tests,
+detached-worker CPU reporting and frontend threading. All ordinary
+checks/tests/lints used hosted. The 10x stock-local target remains unmet.
+
+Backend3ff0c61 passed435 tests and deployed version
+2cccc5ee-149b-4666-84f0-8b8aa2855321. No billing/identity/quota changes.
+Eleven pinned no-op samples1.288->1.240s are within noise. Twenty-one
+idempotent admissions0.640->0.370s are not new-charge or compiler evidence,
+and after-tail2.783s prevents a clean latency claim. Both health endpoints200.
+
+Native Cargo pool eligibility and report repairs5c30aa5/4cf336e/198209d
+passed336 hosted tests. Real full-suite run20261013-092457071-1354392
+passed336 across7 binaries,0 compiled56fresh. Pinned five-sample test edit
+passes157 cases every time:3.324->2.971s, suite compare -11%, faster.
+No-op1.096->0.938s remains within noise. Filters and daemon remain opt-in:
+all7-sample comparisons are within noise and actual2/1/3/2 test transitions
+pass. The initial report-only change did not restore pooling by itself.
+
+Old daemon run20261013-091246820-1272766255 underreported CPU0.027s
+versus6.81s unit and8.03s observed process CPU. b70dbbc uses their maximum,
+not overlapping sum, and labels sampled lower bounds.337 hosted tests/lint
+pass, actual20261013-093920906-1440678992 reports8.44s sampled CPU.
+20261013-100133452-1575817 preserves0 compiled56fresh. Failed intermediate
+fixture expectations/compilation are retained, not hidden from evidence.
+
+Five-sample explicit1vs8 threads compare7.201->6.819s reference and
+2.962->2.840s body-check, both within noise, so defaults remain unchanged.
+Reference frontend2.345->2.311s barely changes. Timing run
+20261013-094425981-1461275918 identifies mono graph walk0.840s, macro
+expansion0.774s, dep-graph serialization0.717s, symbol partition0.613s and
+resolution0.505s. Nested spans must not be added together.
