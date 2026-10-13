@@ -15,7 +15,7 @@ use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct Agent {
     child: Child,
@@ -34,6 +34,57 @@ fn scratch(name: &str) -> PathBuf {
     d
 }
 
+// A concurrent test fork can briefly inherit the just-closed copy writer.
+// Linux rejects exec with ETXTBSY until that writer is closed in the child.
+// Retry only this setup condition, never a protocol/build failure.
+fn spawn_after_copy(command: &mut Command) -> std::io::Result<Child> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
+
+#[test]
+fn copied_executable_waits_for_writer_to_close() {
+    let dir = scratch("copy-writer");
+    let path = dir.join("justrust");
+    std::fs::copy(env!("CARGO_BIN_EXE_justrust"), &path).unwrap();
+    let writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let mut command = Command::new(&path);
+    command.arg("--version").stdout(Stdio::null());
+    assert_eq!(
+        command.spawn().unwrap_err().kind(),
+        std::io::ErrorKind::ExecutableFileBusy
+    );
+    let closer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(30));
+        drop(writer);
+    });
+    let result = spawn_after_copy(&mut command);
+    closer.join().unwrap();
+    assert!(result.unwrap().wait().unwrap().success());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn copied_executable_propagates_non_busy_spawn_error() {
+    let dir = scratch("copy-missing");
+    let mut command = Command::new(dir.join("missing"));
+    assert_eq!(
+        spawn_after_copy(&mut command).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 impl Agent {
     fn start(name: &str) -> Agent {
         Self::start_copy(name, false)
@@ -48,7 +99,8 @@ impl Agent {
         } else {
             PathBuf::from(env!("CARGO_BIN_EXE_justrust"))
         };
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg("__agent")
             .arg(dir.join("root"))
             .env("JUSTRUST_HOME", dir.join("home"))
@@ -65,9 +117,13 @@ impl Agent {
             .env_remove("JUSTRUST_REAL_RUSTC")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::null());
+        let mut child = if copy {
+            spawn_after_copy(&mut command)
+        } else {
+            command.spawn()
+        }
+        .unwrap();
         let mut w = BufWriter::new(child.stdin.take().unwrap());
         let mut r = BufReader::new(child.stdout.take().unwrap());
         write_frame(&mut w, &Msg::Hello { version: VERSION }, &[]).unwrap();
