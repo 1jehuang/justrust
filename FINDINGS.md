@@ -5317,6 +5317,44 @@ online, after its daily check becomes due, with a writable executable
 directory. This verifies rollout availability and real old-client update
 behavior, not that every customer's machine has already applied it.
 
+### 66f. Final whole-release acceptance and requirement traceability
+
+2026-10-13, 14:34-14:39 UTC: reran the published release's public paths
+in fresh isolated homes, then used the newly installed release binary on
+a clean public clone of the actual alpha.15 tag (`90e1c3d`), not the
+concurrently edited working tree. All checks below passed. Test support
+scripts only orchestrate the real clients, installer, GitHub artifacts
+and production endpoints; no stubbed service or synthetic source replaces
+the end-user path.
+
+| Requirement or boundary | Observed public behavior |
+|---|---|
+| Publish the complete release | GitHub latest is alpha.15; all five downloaded archive/checksum pairs match and contain the platform executable. Exact-tag CI `38412570868` is green on Linux, Intel Mac, arm64 Mac, Windows and MSRV. |
+| Offer the release to eligible clients | Fifteen production target/version combinations (five targets times alpha.13, alpha.14 and alpha.15) return enabled=true, the correct alpha.15 asset URLs, update=true for old versions and update=false for alpha.15. |
+| Upgrade prior auto-capable releases | Actual checksum-verified Linux alpha.12, alpha.13 and alpha.14 release binaries automatically become alpha.15 after ordinary public commands and detached background work, without manual update or a shortened interval. Telemetry is off throughout. |
+| Respect deliberate exclusions | Public update-off, both environment opt-outs, CI and remote-agent mode retain alpha.14 and do not check. A source-built alpha.14 only notifies and retains its executable. |
+| Allow deliberate re-enable | Public update-on on the isolated opted-out client starts the real background path and applies alpha.15. |
+| Preserve daily scheduling | An old release with a real not-yet-due persisted check schedule remains alpha.14; the schedule is unchanged and no applied receipt appears. |
+| Avoid repeated replacements/notices | The update notice appears once, not on the third command. Updating an already-current alpha.15 says up to date and leaves its executable checksum unchanged. |
+| Support symlink installations | Automatic update replaces the real target executable with alpha.15 while preserving the symlink. |
+| Handle non-writable installations safely | A real non-writable executable directory retains the old executable byte-for-byte, writes no success receipt and schedules a three-hour retry. Scratch permissions are restored afterwards. |
+| Reject invalid endpoint input | A malformed target receives HTTP 400 and invalid_request, not an offered download. |
+| Serve fresh installs | The actual public installer downloads, verifies and installs alpha.15 in a new isolated destination. |
+| Hosted check on the actual release project | `20261013-073555460-622843`: published client, pristine release-tag project, real authenticated hosted service, exit 0. |
+| Full hosted test/integration suite | `20261013-073607837-624831`: 326 passed, 0 failed, 2 ignored, exit 0, including the real project's CLI integration tests. |
+| Hosted all-target lint | `20261013-073627702-627878`: warning-free, exit 0. All three final clean-tag run summaries are exported. |
+
+Eligibility is a real limitation, not a server setting we can override:
+the updater first shipped in alpha.12 (commit `5445c16` is contained in
+alpha.12 and later tags, not earlier tags). Alpha.11 and older need the
+installer rerun. This is now explicit in the public release notes.
+Offline/inactive clients, deliberately opted-out/source-built clients,
+non-writable installations and not-yet-due daily checks cannot be claimed
+updated. We verified availability across all five targets and real Linux
+client application, plus the exact release commit's native Mac/Windows
+CI, not every customer's device. No additional runtime change or speedup
+claim was needed.
+
 ### 66g. Alpha.16: macOS clients install the Linux hosted agent from GitHub
 
 The published Mac client's first connection called `cargo install justrust
