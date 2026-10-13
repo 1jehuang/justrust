@@ -398,6 +398,10 @@ pub(crate) fn keyed_env(name: &str) -> bool {
     if matches!(
         name,
         "CARGO_MAKEFLAGS"
+            // Parallelism only. The hosted agent sets it to the machine's
+            // core count, which put every hosted key out of reach of the
+            // prebuilt store and of every other machine (FINDINGS 65).
+            | "CARGO_BUILD_JOBS"
             | "RUSTC_WRAPPER"
             | "RUSTC_WORKSPACE_WRAPPER"
             | "CARGO_TERM_VERBOSE"
@@ -1771,6 +1775,7 @@ mod tests {
     fn cargo_home_is_not_keyed() {
         assert!(!keyed_env("CARGO_HOME"));
         assert!(!keyed_env("CARGO_TARGET_DIR"));
+        assert!(!keyed_env("CARGO_BUILD_JOBS"));
         assert!(keyed_env("CARGO_PKG_NAME"));
         assert!(keyed_env("CARGO_ENCODED_RUSTFLAGS"));
     }

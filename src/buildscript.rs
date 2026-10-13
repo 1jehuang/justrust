@@ -127,6 +127,7 @@ fn keyed_env(name: &str) -> bool {
             | "RUSTDOC"
             | "CARGO"
             | "NUM_JOBS"
+            | "CARGO_BUILD_JOBS"
             | "JOBSERVER_FDS"
             // Set only by some callers, value a placeholder anyway (as in
             // depcache::keyed_env).
