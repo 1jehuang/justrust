@@ -5087,3 +5087,80 @@ Also seen: one wake (`justrust remote down` then `justrust check`) took 88 s,
 82 s of it sync. The machine came back on a new public IP, and the daemon
 re-pushed the client binary (`events.log`: patched/installed on the new
 address). Not yet explained beyond that.
+
+## 69. Hosted cache hit rate: what misses, and four fixes (fleet shapes, keep-going, binary patch, git seed) (2026-10-13)
+
+**Measured hit rates.** 217 hosted runs in `~/.justrust/runs` (Oct 11-12):
+81% of units fresh in the target dir. The dependency cache hit 2% (64 of
+2867) on Oct 11 and 52% (6041 of 11597, 1024 from the prebuilt store) on
+Oct 12, after FINDINGS 55/65. The localcache hit 4 of 1370 (expected:
+those crates are the ones being edited). Telemetry
+(`justrust-cloud/tools/usage.py`, now split by where the build ran) agrees:
+remote 47% depcache hit, local 37%.
+
+**Where the misses since FINDINGS 65 come from**, by dependency units
+compiled in hosted runs:
+1. Profiles and target sets the fleet never built: `build --release` of
+   Desktop 838 misses (1539 CPU-s, 20261012-175000702-4156431), `--profile
+   selfdev` of jcode 448 (20261012-215923969-1322939) and 623, `--tests`.
+   The fleet only built `check` and `test --no-run` in the dev profile.
+2. Desktop never published past `check`: the fleet image had no
+   `libxkbcommon-x11` (`mold: fatal: library not found: xkbcommon-x11`, so
+   link failed), its tests did not compile at HEAD, and cargo stops
+   scheduling at the first failed workspace crate.
+3. Keyed env leaking on the shared machine (FINDINGS 65d), fixed earlier.
+
+**Fixes (justrust-cloud 8d1fd5f.., 44ac5a5; fleet files uploaded to
+`s3://.../fleet/`, two fleet runs launched by hand):**
+- `workspaces.txt`: `check --all-targets`, `build --release` and
+  `--profile selfdev` (jcode) passes for jcode, jcode-desktop and justrust.
+- `run.sh`: `--keep-going` (`--no-fail-fast` for `test`, which rejects
+  `--keep-going`: the first run lost every `test --no-run` pass to that),
+  so a broken workspace crate no longer stops dependency units; the
+  hosted image's GL/xcb/xkbcommon-x11 packages.
+- Store: 7185 -> 10108 manifests after the first run
+  (`fleet/logs/20261013T054303Z.log`).
+
+Key coverage, fresh depcache and target on the hosted machine, store off so
+each shape lists every dependency key it needs, compared with the index
+before and after the run:
+
+| shape | dependency keys | in store before | after |
+|---|---:|---:|---:|
+| jcode `check --profile selfdev -p jcode-tui` | 608 | 0 | 529 |
+| jcode `build --release -p jcode-tui` | 609 | 0 | 526 |
+| jcode `check -p jcode-tui --all-targets` | 608 | 500 | 529 |
+| justrust `build --release` | 75 | 0 | 66 |
+
+Cold `check --profile selfdev -p jcode-tui` on the host (jobs 30,
+store-toolchain, fresh target and depcache, localcache and peer off),
+interleaved: store off 49.4, 42.0 s (575 misses); store fetch-all 38.4,
+37.0 s (529 prebuilt hits, 46 misses). Host runs 20261013-085127257-1748,
+-085217323-17947, -085256089-27698, -085338426-39277. Desktop shapes still
+fail to compile at its HEAD (a syntax error in `panel.rs:4088` upstream),
+but with `--keep-going` the dependencies before the failure get published.
+
+**Sync overhead, the other half of hosted wall.** Sync totalled 2271 s
+against 2714 s of server build wall (p50 3.5 s, p90 22.5 s, 66 runs over
+5 s). Two causes:
+- *Installing dev builds of justrust on the machine*: 77 installs, 1115 s
+  (`remote/events.log`), each an 11 MB rsync (3.7 MB compressed; rsync's
+  block delta matched only 1.3 of 11 MB of a relinked binary). Now
+  (b687ec7) the client keeps a copy of what it installed and sends a
+  `zstd --patch-from` (level 9, 0.2 s) against it, sha256-checked on both
+  ends, full upload as fallback: 1.8 MB for a typical change, 2.4 KB for
+  a rebuild with no code change. Verified on hosted: "patched in 1.1 s",
+  machine binary sha equal to the client's.
+- *First mirror of a repo with no mirrored relative*: jcode-website 320 s,
+  gear-perf 250 s, wt-go 174 s. FINDINGS 54 seeds only from a mirrored
+  worktree or clone. Now (e9e56e4) the machine also seeds from the
+  repo's public origin: a depth-1 fetch of HEAD (or the default branch),
+  then the usual `--checksum` rsync. Anonymous https only; a URL with
+  credentials is never sent. On hosted, ruff (11k files, 120 MB): bytes
+  over the uplink 15.2 MB -> 0.57 MB (seed 4.3 s on the machine); a fresh
+  rust-analyzer clone: "seeded from its git origin in 1.98 s", 0 files
+  sent.
+
+Left to another session: the prebuilt cost model's fixed 700 ms
+default (FINDINGS 67). A machine with no measured latency declines nearly
+every unit, so it never makes the request that would measure it.

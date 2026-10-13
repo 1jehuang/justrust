@@ -240,7 +240,7 @@ fn remember_installed(exe: &Path) {
 /// is ~1.8 MB against ~3.7 MB for the compressed full upload (rsync -z;
 /// rsync's block delta finds little in a relinked binary), which at a home
 /// uplink is the bulk of the 1115 s of installs measured on hosted
-/// (FINDINGS 68). `false` (caller uploads in full) when either side has no
+/// (FINDINGS 69). `false` (caller uploads in full) when either side has no
 /// zstd, there is no base, or the machine's binary is not the base.
 fn upload_patch(t: &Target) -> bool {
     if std::env::var("JUSTRUST_REMOTE_PATCH").as_deref() == Ok("0") {
