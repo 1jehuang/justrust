@@ -1,0 +1,172 @@
+{
+  "admission_diagnostics": {
+    "hosted-charge-batch-admission-after": {
+      "date": "2026-10-13T19:19:07.409714+00:00",
+      "discarded_warmups": 3,
+      "endpoint": "https://build.jcode.sh/v1/build/runs",
+      "max": 1.033902,
+      "median": 0.795976,
+      "min": 0.729623,
+      "operation": "idempotent admission of existing charged run, no build executed",
+      "run_id": "20261013-085629718-1176060",
+      "samples": [
+        0.807462,
+        0.783602,
+        0.74253,
+        0.811918,
+        0.777484,
+        0.804702,
+        0.798321,
+        0.729623,
+        0.814849,
+        0.789317,
+        0.797929,
+        0.795976,
+        0.756082,
+        0.803441,
+        0.801045,
+        0.768955,
+        0.77256,
+        1.033902,
+        0.780295,
+        0.799682,
+        0.784749
+      ]
+    },
+    "hosted-charge-batch-admission-rollback": {
+      "date": "2026-10-13T19:20:29.940502+00:00",
+      "discarded_warmups": 3,
+      "endpoint": "https://build.jcode.sh/v1/build/runs",
+      "max": 1.148204,
+      "median": 0.86002,
+      "min": 0.466584,
+      "operation": "idempotent admission of existing charged run, no build executed",
+      "run_id": "20261013-085629718-1176060",
+      "samples": [
+        0.800076,
+        1.022216,
+        0.92072,
+        0.816328,
+        0.829882,
+        0.93837,
+        1.148204,
+        1.093578,
+        0.895455,
+        0.897197,
+        0.911383,
+        0.86002,
+        0.934408,
+        1.081958,
+        0.792585,
+        0.802989,
+        0.782673,
+        0.725994,
+        0.773113,
+        0.831387,
+        0.466584
+      ]
+    },
+    "hosted-identity-admission-before": {
+      "date": "2026-10-13T19:14:48.968314+00:00",
+      "discarded_warmups": 3,
+      "endpoint": "https://build.jcode.sh/v1/build/runs",
+      "max": 1.272688,
+      "median": 0.270397,
+      "min": 0.244391,
+      "operation": "idempotent admission of existing charged run, no build executed",
+      "run_id": "20261013-085629718-1176060",
+      "samples": [
+        0.318756,
+        0.269447,
+        0.258789,
+        0.259662,
+        0.620868,
+        0.389595,
+        0.330587,
+        1.272688,
+        0.259051,
+        0.28365,
+        0.272885,
+        0.283593,
+        0.264562,
+        0.244391,
+        0.321809,
+        0.267832,
+        0.304869,
+        0.270397,
+        0.267244,
+        0.259577,
+        0.24692
+      ]
+    },
+    "hosted-placement-admission-after": {
+      "date": "2026-10-13T19:27:23.629243+00:00",
+      "discarded_warmups": 3,
+      "endpoint": "https://build.jcode.sh/v1/build/runs",
+      "max": 0.518667,
+      "median": 0.274922,
+      "min": 0.245552,
+      "operation": "idempotent admission of existing charged run, no build executed",
+      "run_id": "20261013-085629718-1176060",
+      "samples": [
+        0.253338,
+        0.274922,
+        0.518667,
+        0.256684,
+        0.269242,
+        0.29078,
+        0.290921,
+        0.286228,
+        0.315693,
+        0.268519,
+        0.245552,
+        0.43931,
+        0.329837,
+        0.271976,
+        0.28637,
+        0.339506,
+        0.2573,
+        0.251932,
+        0.271212,
+        0.312998,
+        0.259566
+      ]
+    }
+  },
+  "frozen_client_sha256": "0039ec242fa7b39bf05eb20cf35b9d968f17be51861df15a93a598d8e5a914ca",
+  "notes": [
+    "Initial batch comparison is confounded by placement. No isolated batch speedup claimed.",
+    "Repeat admission bypasses new billing batch, performs no build, creates no new charge.",
+    "Matched placement suite uses same96c8f5b billing source and08a77e8 frozen client."
+  ],
+  "observed_api_headers": {
+    "after": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 19:27:14 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=8M6h%2Fy%2Fz3D9pNIi9nd0j3aZskalVziZF%2F756MmQaFyOh4v%2F6K5UKiz8i5UbQY2Lp7VwnJmEPq4jqG%2Be6OFdNvNuhVTE2BKG2kBaqQVrHT9W%2BHUXxiG6igYa3aqSOCazG6vjDesOdx8R89ug%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a0bd912bc76807-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+    "before": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 19:23:45 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: remote-VIE\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=OjaeleBv27jJSp0xmP6O%2B%2B6zQytdJmSBNURdJ0Nc%2BZ6202DWLAWnV1irmJGW22rpIl2R%2FzeHn0rdJ0GpRfRdqfReK4tvOsnqqPh8c5hEpvGIuBFZZhx%2B1zBAp7WUAq15PPiINhuzOFeRS6Q%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a0b8788d51456e-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n"
+  },
+  "trial": {
+    "accepted": true,
+    "auth_quotas_pricing_unchanged": true,
+    "backend_tests_passed": 439,
+    "candidate_version": "b0d2a727-9cf0-4bef-ae66-dddec389686b",
+    "hosted_tests_passed": 347,
+    "measured_noop_seconds": [
+      1.37,
+      0.68
+    ],
+    "measured_reference_seconds": [
+      5.83,
+      5.16
+    ],
+    "observed_placement_after": "local-SJC",
+    "observed_placement_before": "remote-VIE",
+    "previous_version": "80e9ffbd-71af-4e51-95a2-f64908bf7240",
+    "region": "aws:us-west-1",
+    "target_10x_achieved": false,
+    "validation_ids": [
+      "20261013-122843725-2485537",
+      "20261013-122844340-2485613",
+      "20261013-122845620-2485666",
+      "20261013-122848384-2476255"
+    ]
+  }
+}

@@ -5577,3 +5577,19 @@ are actually remote on hosted, 56 fresh units, zero compiled.
 JR/M8 phase diagnostic115627127-2282562598: frontend1.539s, codegen0.890s,
 incremental0.560s, link0.177s. Profiling warmup115543316-2282562904 reported
 887 compiled units, so cache-safe help claim removed rather than assumed.
+
+## 2026-10-13: verified WNAM control-plane placement recovery
+
+- Actual subscription API placement was remote-VIE from SJC despite WNAM D1.
+  Old-version rollback stayed slow. Initial billing-batch comparison is
+  confounded, not an isolated batch speedup.
+- Same source/client, pinned seven samples: noop 1.37->0.68s (-50%, faster),
+  reference 5.83->5.16s (-12%, faster). Body 2.46->1.86s is within noise.
+  Official suite compare and all trial/rollback/placement files are preserved.
+- Backend dde1cef deployed b0d2a727, actual local-SJC under explicit US-west.
+  439 backend tests pass. Auth/quotas/pricing unchanged, fallback cancelled
+  after genuine hosted acceptance. No fleet/compiler-default change.
+- ETXTBSY setup flake fixed in 4292737. Actual 19 protocol tests, 347 hosted
+  tests and lint pass cleanly. Exact check 20261013-122843725-2485537,
+  protocol 20261013-122844340-2485613, full 20261013-122845620-2485666 and
+  lint 20261013-122848384-2476255 exported. 10x unmet, own host cost 73% higher.

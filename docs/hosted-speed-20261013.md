@@ -401,3 +401,61 @@ compiled units and 26.02 s. It was excluded, but this means the experiment
 must not be described as cache-neutral without further investigation.
 Benchmark help now requires warmup rather than claiming cache-safe behavior.
 No local prebuild or shadow-only test is presented as full-workspace 10x.
+
+## 2026-10-13: eliminate an observed transatlantic admission detour
+
+Actual subscription API health responses from SJC reported cf-placement
+remote-VIE despite its D1 database being in WNAM. The billing-batch trial
+initially regressed latency. Reverting to the old version did not recover it,
+and unchanged idempotent admission also slowed. The initial batch comparison
+is confounded, not proof that the SELECT-in-batch patch helped or hurt.
+
+Same billing source 96c8f5b, same frozen 08a77e8 client, same own M8azn host,
+nightly-2026-10-08, pinned sources, two warmups and seven measured samples:
+
+| workload | Smart Placement, actual VIE | US-west hint, actual SJC | suite compare |
+|---|---:|---:|---|
+| desktop-noop-test | 1.37 s | 0.68 s | faster, -50% |
+| desktop-body-check | 2.46 s | 1.86 s | within noise, one 3.80 s after outlier |
+| desktop-test-edit | 5.83 s | 5.16 s | faster, -12% |
+
+Compare hosted-placement-before-20261013.json and
+hosted-placement-after-20261013.json with bench/suite.py compare.
+Compiler medians barely changed. Noop samples compiled zero units;
+body/reference compiled one local unit with dependencies fresh. Each
+reference sample passed all three selected tests. After deployment, actual
+cf-placement local-SJC was observed, not merely a configured hint.
+
+Backend dde1cef changes placement to region = aws:us-west-1, deployed as
+b0d2a727-9cf0-4bef-ae66-dddec389686b. Database/auth/billing are near WNAM,
+not near the Virginia compute VM. Explicit US placement preserves the
+existing US provider-egress requirement instead of disabling placement and
+risking Asia geo-blocks. Existing Wrangler 4.107.0 validated the real schema
+and bundle. All 439 backend tests passed. Cloud worker, secrets, quota
+conditions, pricing, outbox, fleet default and compiler default were unchanged.
+The bounded trial timer was cancelled after genuine hosted acceptance.
+
+The initial transaction patch 96c8f5b appends the decision SELECT after all
+conditional charge/outbox writes inside one D1 batch, avoiding one separate
+call on new admission. Duplicates remain read-only. Regression tests cover
+exhausted admission and rollback of reservation, charge and outbox if the
+batched read fails. No isolated end-to-end batch speedup is claimed. Preserve
+all three confounded measurements: hosted-charge-batch-before-20261013.json,
+hosted-charge-batch-after-20261013.json and
+hosted-charge-batch-rollback-20261013.json.
+
+Parallel test run 20261013-121907418-2424911 exposed ETXTBSY during a copied
+executable's setup and passed on isolated retry, not a clean parallel pass.
+4292737 bounds retries to that setup condition only, for one second, with
+real held-writer and nonbusy-error tests. No protocol or build failure is
+retried. Actual 19 protocol tests, full 347 tests and warning-free hosted
+clippy then passed without isolation retry. Exact check, protocol, full-suite
+and lint IDs: 20261013-122843725-2485537, 20261013-122844340-2485613,
+20261013-122845620-2485666 and 20261013-122848384-2476255.
+Plain commands selected hosted execution, not local prebuild replay.
+
+hosted-control-plane-20261013.json records deployment identity, headers and
+raw idempotent admission diagnostics. Those retries create no new charge and
+execute no build, so they are not substitutes for full-loop measurements.
+**10x stock-local is not established.** The retained own M8 host's hourly
+infrastructure estimate remains 73% higher; the fleet default is unchanged.
