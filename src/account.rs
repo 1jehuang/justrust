@@ -459,26 +459,129 @@ pub fn logout() -> Result<()> {
     Ok(())
 }
 
+/// What `justrust upgrade --plan N` does for this account.
+#[derive(Debug, PartialEq)]
+enum UpgradeAction {
+    /// No subscription: Stripe checkout (the free first month when eligible).
+    Checkout { trial: bool },
+    /// Subscribed: switch the existing subscription to `to`.
+    ChangePlan { from: u32, to: u32 },
+    /// Nothing to do, with the reason to print.
+    Explain(String),
+}
+
+/// `requested` is `--plan` when given. Subscribers without one move up to the
+/// next tier ($20 -> $50 -> $100 -> $200 -> $500 -> $1,000).
+fn upgrade_action(
+    plan: Option<&hosted::Plan>,
+    next_step: Option<&str>,
+    requested: Option<u32>,
+) -> UpgradeAction {
+    const TIERS: [u32; 6] = [20, 50, 100, 200, 500, 1000];
+    let Some(p) = plan.filter(|p| p.subscribed) else {
+        let want = requested.unwrap_or(20);
+        return UpgradeAction::Checkout {
+            trial: want == 20 && next_step == Some("start_trial"),
+        };
+    };
+    let max = p.max_plan_usd.unwrap_or(1000);
+    let cur = p.plan_usd.unwrap_or(0);
+    if p.managed {
+        return UpgradeAction::Explain(format!(
+            "nothing to upgrade: this account's plan is managed by jcode (complimentary or legacy){}, so it is not changed here. Remote builds are already on.",
+            if cur > 0 {
+                format!(", equivalent to ${cur}/month")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    let to = match requested {
+        Some(r) => r,
+        None => match TIERS.iter().copied().find(|t| *t > cur) {
+            Some(t) => t,
+            None => {
+                return UpgradeAction::Explain(format!(
+                    "nothing to upgrade: you are on the ${cur}/month plan, the highest there is (${max})."
+                ));
+            }
+        },
+    };
+    if to == cur {
+        return UpgradeAction::Explain(format!(
+            "you are already on the ${cur}/month plan. Pick another with `justrust upgrade --plan N` (multiples of $10, $20 to ${max})."
+        ));
+    }
+    UpgradeAction::ChangePlan { from: cur, to }
+}
+
 /// `justrust upgrade [--plan N] [--no-wait]`.
-pub fn upgrade(plan: u32, no_wait: bool) -> Result<()> {
+pub fn upgrade(requested: Option<u32>, no_wait: bool) -> Result<()> {
     let c = hosted::creds()?;
-    // No card yet and the free first month is open ($20 plan only): start it.
-    let trial = plan == 20
-        && hosted::me(&c)
-            .ok()
-            .and_then(|m| m.builds)
-            .and_then(|b| b.next_step)
-            .as_deref()
-            == Some("start_trial");
+    let me = hosted::me(&c).ok();
+    let next_step = me
+        .as_ref()
+        .and_then(|m| m.builds.as_ref())
+        .and_then(|b| b.next_step.clone());
+    match upgrade_action(
+        me.as_ref().and_then(|m| m.plan.as_ref()),
+        next_step.as_deref(),
+        requested,
+    ) {
+        UpgradeAction::Explain(msg) => {
+            println!("justrust: {msg}");
+            Ok(())
+        }
+        UpgradeAction::ChangePlan { from, to } => change_plan(&c, from, to),
+        UpgradeAction::Checkout { trial } => checkout(&c, requested.unwrap_or(20), trial, no_wait),
+    }
+}
+
+/// Switch an existing subscription (`POST billing/plan`). No new checkout:
+/// the card on file is charged the new plan from the next monthly invoice.
+fn change_plan(c: &Creds, from: u32, to: u32) -> Result<()> {
+    let r = hosted::request(c, "POST", "billing/plan", Some(&json!({ "plan_usd": to })))?;
+    if !(200..300).contains(&r.code) {
+        let e = hosted::api_error(&r);
+        bail!(
+            "{e}\njustrust: the plan change could not be made here. Change it at https://jcode.sh/account"
+        );
+    }
+    let new = r.body["plan_usd"].as_u64().unwrap_or(to as u64);
+    let limit = r.body["monthly_limit_usd"]
+        .as_f64()
+        .map(|l| format!(", usage limit now ${l:.0}"))
+        .unwrap_or_default();
+    println!(
+        "justrust: plan changed ${from}/month -> ${new}/month ({} builds a month{limit}). It is billed from your next monthly payment, on the card already on file.",
+        thousands(new / 10 * 2500)
+    );
+    Ok(())
+}
+
+/// 5000 -> "5,000".
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn checkout(c: &Creds, plan: u32, trial: bool, no_wait: bool) -> Result<()> {
     let mut r = hosted::request(
-        &c,
+        c,
         "POST",
         "billing/subscribe",
         Some(&checkout_body(plan, trial)),
     )?;
     if trial && r.code == 409 && r.body["error"]["code"].as_str() == Some("trial_used") {
         r = hosted::request(
-            &c,
+            c,
             "POST",
             "billing/subscribe",
             Some(&checkout_body(plan, false)),
@@ -513,7 +616,7 @@ pub fn upgrade(plan: u32, no_wait: bool) -> Result<()> {
         );
         return Ok(());
     }
-    let b = wait_can_build(&c, UPGRADE_TIMEOUT, Duration::from_secs(5))?;
+    let b = wait_can_build(c, UPGRADE_TIMEOUT, Duration::from_secs(5))?;
     println!("ready: {}", b.describe());
     Ok(())
 }
@@ -703,6 +806,59 @@ mod tests {
             strip_keys(&new),
             "# jcode\nJCODE_API_BASE=http://x\nOTHER=1\n"
         );
+    }
+
+    #[test]
+    fn upgrade_switches_plans_for_subscribers_and_explains_otherwise() {
+        use hosted::Plan;
+        let sub = |usd, managed| Plan {
+            subscribed: true,
+            plan_usd: Some(usd),
+            max_plan_usd: Some(1000),
+            managed,
+            trialing: false,
+        };
+        // Not subscribed: checkout, the free month when eligible.
+        assert_eq!(
+            upgrade_action(None, Some("start_trial"), None),
+            UpgradeAction::Checkout { trial: true }
+        );
+        assert_eq!(
+            upgrade_action(Some(&Plan::default()), Some("subscribe"), Some(50)),
+            UpgradeAction::Checkout { trial: false }
+        );
+        // Subscribed: next tier, or the requested plan, via a plan change.
+        assert_eq!(
+            upgrade_action(Some(&sub(20, false)), None, None),
+            UpgradeAction::ChangePlan { from: 20, to: 50 }
+        );
+        assert_eq!(
+            upgrade_action(Some(&sub(20, false)), None, Some(200)),
+            UpgradeAction::ChangePlan { from: 20, to: 200 }
+        );
+        assert_eq!(
+            upgrade_action(Some(&sub(500, false)), None, Some(100)),
+            UpgradeAction::ChangePlan { from: 500, to: 100 }
+        );
+        // Top tier, same plan, or a managed (complimentary) plan: say so.
+        let UpgradeAction::Explain(top) = upgrade_action(Some(&sub(1000, false)), None, None)
+        else {
+            panic!()
+        };
+        assert!(top.contains("highest"), "{top}");
+        let UpgradeAction::Explain(same) = upgrade_action(Some(&sub(50, false)), None, Some(50))
+        else {
+            panic!()
+        };
+        assert!(same.contains("already on the $50/month plan"), "{same}");
+        let UpgradeAction::Explain(comp) = upgrade_action(Some(&sub(1000, true)), None, None)
+        else {
+            panic!()
+        };
+        assert!(comp.contains("managed by jcode"), "{comp}");
+        assert_eq!(thousands(5000), "5,000");
+        assert_eq!(thousands(250000), "250,000");
+        assert_eq!(thousands(500), "500");
     }
 
     #[test]

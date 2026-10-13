@@ -366,6 +366,25 @@ pub struct Me {
     pub build_hosts: bool,
     #[serde(default)]
     pub builds: Option<Builds>,
+    /// The account's plan (`/me` `plan`); `None` from an older API.
+    #[serde(default)]
+    pub plan: Option<Plan>,
+}
+
+/// The `plan` object of /me.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Plan {
+    #[serde(default)]
+    pub subscribed: bool,
+    #[serde(default)]
+    pub plan_usd: Option<u32>,
+    #[serde(default)]
+    pub max_plan_usd: Option<u32>,
+    /// Complimentary or legacy: not changeable self-serve.
+    #[serde(default)]
+    pub managed: bool,
+    #[serde(default)]
+    pub trialing: bool,
 }
 
 /// The `builds` object of /me and of build fleet responses.
@@ -441,6 +460,10 @@ pub fn me(c: &Creds) -> Result<Me> {
                 .unwrap_or(false)
             || b["builds"].is_object(),
         builds: Builds::from(&b["builds"]),
+        plan: b["plan"]
+            .is_object()
+            .then(|| serde_json::from_value(b["plan"].clone()).ok())
+            .flatten(),
     })
 }
 

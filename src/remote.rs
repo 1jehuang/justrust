@@ -1577,6 +1577,7 @@ mod tests {
                     status: Some("active".into()),
                     build_hosts: true,
                     builds: None,
+                    plan: None,
                 }),
                 hours_left: Some(12.5),
                 connected: true,
