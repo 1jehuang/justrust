@@ -5047,3 +5047,43 @@ bedrock version. Its rmeta is 20.9 MB, and the rlib bundle 118 MB, which is
 over the 95 MB bundle cap, so `build` shapes of bedrock could never be
 served anyway. Options: build the fleet from more than one recent commit,
 or raise the cap for the few crates on the cold critical path. Not done here.
+
+## 68. Jcode account-router validation: oversized project crates (2026-10-13)
+
+Targeted account-router validation in a clean Jcode snapshot continued to
+recompile large project crates before running small test selections:
+
+| Run | Unit | Approximate source size | Measured compile time |
+|---|---|---:|---:|
+| `20261013-010030888-2352953` | `jcode_base` test | 135k lines | 10.45 s |
+| Same run | `jcode_base` library | 135k lines | 5.90 s |
+| `20261013-010255285-2372233` | `jcode_tui` test | 225k lines | 22.40 s |
+| Same run | `jcode_app_core` | 164k lines | 14.46 s |
+| Check run, prefix `20261013-010231444` | `jcode_tui` test | 225k lines | 7.85 s |
+| Same check run | `jcode_tui` library | 225k lines | 3.26 s |
+| Same check run | `jcode_app_core` | 164k lines | 6.94 s |
+
+The targeted TUI test run compiled a binary containing 2,580 tests to execute
+one regression. Test filtering reduced execution, not the compilation unit.
+These are observed per-unit compile times, not wall-time sums or a measured
+speedup from a proposed fix. Smaller project-owned compilation/test boundaries
+are a potential follow-up, but no crate restructuring or justrust behavior
+change was made during this task.
+
+### 66b. Idle stop observed in production
+
+After the deploy, the cron stopped the hosted machine at 06:00:05 UTC, 15 min
+after its last activity (D1 `last_active_at` age 898 s at 05:59:34, `stopped`
+with "User initiated" at 06:00:27). Metering stopped with it and resumed at
+07:38:24, when a real build (`check -p jcode-provider-anthropic-runtime
+--tests`) woke it: 98 min of machine time not billed. Before this change the
+same host ran 36-88 min past every last run.
+
+Since the deploy (05:14 to 08:49): 1.66 machine-hours for 0.25 build-hours
+over 38 runs, **15% utilization, was 7%** (that includes this session's own
+test runs and the 2-hour gap, so it is an early number).
+
+Also seen: one wake (`justrust remote down` then `justrust check`) took 88 s,
+82 s of it sync. The machine came back on a new public IP, and the daemon
+re-pushed the client binary (`events.log`: patched/installed on the new
+address). Not yet explained beyond that.
