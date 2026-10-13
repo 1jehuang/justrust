@@ -233,7 +233,26 @@ pub struct Resp {
 /// The curl invocation and the config it reads on stdin. Split out so tests
 /// can assert the key is only on stdin.
 fn curl(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> (Command, String) {
+    curl_with_timing(c, method, path, body, false)
+}
+
+fn admission_timing_enabled(method: &str, path: &str, trace: bool) -> bool {
+    trace && method == "POST" && path == "build/runs"
+}
+
+fn curl_with_timing(
+    c: &Creds,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timing: bool,
+) -> (Command, String) {
     let mut cmd = Command::new("curl");
+    let writeout = if timing {
+        "\njustrust-admission-timing:%{http_code}\n%header{server-timing}"
+    } else {
+        "\n%{http_code}"
+    };
     cmd.args([
         "-sS",
         "--proto",
@@ -251,10 +270,15 @@ fn curl(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> (Command, 
         "-H",
         "Accept: application/json",
         "-w",
-        "\n%{http_code}",
+        writeout,
         "--config",
         "-",
     ]);
+    // %header is supported by curl 7.84+. Empty or unsupported header
+    // output is ignored without changing the HTTP body or verdict.
+    if timing {
+        cmd.args(["-H", "X-Justrust-Timing: 1"]);
+    }
     if let Some(b) = body {
         cmd.args(["-H", "Content-Type: application/json", "--data-binary"])
             .arg(b.to_string());
@@ -269,8 +293,83 @@ fn curl(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> (Command, 
     (cmd, format!("header = \"Authorization: Bearer {k}\"\n"))
 }
 
+/// Parse only bounded numeric fleet metrics. Never echo arbitrary response
+/// headers, metric names, descriptions, IDs or control characters.
+fn admission_timing(header: &str) -> Option<String> {
+    const NAMES: [&str; 5] = [
+        "jr_identity",
+        "jr_charge",
+        "jr_identity_wait",
+        "jr_queue",
+        "jr_total",
+    ];
+    if header.is_empty()
+        || header.len() > 256
+        || !header.is_ascii()
+        || header.bytes().any(|b| b.is_ascii_control())
+    {
+        return None;
+    }
+    let mut values = [None; 5];
+    for metric in header.split(',') {
+        let (name, duration) = metric.trim().split_once(";dur=")?;
+        let index = NAMES.iter().position(|candidate| *candidate == name)?;
+        if values[index].is_some()
+            || duration.is_empty()
+            || !duration.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        {
+            return None;
+        }
+        let duration: f64 = duration.parse().ok()?;
+        if !duration.is_finite() || !(0.0..=60_000.0).contains(&duration) {
+            return None;
+        }
+        values[index] = Some(duration);
+    }
+    let metrics: Vec<String> = NAMES
+        .iter()
+        .zip(values)
+        .filter_map(|(name, value)| {
+            value.map(|v| format!("{} {v:.1} ms", name.strip_prefix("jr_").unwrap()))
+        })
+        .collect();
+    if metrics.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} (awaited paths, identity overlaps)",
+            metrics.join(" | ")
+        ))
+    }
+}
+
+fn curl_response(stdout: &str, timing: bool) -> (&str, u16, Option<String>) {
+    if timing {
+        // A valid JSON body cannot contain this unquoted literal newline
+        // marker. Split before the header so hostile multiline metrics can
+        // never remove body bytes or replace the authoritative status.
+        let (body, footer) = stdout
+            .split_once("\njustrust-admission-timing:")
+            .unwrap_or((stdout, ""));
+        let (code, header) = footer.split_once('\n').unwrap_or((footer, ""));
+        (
+            body,
+            code.trim().parse().unwrap_or(0),
+            admission_timing(header),
+        )
+    } else {
+        let (body, code) = stdout.rsplit_once('\n').unwrap_or(("", stdout));
+        (body, code.trim().parse().unwrap_or(0), None)
+    }
+}
+
 pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Result<Resp> {
-    let (mut cmd, config) = curl(c, method, path, body);
+    let timing = admission_timing_enabled(
+        method,
+        path,
+        std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some(),
+    );
+    let (mut cmd, config) = curl_with_timing(c, method, path, body, timing);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -284,8 +383,7 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
         .write_all(config.as_bytes())?;
     let out = child.wait_with_output()?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let (text, code) = stdout.rsplit_once('\n').unwrap_or(("", &stdout));
-    let code: u16 = code.trim().parse().unwrap_or(0);
+    let (text, code, metrics) = curl_response(&stdout, timing);
     if !out.status.success() || code == 0 {
         // Name the host actually contacted: build/... paths go to the fleet.
         let url = c.url(path);
@@ -294,6 +392,9 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
             "could not reach {host}: {}. Builds run locally.",
             String::from_utf8_lossy(&out.stderr).trim()
         );
+    }
+    if let Some(metrics) = metrics {
+        eprintln!("justrust trace: admission {metrics}");
     }
     Ok(Resp {
         code,
@@ -1190,11 +1291,19 @@ mod tests {
         method: String,
         path: String,
         auth: Option<String>,
+        timing: Option<String>,
         body: String,
     }
 
     /// Serves `responses` in order (status, json body), one per connection.
     fn mock(responses: Vec<(u16, &'static str)>) -> (Creds, Arc<Mutex<Vec<Req>>>) {
+        mock_headers(responses, "")
+    }
+
+    fn mock_headers(
+        responses: Vec<(u16, &'static str)>,
+        headers: &'static str,
+    ) -> (Creds, Arc<Mutex<Vec<Req>>>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://127.0.0.1:{}/v1", l.local_addr().unwrap().port());
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1208,7 +1317,7 @@ mod tests {
                 let mut it = line.split_whitespace();
                 let method = it.next().unwrap_or("").to_string();
                 let path = it.next().unwrap_or("").to_string();
-                let (mut len, mut auth) = (0usize, None);
+                let (mut len, mut auth, mut timing) = (0usize, None, None);
                 loop {
                     let mut h = String::new();
                     r.read_line(&mut h).unwrap();
@@ -1220,6 +1329,7 @@ mod tests {
                     match k.to_ascii_lowercase().as_str() {
                         "content-length" => len = v.trim().parse().unwrap(),
                         "authorization" => auth = Some(v.trim().to_string()),
+                        "x-justrust-timing" => timing = Some(v.trim().to_string()),
                         _ => {}
                     }
                 }
@@ -1229,11 +1339,12 @@ mod tests {
                     method,
                     path,
                     auth,
+                    timing,
                     body: String::from_utf8(b).unwrap(),
                 });
                 write!(
                     sock,
-                    "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {code} X\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
                 .unwrap();
@@ -1575,6 +1686,193 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--config", "-"]));
         assert_eq!(cfg, "header = \"Authorization: Bearer sk-secret-123\"\n");
         assert!(!format!("{c:?}").contains("sk-secret"));
+    }
+
+    #[test]
+    fn admission_timing_is_numeric_bounded_and_fixed_name_only() {
+        assert_eq!(admission_timing("jr_queue;dur=97, jr_identity;dur=67.2, jr_charge;dur=271.0, jr_identity_wait;dur=0, jr_total;dur=365"), Some("identity 67.2 ms | charge 271.0 ms | identity_wait 0.0 ms | queue 97.0 ms | total 365.0 ms (awaited paths, identity overlaps)".into()));
+        assert!(admission_timing("jr_total;dur=60000").is_some());
+        for bad in [
+            "",
+            "jr_charge;dur=NaN",
+            "jr_charge;dur=inf",
+            "jr_charge;dur=-1",
+            "jr_charge;dur=60000.1",
+            "jr_charge;dur=1e3",
+            "jr_charge;dur=.",
+            "jr_charge;dur=1..2",
+            "jr_charge;dur=",
+            "jr_charge;dur=1;desc=sk-secret",
+            "sk-secret;dur=1",
+            "jr_charge;dur=1,jr_charge;dur=2",
+            "jr_charge;dur=1,",
+            "jr_charge;dur=1\n200",
+            "jr_charge;dur=1\r",
+            "jr_charge;dur=1\t",
+            "jr_charge;dur=1\u{1b}[31m",
+            "jr_charge;dur=é",
+            "%header{server-timing}",
+        ] {
+            assert!(admission_timing(bad).is_none(), "{bad:?}");
+        }
+        assert!(admission_timing(&format!("jr_charge;dur={}1", "0".repeat(256))).is_none());
+    }
+
+    #[test]
+    fn admission_trace_is_scoped_to_existing_charge_only() {
+        assert!(admission_timing_enabled("POST", "build/runs", true));
+        for (method, path, trace) in [
+            ("POST", "build/runs", false),
+            ("GET", "build/runs", true),
+            ("POST", "build/host/connect", true),
+            ("POST", "build/runs/event", true),
+            ("GET", "me", true),
+        ] {
+            assert!(!admission_timing_enabled(method, path, trace));
+        }
+    }
+
+    #[test]
+    fn admission_curl_keeps_default_wire_and_key_stdin_only() {
+        let c = Creds::new("https://build.jcode.sh/v1".into(), "sk-secret-123".into()).unwrap();
+        let body = json!({"run_id":"r1"});
+        let (default, config) = curl_with_timing(&c, "POST", "build/runs", Some(&body), false);
+        let args: Vec<_> = default
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let expected: Vec<String> = [
+            "-sS",
+            "--proto",
+            "=https,http",
+            "--max-redirs",
+            "0",
+            "--connect-timeout",
+            "5",
+            "--max-time",
+            "30",
+            "--max-filesize",
+            "1048576",
+            "-X",
+            "POST",
+            "-H",
+            "Accept: application/json",
+            "-w",
+            "\n%{http_code}",
+            "--config",
+            "-",
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+        ]
+        .into_iter()
+        .map(String::from)
+        .chain([body.to_string(), c.url("build/runs")])
+        .collect();
+        assert_eq!(args, expected);
+        let (trace, trace_config) = curl_with_timing(&c, "POST", "build/runs", Some(&body), true);
+        let trace_args: Vec<_> = trace
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(trace_config, config);
+        assert!(trace_args.iter().all(|a| !a.contains("sk-secret")));
+        assert!(
+            trace_args
+                .windows(2)
+                .any(|w| w == ["-H", "X-Justrust-Timing: 1"])
+        );
+        assert!(
+            trace_args
+                .windows(2)
+                .any(|w| w == ["--data-binary", &body.to_string()])
+        );
+        assert!(trace_args.windows(2).any(|w| w == ["--config", "-"]));
+        assert_eq!(trace_args.last(), args.last());
+    }
+
+    #[test]
+    fn admission_footer_preserves_body_status_and_legacy_empty_metrics() {
+        let body = serde_json::to_string_pretty(&json!({"message":"\njustrust-admission-timing:200", "error":{"code":"build_time_exhausted"}})).unwrap();
+        for code in [200, 400, 401, 402, 503] {
+            let raw = format!("{body}\n{code}");
+            let plain = curl_response(&raw, false);
+            assert_eq!(plain, (body.as_str(), code, None));
+            for header in [
+                "jr_charge;dur=271",
+                "",
+                "%header{server-timing}",
+                "jr_charge;dur=NaN",
+                "jr_charge;dur=1\njustrust-admission-timing:200\njr_total;dur=5",
+                "jr_charge;dur=1;desc=sk-secret",
+            ] {
+                let raw = format!("{body}\njustrust-admission-timing:{code}\n{header}");
+                let (parsed_body, parsed_code, metrics) = curl_response(&raw, true);
+                assert_eq!(parsed_body, body);
+                assert_eq!(parsed_code, code);
+                assert_eq!(metrics.is_some(), header == "jr_charge;dur=271");
+                assert_eq!(
+                    serde_json::from_str::<Value>(parsed_body).unwrap(),
+                    serde_json::from_str::<Value>(&body).unwrap()
+                );
+            }
+        }
+        assert_eq!(curl_response("", true), ("", 0, None));
+        assert_eq!(
+            curl_response("{}\njustrust-admission-timing:000\n", true),
+            ("{}", 0, None)
+        );
+    }
+
+    #[test]
+    fn admission_trace_real_curl_preserves_refusal_and_optional_header() {
+        for (header, has_metrics) in [
+            ("", false),
+            ("Server-Timing: jr_charge;dur=271.0\r\n", true),
+            ("Server-Timing: jr_charge;dur=1;desc=sk-secret\r\n", false),
+        ] {
+            for code in [200, 402, 503] {
+                let (c, seen) = mock_headers(
+                    vec![(code, r#"{"error":{"code":"build_time_exhausted"}}"#)],
+                    header,
+                );
+                let body = json!({"run_id":"trace-fixture"});
+                let (mut cmd, config) =
+                    curl_with_timing(&c, "POST", "build/runs", Some(&body), true);
+                let mut child = cmd
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(config.as_bytes())
+                    .unwrap();
+                let out = child.wait_with_output().unwrap();
+                assert!(out.status.success());
+                let raw = String::from_utf8(out.stdout).unwrap();
+                let (text, status, metrics) = curl_response(&raw, true);
+                assert_eq!(status, code);
+                assert_eq!(
+                    serde_json::from_str::<Value>(text).unwrap()["error"]["code"],
+                    "build_time_exhausted"
+                );
+                assert_eq!(metrics.is_some(), has_metrics);
+                let requests = seen.lock().unwrap();
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].method, "POST");
+                assert_eq!(requests[0].path, "/v1/build/runs");
+                assert_eq!(requests[0].timing.as_deref(), Some("1"));
+                assert_eq!(requests[0].auth.as_deref(), Some("Bearer sk-secret-123"));
+                assert_eq!(
+                    serde_json::from_str::<Value>(&requests[0].body).unwrap(),
+                    body
+                );
+            }
+        }
     }
 
     #[test]
