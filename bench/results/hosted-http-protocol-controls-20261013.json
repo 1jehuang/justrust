@@ -1,0 +1,638 @@
+{
+  "binary_sha256": "a89c983da61666c32a3d4ea2f1dad5a790ef56277b0333709de0451cc8966891",
+  "decision": "retain curl defaults, both comparisons within noise",
+  "epochs": {
+    "h1-after": {
+      "measured_ingress_counts": {
+        "PDX": 4,
+        "SJC": 3
+      },
+      "measured_timing_median_ms": {
+        "dns": 17.744,
+        "http_total": 439.125,
+        "jr_charge": 229,
+        "jr_identity": 43,
+        "jr_identity_wait": 0,
+        "jr_queue": 69,
+        "jr_total": 298,
+        "response_wait": 349.794,
+        "tcp": 29.147,
+        "tls": 35.769
+      },
+      "requests": [
+        {
+          "http_status": 200,
+          "id": "20261013-150214114-3417368840",
+          "ingress": "PDX",
+          "measured": false,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 19.442,
+            "http_total": 482.331,
+            "jr_charge": 222,
+            "jr_identity": 43,
+            "jr_identity_wait": 0,
+            "jr_queue": 83,
+            "jr_total": 305,
+            "response_wait": 384.894,
+            "tcp": 30.499,
+            "tls": 47.439
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150214997-3417368537",
+          "ingress": "PDX",
+          "measured": false,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 19.027,
+            "http_total": 447.588,
+            "jr_charge": 223,
+            "jr_identity": 40,
+            "jr_identity_wait": 0,
+            "jr_queue": 75,
+            "jr_total": 298,
+            "response_wait": 349.959,
+            "tcp": 30.035,
+            "tls": 48.457
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150215850-3417368732",
+          "ingress": "SJC",
+          "measured": true,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 16.128,
+            "http_total": 380.692,
+            "jr_charge": 232,
+            "jr_identity": 28,
+            "jr_identity_wait": 0,
+            "jr_queue": 57,
+            "jr_total": 289,
+            "response_wait": 327.825,
+            "tcp": 10.323,
+            "tls": 26.352
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150216609-3417368623",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 20.884,
+            "http_total": 479.633,
+            "jr_charge": 239,
+            "jr_identity": 43,
+            "jr_identity_wait": 0,
+            "jr_queue": 81,
+            "jr_total": 320,
+            "response_wait": 381.566,
+            "tcp": 35.869,
+            "tls": 41.228
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150217476-3417368988",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 20.197,
+            "http_total": 439.125,
+            "jr_charge": 231,
+            "jr_identity": 43,
+            "jr_identity_wait": 0,
+            "jr_queue": 70,
+            "jr_total": 301,
+            "response_wait": 349.794,
+            "tcp": 32.382,
+            "tls": 36.673
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150218336-3417368304",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 17.744,
+            "http_total": 659.325,
+            "jr_charge": 221,
+            "jr_identity": 390,
+            "jr_identity_wait": 169,
+            "jr_queue": 76,
+            "jr_total": 466,
+            "response_wait": 560.198,
+            "tcp": 37.53,
+            "tls": 43.793
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150219406-3417368997",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 16.083,
+            "http_total": 465.685,
+            "jr_charge": 229,
+            "jr_identity": 56,
+            "jr_identity_wait": 0,
+            "jr_queue": 69,
+            "jr_total": 298,
+            "response_wait": 384.597,
+            "tcp": 29.147,
+            "tls": 35.769
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150220303-3417368995",
+          "ingress": "SJC",
+          "measured": true,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 12.942,
+            "http_total": 368.106,
+            "jr_charge": 207,
+            "jr_identity": 25,
+            "jr_identity_wait": 0,
+            "jr_queue": 53,
+            "jr_total": 260,
+            "response_wait": 306.141,
+            "tcp": 18.374,
+            "tls": 30.585
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150221047-3417368119",
+          "ingress": "SJC",
+          "measured": true,
+          "protocol": "1.1",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 22.907,
+            "http_total": 368.935,
+            "jr_charge": 209,
+            "jr_identity": 24,
+            "jr_identity_wait": 0,
+            "jr_queue": 58,
+            "jr_total": 267,
+            "response_wait": 306.225,
+            "tcp": 13.523,
+            "tls": 26.202
+          }
+        }
+      ],
+      "wall_median_seconds": 0.832
+    },
+    "h2-before": {
+      "measured_ingress_counts": {
+        "PDX": 7
+      },
+      "measured_timing_median_ms": {
+        "dns": 22.184,
+        "http_total": 574.375,
+        "jr_charge": 247,
+        "jr_identity": 45,
+        "jr_identity_wait": 0,
+        "jr_queue": 74,
+        "jr_total": 318,
+        "response_wait": 399.017,
+        "tcp": 39.278,
+        "tls": 41.667
+      },
+      "requests": [
+        {
+          "http_status": 200,
+          "id": "20261013-150156060-3415220335",
+          "ingress": "PDX",
+          "measured": false,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 19.576,
+            "http_total": 520.914,
+            "jr_charge": 250,
+            "jr_identity": 293,
+            "jr_identity_wait": 43,
+            "jr_queue": 76,
+            "jr_total": 369,
+            "response_wait": 428.562,
+            "tcp": 30.072,
+            "tls": 42.194
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150205697-3415220913",
+          "ingress": "PDX",
+          "measured": false,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 34.856,
+            "http_total": 575.661,
+            "jr_charge": 227,
+            "jr_identity": 66,
+            "jr_identity_wait": 0,
+            "jr_queue": 74,
+            "jr_total": 301,
+            "response_wait": 355.632,
+            "tcp": 143.53,
+            "tls": 41.284
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150206600-3415220252",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 115.804,
+            "http_total": 1119.416,
+            "jr_charge": 589,
+            "jr_identity": 45,
+            "jr_identity_wait": 0,
+            "jr_queue": 71,
+            "jr_total": 660,
+            "response_wait": 819.627,
+            "tcp": 29.836,
+            "tls": 154.039
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150208172-3415220929",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 21.557,
+            "http_total": 592.148,
+            "jr_charge": 248,
+            "jr_identity": 49,
+            "jr_identity_wait": 0,
+            "jr_queue": 74,
+            "jr_total": 322,
+            "response_wait": 399.017,
+            "tcp": 127.613,
+            "tls": 43.537
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150209194-3415220864",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 23.702,
+            "http_total": 579.182,
+            "jr_charge": 247,
+            "jr_identity": 43,
+            "jr_identity_wait": 0,
+            "jr_queue": 71,
+            "jr_total": 318,
+            "response_wait": 374.202,
+            "tcp": 139.466,
+            "tls": 41.667
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150210193-3415220677",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 44.463,
+            "http_total": 532.912,
+            "jr_charge": 232,
+            "jr_identity": 39,
+            "jr_identity_wait": 0,
+            "jr_queue": 76,
+            "jr_total": 308,
+            "response_wait": 374.611,
+            "tcp": 67.017,
+            "tls": 46.669
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150211156-3415220125",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 16.241,
+            "http_total": 516.305,
+            "jr_charge": 247,
+            "jr_identity": 61,
+            "jr_identity_wait": 0,
+            "jr_queue": 79,
+            "jr_total": 326,
+            "response_wait": 425.576,
+            "tcp": 34.177,
+            "tls": 40.219
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150212070-3415220519",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 20.695,
+            "http_total": 489.063,
+            "jr_charge": 221,
+            "jr_identity": 53,
+            "jr_identity_wait": 0,
+            "jr_queue": 75,
+            "jr_total": 296,
+            "response_wait": 388.814,
+            "tcp": 39.278,
+            "tls": 39.732
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150212953-3415220335",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 22.184,
+            "http_total": 574.375,
+            "jr_charge": 241,
+            "jr_identity": 40,
+            "jr_identity_wait": 0,
+            "jr_queue": 69,
+            "jr_total": 310,
+            "response_wait": 477.076,
+            "tcp": 33.036,
+            "tls": 40.695
+          }
+        }
+      ],
+      "wall_median_seconds": 0.959
+    },
+    "h2-recheck": {
+      "measured_ingress_counts": {
+        "PDX": 4,
+        "SJC": 3
+      },
+      "measured_timing_median_ms": {
+        "dns": 19.183,
+        "http_total": 456.557,
+        "jr_charge": 241,
+        "jr_identity": 39,
+        "jr_identity_wait": 0,
+        "jr_queue": 67,
+        "jr_total": 312,
+        "response_wait": 368.623,
+        "tcp": 32.768,
+        "tls": 39.041
+      },
+      "requests": [
+        {
+          "http_status": 200,
+          "id": "20261013-150221981-3418296237",
+          "ingress": "SJC",
+          "measured": false,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 20.54,
+            "http_total": 504.931,
+            "jr_charge": 353,
+            "jr_identity": 21,
+            "jr_identity_wait": 0,
+            "jr_queue": 52,
+            "jr_total": 405,
+            "response_wait": 440.086,
+            "tcp": 16.075,
+            "tls": 27.788
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150222900-3418296215",
+          "ingress": "SJC",
+          "measured": false,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 18.575,
+            "http_total": 358.376,
+            "jr_charge": 207,
+            "jr_identity": 19,
+            "jr_identity_wait": 0,
+            "jr_queue": 60,
+            "jr_total": 267,
+            "response_wait": 303.893,
+            "tcp": 9.783,
+            "tls": 25.388
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150223684-3418296282",
+          "ingress": "SJC",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 18.309,
+            "http_total": 354.271,
+            "jr_charge": 199,
+            "jr_identity": 39,
+            "jr_identity_wait": 0,
+            "jr_queue": 58,
+            "jr_total": 257,
+            "response_wait": 296.933,
+            "tcp": 17.185,
+            "tls": 21.505
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150224428-3418296460",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 21.496,
+            "http_total": 469.594,
+            "jr_charge": 240,
+            "jr_identity": 49,
+            "jr_identity_wait": 0,
+            "jr_queue": 72,
+            "jr_total": 312,
+            "response_wait": 368.623,
+            "tcp": 33.582,
+            "tls": 45.48
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150225229-3418296758",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 14.879,
+            "http_total": 454.25,
+            "jr_charge": 241,
+            "jr_identity": 37,
+            "jr_identity_wait": 0,
+            "jr_queue": 69,
+            "jr_total": 310,
+            "response_wait": 365.709,
+            "tcp": 34.489,
+            "tls": 39.041
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150226120-3418296794",
+          "ingress": "SJC",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 18.82,
+            "http_total": 456.557,
+            "jr_charge": 300,
+            "jr_identity": 25,
+            "jr_identity_wait": 0,
+            "jr_queue": 57,
+            "jr_total": 357,
+            "response_wait": 397.745,
+            "tcp": 15.925,
+            "tls": 23.03
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150226988-3418296298",
+          "ingress": "SJC",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 19.445,
+            "http_total": 383.476,
+            "jr_charge": 214,
+            "jr_identity": 32,
+            "jr_identity_wait": 0,
+            "jr_queue": 60,
+            "jr_total": 274,
+            "response_wait": 315.577,
+            "tcp": 12.454,
+            "tls": 35.823
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150227771-3418296462",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 19.183,
+            "http_total": 624.974,
+            "jr_charge": 402,
+            "jr_identity": 66,
+            "jr_identity_wait": 0,
+            "jr_queue": 67,
+            "jr_total": 469,
+            "response_wait": 531.297,
+            "tcp": 32.768,
+            "tls": 41.613
+          }
+        },
+        {
+          "http_status": 200,
+          "id": "20261013-150228805-3418296571",
+          "ingress": "PDX",
+          "measured": true,
+          "protocol": "2",
+          "proxy_used": false,
+          "timing_ms": {
+            "dns": 20.197,
+            "http_total": 639.214,
+            "jr_charge": 268,
+            "jr_identity": 336,
+            "jr_identity_wait": 68,
+            "jr_queue": 132,
+            "jr_total": 468,
+            "response_wait": 542.529,
+            "tcp": 34.76,
+            "tls": 41.059
+          }
+        }
+      ],
+      "wall_median_seconds": 0.841
+    }
+  },
+  "verified_run_ids": [
+    "20261013-150156060-3415220335",
+    "20261013-150205697-3415220913",
+    "20261013-150206600-3415220252",
+    "20261013-150208172-3415220929",
+    "20261013-150209194-3415220864",
+    "20261013-150210193-3415220677",
+    "20261013-150211156-3415220125",
+    "20261013-150212070-3415220519",
+    "20261013-150212953-3415220335",
+    "20261013-150214114-3417368840",
+    "20261013-150214997-3417368537",
+    "20261013-150215850-3417368732",
+    "20261013-150216609-3417368623",
+    "20261013-150217476-3417368988",
+    "20261013-150218336-3417368304",
+    "20261013-150219406-3417368997",
+    "20261013-150220303-3417368995",
+    "20261013-150221047-3417368119",
+    "20261013-150221981-3418296237",
+    "20261013-150222900-3418296215",
+    "20261013-150223684-3418296282",
+    "20261013-150224428-3418296460",
+    "20261013-150225229-3418296758",
+    "20261013-150226120-3418296794",
+    "20261013-150226988-3418296298",
+    "20261013-150227771-3418296462",
+    "20261013-150228805-3418296571"
+  ],
+  "wrapper_sha256": "73b35a2e9e1a27a7a67d2be9593cb812ab82c096054c37f0f29c33e7302dd881"
+}
