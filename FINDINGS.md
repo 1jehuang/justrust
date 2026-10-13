@@ -5316,3 +5316,24 @@ source build as alpha.15. Customers still must run an eligible client
 online, after its daily check becomes due, with a writable executable
 directory. This verifies rollout availability and real old-client update
 behavior, not that every customer's machine has already applied it.
+
+### 66g. Alpha.16: macOS clients install the Linux hosted agent from GitHub
+
+The published Mac client's first connection called `cargo install justrust
+--version <client version>` on the Linux host. The crates.io sparse index has
+no `justrust` package (HTTP 404), so publishing GitHub assets alone did not
+make that path work. Alpha.16 release clients select the Linux host's x86_64
+or arm64 asset from the exact same release, verify its archive checksum and
+executable version, and replace the agent atomically. Source builds retain
+the previous fallback. The exact generated script has executable regression
+coverage for success, corrupt checksums and incorrect executable versions.
+
+Hosted validation passed: check `20261013-074043475-677824`, full tests
+`20261013-074113970-684828` (329 passed, 0 failed, 2 ignored), and warning-free
+all-target clippy `20261013-074132836-689618`. `show` confirms remote on hosted,
+and these summaries are exported. A fresh validation session resolved an
+initial shared-session ENOENT infrastructure failure without interrupting
+other agents. No compile speedup is claimed. See `docs/release-alpha16.md`
+for publication and live-service verification, including the boundary that
+the customer's own Mac retry is not observable here. Linux hosted builds
+still require Linux-compatible projects, not macOS-specific native targets.

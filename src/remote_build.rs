@@ -217,6 +217,58 @@ fn fetch_release_on_machine(t: &Target) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// A Mac release cannot upload its Mach-O executable to a Linux build host.
+/// Use the host's asset from the same release, not an unpublished crates.io
+/// package. Source builds still take the existing source-install fallback.
+fn cross_release_install_script(remote_arch: &str, release_build: bool) -> Option<String> {
+    if !release_build {
+        return None;
+    }
+    let target = match remote_arch {
+        "Linux x86_64" => "x86_64-unknown-linux-musl",
+        "Linux aarch64" => "aarch64-unknown-linux-musl",
+        _ => return None,
+    };
+    let version = env!("CARGO_PKG_VERSION");
+    let asset = format!("justrust-{target}.tar.gz");
+    let url = format!("https://github.com/1jehuang/justrust/releases/download/v{version}/{asset}");
+    Some(format!(
+        "set -e; d=$(mktemp -d); stage=; \
+         trap 'rm -rf \"$d\"; [ -z \"$stage\" ] || rm -f \"$stage\"' EXIT; \
+         curl -fsSL --max-time 30 {url} -o \"$d/{asset}\"; \
+         curl -fsSL --max-time 30 {checksum_url} -o \"$d/checksum\"; \
+         expected=$(awk 'NR == 1 {{print $1}}' \"$d/checksum\"); \
+         [ \"${{#expected}}\" = 64 ]; \
+         printf '%s  %s\\n' \"$expected\" \"$d/{asset}\" | sha256sum -c -; \
+         tar xzf \"$d/{asset}\" -C \"$d\"; \
+         f=\"$d/justrust-{target}/justrust\"; \
+         [ \"$(\"$f\" --version)\" = {expected_version} ]; \
+         mkdir -p ~/.cargo/bin; chmod +x \"$f\"; \
+         stage=$(mktemp ~/.cargo/bin/.justrust.upload.XXXXXX); \
+         mv \"$f\" \"$stage\"; mv \"$stage\" ~/.cargo/bin/justrust",
+        url = shell_quote(&url),
+        checksum_url = shell_quote(&format!("{url}.sha256")),
+        expected_version = shell_quote(&format!("justrust {version}")),
+    ))
+}
+
+fn fetch_cross_release_on_machine(t: &Target, remote_arch: &str) -> bool {
+    if std::env::var("JUSTRUST_REMOTE_FETCH_RELEASE").as_deref() == Ok("0") {
+        return false;
+    }
+    let Some(script) = cross_release_install_script(remote_arch, crate::update::release_build())
+    else {
+        return false;
+    };
+    t.command()
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Local copy of the justrust binary last installed on the machine, the
 /// base for [`upload_patch`].
 fn installed_copy() -> Option<PathBuf> {
@@ -355,6 +407,13 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
         if !ok {
             bail!("copying justrust to the remote machine failed");
         }
+    } else if remote_arch != local_arch && fetch_cross_release_on_machine(t, &remote_arch) {
+        crate::remote::log_event(&format!(
+            "justrust {} fetched its {remote_arch} release on {} in {:.1}s",
+            env!("CARGO_PKG_VERSION"),
+            t.dest,
+            t0.elapsed().as_secs_f64()
+        ));
     } else {
         eprintln!("justrust remote: building justrust on the machine ({remote_arch})...");
         let st = t
@@ -809,6 +868,135 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cross_release_install_uses_host_target_and_verifies_before_replacing() {
+        for (arch, target) in [
+            ("Linux x86_64", "x86_64-unknown-linux-musl"),
+            ("Linux aarch64", "aarch64-unknown-linux-musl"),
+        ] {
+            let script = cross_release_install_script(arch, true).unwrap();
+            assert!(script.contains(&format!("/v{}/", env!("CARGO_PKG_VERSION"))));
+            assert!(script.contains(&format!("justrust-{target}.tar.gz.sha256")));
+            let checksum = script.find("sha256sum -c -").unwrap();
+            let extract = script.find("tar xzf").unwrap();
+            let verify_version = script.find("--version").unwrap();
+            let replace = script.find("mv \"$f\"").unwrap();
+            assert!(checksum < extract && extract < verify_version && verify_version < replace);
+            assert!(script.contains(&shell_quote(&format!(
+                "justrust {}",
+                env!("CARGO_PKG_VERSION")
+            ))));
+            assert!(cross_release_install_script(arch, false).is_none());
+        }
+        assert!(cross_release_install_script("Darwin arm64", true).is_none());
+        assert!(cross_release_install_script("Linux riscv64", true).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cross_release_install_rejects_bad_downloads_without_replacing_the_agent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("jr-cross-release-{}", std::process::id()));
+        let bin = root.join("bin");
+        let home = root.join("home");
+        let package = root.join("justrust-x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        std::fs::create_dir_all(&package).unwrap();
+        let installed = home.join(".cargo/bin/justrust");
+        std::fs::write(&installed, "original agent").unwrap();
+        let curl = bin.join("curl");
+        std::fs::write(
+            &curl,
+            "#!/bin/sh\nfor arg; do out=$arg; done\ncase \"$out\" in */checksum) cp \"$JR_TEST_CHECKSUM\" \"$out\";; *) cp \"$JR_TEST_ARCHIVE\" \"$out\";; esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The production script runs on Linux. A native Mac test exercises
+        // it with the equivalent checksum tool instead of requiring GNU
+        // coreutils to be installed on the client.
+        if cfg!(target_os = "macos") {
+            let sha = bin.join("sha256sum");
+            std::fs::write(&sha, "#!/bin/sh\nexec shasum -a 256 \"$@\"\n").unwrap();
+            std::fs::set_permissions(&sha, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let archive = root.join("release.tar.gz");
+        let checksum = root.join("release.sha256");
+        let executable = package.join("justrust");
+        let pack = |version: &str| {
+            std::fs::write(
+                &executable,
+                format!("#!/bin/sh\necho 'justrust {version}'\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(
+                Command::new("tar")
+                    .arg("czf")
+                    .arg(&archive)
+                    .arg("-C")
+                    .arg(&root)
+                    .arg("justrust-x86_64-unknown-linux-musl")
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::fs::write(
+                &checksum,
+                format!(
+                    "{}  release.tar.gz\n",
+                    crate::toolchain::sha256(&archive).unwrap()
+                ),
+            )
+            .unwrap();
+        };
+        let run = || {
+            Command::new("sh")
+                .arg("-c")
+                .arg(cross_release_install_script("Linux x86_64", true).unwrap())
+                .env("HOME", &home)
+                .env(
+                    "PATH",
+                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                )
+                .env("JR_TEST_ARCHIVE", &archive)
+                .env("JR_TEST_CHECKSUM", &checksum)
+                .output()
+                .unwrap()
+        };
+        pack(env!("CARGO_PKG_VERSION"));
+        std::fs::write(&checksum, format!("{}  release.tar.gz\n", "0".repeat(64))).unwrap();
+        assert!(!run().status.success(), "bad checksum must fail closed");
+        assert_eq!(
+            std::fs::read_to_string(&installed).unwrap(),
+            "original agent"
+        );
+        pack("0.0.0-wrong");
+        assert!(!run().status.success(), "wrong version must fail closed");
+        assert_eq!(
+            std::fs::read_to_string(&installed).unwrap(),
+            "original agent"
+        );
+        pack(env!("CARGO_PKG_VERSION"));
+        let output = run();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            std::fs::read(&installed).unwrap(),
+            std::fs::read(&executable).unwrap()
+        );
+        assert!(
+            std::fs::read_dir(home.join(".cargo/bin"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".justrust.upload"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn release_asset_url_names_this_version() {

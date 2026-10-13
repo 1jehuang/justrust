@@ -5,6 +5,22 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.16
+
+- **macOS clients can install the Linux hosted agent.** Release clients
+  download the host architecture's binary from the same GitHub release,
+  verify its archive checksum and executable version, then replace the agent
+  atomically. This avoids the unavailable crates.io source-install fallback.
+- **Remote reconnects** mirror only workspaces requested by the build, while
+  invalidating all remembered source manifests before any reuse.
+- **Remote diagnostics** include opt-in client phase tracing and slow-sync
+  phase breakdowns. No compile speedup is claimed for this release.
+
+## 0.1.0-alpha.15
+
+- Fix the hosted prebuilt-policy regression test so it checks normal costs
+  and the host's forced-fetch override without changing global environment.
+
 ## 0.1.0-alpha.14
 
 - **Hosted builds on macOS with longer user names work.** The ssh control
