@@ -12,6 +12,28 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_hosted_early_requires_real_shown_confirmed_nonfinal_diagnostics(self):
+        good = {"ready": True, "shown": True, "matched": 1, "early_only": 0, "exited": False}
+        self.assertEqual(suite.hosted_early_provenance({"early": good}), good)
+        for change in ({"ready": False}, {"shown": False}, {"matched": 0},
+                       {"early_only": 1}, {"exited": True}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                suite.hosted_early_provenance({"early": {**good, **change}})
+        with self.assertRaises(ValueError):
+            suite.hosted_early_provenance({})
+
+    def test_hosted_early_rejects_local_startup_and_ignored_flags_before_install(self):
+        for remote, names, requested in ((True, ["desktop-type-error-early"], False),
+                                       (False, ["desktop-type-error"], True),
+                                       (True, ["desktop-body-check"], True),
+                                       (True, ["missing"], True), (True, None, True)):
+            args = argparse.Namespace(toolchain="nightly-2026-10-08", remote=remote, synth=None,
+                                      scenarios=names, hosted_early=requested)
+            with self.subTest(args=args), patch.object(suite.subprocess, "run") as run, \
+                    self.assertRaises(SystemExit):
+                suite.cmd_run(args)
+            run.assert_not_called()
+
     def test_explicit_binary_alias_is_absolute_and_never_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "justrust"

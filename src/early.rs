@@ -144,20 +144,32 @@ pub fn exit_eligible(diags: &[Diag]) -> bool {
 
 /// `JUSTRUST_EARLY`: unset or `0` = off, `auto` = query a running daemon
 /// and start one for workspaces with recent agent builds (`maybe_autostart`),
-/// anything else = on (query, and start the daemon on first use).
+/// `query` = query a running daemon only, anything else = on (query, and
+/// start the daemon on first use). Remote startup requires a machine-local
+/// launcher.json argv prefix so resource policy failures never start unbounded.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
     Off,
     Auto,
+    /// Query a resident daemon, never start one or compile its support crates.
+    Query,
     On,
 }
 
 pub fn mode() -> Mode {
-    match std::env::var("JUSTRUST_EARLY").as_deref() {
-        Err(_) if exit_wanted() => Mode::On,
-        Ok("0") | Ok("off") | Ok("no") | Ok("false") | Err(_) => Mode::Off,
-        Ok("auto") => Mode::Auto,
-        Ok(_) => Mode::On,
+    parse_mode(
+        std::env::var("JUSTRUST_EARLY").ok().as_deref(),
+        exit_wanted(),
+    )
+}
+
+fn parse_mode(value: Option<&str>, exit: bool) -> Mode {
+    match value {
+        None if exit => Mode::On,
+        Some("0" | "off" | "no" | "false") | None => Mode::Off,
+        Some("auto") => Mode::Auto,
+        Some("query") => Mode::Query,
+        Some(_) => Mode::On,
     }
 }
 
@@ -269,7 +281,7 @@ fn query_op(cwd: &Path, timeout: Duration, op: &str) -> Option<Reply> {
     let s = match UnixStream::connect(&sock) {
         Ok(s) => s,
         Err(_) => {
-            if op != "diagnostics" || mode() == Mode::Auto {
+            if op != "diagnostics" || matches!(mode(), Mode::Auto | Mode::Query) {
                 return None;
             }
             if let Err(e) = spawn_daemon(&root, &dir) {
@@ -327,7 +339,10 @@ fn early_for_build(
         };
         let done = || build_done.load(std::sync::atomic::Ordering::SeqCst);
         if info.ready && !info.diags.is_empty() && !done() {
-            let exit = exit_wanted() && crate::buildd::is_child() && exit_eligible(&info.diags);
+            let exit = mode() != Mode::Query
+                && exit_wanted()
+                && crate::buildd::is_child()
+                && exit_eligible(&info.diags);
             let text = if exit {
                 format_exit_block(&info.diags, &cwd, secs)
             } else {
@@ -536,6 +551,29 @@ pub fn report_line(e: &EarlyInfo, compile_failed: bool) -> Option<String> {
     Some(s)
 }
 
+/// Optional machine-local argv prefix, never forwarded from the client.
+/// A remote agent requires it so explicit diagnostic opt-in cannot launch
+/// an unbounded background process when its resource policy is absent.
+fn daemon_command(exe: &Path, launcher: &Path, required: bool) -> Result<Command> {
+    match std::fs::read(launcher) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !required => Ok(Command::new(exe)),
+        Err(e) => Err(e).context("early diagnostics require a machine-local early/launcher.json"),
+        Ok(bytes) => {
+            let argv: Vec<String> = serde_json::from_slice(&bytes)
+                .context("early/launcher.json must contain a JSON argv array")?;
+            let program = argv.first().context("empty early diagnostic launcher")?;
+            if !Path::new(program).is_absolute() || argv.iter().any(|arg| arg.contains('\0')) {
+                bail!(
+                    "early diagnostic launcher must use an absolute executable and valid arguments"
+                );
+            }
+            let mut c = Command::new(program);
+            c.args(&argv[1..]).arg(exe);
+            Ok(c)
+        }
+    }
+}
+
 fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     // Do not even try again soon after a daemon failed to start.
@@ -555,7 +593,12 @@ fn spawn_daemon(root: &Path, dir: &Path) -> Result<()> {
         .create(true)
         .append(true)
         .open(dir.join("daemon.log"))?;
-    let mut c = Command::new(std::env::current_exe()?);
+    let launcher = crate::paths::home()?.join("early/launcher.json");
+    let mut c = daemon_command(
+        &std::env::current_exe()?,
+        &launcher,
+        std::env::var_os(crate::route::ON_AGENT).is_some(),
+    )?;
     c.arg(DAEMON_ARG)
         .arg(root)
         .current_dir(root)
@@ -1613,6 +1656,48 @@ fn daemon(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_mode_never_requests_autostart_or_early_exit() {
+        assert_eq!(parse_mode(Some("query"), false), Mode::Query);
+        assert_eq!(parse_mode(Some("query"), true), Mode::Query);
+        assert_eq!(parse_mode(None, false), Mode::Off);
+        assert_eq!(parse_mode(None, true), Mode::On);
+        assert_eq!(parse_mode(Some("auto"), false), Mode::Auto);
+        assert_eq!(parse_mode(Some("0"), true), Mode::Off);
+    }
+
+    #[test]
+    fn remote_launcher_missing_or_invalid_never_falls_back_unbounded() {
+        let dir = std::env::temp_dir().join(format!("jr-launcher-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("launcher.json");
+        let exe = Path::new("/bin/justrust");
+        assert!(daemon_command(exe, &config, true).is_err());
+        assert_eq!(
+            daemon_command(exe, &config, false).unwrap().get_program(),
+            exe
+        );
+        for invalid in [
+            "[]",
+            "null",
+            "[\"relative\"]",
+            "[\"/bin/echo\",\"\\u0000\"]",
+            "bad json",
+        ] {
+            std::fs::write(&config, invalid).unwrap();
+            assert!(daemon_command(exe, &config, true).is_err());
+            assert!(daemon_command(exe, &config, false).is_err());
+        }
+        std::fs::write(&config, "[\"/bin/echo\",\"literal prefix\"]").unwrap();
+        let mut command = daemon_command(exe, &config, true).unwrap();
+        command.arg(DAEMON_ARG).arg("/workspace with spaces");
+        assert_eq!(
+            String::from_utf8(command.output().unwrap().stdout).unwrap(),
+            "literal prefix /bin/justrust __early-daemon /workspace with spaces\n"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn parses_rustc_errors() {

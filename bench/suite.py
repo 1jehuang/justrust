@@ -597,6 +597,14 @@ def admission_transport(stderr: str, requested: bool) -> str:
     return "pooled"
 
 
+def hosted_early_provenance(summary: dict) -> dict:
+    early = summary.get("early") or {}
+    if (not early.get("ready") or not early.get("shown") or early.get("exited")
+            or not early.get("matched") or early.get("early_only", 0)):
+        raise ValueError("requested hosted provisional diagnostics were not shown and rustc-confirmed")
+    return early
+
+
 def run_once(s: Scenario, root: Path, target: Path) -> dict:
     rid = new_id()
     env = dict(os.environ)
@@ -675,6 +683,8 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         try:
             remote = remote_measurement(sm)
             admission = admission_transport(p.stderr, env.get("JUSTRUST_HOSTED_HTTP_POOL") in ("1", "on", "true"))
+            if env.get("JUSTRUST_EARLY") == "query":
+                hosted_early_provenance(sm)
         except ValueError as e:
             sys.exit(f"bench: {s.name}: {e} (justrust log {rid})\n{p.stderr[-3000:]}")
     failed = p.returncode != 0
@@ -708,7 +718,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         # Seconds until the first `error` line on stderr (None: no error).
         "first_error": None if first_error is None else round(first_error, 3),
         "first_fail": round(first_fail[0], 3) if first_fail else None,
-        "early": {k: early.get(k) for k in ("secs", "ready", "shown", "matched", "early_only", "rustc_only")}
+        "early": {k: early.get(k) for k in ("secs", "ready", "shown", "matched", "early_only", "rustc_only", "exited")}
         if early else None,
         "recorded_wall": round(sm["wall"], 3),
         **({"remote": remote} if remote is not None else {}),
@@ -962,6 +972,13 @@ def cmd_run(args) -> None:
     if (RUSTC_THREADS is not None or WORKSPACE_THREADS is not None or PASS_TIMES) and args.synth is not None:
         sys.exit("bench: compiler thread/pass options require named pinned scenarios")
     REMOTE = getattr(args, "remote", False)
+    hosted_early = getattr(args, "hosted_early", False)
+    if hosted_early and (not REMOTE or args.synth is not None or not getattr(args, "scenarios", None)
+                        or any(n not in BY_NAME or not BY_NAME[n].expect_fail for n in args.scenarios)):
+        sys.exit("bench: --hosted-early requires --remote and named compile-error scenarios")
+    if REMOTE and any(BY_NAME[n].env.get("JUSTRUST_EARLY") == "1"
+                      for n in (getattr(args, "scenarios", None) or []) if n in BY_NAME):
+        sys.exit("bench: local analyzer startup is not a hosted measurement; use --hosted-early on error scenarios")
     if REMOTE and args.synth is not None:
         sys.exit("bench: hosted synthetic measurements use bench/versus.py --remote")
     if TOOLCHAIN != "system":
@@ -969,7 +986,8 @@ def cmd_run(args) -> None:
         subprocess.run([J, "toolchain", "install", TOOLCHAIN], check=True, stdout=subprocess.DEVNULL)
     if args.synth is not None:
         return cmd_run_synth(args)
-    names = args.scenarios or [s.name for s in SCENARIOS if not s.cold]
+    names = args.scenarios or [s.name for s in SCENARIOS if not s.cold
+                               and not (REMOTE and s.env.get("JUSTRUST_EARLY") == "1")]
     if args.cold:
         names += [s.name for s in SCENARIOS if s.cold and s.name not in names]
     for n in names:
@@ -988,6 +1006,7 @@ def cmd_run(args) -> None:
                 sys.exit(f"bench: {n}: anchor occurs {c} times in {s.edit.file}")
     info = env_info()
     info["execution"] = "remote" if REMOTE else "local"
+    info["hosted_early"] = hosted_early
     if REMOTE:
         info["target_state"] = "persistent remote target; first run is warmup"
     started = time.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -995,6 +1014,8 @@ def cmd_run(args) -> None:
     for k, name in enumerate(names):
         print(f"bench: {name} ({k + 1}/{len(names)})", file=sys.stderr)
         scenario = compiler_scenario(BY_NAME[name], RUSTC_THREADS, PASS_TIMES, WORKSPACE_THREADS)
+        if hosted_early:
+            scenario = replace(scenario, env={**scenario.env, "JUSTRUST_EARLY": "query", "JUSTRUST_EARLY_EXIT": "0"})
         result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait)
     verify_binary_identity(info)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -1120,6 +1141,8 @@ def main() -> None:
     r.add_argument("-n", type=int, default=5, help="measured runs per scenario (default 5)")
     r.add_argument("--warmup", type=int, default=1, help="discarded runs first (default 1)")
     r.add_argument("--cold", action="store_true", help="also run the cold (fresh target dir) scenarios")
+    r.add_argument("--hosted-early", action="store_true",
+                   help="query a prewarmed bounded hosted analyzer on compile-error scenarios, preserving full cargo exit")
     r.add_argument("--remote", action="store_true",
                    help="force warm scenarios through the real remote route and reject local fallback; "
                         "not a cold hosted benchmark")

@@ -43,6 +43,8 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_CARGO_DAEMON",
     "JUSTRUST_CARGO_DAEMON_TRACE",
     "JUSTRUST_UNIFY_FEATURES",
+    "JUSTRUST_EARLY",
+    "JUSTRUST_EARLY_EXPERIMENTAL",
 ];
 
 /// Every directory the machine must mirror for a build started in `cwd`.
@@ -929,6 +931,8 @@ mod tests {
             "JUSTRUST_CARGO_DAEMON",
             "JUSTRUST_CARGO_DAEMON_TRACE",
             "JUSTRUST_UNIFY_FEATURES",
+            "JUSTRUST_EARLY",
+            "JUSTRUST_EARLY_EXPERIMENTAL",
         ] {
             assert!(
                 FORWARDED_ENV.contains(&var),
@@ -943,6 +947,8 @@ mod tests {
             "JUSTRUST_HOME",
             "JUSTRUST_RUN_DIR",
             "JUSTRUST_REAL_RUSTC",
+            "JUSTRUST_EARLY_EXIT",
+            "JUSTRUST_EARLY_LAUNCHER",
         ] {
             assert!(
                 !FORWARDED_ENV.contains(&var),

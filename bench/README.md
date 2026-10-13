@@ -103,6 +103,13 @@ bench/suite.py compare bench/results/A.json bench/results/B.json
 bench/suite.py show bench/results/A.json
 ```
 
+Hosted provisional-error experiments use `--remote --hosted-early` with a
+named compile-error scenario, for example `desktop-type-error`. Prewarm the
+remote analyzer through an admitted build with a machine-local bounded launcher.
+The suite only queries it, never starts local rust-analyzer as a substitute,
+and requires shown diagnostics confirmed by the final rustc result. Full cargo
+exit remains measured. This is not an early-exit or successful-test speed claim.
+
 How it works:
 
 - **Executable identity.** Set `JUSTRUST=/absolute/path/to/justrust` (or
