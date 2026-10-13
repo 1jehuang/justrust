@@ -48,6 +48,13 @@ are listed under [Status](#status). Installs to
 `~/.local/bin` (`JUSTRUST_INSTALL_DIR` to change it), verifies the sha256,
 and runs `justrust login` when interactive (`JUSTRUST_NO_LOGIN=1` skips it).
 
+Signed in at [jcode.sh/rust](https://jcode.sh/rust#connect), the page shows
+an install command with a one-time token (`rust.sh?t=jri_...`, single use,
+30 minutes). The installer exchanges it for an API key and saves it to
+`~/.config/jcode/jcode-subscription.env`, so the machine is signed in with no
+`justrust login`. Once used or expired the token is worthless, so the
+command can sit in shell history or an agent transcript.
+
 What the installer sends: a random install id, the OS and CPU
 architecture, and whether the install succeeded (or which step failed), to
 build.jcode.sh. `justrust login` sends the same id with its sign-in flow id

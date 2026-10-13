@@ -6,6 +6,10 @@
 #   JUSTRUST_BASE_URL     release asset base URL
 #                         (default: https://github.com/1jehuang/justrust/releases/latest/download)
 #   JUSTRUST_NO_LOGIN     if set, skip running `justrust login`
+#   JUSTRUST_INSTALL_TOKEN  one-time token from the signed-in install command
+#                         on jcode.sh/rust (rust.sh?t=...). Exchanged once for
+#                         an API key saved to the Jcode credentials file, so
+#                         this machine is signed in with no `justrust login`.
 #   JUSTRUST_NO_AGENTS    if set, do not add justrust instructions to the
 #                         global CLAUDE.md / AGENTS.md of installed agents
 #   JUSTRUST_NO_TELEMETRY or DO_NOT_TRACK
@@ -75,6 +79,65 @@ on_exit() {
         if [ "$code" = 0 ]; then report installer_finish success ""; else report installer_finish failure "$STAGE"; fi
     fi
     exit "$code"
+}
+
+# The Jcode credentials file justrust and Jcode share (remote_hosted.rs
+# config_dir): $JCODE_HOME/config/jcode, else the platform config dir.
+creds_file() {
+    if [ -n "${JCODE_HOME:-}" ]; then
+        dir="$JCODE_HOME/config/jcode"
+    elif [ "$(uname -s)" = Darwin ]; then
+        dir="$HOME/Library/Application Support/jcode"
+    else
+        dir="${XDG_CONFIG_HOME:-$HOME/.config}/jcode"
+    fi
+    printf '%s/jcode-subscription.env' "$dir"
+}
+
+json_field() {
+    printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | tr -cd 'A-Za-z0-9@._+-'
+}
+
+# Exchange JUSTRUST_INSTALL_TOKEN (single use, 30 minutes) for an API key and
+# save it like `justrust login` does. Fails soft: the install still succeeds,
+# and the normal login runs instead.
+redeem_install_token() {
+    token=$(printf '%s' "$JUSTRUST_INSTALL_TOKEN" | tr -cd 'A-Za-z0-9_-')
+    api="${JCODE_API_BASE:-https://api.jcode.sh/v1}"
+    resp=$(curl -sS -m 20 -H 'Content-Type: application/json' \
+        -d "{\"install_token\":\"$token\"}" "$api/auth/install-token" 2>/dev/null) || resp=
+    key=$(json_field "$resp" api_key)
+    case "$key" in
+        jck_live_*) ;;
+        *)
+            msg=$(printf '%s' "$resp" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            say "could not sign in with the install command: ${msg:-no response from $api}"
+            report login_token failure ""
+            return 1
+            ;;
+    esac
+    file=$(creds_file)
+    (
+        umask 077
+        mkdir -p "$(dirname "$file")"
+        tmpf="$file.tmp"
+        if [ -f "$file" ]; then
+            grep -Ev '^(export[[:space:]]+)?(JCODE_API_KEY|JCODE_ACCOUNT_ID|JCODE_ACCOUNT_EMAIL|JCODE_TIER)=' "$file" > "$tmpf" || true
+        else
+            : > "$tmpf"
+        fi
+        {
+            printf 'JCODE_API_KEY=%s\n' "$key"
+            printf 'JCODE_ACCOUNT_ID=%s\n' "$(json_field "$resp" account_id)"
+            printf 'JCODE_ACCOUNT_EMAIL=%s\n' "$(json_field "$resp" email)"
+            printf 'JCODE_TIER=%s\n' "$(json_field "$resp" tier)"
+        } >> "$tmpf"
+        chmod 600 "$tmpf"
+        mv "$tmpf" "$file"
+    ) || { say "could not write $file"; return 1; }
+    say "signed in as $(json_field "$resp" email) (saved to $file)"
+    report login_token success ""
+    return 0
 }
 
 detect_target() {
@@ -177,7 +240,14 @@ main() {
         "$BIN" agents --quiet </dev/null 2>&1 | sed 's/^/justrust: /' || true
     fi
 
-    if [ -n "${JUSTRUST_NO_LOGIN:-}" ]; then
+    if [ -n "${JUSTRUST_INSTALL_TOKEN:-}" ] && redeem_install_token; then
+        # Signed in: `login` now only selects hosted builds and shows the
+        # builds left.
+        "$BIN" login </dev/null 2>&1 | sed 's/^/justrust: /' || true
+        echo
+        echo "Installed and signed in: $BIN"
+        echo "Use justrust check / test / clippy instead of cargo. They run on remote build machines."
+    elif [ -n "${JUSTRUST_NO_LOGIN:-}" ]; then
         say "Next: justrust login"
     elif [ -t 0 ] || { [ -t 1 ] && (: </dev/tty) 2>/dev/null; }; then
         # A human is at a terminal: run the interactive login.
