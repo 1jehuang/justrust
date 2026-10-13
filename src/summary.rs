@@ -128,6 +128,10 @@ pub struct UnitStats {
     /// Wall time spent compiling the misses.
     #[serde(default)]
     pub depcache_miss_secs: f64,
+    /// Keyed env vars not set by cargo, seen on missed units (names). Each
+    /// splits keys from the prebuilt store and other machines.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depcache_miss_env: Vec<String>,
     /// Hits served by the remote cache (shared tier or the account's own
     /// uploads), included in `depcache_hits`.
     #[serde(default)]
@@ -793,6 +797,16 @@ pub fn build(
             .filter(|u| u.depcache == "miss")
             .map(|u| u.wall)
             .sum(),
+        depcache_miss_env: {
+            let mut v: Vec<String> = units
+                .iter()
+                .filter(|u| u.depcache == "miss")
+                .flat_map(|u| u.keyed_env.iter().cloned())
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        },
     };
     stats.rustc_cpu_secs = (stats.rustc_cpu_secs * 100.0).round() / 100.0;
 

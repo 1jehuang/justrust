@@ -389,6 +389,52 @@ fn is_unit_out_dir(out_dir: &Path) -> bool {
         && profile_dir(out_dir).is_some()
 }
 
+/// Keyed variables in `env` that cargo does not set for every unit: the
+/// user's environment or a cargo `[env]` table (`LIBRARY_PATH`, `RUSTC_*`,
+/// `CARGO_PROFILE_*`, ...). Each one splits this machine's keys from the
+/// prebuilt store and from machines without it: a leftover `[env]
+/// LIBRARY_PATH` on a hosted machine took a cold build from 529 store hits
+/// to 0 (FINDINGS 65d). Names only, sorted.
+pub(crate) fn user_keyed_env(env: &[(String, String)]) -> Vec<String> {
+    let mut v: Vec<String> = env
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .filter(|k| keyed_env(k) && !cargo_sets(k))
+        .map(str::to_owned)
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Variables cargo sets for every rustc it runs (or justrust itself sets
+/// identically everywhere), so they never distinguish machines.
+fn cargo_sets(k: &str) -> bool {
+    k.starts_with("CARGO_PKG_")
+        || k.starts_with("CARGO_CFG_")
+        || matches!(
+            k,
+            "CARGO"
+                | "CARGO_CRATE_NAME"
+                | "CARGO_MANIFEST_DIR"
+                | "CARGO_MANIFEST_PATH"
+                | "CARGO_MANIFEST_LINKS"
+                | "CARGO_PRIMARY_PACKAGE"
+                | "CARGO_BIN_NAME"
+                | "CARGO_ENCODED_RUSTFLAGS"
+                | "CARGO_RESOLVER_FEATURE_UNIFICATION"
+                | "CARGO_UNSTABLE_FEATURE_UNIFICATION"
+                | "CARGO_SBOM_PATH"
+                | "CARGO_RUSTC_CURRENT_DIR"
+                | "OUT_DIR"
+                | "RUSTC"
+                | "RUSTC_BOOTSTRAP"
+                | "RUSTC_WRAPPER"
+                | "RUSTC_WORKSPACE_WRAPPER"
+                | "RUSTC_LINKER"
+        )
+}
+
 /// Env vars that are part of the base key. `CARGO_MAKEFLAGS` carries
 /// jobserver fds, which differ every run.
 pub(crate) fn keyed_env(name: &str) -> bool {
@@ -1778,6 +1824,37 @@ mod tests {
         assert!(!keyed_env("CARGO_BUILD_JOBS"));
         assert!(keyed_env("CARGO_PKG_NAME"));
         assert!(keyed_env("CARGO_ENCODED_RUSTFLAGS"));
+    }
+
+    #[test]
+    fn user_keyed_env_names_only_what_cargo_does_not_set() {
+        let e = |k: &str| (k.to_owned(), "x".to_owned());
+        let cargo = [
+            "CARGO_PKG_NAME",
+            "CARGO_CRATE_NAME",
+            "CARGO_MANIFEST_DIR",
+            "OUT_DIR",
+            "CARGO_RESOLVER_FEATURE_UNIFICATION",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "PATH",
+            "HOME",
+            "CARGO_BUILD_JOBS",
+        ];
+        let env: Vec<_> = cargo.iter().map(|k| e(k)).collect();
+        assert!(user_keyed_env(&env).is_empty());
+        let mut env2 = env.clone();
+        env2.extend([
+            e("LIBRARY_PATH"),
+            e("CARGO_PROFILE_DEV_DEBUG"),
+            e("LIBRARY_PATH"),
+        ]);
+        assert_eq!(
+            user_keyed_env(&env2),
+            vec![
+                "CARGO_PROFILE_DEV_DEBUG".to_owned(),
+                "LIBRARY_PATH".to_owned()
+            ]
+        );
     }
 
     fn s(v: &[&str]) -> Vec<String> {

@@ -152,8 +152,19 @@ pub fn analyze(s: &Summary) -> Vec<Finding> {
             format!(
                 "{} dependency units missed the shared dependency cache and compiled \
                  ({:.1}s of rustc); they are cached now, so other target dirs, slots, \
-                 and checkouts reuse them",
-                u.depcache_misses, u.depcache_miss_secs
+                 and checkouts reuse them{}",
+                u.depcache_misses,
+                u.depcache_miss_secs,
+                if u.depcache_miss_env.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ". Their keys include {} (set in your environment or a cargo \
+                         [env] table), so they can never match the prebuilt store or \
+                         machines without it",
+                        u.depcache_miss_env.join(", ")
+                    )
+                }
             ),
         ));
     }

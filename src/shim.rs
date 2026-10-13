@@ -54,6 +54,10 @@ pub struct Unit {
     /// On a hit, how long the original compile took.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depcache_saved_secs: Option<f64>,
+    /// On a miss: keyed env vars cargo does not set itself (user env or a
+    /// cargo `[env]`), which keep this unit's key from matching the store.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyed_env: Vec<String>,
 }
 
 #[derive(Debug, Serialize, serde::Deserialize, Clone)]
@@ -339,6 +343,8 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let mut unit = described;
     if let (Some(plan), Some(captured)) = (&plan, &captured) {
         unit.depcache = "miss".into();
+        let env: Vec<(String, String)> = std::env::vars().collect();
+        unit.keyed_env = crate::depcache::user_keyed_env(&env);
         if exit == 0 && !passes_on {
             let lines = std::mem::take(&mut *captured.lock().unwrap());
             if let Some(line) = plan.store(start, end - start, &lines) {
