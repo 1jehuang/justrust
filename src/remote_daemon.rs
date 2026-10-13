@@ -228,9 +228,6 @@ impl Link {
     }
 
     fn send(&self, m: &Msg, payload: &[u8]) -> Result<()> {
-        if m.local_only() {
-            bail!("local admission frames must never enter the remote agent link");
-        }
         write_frame(&mut *self.stdin.lock().unwrap(), m, payload)
     }
 
@@ -530,25 +527,6 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
         }
         let pipeline = matches!(&msg, Msg::RunSync { .. });
         match msg {
-            #[cfg(unix)]
-            Msg::HostedAdmission { auth, body } => {
-                // Handles local credentials here, never through the SSH link.
-                let response = crate::remote_hosted::Creds::from_local_auth(auth)
-                    .and_then(|c| crate::hosted_http::request(&c, &body));
-                let msg = match response {
-                    Ok(r) => Msg::HostedAdmissionResponse {
-                        code: r.code,
-                        body: r.body,
-                    },
-                    // Do not log an HTTP error that could include a header.
-                    Err(_) => Msg::Error {
-                        id: 0,
-                        msg: "pooled hosted admission failed".into(),
-                    },
-                };
-                write_frame(&mut w, &msg, &[])?;
-                return Ok(());
-            }
             Msg::Ping => {
                 // `connected` is only updated on connect/drop: a link the
                 // agent closed (machine stopped when idle) is not connected.

@@ -42,8 +42,6 @@ mod hotpatch {
     }
     pub fn after_link(_raw: &[OsString]) {}
 }
-#[cfg(unix)]
-mod hosted_http;
 mod install;
 mod linker;
 mod live;

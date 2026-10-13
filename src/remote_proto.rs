@@ -125,15 +125,6 @@ pub struct OfferItem {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "t")]
 pub enum Msg {
-    /// Local socket only. Never forwarded to a remote agent.
-    HostedAdmission {
-        auth: HostedAuth,
-        body: serde_json::Value,
-    },
-    HostedAdmissionResponse {
-        code: u16,
-        body: serde_json::Value,
-    },
     /// First frame in both directions.
     Hello {
         version: u32,
@@ -340,34 +331,6 @@ pub enum Msg {
     },
 }
 
-/// Credentials carried only across the owner-only local daemon socket.
-/// Debug output must never reveal the bearer key.
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
-pub struct HostedAuth {
-    pub(crate) base: String,
-    pub(crate) build_base: String,
-    pub(crate) key: String,
-}
-
-impl Msg {
-    pub fn local_only(&self) -> bool {
-        matches!(
-            self,
-            Self::HostedAdmission { .. } | Self::HostedAdmissionResponse { .. }
-        )
-    }
-}
-
-impl std::fmt::Debug for HostedAuth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HostedAuth")
-            .field("base", &self.base)
-            .field("build_base", &self.build_base)
-            .field("key", &"<redacted>")
-            .finish()
-    }
-}
-
 pub fn write_frame<W: Write>(w: &mut W, msg: &Msg, payload: &[u8]) -> Result<()> {
     let h = serde_json::to_vec(msg)?;
     let mut buf = Vec::with_capacity(8 + h.len() + payload.len());
@@ -404,26 +367,6 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<(Msg, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn local_admission_credentials_are_redacted_and_not_agent_frames() {
-        let request = Msg::HostedAdmission {
-            auth: HostedAuth {
-                base: "https://example.com/v1".into(),
-                build_base: "https://build.example.com/v1".into(),
-                key: "never-log-this-canary".into(),
-            },
-            body: serde_json::json!({"run_id":"r1"}),
-        };
-        let debug = format!("{request:?}");
-        assert!(!debug.contains("never-log-this-canary"));
-        assert!(debug.contains("<redacted>"));
-        assert!(request.local_only());
-        assert!(!Msg::Barrier { id: 1 }.local_only());
-        let mut bytes = Vec::new();
-        write_frame(&mut bytes, &request, &[]).unwrap();
-        assert_eq!(read_frame(&mut &bytes[..]).unwrap().unwrap().0, request);
-    }
 
     #[test]
     fn guarded_run_and_submission_state_roundtrip_without_changing_legacy_run() {
