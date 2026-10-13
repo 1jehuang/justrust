@@ -194,9 +194,13 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
         String::from_utf8_lossy(&staged.stderr)
     );
     let marker = home
-        .join("toolchains")
+        .join("toolchains/staged")
         .join(id)
         .join("justrust-toolchain.json");
+    assert!(
+        !home.join("toolchains").join(id).exists(),
+        "old agents must not see a staged candidate in the automatic scan"
+    );
     let info: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
     assert_eq!(info["installed_at"], 0.0);
     let log = dir.join("cargo.log");
@@ -235,7 +239,11 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
         check(false).contains(&format!("ACTIVE={id}")),
         "legacy install must still activate compiler"
     );
-    let before = std::fs::read(&marker).unwrap();
+    let active_marker = home
+        .join("toolchains")
+        .join(id)
+        .join("justrust-toolchain.json");
+    let before = std::fs::read(&active_marker).unwrap();
     let refused = install(true);
     assert!(
         !refused.status.success(),
@@ -244,7 +252,18 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
     assert!(
         String::from_utf8_lossy(&refused.stderr).contains("cannot stage over activated toolchain")
     );
-    assert_eq!(std::fs::read(&marker).unwrap(), before);
+    assert_eq!(std::fs::read(&active_marker).unwrap(), before);
+    let removed = justrust(&home, "file:///unused", &project)
+        .args(["toolchain", "remove", id])
+        .output()
+        .unwrap();
+    assert!(
+        removed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(!marker.exists() && !active_marker.exists());
+    assert!(check(false).lines().any(|l| l == "ACTIVE="));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

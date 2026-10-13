@@ -359,8 +359,11 @@ pub fn cargo_fork_command(binary: &Path, spec: Option<String>) -> Result<()> {
 }
 
 pub fn installed(spec: &Spec) -> Result<Option<Toolchain>> {
-    let dir = root()?.join(spec.id());
-    Ok(dir.join(MARKER).is_file().then(|| Toolchain {
+    let root = root()?;
+    let dir = [root.join(spec.id()), root.join("staged").join(spec.id())]
+        .into_iter()
+        .find(|dir| dir.join(MARKER).is_file());
+    Ok(dir.map(|dir| Toolchain {
         id: spec.id(),
         dir,
         nightly: spec.is_nightly(),
@@ -754,7 +757,15 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain, activate: bool) -> Res
         install_secs: crate::paths::now() - start,
     };
     std::fs::write(prefix.join(MARKER), serde_json::to_vec_pretty(&info)?)?;
-    let dest = root.join(spec.id());
+    // Older live agents do not understand the zero timestamp. A separate
+    // namespace keeps the candidate invisible to their default selectors.
+    let dest = if activate {
+        root.join(spec.id())
+    } else {
+        let staged = root.join("staged");
+        std::fs::create_dir_all(&staged)?;
+        staged.join(spec.id())
+    };
     if dest.exists() {
         let trash = root.join(format!(".trash-{}", std::process::id()));
         std::fs::rename(&dest, &trash)?;
@@ -1019,9 +1030,9 @@ pub fn latest(channel: &str) -> Result<Spec> {
 
 pub fn list_installed() -> Vec<Toolchain> {
     let Ok(root) = root() else { return Vec::new() };
-    let mut v: Vec<Toolchain> = std::fs::read_dir(&root)
+    let mut v: Vec<Toolchain> = [root.clone(), root.join("staged")]
         .into_iter()
-        .flatten()
+        .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten())
         .flatten()
         .filter(|e| e.path().join(MARKER).is_file())
         .map(|e| {
@@ -1175,13 +1186,18 @@ pub fn remove_command(spec: &str) -> Result<()> {
     let spec = Spec::parse(spec)?;
     let root = root()?;
     let _lock = lock_exclusive(&root.join(".install.lock"))?;
-    let dir = root.join(spec.id());
-    if !dir.exists() {
+    let dirs: Vec<_> = [root.join(spec.id()), root.join("staged").join(spec.id())]
+        .into_iter()
+        .filter(|dir| dir.exists())
+        .collect();
+    if dirs.is_empty() {
         bail!("{} is not installed", spec.id());
     }
-    let trash = root.join(format!(".trash-{}", std::process::id()));
-    std::fs::rename(&dir, &trash)?;
-    std::fs::remove_dir_all(&trash)?;
+    for (i, dir) in dirs.into_iter().enumerate() {
+        let trash = root.join(format!(".trash-{}-{i}", std::process::id()));
+        std::fs::rename(&dir, &trash)?;
+        std::fs::remove_dir_all(&trash)?;
+    }
     println!("removed {}", spec.id());
     Ok(())
 }

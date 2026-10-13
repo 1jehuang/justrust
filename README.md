@@ -276,8 +276,10 @@ changes. Dependencies keep their cache keys.
 Use `justrust toolchain jr-install <build dir> --no-default` to stage an
 experimental compiler without changing the default, even on a fresh host.
 Select it only for a measured run with `JUSTRUST_TOOLCHAIN=jr-<commit>`.
-Staging refuses to overwrite an already activated revision. The usual install
-without `--no-default` retains its existing default-activation behavior.
+Staged compilers live under `toolchains/staged/`, so older running agents
+cannot accidentally select them either. Staging refuses to overwrite an
+already activated revision. The usual install without `--no-default` retains
+its existing default-activation behavior.
 
 **wild**: once installed, local crates that link (test binaries, bins,
 cdylibs) link with [wild](https://github.com/wild-linker/wild) through a
