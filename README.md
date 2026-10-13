@@ -273,6 +273,12 @@ per Desktop edit). A proc macro whose output depends on something other
 than its input (a file it reads, an env var) is not re-run when only that
 changes. Dependencies keep their cache keys.
 
+Use `justrust toolchain jr-install <build dir> --no-default` to stage an
+experimental compiler without changing the default, even on a fresh host.
+Select it only for a measured run with `JUSTRUST_TOOLCHAIN=jr-<commit>`.
+Staging refuses to overwrite an already activated revision. The usual install
+without `--no-default` retains its existing default-activation behavior.
+
 **wild**: once installed, local crates that link (test binaries, bins,
 cdylibs) link with [wild](https://github.com/wild-linker/wild) through a
 `-B` linker directory, which works with `cc`, `clang -fuse-ld=mold`, and

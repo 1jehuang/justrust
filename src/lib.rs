@@ -439,6 +439,9 @@ enum ToolchainCmd {
         /// Installed official toolchain to take cargo and rustfmt from.
         #[arg(long, default_value = "nightly-2026-10-08")]
         cargo_from: String,
+        /// Stage for explicit pins only, without changing the default compiler.
+        #[arg(long)]
+        no_default: bool,
     },
 }
 
@@ -760,6 +763,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             ToolchainCmd::JrInstall {
                 sysroot,
                 cargo_from,
+                no_default,
             } => {
                 use anyhow::Context as _;
                 let sysroot = match sysroot.strip_prefix("~/") {
@@ -768,7 +772,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 };
                 let from = toolchain::installed(&toolchain::Spec::parse(&cargo_from)?)?
                     .with_context(|| format!("{cargo_from} is not installed (`justrust toolchain install {cargo_from}`)"))?;
-                let tc = toolchain::jr_install(&sysroot, &from)?;
+                let tc = toolchain::jr_install(&sysroot, &from, !no_default)?;
                 println!("installed {} at {}", tc.id, tc.dir.display());
             }
             ToolchainCmd::CargoFork { binary, toolchain } => {

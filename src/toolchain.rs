@@ -673,7 +673,7 @@ pub fn install(
 /// toolchain `jr-<commit>`. Cargo comes from `cargo_from` (an installed
 /// official toolchain, the one the fork is based on). Copied, not linked:
 /// rebuilding the fork never changes an installed toolchain under a build.
-pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
+pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain, activate: bool) -> Result<Toolchain> {
     let rustc = sysroot.join("bin").join(crate::sys::exe_name("rustc"));
     for b in ["rustc", "rustdoc", "clippy-driver", "cargo-clippy"] {
         if !is_executable(&sysroot.join("bin").join(crate::sys::exe_name(b))) {
@@ -693,6 +693,15 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
     let root = root()?;
     std::fs::create_dir_all(&root)?;
     let _lock = lock_exclusive(&root.join(".install.lock"))?;
+    if !activate
+        && let Some(existing) = installed(&spec)?
+        && existing.info().is_some_and(|i| i.installed_at > 0.0)
+    {
+        bail!(
+            "cannot stage over activated toolchain {}: omit --no-default to explicitly replace it",
+            spec.id()
+        );
+    }
     let start = crate::paths::now();
     let staging = root.join(format!(".staging-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
@@ -739,7 +748,9 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
             format!("jr-rustc from {}", sysroot.display()),
             format!("cargo from {}", cargo_from.id),
         ],
-        installed_at: crate::paths::now(),
+        // Zero is a staged compiler: available to explicit pins, never the
+        // default, including on a fresh host with no other jr toolchain.
+        installed_at: if activate { crate::paths::now() } else { 0.0 },
         install_secs: crate::paths::now() - start,
     };
     std::fs::write(prefix.join(MARKER), serde_json::to_vec_pretty(&info)?)?;
@@ -761,13 +772,20 @@ pub fn jr_install(sysroot: &Path, cargo_from: &Toolchain) -> Result<Toolchain> {
 /// The newest installed jr toolchain, used by default when nothing else is
 /// pinned (`JUSTRUST_TOOLCHAIN=system` or a `justrust.toml` pin wins).
 pub fn default_jr() -> Option<Toolchain> {
-    list_installed()
+    newest_active_jr(list_installed().into_iter().filter_map(|tc| {
+        let timestamp = tc.info()?.installed_at;
+        Some((tc, timestamp))
+    }))
+}
+
+fn newest_active_jr(candidates: impl IntoIterator<Item = (Toolchain, f64)>) -> Option<Toolchain> {
+    candidates
         .into_iter()
-        .filter(|t| t.id.starts_with("jr-"))
-        .max_by(|a, b| {
-            let t = |t: &Toolchain| t.info().map(|i| i.installed_at).unwrap_or(0.0);
-            t(a).total_cmp(&t(b))
+        .filter(|(tc, timestamp)| {
+            tc.id.starts_with("jr-") && timestamp.is_finite() && *timestamp > 0.0
         })
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(tc, _)| tc)
 }
 
 /// Add one more manifest component (for example `rust-analyzer-preview`) to
@@ -1299,6 +1317,31 @@ available = false
 [renames.clippy]
 to = "clippy-preview"
 "#;
+
+    #[test]
+    fn staged_compilers_never_become_default_even_on_fresh_hosts() {
+        let candidate = |id: &str, timestamp| {
+            (
+                Toolchain {
+                    id: id.into(),
+                    dir: PathBuf::from(id),
+                    nightly: true,
+                },
+                timestamp,
+            )
+        };
+        for timestamp in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(newest_active_jr([candidate("jr-1234567", timestamp)]).is_none());
+        }
+        let selected = newest_active_jr([
+            candidate("jr-1111111", 10.0),
+            candidate("jr-2222222", 20.0),
+            candidate("jr-3333333", 0.0),
+            candidate("nightly-2026-10-08", 1000.0),
+        ])
+        .unwrap();
+        assert_eq!(selected.id, "jr-2222222");
+    }
 
     #[test]
     fn reads_manifest_packages() {

@@ -156,6 +156,99 @@ fn justrust(home: &Path, server: &str, cwd: &Path) -> Command {
 }
 
 #[test]
+fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
+    let dir = scratch("jr-stage");
+    let home = dir.join("home");
+    let project = dir.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname='stage-test'\nversion='0.0.0'\n[workspace]\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+    let official = home.join("toolchains").join(format!("nightly-{DATE}"));
+    write_exe(&official.join("bin/cargo"), &files_of("cargo")[0].1);
+    write_exe(&official.join("bin/rustfmt"), "#!/bin/sh\nexit 0\n");
+    std::fs::write(official.join("justrust-toolchain.json"), "{}").unwrap();
+    let sysroot = dir.join("candidate");
+    let id = "jr-123456789abc";
+    for tool in ["rustc", "rustdoc", "clippy-driver", "cargo-clippy"] {
+        write_exe(
+            &sysroot.join("bin").join(tool),
+            "#!/bin/sh\necho 'rustc 1.101.0-nightly (123456789 2026-10-13)'\necho 'commit-hash: 123456789abcdef0123456789abcdef0123456789a'\necho 'host: x86_64-unknown-linux-gnu'\n",
+        );
+    }
+    let install = |stage: bool| {
+        let mut cmd = justrust(&home, "file:///unused", &project);
+        cmd.args(["toolchain", "jr-install"]).arg(&sysroot);
+        if stage {
+            cmd.arg("--no-default");
+        }
+        cmd.output().unwrap()
+    };
+    let staged = install(true);
+    assert!(
+        staged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&staged.stderr)
+    );
+    let marker = home
+        .join("toolchains")
+        .join(id)
+        .join("justrust-toolchain.json");
+    let info: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(info["installed_at"], 0.0);
+    let log = dir.join("cargo.log");
+    let check = |pin: bool| {
+        let mut cmd = justrust(&home, "file:///unused", &project);
+        cmd.arg("check")
+            .env("FAKE_CARGO_LOG", &log)
+            .env("JUSTRUST_REAL_CARGO", official.join("bin/cargo"))
+            .env_remove("JUSTRUST_TOOLCHAIN_ACTIVE");
+        if pin {
+            cmd.env("JUSTRUST_TOOLCHAIN", id);
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::fs::read_to_string(&log).unwrap()
+    };
+    assert!(
+        check(false).lines().any(|l| l == "ACTIVE="),
+        "staged-only compiler must not become default"
+    );
+    assert!(
+        check(true).contains(&format!("ACTIVE={id}")),
+        "explicit pin must still use staged compiler"
+    );
+    let active = install(false);
+    assert!(
+        active.status.success(),
+        "{}",
+        String::from_utf8_lossy(&active.stderr)
+    );
+    assert!(
+        check(false).contains(&format!("ACTIVE={id}")),
+        "legacy install must still activate compiler"
+    );
+    let before = std::fs::read(&marker).unwrap();
+    let refused = install(true);
+    assert!(
+        !refused.status.success(),
+        "staging must not replace an activated revision"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("cannot stage over activated toolchain")
+    );
+    assert_eq!(std::fs::read(&marker).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn installs_pins_and_builds_with_the_pinned_toolchain() {
     let dir = scratch("ok");
     let server = fake_dist(&dir.join("server"), None);
