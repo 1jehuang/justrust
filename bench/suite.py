@@ -1035,7 +1035,7 @@ def main() -> None:
     r.add_argument("--rustc-threads", type=int, choices=(1, 2, 4, 8, 16),
                    help="explicit nightly/JR frontend threads via Cargo config; changes dependency artifacts, warm up first")
     r.add_argument("--pass-times", action="store_true",
-                   help="cache-safe local-crate pass timings through explicit Cargo environment config")
+                   help="local-crate pass timings through explicit Cargo environment config; warmup required")
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
                    help="before each run wait up to SECS for no foreign rustc and load < 2")
     r.add_argument("-o", "--out", help="result file (default bench/results/<time>-<rev>.json)")

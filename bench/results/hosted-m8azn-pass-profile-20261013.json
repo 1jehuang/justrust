@@ -1,0 +1,228 @@
+{
+ "started": "2026-10-13T11:55:43-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.16",
+  "justrust_rev": "08a77e8",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (b7907f1fe 2026-10-12)",
+  "toolchain": "jr-b7907f1fe8f7",
+  "optimization_env": {
+   "JUSTRUST_TEST_FILTER_COMPILE": "0",
+   "JUSTRUST_CARGO_DAEMON": "0"
+  },
+  "rustc_threads": null,
+  "pass_times": true,
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "execution": "remote",
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 1,
+ "scenarios": {
+  "desktop-body-check": {
+   "what": "same body edit, `check` only (the inner type-check loop)",
+   "cmd": [
+    "check",
+    "--config",
+    "env.JUSTRUST_PASSES=\"on\"",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261013-115609370-2282562627",
+     "wall": 2.229,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 1.348,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 94.566353,
+      "client_wall": 2.225477506,
+      "host_wall": 1.3477463722229004,
+      "toolchain": "jr-b7907f1fe8f7",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 1.58,
+     "startup": 0.152,
+     "compile": 1.167,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.837,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.083,
+      "other": 0.227
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.23,
+     "foreign_rustc_before": 0,
+     "load_before": 2.47,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 1,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 2.229,
+    "min": 2.229,
+    "max": 2.229,
+    "quiet_n": 1,
+    "quiet_median": 2.229,
+    "phases": {
+     "startup": 0.152,
+     "compile": 1.167,
+     "test_run": 0.0,
+     "cpu": 1.58,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.837,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.083,
+     "other": 0.227
+    },
+    "units": 1
+   }
+  },
+  "desktop-test-edit": {
+   "what": "THE reference loop: one line inside a #[test] fn of the 118k-line UI crate, run its tests",
+   "cmd": [
+    "test",
+    "--config",
+    "env.JUSTRUST_PASSES=\"on\"",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "samples": [
+    {
+     "id": "20261013-115627127-2282562598",
+     "wall": 4.63,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 3.882,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 96.398741,
+      "client_wall": 4.628054773,
+      "host_wall": 3.8820836544036865,
+      "toolchain": "jr-b7907f1fe8f7",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 5.73,
+     "startup": 0.174,
+     "compile": 3.67,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 1.539,
+      "codegen": 0.89,
+      "link": 0.177,
+      "incremental": 0.56,
+      "other": 0.469
+     },
+     "link_secs": 0.177,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 0.61,
+     "foreign_rustc_before": 0,
+     "load_before": 2.2,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui (test)"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 1,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 4.63,
+    "min": 4.63,
+    "max": 4.63,
+    "quiet_n": 1,
+    "quiet_median": 4.63,
+    "phases": {
+     "startup": 0.174,
+     "compile": 3.67,
+     "test_run": 0.0,
+     "cpu": 5.73,
+     "link_secs": 0.177
+    },
+    "split": {
+     "frontend": 1.539,
+     "codegen": 0.89,
+     "link": 0.177,
+     "incremental": 0.56,
+     "other": 0.469
+    },
+    "units": 1
+   }
+  }
+ },
+ "finished": "2026-10-13T11:56:31-0700"
+}

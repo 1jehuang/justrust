@@ -349,3 +349,55 @@ build-count pricing change. Faster latency does not mean cheaper compute.
 The completed experiment did not change fleet or compiler defaults. Keeping
 the faster own dogfood host requires a separate default-nightly controlled
 comparison and actual hosted worker stop/start acceptance, now in progress.
+
+## Faster live dogfood host and corrected hosted routing
+
+The separate default-nightly comparison uses the same frozen ee5699d client,
+nightly-2026-10-08, pinned sources, two warmups and seven measured samples.
+Compare hosted-cpu-default-c7i-before-20261013.json against
+hosted-cpu-default-m8azn-after-20261013.json:
+
+```text
+scenario                       A med   B med   delta      %  verdict
+desktop-noop-test               0.95    0.77   -0.18   -19%  within noise
+desktop-body-check              2.43    1.89   -0.54   -22%  faster
+desktop-test-edit               7.24    5.21   -2.03   -28%  faster
+```
+
+Exact reference 7.235 -> 5.208 s, body 2.428 -> 1.886 s. Every measured
+reference/noop passed three tests, reference/body compiled one local unit,
+no dependencies. The faster CPU is now retained on our own dogfood account.
+Actual authenticated worker stop and connect restarted the same instance
+with the same volume and M8azn type. No other account host, fleet default,
+compiler default, build price, authorization, quota or ledger was changed.
+Hourly machine estimate remains 2.47752 versus the old 1.428 USD/hour.
+
+The lifecycle test exposed a real dogfood bug: local resident prebuilds
+answered before hosted routing. Runs 20261013-113748084-2040116-pre and
+20261013-114753507-2040116-pre are local, not hosted acceptance. 08a77e8
+moves route selection before local daemon/shadow shortcuts and adds two
+order/argument regressions. Guaranteed hosted check, full 345 tests and
+warning-free lint passed at 20261013-115013528-2248540,
+20261013-115014431-2248699 and 20261013-115017412-2248920. After reinstall,
+ordinary defaults with the local daemon enabled passed check
+20261013-115223558-2262223, four routing tests
+20261013-115229000-2262966 and lint 20261013-115229660-2263025. Actual
+profiles say remote on hosted, 56 fresh units and zero compiled. This is a
+routing correctness fix, not an unmeasured speed claim. Temporary-trial
+rollback scheduling was cancelled only after these live acceptance gates.
+
+## Remaining compiler cost on the faster host
+
+hosted-m8azn-pass-profile-20261013.json records diagnostic single samples,
+not a before/after speed comparison. Explicit JR reference run
+20261013-115627127-2282562598 passed three tests, one local unit: 3.67 s
+compile, 1.539 s frontend, 0.890 s codegen, 0.560 s incremental, 0.177 s
+link and 0.469 s other. Body run 20261013-115609370-2282562627 reports
+0.837 s frontend. These measured frontend and persistence costs remain
+well above what the 10x target allows. Nested query timings are not additive.
+
+The first profiling warmup, 20261013-115543316-2282562904, reported 887
+compiled units and 26.02 s. It was excluded, but this means the experiment
+must not be described as cache-neutral without further investigation.
+Benchmark help now requires warmup rather than claiming cache-safe behavior.
+No local prebuild or shadow-only test is presented as full-workspace 10x.

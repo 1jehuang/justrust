@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-13",
+  "scope": "verified own-account host only",
+  "instance_type": "m8azn.6xlarge",
+  "volume_preserved": true,
+  "worker_stop_start_verified": true,
+  "installed_routing_fix": "08a77e8",
+  "default_check_with_daemon_enabled": "20261013-115223558-2262223",
+  "default_lint_with_daemon_enabled": "20261013-115229660-2263025",
+  "hourly_machine_estimate_usd": 2.47752,
+  "previous_hourly_machine_estimate_usd": 1.428,
+  "fleet_default_changed": false,
+  "compiler_default_changed": false,
+  "billing_or_isolation_changed": false,
+  "temporary_rollback_cancelled_after_acceptance": true
+}

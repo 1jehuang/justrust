@@ -5561,3 +5561,19 @@ Candidate 343 tests 20261013-112901865-2119204 and all-target lint
 restored; hosted recovery 20261013-113350378-2148872 passed 56 fresh units,
 zero compiled. Hourly machine estimate 73% higher, customer build pricing
 unchanged. 10x still unmet. Default-nightly promotion gate follows separately.
+
+## 2026-10-13: faster own dogfood host retained, hosted shortcut fixed
+
+Default nightly, same frozen client and pinned snapshots, seven samples:
+reference 7.235 -> 5.208 s (-28%, faster), body 2.428 -> 1.886 s (-22%,
+faster), noop within noise. Actual authenticated worker stop/start preserved
+M8azn type and volume. Own host only, hourly estimate 73% higher, no fleet,
+compiler, customer pricing, authorization or quota change. 10x remains unmet.
+08a77e8 fixes local prebuilds bypassing hosted defaults. Do not count the
+exported -pre runs as hosted. Full hosted 345 tests
+20261013-115014431-2248699 and warning-free lint115017412-2248920 pass.
+Installed daemon-enabled defaults115223558-2262223 and115229660-2263025
+are actually remote on hosted, 56 fresh units, zero compiled.
+JR/M8 phase diagnostic115627127-2282562598: frontend1.539s, codegen0.890s,
+incremental0.560s, link0.177s. Profiling warmup115543316-2282562904 reported
+887 compiled units, so cache-safe help claim removed rather than assumed.
