@@ -344,7 +344,13 @@ pub fn collect() -> Result<Status> {
                 status.recent = Some(Finished {
                     id: r.id.clone(),
                     label: label(&r.cwd, &r.args),
-                    wall: r.wall,
+                    // A remote run's wall is the machine's: show what the
+                    // caller waited (sync included).
+                    wall: r
+                        .remote
+                        .as_ref()
+                        .and_then(|_| load_summary(&runs.join(&r.id))?.remote)
+                        .map_or(r.wall, |ri| ri.client_wall.max(r.wall)),
                     ok: r.exit == 0,
                     ago,
                     place: place_of(read_meta(&runs.join(&r.id)).as_ref(), r.remote.is_some()),
