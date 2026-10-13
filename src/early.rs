@@ -757,8 +757,8 @@ fn experimental() -> bool {
     )
 }
 
-fn ra_config(target: &Path) -> Value {
-    json!({
+fn ra_config(target: &Path, resource_limited: bool) -> Value {
+    let mut config = json!({
         "checkOnSave": false,
         "check": {"workspace": false},
         "cargo": {
@@ -768,11 +768,19 @@ fn ra_config(target: &Path) -> Value {
         },
         "procMacro": {"enable": true},
         "diagnostics": {"enable": true, "experimental": {"enable": experimental()}},
-        "cachePriming": {"enable": true},
+        "cachePriming": {"enable": !resource_limited},
         "files": {"watcher": "server"},
         "lens": {"enable": false},
         "inlayHints": {"enable": false},
-    })
+    });
+    if resource_limited {
+        // The machine-local hosted launcher sets this mode under a hard
+        // memory/task cap. Eager whole-workspace priming exhausted that
+        // budget before becoming ready. Demand-load only queried files and
+        // bound concurrent analysis, without changing local defaults.
+        config["numThreads"] = json!(4);
+    }
+    config
 }
 
 impl Lsp {
@@ -792,7 +800,10 @@ impl Lsp {
         let stdout = child.stdout.take().context("stdout")?;
         let pending: Pending = Arc::default();
         let ready = Arc::new(Mutex::new(false));
-        let cfg = ra_config(&dir.join("target"));
+        let cfg = ra_config(
+            &dir.join("target"),
+            std::env::var("JUSTRUST_EARLY_RESOURCE_LIMITED").as_deref() == Ok("1"),
+        );
         {
             let (pending, ready, stdin, cfg) =
                 (pending.clone(), ready.clone(), stdin.clone(), cfg.clone());
@@ -1674,6 +1685,23 @@ fn daemon(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limited_analyzer_demand_loads_without_changing_local_defaults() {
+        let target = Path::new("/dedicated analyzer target");
+        let local = ra_config(target, false);
+        assert_eq!(local["cachePriming"]["enable"], true);
+        assert!(local.get("numThreads").is_none());
+        let limited = ra_config(target, true);
+        assert_eq!(limited["cachePriming"]["enable"], false);
+        assert_eq!(limited["numThreads"], 4);
+        for config in [local, limited] {
+            assert_eq!(config["checkOnSave"], false);
+            assert_eq!(config["cargo"]["targetDir"], json!(target));
+            assert_eq!(config["cargo"]["buildScripts"]["enable"], true);
+            assert_eq!(config["procMacro"]["enable"], true);
+        }
+    }
 
     #[test]
     fn source_metadata_uses_offline_host_graph_and_selected_toolchain() {

@@ -949,6 +949,7 @@ mod tests {
             "JUSTRUST_REAL_RUSTC",
             "JUSTRUST_EARLY_EXIT",
             "JUSTRUST_EARLY_LAUNCHER",
+            "JUSTRUST_EARLY_RESOURCE_LIMITED",
         ] {
             assert!(
                 !FORWARDED_ENV.contains(&var),
