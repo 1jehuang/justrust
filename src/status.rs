@@ -34,6 +34,8 @@ pub struct Active {
     pub label: String,
     pub cwd: String,
     pub args: Vec<String>,
+    /// "local", "remote" (own machine) or "hosted".
+    pub place: String,
     pub elapsed: f64,
     pub live: LiveState,
     pub units_finished: usize,
@@ -62,6 +64,20 @@ pub struct Finished {
     pub wall: f64,
     pub ok: bool,
     pub ago: f64,
+    pub place: String,
+}
+
+/// Where a run ran: its `meta.json` says, else the index's remote marker.
+fn place_of(meta: Option<&Meta>, remote: bool) -> String {
+    match meta.and_then(|m| m.place.clone()) {
+        Some(p) => p,
+        None if remote => crate::remote_build::place_name().into(),
+        None => "local".into(),
+    }
+}
+
+fn read_meta(dir: &Path) -> Option<Meta> {
+    serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -129,7 +145,17 @@ fn pick_reference<'a>(
     meta: &Meta,
     to_compile: Option<usize>,
 ) -> Option<&'a IndexEntry> {
-    let ok = |r: &&IndexEntry| r.cwd == meta.cwd && !r.compile_failed && r.id != meta.id;
+    // Remote runs line up with remote runs, local with local, when both exist.
+    let remote = meta.place.as_deref().is_some_and(|p| p != "local");
+    let same_place = index
+        .iter()
+        .any(|r| r.cwd == meta.cwd && r.remote.is_some() == remote);
+    let ok = |r: &&IndexEntry| {
+        r.cwd == meta.cwd
+            && !r.compile_failed
+            && r.id != meta.id
+            && (!same_place || r.remote.is_some() == remote)
+    };
     let same_args: Vec<&IndexEntry> = index
         .iter()
         .filter(ok)
@@ -277,10 +303,7 @@ pub fn collect() -> Result<Status> {
         if dir.join("summary.json").exists() {
             continue;
         }
-        let Some(meta) = std::fs::read(dir.join("meta.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Meta>(&b).ok())
-        else {
+        let Some(meta) = read_meta(&dir) else {
             continue;
         };
         if !pid_alive(meta.pid, meta.start) {
@@ -301,6 +324,7 @@ pub fn collect() -> Result<Status> {
             label: label(&meta.cwd, &meta.args),
             cwd: meta.cwd.clone(),
             args: meta.args.clone(),
+            place: place_of(Some(&meta), false),
             elapsed: now - meta.start,
             units_finished: done_units.len(),
             running,
@@ -323,6 +347,7 @@ pub fn collect() -> Result<Status> {
                     wall: r.wall,
                     ok: r.exit == 0,
                     ago,
+                    place: place_of(read_meta(&runs.join(&r.id)).as_ref(), r.remote.is_some()),
                 });
             }
         }
@@ -354,6 +379,8 @@ fn phase_word(a: &Active) -> String {
         "running" => "running".into(),
         "waiting for lock" => "waiting for lock".into(),
         "finishing" => "linking".into(),
+        "syncing" => "syncing".into(),
+        "building" if l.total == 0 => "building".into(),
         _ if l.total > 0 => format!("{}/{}", l.done, l.total),
         _ => "starting".into(),
     }
@@ -367,8 +394,9 @@ fn render_text(s: &Status) -> String {
             Some(r) => {
                 let _ = writeln!(
                     out,
-                    "{} {} in {}",
+                    "{} {} {} in {}",
                     r.label,
+                    r.place,
                     if r.ok { "finished" } else { "failed" },
                     dur(r.wall)
                 );
@@ -378,7 +406,14 @@ fn render_text(s: &Status) -> String {
         return out;
     }
     for a in &s.active {
-        let _ = write!(out, "{}  {}  {}", a.label, phase_word(a), dur(a.elapsed));
+        let _ = write!(
+            out,
+            "{}  {}  {}  {}",
+            a.label,
+            a.place,
+            phase_word(a),
+            dur(a.elapsed)
+        );
         if let Some(e) = &a.estimate {
             let _ = write!(
                 out,
@@ -410,11 +445,17 @@ pub fn render_waybar(s: &Status) -> String {
                 } else {
                     ("\u{f00d}", "failed")
                 };
-                let text = format!("{icon} {} {}", r.label, dur(r.wall));
+                let text = format!("{icon} {} [{}] {}", r.label, r.place, dur(r.wall));
                 format!(
-                    "{{\"text\": {}, \"tooltip\": {}, \"class\": \"{class}\"}}",
+                    "{{\"text\": {}, \"tooltip\": {}, \"class\": [\"{class}\", \"{}\"]}}",
                     json_escape(&text),
-                    json_escape(&format!("{} {}", r.id, if r.ok { "ok" } else { "failed" }))
+                    json_escape(&format!(
+                        "{} {} ({})",
+                        r.id,
+                        if r.ok { "ok" } else { "failed" },
+                        r.place
+                    )),
+                    r.place
                 )
             }
             None => "{\"text\": \"\", \"class\": \"idle\"}".into(),
@@ -422,7 +463,13 @@ pub fn render_waybar(s: &Status) -> String {
     };
     // Bar shows time taken so far, then progress. The time-left estimate
     // stays in the tooltip.
-    let mut text = format!("\u{e7a8} {} {} {}", a.label, dur(a.elapsed), phase_word(a));
+    let mut text = format!(
+        "\u{e7a8} {} [{}] {} {}",
+        a.label,
+        a.place,
+        dur(a.elapsed),
+        phase_word(a)
+    );
     let (class, pct) = match &a.estimate {
         Some(e) => {
             let over = a.elapsed > e.reference_wall * 1.2 && e.remaining < 2.0;
@@ -438,7 +485,7 @@ pub fn render_waybar(s: &Status) -> String {
     }
     let mut tip = String::new();
     for a in &s.active {
-        let _ = writeln!(tip, "{}  ({})", a.label, a.cwd);
+        let _ = writeln!(tip, "{}  ({}, {})", a.label, a.place, a.cwd);
         let _ = writeln!(tip, "  cargo {}", a.args.join(" "));
         let _ = writeln!(tip, "  elapsed {}, {}", dur(a.elapsed), phase_word(a));
         if let Some(e) = &a.estimate {
@@ -466,9 +513,10 @@ pub fn render_waybar(s: &Status) -> String {
         }
     }
     format!(
-        "{{\"text\": {}, \"tooltip\": {}, \"class\": \"{class}\", \"percentage\": {pct}}}",
+        "{{\"text\": {}, \"tooltip\": {}, \"class\": [\"{class}\", \"{}\"], \"percentage\": {pct}}}",
         json_escape(&text),
-        json_escape(tip.trim_end())
+        json_escape(tip.trim_end()),
+        a.place
     )
 }
 
@@ -517,6 +565,52 @@ mod tests {
             label("/x/repo", &s(&["build", "-p", "a", "-p", "b"])),
             "repo build"
         );
+    }
+
+    #[test]
+    fn waybar_shows_where_the_build_runs() {
+        let a = Active {
+            id: "r1".into(),
+            label: "jcode check".into(),
+            cwd: "/w".into(),
+            args: s(&["check"]),
+            place: "hosted".into(),
+            elapsed: 4.0,
+            live: LiveState {
+                phase: "syncing".into(),
+                ..Default::default()
+            },
+            units_finished: 0,
+            running: vec![],
+            estimate: None,
+        };
+        let st = Status {
+            active: vec![a],
+            recent: None,
+        };
+        let v: serde_json::Value = serde_json::from_str(&render_waybar(&st)).unwrap();
+        let text = v["text"].as_str().unwrap();
+        assert!(
+            text.contains("[hosted]") && text.contains("syncing"),
+            "{text}"
+        );
+        assert_eq!(v["class"], serde_json::json!(["starting", "hosted"]));
+        let done = Status {
+            active: vec![],
+            recent: Some(Finished {
+                id: "r2".into(),
+                label: "jcode test".into(),
+                wall: 12.0,
+                ok: true,
+                ago: 1.0,
+                place: "local".into(),
+            }),
+        };
+        let v: serde_json::Value = serde_json::from_str(&render_waybar(&done)).unwrap();
+        assert!(v["text"].as_str().unwrap().contains("[local]"));
+        assert_eq!(v["class"], serde_json::json!(["done", "local"]));
+        // Old runs without a place: local unless the index says remote.
+        assert_eq!(place_of(None, false), "local");
     }
 
     #[test]

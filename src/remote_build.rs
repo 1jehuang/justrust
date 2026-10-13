@@ -399,6 +399,8 @@ pub fn run_remote(
         Ok(h) => h,
         Err(m) => return infra(m),
     };
+    // Visible to `justrust status` (and the status bar) while it runs.
+    let mut live = LiveRun::start(&run_id, &cwd, &label, started_at);
     // Lifecycle events for the hosted operator dashboard (fire and forget).
     let report = |event: &str, code: Option<i32>| {
         if hosted {
@@ -496,6 +498,7 @@ pub fn run_remote(
                 }
                 if sync.is_none() {
                     report("running", None);
+                    live.phase("building", &machine);
                 }
                 sync = Some((files, ms, machine));
             }
@@ -551,6 +554,78 @@ pub fn run_remote(
     }
 }
 
+/// Where a remote build runs, for `justrust status`: "hosted" or "remote".
+pub fn place_name() -> &'static str {
+    match remote_backend::load() {
+        Some(remote_backend::Backend::Hosted) => "hosted",
+        _ => "remote",
+    }
+}
+
+/// Placeholder run directory (`meta.json` with our pid, `live.json`) for a
+/// remote build in flight, so `justrust status` lists it like a local one.
+/// Removed on drop unless the run was recorded (`summary.json` written), so
+/// a fallback to a local build does not leave a phantom active run.
+struct LiveRun {
+    dir: Option<PathBuf>,
+    state: crate::live::LiveState,
+}
+
+impl LiveRun {
+    fn start(run_id: &str, cwd: &Path, args: &[String], start: f64) -> LiveRun {
+        let Ok(dir) = crate::paths::runs_dir().map(|d| d.join(run_id)) else {
+            return LiveRun {
+                dir: None,
+                state: Default::default(),
+            };
+        };
+        let meta = crate::record::Meta {
+            id: run_id.to_string(),
+            args: args.to_vec(),
+            subcommand: args.first().cloned().unwrap_or_default(),
+            cwd: cwd.display().to_string(),
+            start,
+            pid: std::process::id(),
+            agent_session: std::env::var("JCODE_SESSION_ID").ok(),
+            place: Some(place_name().into()),
+            ..Default::default()
+        };
+        let ok = std::fs::create_dir_all(&dir).is_ok()
+            && serde_json::to_vec(&meta)
+                .is_ok_and(|b| std::fs::write(dir.join("meta.json"), b).is_ok());
+        let mut r = LiveRun {
+            dir: ok.then_some(dir),
+            state: Default::default(),
+        };
+        r.phase("syncing", "");
+        r
+    }
+
+    fn phase(&mut self, phase: &str, machine: &str) {
+        let Some(dir) = &self.dir else { return };
+        self.state.phase = phase.into();
+        if !machine.is_empty() {
+            self.state.active = vec![machine.to_string()];
+            self.state.active_since = vec![crate::paths::now()];
+        }
+        self.state.updated = crate::paths::now();
+        if let Ok(b) = serde_json::to_vec(&self.state) {
+            let _ = std::fs::write(dir.join(crate::live::FILE), b);
+        }
+    }
+}
+
+impl Drop for LiveRun {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_file(dir.join(crate::live::FILE));
+            if !dir.join("summary.json").exists() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+}
+
 /// Keep a local copy of the remote run so `justrust runs/show/log` and the
 /// router see it. Marked `remote` in the index. `run_files` (from a v4+
 /// agent) carries the output log, units, and samples.
@@ -575,6 +650,17 @@ fn record_remote(
         && let Err(e) = crate::remote_proto::unpack_run_files(run_files, &dir)
     {
         crate::remote::log_event(&format!("run {run_id}: remote run files: {e:#}"));
+    }
+    // The machine recorded the run as local to itself.
+    let meta_path = dir.join("meta.json");
+    if let Some(mut m) = std::fs::read(&meta_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<crate::record::Meta>(&b).ok())
+    {
+        m.place = Some(place_name().into());
+        if let Ok(b) = serde_json::to_vec_pretty(&m) {
+            let _ = std::fs::write(&meta_path, b);
+        }
     }
     s.remote = Some(crate::summary::RemoteInfo {
         machine: machine.to_string(),

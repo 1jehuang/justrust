@@ -56,6 +56,10 @@ pub struct Meta {
     /// (`route::local_reason`), `None` when routing was not consulted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    /// Where the build runs: "local", "remote" (own machine) or "hosted".
+    /// `None` in runs recorded before this existed (they were local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -352,6 +356,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         slot: slot.as_ref().map(|s| s.info.clone()),
         toolchain: pinned.as_ref().map(|tc| tc.id.clone()),
         route: crate::route::local_reason(),
+        place: Some("local".into()),
     };
     std::fs::write(run_dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
 
