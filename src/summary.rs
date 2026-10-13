@@ -656,9 +656,10 @@ pub fn build(
                 if peek.next() == Some(crate::test_runner::SUBCOMMAND) {
                     words = peek;
                     exe = words.next()?;
-                    if exe.starts_with(crate::test_pool::POOL_ARG) {
-                        return None;
-                    }
+                    // An explicit runner identifies a test independently of
+                    // Cargo's output layout. Forked Cargo puts test binaries
+                    // under target/debug/build/<package>/<hash>/out, not deps.
+                    return (!exe.starts_with(crate::test_pool::POOL_ARG)).then_some(exe);
                 }
                 let is_test = crate::sys::has_dir(exe, "deps") && {
                     let name = crate::sys::program_name(exe.as_ref());
@@ -1415,6 +1416,57 @@ mod tests {
             "not notable in a long run"
         );
     }
+    #[test]
+    fn pooled_tests_outside_deps_keep_counts_timing_and_verdict() {
+        let line = |t: f64, s: &str, l: &str| OutputLine {
+            t,
+            s: s.into(),
+            l: l.into(),
+        };
+        let lines = [
+            line(
+                0.8,
+                "e",
+                "Running `/h/justrust __test-runner --pool=env /w/target/debug/build/app/abc/out/app-abc alpha`",
+            ),
+            line(
+                1.0,
+                "e",
+                "Running `/h/justrust __test-runner /w/target/debug/build/app/abc/out/app-abc`",
+            ),
+            line(1.1, "o", "test alpha::one ... ok <0.010s>"),
+            line(
+                1.2,
+                "o",
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            ),
+        ];
+        let s = build(
+            &Meta {
+                subcommand: "test".into(),
+                ..Default::default()
+            },
+            GitInfo::default(),
+            0.0,
+            1.3,
+            0,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(s.tests.binaries.len(), 1);
+        assert_eq!(s.tests.binaries[0].name, "app-abc");
+        assert_eq!(s.tests.binaries[0].passed, 1);
+        assert_eq!(s.tests.slowest[0].binary, "app-abc");
+        // The test phase ends at libtest's result, not at process teardown.
+        assert!((s.phases.test_run - 0.2).abs() < 1e-9);
+        let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+        assert!(footer.contains("ok: 1 test passed"), "{footer}");
+        assert!(footer.contains("1 passed, 0 failed"), "{footer}");
+    }
+
     #[test]
     fn clippy_driver_processes_become_units() {
         let p = |comm: &str, cmd: &str| ProcRecord {
