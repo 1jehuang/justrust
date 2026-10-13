@@ -296,7 +296,7 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     }
 
     let t = &s.tests;
-    if !t.binaries.is_empty() {
+    if t.has_results() {
         let _ = writeln!(
             o,
             "\nTests: {} passed, {} failed, {} ignored, {} filtered out (libtest reports {:.2}s)",

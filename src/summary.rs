@@ -254,6 +254,16 @@ pub struct TestStats {
     pub timed: u64,
 }
 
+impl TestStats {
+    pub(crate) fn has_results(&self) -> bool {
+        !self.binaries.is_empty()
+            || self.passed > 0
+            || self.failed > 0
+            || self.ignored > 0
+            || self.filtered_out > 0
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TestTime {
     pub name: String,
@@ -1073,7 +1083,7 @@ impl Summary {
             )
         } else if self.exit != 0 {
             format!("FAILED (exit {})", self.exit)
-        } else if !self.tests.binaries.is_empty() {
+        } else if self.tests.has_results() {
             let mut v = format!(
                 "ok: {} test{} passed",
                 self.tests.passed,
@@ -1185,17 +1195,21 @@ impl Summary {
 
         // Tests.
         let t = &self.tests;
-        if !t.binaries.is_empty() {
+        if t.has_results() {
+            let binary_timing = if t.binaries.is_empty() {
+                "binary timing unavailable".to_owned()
+            } else {
+                format!(
+                    "{} binar{} in {:.2}s",
+                    t.binaries.len(),
+                    if t.binaries.len() == 1 { "y" } else { "ies" },
+                    p.test_run
+                )
+            };
             let _ = writeln!(
                 o,
-                "  tests   {} passed, {} failed, {} ignored, {} filtered out, {} binar{} in {:.2}s",
-                t.passed,
-                t.failed,
-                t.ignored,
-                t.filtered_out,
-                t.binaries.len(),
-                if t.binaries.len() == 1 { "y" } else { "ies" },
-                p.test_run
+                "  tests   {} passed, {} failed, {} ignored, {} filtered out, {}",
+                t.passed, t.failed, t.ignored, t.filtered_out, binary_timing
             );
             for line in slow_test_lines(t, p.test_run) {
                 let _ = writeln!(o, "          {line}");
@@ -1465,6 +1479,34 @@ mod tests {
         let footer = s.agent_footer(&crate::agent_output::Hidden::default());
         assert!(footer.contains("ok: 1 test passed"), "{footer}");
         assert!(footer.contains("1 passed, 0 failed"), "{footer}");
+    }
+
+    #[test]
+    fn test_results_without_binary_headers_are_not_hidden() {
+        let lines = [OutputLine {
+            t: 1.0, s: "o".into(),
+            l: "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s".into(),
+        }];
+        let s = build(
+            &Meta {
+                subcommand: "test".into(),
+                ..Default::default()
+            },
+            GitInfo::default(),
+            0.0,
+            1.1,
+            0,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &[],
+        );
+        assert!(s.tests.binaries.is_empty());
+        let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+        assert!(footer.contains("ok: 2 tests passed"), "{footer}");
+        assert!(footer.contains("2 passed, 0 failed"), "{footer}");
+        assert!(footer.contains("binary timing unavailable"), "{footer}");
     }
 
     #[test]
