@@ -4756,11 +4756,15 @@ jcode-desktop and justrust from their own lockfiles (dependency units only are
 published; workspace crates go to the localcache, which is never published).
 Store: 3373 -> 7185 manifests. jcode-tui keys in the index: **0 -> 529 of 701**.
 
-**The job cap mattered more than the store.** Jcode sets `jobs = 4`. Store
+**The job cap matters more than the store.** Jcode sets `jobs = 4`. Store
 hits are ~0.2 s each, so 605 of them ran 4 wide at 2.1 of 32 cores. The
-hosted agent already overrides jobs (`remote_agent::machine_jobs`), but it sets
-`CARGO_BUILD_JOBS`, which was keyed, so every hosted key differed from the
-store and from every other machine. 0a7d006 stops keying it.
+hosted agent already overrides jobs (`remote_agent::machine_jobs`, shipped
+before this session), so real hosted builds already ran at 32 jobs; the
+jobs 4 rows below are builds started over plain ssh (as in FINDINGS 55), not
+what users see. The override set `CARGO_BUILD_JOBS`, which was keyed, so every
+agent-run key differed from the store and from every other machine. 0a7d006
+stops keying it. The user-facing win of this session is the jobs-32 store
+rows: ~41-44 s -> ~36-39 s with all hits fetched (4-10%).
 
 | run (host, cold `check -p jcode-tui`) | wall | dependency hits |
 |---|---:|---:|
