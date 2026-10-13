@@ -132,3 +132,26 @@ change was made for this release. These timings are not a speedup comparison.
 The customer's Mac and private workspace are not accessible, so their actual
 retry cannot be claimed as verified by these checks. Hosted machines remain
 Linux and explicitly hosted projects must be Linux-compatible.
+
+## Direct behavioral comparison, 15:19 UTC
+
+On the same live Linux account host, an isolated replay of alpha.15's
+cross-platform registry installation failed with exit 101:
+
+```text
+error: could not find `justrust` in registry `crates-io` with version `=0.1.0-alpha.15`
+```
+
+The command kept the old version and locked-install arguments, adding only
+an isolated Cargo cache and installation root so the shared agent could not
+be changed. No executable was installed by the old command. Immediately
+following it, the exact alpha.16 cross-platform shell template downloaded
+its public Linux asset in a separate new HOME, verified the checksum, exited
+successfully and reported `justrust 0.1.0-alpha.16`.
+
+This is a directly observed failure-to-success change for the host-side
+installation that macOS clients require, not an inference from source
+inspection or an HTTP availability check. Combined with native Mac CI and
+the released binary's actual 330-test hosted run above, it checks both the
+fixed installation and functioning hosted service. It still does not claim
+an inaccessible private Mac session or native macOS remote compilation.
