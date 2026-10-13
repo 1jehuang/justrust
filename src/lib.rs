@@ -542,6 +542,22 @@ fn take_route_flags(args: Vec<OsString>) -> (Vec<OsString>, Option<&'static str>
     (out, mode)
 }
 
+/// Remote routing must precede local early answers. A resident prebuild or
+/// shadow result must not override an explicit or default hosted route.
+fn route_then_accelerate(
+    full: &[OsString],
+    route: impl FnOnce(&[OsString]),
+    daemon: impl FnOnce(&[OsString]) -> Option<i32>,
+    shadow: impl FnOnce(&[OsString]),
+) -> Option<i32> {
+    route(full);
+    if let Some(code) = daemon(full) {
+        return Some(code);
+    }
+    shadow(full);
+    None
+}
+
 fn agent(sub: &str, args: Vec<OsString>) -> ! {
     let (args, route_mode) = take_route_flags(args);
     if let Some(m) = route_mode {
@@ -550,17 +566,16 @@ fn agent(sub: &str, args: Vec<OsString>) -> ! {
     }
     let mut full = vec![OsString::from(sub)];
     full.extend(args);
-    // Opt-in resident daemon (JUSTRUST_BUILDD=1): identical concurrent
-    // requests share one build. Falls through when it cannot serve.
-    if let Some(code) = buildd::maybe_run(&full) {
+    // Hosted/forced remote runs exit before a local daemon can return a
+    // prebuild. Only a chosen local build may use local early answers.
+    if let Some(code) = route_then_accelerate(
+        &full,
+        route::maybe_remote,
+        buildd::maybe_run,
+        shadow::maybe_route,
+    ) {
         std::process::exit(code);
     }
-    // check, clippy and test may run on the remote machine when that is
-    // predicted faster. Returns when the build should run here.
-    // Opt-in (JUSTRUST_SHADOW=1): a leaf module's tests in a tiny shadow
-    // crate when only that file changed. Returns for the normal build.
-    shadow::maybe_route(&full);
-    route::maybe_remote(&full);
     let max_warnings = std::env::var("JUSTRUST_MAX_WARNINGS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -862,6 +877,53 @@ mod passthrough_tests {
         let argv: Vec<OsString> = args.iter().map(OsString::from).collect();
         passthrough_split(&argv)
             .map(|(s, r)| (s, r.into_iter().map(|a| a.into_string().unwrap()).collect()))
+    }
+
+    #[test]
+    fn routing_precedes_a_daemon_prebuild_answer() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let args = [OsString::from("check")];
+        let code = route_then_accelerate(
+            &args,
+            |full| {
+                assert_eq!(full, args);
+                calls.borrow_mut().push("route");
+            },
+            |_| {
+                calls.borrow_mut().push("daemon");
+                Some(23)
+            },
+            |_| calls.borrow_mut().push("shadow"),
+        );
+        assert_eq!(code, Some(23));
+        assert_eq!(*calls.borrow(), ["route", "daemon"]);
+    }
+
+    #[test]
+    fn local_fallback_keeps_daemon_then_shadow_order_and_arguments() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let args: Vec<OsString> = ["test", "--lib", "--", "fps_counter"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        let code = route_then_accelerate(
+            &args,
+            |full| {
+                assert_eq!(full, args);
+                calls.borrow_mut().push("route");
+            },
+            |full| {
+                assert_eq!(full, args);
+                calls.borrow_mut().push("daemon");
+                None
+            },
+            |full| {
+                assert_eq!(full, args);
+                calls.borrow_mut().push("shadow");
+            },
+        );
+        assert_eq!(code, None);
+        assert_eq!(*calls.borrow(), ["route", "daemon", "shadow"]);
     }
 
     #[test]
