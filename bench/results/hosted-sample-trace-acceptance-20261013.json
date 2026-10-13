@@ -1,0 +1,224 @@
+{
+ "started": "2026-10-13T15:21:03-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.16",
+  "justrust_rev": "f0afc0c2fe7a",
+  "benchmark_repo_rev": "f0afc0c2fe7a",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "e2bc92690d1e2f0c11f0d7be413fee97e70fb987df0bcfeadfea68e7a4e5f79e",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)",
+  "toolchain": "nightly-2026-10-08",
+  "optimization_env": {},
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "execution": "remote",
+  "hosted_early": false,
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 2,
+ "scenarios": {
+  "desktop-noop-test": {
+   "what": "no edit: pure overhead of a fresh `test` (cargo startup, fingerprints, test run)",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "samples": [
+    {
+     "id": "20261013-152106006-3541783284",
+     "wall": 0.728,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.165,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 97.116209,
+      "client_wall": 0.723754501,
+      "host_wall": 0.1650900840759277,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "remote_trace": {
+      "client_elapsed_ms": {
+       "roots": 0.1,
+       "charged": 410.3,
+       "flushed": 508.1,
+       "first_output": 694.2,
+       "exit": 723.2,
+       "recording": 723.7
+      },
+      "admission_awaited_ms": {
+       "identity": 20.0,
+       "charge": 228.0,
+       "identity_wait": 0.0,
+       "queue": 59.0,
+       "total": 287.0
+      }
+     },
+     "cpu": 0.27,
+     "startup": 0.16,
+     "compile": 0.0,
+     "test_run": 0.004,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 1.58,
+     "foreign_rustc_before": 0,
+     "load_before": 3.07,
+     "noisy": false,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261013-152106769-3541783225",
+     "wall": 0.766,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.167,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 115.981382,
+      "client_wall": 0.762734185,
+      "host_wall": 0.16678524017333984,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "remote_trace": {
+      "client_elapsed_ms": {
+       "roots": 0.2,
+       "charged": 364.9,
+       "flushed": 483.2,
+       "first_output": 659.5,
+       "exit": 762.5,
+       "recording": 762.7
+      },
+      "admission_awaited_ms": {
+       "identity": 26.0,
+       "charge": 209.0,
+       "identity_wait": 0.0,
+       "queue": 54.0,
+       "total": 263.0
+      }
+     },
+     "cpu": 0.28,
+     "startup": 0.162,
+     "compile": 0.0,
+     "test_run": 0.005,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 1.62,
+     "foreign_rustc_before": 0,
+     "load_before": 3.07,
+     "noisy": false,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 2,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 0.747,
+    "min": 0.728,
+    "max": 0.766,
+    "quiet_n": 2,
+    "quiet_median": 0.747,
+    "phases": {
+     "startup": 0.161,
+     "compile": 0.0,
+     "test_run": 0.005,
+     "cpu": 0.275,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 0.0
+   }
+  }
+ },
+ "finished": "2026-10-13T15:21:07-0700"
+}
