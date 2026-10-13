@@ -5246,6 +5246,14 @@ claim. Local `check` (`20261013-032741214-3434033`), the override regression
 (`20261013-032803535-3438523`) pass. Reinstalled with
 `cargo install --path . --locked`; all cited build summaries are exported.
 
+At 10:41 UTC, post-repair CI run `38383928546` for source commit
+`e41edabfa6ef688b29d44b9c3b70cb983112d657` completed successfully on all
+five jobs: Linux, arm64 macOS, Intel macOS, Windows and MSRV. Both native
+Mac jobs passed lint, tests, smoke, integration and release execution.
+Linux additionally passed package validation. This checks the committed
+repair on real platform runners, in addition to the installed client's
+live hosted success and failure propagation above.
+
 The customer's latest production run remains the original abandoned
 alpha.13 attempt. Their Mac and private workspace are not accessible here,
 so applying the update and observing their own retry remains externally
