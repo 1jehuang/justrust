@@ -5603,3 +5603,11 @@ incremental0.560s, link0.177s. Profiling warmup115543316-2282562904 reported
 - All21 measured remote samples have actual hosted markers and exit0.
   Raw versus-20261013-123317-08a77e8-dirty.json and exact exported records
   preserved. Remote CPU/RSS are client-only, not server resource comparisons.
+
+### Hosted child file-creation fidelity (2026-10-13)
+
+- `7096694` preserves caller umask per run child. Real host SSH `0002` versus caller `0022` caused seven unchanged package-security fixtures to reject group-writable directories. Guards and pinned source were not weakened.
+- 21 real protocol/subprocess tests cover concurrent0077/0022/legacy children, invalid metadata rejection, metadata stripping, atomic replacement and recorded/raw/recorded artifact reuse (`20261013-125945235-2676755`). Full351 and warning-free all-target lint passed before and after install.
+- Installed defaults genuinely hosted: check `20261013-130405588-2703785`, full351tests `20261013-130420296-2705417`, lint `20261013-130423685-2705593` all0compiled56fresh. First connection sync14.16s is disclosed, not a latency win.
+- All16 unchanged package/security tests pass `20261013-130424881-2705665`. Full UI changes1295/8/10 to1302/1/10. Remaining viewport assertion fails isolated default and optimizedJR; neither full suite is clean, default compiler unchanged.
+- Exact14 acceptance/failure records and details: `docs/hosted-umask-20261013.md`. This is an execution-correctness fix, not a measured speedup or10x claim.
