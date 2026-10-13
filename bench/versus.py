@@ -335,6 +335,21 @@ def geomean(xs: list[float]) -> float:
     return math.exp(sum(map(math.log, xs)) / len(xs)) if xs else float("nan")
 
 
+def contention_reason(workload: dict, base: str, candidate: str) -> str | None:
+    samples = workload.get("samples")
+    if not isinstance(samples, dict):
+        return "unverified contention"
+    for name in (base, candidate):
+        rows = samples.get(name)
+        if not isinstance(rows, list) or not rows:
+            return "unverified contention"
+        if any(isinstance(row, dict) and row.get("noisy") is True for row in rows):
+            return "contended"
+        if any(not isinstance(row, dict) or row.get("noisy") is not False for row in rows):
+            return "unverified contention"
+    return None
+
+
 def scoreboard(res: dict) -> str:
     names = res["stacks"]
     base = names[0]
@@ -342,11 +357,17 @@ def scoreboard(res: dict) -> str:
     head += [f"instr {s}/{base}" for s in names[1:]]
     rows = ["| " + " | ".join(head) + " |", "|" + "---|" + "---:|" * (len(head) - 1)]
     speed: dict[str, list[float]] = {s: [] for s in names[1:]}
+    blocked = {s: False for s in names[1:]}
     for wname, w in res["workloads"].items():
         st = w["stats"]
         cells = [wname + (" (cold)" if w["cold"] else "")]
         cells += [f"{fmt_s(st[s])} ({st[s]['min']:.1f}-{st[s]['max']:.1f})" for s in names]
         for s in names[1:]:
+            reason = contention_reason(w, base, s)
+            if reason:
+                blocked[s] = True
+                cells.append(reason)
+                continue
             x = speedup(st[base], st[s])
             speed[s].append(x)
             v = verdict(st[base], st[s])
@@ -357,7 +378,10 @@ def scoreboard(res: dict) -> str:
             a, b = st[base]["instructions"], st[s]["instructions"]
             cells.append(f"{b / a:.2f}" if a and b else "-")
         rows.append("| " + " | ".join(cells) + " |")
-    geo = ["**geomean**"] + [""] * len(names) + [f"**{geomean(speed[s]):.2f}x**" for s in names[1:]]
+    geo = ["**geomean**"] + [""] * len(names) + [
+        "not comparable" if blocked[s] or not speed[s] else f"**{geomean(speed[s]):.2f}x**"
+        for s in names[1:]
+    ]
     geo += [""] * (len(names) - 1)
     rows.append("| " + " | ".join(geo) + " |")
     return "\n".join(rows)
@@ -439,6 +463,9 @@ Every workload runs on every stack on the same pinned sources, round-robin
 with a rotating order, {res['runs']} measured rounds after {res['warmup']} warmup.
 Wall medians (min-max). `Nx` = stock median / stack median; **bold** when
 the ranges are disjoint and the move is above 10%, `~` otherwise.
+`contended` suppresses wall-speed ratios when either stack has a noisy sample;
+`unverified contention` means the required sample flags are absent. Raw wall
+medians remain visible. A geomean is not comparable if any workload is excluded.
 `instr` = user-space instructions retired by the whole build tree relative
 to stock: nearly noise-free, so it shows compiler work saved even when wall
 ranges overlap.
@@ -588,7 +615,10 @@ def cmd_compare(args) -> None:
             pct = 100 * (sb["median"] - sa["median"]) / sa["median"]
             ia, ib = sa["instructions"], sb["instructions"]
             ipct = f"{100 * (ib - ia) / ia:+7.1f}%" if ia and ib else "       -"
-            print(f"{w:16s} {s:12s} {sa['median']:8.2f} {sb['median']:8.2f} {pct:+5.0f}% {ipct}  {verdict(sa, sb)}")
+            reason = contention_reason(a['workloads'][w], s, s) or contention_reason(b['workloads'][w], s, s)
+            percent = f"{pct:+5.0f}%" if reason is None else '     -'
+            decision = reason or verdict(sa, sb)
+            print(f"{w:16s} {s:12s} {sa['median']:8.2f} {sb['median']:8.2f} {percent} {ipct}  {decision}")
 
 
 def cmd_clean(_args) -> None:
