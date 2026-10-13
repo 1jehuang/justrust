@@ -4992,3 +4992,44 @@ aws-sdk-bedrock.
 Host runs: 20261013-051819907-233191 .. 20261013-052104092-284623 (this
 change), 20261013-051206447-165622 .. -051428313-209773 (before),
 20261013-052214469-294010 .. -052321715-316128 (store off).
+
+## 68. jr-rustc parallel upstream monomorphizations: the targeted pass gets 2.6x faster, the loop does not (2026-10-13)
+
+Item 3 of FINDINGS 56 (rustc serial passes). Self-profile on the Desktop
+reference loop showed every collector thread blocked ~285 ms in
+`upstream_drop_glue_for` at the start of the mono walk: the first upstream
+generic computes `upstream_monomorphizations`, which decodes 623 crates'
+exported generics one by one. Change (jr-rustc branch
+`jr-par-upstream-mono`, d6f55210de1e, not merged into `justrust`): decode
+`exported_generic_symbols` for all crates with `par_for_each_in` before the
+serial merge (result order unchanged: the merge still walks crates in order),
+and start the query during the lints/dead-code `par_fns` in `analysis`, so
+it overlaps work that leaves threads idle. Switch:
+`JUSTRUST_RUSTC_PAR_UPSTREAM_MONO=0`.
+
+Factor `jr-par-upstream-mono` (release build of the branch,
+`JR_RUSTC_DIR=~/jr-rustc-bf JR_RUSTC_MODE=release`, n=8 interleaved,
+`factors-20261012-223235-b687ec7aa473-dirty.json`, load average 13-18 from
+other agents, every sample flagged noisy): on 7.42 s (5.8-10.0), off 7.33 s
+(6.1-14.2), **-0.09 s, within noise**. Per pass, medians over the 8 runs:
+
+| pass | on | off | delta |
+|---|---:|---:|---:|
+| monomorphization_collector_graph_walk | 0.25 s | 0.64 s | -0.39 |
+| codegen_crate | 0.98 s | 1.50 s | -0.53 |
+| incr persist (serialize_dep_graph) | 0.79 s | 1.00 s | -0.21 |
+| macro expansion | 1.30 s | 1.12 s | +0.18 |
+| misc_checking_3 (lints, where the prefetch now runs) | 0.59 s | 0.41 s | +0.18 |
+| unit CPU | 8.87 s | 7.73 s | +1.14 |
+
+The targeted wait is gone (walk 2.6x faster, every on sample under every off
+sample), but the decode moved into the lints phase and showed up there, and
+the run costs 1.1 s more CPU. Macro expansion, which this does not touch,
+moved by the same amount as the gain, so the machine noise is the size of
+the effect. Not shipped. Worth a rerun on a quiet machine (ideally the
+32-core host, where the decode has more idle threads to use) before
+deciding; the branch is pushed.
+
+Process note: the first attempt aborted because another agent reinstalled
+justrust mid-run (`factors.py` refuses to mix versions). Pin a copy:
+`JUSTRUST=<copy of the binary> bench/factors.py run ...`.
