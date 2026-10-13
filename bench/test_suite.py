@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Safety checks for hosted benchmark accounting (no network or builds)."""
 import argparse
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -21,6 +23,29 @@ class HostedMeasurements(unittest.TestCase):
         for remote in (None, {}, {"client_wall": 1}, "hosted"):
             with self.subTest(remote=remote), self.assertRaises(ValueError):
                 suite.remote_measurement({"wall": 1.0, "remote": remote})
+
+    def test_remote_compiler_fallback_is_not_an_optimized_measurement(self):
+        expected = "jr-b7907f1fe8f7"
+        with patch.object(suite, "TOOLCHAIN", expected):
+            for actual in (None, "system", "nightly-2026-10-08", "jr-1234567"):
+                with self.subTest(actual=actual), self.assertRaises(ValueError):
+                    suite.remote_measurement({"wall": 1.0, "toolchain": actual,
+                                              "remote": {"machine": "hosted"}})
+            sample = suite.remote_measurement({"wall": 1.0, "toolchain": expected,
+                                              "remote": {"machine": "hosted"}})
+            self.assertEqual(sample["toolchain"], expected)
+
+    def test_environment_finds_staged_compiler_and_prefers_activated(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(suite, "JR_HOME", Path(tmp)):
+            spec = "jr-b7907f1fe8f7"
+            staged = Path(tmp) / "toolchains" / "staged" / spec / "bin" / "rustc"
+            staged.parent.mkdir(parents=True)
+            staged.touch()
+            self.assertEqual(suite.toolchain_rustc(spec), staged)
+            active = Path(tmp) / "toolchains" / spec / "bin" / "rustc"
+            active.parent.mkdir(parents=True)
+            active.touch()
+            self.assertEqual(suite.toolchain_rustc(spec), active)
 
     def test_local_target_reset_is_not_a_cold_hosted_build(self):
         args = argparse.Namespace(toolchain="system", remote=True, synth=None,

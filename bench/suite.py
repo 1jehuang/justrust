@@ -471,7 +471,11 @@ def remote_measurement(summary: dict) -> dict:
     remote = summary.get("remote")
     if not isinstance(remote, dict) or not remote.get("machine"):
         raise ValueError("forced remote benchmark fell back locally")
-    return {**remote, "host_wall": summary["wall"], "target_state": "persistent remote target"}
+    actual_toolchain = summary.get("toolchain") or "system"
+    if actual_toolchain != TOOLCHAIN:
+        raise ValueError(f"forced remote benchmark used {actual_toolchain}, expected {TOOLCHAIN}")
+    return {**remote, "host_wall": summary["wall"], "toolchain": actual_toolchain,
+            "target_state": "persistent remote target"}
 
 
 def prebuilt_store(s: Scenario, root: Path) -> None:
@@ -748,6 +752,13 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
     return {"what": s.what, "cmd": s.cmd, "samples": samples, "stats": stats(samples)}
 
 
+def toolchain_rustc(spec: str) -> Path:
+    """Explicit staged compilers are not in the automatic toolchain namespace."""
+    installed = JR_HOME / "toolchains" / spec / "bin" / "rustc"
+    staged = JR_HOME / "toolchains" / "staged" / spec / "bin" / "rustc"
+    return staged if not installed.is_file() and staged.is_file() else installed
+
+
 def env_info() -> dict:
     def tryrun(cmd):
         try:
@@ -773,7 +784,7 @@ def env_info() -> dict:
         if "JUSTRUST_BENCH_DIRTY" in os.environ
         else bool(tryrun(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"])),
         "rustc": tryrun(["rustc", "-V"]) if TOOLCHAIN == "system" else tryrun(
-            [str(JR_HOME / "toolchains" / TOOLCHAIN / "bin" / "rustc"), "-V"]),
+            [str(toolchain_rustc(TOOLCHAIN)), "-V"]),
         "toolchain": TOOLCHAIN,
         "cargo": tryrun(["cargo", "-V"]),
         "governor": tryrun(["cat", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]),
