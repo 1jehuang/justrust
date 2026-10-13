@@ -5700,3 +5700,24 @@ full tests 20261013-155805477-3862970, strict all-target clippy
 - Installed plain default-hosted check `20261013-160058612-3890266`, full tests `20261013-160059348-3890346` (360 passed, 0 failed, 2 ignored), and strict all-target lint `20261013-160102069-3890192` all exit 0, truly hosted, 24 cores, 0 compiled / 56 fresh. Exact three own records exported.
 - Regional owner confirmed accepted west M8azn and live counted-reclamation guard. Independent actual-source regional/outage checks passed 11 cases after reproducing a compound AWS + failed database rollback cap leak. Details and attribution: `docs/hosted-west-acceptance-20261013.md`.
 - Acceptance completed at 23:01:02 UTC; the owner subsequently announced an exclusive trial window starting at 23:01 UTC. No subsequent host calls or speed claim. Matched warm east/west results remain within noise, and 10x stock-local remains unmet.
+
+## 2026-10-13: c8a.8xlarge vs m8azn.6xlarge (us-west-2, own host, same volume)
+
+Reversible resize of i-0e052af0d41ab457e, same frozen client, nightly-2026-10-08.
+Defaults (2+7): `compare hosted-region-after-west hosted-chip-c8a-west`:
+noop 0.81 -> 0.83, body 1.93 -> 2.04 (+6%), reference 5.37 -> 5.60 (+4%),
+all within noise but every row slower on c8a. Workspace-threads sweep on the
+reference loop (2+5, medians):
+
+| threads | c8a.8xlarge (32c, 4.5 GHz, $1.72/h) | m8azn.6xlarge (24c, 5.0 GHz, $2.48/h) |
+|---|---|---|
+| 1 | 5.97 | 5.63 |
+| 8 | 5.57 | 5.35 |
+| 16 | 5.64 | 5.34 |
+
+c8a is ~4-6% slower at every thread count; 8 -> 16 threads buys nothing on
+either chip, so c8a's extra 8 cores are unused by today's warm loop. The
+gap is about the clock ratio (5.0/4.5), as expected for a serial-bound loop.
+Per dollar c8a is ~30% cheaper for ~5% more latency. Own host restored to
+m8azn. Fleet default (c7i.8xlarge) unchanged. Revisit c8a once the toolchain
+uses >8 threads productively.
