@@ -66,6 +66,46 @@ class HostedMeasurements(unittest.TestCase):
         self.assertEqual(configured.cmd[-1], "fps_counter")
         self.assertIs(suite.compiler_scenario(original, None, False), original)
 
+    def test_workspace_threads_force_existing_wrapper_only_before_runtime_filter(self):
+        original = suite.BY_NAME["desktop-test-edit"]
+        command = list(original.cmd)
+        configured = suite.compiler_scenario(original, None, False, 6)
+        self.assertEqual(original.cmd, command)
+        self.assertIn('env.JCODE_FRONTEND_THREADS.value="6"', configured.cmd)
+        self.assertIn("env.JCODE_FRONTEND_THREADS.force=true", configured.cmd)
+        self.assertFalse(any("build.rustflags" in arg for arg in configured.cmd))
+        self.assertLess(configured.cmd.index("env.JCODE_FRONTEND_THREADS.force=true"),
+                        configured.cmd.index("--"))
+        self.assertEqual(configured.cmd[-1], "fps_counter")
+        with self.assertRaises(ValueError):
+            suite.compiler_scenario(original, 8, False, 6)
+
+    def test_workspace_thread_provenance_rejects_silent_wrapper_fallback(self):
+        unit = {"local": True, "name": "jcode_desktop_ui (test)", "frontend_threads": 6}
+        self.assertEqual(suite.workspace_thread_provenance({"top_units": [unit]}, 6), 6)
+        for observed in (None, 8):
+            with self.subTest(observed=observed), self.assertRaises(ValueError):
+                suite.workspace_thread_provenance(
+                    {"top_units": [dict(unit, frontend_threads=observed)]}, 6)
+        self.assertIsNone(suite.workspace_thread_provenance({"top_units": []}, 6))
+        self.assertIsNone(suite.workspace_thread_provenance(
+            {"top_units": [dict(unit, local=False, frontend_threads=None)]}, 6))
+
+    def test_workspace_thread_options_reject_ignored_controls_before_install(self):
+        for scenarios, toolchain, global_threads in [
+                (["desktop-test-edit"], "system", None),
+                (["desktop-test-edit"], "jr-b7907f1fe8f7", 8),
+                (["justrust-body-test"], "jr-b7907f1fe8f7", None),
+                (None, "jr-b7907f1fe8f7", None),
+                (["missing"], "jr-b7907f1fe8f7", None)]:
+            args = argparse.Namespace(toolchain=toolchain, remote=True, synth=None,
+                                      rustc_threads=global_threads, workspace_threads=6,
+                                      pass_times=False, scenarios=scenarios)
+            with self.subTest(args=args), patch.object(suite.subprocess, "run") as run, \
+                    self.assertRaises(SystemExit):
+                suite.cmd_run(args)
+            run.assert_not_called()
+
     def test_thread_options_require_nightly_before_any_build_or_install(self):
         args = argparse.Namespace(toolchain="system", remote=True, synth=None, rustc_threads=8, pass_times=True)
         with patch.object(suite.subprocess, "run") as run, self.assertRaises(SystemExit):
@@ -108,6 +148,7 @@ class HostedMeasurements(unittest.TestCase):
         suite.REMOTE = False
         suite.TOOLCHAIN = "system"
         suite.RUSTC_THREADS = None
+        suite.WORKSPACE_THREADS = None
         suite.PASS_TIMES = False
 
 

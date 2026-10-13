@@ -47,6 +47,7 @@ J = os.environ.get("JUSTRUST") or shutil.which("justrust") or "justrust"
 # (JUSTRUST_TOOLCHAIN) in its own target dir. "system" = the system rustc.
 TOOLCHAIN = "system"
 RUSTC_THREADS = None
+WORKSPACE_THREADS = None
 PASS_TIMES = False
 # A sample is noisy when other processes averaged more than this many cores
 # or another rustc was running when it started.
@@ -646,6 +647,10 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         # The timing is still valid; a flaky test in a pinned snapshot must
         # not abort an hour of benchmarking. Recorded per sample.
         print(f"  note {s.name}: {tests_failed} test(s) failed (justrust log {rid})", file=sys.stderr)
+    try:
+        workspace_threads = workspace_thread_provenance(sm, WORKSPACE_THREADS)
+    except ValueError as e:
+        sys.exit(f"bench: {s.name}: {e} (justrust log {rid})")
     local = [u for u in sm.get("top_units", []) if u.get("local")]
     split = {"frontend": 0.0, "codegen": 0.0, "link": 0.0, "incremental": 0.0, "other": 0.0}
     for u in local:
@@ -683,6 +688,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         "load_before": load,
         "noisy": res.get("avg_other_cores", 0.0) > NOISY_CORES or rustc > 0,
         "top_unit": local[0]["name"] if local else None,
+        "workspace_frontend_threads": workspace_threads,
     }
 
 
@@ -774,13 +780,34 @@ def toolchain_rustc(spec: str) -> Path:
     return staged if not installed.is_file() and staged.is_file() else installed
 
 
-def compiler_scenario(s: Scenario, threads: int | None, passes: bool) -> Scenario:
+def workspace_thread_provenance(summary: dict, expected: int | None) -> int | None:
+    """Verify the requested wrapper setting on actual compiled UI units.
+
+    No-op and interface-cutoff runs may have no UI compiler invocation, so
+    they carry no observed thread count instead of inventing one.
+    """
+    units = [u for u in summary.get("top_units", []) if u.get("local")
+             and (u["name"] == "jcode_desktop_ui"
+                  or u["name"].startswith("jcode_desktop_ui ("))]
+    counts = {u.get("frontend_threads") for u in units}
+    if expected is not None and units and counts != {expected}:
+        raise ValueError(f"workspace wrapper did not use {expected} threads: {counts}")
+    return next(iter(counts)) if len(counts) == 1 else None
+
+
+def compiler_scenario(s: Scenario, threads: int | None, passes: bool,
+                      workspace_threads: int | None = None) -> Scenario:
     """Explicit Cargo config survives hosted transport, unlike arbitrary env.
 
     Never mutate shared scenarios or put Cargo options after libtest's --.
     The effective command is saved with every result for reproducibility.
     """
+    if threads is not None and workspace_threads is not None:
+        raise ValueError("global rustc threads override the workspace wrapper control")
     configs = []
+    if workspace_threads is not None:
+        configs += ["--config", f'env.JCODE_FRONTEND_THREADS.value="{workspace_threads}"',
+                    "--config", "env.JCODE_FRONTEND_THREADS.force=true"]
     if threads is not None:
         configs += ["--config", f'build.rustflags=["-Zthreads={threads}"]']
     if passes:
@@ -829,6 +856,7 @@ def env_info() -> dict:
         "toolchain": TOOLCHAIN,
         "optimization_env": optimization_env(),
         "rustc_threads": RUSTC_THREADS,
+        "workspace_threads": WORKSPACE_THREADS,
         "pass_times": PASS_TIMES,
         "cargo": tryrun(["cargo", "-V"]),
         "governor": tryrun(["cat", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]),
@@ -864,13 +892,20 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
-    global TOOLCHAIN, REMOTE, RUSTC_THREADS, PASS_TIMES
+    global TOOLCHAIN, REMOTE, RUSTC_THREADS, WORKSPACE_THREADS, PASS_TIMES
     TOOLCHAIN = args.toolchain
     RUSTC_THREADS = getattr(args, "rustc_threads", None)
+    WORKSPACE_THREADS = getattr(args, "workspace_threads", None)
     PASS_TIMES = getattr(args, "pass_times", False)
-    if (RUSTC_THREADS is not None or PASS_TIMES) and not TOOLCHAIN.startswith(("nightly-", "jr-")):
+    if WORKSPACE_THREADS is not None:
+        if RUSTC_THREADS is not None:
+            sys.exit("bench: global rustc threads override workspace threads; choose only one")
+        if (args.synth is not None or not getattr(args, "scenarios", None)
+                or any(n not in BY_NAME or BY_NAME[n].snapshot != "desktop" for n in args.scenarios)):
+            sys.exit("bench: workspace threads require named Desktop wrapper scenarios")
+    if (RUSTC_THREADS is not None or WORKSPACE_THREADS is not None or PASS_TIMES) and not TOOLCHAIN.startswith(("nightly-", "jr-")):
         sys.exit("bench: compiler thread/pass options require an explicit nightly or JR toolchain")
-    if (RUSTC_THREADS is not None or PASS_TIMES) and args.synth is not None:
+    if (RUSTC_THREADS is not None or WORKSPACE_THREADS is not None or PASS_TIMES) and args.synth is not None:
         sys.exit("bench: compiler thread/pass options require named pinned scenarios")
     REMOTE = getattr(args, "remote", False)
     if REMOTE and args.synth is not None:
@@ -905,7 +940,7 @@ def cmd_run(args) -> None:
     result = {"started": started, "env": info, "runs_per_scenario": args.n, "scenarios": {}}
     for k, name in enumerate(names):
         print(f"bench: {name} ({k + 1}/{len(names)})", file=sys.stderr)
-        scenario = compiler_scenario(BY_NAME[name], RUSTC_THREADS, PASS_TIMES)
+        scenario = compiler_scenario(BY_NAME[name], RUSTC_THREADS, PASS_TIMES, WORKSPACE_THREADS)
         result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
@@ -1034,6 +1069,9 @@ def main() -> None:
                         "not a cold hosted benchmark")
     r.add_argument("--rustc-threads", type=int, choices=(1, 2, 4, 8, 16),
                    help="explicit nightly/JR frontend threads via Cargo config; changes dependency artifacts, warm up first")
+    r.add_argument("--workspace-threads", type=int, choices=(1, 2, 4, 6, 8, 12, 16),
+                   help="Desktop workspace wrapper threads via forced Cargo env config; "
+                        "registry compiler flags stay unchanged, warm up first")
     r.add_argument("--pass-times", action="store_true",
                    help="local-crate pass timings through explicit Cargo environment config; warmup required")
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
