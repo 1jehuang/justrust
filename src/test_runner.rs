@@ -132,6 +132,42 @@ fn is_libtest(bin: &Path) -> bool {
     }
 }
 
+/// Cargo's test targets, not rustdoc's temporary binaries. Forked Cargo uses
+/// build/<package>/<hash>/out/<crate>-<hash> instead of the upstream deps dir.
+fn is_cargo_test_binary(bin: &Path) -> bool {
+    let Some(text) = bin.to_str() else {
+        return false;
+    };
+    if crate::sys::has_dir(text, "deps") {
+        return true;
+    }
+    let Some(out) = bin
+        .parent()
+        .filter(|p| p.file_name().is_some_and(|n| n == "out"))
+    else {
+        return false;
+    };
+    let Some(hash) = out.parent() else {
+        return false;
+    };
+    let Some(id) = hash.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let build = hash.parent().and_then(Path::parent);
+    if id.len() != 16
+        || !id.bytes().all(|c| c.is_ascii_hexdigit())
+        || !build.is_some_and(|p| p.file_name().is_some_and(|n| n == "build"))
+    {
+        return false;
+    }
+    let Some(name) = bin.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    name.strip_suffix(id)
+        .is_some_and(|prefix| prefix.ends_with('-'))
+}
+
 /// `justrust __test-runner <binary> <args...>`: exec the binary.
 pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
     let mut bin = args.next();
@@ -171,7 +207,7 @@ pub fn main(mut args: impl Iterator<Item = OsString>) -> ! {
         && let Some(bin_s) = bin.to_str()
         // Cargo's test targets only. rustdoc also runs doc-test binaries
         // through the runner, from a temp dir, and reads their result itself.
-        && crate::sys::has_dir(bin_s, "deps")
+        && is_cargo_test_binary(Path::new(bin_s))
     {
         let mut all: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
         all.extend(user_s);
@@ -225,6 +261,26 @@ mod tests {
 
     fn os(v: &[&str]) -> Vec<OsString> {
         v.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn recognizes_forked_cargo_tests_without_pooling_rustdoc_or_build_outputs() {
+        for bin in [
+            "/w/target/debug/deps/app-123",
+            "/w/target/debug/build/app/0123456789abcdef/out/app-0123456789abcdef",
+            "/w/target/release/build/app/0123456789abcdef/out/app-0123456789abcdef.exe",
+        ] {
+            assert!(is_cargo_test_binary(Path::new(bin)), "{bin}");
+        }
+        for bin in [
+            "/tmp/rustdoctest123/rust_out",
+            "/w/target/debug/build/app-0123456789abcdef/out/rust_out",
+            "/w/target/debug/build/app/0123456789abcdef/out/app-1111111111111111",
+            "/w/target/debug/build/app/not-a-unit-hash/out/app-not-a-unit-hash",
+            "/w/target/debug/other/app/0123456789abcdef/out/app-0123456789abcdef",
+        ] {
+            assert!(!is_cargo_test_binary(Path::new(bin)), "{bin}");
+        }
     }
 
     #[test]
