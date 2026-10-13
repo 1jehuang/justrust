@@ -14,6 +14,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Marks the binaries as release builds: they update themselves
+  # (src/update.rs). Source builds never do.
+  JUSTRUST_RELEASE_BUILD: "1"
   # Small, fast release binaries without editing Cargo.toml.
   DIST_FLAGS: >-
     --config profile.release.lto="thin"

@@ -596,6 +596,8 @@ fn record_remote(
     }
     crate::split_index::record(&s);
     crate::split_index::maybe_refresh(&s);
+    crate::telemetry::record_run(&s, true);
+    crate::telemetry::maybe_spawn_background();
 }
 
 /// `justrust remote check|test|...`: always remote (starting the machine if

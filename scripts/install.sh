@@ -234,6 +234,13 @@ main() {
     FINISHED=1
     report installer_finish success ""
 
+    # Opted out while installing: keep it off for every later run too
+    # (the environment variable only covers this shell).
+    if telemetry_off && "$BIN" telemetry --help </dev/null >/dev/null 2>&1; then
+        "$BIN" telemetry off </dev/null >/dev/null 2>&1 || true
+        say "telemetry off (justrust telemetry on to change)"
+    fi
+
     # Tell installed coding agents to use justrust (global CLAUDE.md /
     # AGENTS.md, a marked block that `justrust agents --remove` takes out).
     if [ -z "${JUSTRUST_NO_AGENTS:-}" ] && "$BIN" agents --help </dev/null >/dev/null 2>&1; then

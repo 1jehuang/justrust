@@ -58,6 +58,8 @@ fn run(ws: &Path, home: &Path) -> (bool, String) {
         .current_dir(ws)
         .env("JUSTRUST_SHADOW", "1")
         .env("JUSTRUST_HOME", home)
+        .env("JUSTRUST_NO_TELEMETRY", "1")
+        .env("JUSTRUST_NO_UPDATE", "1")
         .env("JUSTRUST_REMOTE", "off")
         .env("JUSTRUST_BUILDD", "0")
         .env("JUSTRUST_SLOTS", "0")

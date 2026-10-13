@@ -143,6 +143,8 @@ fn justrust(home: &Path, server: &str, cwd: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_justrust"));
     c.current_dir(cwd)
         .env("JUSTRUST_HOME", home)
+        .env("JUSTRUST_NO_TELEMETRY", "1")
+        .env("JUSTRUST_NO_UPDATE", "1")
         .env("JUSTRUST_DIST_SERVER", server)
         .env("JUSTRUST_REMOTE", "0")
         .env("JUSTRUST_DEPCACHE", "0")

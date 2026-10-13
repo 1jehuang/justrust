@@ -5,6 +5,18 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.12
+
+- **Automatic updates.** Release binaries check build.jcode.sh at most
+  daily in the background, download the new release from GitHub, verify
+  its sha256 and that it runs, and swap it in when no build is running.
+  `justrust update [now|status|on|off]`; `JUSTRUST_NO_UPDATE=1` turns it
+  off. Source builds only print a notice.
+- **Anonymous usage telemetry** (timings, counts, waste kinds, flag names,
+  update outcomes, panic locations; never code, paths, or names), queued
+  locally and sent in background batches. `justrust telemetry off`,
+  `JUSTRUST_NO_TELEMETRY=1`, or `DO_NOT_TRACK=1` turns it off.
+
 ## 0.1.0-alpha.11
 
 - **Hosted builds hit the prebuilt dependency store.** The build machine

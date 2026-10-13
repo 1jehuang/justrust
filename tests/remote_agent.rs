@@ -40,7 +40,12 @@ impl Agent {
         let mut child = Command::new(env!("CARGO_BIN_EXE_justrust"))
             .arg("__agent")
             .arg(dir.join("root"))
-            .env("JUSTRUST_HOME", dir.join("home"))
+            .env(
+                "JUSTRUST_HOME",
+                dir.join("home")
+                    .env("JUSTRUST_NO_TELEMETRY", "1")
+                    .env("JUSTRUST_NO_UPDATE", "1"),
+            )
             .env("JUSTRUST_PREBUILT", "off")
             .env_remove("JUSTRUST_DEPCACHE_DIR")
             .stdin(Stdio::piped())
@@ -437,7 +442,12 @@ fn refuses_unknown_protocol_versions() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_justrust"))
         .arg("__agent")
         .arg(&dir)
-        .env("JUSTRUST_HOME", dir.join("home"))
+        .env(
+            "JUSTRUST_HOME",
+            dir.join("home")
+                .env("JUSTRUST_NO_TELEMETRY", "1")
+                .env("JUSTRUST_NO_UPDATE", "1"),
+        )
         .env("JUSTRUST_PREBUILT", "off")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -461,7 +471,12 @@ fn serves_v1_daemons() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_justrust"))
         .arg("__agent")
         .arg(&dir)
-        .env("JUSTRUST_HOME", dir.join("home"))
+        .env(
+            "JUSTRUST_HOME",
+            dir.join("home")
+                .env("JUSTRUST_NO_TELEMETRY", "1")
+                .env("JUSTRUST_NO_UPDATE", "1"),
+        )
         .env("JUSTRUST_PREBUILT", "off")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

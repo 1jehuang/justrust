@@ -64,6 +64,34 @@ sign in, and no IP address is stored. `JUSTRUST_NO_TELEMETRY=1` or
 remote run (command, exit code, time) and why a build stayed local.
 From source: `cargo install justrust --locked` (Rust 1.91 or newer).
 
+**Updates.** Installed binaries keep themselves current: at most once a
+day, after a command, a background process asks build.jcode.sh for the
+latest release, downloads it from GitHub, checks its sha256 and that it
+runs, and swaps it in (never while a build is running). The next command
+says `updated A -> B`. `justrust update` updates now, `justrust update
+status` shows the state, `justrust update off` (or `JUSTRUST_NO_UPDATE=1`)
+stops it. Source builds are never replaced: they print one line when a
+newer release is out. CI (`CI` set) never updates.
+
+**Telemetry.** justrust sends anonymous usage stats so we can see where
+builds are slow and what breaks: per build the subcommand, flag names
+(never their values), exit code, phase timings, unit, cache, and test
+counts, waste kinds, rustc error codes, and which coding agent ran it; per
+other command its name and duration; update outcomes; panic locations.
+Each event carries the random install id above, the justrust version, OS,
+and CPU architecture. Never source, paths, crate or package names,
+argument values, hostnames, or environment values. Events are queued in
+`~/.justrust/telemetry/` and sent in the background in batches, so they
+never slow a build. Turn it off with any of:
+
+```sh
+justrust telemetry off          # also deletes anything not yet sent
+export JUSTRUST_NO_TELEMETRY=1  # or DO_NOT_TRACK=1
+```
+
+`justrust telemetry status` shows whether it is on, why not, and what is
+queued. The first event on a machine prints a one-line notice.
+
 Then tell your agents to use it:
 
 ```sh

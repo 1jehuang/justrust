@@ -87,9 +87,11 @@ mod split_index;
 mod status;
 mod summary;
 mod sys;
+mod telemetry;
 mod test_pool;
 mod test_runner;
 mod toolchain;
+mod update;
 
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
@@ -368,6 +370,23 @@ enum Command {
         #[arg(long, default_value_t = 15)]
         top: usize,
     },
+    /// Update justrust now, or show/change automatic updates
+    /// (`status`, `on`, `off`). Release binaries update themselves daily.
+    Update {
+        /// now (default) | status | on | off
+        #[arg(default_value = "now")]
+        action: String,
+        /// Update even while a build runs, or replace a source build.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Anonymous usage stats: status (default), on, off.
+    /// Also off with JUSTRUST_NO_TELEMETRY=1 or DO_NOT_TRACK=1.
+    Telemetry {
+        /// status | on | off
+        #[arg(default_value = "status")]
+        action: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -580,6 +599,7 @@ pub fn main() -> anyhow::Result<()> {
                 .unwrap_or_default(),
         ),
         Some(buildd::DAEMON_ARG) => buildd::daemon_main(),
+        Some(telemetry::BG_ARG) => telemetry::background_main(),
         Some("__agent") => remote_agent::main(std::env::args().nth(2)),
         Some(remote_artifacts::ARG) => remote_artifacts::serve_main(),
         Some(localcache::FINISH_ARG) => localcache::finish_main(
@@ -596,9 +616,11 @@ pub fn main() -> anyhow::Result<()> {
     if shim::invoked_as_shim(&argv0) {
         shim::main();
     }
+    telemetry::install_panic_hook();
     if name == "cargo" {
         record::main(std::env::args_os().skip(1).collect());
     }
+    update::notices();
 
     // Cargo passthrough subcommands take argv verbatim: clap swallows a
     // leading `--` (`justrust test -- --skip x` reached cargo as
@@ -619,7 +641,71 @@ pub fn main() -> anyhow::Result<()> {
     ) {
         account::poll_pending();
     }
-    match cli.command {
+    let name = command_name(&cli.command);
+    let started = std::time::Instant::now();
+    let result = dispatch(cli.command);
+    if let Some(name) = name {
+        telemetry::record(
+            "command",
+            serde_json::json!({
+                "name": name,
+                "ok": result.is_ok(),
+                "secs": (started.elapsed().as_secs_f64() * 100.0).round() / 100.0,
+            }),
+        );
+    }
+    telemetry::maybe_spawn_background();
+    result
+}
+
+/// The subcommand's name for telemetry (no arguments). `None` for the
+/// build commands (recorded as runs) and for `telemetry` itself.
+fn command_name(c: &Command) -> Option<&'static str> {
+    Some(match c {
+        Command::Check(_)
+        | Command::Test(_)
+        | Command::Build(_)
+        | Command::Clippy(_)
+        | Command::Run(_)
+        | Command::Cargo(_)
+        | Command::Telemetry { .. } => return None,
+        Command::Log { .. } => "log",
+        Command::Runs { .. } => "runs",
+        Command::Status { watch: Some(_), .. } => return None,
+        Command::Status { .. } => "status",
+        Command::Show { .. } => "show",
+        Command::Slots {
+            gc_root: Some(_), ..
+        } => return None,
+        Command::Slots { .. } => "slots",
+        Command::Cache { auto: true, .. } => return None,
+        Command::Cache { .. } => "cache",
+        Command::Early { .. } => "early",
+        Command::Daemon { .. } => "daemon",
+        Command::Toolchain { .. } => "toolchain",
+        Command::Install { .. } => "install",
+        Command::Uninstall { .. } => "uninstall",
+        Command::Shadow { .. } => "shadow",
+        Command::Split {
+            refresh_hints: true,
+            ..
+        } => return None,
+        Command::Split { apply: Some(_), .. } => "split_apply",
+        Command::Split { .. } => "split",
+        Command::Login { .. } => "login",
+        Command::Logout => "logout",
+        Command::Mcp => "mcp",
+        Command::Agents { .. } => "agents",
+        Command::Upgrade { .. } => "upgrade",
+        Command::Remote { .. } => "remote",
+        Command::Export { .. } => "export",
+        Command::History { .. } => "history",
+        Command::Update { .. } => "update",
+    })
+}
+
+fn dispatch(command: Command) -> anyhow::Result<()> {
+    match command {
         Command::Check(p) => agent("check", p.args),
         Command::Test(p) => agent("test", p.args),
         Command::Build(p) => agent("build", p.args),
@@ -756,6 +842,8 @@ pub fn main() -> anyhow::Result<()> {
             let report = history::Report::build(&calls, repo.as_deref(), max_wall, top);
             print!("{report}");
         }
+        Command::Update { action, force } => update::command(&action, force)?,
+        Command::Telemetry { action } => telemetry::command(&action)?,
     }
     Ok(())
 }

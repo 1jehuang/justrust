@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # Test runs are not usage.
+  JUSTRUST_NO_TELEMETRY: "1"
+  JUSTRUST_NO_UPDATE: "1"
 
 jobs:
   linux:
