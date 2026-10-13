@@ -462,6 +462,15 @@ pub fn run_remote(
     start: bool,
 ) -> Result<std::result::Result<Outcome, Infra>> {
     let total = Instant::now();
+    let trace = std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some();
+    let mark = |what: &str| {
+        if trace {
+            eprintln!(
+                "justrust trace: {:>7.1} ms {what}",
+                total.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    };
     let started_at = crate::paths::now();
     let cwd = std::env::current_dir()?;
     let infra = |m: String| Ok(Err(Infra(m)));
@@ -481,10 +490,12 @@ pub fn run_remote(
         .and_then(|r| r.file_name())
         .and_then(|n| n.to_str())
         .map(str::to_string);
+    mark("roots");
     let hosted = match charge_hosted(&run_id, &label.join(" "), project.as_deref()) {
         Ok(h) => h,
         Err(m) => return infra(m),
     };
+    mark("charged");
     // Visible to `justrust status` (and the status bar) while it runs.
     let mut live = LiveRun::start(&run_id, &cwd, &label, started_at);
     // Lifecycle events for the hosted operator dashboard (fire and forget).
@@ -553,6 +564,7 @@ pub fn run_remote(
         &[],
     )?;
     let mut sync = None;
+    let mut first_out = false;
     let mut run_files: Vec<u8> = Vec::new();
     let mut so = std::io::stdout();
     let mut se = std::io::stderr();
@@ -582,6 +594,7 @@ pub fn run_remote(
                 if !note.is_empty() {
                     eprintln!("justrust remote: {note}");
                 }
+                mark("flushed");
                 if sync.is_none() {
                     report("running", None);
                     live.phase("building", &machine);
@@ -589,6 +602,10 @@ pub fn run_remote(
                 sync = Some((files, ms, machine));
             }
             (Msg::Out { stream, .. }, data) => {
+                if trace && !first_out {
+                    first_out = true;
+                    mark("first output");
+                }
                 if stream == 1 {
                     so.write_all(&data)?;
                     so.flush()?;
@@ -597,8 +614,12 @@ pub fn run_remote(
                     se.flush()?;
                 }
             }
-            (Msg::RunFiles { .. }, data) => run_files = data,
+            (Msg::RunFiles { .. }, data) => {
+                mark(&format!("run files {} KB", data.len() / 1024));
+                run_files = data
+            }
             (Msg::Exit { code, .. }, summary) => {
+                mark("exit");
                 report("done", Some(code));
                 // A build is only done once its outputs are here. Counted in
                 // the client wall the router compares against local.
@@ -613,6 +634,7 @@ pub fn run_remote(
                     }
                 }
                 let (files, ms, machine) = sync.unwrap_or((0, 0.0, String::new()));
+                mark("recording");
                 record_remote(
                     &run_id,
                     &summary,

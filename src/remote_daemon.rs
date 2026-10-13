@@ -23,8 +23,9 @@
 //!
 //! Failure policy: any infrastructure problem becomes an `Error` frame and
 //! the client falls back to building locally. The daemon never guesses that
-//! the machine is in sync: after a reconnect every root is mirrored again
-//! with rsync, and a write the agent could not apply fails the next barrier.
+//! the machine is in sync: after a reconnect a requested root is mirrored
+//! again with rsync before it can build. Unrequested workspaces need not delay
+//! it. A write the agent could not apply fails the next barrier.
 
 use crate::sys::Detach;
 use crate::sys::net::{UnixListener, UnixStream};
@@ -241,6 +242,9 @@ struct Root {
     manifest: Manifest,
     /// Files over `MAX_FILE`, not mirrored.
     oversized: Vec<PathBuf>,
+    /// A new agent connection cannot trust the previous connection's manifest.
+    /// Resync on demand, not all remembered workspaces before the first build.
+    needs_full_sync: bool,
 }
 
 /// Everything network operations touch. Held across them.
@@ -248,6 +252,23 @@ struct Sync {
     backend: Backend,
     link: Option<Arc<Link>>,
     roots: BTreeMap<PathBuf, Root>,
+}
+
+impl Sync {
+    fn needs_mirror(&self, root: &Path) -> bool {
+        self.roots.get(root).is_none_or(|r| r.needs_full_sync)
+    }
+
+    fn invalidate_sources(&mut self) {
+        self.roots.retain(|r, root| {
+            if !r.is_dir() {
+                log(&format!("forgot {} (deleted)", r.display()));
+                return false;
+            }
+            root.needs_full_sync = true;
+            true
+        });
+    }
 }
 
 /// What `Ping` reports. Only ever locked briefly.
@@ -470,7 +491,7 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
         let roots: Vec<PathBuf> = st
             .roots
             .keys()
-            .filter(|r| touched.iter().any(|t| t.starts_with(r)))
+            .filter(|r| !st.roots[*r].needs_full_sync && touched.iter().any(|t| t.starts_with(r)))
             .cloned()
             .collect();
         for r in roots {
@@ -582,8 +603,9 @@ fn drop_link(d: &Daemon, st: &mut Sync) {
     d.set_info(|i| i.connected = false);
 }
 
-/// Connect to the agent (starting the machine only when `start`), mirror
-/// every known root with rsync, and begin reading agent frames.
+/// Connect to the agent (starting the machine only when `start`) and begin
+/// reading frames. Invalidate known roots: only roots needed by a build are
+/// mirrored before that build, so an unrelated old workspace cannot delay it.
 fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     if let Some(l) = &st.link {
         if l.alive() {
@@ -672,15 +694,8 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     // Roots deleted since (a removed worktree) are forgotten, not mirrored:
     // rsync of a missing dir failed the whole connect and sent the next
     // build local (FINDINGS 65).
-    let roots: Vec<PathBuf> = st.roots.keys().cloned().collect();
-    st.roots.clear();
-    for r in roots {
-        if !r.is_dir() {
-            log(&format!("forgot {} (deleted)", r.display()));
-            continue;
-        }
-        add_root(d, st, &link, &r)?;
-    }
+    st.invalidate_sources();
+    update_root_info(d, st);
     Ok(link)
 }
 
@@ -854,6 +869,7 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
         Root {
             manifest: scan.files,
             oversized: scan.oversized,
+            needs_full_sync: false,
         },
     );
     update_root_info(d, st);
@@ -1043,17 +1059,30 @@ fn run(
     let (tx, rx) = channel();
     let (link, files, note) = {
         let mut st = d.sync.lock().unwrap();
+        let locked = t.elapsed();
         let res = (|| -> Result<_> {
             let link = ensure_link(d, &mut st, start)?;
+            let linked = t.elapsed();
             let mut files = 0;
             for root in &roots {
-                if st.roots.contains_key(root) {
-                    files += push_root(d, &mut st, root)?;
-                } else {
+                if st.needs_mirror(root) {
                     add_root(d, &mut st, &link, root)?;
+                } else {
+                    files += push_root(d, &mut st, root)?;
                 }
             }
+            let pushed = t.elapsed();
             barrier(d, &mut st, &link)?;
+            if t.elapsed() > Duration::from_millis(1000) {
+                log(&format!(
+                    "slow sync {:.2}s: lock {:.2}s, link {:.2}s, push {:.2}s, barrier {:.2}s",
+                    t.elapsed().as_secs_f64(),
+                    locked.as_secs_f64(),
+                    (linked - locked).as_secs_f64(),
+                    (pushed - linked).as_secs_f64(),
+                    (t.elapsed() - pushed).as_secs_f64()
+                ));
+            }
             let note = oversized_note(&st, &roots)?;
             {
                 let mut rt = link.routes.lock().unwrap();
@@ -1185,5 +1214,45 @@ fn peer_sync_loop(d: &Daemon) {
         {
             let _ = std::fs::write(f, serde_json::to_vec(&off).unwrap_or_default());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_invalidates_all_live_roots_but_forgets_deleted_ones() {
+        let base = std::env::temp_dir().join(format!("jr-reconnect-{}", std::process::id()));
+        let a = base.join("a");
+        let b = base.join("b");
+        let gone = base.join("gone");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let make_root = || Root {
+            manifest: Manifest::new(),
+            oversized: Vec::new(),
+            needs_full_sync: false,
+        };
+        let mut sync = Sync {
+            backend: Backend::Hosted,
+            link: None,
+            roots: BTreeMap::from([
+                (a.clone(), make_root()),
+                (b.clone(), make_root()),
+                (gone.clone(), make_root()),
+            ]),
+        };
+        assert!(!sync.needs_mirror(&a));
+        sync.invalidate_sources();
+        assert!(sync.needs_mirror(&a));
+        assert!(sync.needs_mirror(&b));
+        assert!(!sync.roots.contains_key(&gone));
+        assert!(sync.needs_mirror(&base.join("new")));
+        // Resyncing one workspace must not accidentally mark another fresh.
+        sync.roots.insert(a.clone(), make_root());
+        assert!(!sync.needs_mirror(&a));
+        assert!(sync.needs_mirror(&b));
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
