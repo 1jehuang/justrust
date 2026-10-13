@@ -946,15 +946,33 @@ fn scan(roots: &[PathBuf]) -> HashMap<PathBuf, (SystemTime, u64)> {
 
 /// Workspace members and path dependencies (outside the root too: Jcode
 /// Desktop builds crates of the sibling Jcode repo).
-fn source_roots(root: &Path, t: Option<&crate::toolchain::Toolchain>) -> Vec<PathBuf> {
+fn source_metadata_command(root: &Path, t: Option<&crate::toolchain::Toolchain>) -> Command {
     let cargo = t.map_or_else(|| PathBuf::from("cargo"), |t| t.bin("cargo"));
+    let mut command = Command::new(cargo);
+    command.args([
+        "metadata",
+        "--format-version",
+        "1",
+        "--offline",
+        "--filter-platform",
+        crate::toolchain::TARGET,
+    ]);
+    if let Some(t) = t {
+        crate::record::apply_toolchain_env(&mut command, t);
+    }
+    command.current_dir(root).stderr(Stdio::null());
+    command
+}
+
+fn source_roots(root: &Path, t: Option<&crate::toolchain::Toolchain>) -> Vec<PathBuf> {
     let mut roots = vec![root.to_path_buf()];
-    let out = Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--offline"])
-        .current_dir(root)
-        .stderr(Stdio::null())
-        .output();
+    // The hosted mirror has host dependencies, not every platform's sources.
+    // Unfiltered offline metadata tries to download (for example) macOS
+    // crates on Linux, fails, and silently loses every sibling path crate.
+    // Match the analyzer's selected host toolchain, without a network retry.
+    let out = source_metadata_command(root, t).output();
     if let Ok(o) = out
+        && o.status.success()
         && let Ok(v) = serde_json::from_slice::<Value>(&o.stdout)
     {
         for p in v["packages"].as_array().into_iter().flatten() {
@@ -1656,6 +1674,37 @@ fn daemon(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_metadata_uses_offline_host_graph_and_selected_toolchain() {
+        let root = Path::new("/workspace with spaces");
+        let toolchain = crate::toolchain::Toolchain {
+            id: "nightly-test".into(),
+            dir: "/managed toolchain".into(),
+            nightly: true,
+        };
+        let command = source_metadata_command(root, Some(&toolchain));
+        assert_eq!(command.get_program(), toolchain.bin("cargo"));
+        assert_eq!(command.get_current_dir(), Some(root));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                "metadata",
+                "--format-version",
+                "1",
+                "--offline",
+                "--filter-platform",
+                crate::toolchain::TARGET
+            ]
+            .map(std::ffi::OsStr::new)
+        );
+        assert!(command.get_envs().any(|(key, value)| {
+            key == "RUSTC" && value == Some(toolchain.bin("rustc").as_os_str())
+        }));
+        let default = source_metadata_command(root, None);
+        assert_eq!(default.get_program(), "cargo");
+        assert!(!default.get_envs().any(|(key, _)| key == "RUSTC"));
+    }
 
     #[test]
     fn query_mode_never_requests_autostart_or_early_exit() {
