@@ -38,6 +38,44 @@ compilation. An isolated session with the existing account credentials
 passed without changing billing, tenant isolation, or other agents' connections.
 This is correctness validation, not a benchmark or a compile-speedup claim.
 
+## Active hosted sessions survive binary replacement
+
+Release preparation exposed a second live issue: another client atomically
+replacing the installed agent made an existing Linux agent's `current_exe`
+point at a deleted pathname. Its next build failed with ENOENT before any
+compilation. Commit `3687ab6` snapshots the running executable from its open
+inode, publishes a stable non-replacing path, and starts all builds through
+that path. Old snapshots are retained rather than unlinking active programs.
+
+All 14 agent protocol tests passed on hosted run
+`20261013-075429794-820147`, including a real subprocess whose installed
+executable is atomically replaced. It then executes recorded, unrecorded,
+and recorded offline checks successfully. The final recorded check compiles
+zero units and the rustc shim resolves to the stable snapshot, checking that
+recording still shares Cargo artifacts. Hosted check
+`20261013-075149665-800573` and warning-free all-target clippy
+`20261013-075431281-820282` also passed. These records are exported by the
+fix owner.
+
+After review, the cross-platform installer also uses a unique temporary
+staging file for each connection, and the Mac test fixture supplies the
+Linux checksum command through the equivalent native `shasum` tool.
+Hosted installer tests `20261013-074833055-771527` and all-target clippy
+`20261013-074848033-773179` passed after this hardening.
+
+## Final prepublication validation
+
+After installing the complete alpha.16 source with `cargo install --path .
+--locked`, the live hosted path passed again with both fixes:
+
+- Check: `20261013-075650793-836118`.
+- Full tests: `20261013-075656254-836888`, 330 passed, 0 failed, 2 ignored.
+- Warning-free all-target clippy: `20261013-075703750-837765`.
+
+The new agent pins its executable before accepting the connection. The
+checks use normal hosted admission and billing, not a local substitute.
+Run summaries are exported alongside the earlier installer regressions.
+
 ## Live service
 
 Cloud readiness and installed `/Users` permissions were verified and recorded

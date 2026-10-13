@@ -11,6 +11,9 @@ All notable changes. Versions follow [semver](https://semver.org); while in
   download the host architecture's binary from the same GitHub release,
   verify its archive checksum and executable version, then replace the agent
   atomically. This avoids the unavailable crates.io source-install fallback.
+- **Active hosted agents survive upgrades.** Each connection pins its running
+  executable at a stable path, so another client replacing the installed
+  binary cannot break later builds or their recording shims.
 - **Remote reconnects** mirror only workspaces requested by the build, while
   invalidating all remembered source manifests before any reuse.
 - **Remote diagnostics** include opt-in client phase tracing and slow-sync
