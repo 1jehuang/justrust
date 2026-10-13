@@ -4851,3 +4851,49 @@ roots. Runs 6-8 then removed their worktrees between runs and stayed remote
 (`forgot ... (deleted)` in daemon.log).
 
 Release check: v0.1.0-alpha.11 installed via jcode.sh/rust.sh; first remote build: "fetched from its release ... in 0.4s", installed in 0.6s (was 54-126 s by upload).
+
+### 65d. Verification pass: interleaved repeats, a leaked override, and the requirement map
+
+**Interleaved n=3 on the host, alpha.12, agent environment** (`CARGO_BUILD_JOBS=30`,
+store toolchain, fresh target and depcache per run, localcache off), cold
+`check -p jcode-tui`:
+
+| store | runs (s) | median | dependency hits | exit / warnings |
+|---|---|---:|---:|---|
+| fetch all | 35.4, 34.5, 34.2 | 34.5 | 529 prebuilt / 575 | 0 / 3 each |
+| off | 43.1, 42.5, 43.2 | 43.1 | 0 | 0 / 3 each |
+
+**-20% (8.6 s)**, disjoint ranges, identical exit code and warning count.
+
+The first attempt at this table got 0 hits on both sides: another session had
+left `[env] LIBRARY_PATH=/home/ubuntu/jr-syslibs/...` in
+`/home/jeremy/.cargo/config.toml` on the shared machine (mirrored-path cargo
+config), and `LIBRARY_PATH` is keyed, so every key moved (0 of 701 in the
+index; key inputs differed only in that line). I renamed it to
+`config.toml.jr-syslibs-disabled` (reversible). Desktop `test -p
+jcode-desktop-ui --lib -- fps_counter` still passes remotely without it (17.1 s).
+Risk that remains: any cargo `[env]` or user env on a hosted machine silently
+disables the store. A keyed-env mismatch should show up in `justrust show`
+(follow-up).
+
+| requirement / changed behavior | check | observed |
+|---|---|---|
+| hosted cold builds faster | interleaved n=3 above | 43.1 -> 34.5 s median, 529 hits |
+| store keys match real projects | key inputs diff, index overlap | 529 of 701 keys in index (was 0) |
+| `CARGO_BUILD_JOBS` not keyed | unit test `cargo_home_is_not_keyed`; host explain shows no `CARGO_BUILD_JOBS` line | pass; absent |
+| fetch-all on the machine | agent-route run from a fresh worktree (65b) | 529 prebuilt hits through `JUSTRUST_REMOTE=force` |
+| client can still turn the store off | `JUSTRUST_PREBUILT=off` via agent, fresh crate vs default | off: 3 hit (host depcache only), default: 11 hit |
+| store hits give the same build | exit code and warnings, store vs off, n=3 each | equal (0, 3) |
+| wake never fails over to local | worker unit test; 3 stop/start cycles through `justrust check` | 3/3 remote, 0 503s (earlier: 1 of 3 wakes 503) |
+| machine installs from the release | alpha.11 installed via jcode.sh/rust.sh, first remote build | `fetched from its release ... 0.4s`, install 0.6 s |
+| dev builds still upload | wakes with the cargo-installed alpha.12 dev binary | upload 2.8-49.1 s, builds succeed |
+| removed worktree keeps remote | 3 runs removing their worktree between builds | 3/3 remote, `forgot ... (deleted)` logged |
+| errors and failing tests reported in full remotely | scratch crate (65) | E0308 full, panic message, exit 101 |
+| big workspace with sibling path deps | Desktop fps_counter test remotely | ok, 17.1-37.9 s |
+| concurrent builds | two workspaces at once (65) | both ok |
+| packaging | release workflow, 5 targets; CI on Linux, macOS x2, Windows, MSRV | all green (first green CI in many commits) |
+
+Still open: wake time is dominated by EC2 start (~45 s) plus install for dev
+binaries; one 503 from before the worker fix was never explained; Desktop's
+`test --no-run` does not compile at its HEAD, so the fleet publishes only its
+`check` dependencies.
