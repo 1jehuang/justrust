@@ -645,6 +645,9 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
+    // Mirrors are unix paths on the machine: a Windows path (`C:\..`)
+    // under a local prefix is not a valid file name there.
+    #[cfg_attr(windows, ignore)]
     #[test]
     fn seeds_from_worktree_then_clone_and_copies_sources_only() {
         let d = std::env::temp_dir().join(format!("jr-seed-{}", std::process::id()));
