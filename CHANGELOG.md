@@ -5,6 +5,19 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.11
+
+- **Hosted builds hit the prebuilt dependency store.** The build machine
+  downloads every store hit (fetches overlap at 32 jobs), and
+  `CARGO_BUILD_JOBS` is no longer part of cache keys (the agent sets it,
+  so hosted keys never matched the store). Cold `check -p jcode-tui` from
+  a fresh worktree: 529 of 575 dependencies downloaded, 32.4 s on the
+  machine (FINDINGS 65).
+- The build machine installs justrust from this release on GitHub
+  (sha256-checked against your binary) instead of an 11 MB upload over
+  your connection: 0.4 s instead of 40-130 s after each update.
+- Removing a mirrored worktree no longer sends the next remote build local.
+- Windows builds and tests pass again.
 - **Remote optimized builds.** `justrust build --release` (or any
   optimized profile, host target) routes like `check`: it goes remote once
   the local build takes over 5 s and stays there while it wins. The binary
