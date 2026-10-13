@@ -5548,3 +5548,16 @@ policy-test failure20261013-104430840-1840198 is retained alongside repair
 and acceptance.343 hosted tests111516986-2032086 and warning-free lint
 111522449-2032855 pass; installed acceptance111621112-2040123 is remote
 on hosted with56fresh and zero compiled. No10x or pool speedup claim.
+
+## 2026-10-13: measured faster CPU, original host recovered
+
+Same frozen ee5699d client and explicit JR compiler, seven samples after two
+warmups on same preserved account volume: c7i.8xlarge -> m8azn.6xlarge
+reference 6.519 -> 4.480 s (-31%, faster), body 2.602 -> 1.986 s (-24%,
+faster), noop 0.998 -> 0.749 s (within noise), per bench/suite.py compare.
+Actual remote hardware saved separately, benchmark env.cpu is the client.
+Candidate 343 tests 20261013-112901865-2119204 and all-target lint
+20261013-112905082-2119538 passed. Original type, volume and cost metadata
+restored; hosted recovery 20261013-113350378-2148872 passed 56 fresh units,
+zero compiled. Hourly machine estimate 73% higher, customer build pricing
+unchanged. 10x still unmet. Default-nightly promotion gate follows separately.

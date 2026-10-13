@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-13",
+  "scope": "one backend-verified own-account instance, same preserved root volume and availability zone",
+  "client_commit": "ee5699d",
+  "client_frozen": true,
+  "toolchain": "jr-b7907f1fe8f7",
+  "samples_per_scenario": 7,
+  "discarded_warmups": 2,
+  "execution": "authenticated, charged hosted builds, persistent remote target",
+  "before": {
+    "instance_type": "c7i.8xlarge",
+    "architecture": "x86_64",
+    "model": "Intel(R) Xeon(R) Platinum 8488C",
+    "logical_cpus": 32,
+    "physical_cores": 16,
+    "threads_per_core": 2,
+    "hourly_usd": 1.428,
+    "result": "hosted-cpu-c7i-before-20261013.json"
+  },
+  "candidate": {
+    "instance_type": "m8azn.6xlarge",
+    "architecture": "x86_64",
+    "model": "AMD EPYC 9R05",
+    "logical_cpus": 24,
+    "physical_cores": 24,
+    "threads_per_core": 1,
+    "hourly_usd": 2.47752,
+    "result": "hosted-cpu-m8azn-after-20261013.json"
+  },
+  "fleet_default_changed": false,
+  "billing_and_isolation_changed": false,
+  "restoration": "verified: original type and volume restored, authenticated hosted recovery passed",
+  "recovery_run_id": "20261013-113350378-2148872"
+}

@@ -309,3 +309,43 @@ reinstall, default hosted check111611765-2038913 and targeted tests
 111621112-2040123 reused56 fresh units, zero compiled. The new agent first
 sync took8.7s, followed by warm hosted acceptance0.6s. Neither is a
 controlled speedup claim. The10x stock-local target is still unmet.
+
+## Actual faster CPU: bounded own-account experiment
+
+Frozen ee5699d client, explicit JR compiler, pinned snapshots, two discarded
+warmups and seven measured samples per side. Both used authenticated, charged
+hosted builds on the same account instance and preserved root volume. Actual
+lscpu reports old c7i.8xlarge Intel 8488C, 16 physical cores/32 threads, versus
+m8azn.6xlarge AMD EPYC 9R05, 24 physical cores/24 threads. The benchmark env
+CPU field describes the client laptop, not the remote host. Actual remote
+hardware is saved separately in hosted-cpu-hardware-20261013.json.
+
+```text
+scenario                       A med   B med   delta      %  verdict
+desktop-noop-test               1.00    0.75   -0.25   -25%  within noise
+desktop-body-check              2.60    1.99   -0.62   -24%  faster
+desktop-test-edit               6.52    4.48   -2.04   -31%  faster
+```
+
+Exact reference median 6.519 -> 4.480 s (1.46x), compile 5.319 -> 3.630 s;
+body 2.602 -> 1.986 s, compile 1.685 -> 1.109 s. Compare
+hosted-cpu-c7i-before-20261013.json with hosted-cpu-m8azn-after-20261013.json.
+Every test sample passed three tests. No-op compiled zero units, body and
+reference one local unit, dependencies remained fresh. No conclusive noop
+gain and no 10x stock-local result. This isolates hosted hardware, not a
+new controlled stock-local comparison.
+
+The candidate passed actual default-nightly hosted check
+20261013-112855691-2118404, 343 full tests 20261013-112901865-2119204 and
+warning-free all-target lint 20261013-112905082-2119538. First boot had cold
+page-cache IO and reconnect sync, excluded by benchmark warmups. A failed
+local preflight delimiter stopped before any mutation. The repaired trial
+restored original CPU type, exact volume and accurate own-account type
+metadata, then authenticated recovery 20261013-113350378-2148872 passed
+with 56 fresh units, zero compiled.
+
+Machine cost estimate 1.428 -> 2.47752 USD/hour is 73% higher, not a customer
+build-count pricing change. Faster latency does not mean cheaper compute.
+The completed experiment did not change fleet or compiler defaults. Keeping
+the faster own dogfood host requires a separate default-nightly controlled
+comparison and actual hosted worker stop/start acceptance, now in progress.
