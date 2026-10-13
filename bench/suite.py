@@ -32,7 +32,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +46,8 @@ J = os.environ.get("JUSTRUST") or shutil.which("justrust") or "justrust"
 # `run --toolchain SPEC`: build with a justrust-pinned toolchain
 # (JUSTRUST_TOOLCHAIN) in its own target dir. "system" = the system rustc.
 TOOLCHAIN = "system"
+RUSTC_THREADS = None
+PASS_TIMES = False
 # A sample is noisy when other processes averaged more than this many cores
 # or another rustc was running when it started.
 NOISY_CORES = float(os.environ.get("BENCH_NOISY_CORES", "4"))
@@ -759,6 +761,20 @@ def toolchain_rustc(spec: str) -> Path:
     return staged if not installed.is_file() and staged.is_file() else installed
 
 
+def compiler_scenario(s: Scenario, threads: int | None, passes: bool) -> Scenario:
+    """Explicit Cargo config survives hosted transport, unlike arbitrary env.
+
+    Never mutate shared scenarios or put Cargo options after libtest's --.
+    The effective command is saved with every result for reproducibility.
+    """
+    configs = []
+    if threads is not None:
+        configs += ["--config", f'build.rustflags=["-Zthreads={threads}"]']
+    if passes:
+        configs += ["--config", 'env.JUSTRUST_PASSES="on"']
+    return replace(s, cmd=s.cmd[:1] + configs + s.cmd[1:]) if configs else s
+
+
 def optimization_env() -> dict:
     """Only public performance controls, never credential-bearing environment."""
     names = (
@@ -798,6 +814,8 @@ def env_info() -> dict:
             [str(toolchain_rustc(TOOLCHAIN)), "-V"]),
         "toolchain": TOOLCHAIN,
         "optimization_env": optimization_env(),
+        "rustc_threads": RUSTC_THREADS,
+        "pass_times": PASS_TIMES,
         "cargo": tryrun(["cargo", "-V"]),
         "governor": tryrun(["cat", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]),
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
@@ -832,8 +850,14 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
-    global TOOLCHAIN, REMOTE
+    global TOOLCHAIN, REMOTE, RUSTC_THREADS, PASS_TIMES
     TOOLCHAIN = args.toolchain
+    RUSTC_THREADS = getattr(args, "rustc_threads", None)
+    PASS_TIMES = getattr(args, "pass_times", False)
+    if (RUSTC_THREADS is not None or PASS_TIMES) and not TOOLCHAIN.startswith(("nightly-", "jr-")):
+        sys.exit("bench: compiler thread/pass options require an explicit nightly or JR toolchain")
+    if (RUSTC_THREADS is not None or PASS_TIMES) and args.synth is not None:
+        sys.exit("bench: compiler thread/pass options require named pinned scenarios")
     REMOTE = getattr(args, "remote", False)
     if REMOTE and args.synth is not None:
         sys.exit("bench: hosted synthetic measurements use bench/versus.py --remote")
@@ -867,7 +891,8 @@ def cmd_run(args) -> None:
     result = {"started": started, "env": info, "runs_per_scenario": args.n, "scenarios": {}}
     for k, name in enumerate(names):
         print(f"bench: {name} ({k + 1}/{len(names)})", file=sys.stderr)
-        result["scenarios"][name] = run_scenario(BY_NAME[name], args.n, args.warmup, args.quiet_wait)
+        scenario = compiler_scenario(BY_NAME[name], RUSTC_THREADS, PASS_TIMES)
+        result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
         time.strftime("%Y%m%d-%H%M%S") + f"-{info['justrust_rev']}{'-dirty' if info['justrust_dirty'] else ''}"
@@ -935,7 +960,7 @@ def cmd_compare(args) -> None:
         print(synth_run.compare(a["synth"], b["synth"]))
         return
     if a["env"]["snapshots"] != b["env"]["snapshots"]:
-        print("WARNING: different pinned snapshots, numbers are not comparable", file=sys.stderr)
+        sys.exit("bench: different pinned snapshots, numbers are not comparable")
     if a["env"].get("host") != b["env"].get("host"):
         print("WARNING: different machines", file=sys.stderr)
     if a["env"].get("execution", "local") != b["env"].get("execution", "local"):
@@ -993,6 +1018,10 @@ def main() -> None:
     r.add_argument("--remote", action="store_true",
                    help="force warm scenarios through the real remote route and reject local fallback; "
                         "not a cold hosted benchmark")
+    r.add_argument("--rustc-threads", type=int, choices=(1, 2, 4, 8, 16),
+                   help="explicit nightly/JR frontend threads via Cargo config; changes dependency artifacts, warm up first")
+    r.add_argument("--pass-times", action="store_true",
+                   help="cache-safe local-crate pass timings through explicit Cargo environment config")
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
                    help="before each run wait up to SECS for no foreign rustc and load < 2")
     r.add_argument("-o", "--out", help="result file (default bench/results/<time>-<rev>.json)")

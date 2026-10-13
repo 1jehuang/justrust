@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Safety checks for hosted benchmark accounting (no network or builds)."""
 import argparse
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -47,6 +48,32 @@ class HostedMeasurements(unittest.TestCase):
             active.touch()
             self.assertEqual(suite.toolchain_rustc(spec), active)
 
+    def test_compiler_config_is_saved_before_runtime_filter_without_mutation(self):
+        original = suite.BY_NAME["desktop-test-edit"]
+        command = list(original.cmd)
+        configured = suite.compiler_scenario(original, 8, True)
+        self.assertEqual(original.cmd, command)
+        self.assertIn('build.rustflags=["-Zthreads=8"]', configured.cmd)
+        self.assertIn('env.JUSTRUST_PASSES="on"', configured.cmd)
+        self.assertLess(configured.cmd.index("--config"), configured.cmd.index("--"))
+        self.assertEqual(configured.cmd[-1], "fps_counter")
+        self.assertIs(suite.compiler_scenario(original, None, False), original)
+
+    def test_thread_options_require_nightly_before_any_build_or_install(self):
+        args = argparse.Namespace(toolchain="system", remote=True, synth=None, rustc_threads=8, pass_times=True)
+        with patch.object(suite.subprocess, "run") as run, self.assertRaises(SystemExit):
+            suite.cmd_run(args)
+        run.assert_not_called()
+
+    def test_different_source_pins_never_produce_speed_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / "a.json", Path(tmp) / "b.json"]
+            for path, pin in zip(paths, ("old", "new")):
+                path.write_text(json.dumps({"env": {"snapshots": {"desktop": pin}}, "scenarios": {}}))
+            with self.assertRaises(SystemExit) as err:
+                suite.cmd_compare(argparse.Namespace(a=str(paths[0]), b=str(paths[1]), floor=10))
+            self.assertIn("not comparable", str(err.exception))
+
     def test_optimization_provenance_excludes_secrets(self):
         env = {"JUSTRUST_TEST_FILTER_COMPILE": "1", "JUSTRUST_CARGO_DAEMON": "0",
                "JCODE_API_KEY": "secret", "AWS_SECRET_ACCESS_KEY": "secret"}
@@ -73,6 +100,8 @@ class HostedMeasurements(unittest.TestCase):
     def tearDown(self):
         suite.REMOTE = False
         suite.TOOLCHAIN = "system"
+        suite.RUSTC_THREADS = None
+        suite.PASS_TIMES = False
 
 
 if __name__ == "__main__":
