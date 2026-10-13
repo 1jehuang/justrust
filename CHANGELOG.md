@@ -5,6 +5,21 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.13
+
+- **Remote builds need a card on file.** The 25 free no-card builds are
+  gone. The first month of the $20 plan is free (5,000 builds, card
+  required, $20/month after unless canceled): start it at
+  [jcode.sh/rust](https://jcode.sh/rust#get-started) or with
+  `justrust upgrade`, which now opens the free-month checkout when the
+  account is eligible. A build without a card prints one line saying so and
+  runs locally. Trial builds used up (`end_trial`) get their own message.
+- **`justrust status`** shows where a build runs (local, remote, hosted),
+  including remote client builds in flight and their client wall time.
+- **waste:** a depcache miss names keyed env vars cargo does not set (user
+  env or cargo `[env]`, e.g. `LIBRARY_PATH`) that keep keys from matching
+  the prebuilt store.
+
 ## 0.1.0-alpha.12
 
 - **Automatic updates.** Release binaries check build.jcode.sh at most
