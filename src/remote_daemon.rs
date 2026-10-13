@@ -814,6 +814,15 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
             from.display(),
             t.elapsed().as_secs_f64()
         ));
+    } else if std::env::var("JUSTRUST_REMOTE_GIT_SEED").as_deref() != Ok("0")
+        && link.mirror.seed_from_origin(root)
+    {
+        seeded = true;
+        log(&format!(
+            "seeded {} from its git origin on the machine in {:.2}s",
+            root.display(),
+            t.elapsed().as_secs_f64()
+        ));
     }
     let n = link.mirror.rsync_with(root, seeded)?;
     remember_root(dest, root);

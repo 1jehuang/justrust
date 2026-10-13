@@ -295,6 +295,51 @@ pub fn repo_id(root: &Path) -> Option<RepoId> {
     })
 }
 
+/// `(anonymous https URL, checked-out commit)` of `root`'s `origin`, for
+/// [`Mirror::seed_from_origin`]. `git@host:owner/repo` becomes
+/// `https://host/owner/repo` (a private repo then just fails to fetch,
+/// anonymously). URLs carrying credentials, local paths and other schemes
+/// give `None`.
+pub fn public_origin(root: &Path) -> Option<(String, String)> {
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let url = anonymous_https(&git(&["remote", "get-url", "origin"])?)?;
+    let head = git(&["rev-parse", "HEAD"])?;
+    (head.len() >= 40 && head.bytes().all(|b| b.is_ascii_hexdigit())).then_some((url, head))
+}
+
+fn anonymous_https(url: &str) -> Option<String> {
+    let url = if let Some(rest) = url.strip_prefix("https://") {
+        let host = rest.split('/').next()?;
+        if host.contains('@') {
+            return None;
+        }
+        url.to_string()
+    } else if let Some(rest) = url.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        format!("https://{host}/{}", path.trim_start_matches('/'))
+    } else {
+        let rest = url.strip_prefix("ssh://git@")?;
+        let (host, path) = rest.split_once('/')?;
+        let host = host.split(':').next()?;
+        format!("https://{host}/{path}")
+    };
+    url.bytes()
+        .all(|b| b.is_ascii_graphic() && b != b'\'' && b != b'\\')
+        .then_some(url)
+}
+
 /// The best already-mirrored root to seed a new mirror of `root` from:
 /// a worktree of the same repository first, then a clone sharing a root
 /// commit. None outside git or without a relative.
@@ -357,6 +402,51 @@ impl Mirror {
             bail!("cannot create {remote} on the remote machine");
         }
         Ok(())
+    }
+
+    /// Seed the (new, empty) mirror of `root` from its public git origin:
+    /// the machine fetches the checked-out commit (or, if it was never
+    /// pushed, the default branch) at depth 1 straight from the forge, so
+    /// the following `--checksum` rsync sends only local changes. A first
+    /// sync of a repo with no mirrored relative sent every file over the
+    /// home uplink: jcode-website 320 s, gear-perf 250 s (FINDINGS 67).
+    /// Only anonymous https origins: the machine holds no credentials, and
+    /// a URL with userinfo is never sent. Fail open.
+    pub fn seed_from_origin(&self, root: &Path) -> bool {
+        let Some((url, head)) = public_origin(root) else {
+            return false;
+        };
+        self.seed_from_url(root, &url, &head)
+    }
+
+    fn seed_from_url(&self, root: &Path, url: &str, head: &str) -> bool {
+        let dst = shell_quote(&self.remote(root));
+        let (url, head) = (shell_quote(url), shell_quote(head));
+        let script = format!(
+            "test -d {dst} && test -z \"$(ls -A {dst} | grep -vx -e target -e .justrust)\" || exit 1; \
+             g=$(mktemp -d); trap 'rm -rf \"$g\"' EXIT; export GIT_TERMINAL_PROMPT=0; \
+             git init -q --bare \"$g\" && \
+             {{ timeout 120 git --git-dir=\"$g\" fetch -q --depth 1 {url} {head} \
+                || timeout 120 git --git-dir=\"$g\" fetch -q --depth 1 {url} HEAD; }} && \
+             git --git-dir=\"$g\" --work-tree={dst} checkout -q -f FETCH_HEAD -- ."
+        );
+        let mut c = match &self.target {
+            Some(t) => {
+                let mut c = t.command();
+                c.arg(script);
+                c
+            }
+            None => {
+                let mut c = Command::new("sh");
+                c.arg("-c").arg(script);
+                c
+            }
+        };
+        c.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
     }
 
     /// Seed the (new, empty) mirror of `root` from the machine's existing
@@ -643,6 +733,83 @@ mod tests {
         }
         assert!(!keys.contains(&PathBuf::from("x.log")));
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn origin_urls_become_anonymous_https_or_nothing() {
+        let a = |u: &str| anonymous_https(u);
+        assert_eq!(
+            a("https://github.com/o/r.git").as_deref(),
+            Some("https://github.com/o/r.git")
+        );
+        assert_eq!(
+            a("git@github.com:o/r.git").as_deref(),
+            Some("https://github.com/o/r.git")
+        );
+        assert_eq!(
+            a("ssh://git@github.com:22/o/r").as_deref(),
+            Some("https://github.com/o/r")
+        );
+        // Credentials never leave this machine.
+        assert_eq!(a("https://tok@github.com/o/r"), None);
+        assert_eq!(a("https://u:p@github.com/o/r"), None);
+        for u in ["/srv/r.git", "file:///r", "http://h/r", "https://h/o/r'x"] {
+            assert_eq!(a(u), None, "{u}");
+        }
+    }
+
+    #[cfg_attr(windows, ignore)]
+    #[test]
+    fn seeds_an_empty_mirror_from_git_then_never_over_sources() {
+        let d = std::env::temp_dir().join(format!("jr-gitseed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let src = d.join("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        let git = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&src)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{args:?}: {o:?}");
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(src.join("sub/lib.rs"), "committed").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "x"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let m = Mirror {
+            target: None,
+            prefix: d.join("machine").display().to_string(),
+        };
+        let root = d.join("ws");
+        let dst = PathBuf::from(m.remote(&root));
+        std::fs::create_dir_all(dst.join("target")).unwrap();
+        let url = src.display().to_string();
+        assert!(m.seed_from_url(&root, &url, &head));
+        assert_eq!(
+            std::fs::read_to_string(dst.join("sub/lib.rs")).unwrap(),
+            "committed"
+        );
+        assert!(!dst.join(".git").exists());
+        // An unknown commit falls back to the default branch.
+        let _ = std::fs::remove_dir_all(dst.join("sub"));
+        assert!(m.seed_from_url(&root, &url, &"0".repeat(40)));
+        assert!(dst.join("sub/lib.rs").is_file());
+        // Never over a mirror that already holds sources.
+        std::fs::write(dst.join("sub/lib.rs"), "synced").unwrap();
+        assert!(!m.seed_from_url(&root, &url, &head));
+        assert_eq!(
+            std::fs::read_to_string(dst.join("sub/lib.rs")).unwrap(),
+            "synced"
+        );
+        // An unreachable origin is no seed, not an error.
+        let other = d.join("ws2");
+        std::fs::create_dir_all(m.remote(&other)).unwrap();
+        assert!(!m.seed_from_url(&other, &d.join("nope").display().to_string(), &head));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     // Mirrors are unix paths on the machine: a Windows path (`C:\..`)
