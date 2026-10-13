@@ -5502,3 +5502,35 @@ Reference frontend2.345->2.311s barely changes. Timing run
 20261013-094425981-1461275918 identifies mono graph walk0.840s, macro
 expansion0.774s, dep-graph serialization0.717s, symbol partition0.613s and
 resolution0.505s. Nested spans must not be added together.
+
+
+## Guarded sync/run pipeline and measured latency, 2026-10-13
+
+5a211c5 is committed/pushed and installed. Protocolv5 combines source
+barrier and build submission on the ordered SSH stream. The agent refuses
+all failed-write runs, acknowledges before launching, and retains v1-v4
+support. The client never falls back locally after ambiguous submission,
+but can do so after a confirmed no-start rejection. Pending cancellation
+is latched before PID publication. No billing, quota or identity changes.
+
+Actual subprocess regression rejects failed writes twice without creating
+a target directory, repairs them, compiles latest source, detects a real
+type error, repairs it, then compiles zero units with fresh artifacts. Twelve immediately
+cancelled jobs terminate without leaked sleep processes. Full343 hosted
+tests and all-target warning-free lint pass at
+20261013-102356238-1713803 and20261013-102404406-1714588. Installed
+actual17 protocol tests pass at20261013-102608318-1727805,0compiled56fresh.
+First reconnect/upload14.6s is not a warm performance result.
+
+Same frozen source snapshots/account/compiler, seven measured samples
+after discarded warmups: bench/suite.py compare reports noop0.962->0.816s
+-15% within noise and reference6.586->6.143s -7% within noise. Both exact
+result files are hosted-sync-pipeline-{before,after}-20261013.json. No
+conclusive end-to-end speedup is claimed. The10x stock-local goal is unmet.
+
+Transport-only curl repeats of an already charged run observed21-sample
+fresh0.357s, reused0.197s, fresh-after0.290s. TLS costs0.066-0.082s and
+reused samples create0new connections. This is neither a new-charge nor
+a compiler benchmark. Artifacthosted-http-transport-repeat-20261013.json
+contains only timings and the already-public run ID, never credentials.
+Authoritative billing must remain online before every actual build.

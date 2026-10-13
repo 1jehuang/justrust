@@ -1,0 +1,548 @@
+{
+  "date": "2026-10-13T17:12:41.232081+00:00",
+  "operation": "idempotent repeat, no new charge or compilation",
+  "run_id": "20261013-085629718-1176060",
+  "discarded_warmups": 3,
+  "results": {
+    "fresh": {
+      "samples": [
+        {
+          "dns": 0.014755,
+          "tcp": 0.032627,
+          "tls": 0.064591,
+          "ttfb": 0.255507,
+          "total": 0.257929,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.029615,
+          "tcp": 0.040328,
+          "tls": 0.062536,
+          "ttfb": 0.243181,
+          "total": 0.243215,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.017197,
+          "tcp": 0.047302,
+          "tls": 0.088974,
+          "ttfb": 0.667185,
+          "total": 0.667228,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.017793,
+          "tcp": 0.049636,
+          "tls": 0.090125,
+          "ttfb": 0.416392,
+          "total": 0.416424,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.01781,
+          "tcp": 0.029423,
+          "tls": 0.054424,
+          "ttfb": 0.404508,
+          "total": 0.404542,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.012979,
+          "tcp": 0.035579,
+          "tls": 0.061603,
+          "ttfb": 0.249043,
+          "total": 0.249145,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.019856,
+          "tcp": 0.057304,
+          "tls": 0.081653,
+          "ttfb": 0.391147,
+          "total": 0.391483,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.017284,
+          "tcp": 0.032419,
+          "tls": 0.100189,
+          "ttfb": 0.368317,
+          "total": 0.368356,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.023441,
+          "tcp": 0.037101,
+          "tls": 0.067827,
+          "ttfb": 0.245794,
+          "total": 0.246108,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.016457,
+          "tcp": 0.028723,
+          "tls": 0.155089,
+          "ttfb": 0.357009,
+          "total": 0.357069,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.018927,
+          "tcp": 0.031929,
+          "tls": 0.066444,
+          "ttfb": 0.404141,
+          "total": 0.404179,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.016762,
+          "tcp": 0.211849,
+          "tls": 0.243402,
+          "ttfb": 0.470967,
+          "total": 0.471006,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.016241,
+          "tcp": 0.138198,
+          "tls": 0.168515,
+          "ttfb": 0.464393,
+          "total": 0.464429,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.046592,
+          "tcp": 0.08194,
+          "tls": 0.124997,
+          "ttfb": 0.31277,
+          "total": 0.31281,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.021195,
+          "tcp": 0.033097,
+          "tls": 0.075951,
+          "ttfb": 0.373788,
+          "total": 0.373826,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.026207,
+          "tcp": 0.038894,
+          "tls": 0.064034,
+          "ttfb": 0.276071,
+          "total": 0.276138,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.046132,
+          "tcp": 0.169533,
+          "tls": 0.196721,
+          "ttfb": 0.436312,
+          "total": 0.436356,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.07735,
+          "tcp": 0.093264,
+          "tls": 0.122023,
+          "ttfb": 0.343957,
+          "total": 0.343991,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.016974,
+          "tcp": 0.076875,
+          "tls": 0.102756,
+          "ttfb": 0.325044,
+          "total": 0.326433,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.019758,
+          "tcp": 0.037922,
+          "tls": 0.071613,
+          "ttfb": 0.295539,
+          "total": 0.295582,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.01949,
+          "tcp": 0.035097,
+          "tls": 0.058788,
+          "ttfb": 0.248014,
+          "total": 0.248168,
+          "new_connections": 1.0
+        }
+      ],
+      "medians": {
+        "dns": 0.018927,
+        "tcp": 0.038894,
+        "tls": 0.081653,
+        "ttfb": 0.357009,
+        "total": 0.357069,
+        "new_connections": 1.0
+      }
+    },
+    "reused": {
+      "samples": [
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.176622,
+          "total": 0.176934,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.217451,
+          "total": 0.217483,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.196407,
+          "total": 0.196538,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.187961,
+          "total": 0.187987,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.17667,
+          "total": 0.176702,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.190815,
+          "total": 0.190843,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.21114,
+          "total": 0.21135,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.182382,
+          "total": 0.182445,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.199319,
+          "total": 0.199543,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.21186,
+          "total": 0.211892,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.253457,
+          "total": 0.253501,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.206203,
+          "total": 0.206337,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.177658,
+          "total": 0.177977,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.189838,
+          "total": 0.189894,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.18372,
+          "total": 0.183887,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.180994,
+          "total": 0.181025,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.208894,
+          "total": 0.208927,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.291584,
+          "total": 0.291817,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.188708,
+          "total": 0.188761,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.204497,
+          "total": 0.204528,
+          "new_connections": 0.0
+        },
+        {
+          "dns": 0.0,
+          "tcp": 0.0,
+          "tls": 0.0,
+          "ttfb": 0.205041,
+          "total": 0.205311,
+          "new_connections": 0.0
+        }
+      ],
+      "medians": {
+        "dns": 0.0,
+        "tcp": 0.0,
+        "tls": 0.0,
+        "ttfb": 0.196407,
+        "total": 0.196538,
+        "new_connections": 0.0
+      }
+    },
+    "fresh_after": {
+      "samples": [
+        {
+          "dns": 0.015718,
+          "tcp": 0.036771,
+          "tls": 0.063057,
+          "ttfb": 0.289411,
+          "total": 0.289468,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.015547,
+          "tcp": 0.033877,
+          "tls": 0.059149,
+          "ttfb": 0.248717,
+          "total": 0.248755,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.015594,
+          "tcp": 0.152307,
+          "tls": 0.18,
+          "ttfb": 0.39787,
+          "total": 0.397932,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.019672,
+          "tcp": 0.035017,
+          "tls": 0.066259,
+          "ttfb": 0.290244,
+          "total": 0.290338,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.020801,
+          "tcp": 0.033799,
+          "tls": 0.059446,
+          "ttfb": 0.251308,
+          "total": 0.251791,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.02528,
+          "tcp": 0.04087,
+          "tls": 0.065765,
+          "ttfb": 0.262754,
+          "total": 0.263746,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.019825,
+          "tcp": 0.033063,
+          "tls": 0.059809,
+          "ttfb": 0.258866,
+          "total": 0.258897,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.023497,
+          "tcp": 0.038227,
+          "tls": 0.06525,
+          "ttfb": 0.301676,
+          "total": 0.303663,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.020561,
+          "tcp": 0.057933,
+          "tls": 0.102699,
+          "ttfb": 0.372465,
+          "total": 0.372993,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.02072,
+          "tcp": 0.032682,
+          "tls": 0.057,
+          "ttfb": 0.254138,
+          "total": 0.254455,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.02112,
+          "tcp": 0.032352,
+          "tls": 0.057523,
+          "ttfb": 0.280872,
+          "total": 0.281355,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.0178,
+          "tcp": 0.048213,
+          "tls": 0.089476,
+          "ttfb": 0.317041,
+          "total": 0.317266,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.021742,
+          "tcp": 0.053173,
+          "tls": 0.095429,
+          "ttfb": 0.343737,
+          "total": 0.344502,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.018892,
+          "tcp": 0.033428,
+          "tls": 0.062545,
+          "ttfb": 0.277374,
+          "total": 0.277479,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.019414,
+          "tcp": 0.033641,
+          "tls": 0.070632,
+          "ttfb": 0.265699,
+          "total": 0.265754,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 2.043989,
+          "tcp": 2.060469,
+          "tls": 2.087589,
+          "ttfb": 2.312666,
+          "total": 2.313215,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.017895,
+          "tcp": 0.035585,
+          "tls": 0.065597,
+          "ttfb": 0.307927,
+          "total": 0.309262,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.018374,
+          "tcp": 0.038213,
+          "tls": 0.081608,
+          "ttfb": 0.346564,
+          "total": 0.347006,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.022082,
+          "tcp": 0.055109,
+          "tls": 0.098888,
+          "ttfb": 0.34588,
+          "total": 0.34592,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.016389,
+          "tcp": 0.036584,
+          "tls": 0.06855,
+          "ttfb": 0.266839,
+          "total": 0.267106,
+          "new_connections": 1.0
+        },
+        {
+          "dns": 0.020408,
+          "tcp": 0.033818,
+          "tls": 0.060024,
+          "ttfb": 0.290204,
+          "total": 0.291802,
+          "new_connections": 1.0
+        }
+      ],
+      "medians": {
+        "dns": 0.019825,
+        "tcp": 0.036584,
+        "tls": 0.065765,
+        "ttfb": 0.290204,
+        "total": 0.290338,
+        "new_connections": 1.0
+      }
+    }
+  }
+}

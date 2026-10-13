@@ -231,3 +231,44 @@ After the CPU-reporting change, ordinary hosted check
 `20261013-100133452-1575817` compiled zero units with 56 fresh, preserving
 artifacts. Its first reconnect spent 3.136 s syncing despite zero build-time
 files, so reconnect latency remains a separate optimization opportunity.
+
+
+## Guarded source sync and build submission
+
+5a211c5 adds protocolv5 RunSync, combining the source barrier and run on
+one ordered SSH stream while supporting legacyv1-v4 agents. All earlier
+source writes are applied before the agent acknowledges. Any failed write
+prevents launching cargo, persists as a failure until repaired, and forces
+the daemon to invalidate the affected manifest for retry. A confirmed
+rejection permits local fallback, an ambiguous submitted run does not.
+Cancellation is registered before a worker gets its PID, so immediate
+cancellation cannot disappear in that window. Authentication and charging
+still complete before any compile request is sent.
+
+Full343 hosted tests and warning-free lint passed. Actual subprocess tests
+reject failed writes twice without a target directory, check changed source,
+fail on a real type error, repair it and preserve fresh artifacts. Twelve
+immediate cancels leave no sleep processes. Installed hosted acceptance
+20261013-102553092-1726312 compiled zero units with56 fresh and
+20261013-102608318-1727805 passed17 protocol tests without recompilation.
+The first reconnect and upload took14.6s, excluded from warm comparisons.
+
+Pinned seven-sample comparison, same explicit JR candidate and disabled
+filter/daemon options, preserved b70dbbc and5a211c5 clients:
+
+```text
+desktop-noop-test   0.962 -> 0.816s  -15%  within noise
+desktop-test-edit   6.586 -> 6.143s   -7%  within noise
+```
+
+Reference compile medians5.376 ->5.111s. Every test sample passes3cases,
+every no-op compiles0units and every reference edit compiles1unit. Exact
+files: hosted-sync-pipeline-before-20261013.json and
+hosted-sync-pipeline-after-20261013.json. No conclusive gain is claimed.
+
+Separate connection-reuse diagnostics use only idempotent repeats of an
+already charged run, no build or new charge. Fresh/reused/fresh-after
+21-sample medians0.357/0.197/0.290s, TLS0.066-0.082s, zero new connections
+on reused samples. hosted-http-transport-repeat-20261013.json records the
+timings. This motivates investigating persistent transport, not caching
+authorization or successful charges. No new HTTP library has been chosen.
