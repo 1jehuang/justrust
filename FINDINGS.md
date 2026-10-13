@@ -5439,3 +5439,29 @@ normal-build routing off. It has not been installed or promoted to hosted.
 Correction to finding 67: the 95MiB bundle cap applies to gzip bytes, and the
 unpack limit is380MiB. An 118MiB raw bedrock output alone does not prove it
 cannot be served. Matching exact dependency/toolchain keys remains necessary.
+
+## Hosted optimized compiler candidate, 2026-10-13
+
+The PGO/BOLT stage2 b7907f1fe8f7 compiler is provisioned only on our account
+host, explicitly pinned in a staged namespace. Its marker has installed_at0,
+no active-root entry exists, Ubuntu rustc/clippy and native cargo load, and
+older running agents cannot default to the candidate. Full hosted client
+tests332 pass at20261013-085654660-1178588, check
+20261013-085629718-1176060 and all-target warning-free clippy
+20261013-085719414-1181114. Safe staging full-suite acceptance is
+20261013-083002649-1025849. No default compiler promotion.
+
+Same frozen client, pinned source snapshots, same native hosted cargo,
+five measured edits after one discarded warmup: stock nightly reference
+7.777s versus optimized JR6.545s (1.19x). `bench/suite.py compare` reports
+desktop-test-edit -16%, faster; desktop-body-check2.700->3.099s +15%,
+within noise. Compile phases6.349->5.332s and1.566->1.685s respectively.
+All three fps_counter tests actually pass in reference logs. Results:
+bench/results/hosted-jr-reference-before-20261013.json and
+bench/results/hosted-jr-reference-after-20261013.json. This is hosted versus
+hosted, not a new local-versus-hosted10x claim. Target remains unmet.
+
+Local-only unpromoted compiler validation passed18 interface/link/load
+checks,12 test-filter checks and40 deterministic interface stress cases.
+Live ABI verification and actual887-unit Desktop warmup also passed. The
+benchmark excludes this cold warmup, never conflates cold build and reuse.

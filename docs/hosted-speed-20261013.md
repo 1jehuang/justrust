@@ -63,7 +63,10 @@ tests and warning-free lint passed after activation.
 The stage2 PGO/BOLT compiler build finished in 39m52s. Its interface hash,
 dependent link/load, test-filter and 40-round stress checks passed locally
 (custom compiler validation requires this unpromoted local binary). It is
-not installed on hosted or selected by default.
+now installed on our hosted account only as an explicit nondefault candidate
+under `toolchains/staged/jr-b7907f1fe8f7`. Its exact commit, Ubuntu loader,
+native cargo and zero activation timestamp were checked. Older agents cannot
+accidentally select this namespace.
 
 Agent replacement failures found during dogfooding are fixed in 3687ab6:
 the running executable is copied to an immutable per-inode snapshot before
@@ -77,3 +80,42 @@ All checks and tests above used the hosted service. Global agent instructions
 now require hosted dogfooding and explicitly documented local exceptions.
 The release coordinator owns alpha.16 and macOS cross-platform agent
 installation. These changes do not establish a 10x performance result.
+
+## Optimized compiler: controlled hosted reference comparison
+
+The same frozen client (`compiler-stage-justrust`, built from 46d38a1 with
+the existing seed toggle) ran both sides on the same account host, pinned
+desktop/Jcode snapshots, persistent per-toolchain targets, one discarded
+warmup and five measured edits. Both used the same native hosted jr-cargo.
+Every sample verified hosted execution and the requested compiler ID.
+Results are `hosted-jr-reference-before-20261013.json` and
+`hosted-jr-reference-after-20261013.json`.
+
+`bench/suite.py compare` reports:
+
+```text
+scenario                       A med   B med   delta      %  verdict
+desktop-test-edit               7.78    6.54   -1.23   -16%  faster
+desktop-body-check              2.70    3.10   +0.40   +15%  within noise
+```
+
+The exact reference median is 7.777 -> 6.545 s (1.19x), with rustc
+compile 6.349 -> 5.332 s. Actual logs show all three fps_counter tests
+passed on every reference sample. The body-check compile phase instead
+regressed 1.566 -> 1.685 s, so no default compiler promotion was made.
+This compares stock nightly hosted against optimized JR hosted, not stock
+local against hosted. The earlier 7.17 s local reference is context only,
+not a same-client controlled comparison against this newer compiler.
+
+The new compiler also passed real hosted check
+`20261013-085629718-1176060`, full tests
+`20261013-085654660-1178588` (332 passed, zero failed, two ignored,
+55 compiled units) and warning-free all-target clippy
+`20261013-085719414-1181114`. Safe staging support passed the full hosted
+332-test suite in `20261013-083002649-1025849`, with CLI namespace and
+default-preservation integration coverage.
+
+The next experiments target selective test codegen and cached Cargo startup.
+Their explicit opt-in environment variables were previously dropped by the
+hosted client. They remain opt-in and must be measured with actual selected
+tests, filter-change invalidation and unfiltered-test restoration verified.
