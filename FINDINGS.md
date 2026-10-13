@@ -5187,3 +5187,22 @@ offers it to alpha.13 clients.
 macOS CI had been red since e9e56e4 for an unrelated reason: the git-origin
 seed script called GNU `timeout`, which macOS lacks (440bad5). All five CI
 jobs green again.
+
+Reverified 2026-10-13 at 10:16 UTC after the first-user report: both Mac
+updater requests with `version=0.1.0-alpha.13` return `update: true` and
+alpha.14, and the downloaded arm64 Mac, Intel Mac and Linux release
+archives match their published SHA-256 files. A real `justrust check` using
+the released alpha.14 binary and an isolated long `JUSTRUST_HOME` succeeded
+on the hosted service: run `20261013-031625285-3366289`, remote wall 13.97 s,
+D1 `build_runs` state `done`, exit 0. Its SSH options use the shortened
+`/run/user/<uid>/justrust-cm/%C` instead of the long home path. This is a
+Linux acceptance check of the fallback, not a claim that the customer's
+Mac has retried successfully. The exact socket regression passed locally
+(1 passed, 0 failed, run `20261013-031639400-3367518`), as did `justrust check`
+(run `20261013-031632698-3367056`). All cited run summaries are exported.
+
+The customer's last recorded client was alpha.13, so their next step is
+`justrust update` and then `JUSTRUST_REMOTE=force justrust check` in the
+project. Auto-update normally checks daily, so publishing a fix does not
+immediately replace every installed client. macOS automatic routing still
+intentionally stays local because the hosted machines target Linux.
