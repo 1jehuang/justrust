@@ -22,6 +22,29 @@ use std::time::Instant;
 use crate::remote_backend::{self, Target};
 use crate::remote_proto::{Msg, read_frame, write_frame};
 
+// Forward only public build controls, never credentials or machine-local paths.
+// Opt-ins and opt-outs must mean the same thing on hosted as they do locally.
+const FORWARDED_ENV: &[&str] = &[
+    "JUSTRUST_MAX_WARNINGS",
+    "RUST_BACKTRACE",
+    "RUST_LOG",
+    "JCODE_SESSION_ID",
+    "CARGO_TERM_COLOR",
+    "JUSTRUST_DEPCACHE_EXPLAIN",
+    "JUSTRUST_DEPCACHE",
+    "JUSTRUST_PEER_CACHE",
+    "JUSTRUST_TOOLCHAIN",
+    "JUSTRUST_PREBUILT",
+    "JUSTRUST_TEST_FILTER_COMPILE",
+    "JUSTRUST_CACHE_PROC_MACROS",
+    "JUSTRUST_CUTOFF",
+    "JUSTRUST_CARGO_CUTOFF",
+    "JUSTRUST_CARGO_FORK",
+    "JUSTRUST_CARGO_DAEMON",
+    "JUSTRUST_CARGO_DAEMON_TRACE",
+    "JUSTRUST_UNIFY_FEATURES",
+];
+
 /// Every directory the machine must mirror for a build started in `cwd`.
 pub fn source_roots(cwd: &Path) -> Result<Vec<PathBuf>> {
     let cache_key = roots_cache_key(cwd);
@@ -577,19 +600,7 @@ pub fn run_remote(
         Err(e) => return infra(format!("{e:#}")),
     };
     let mut env = Vec::new();
-    for var in [
-        "JUSTRUST_MAX_WARNINGS",
-        "RUST_BACKTRACE",
-        "RUST_LOG",
-        "JCODE_SESSION_ID",
-        "CARGO_TERM_COLOR",
-        // Diagnostics and opt-outs behave the same remotely.
-        "JUSTRUST_DEPCACHE_EXPLAIN",
-        "JUSTRUST_DEPCACHE",
-        "JUSTRUST_PEER_CACHE",
-        "JUSTRUST_TOOLCHAIN",
-        "JUSTRUST_PREBUILT",
-    ] {
+    for var in FORWARDED_ENV {
         if let Ok(v) = std::env::var(var) {
             env.push((var.to_string(), v));
         }
@@ -868,6 +879,41 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosted_forwards_explicit_optimization_controls_not_secrets_or_local_paths() {
+        for var in [
+            "JUSTRUST_TEST_FILTER_COMPILE",
+            "JUSTRUST_CACHE_PROC_MACROS",
+            "JUSTRUST_CUTOFF",
+            "JUSTRUST_CARGO_CUTOFF",
+            "JUSTRUST_CARGO_FORK",
+            "JUSTRUST_CARGO_DAEMON",
+            "JUSTRUST_CARGO_DAEMON_TRACE",
+            "JUSTRUST_UNIFY_FEATURES",
+        ] {
+            assert!(
+                FORWARDED_ENV.contains(&var),
+                "missing hosted control: {var}"
+            );
+        }
+        for var in [
+            "JCODE_API_KEY",
+            "CACHE_PUBLISH_TOKEN",
+            "BUILDS_INTERNAL_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "JUSTRUST_HOME",
+            "JUSTRUST_RUN_DIR",
+            "JUSTRUST_REAL_RUSTC",
+        ] {
+            assert!(
+                !FORWARDED_ENV.contains(&var),
+                "unsafe hosted control: {var}"
+            );
+        }
+        let unique: BTreeSet<_> = FORWARDED_ENV.iter().collect();
+        assert_eq!(unique.len(), FORWARDED_ENV.len());
+    }
 
     #[test]
     fn cross_release_install_uses_host_target_and_verifies_before_replacing() {

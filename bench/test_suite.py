@@ -47,6 +47,15 @@ class HostedMeasurements(unittest.TestCase):
             active.touch()
             self.assertEqual(suite.toolchain_rustc(spec), active)
 
+    def test_optimization_provenance_excludes_secrets(self):
+        env = {"JUSTRUST_TEST_FILTER_COMPILE": "1", "JUSTRUST_CARGO_DAEMON": "0",
+               "JCODE_API_KEY": "secret", "AWS_SECRET_ACCESS_KEY": "secret"}
+        with patch.dict(suite.os.environ, env, clear=True):
+            self.assertEqual(suite.optimization_env(), {
+                "JUSTRUST_TEST_FILTER_COMPILE": "1", "JUSTRUST_CARGO_DAEMON": "0"})
+        with patch.dict(suite.os.environ, {}, clear=True):
+            self.assertEqual(suite.optimization_env(), {})
+
     def test_local_target_reset_is_not_a_cold_hosted_build(self):
         args = argparse.Namespace(toolchain="system", remote=True, synth=None,
                                   scenarios=["desktop-cold-check"], cold=False)

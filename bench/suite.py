@@ -759,6 +759,17 @@ def toolchain_rustc(spec: str) -> Path:
     return staged if not installed.is_file() and staged.is_file() else installed
 
 
+def optimization_env() -> dict:
+    """Only public performance controls, never credential-bearing environment."""
+    names = (
+        "JUSTRUST_TEST_FILTER_COMPILE", "JUSTRUST_CACHE_PROC_MACROS",
+        "JUSTRUST_CUTOFF", "JUSTRUST_CARGO_CUTOFF", "JUSTRUST_CARGO_FORK",
+        "JUSTRUST_CARGO_DAEMON", "JUSTRUST_CARGO_DAEMON_TRACE",
+        "JUSTRUST_UNIFY_FEATURES",
+    )
+    return {name: os.environ[name] for name in names if name in os.environ}
+
+
 def env_info() -> dict:
     def tryrun(cmd):
         try:
@@ -786,6 +797,7 @@ def env_info() -> dict:
         "rustc": tryrun(["rustc", "-V"]) if TOOLCHAIN == "system" else tryrun(
             [str(toolchain_rustc(TOOLCHAIN)), "-V"]),
         "toolchain": TOOLCHAIN,
+        "optimization_env": optimization_env(),
         "cargo": tryrun(["cargo", "-V"]),
         "governor": tryrun(["cat", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]),
         "on_ac": tryrun(["cat", "/sys/class/power_supply/AC/online"]),
