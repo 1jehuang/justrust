@@ -217,6 +217,83 @@ fn fetch_release_on_machine(t: &Target) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Local copy of the justrust binary last installed on the machine, the
+/// base for [`upload_patch`].
+fn installed_copy() -> Option<PathBuf> {
+    Some(crate::remote::dir().ok()?.join("installed-justrust"))
+}
+
+/// Remember the binary now on the machine, so the next dev build uploads a
+/// patch against it. Best effort.
+fn remember_installed(exe: &Path) {
+    if let Some(p) = installed_copy() {
+        let t = p.with_extension("tmp");
+        if std::fs::copy(exe, &t).is_ok() {
+            let _ = std::fs::rename(&t, &p);
+        }
+    }
+}
+
+/// Install a dev build by sending a zstd patch against the binary the
+/// machine already runs (`--patch-from`), checked by sha256 on both ends.
+/// Consecutive dev builds of justrust share most of their 11 MB: the patch
+/// is ~1.8 MB against ~3.7 MB for the compressed full upload (rsync -z;
+/// rsync's block delta finds little in a relinked binary), which at a home
+/// uplink is the bulk of the 1115 s of installs measured on hosted
+/// (FINDINGS 67). `false` (caller uploads in full) when either side has no
+/// zstd, there is no base, or the machine's binary is not the base.
+fn upload_patch(t: &Target) -> bool {
+    if std::env::var("JUSTRUST_REMOTE_PATCH").as_deref() == Ok("0") {
+        return false;
+    }
+    let (Some(base), Ok(exe)) = (installed_copy(), std::env::current_exe()) else {
+        return false;
+    };
+    let (Ok(base_sha), Ok(want)) = (
+        crate::toolchain::sha256(&base),
+        crate::toolchain::sha256(&exe),
+    ) else {
+        return false;
+    };
+    let Ok(out) = Command::new("zstd")
+        .args(["-q", "-9", "-T0", "--long=27", "-c"])
+        .arg(format!("--patch-from={}", base.display()))
+        .arg(&exe)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() || out.stdout.is_empty() {
+        return false;
+    }
+    let script = format!(
+        "set -e; command -v zstd >/dev/null; b=~/.cargo/bin/justrust; u=~/.cargo/bin/.justrust.upload; \
+         [ \"$(sha256sum \"$b\" | cut -d' ' -f1)\" = {base_sha} ]; \
+         zstd -q -d -f --long=27 --patch-from=\"$b\" -o \"$u\"; \
+         [ \"$(sha256sum \"$u\" | cut -d' ' -f1)\" = {want} ] || {{ rm -f \"$u\"; exit 1; }}; \
+         chmod +x \"$u\"; mv \"$u\" \"$b\"",
+        base_sha = shell_quote(&base_sha),
+        want = shell_quote(&want),
+    );
+    let Ok(mut child) = t
+        .command()
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let wrote = child
+        .stdin
+        .take()
+        .is_some_and(|mut s| s.write_all(&out.stdout).is_ok());
+    child.wait().is_ok_and(|s| s.success()) && wrote
+}
+
 /// Make sure the machine runs this exact justrust binary. Same OS and
 /// architecture (the common case): fetch it from its release on the
 /// machine, else copy it. Otherwise build it there from crates.io at this
@@ -249,6 +326,12 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
         crate::remote::log_event(&format!(
             "justrust {} fetched from its release on {} in {:.1}s",
             env!("CARGO_PKG_VERSION"),
+            t.dest,
+            t0.elapsed().as_secs_f64()
+        ));
+    } else if remote_arch == local_arch && upload_patch(t) {
+        crate::remote::log_event(&format!(
+            "justrust patched on {} in {:.1}s",
             t.dest,
             t0.elapsed().as_secs_f64()
         ));
@@ -309,6 +392,9 @@ pub fn ensure_remote_justrust(t: &Target) -> Result<()> {
             ))
             .stdin(Stdio::null())
             .status();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        remember_installed(&exe);
     }
     std::fs::write(&stamp, want)?;
     crate::remote::log_event(&format!(
