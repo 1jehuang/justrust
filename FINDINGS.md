@@ -4738,3 +4738,69 @@ typeck) covers all 1314 tests. A filter-aware *frontend* (skip
 `#[cfg(test)]` bodies of unselected tests entirely) is the version that
 could pay. It needs to keep their items for name resolution, and to
 re-check them in the background build.
+
+## 65. Hosted service: store keys that match real projects, job count, wake and install fixes (2026-10-12)
+
+All on the hosted c7i.8xlarge (us-east-1, 32 vCPU), cold `check -p jcode-tui`
+(651 units, 575 dependency units), fresh target and depcache per run,
+nightly-2026-10-08.
+
+**Why the store never hit hosted builds (after FINDINGS 55's fix shipped).**
+The fleet's debug=0 pass set `CARGO_PROFILE_DEV_DEBUG=0` in the environment.
+`CARGO_*` variables reach rustc and are keyed, so those 768 keys matched no
+project that sets `debug = 0` in Cargo.toml (0 of 768). Separately, the seed
+graph resolves other versions and feature sets than real lockfiles: 77 of
+jcode-tui's 625 keys were shared. Fix (justrust-cloud a38d762, 2b deployed to
+`fleet/`): debug=0 via Cargo.toml, and the fleet also builds jcode,
+jcode-desktop and justrust from their own lockfiles (dependency units only are
+published; workspace crates go to the localcache, which is never published).
+Store: 3373 -> 7185 manifests. jcode-tui keys in the index: **0 -> 529 of 701**.
+
+**The job cap mattered more than the store.** Jcode sets `jobs = 4`. Store
+hits are ~0.2 s each, so 605 of them ran 4 wide at 2.1 of 32 cores. The
+hosted agent already overrides jobs (`remote_agent::machine_jobs`), but it sets
+`CARGO_BUILD_JOBS`, which was keyed, so every hosted key differed from the
+store and from every other machine. 0a7d006 stops keying it.
+
+| run (host, cold `check -p jcode-tui`) | wall | dependency hits |
+|---|---:|---:|
+| jobs 4, store off (before, FINDINGS 55) | 85.0-91.9 s | 0 |
+| jobs 4, store on, cost model | 71.6-85.2 s | 43-46 |
+| jobs 4, store on, fetch all | 79.6 s | 529 |
+| jobs 32, store off | 41.6-44.5 s | 0 |
+| jobs 32, store on, cost model | 37.5-41.3 s | 42 |
+| jobs 32, store on, fetch all | 35.7-38.7 s | 529 |
+
+Takeaway: on a server the cost model's 700 ms per-fetch overhead declines 487
+of 529 available hits, while fetching them all is ~2-4 s faster at 32 jobs.
+Next: per-machine fetch overhead (measure it on hosts, ~0.2 s there), then
+fetch-all on hosted. The remaining ~35 s is the three giant local crates
+(jcode_app_core, jcode_base, jcode_tui: 16.6 s serial, FINDINGS 53).
+
+**Wakes failed over to local.** About 1 in 3 wakes returned 503: EC2 Instance
+Connect answers `ServiceException` for a moment after a start. The worker now
+retries (3 tries) and answers 202 booting instead (justrust-cloud d054ace,
+deployed, test added). One 503 was still seen afterwards. Not reproduced in 6
+more wakes, and the laptop's network was failing DNS at the time.
+
+**Installing justrust on the machine dominated syncs.** Every client binary
+change uploaded 11 MB: 40-130 s at the home uplink (90 KB/s measured,
+`events.log`: 54-126 s installs). The machine now downloads the matching
+release asset from GitHub and installs it only when its sha256 equals the
+client's executable (b4aa0c7): 0.39 s on the host, a mismatching hash is
+refused. Takes effect from the next release (dev builds still upload).
+
+**Hosted functional matrix (all passed):** check, clippy and filtered test of
+justrust; compile error (E0308 in full, exit code) and a failing test (panic
+message, `1 of 2 tests failed`, exit 101) in a scratch crate; Desktop
+`test -p jcode-desktop-ui --lib -- fps_counter` (37.9 s cold mirror); two
+concurrent builds from different workspaces; wake from stopped through a build.
+`npm test` in justrust-cloud: 41/41.
+
+Fleet: jcode-desktop's lockfile is stale against jcode HEAD, so `--locked`
+failed; run.sh falls back to a minimal lock update. Its `test --no-run` does
+not compile at HEAD (project issue). Fleet logs
+`fleet/logs/20261012T224351Z.log`, `20261013T002752Z.log`.
+
+Host run ids: 20261012-215912915-1857 .. 20261012-220339511-36302 (before),
+20261013-001826 .. 20261013-003715 (after, `~/.justrust/runs` on the host).
