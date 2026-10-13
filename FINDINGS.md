@@ -5110,7 +5110,7 @@ compiled in hosted runs:
    scheduling at the first failed workspace crate.
 3. Keyed env leaking on the shared machine (FINDINGS 65d), fixed earlier.
 
-**Fixes (justrust-cloud 8d1fd5f.., 44ac5a5; fleet files uploaded to
+**Fixes (justrust-cloud 9fc101c, 44ac5a5; fleet files uploaded to
 `s3://.../fleet/`, two fleet runs launched by hand):**
 - `workspaces.txt`: `check --all-targets`, `build --release` and
   `--profile selfdev` (jcode) passes for jcode, jcode-desktop and justrust.
