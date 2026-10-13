@@ -5,6 +5,21 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.14
+
+- **Hosted builds on macOS with longer user names work.** The ssh control
+  socket used Linux's 108-byte limit; macOS allows 104, so a home like
+  `/Users/<17 characters>` made ssh fail and every hosted build ran locally.
+- **Hosted fleet at capacity** gets its own message and builds locally, and
+  connect polling follows the server's hint (10 s while a machine is being
+  created, was 2 s).
+- **Remote sync** seeds a new mirror from its public git origin on the
+  machine when no mirrored relative exists, and installs dev builds on the
+  machine as a zstd patch. The seed no longer needs GNU `timeout` (macOS).
+- **Prebuilt store** fetch cost is measured per machine instead of a fixed
+  700 ms.
+- **`justrust upgrade`** switches plans for subscribers instead of failing.
+
 ## 0.1.0-alpha.13
 
 - **Remote builds need a card on file.** The 25 free no-card builds are
