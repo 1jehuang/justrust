@@ -1,0 +1,600 @@
+{
+  "acceptance": [
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-160058612-3890266",
+      "tests": {
+        "failed": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "where": "hosted"
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-160059348-3890346",
+      "tests": {
+        "failed": 0,
+        "ignored": 2,
+        "passed": 360
+      },
+      "toolchain": "nightly-2026-10-08",
+      "where": "hosted"
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-160102069-3890192",
+      "tests": {
+        "failed": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "where": "hosted"
+    }
+  ],
+  "checked_at": "2026-10-13T23:10:00.170102+00:00",
+  "files": [
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-admission-control-20261013.json",
+      "referenced_runs": 138,
+      "sha256": "53bae2684cda8c14f1dc4a9cc288ad38cae7c4b9192ea530072c3c9e5d55ffbf"
+    },
+    {
+      "mapped_samples_checked": 1,
+      "path": "bench/results/hosted-binary-provenance-smoke-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "39ce5da4a510c3197d6e2378df8495dfa17e686db6f7621c5eadf7f58d4c622f"
+    },
+    {
+      "mapped_samples_checked": 10,
+      "path": "bench/results/hosted-cargo-before-20261013.json",
+      "referenced_runs": 10,
+      "sha256": "f86d54dc36b4472aa4f2f2cb51b0e2f1b75a5b91e138b418b34ace7054f1a42a"
+    },
+    {
+      "mapped_samples_checked": 33,
+      "path": "bench/results/hosted-charge-batch-after-20261013.json",
+      "referenced_runs": 33,
+      "sha256": "4f92a1a77f15f8b41e4e6a7ad03c7e5e36cd013fafdbdc35e21da34d5b075fdf"
+    },
+    {
+      "mapped_samples_checked": 33,
+      "path": "bench/results/hosted-charge-batch-before-20261013.json",
+      "referenced_runs": 33,
+      "sha256": "36ec4f744546f267c832448fcb2a618092e99b406195a11c434a4c699fdb0c23"
+    },
+    {
+      "mapped_samples_checked": 11,
+      "path": "bench/results/hosted-charge-batch-rollback-20261013.json",
+      "referenced_runs": 11,
+      "sha256": "d24bc44de329a75e6dafb890d90a8194b9a1c597a851e0af126511afd9e7b059"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-charge-server-trace-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "876dda03ec59342be8be1a7701bec560fdd141753b03890cd468a2e39b5abf06"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-charge-trace-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "6c76e9cd93a039ac3b4bed8ab385060275dfab0c1ef3544492cfd70846045fe8"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-cloud-placement-after-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "2e8717f3416cc043b99e5d3ba514c39272bb8fcfc0b3f6149ac3274c62763e79"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-cloud-placement-before-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "b366ad308c2ba0600d5d5b7a95903ab0e575815849cc7e78bde81214c308f15f"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-cloud-placement-control-20261013.json",
+      "referenced_runs": 53,
+      "sha256": "86e115e488030ac256e9ee933e1c33057dc88b13d5bf7b9f9aa0f2ba4484def5"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-cloud-placement-restored-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "b9228c2f13773001229d7ee074dd4ee1bf545969ac996523b5228c5ed11252ae"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-compiler-m8azn-jr-after-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "438882a87bab5fe1586b7a2ea306d151f9d6745c34d9736df58ebe0c1171ffb3"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-compiler-m8azn-nightly-before-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "754d6b8b305f7d2477f886d5aba5894ee052426c7057d40a193d9c4bc9e52dbf"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-compiler-network-20261013.json",
+      "referenced_runs": 0,
+      "sha256": "163a88ac5ffddcc2f2f55464f68e55f79034dc281ed563ecc78496031abad5e9"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-control-plane-20261013.json",
+      "referenced_runs": 5,
+      "sha256": "555b83031addaf8847e301019feb2576c3baa63bf323e1b9145e52e935695ced"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-cpu-c7i-before-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "3948ac746d9a73b86e930a8ad711817482362e32477a95c7686a9c9ead00685f"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-cpu-default-c7i-before-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "090670361f162885038061666f218bfb6ecadda6abf9f56ffd2c632da9ee4be3"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-cpu-default-m8azn-after-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "80d82aa23325f94c8b7844b45284f85a41513f1fbbc06471c19083eeea24e06f"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-cpu-hardware-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "f3e2351f9873a8289726013010306b738832a788647575398f7914b6cd1c3d24"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-cpu-m8azn-after-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "34c79214c089a9c02a3bc0cf8dcb8c412666956b4b36aa016b0c40878fb33fcd"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-cpu-promotion-20261013.json",
+      "referenced_runs": 2,
+      "sha256": "e3c5372065e459765a29f47776d301a9211b6a49f473e3caa654882ab3d04f20"
+    },
+    {
+      "mapped_samples_checked": 2,
+      "path": "bench/results/hosted-daemon-cpu-accounting-after-20261013.json",
+      "referenced_runs": 2,
+      "sha256": "0cf2fc1b23cd09f5feacb28047b05d15652824f421153338e166c4d186344624"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-early-after-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "43728169b43a3ab56764acd587f583380859ac6fed08b4b31a23b701a2089285"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-early-before-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "63a82dbc7009d7827ec2317d8e3c229b128cb5ef7fa9013fc75089e511b3109a"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-early-control-20261013.json",
+      "referenced_runs": 56,
+      "sha256": "abad08b8dadb181508ff61c47178d0c7788ff8e7b416648fe6a03efbaee93676"
+    },
+    {
+      "mapped_samples_checked": 1,
+      "path": "bench/results/hosted-early-prewarm-initial-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "19e31987fe1184836c9860e2af04f61ddd181ca5a8acfaaf9892345d83a79cdd"
+    },
+    {
+      "mapped_samples_checked": 1,
+      "path": "bench/results/hosted-early-prewarm-jobs2-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "af7648703d4e24dcc2ab87fdb13362856f44d3c2fb694ff9de72b5e231f8249b"
+    },
+    {
+      "mapped_samples_checked": 1,
+      "path": "bench/results/hosted-early-prewarm-limited-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "b68de44b8481a4aeb410e442e30e2d31a08821a48f411f023cd770fb95807313"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-early-same-client-off-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "24a5ee08b0ffa4d69326ebba1e49463ace9ee7005b4c848141a4a1bb46832cd3"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-filter-daemon-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "8161534daf250c7c4d6bf80c6f727646f5bb292aeffbe398ddf49cb6bb94f440"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-filter-only-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "f737437fe390de212cb047693a120baafc7bd0e5c1deeafd3cfa72968cb76da6"
+    },
+    {
+      "mapped_samples_checked": 10,
+      "path": "bench/results/hosted-frontend-threads1-20261013.json",
+      "referenced_runs": 10,
+      "sha256": "d4c9db834a1b1d2f1b8831c8705b1e8b5f7be64e891812e7126d7563895682e1"
+    },
+    {
+      "mapped_samples_checked": 10,
+      "path": "bench/results/hosted-frontend-threads8-20261013.json",
+      "referenced_runs": 10,
+      "sha256": "f697e4aa8d946b84845b96e43d546fca603512255138debfd184f6169fe56109"
+    },
+    {
+      "mapped_samples_checked": 33,
+      "path": "bench/results/hosted-http-pool-after-20261013.json",
+      "referenced_runs": 33,
+      "sha256": "aac45900e14e871d9781e20277592a5a3158219cbc60c78dd9d03808e641a0cd"
+    },
+    {
+      "mapped_samples_checked": 33,
+      "path": "bench/results/hosted-http-pool-before-20261013.json",
+      "referenced_runs": 33,
+      "sha256": "304a2d9f916fe2dbff8fe48151b6d5e50e7078764cff90b8f59b4320155bfb44"
+    },
+    {
+      "mapped_samples_checked": 11,
+      "path": "bench/results/hosted-http-pool-curl-recheck-20261013.json",
+      "referenced_runs": 11,
+      "sha256": "72f87457ddeaeca44a0b0561cc2a46f0cc9afda6e74eed77055b45243b840d1f"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-http-protocol-controls-20261013.json",
+      "referenced_runs": 27,
+      "sha256": "3a75e109b5805d75432d24d7a2f0c9cefe2f39a5e93e4a03b5a687464b893d3b"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-http-protocol-h1-after-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "29ccab06d625c2b311ef21d392f2e601fc3c0e106a30f8b137411ab7b166a9d9"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-http-protocol-h2-before-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "7e44e17b2cf6fea22995d69eda3a42c622b59ed293f209d2cce2cc5c7995a1ba"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-http-protocol-h2-recheck-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "16a195dea8a66c23e13ab6a61271f50f794a823deca4c049c17e4f1278db7e00"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-http-transport-repeat-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "66e978e2c1f4546430a4ba5b7ff64933d89ff8250b4744a7be6283b21c8aab80"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-https-forward-prototype-after-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "33b11f8da5f4c718fabe39e9d39a97d91ff6f6c850b5f23c2930e009510924ff"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-https-forward-prototype-before-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "ece71fab15c8e7630d929466ad67c772600f087fa4722ac079f5cafc02a07784"
+    },
+    {
+      "mapped_samples_checked": 7,
+      "path": "bench/results/hosted-https-forward-prototype-recheck-20261013.json",
+      "referenced_runs": 7,
+      "sha256": "434392e680062ef381e9202e67cbfa792ed3fa9925de63f344c801f156edd8ad"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-https-forward-prototype-recheck-full-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "0ecd11832f8de106f324dfd6f6ff929d5a0f90f7460f1e57e8eddc2909ca5e67"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-https-forward-selector-miss-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "e665344d22a5c5ffe543656cdce1b3e73a4a7f11ed159489959ca2cf8725db4e"
+    },
+    {
+      "mapped_samples_checked": 10,
+      "path": "bench/results/hosted-jr-reference-after-20261013.json",
+      "referenced_runs": 10,
+      "sha256": "a64ae33199d44a0fa7362c917b53180f13c5df2d6855c3d77aa3f1e8f03143c5"
+    },
+    {
+      "mapped_samples_checked": 10,
+      "path": "bench/results/hosted-jr-reference-before-20261013.json",
+      "referenced_runs": 10,
+      "sha256": "3381ea795cf727b9fcfde8d8b2d9373a28d01ff9c0d47bd14a80f375cc5f3af5"
+    },
+    {
+      "mapped_samples_checked": 2,
+      "path": "bench/results/hosted-m8azn-pass-profile-20261013.json",
+      "referenced_runs": 2,
+      "sha256": "30a3d028e1123970dbfb43a44d4eca707c5b8fda44d707dbc1d9978232b6de7a"
+    },
+    {
+      "mapped_samples_checked": 14,
+      "path": "bench/results/hosted-native-cargo-fork-after-20261013.json",
+      "referenced_runs": 14,
+      "sha256": "f813adb49210b46fd20ac3f8204f87a7442e244af032c3332acc59ec679ff3df"
+    },
+    {
+      "mapped_samples_checked": 14,
+      "path": "bench/results/hosted-native-cargo-stock-before-20261013.json",
+      "referenced_runs": 14,
+      "sha256": "4d4fc5ac62cb4fbe01dc032d337d8aa4bc40d0dc2247922fa0f9b852a96c394f"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/hosted-native-current-controls-20261013.json",
+      "referenced_runs": 121,
+      "sha256": "29df05ee24ac41383f7feb88e593aeb00192fedc98a992c3c86457a844036d2d"
+    },
+    {
+      "mapped_samples_checked": 33,
+      "path": "bench/results/hosted-native-current-curl-20261013.json",
+      "referenced_runs": 33,
+      "sha256": "e28d061b1676f2b4b511519aa77fc1de7a6decb5a7896fa13276ee78fe59f184"
+    },
+    {
+      "mapped_samples_checked": 33,
+      "path": "bench/results/hosted-native-current-native-before-20261013.json",
+      "referenced_runs": 33,
+      "sha256": "49f043632f5f1c5239044113f4d7830ec5e009562da213e9eb6c6d67a598c942"
+    },
+    {
+      "mapped_samples_checked": 33,
+      "path": "bench/results/hosted-native-current-native-recheck-20261013.json",
+      "referenced_runs": 33,
+      "sha256": "5ed3c4df116c237772c0b71a535a80d2b57a44442e98c027873e48a3c9b8e0ec"
+    },
+    {
+      "mapped_samples_checked": 3,
+      "path": "bench/results/hosted-native-epoch-curl-20261013.json",
+      "referenced_runs": 3,
+      "sha256": "65c21df57390435508ee6abb055e15e6cd9ab8f034775c0d5921ec7dbee9b67d"
+    },
+    {
+      "mapped_samples_checked": 3,
+      "path": "bench/results/hosted-native-epoch-native-before-20261013.json",
+      "referenced_runs": 3,
+      "sha256": "e44a4bfadc8a339e053003cf9dd964f4d655c6c2f42986a1c0368e01f5df56ea"
+    },
+    {
+      "mapped_samples_checked": 3,
+      "path": "bench/results/hosted-native-epoch-native-recheck-20261013.json",
+      "referenced_runs": 3,
+      "sha256": "7d8de5f1114016ddd32e44421afdeeaecf8ae2ad474ea94ca1947e0170014ac9"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-optins-off-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "8c41347d12091c023046c3a91401c0b89d2addcdbaf045208126a2f7531a3b49"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-placement-after-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "6a783b5d45ee6e4eb57b4fd77bed82a337179cd967e004635cda0a8d7f44b8a6"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-placement-before-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "824c47969873dfab0fb2b3ec8707b697f3edba86a17f2be44c4c9f909dc53a2f"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-region-after-west-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "577250ca859553081004ec5edc55180cc169729590916a6836cfa4d5ea634f06"
+    },
+    {
+      "mapped_samples_checked": 21,
+      "path": "bench/results/hosted-region-before-east-20261013.json",
+      "referenced_runs": 21,
+      "sha256": "941d5f382d09488d2a334639c4985c486f610e3bab458cd768cb9204e12f7152"
+    },
+    {
+      "mapped_samples_checked": 2,
+      "path": "bench/results/hosted-sample-trace-acceptance-20261013.json",
+      "referenced_runs": 2,
+      "sha256": "ec3c821a827d855567b16e5b299e9ab1d141b6be87b148628bfc1497b9115202"
+    },
+    {
+      "mapped_samples_checked": 11,
+      "path": "bench/results/hosted-status-query-after-20261013.json",
+      "referenced_runs": 11,
+      "sha256": "8d63fb3ebd1074a0fd1c53e6e1479ec5c4f24517a8c79afa237342ca31b406ae"
+    },
+    {
+      "mapped_samples_checked": 11,
+      "path": "bench/results/hosted-status-query-before-20261013.json",
+      "referenced_runs": 11,
+      "sha256": "0b5aaebd25d017efa03b087cfeee65105a676a5ff8d63afb90abe835aa900f20"
+    },
+    {
+      "mapped_samples_checked": 14,
+      "path": "bench/results/hosted-sync-pipeline-after-20261013.json",
+      "referenced_runs": 14,
+      "sha256": "173082674f5cb3f5cf1e7e55921e730e0d18e7f0813d9cfee931304b014542c4"
+    },
+    {
+      "mapped_samples_checked": 14,
+      "path": "bench/results/hosted-sync-pipeline-before-20261013.json",
+      "referenced_runs": 14,
+      "sha256": "f19369b8f3e1f920771d9994c92077f587ac1303e084f3b1a719a4b0c9db3d53"
+    },
+    {
+      "mapped_samples_checked": 10,
+      "path": "bench/results/hosted-test-pool-after-20261013.json",
+      "referenced_runs": 10,
+      "sha256": "0ff5f3c7c308638c672f84c56dc5d6cd9193daa86573b53c83fced66351b8b59"
+    },
+    {
+      "mapped_samples_checked": 10,
+      "path": "bench/results/hosted-test-pool-before-20261013.json",
+      "referenced_runs": 10,
+      "sha256": "15bafa40d1580f78a6531046b61b477fe54425d0e0d83a8ca417ac63ffff8210"
+    },
+    {
+      "mapped_samples_checked": 14,
+      "path": "bench/results/hosted-workspace-threads6-20261013.json",
+      "referenced_runs": 14,
+      "sha256": "25c4e49d459a09d44977afb67ea67fe0bb90a85f441dc639c47311e482b8c517"
+    },
+    {
+      "mapped_samples_checked": 1,
+      "path": "bench/results/hosted-workspace-threads6-error-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "da84fbafe6a0e3db145c6e652fd1bdb908d4ca3459f3a2cf079542dbfb3c927a"
+    },
+    {
+      "mapped_samples_checked": 1,
+      "path": "bench/results/hosted-workspace-threads8-error-20261013.json",
+      "referenced_runs": 1,
+      "sha256": "2c11b6157145923c1bb621cec591cd80747ce5b6cef188bfc515af7490723ad0"
+    },
+    {
+      "mapped_samples_checked": 14,
+      "path": "bench/results/hosted-workspace-threads8-recheck-20261013.json",
+      "referenced_runs": 14,
+      "sha256": "b8bc07f783b7f065e6972ca3d0005975aef1a690d6f2fd78d9197c46c9773b6a"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/versus-20261013-021448-440bad50c73c-dirty.json",
+      "referenced_runs": 30,
+      "sha256": "4b1c24cb226aad533b388c7389b03d1aedf113eda35ffdb56eb12564709e8ac8"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "bench/results/versus-20261013-123317-08a77e8-dirty.json",
+      "referenced_runs": 21,
+      "sha256": "bf4d2ea5057b8a5d385f7a64976c4d1a513817ef74b37c5b5d22ac9c992ee26e"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-admission-20261013.md",
+      "referenced_runs": 0,
+      "sha256": "e4c53752f45f6e623f3d6f4f9fee0b0ef7ec19d739009e16cc89a5d14552f59e"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-admission-client-20261013.md",
+      "referenced_runs": 11,
+      "sha256": "d5e7a773e7f12b1de628a1e371752f3266a69106f0c7a7d61f404d6fd03e3b7b"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-cloud-placement-20261013.md",
+      "referenced_runs": 4,
+      "sha256": "2c3cdd0fa1ed59dfdc99bb69c0cdc11569fd2d952f56a86e85cc6c1ce994971e"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-compiler-20261013.md",
+      "referenced_runs": 0,
+      "sha256": "ba8a3a53a53866227e33926abe072a9703dfa96a396013170e44d4637302106d"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-early-20261013.md",
+      "referenced_runs": 5,
+      "sha256": "020515a95a2f41ae198f876e875576138947c5315f9e77c7f4d9ba0294ca9ebb"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-http-protocol-20261013.md",
+      "referenced_runs": 1,
+      "sha256": "e54bf9ba791dbff55a348b537b1441dcedfbc45b31eadc85cf350a3c65b987b4"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-native-current-20261013.md",
+      "referenced_runs": 4,
+      "sha256": "d99453c7441b497c785eec8340449685277af6320a81236bb0fb54763907e19a"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-sample-trace-20261013.md",
+      "referenced_runs": 5,
+      "sha256": "2732d9e85ca186441e3595a8fe8cda7e8b0661bffb13197daf6b86be95b82276"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-speed-20261013.md",
+      "referenced_runs": 40,
+      "sha256": "2b68fbd2de5ea69af8321bc738bdc05f10ffc283b8155cad630fa6427d389e86"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-umask-20261013.md",
+      "referenced_runs": 13,
+      "sha256": "388fc3e41bd19d9f9afb9a08d4d50f18ed9229fc39138a551956653f1089e613"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-west-acceptance-20261013.md",
+      "referenced_runs": 3,
+      "sha256": "a567b16b2d9137df1a237639ebe06cb94f126b16e7ac07f085daa83181d518e4"
+    },
+    {
+      "mapped_samples_checked": 0,
+      "path": "docs/hosted-workspace-threads-20261013.md",
+      "referenced_runs": 2,
+      "sha256": "d8ccca0140d5fb449f47a0d5512c1a533f97826db0bd19f1ea7c77654a6150f7"
+    }
+  ],
+  "mapped_samples_checked": 919,
+  "missing_references": [],
+  "pass": true,
+  "sample_mismatches": [],
+  "scope": "Committed October13 hosted docs and benchmark outputs, no network or builds",
+  "source_head": "fb0e28057bbee8d3d9b944d75dd5739ea30092b6",
+  "unique_referenced_runs": 1132
+}
