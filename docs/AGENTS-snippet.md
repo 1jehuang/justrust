@@ -23,5 +23,5 @@ one line saying why.
 Not signed in yet? Run `justrust login --no-wait`, give your user the link
 it prints, and keep working: builds stay local until it is approved. In CI,
 set `JCODE_API_KEY` (create one at https://jcode.sh/account). If a build
-says the free builds are used up or a limit was reached, relay that line to
+says a card is needed, the trial or builds are used up, or a limit was reached, relay that line to
 your user. Billing is always the user's decision.

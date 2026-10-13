@@ -46,7 +46,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 const RECENT_READY_S: u64 = 60;
 
 pub const SIGNED_OUT: &str = "not signed in for hosted builds. Run `justrust login --no-wait` and ask your user to open the URL it prints (builds stay local until then).";
-pub const SUBSCRIBE: &str = "free builds used up. Subscribe ($20/mo, 5,000 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
+pub const SUBSCRIBE: &str = "remote builds need a plan ($20/mo, 5,000 builds): run `justrust upgrade --no-wait` and ask your user to open the checkout URL it prints. Builds run locally until then.";
+pub const START_TRIAL: &str = "remote builds need a card on file: run `justrust upgrade --no-wait` and ask your user to open the URL it prints to start the free first month (card required, $20/mo after, 5,000 builds). Builds run locally until then.";
 pub const UPGRADE_PLAN: &str = "remote builds need the $20 plan or higher (5,000 builds a month): ask your user to switch plans at https://jcode.sh/rust#subscribe. Builds run locally until then.";
 pub const RAISE_LIMIT: &str = "monthly usage limit reached: ask your user to raise it at https://jcode.sh/account. Builds run locally until then.";
 pub const END_TRIAL: &str = "free trial builds used up: ask your user to start their plan now at https://jcode.sh/account (it starts on its own when the trial ends). Builds run locally until then.";
@@ -328,6 +329,9 @@ pub fn api_error(r: &Resp) -> anyhow::Error {
         (402, _) if r.body["error"]["next_step"].as_str() == Some("end_trial") => {
             return anyhow!(END_TRIAL);
         }
+        (402, _) if r.body["error"]["next_step"].as_str() == Some("start_trial") => {
+            return anyhow!(START_TRIAL);
+        }
         (402, _) | (403, "build_not_entitled") => return anyhow!(SUBSCRIBE),
         (429, _) => RATE_LIMITED.into(),
         (503, _) | (_, "build_unavailable") => UNAVAILABLE.into(),
@@ -406,6 +410,9 @@ impl Builds {
         }
         match self.next_step.as_deref() {
             Some("subscribe") => s.push_str(". Subscribe: `justrust upgrade`"),
+            Some("start_trial") => s.push_str(
+                ". Remote builds need a card: `justrust upgrade` starts the free first month",
+            ),
             Some("raise_limit") => s.push_str(". Raise the limit at https://jcode.sh/account"),
             Some("end_trial") => {
                 s.push_str(". Trial builds used up: start the plan at https://jcode.sh/account")
@@ -1405,13 +1412,17 @@ mod tests {
                 402,
                 r#"{"error":{"code":"builds_exhausted","message":"no","next_step":"end_trial"}}"#,
             ),
+            (
+                402,
+                r#"{"error":{"code":"builds_exhausted","message":"no","next_step":"start_trial"}}"#,
+            ),
         ]);
         let api = c.base.clone();
         // Fleet paths use the build base, account paths stay on the API.
         c.set_build_base(format!("{api}/fleet")).unwrap();
         assert_eq!(charge_run(&c, "r1").unwrap().unwrap().left(), 24);
         let sub = charge_run(&c, "r2").unwrap_err();
-        assert!(sub.starts_with("free builds used up. Subscribe ($20/mo, 5,000 builds)"));
+        assert!(sub.starts_with("remote builds need a plan ($20/mo, 5,000 builds)"));
         assert!(
             sub.contains("justrust upgrade") && !sub.contains('\n'),
             "{sub}"
@@ -1427,6 +1438,13 @@ mod tests {
         assert!(
             trial.starts_with("free trial builds used up") && trial.contains("jcode.sh/account"),
             "{trial}"
+        );
+        let card = charge_run(&c, "r6").unwrap_err();
+        assert!(
+            card.starts_with("remote builds need a card on file")
+                && card.contains("justrust upgrade --no-wait")
+                && !card.contains('\n'),
+            "{card}"
         );
         let s = seen.lock().unwrap();
         assert_eq!(s[0].path, "/v1/fleet/build/runs");

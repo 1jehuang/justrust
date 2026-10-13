@@ -139,7 +139,8 @@ Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
 ## Remote builds
 
 ```sh
-justrust login     # approve in the browser: 25 free remote builds, no card
+justrust login     # approve in the browser
+justrust upgrade   # add a card: first month free, then $20/mo (5,000 builds)
 justrust check     # now runs on a build machine
 ```
 
@@ -152,7 +153,9 @@ signed out, the build runs locally and prints one line saying why.
   for the user and returns at once. Builds stay local until it is approved.
 - **CI:** create an API key at [jcode.sh/account](https://jcode.sh/account)
   and export it as `JCODE_API_KEY`. No login step needed.
-- **Pricing:** after the free builds, `justrust upgrade`: from $20/month for
+- **Pricing:** remote builds need a card on file. The first month of the
+  $20 plan is free (`justrust upgrade`, or start it at
+  [jcode.sh/rust](https://jcode.sh/rust#get-started)), then from $20/month for
   5,000 remote builds (2,500 more per $10 of plan), $0.10 each after that.
   Local builds are always free. See [jcode.sh/rust](https://jcode.sh/rust#pricing).
 - **MCP:** `justrust mcp` serves the account (status, builds left, sign-in

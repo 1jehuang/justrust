@@ -109,7 +109,7 @@ fn tools() -> Value {
         },
         {
             "name": "login",
-            "description": "Sign in for hosted Rust builds. Returns a link: give it to the user to open and approve (25 free builds, no card). Does not wait; any later justrust command finishes the sign-in once approved.",
+            "description": "Sign in for hosted Rust builds. Returns a link: give it to the user to open and approve. Remote builds then need a card on file: the free first month ($20/mo after) starts with the `upgrade` link. Does not wait; any later justrust command finishes the sign-in once approved.",
             "inputSchema": none,
         },
         {

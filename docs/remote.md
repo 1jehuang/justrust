@@ -82,7 +82,7 @@ routing) only needs an ssh-reachable machine with a shell.
 | backend | what | set up with | status |
 |---|---|---|---|
 | `aws` | one machine in your own AWS account, created and controlled through the `aws` CLI | `justrust remote up` | built |
-| `hosted` | justrust's own build fleet, billed per build (25 free, then from $20/mo for 5,000, 2,500 per $10) (`src/remote_hosted.rs`, `src/account.rs`) | `justrust login` | client built against HOSTED_BUILDS.md |
+| `hosted` | justrust's own build fleet, billed per build (card required: first month of $20 free, then from $20/mo for 5,000, 2,500 per $10) (`src/remote_hosted.rs`, `src/account.rs`) | `justrust login` | client built against HOSTED_BUILDS.md |
 | none | every build is local | `justrust remote use off` | |
 
 A machine created before `backend.json` existed counts as `aws`.
@@ -119,8 +119,8 @@ build POST /build/host/stop     {state}
 
 - Every hosted remote run first POSTs `build/runs` with the run's id (the
   same id it is recorded under, so retries are free). Any non-200 means no
-  remote run: a 402 prints one line for the agent to relay (`free builds
-  used up. Subscribe ($20/mo, 5,000 builds): justrust upgrade ...` or
+  remote run: a 402 prints one line for the agent to relay (`remote builds
+  need a card on file: run justrust upgrade ...` or
   `monthly usage limit reached: ... https://jcode.sh/account`), the build
   runs locally, and auto routing stays local for the 10 minute backoff.
 - Routing may start a stopped hosted machine when signed in and the local

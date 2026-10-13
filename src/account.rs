@@ -462,12 +462,28 @@ pub fn logout() -> Result<()> {
 /// `justrust upgrade [--plan N] [--no-wait]`.
 pub fn upgrade(plan: u32, no_wait: bool) -> Result<()> {
     let c = hosted::creds()?;
-    let r = hosted::request(
+    // No card yet and the free first month is open ($20 plan only): start it.
+    let trial = plan == 20
+        && hosted::me(&c)
+            .ok()
+            .and_then(|m| m.builds)
+            .and_then(|b| b.next_step)
+            .as_deref()
+            == Some("start_trial");
+    let mut r = hosted::request(
         &c,
         "POST",
         "billing/subscribe",
-        Some(&json!({ "plan_usd": plan })),
+        Some(&checkout_body(plan, trial)),
     )?;
+    if trial && r.code == 409 && r.body["error"]["code"].as_str() == Some("trial_used") {
+        r = hosted::request(
+            &c,
+            "POST",
+            "billing/subscribe",
+            Some(&checkout_body(plan, false)),
+        )?;
+    }
     if !(200..300).contains(&r.code) {
         if r.code == 409 {
             // Already subscribed: nothing to buy, the limit is what to raise.
@@ -482,17 +498,34 @@ pub fn upgrade(plan: u32, no_wait: bool) -> Result<()> {
     if !url.starts_with("https://") {
         bail!("the Jcode API returned no checkout URL");
     }
-    show_url(&format!("subscribe (${plan}/mo)"), url);
+    show_url(
+        &if trial {
+            "start the free first month (card required, $20/mo after)".to_string()
+        } else {
+            format!("subscribe (${plan}/mo)")
+        },
+        url,
+    );
     open_browser(url);
     if no_wait {
         println!(
-            "justrust: keep working, builds stay local. Remote builds resume by themselves once the payment goes through."
+            "justrust: keep working, builds stay local. Remote builds start by themselves once the card is added."
         );
         return Ok(());
     }
     let b = wait_can_build(&c, UPGRADE_TIMEOUT, Duration::from_secs(5))?;
     println!("ready: {}", b.describe());
     Ok(())
+}
+
+/// `POST billing/subscribe` body. `trial` asks for the free first month
+/// (card collected now, the plan renews after it).
+fn checkout_body(plan: u32, trial: bool) -> Value {
+    if trial {
+        json!({ "plan_usd": plan, "trial": true })
+    } else {
+        json!({ "plan_usd": plan })
+    }
 }
 
 pub fn wait_can_build(c: &Creds, timeout: Duration, every: Duration) -> Result<Builds> {
@@ -670,6 +703,15 @@ mod tests {
             strip_keys(&new),
             "# jcode\nJCODE_API_BASE=http://x\nOTHER=1\n"
         );
+    }
+
+    #[test]
+    fn checkout_body_asks_for_the_trial_only_when_eligible() {
+        assert_eq!(
+            checkout_body(20, true),
+            json!({ "plan_usd": 20, "trial": true })
+        );
+        assert_eq!(checkout_body(50, false), json!({ "plan_usd": 50 }));
     }
 
     #[test]
