@@ -1,0 +1,99 @@
+{
+  "scope": "Actual complete pinned Desktop public hosted CLI, including known failing viewport assertion, not clean full-UI gate.",
+  "snapshots": {
+    "jcode": "abff94eeb",
+    "jcode-desktop": "7d38fb7"
+  },
+  "rows": [
+    {
+      "case": "package-security",
+      "client_wall": 4.832462373,
+      "compiled": 0,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 744,
+      "id": "20261013-164308089-4110778674",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 1297,
+        "ignored": 0,
+        "passed": 16
+      }
+    },
+    {
+      "case": "full-ui",
+      "client_wall": 5.893955237,
+      "compiled": 0,
+      "compiler": "nightly-2026-10-08",
+      "exit": 101,
+      "fresh": 744,
+      "id": "20261013-164312927-4110778119",
+      "tests": {
+        "failed": 1,
+        "filtered_out": 0,
+        "ignored": 10,
+        "passed": 1302
+      }
+    },
+    {
+      "case": "package-security",
+      "client_wall": 10.887215518,
+      "compiled": 887,
+      "compiler": "jr-b7907f1fe8f7",
+      "exit": 0,
+      "fresh": 0,
+      "id": "20261013-164318830-4110778899",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 1297,
+        "ignored": 0,
+        "passed": 16
+      }
+    },
+    {
+      "case": "full-ui",
+      "client_wall": 5.97609214,
+      "compiled": 0,
+      "compiler": "jr-b7907f1fe8f7",
+      "exit": 101,
+      "fresh": 744,
+      "id": "20261013-164329733-4110778913",
+      "tests": {
+        "failed": 1,
+        "filtered_out": 0,
+        "ignored": 10,
+        "passed": 1302
+      }
+    },
+    {
+      "case": "filter-fps",
+      "client_wall": 6.791190621,
+      "compiled": 1,
+      "compiler": "jr-b7907f1fe8f7",
+      "exit": 0,
+      "fresh": 743,
+      "id": "20261013-164335712-4110778849",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 3
+      }
+    },
+    {
+      "case": "filter-full-ui",
+      "client_wall": 11.764825626,
+      "compiled": 1,
+      "compiler": "jr-b7907f1fe8f7",
+      "exit": 101,
+      "fresh": 743,
+      "id": "20261013-164342509-4110778907",
+      "tests": {
+        "failed": 1,
+        "filtered_out": 0,
+        "ignored": 10,
+        "passed": 1302
+      }
+    }
+  ]
+}

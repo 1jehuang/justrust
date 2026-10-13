@@ -1,0 +1,86 @@
+{
+  "scope": "Final installed plain check/test/strict lint/repeated check, no forced routing or toolchain activation, actual hosted acceptance.",
+  "binary_sha256": "e2bc92690d1e2f0c11f0d7be413fee97e70fb987df0bcfeadfea68e7a4e5f79e",
+  "rows": [
+    {
+      "id": "20261013-164407681-4115213",
+      "args": [
+        "check"
+      ],
+      "compiler": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted"
+      },
+      "exit": 0,
+      "compiled": 0,
+      "fresh": 56,
+      "tests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      }
+    },
+    {
+      "id": "20261013-164409873-4115463",
+      "args": [
+        "test"
+      ],
+      "compiler": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted"
+      },
+      "exit": 0,
+      "compiled": 0,
+      "fresh": 56,
+      "tests": {
+        "passed": 360,
+        "failed": 0,
+        "ignored": 2,
+        "filtered_out": 0
+      }
+    },
+    {
+      "id": "20261013-164412791-4115540",
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "compiler": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted"
+      },
+      "exit": 0,
+      "compiled": 0,
+      "fresh": 56,
+      "tests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      }
+    },
+    {
+      "id": "20261013-164413643-4115676",
+      "args": [
+        "check"
+      ],
+      "compiler": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted"
+      },
+      "exit": 0,
+      "compiled": 0,
+      "fresh": 56,
+      "tests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      }
+    }
+  ]
+}

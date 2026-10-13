@@ -1,0 +1,309 @@
+{
+  "client_sha256": "e2bc92690d1e2f0c11f0d7be413fee97e70fb987df0bcfeadfea68e7a4e5f79e",
+  "host": {
+    "instance_type": "m8azn.6xlarge",
+    "region": "us-west-2a"
+  },
+  "limitations": [
+    "The three requested-JR observations at23:12 actually used system compiler.",
+    "First upload interrupted by server reload, resumed upload timed out600seconds with partial state preserved. Final transfer completed before any runtime publication.",
+    "New west host has no native forked Cargo or test-pool setup. Host owner owns bootstrap follow-up.",
+    "Changing toolchains in the repository target invalidated units as expected. These compiler-switch builds do not establish artifact reuse.",
+    "No new compiler-fork implementation or promotion."
+  ],
+  "observations": [
+    {
+      "args": [
+        "check"
+      ],
+      "candidate_accepted": false,
+      "compiled": 0,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161234102-3964915",
+      "remote": {
+        "machine": "hosted"
+      },
+      "requested_compiler": "default",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "candidate_accepted": false,
+      "compiled": 0,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161238615-3965351",
+      "remote": {
+        "machine": "hosted"
+      },
+      "requested_compiler": "default",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      }
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "candidate_accepted": false,
+      "compiled": 0,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161241885-3965648",
+      "remote": {
+        "machine": "hosted"
+      },
+      "requested_compiler": "default",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "candidate_accepted": false,
+      "compiled": 68,
+      "compiler": "system",
+      "exit": 0,
+      "fresh": 0,
+      "id": "20261013-161242624-3965741",
+      "remote": {
+        "machine": "hosted"
+      },
+      "requested_compiler": "jr-b7907f1fe8f7",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "candidate_accepted": false,
+      "compiled": 55,
+      "compiler": "system",
+      "exit": 0,
+      "fresh": 8,
+      "id": "20261013-161250312-3966161",
+      "remote": {
+        "machine": "hosted"
+      },
+      "requested_compiler": "jr-b7907f1fe8f7",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      }
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "candidate_accepted": false,
+      "compiled": 3,
+      "compiler": "system",
+      "exit": 0,
+      "fresh": 55,
+      "id": "20261013-161303901-3967208",
+      "remote": {
+        "machine": "hosted"
+      },
+      "requested_compiler": "jr-b7907f1fe8f7",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "candidate_accepted": false,
+      "compiled": 0,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161309205-3967609",
+      "remote": {
+        "machine": "hosted"
+      },
+      "requested_compiler": "default",
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "candidate_accepted": true,
+      "compiled": 68,
+      "compiler": "jr-b7907f1fe8f7",
+      "exit": 0,
+      "fresh": 0,
+      "id": "20261013-163148836-4050014",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "candidate_accepted": true,
+      "compiled": 55,
+      "compiler": "jr-b7907f1fe8f7",
+      "exit": 0,
+      "fresh": 8,
+      "id": "20261013-163158662-4050865",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      }
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "candidate_accepted": true,
+      "compiled": 3,
+      "compiler": "jr-b7907f1fe8f7",
+      "exit": 0,
+      "fresh": 55,
+      "id": "20261013-163216447-4052239",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "candidate_accepted": false,
+      "compiled": 68,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 0,
+      "id": "20261013-163222035-4052401",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "candidate_accepted": false,
+      "compiled": 55,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 8,
+      "id": "20261013-163224269-4052730",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      }
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "candidate_accepted": false,
+      "compiled": 3,
+      "compiler": "nightly-2026-10-08",
+      "exit": 0,
+      "fresh": 55,
+      "id": "20261013-163228877-4050007",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      }
+    }
+  ],
+  "scope": "Actual cumulative installed public interfaces, own west host only. Missing-toolchain fallback observations are not candidate acceptance. No cross-epoch speed claim.",
+  "staging": {
+    "cargo": "official nightly-2026-10-08, byte-identical to hosted default Cargo",
+    "defaults_changed": false,
+    "identity": "b7907f1fe8f7b788dbace9ca649ce4729408f943",
+    "installed_at": 0,
+    "loader": "resolved on Ubuntu24.04",
+    "local_jr_cargo": "failed libgit2.so.1.9 loader check, renamed inside staged namespace before publication",
+    "rustc_sha256": "efd82c516ba2b499e4a617cb97fbcbb65b8b1088e64b9c2654e98f7281d64e8a"
+  }
+}

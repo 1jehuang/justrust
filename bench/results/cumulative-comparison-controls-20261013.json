@@ -1,0 +1,46 @@
+{
+  "host_window_utc": {
+    "start": "2026-10-13T23:12:00Z",
+    "released": "2026-10-13T23:44:33Z"
+  },
+  "host": {
+    "region": "us-west-2",
+    "type": "m8azn.6xlarge",
+    "cores": 24
+  },
+  "client_sha256": "e2bc92690d1e2f0c11f0d7be413fee97e70fb987df0bcfeadfea68e7a4e5f79e",
+  "compiler_comparison": {
+    "before": "cumulative-nightly-before-20261013.json",
+    "after": "cumulative-jr-after-20261013.json",
+    "samples_per_scenario": 7,
+    "warmups": 2,
+    "noisy_samples": 0,
+    "cargo": "Byte-identical official nightly-2026-10-08 Cargo on both paths. Native jr-cargo is not present in this comparison.",
+    "rustc": "nightly-2026-10-08 versus staged jr-b7907f1fe8f7, different upstream revisions and optimization stack. Not isolated PGO/BOLT causality.",
+    "reference_seconds": {
+      "before": 5.32,
+      "after": 4.56
+    },
+    "suite_compare": "reference -14% faster, body/no-op within noise",
+    "default_promoted": false
+  },
+  "stock_control": {
+    "artifact": "versus-20261013-164114-e6a1b5e-with-existing-seed-control-dirty.json",
+    "measured_samples": 42,
+    "noisy_samples": 42,
+    "accepted_speed_claim": false,
+    "confirmed_local_cargo_build_utc": {
+      "start": "2026-10-13T23:38:02Z",
+      "end": "2026-10-13T23:39:53Z",
+      "cpu_seconds": 769,
+      "average_cores": 7
+    },
+    "load_at_followup": 8.2,
+    "followup_utc": "2026-10-13T23:44:01Z",
+    "reason": "Peer confirmed simultaneous static jr-cargo compilation. All stock and remote rows marked noisy. Raw printed 2.05x reference ratio is rejected as causal evidence, not promoted or combined with other epochs."
+  },
+  "ten_x_achieved": false,
+  "full_ui_clean": false,
+  "full_ui_parity": "Actual unchanged full UI on both compilers:1302 passed,1 same workspace hint-chip failure,10 ignored. Failure output and exit101 retained.",
+  "host_bootstrap_followup": "Peer owns native portable JR Cargo/sysroot bootstrap and later 96-core trial. Current candidate remains nondefault staged installed_at0."
+}

@@ -1,0 +1,779 @@
+{
+ "started": "2026-10-13T16:37:21-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.16",
+  "justrust_rev": "e6a1b5e-with-existing-seed-control",
+  "benchmark_repo_rev": "43094a442588",
+  "justrust_binary_revision": "e6a1b5e-with-existing-seed-control",
+  "justrust_revision_source": "declared JUSTRUST_BENCH_REV",
+  "justrust_binary_sha256": "e2bc92690d1e2f0c11f0d7be413fee97e70fb987df0bcfeadfea68e7a4e5f79e",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "optimization_env": {
+   "JUSTRUST_TEST_FILTER_COMPILE": "0",
+   "JUSTRUST_CARGO_DAEMON": "0"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 7,
+ "warmup": 2,
+ "stacks": [
+  "stock",
+  "remote"
+ ],
+ "stack_defs": [
+  {
+   "name": "stock",
+   "what": "plain cargo + system rustc, no justrust",
+   "env": {},
+   "justrust": false
+  },
+  {
+   "name": "remote",
+   "what": "justrust, JUSTRUST_REMOTE=force: check/clippy/test on the remote machine, wall includes sync and ssh",
+   "env": {
+    "JUSTRUST_REMOTE": "force"
+   },
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "reference-loop": {
+   "what": "edit a #[test] fn in the 118k-line UI crate, run its tests",
+   "scenario": "desktop-test-edit",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 7.703,
+      "exit": 0,
+      "cpu": 8.25,
+      "max_rss_mb": 2129.9,
+      "instructions": 49018421282,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.78,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 15.351,
+      "exit": 0,
+      "cpu": 13.02,
+      "max_rss_mb": 2129.6,
+      "instructions": 48968721850,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.06,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 14.168,
+      "exit": 0,
+      "cpu": 13.98,
+      "max_rss_mb": 2115.4,
+      "instructions": 49079267719,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.84,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 7.818,
+      "exit": 0,
+      "cpu": 8.45,
+      "max_rss_mb": 1997.6,
+      "instructions": 49019171927,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.14,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 8.256,
+      "exit": 0,
+      "cpu": 8.5,
+      "max_rss_mb": 2053.1,
+      "instructions": 49203540370,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.11,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 16.265,
+      "exit": 0,
+      "cpu": 13.82,
+      "max_rss_mb": 1983.2,
+      "instructions": 49000081787,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.48,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 10.97,
+      "exit": 0,
+      "cpu": 11.01,
+      "max_rss_mb": 2143.6,
+      "instructions": 49093350045,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 17.08,
+      "foreign_rustc_before": 2
+     }
+    ],
+    "remote": [
+     {
+      "wall": 5.195,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 54
+      },
+      "id": "20261013-163807277-4073140411",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.32,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.524,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 16.0,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 61
+      },
+      "id": "20261013-163812496-4073140674",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 8.85,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.316,
+      "exit": 0,
+      "cpu": 0.05,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 78
+      },
+      "id": "20261013-163847701-4073140470",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 13.62,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 5.214,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 131
+      },
+      "id": "20261013-163853055-4073140826",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.93,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 5.389,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 58
+      },
+      "id": "20261013-163914439-4073140415",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.48,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 5.427,
+      "exit": 0,
+      "cpu": 0.05,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 71
+      },
+      "id": "20261013-163919860-4073140514",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 12.52,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 5.339,
+      "exit": 0,
+      "cpu": 0.06,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 54
+      },
+      "id": "20261013-163952678-4073140893",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 16.77,
+      "foreign_rustc_before": 2
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 7,
+     "median": 10.97,
+     "min": 7.703,
+     "max": 16.265,
+     "quiet_median": 0,
+     "cpu": 11.01,
+     "max_rss_mb": 2115.4,
+     "instructions": 49019171927,
+     "instructions_spread": 0.0048
+    },
+    "remote": {
+     "n": 7,
+     "median": 5.339,
+     "min": 5.195,
+     "max": 5.524,
+     "quiet_median": 0,
+     "cpu": 0.04,
+     "max_rss_mb": 15.9,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 2.481,
+      "exit": 0,
+      "cpu": 2.64,
+      "max_rss_mb": 740.2,
+      "instructions": 10137789868,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 13.59,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.725,
+      "exit": 0,
+      "cpu": 2.99,
+      "max_rss_mb": 739.3,
+      "instructions": 10138449460,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.27,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.547,
+      "exit": 0,
+      "cpu": 2.68,
+      "max_rss_mb": 740.2,
+      "instructions": 10137783636,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.27,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.616,
+      "exit": 0,
+      "cpu": 2.76,
+      "max_rss_mb": 739.5,
+      "instructions": 10138545282,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.1,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.285,
+      "exit": 0,
+      "cpu": 2.39,
+      "max_rss_mb": 740.0,
+      "instructions": 10136822892,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.1,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.444,
+      "exit": 0,
+      "cpu": 2.61,
+      "max_rss_mb": 739.2,
+      "instructions": 10137047993,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.333,
+      "exit": 0,
+      "cpu": 2.51,
+      "max_rss_mb": 739.4,
+      "instructions": 10138433494,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 11.83,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 1.926,
+      "exit": 0,
+      "cpu": 0.07,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 64
+      },
+      "id": "20261013-164015957-4073140478",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.99,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.904,
+      "exit": 0,
+      "cpu": 0.09,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 69
+      },
+      "id": "20261013-164017931-4073140711",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.99,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.954,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 16.0,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 50
+      },
+      "id": "20261013-164025253-4073140157",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.81,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.131,
+      "exit": 0,
+      "cpu": 0.07,
+      "max_rss_mb": 16.0,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 93
+      },
+      "id": "20261013-164027268-4073140469",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.81,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.835,
+      "exit": 0,
+      "cpu": 0.05,
+      "max_rss_mb": 16.0,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 56
+      },
+      "id": "20261013-164034431-4073140863",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.896,
+      "exit": 0,
+      "cpu": 0.07,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 87
+      },
+      "id": "20261013-164036299-4073140992",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.906,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 52
+      },
+      "id": "20261013-164043134-4073140121",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 11.83,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 7,
+     "median": 2.481,
+     "min": 2.285,
+     "max": 2.725,
+     "quiet_median": 0,
+     "cpu": 2.64,
+     "max_rss_mb": 739.5,
+     "instructions": 10137789868,
+     "instructions_spread": 0.0002
+    },
+    "remote": {
+     "n": 7,
+     "median": 1.906,
+     "min": 1.835,
+     "max": 2.131,
+     "quiet_median": 0,
+     "cpu": 0.07,
+     "max_rss_mb": 15.9,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "noop-test": {
+   "what": "no edit: fixed cost of a `test` call",
+   "scenario": "desktop-noop-test",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 0.551,
+      "exit": 0,
+      "cpu": 0.56,
+      "max_rss_mb": 177.2,
+      "instructions": 2229662150,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.7,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.915,
+      "exit": 0,
+      "cpu": 0.92,
+      "max_rss_mb": 176.7,
+      "instructions": 2230366453,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.0,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.698,
+      "exit": 0,
+      "cpu": 0.72,
+      "max_rss_mb": 176.8,
+      "instructions": 2230596588,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.0,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.618,
+      "exit": 0,
+      "cpu": 0.63,
+      "max_rss_mb": 177.0,
+      "instructions": 2230296416,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.6,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.602,
+      "exit": 0,
+      "cpu": 0.61,
+      "max_rss_mb": 176.8,
+      "instructions": 2230144986,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.6,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.602,
+      "exit": 0,
+      "cpu": 0.61,
+      "max_rss_mb": 176.7,
+      "instructions": 2230429847,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.6,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.367,
+      "exit": 0,
+      "cpu": 0.37,
+      "max_rss_mb": 176.9,
+      "instructions": 2229343893,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.6,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 1.083,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 129
+      },
+      "id": "20261013-164103857-4073140636",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.7,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.807,
+      "exit": 0,
+      "cpu": 0.06,
+      "max_rss_mb": 16.0,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 69
+      },
+      "id": "20261013-164104974-4073140691",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.0,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.051,
+      "exit": 0,
+      "cpu": 0.05,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 62
+      },
+      "id": "20261013-164107559-4073140423",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.0,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.789,
+      "exit": 0,
+      "cpu": 0.05,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 63
+      },
+      "id": "20261013-164108659-4073140923",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 11.0,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.786,
+      "exit": 0,
+      "cpu": 0.07,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 85
+      },
+      "id": "20261013-164110801-4073140544",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.6,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.837,
+      "exit": 0,
+      "cpu": 0.06,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 65
+      },
+      "id": "20261013-164111628-4073140767",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.6,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.814,
+      "exit": 0,
+      "cpu": 0.05,
+      "max_rss_mb": 15.9,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 59
+      },
+      "id": "20261013-164113592-4073140776",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 10.6,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 7,
+     "median": 0.602,
+     "min": 0.367,
+     "max": 0.915,
+     "quiet_median": 0,
+     "cpu": 0.61,
+     "max_rss_mb": 176.8,
+     "instructions": 2230296416,
+     "instructions_spread": 0.0006
+    },
+    "remote": {
+     "n": 7,
+     "median": 0.814,
+     "min": 0.786,
+     "max": 1.083,
+     "quiet_median": 0,
+     "cpu": 0.05,
+     "max_rss_mb": 15.9,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  }
+ },
+ "finished": "2026-10-13T16:41:14-0700"
+}

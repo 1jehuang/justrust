@@ -1,0 +1,294 @@
+{
+ "started": "2026-10-13T16:36:47-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.16",
+  "justrust_rev": "e6a1b5e-with-existing-seed-control",
+  "benchmark_repo_rev": "43094a442588",
+  "justrust_binary_revision": "e6a1b5e-with-existing-seed-control",
+  "justrust_revision_source": "declared JUSTRUST_BENCH_REV",
+  "justrust_binary_sha256": "e2bc92690d1e2f0c11f0d7be413fee97e70fb987df0bcfeadfea68e7a4e5f79e",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)",
+  "toolchain": "nightly-2026-10-08",
+  "optimization_env": {
+   "JUSTRUST_TEST_FILTER_COMPILE": "0",
+   "JUSTRUST_CARGO_DAEMON": "0"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "execution": "remote",
+  "hosted_early": false,
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 3,
+ "scenarios": {
+  "desktop-type-error": {
+   "what": "time to the first type error after an edit (the check must fail)",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "samples": [
+    {
+     "id": "20261013-163659667-4070699745",
+     "wall": 1.753,
+     "first_error": 1.686,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 1.124,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 70.67580699999999,
+      "client_wall": 1.748119201,
+      "host_wall": 1.1242918968200684,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "remote_trace": {
+      "client_elapsed_ms": {
+       "roots": 0.1,
+       "charged": 463.1,
+       "flushed": 535.1,
+       "first_output": 802.3,
+       "exit": 1742.7,
+       "recording": 1748.1
+      },
+      "admission_awaited_ms": {
+       "identity": 39.0,
+       "charge": 309.0,
+       "identity_wait": 0.0,
+       "queue": 54.0,
+       "total": 363.0
+      }
+     },
+     "cpu": 1.21,
+     "startup": 0.256,
+     "compile": 0.825,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.3,
+     "foreign_rustc_before": 0,
+     "load_before": 6.1,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui",
+     "workspace_frontend_threads": 8
+    },
+    {
+     "id": "20261013-163701448-4070699585",
+     "wall": 1.65,
+     "first_error": 1.481,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 1.098,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 80.038839,
+      "client_wall": 1.645476014,
+      "host_wall": 1.0975706577301023,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "remote_trace": {
+      "client_elapsed_ms": {
+       "roots": 0.2,
+       "charged": 365.1,
+       "flushed": 446.3,
+       "first_output": 681.7,
+       "exit": 1644.9,
+       "recording": 1645.5
+      },
+      "admission_awaited_ms": {
+       "identity": 48.0,
+       "charge": 206.0,
+       "identity_wait": 0.0,
+       "queue": 58.0,
+       "total": 264.0
+      }
+     },
+     "cpu": 1.22,
+     "startup": 0.227,
+     "compile": 0.827,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.31,
+     "foreign_rustc_before": 0,
+     "load_before": 6.1,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui",
+     "workspace_frontend_threads": 8
+    },
+    {
+     "id": "20261013-163703126-4070699522",
+     "wall": 1.7,
+     "first_error": 1.539,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 1.072,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 86.302919,
+      "client_wall": 1.696393891,
+      "host_wall": 1.072155237197876,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "remote_trace": {
+      "client_elapsed_ms": {
+       "roots": 0.3,
+       "charged": 441.0,
+       "flushed": 528.5,
+       "first_output": 765.4,
+       "exit": 1696.1,
+       "recording": 1696.4
+      },
+      "admission_awaited_ms": {
+       "identity": 43.0,
+       "charge": 197.0,
+       "identity_wait": 0.0,
+       "queue": 53.0,
+       "total": 250.0
+      }
+     },
+     "cpu": 1.19,
+     "startup": 0.227,
+     "compile": 0.804,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.23,
+     "foreign_rustc_before": 0,
+     "load_before": 6.1,
+     "noisy": false,
+     "top_unit": "jcode_desktop_ui",
+     "workspace_frontend_threads": 8
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": 1.539,
+    "first_error_min": 1.481,
+    "first_error_max": 1.686,
+    "median": 1.7,
+    "min": 1.65,
+    "max": 1.753,
+    "quiet_n": 3,
+    "quiet_median": 1.7,
+    "phases": {
+     "startup": 0.227,
+     "compile": 0.825,
+     "test_run": 0.0,
+     "cpu": 1.21,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 1
+   }
+  }
+ },
+ "finished": "2026-10-13T16:37:04-0700"
+}
