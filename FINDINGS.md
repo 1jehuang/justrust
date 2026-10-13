@@ -5170,3 +5170,20 @@ the jcode and justrust `test --no-run` passes now complete, and the store
 has 10210 manifests. Every jcode-desktop pass still fails on the upstream
 syntax error. Only the dependency units compiled before that error get
 published.
+
+### 66c. A new user's first hosted build went local: macOS ssh socket limit (fixed in 0.1.0-alpha.14)
+
+Production 08:47-08:50: a new account on a MacBook launched a host (first
+launch to readiness 68 s: started 08:47:55, `JCODE_BUILD_READY` 08:49:03),
+then the build fell back to local after 136 s: `local_builds` reason
+`cannot open an ssh session ... unix_listener: path
+"/Users/<17 chars>/.justrust/remote/hosted/cm-<40 hex>..." too long`.
+`control_path` used Linux's 108-byte `sun_path`; macOS has 104, and this
+home made a 107-byte path. 0a1e758 uses the per-OS limit (falls back to the
+runtime dir), test passes on both macOS CI runners. Any Mac user name of 15+
+characters was affected. Shipped in v0.1.0-alpha.14; the update endpoint
+offers it to alpha.13 clients.
+
+macOS CI had been red since e9e56e4 for an unrelated reason: the git-origin
+seed script called GNU `timeout`, which macOS lacks (440bad5). All five CI
+jobs green again.
