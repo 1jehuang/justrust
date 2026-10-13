@@ -5375,3 +5375,51 @@ other agents. No compile speedup is claimed. See `docs/release-alpha16.md`
 for publication and live-service verification, including the boundary that
 the customer's own Mac retry is not observable here. Linux hosted builds
 still require Linux-compatible projects, not macOS-specific native targets.
+
+## 2026-10-13: hosted dogfooding, native cargo and upgrade-safe agents
+
+The 10x stock-local target is not achieved. Details and pinned results are in
+`docs/hosted-speed-20261013.md`. The earlier apparent 54x cold result reused
+a warm remote target, not a truly cold hosted compiler.
+
+`623b85e` lazily resyncs requested roots after reconnect and adds phase trace
+diagnostics. `3687ab6` pins a reusable executable snapshot, so atomic live
+agent replacement cannot break later builds or their recording shims. A real
+replacement subprocess runs recorded, raw, recorded offline checks, with zero
+units compiled on the final check. All 14 protocol tests passed on hosted run
+`20261013-075429794-820147`; check `20261013-075149665-800573` and warning-free
+clippy `20261013-075431281-820282` passed. Alpha.16 release owner installed it
+and verified full hosted tests (330 passed). No reconnect speedup is claimed.
+
+Cloud `4cd6d38`, deployed worker `beba6b93-5ae1-4cb8-970e-0308c571fb8e`, overlaps
+identity lookup with authoritative charging while preserving billing-before-
+execution and queued telemetry ordering. All 62 Node and six Python tests passed.
+No billing entitlement, tenant isolation or shared-cache publishing rules changed.
+
+Native Ubuntu jr-cargo (vendored libgit2) was built through hosted run
+`20261013-074654609-754326` and installed only on our account host. The first
+Arch binary could not load libgit2 and was immediately disabled. Both native
+and stock report the exact pinned release/channel and base commit. Fixed-client
+seven-sample `bench/suite.py compare` reports:
+
+```text
+desktop-noop-test  1.35 -> 1.00 s  -26%  within noise
+desktop-body-check 2.69 -> 2.54 s   -6%  within noise
+```
+
+These are observed medians, not a conclusive end-to-end speedup. Host cargo
+startup medians moved 0.34 -> 0.21 s and 0.37 -> 0.23 s. No-op compiled zero
+units and body-check compiled one local unit in both measured groups, so
+activation did not invalidate dependencies. Real hosted check, library tests
+and warning-free all-target lint passed afterwards: `20261013-080759334-903256`,
+`20261013-080802295-903631`, `20261013-080803980-903707`. Native fork checksum:
+`ab748784c57fc2a3da6f17272be48cfbd7a432f02ee8a864124b73bcedab8531`.
+
+The new stage2 PGO/BOLT compiler finished in 39m52s, then passed interface
+hash/link/load checks, test-filter checks and 40 deterministic stress rounds.
+These custom compiler harnesses require the local unpromoted compiler, not
+normal-build routing off. It has not been installed or promoted to hosted.
+
+Correction to finding 67: the 95MiB bundle cap applies to gzip bytes, and the
+unpack limit is380MiB. An 118MiB raw bedrock output alone does not prove it
+cannot be served. Matching exact dependency/toolchain keys remains necessary.

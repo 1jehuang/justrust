@@ -51,10 +51,27 @@ wall time and reconnect tails matter, not only rustc time.
 
 An Arch-built jr-cargo upload could not load Ubuntu
 `libgit2.so.1.9`. It was immediately disabled before any benchmark, restoring
-stock cargo. A native hosted build with vendored libgit2 is running. Do not
-promote it until version/channel compatibility, real tests and fixed-client
-before/after measurements pass. The optimized jr-rustc rebuild is separately
-running in a reload-resilient systemd unit. It is not validated or promoted.
+stock cargo. A native hosted build with vendored libgit2 subsequently passed
+loader and exact release/channel checks. It is enabled only on our account
+host. The fixed alpha.16 client seven-sample comparison observes no-op
+1.355 -> 0.997 s and body-check2.690 ->2.542 s, but `suite.py compare` labels
+both within noise. No conclusive end-to-end speedup is claimed. Results are
+`hosted-native-cargo-stock-before-20261013.json` and
+`hosted-native-cargo-fork-after-20261013.json`. Normal hosted check, library
+tests and warning-free lint passed after activation.
+
+The stage2 PGO/BOLT compiler build finished in 39m52s. Its interface hash,
+dependent link/load, test-filter and 40-round stress checks passed locally
+(custom compiler validation requires this unpromoted local binary). It is
+not installed on hosted or selected by default.
+
+Agent replacement failures found during dogfooding are fixed in 3687ab6:
+the running executable is copied to an immutable per-inode snapshot before
+accepting builds. Copies are published atomically without replacing an
+already-running snapshot. Real recorded/raw/recorded checks after replacing
+the installed binary pass and share fresh Cargo artifacts. All 14 protocol
+tests passed; the release owner installed the fix and passed 330 full hosted
+tests before alpha.16 publication.
 
 All checks and tests above used the hosted service. Global agent instructions
 now require hosted dogfooding and explicitly documented local exceptions.
