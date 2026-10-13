@@ -5611,3 +5611,9 @@ incremental0.560s, link0.177s. Profiling warmup115543316-2282562904 reported
 - Installed defaults genuinely hosted: check `20261013-130405588-2703785`, full351tests `20261013-130420296-2705417`, lint `20261013-130423685-2705593` all0compiled56fresh. First connection sync14.16s is disclosed, not a latency win.
 - All16 unchanged package/security tests pass `20261013-130424881-2705665`. Full UI changes1295/8/10 to1302/1/10. Remaining viewport assertion fails isolated default and optimizedJR; neither full suite is clean, default compiler unchanged.
 - Exact14 acceptance/failure records and details: `docs/hosted-umask-20261013.md`. This is an execution-correctness fix, not a measured speedup or10x claim.
+
+### Current-M8 optimized compiler gate (2026-10-13)
+
+- Same frozen7096694 client, two warmups/seven samples, same M8 host and explicit USwest backend: `bench/suite.py compare` reports reference5.803->5.012s(-14%,faster), body2.437->2.465s(noise), noop1.309->1.487s(noise). Reference compile4.402->3.654s, body compile1.052->1.134s regresses.
+- All42 exact measured records report hosted, zero failures and equal3 filtered reference/noop tests. Both raw benchmark files and credential-free network headers/timings are committed. Current ingress KIX/SYD with backend remote-SJC is not the earlier SJC epoch, no cross-epoch compiler-speed claim.
+- Default remainsnightly; optimizedJR remains staged opt-in. Full unchanged UI has same1302/1/10 on both and isolated default viewport failure, so neither correctness gate is clean. Details `docs/hosted-compiler-20261013.md`, correctness records `docs/hosted-umask-20261013.md`.10x remains unmet.
