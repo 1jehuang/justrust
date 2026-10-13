@@ -85,6 +85,7 @@ pub const DEFAULT_STORE: &str = "https://d1j555vqgf2xkj.cloudfront.net";
 /// `prebuild/run.sh` default). Keys include rustc `-vV`, so only builds
 /// with this toolchain can hit the store. Remote build machines use it
 /// unless the project pins another (`remote_agent::store_toolchain`).
+#[cfg_attr(windows, allow(dead_code))] // the remote agent runs on Linux and macOS only
 pub const STORE_TOOLCHAIN: &str = "nightly-2026-10-08";
 
 /// The store base, without a trailing slash, or `None` when off.
