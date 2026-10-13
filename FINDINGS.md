@@ -5206,3 +5206,50 @@ The customer's last recorded client was alpha.13, so their next step is
 project. Auto-update normally checks daily, so publishing a fix does not
 immediately replace every installed client. macOS automatic routing still
 intentionally stays local because the hosted machines target Linux.
+
+### 66d. Expanded hosted acceptance: installer, updater, native Macs, and full tests
+
+2026-10-13, 10:23-10:29 UTC: exercised the actual published installer from
+`jcode.sh/rust.sh` into an isolated directory (login and agent-file edits
+disabled): it downloads, verifies, installs and runs alpha.14. A separately
+downloaded, checksum-verified alpha.13 release binary ran `justrust update`
+against the production release endpoint, replaced itself with alpha.14,
+and reported up to date on a second update. No normal user installation or
+credentials were modified by these two acceptance paths.
+
+Read the actual native Mac logs from release-commit CI run `38374301919`
+(4578234): Intel job `115218706991` and arm64 job `115218707112` both execute
+`remote_backend::tests::control_path_fits_the_socket_limit ... ok`, with
+308 passed, 0 failed and 2 ignored. Their macOS integration, smoke and
+release-execution steps pass too. Release workflow `38374301888` built and
+packaged both Mac architectures successfully. These are real native CI
+observations, not inferred from Linux compilation.
+
+The fresh installer binary's real hosted `test --lib` exposed a separate
+test-isolation defect: run `20261013-032421170-3415301` returned 101 with
+307 passed and 1 failed. The agent intentionally defaults
+`JUSTRUST_PREBUILT_ALWAYS=1`, but the cost-model regression assumed it was
+unset. Reproduced locally with that variable (run
+`20261013-032558550-3424443`). Factor the policy input explicitly so the
+fixture tests normal costs and the forced-fetch override without mutating
+process-global environment. The production wrapper still honors the same
+variable and preserves the existing fetch policy.
+
+After the fix, the same public installed binary and hosted `test --lib`
+path passes all 308 tests, 2 ignored, in 4.82 s: run
+`20261013-032804769-3438655`. Production D1 records both the failing run
+(`done`, exit 101) and the passing run (`done`, exit 0), verifying error
+propagation as well as success. This is a correctness result, not a speedup
+claim. Local `check` (`20261013-032741214-3434033`), the override regression
+(`20261013-032742619-3434124`), full `test` (326 passed, 2 ignored,
+`20261013-032742724-3434190`) and warning-free all-target `clippy`
+(`20261013-032803535-3438523`) pass. Reinstalled with
+`cargo install --path . --locked`; all cited build summaries are exported.
+
+The customer's latest production run remains the original abandoned
+alpha.13 attempt. Their Mac and private workspace are not accessible here,
+so applying the update and observing their own retry remains externally
+blocked. Do not equate our hosted acceptance or native Mac CI with a
+successful customer retry. The audit also identified unchecked oversized
+runtime-directory fallbacks as separate hardening work, beyond the
+ordinary-home-path incident fixed by alpha.14.

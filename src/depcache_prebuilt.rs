@@ -216,7 +216,18 @@ fn index_path(root: &Path, base: &str) -> PathBuf {
 /// 16-core laptop at ~10 MB/s: median fetch 1.2 s vs median compile 0.18 s,
 /// and fetching all 615 hits made a cold check 2-3x slower (FINDINGS 43).
 fn worth_fetching(root: &Path, base: &str, key: &str) -> bool {
-    if std::env::var("JUSTRUST_PREBUILT_ALWAYS").is_ok_and(|v| v == "1") {
+    worth_fetching_with_override(
+        root,
+        base,
+        key,
+        std::env::var("JUSTRUST_PREBUILT_ALWAYS").is_ok_and(|v| v == "1"),
+    )
+}
+
+// Explicit policy input keeps cost-model tests independent of the environment
+// inherited by real hosted runs, whose agent defaults the override to true.
+fn worth_fetching_with_override(root: &Path, base: &str, key: &str, always: bool) -> bool {
+    if always {
         return true;
     }
     let Some((compile_ms, bytes)) = cost_of(root, base, key) else {
@@ -773,15 +784,19 @@ mod tests {
         )
         .unwrap();
         let base = format!("file://{}", store.display());
+        let priced = |key: &str| worth_fetching_with_override(&root, &base, key, false);
         std::fs::write(rate_path(&root), "10000000").unwrap(); // 10 MB/s
         // 180 ms to compile vs 0.7 s fixed fetch cost: compile.
-        assert!(!worth_fetching(&root, &base, &cheap));
+        assert!(!priced(&cheap));
         // 9 s to compile vs 0.7 s + 40 ms transfer: fetch.
-        assert!(worth_fetching(&root, &base, &slow));
+        assert!(priced(&slow));
         // 3 s to compile vs 20 s of transfer: compile.
-        assert!(!worth_fetching(&root, &base, &big));
+        assert!(!priced(&big));
         // Not priced by the store: fetch, as before costs existed.
-        assert!(worth_fetching(&root, &base, &unpriced));
+        assert!(priced(&unpriced));
+        // The hosted override still fetches even when compiling would win.
+        assert!(worth_fetching_with_override(&root, &base, &cheap, true));
+        assert!(worth_fetching_with_override(&root, &base, &big, true));
         // Measured downloads move the rate.
         note_download(&root, 4_000_000, 4.0);
         assert!(download_rate(&root) < 10_000_000.0);
@@ -790,14 +805,14 @@ mod tests {
         std::fs::write(rate_path(&root), "10000000").unwrap();
         note_latency(&root, 0.02);
         assert!((fetch_overhead_ms(&root) - 70.0).abs() < 1.0);
-        assert!(worth_fetching(&root, &base, &cheap));
-        assert!(!worth_fetching(&root, &base, &big));
+        assert!(priced(&cheap));
+        assert!(!priced(&big));
         // A slow request pulls the estimate back up, bounded.
         for _ in 0..50 {
             note_latency(&root, 10.0);
         }
         assert_eq!(fetch_overhead_ms(&root), 3000.0);
-        assert!(!worth_fetching(&root, &base, &cheap));
+        assert!(!priced(&cheap));
         let _ = std::fs::remove_dir_all(&root);
     }
 
