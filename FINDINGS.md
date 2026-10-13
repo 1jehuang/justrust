@@ -4849,3 +4849,5 @@ rsync a missing dir, which failed the whole link and sent the build local
 and 3, which then built locally in 32.6 and 28.4 s). 2952861 forgets deleted
 roots. Runs 6-8 then removed their worktrees between runs and stayed remote
 (`forgot ... (deleted)` in daemon.log).
+
+Release check: v0.1.0-alpha.11 installed via jcode.sh/rust.sh; first remote build: "fetched from its release ... in 0.4s", installed in 0.6s (was 54-126 s by upload).
