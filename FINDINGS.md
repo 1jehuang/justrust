@@ -5033,3 +5033,17 @@ deciding; the branch is pushed.
 Process note: the first attempt aborted because another agent reinstalled
 justrust mid-run (`factors.py` refuses to mix versions). Pin a copy:
 `JUSTRUST=<copy of the binary> bench/factors.py run ...`.
+
+### 67b. Why aws_sdk_bedrock still misses the store
+
+The host's local depcache has 10 keys for aws-sdk-bedrock 1.148.0 (one per
+command shape and dependency set). None of them is in the store index. The
+fleet built bedrock (`check --workspace` of jcode: 8.9 s, published), but it
+builds jcode's `origin/HEAD`, and the laptop checkout that agents build had
+diverged (17 local commits ahead, 11 behind, 28 lockfile packages added
+upstream). A unit's key includes its dependencies' keys, so any drift in
+bedrock's aws-smithy dependency graph gives a new key even at the same
+bedrock version. Its rmeta is 20.9 MB, and the rlib bundle 118 MB, which is
+over the 95 MB bundle cap, so `build` shapes of bedrock could never be
+served anyway. Options: build the fleet from more than one recent commit,
+or raise the cap for the few crates on the cold critical path. Not done here.
