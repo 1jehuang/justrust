@@ -50,6 +50,16 @@ Anything multitenant goes in `~/justrust-cloud`, never here (see
 both `src/depcache_remote.rs` here and `src/cache.js` there: change both,
 test both (`justrust test`, `npm test`), push both.
 
+## Production changes are allowed
+
+You may change the live system without asking: deploy the worker
+(`wrangler deploy` in `~/justrust-cloud`), upload fleet files to S3, trigger
+prebuild fleet runs, update hosted machines, run D1 migrations, cut releases.
+Do it, verify it worked (logs, a real build, the index), and note what you
+changed in the commit or FINDINGS. Still never destroy user data (accounts,
+billing, private caches) and never weaken the security invariants in
+`~/justrust-cloud/AGENTS.md`.
+
 ## Git workflow
 
 - Work directly on `main`. No feature branches.
