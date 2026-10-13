@@ -459,3 +459,27 @@ raw idempotent admission diagnostics. Those retries create no new charge and
 execute no build, so they are not substitutes for full-loop measurements.
 **10x stock-local is not established.** The retained own M8 host's hourly
 infrastructure estimate remains 73% higher; the fleet default is unchanged.
+
+## Current accepted service against stock-local, 2026-10-13
+
+The current round-robin comparison uses seven measured rounds and two
+warmups per workload, the same pinned source edit on both stacks, stock
+/usr/bin/cargo with rustc 1.98.1 versus the frozen 08a77e8 client and accepted
+M8azn/US-west-control-plane hosted service. All 21 measured remote runs have
+actual hosted markers, exit zero, and the same selected test counts as stock.
+Both stacks are warm. There is no cold-local/warm-host cache substitution.
+
+| workload | stock-local | current hosted | hosted vs stock |
+|---|---:|---:|---|
+| reference-loop | 6.846 s | 5.198 s | 1.32x faster |
+| body-check | 1.837 s | 1.904 s | 0.96x, within noise |
+| noop-test | 0.462 s | 0.742 s | 0.62x, slower |
+| geometric mean | | | 0.92x |
+
+Raw result: versus-20261013-123317-08a77e8-dirty.json. Reproduce its scoreboard
+with bench/versus.py show. Instructions and RSS for remote are client-only,
+not the build VM; remote instructions are intentionally omitted. This is
+not a measurement of a 10x win, and not evidence that every hosted call is
+faster. The reference loop is improved, but very short calls still pay
+admission/transport overhead. These numbers justify deeper frontend/cache
+integration work rather than declaring the target achieved.

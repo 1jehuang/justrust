@@ -5593,3 +5593,13 @@ incremental0.560s, link0.177s. Profiling warmup115543316-2282562904 reported
   tests and lint pass cleanly. Exact check 20261013-122843725-2485537,
   protocol 20261013-122844340-2485613, full 20261013-122845620-2485666 and
   lint 20261013-122848384-2476255 exported. 10x unmet, own host cost 73% higher.
+
+## 2026-10-13: current stock-local target check
+
+- Seven round-robin samples, identical pinned edits, same selected tests.
+  Current stock rustc 1.98.1 vs hosted default: reference6.846->5.198s,
+  1.32x faster; body1.837->1.904s within noise; noop0.462->0.742s slower.
+  Three-workload geometric mean0.92x.10x target is not reached.
+- All21 measured remote samples have actual hosted markers and exit0.
+  Raw versus-20261013-123317-08a77e8-dirty.json and exact exported records
+  preserved. Remote CPU/RSS are client-only, not server resource comparisons.
