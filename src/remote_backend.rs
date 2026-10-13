@@ -141,12 +141,12 @@ impl Target {
 
 /// ssh ControlPath for connections from justrust. `%C` expands to 40 hex
 /// characters, ssh binds the master first at the path plus a 17-character
-/// random suffix (`.XXXXXXXXXXXXXXXX`), and a Unix socket path must stay
-/// under 108 bytes, so a long JUSTRUST_HOME falls back to the per-user
-/// runtime dir (then /tmp).
+/// random suffix (`.XXXXXXXXXXXXXXXX`), and a Unix socket path must fit in
+/// `sun_path` ([`SUN_PATH_MAX`], including the NUL), so a long JUSTRUST_HOME
+/// falls back to the per-user runtime dir (then /tmp).
 pub(crate) fn control_path(dir: &std::path::Path) -> String {
     let p = format!("{}/cm-%C", dir.display());
-    if p.len() - 2 + 40 + 17 < 108 {
+    if fits_sun_path(p.len() - 2 + 40 + 17) {
         return p;
     }
     let uid = crate::sys::user_tag();
@@ -157,6 +157,18 @@ pub(crate) fn control_path(dir: &std::path::Path) -> String {
     let short = base.join("justrust-cm");
     let _ = std::fs::create_dir_all(&short);
     format!("{}/%C", short.display())
+}
+
+/// `sun_path` size: 108 on Linux, 104 on macOS and the BSDs. Was a fixed
+/// 108, so a 46-character macOS home (`/Users/<17 chars>/.justrust/remote/hosted`)
+/// made a 107-byte path, ssh failed with `unix_listener: path ... too long`,
+/// and a new user's first hosted build fell back to local (production
+/// `local_builds`, 2026-10-13).
+const SUN_PATH_MAX: usize = if cfg!(target_os = "linux") { 108 } else { 104 };
+
+/// A socket path of `len` bytes plus its NUL fits.
+fn fits_sun_path(len: usize) -> bool {
+    len < SUN_PATH_MAX
 }
 
 /// `justrust remote env`: the ssh destination of the current backend as
@@ -214,6 +226,31 @@ pub fn use_command(kind: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_path_fits_the_socket_limit() {
+        // ssh binds `<path>.<17 random chars>` with %C as 40 hex characters.
+        let bound = |p: &str| p.replace("%C", &"a".repeat(40)).len() + 17;
+        // The production failure: a 17-character macOS user name.
+        let mac = std::path::Path::new("/Users/jonathanfishner/.justrust/remote/hosted");
+        assert!(
+            bound(&control_path(mac)) < SUN_PATH_MAX,
+            "{}",
+            control_path(mac)
+        );
+        // Short homes keep the socket next to the keys.
+        let short = std::path::Path::new("/home/me/.justrust/remote/hosted");
+        assert_eq!(
+            control_path(short),
+            "/home/me/.justrust/remote/hosted/cm-%C"
+        );
+        assert!(!fits_sun_path(SUN_PATH_MAX) && fits_sun_path(SUN_PATH_MAX - 1));
+        // On macOS (104) the old fixed 108 accepted the 107-byte production
+        // path; the per-OS limit must reject it there.
+        let raw_mac = bound("/Users/jonathanfishner/.justrust/remote/hosted/cm-%C");
+        assert_eq!(raw_mac, 107);
+        assert!(raw_mac >= 104);
+    }
 
     #[test]
     fn backend_json_shapes() {
