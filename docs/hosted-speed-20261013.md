@@ -272,3 +272,40 @@ already charged run, no build or new charge. Fresh/reused/fresh-after
 on reused samples. hosted-http-transport-repeat-20261013.json records the
 timings. This motivates investigating persistent transport, not caching
 authorization or successful charges. No new HTTP library has been chosen.
+
+## Persistent native admission pool: measured rejection
+
+The frozen 6c0988c client used pinned Desktop/Jcode snapshots and explicit
+JR compiler jr-b7907f1fe8f7 on the same persistent account host. Each side
+had two discarded warmups and eleven measured samples per scenario. Every
+sample verified actual hosted execution. The after samples also verified
+the native admission RPC marker, not merely the requested environment flag.
+
+```text
+scenario                       A med   B med   delta      %  verdict
+desktop-noop-test               0.91    1.52   +0.61   +67%  slower
+desktop-body-check              2.56    3.19   +0.63   +25%  slower
+desktop-test-edit               6.22    6.74   +0.53    +8%  within noise
+```
+
+Compare hosted-http-pool-before-20261013.json against
+hosted-http-pool-after-20261013.json with bench/suite.py compare. All test
+samples passed three tests. No-op compiled zero units, body/reference one
+local unit, dependency artifacts stayed fresh. Curl recheck median0.864s
+is supporting evidence only: the outlier-overlapping reversal comparison
+was within noise. Alternating pinned Desktop checks also observed slower
+native admissions, but their cause is not proven.
+
+Correctness alone did not justify the dependency and compile cost. The
+prototype passed350 hosted tests and warning-free lint, then ee5699d removed
+it after the measured regression. Owner-only daemon socket0600 and strict
+benchmark provenance remain. The initial four policy-test failures are
+retained in run20261013-104430840-1840198, followed by the repaired native
+tests20261013-104805989-1861746 and full suite105755513-1920686.
+
+Removal passed343 full hosted tests20261013-111516986-2032086, hosted check
+111514690-2031936 and all-target warning-free lint111522449-2032855. After
+reinstall, default hosted check111611765-2038913 and targeted tests
+111621112-2040123 reused56 fresh units, zero compiled. The new agent first
+sync took8.7s, followed by warm hosted acceptance0.6s. Neither is a
+controlled speedup claim. The10x stock-local target is still unmet.

@@ -5534,3 +5534,17 @@ reused samples create0new connections. This is neither a new-charge nor
 a compiler benchmark. Artifacthosted-http-transport-repeat-20261013.json
 contains only timings and the already-public run ID, never credentials.
 Authoritative billing must remain online before every actual build.
+
+## 2026-10-13: native hosted admission pool rejected by measurement
+
+Frozen6c0988c, explicit JR compiler, pinned Desktop/Jcode,11samples per side
+after2warmups: noop0.91->1.52s (+67%, slower), body2.56->3.19s (+25%,
+slower), reference6.22->6.74s (within noise), per bench/suite.py compare.
+Every pool sample verified actual native admission and hosted execution.
+Files hosted-http-pool-before/after-20261013.json and curl-recheck are
+committed. The correct350-test prototype was removed in ee5699d rather
+than carrying an unhelpful dependency stack. Socket0600 stays. Initial
+policy-test failure20261013-104430840-1840198 is retained alongside repair
+and acceptance.343 hosted tests111516986-2032086 and warning-free lint
+111522449-2032855 pass; installed acceptance111621112-2040123 is remote
+on hosted with56fresh and zero compiled. No10x or pool speedup claim.
