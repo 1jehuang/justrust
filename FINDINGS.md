@@ -4818,3 +4818,34 @@ of jcode: 530 dependency hits (529 prebuilt) of 575, build 32.4 s on the host,
 from the agent's seat. Before this session the same shape of build had 0 hits
 and 85-95 s over plain ssh, ~41-44 s through the agent (jobs 32, no hits). The
 immediate rerun is a no-op in 2.4 s.
+
+### 65c. Repeats through the agent route, and a removed-worktree bug
+
+Fresh `git worktree` of jcode per run, `JUSTRUST_REMOTE=force justrust check -p
+jcode-tui` from the laptop (hosted, f67c993 + 2952861):
+
+| run | build on host | remote total | dependency hits |
+|---|---:|---:|---:|
+| 4 (warm host depcache) | 28.9 s | 39.9 s | 575 of 575 |
+| 5 | 19.1 s | 25.8 s | 575 |
+| 6 | 18.8 s | 47.3 s (sync 26.3 s) | 575 |
+| 7 | 19.2 s | 24.7 s | 575 |
+| 8 | 19.2 s | 26.4 s | 575 |
+
+These hit the host's own depcache, filled by the earlier runs, not only the
+prebuilt store (the store's 529 hits were measured in 65b: 32.4 s). Store-only
+cold on a fresh host stays 32-39 s.
+
+Two runs were contaminated: another agent session set
+`[env] LIBRARY_PATH=~/jr-syslibs/...` on the shared hosted machine to link
+Desktop, which is keyed, so one run got 0 hits (59.1 s). Hosted machines are
+per account and shared by all of its agents; env set there leaks into every
+build's keys. Fixed at the source by the other session (justrust-cloud cf119d4
+installs those packages in the image).
+
+Bug: removing a worktree that had been mirrored made the next connect or push
+rsync a missing dir, which failed the whole link and sent the build local
+(`justrust: remote unavailable (rsync ... No such file or directory)`, runs 1
+and 3, which then built locally in 32.6 and 28.4 s). 2952861 forgets deleted
+roots. Runs 6-8 then removed their worktrees between runs and stayed remote
+(`forgot ... (deleted)` in daemon.log).
