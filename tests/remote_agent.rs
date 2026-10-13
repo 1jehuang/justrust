@@ -407,6 +407,102 @@ fn runs_stream_output_and_exit_codes() {
 }
 
 #[test]
+fn run_children_preserve_distinct_umasks_without_changing_agent_default() {
+    use std::os::unix::fs::MetadataExt;
+    let output = Command::new("sh").args(["-c", "umask"]).output().unwrap();
+    let original =
+        u32::from_str_radix(std::str::from_utf8(&output.stdout).unwrap().trim(), 8).unwrap();
+    let mut a = Agent::start("run-masks");
+    a.send(
+        Msg::Mkdir {
+            path: "/proj".into(),
+        },
+        &[],
+    );
+    for (id, mask) in [(80, Some("0077")), (81, Some("0022")), (82, None)] {
+        let mut env = vec![("JUSTRUST_REAL_CARGO".into(), "sh".into())];
+        if let Some(mask) = mask {
+            env.push((remote_proto::CLIENT_UMASK.into(), mask.into()));
+        }
+        a.send(Msg::Run {
+            id, cwd: "/proj".into(),
+            args: vec!["cargo".into(), "-c".into(), format!("umask; printf 'metadata=%s\n' \"${{JUSTRUST_CLIENT_UMASK-unset}}\"; : > file-{id}; mkdir dir-{id}")],
+            env, roots: vec![], start: false, run_id: String::new(),
+        }, &[]);
+    }
+    let mut pending = std::collections::BTreeSet::from([80, 81, 82]);
+    let mut outputs = std::collections::BTreeMap::<u64, String>::new();
+    while !pending.is_empty() {
+        match a.recv() {
+            (Msg::Out { id, .. }, data) => outputs
+                .entry(id)
+                .or_default()
+                .push_str(&String::from_utf8_lossy(&data)),
+            (Msg::Exit { id, code }, _) => {
+                assert_eq!(code, 0);
+                assert!(pending.remove(&id));
+            }
+            other => panic!("unexpected mask frame {other:?}"),
+        }
+    }
+    for (id, mask) in [(80, 0o077), (81, 0o022), (82, original)] {
+        let output = &outputs[&id];
+        assert_eq!(
+            u32::from_str_radix(output.lines().next().unwrap().trim(), 8).unwrap(),
+            mask
+        );
+        assert!(
+            output.contains("metadata=unset"),
+            "transport metadata must not become Cargo env: {output}"
+        );
+        assert_eq!(
+            std::fs::metadata(a.at(&format!("/proj/file-{id}")))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o666 & !mask
+        );
+        assert_eq!(
+            std::fs::metadata(a.at(&format!("/proj/dir-{id}")))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o777 & !mask
+        );
+    }
+}
+
+#[test]
+fn invalid_caller_umask_rejects_run_before_execution() {
+    let mut a = Agent::start("invalid-mask");
+    a.send(
+        Msg::Mkdir {
+            path: "/proj".into(),
+        },
+        &[],
+    );
+    assert!(a.barrier(91).is_empty());
+    a.send(
+        Msg::Run {
+            id: 92,
+            cwd: "/proj".into(),
+            args: vec!["--version".into()],
+            env: vec![(remote_proto::CLIENT_UMASK.into(), "1777".into())],
+            roots: vec![],
+            start: false,
+            run_id: String::new(),
+        },
+        &[],
+    );
+    match a.recv() {
+        (Msg::Error { id: 92, msg }, _) => {
+            assert!(msg.contains("invalid caller file creation mask"), "{msg}")
+        }
+        other => panic!("invalid mask must not execute: {other:?}"),
+    }
+}
+
+#[test]
 fn sync_run_rejects_failed_writes_then_checks_latest_source_and_reuses_artifacts() {
     let mut a = Agent::start("pipeline-check");
     for (path, data) in [

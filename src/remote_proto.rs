@@ -34,6 +34,9 @@ pub const RUN_FILES: &[&str] = &[
     "processes.json",
     "scripts.jsonl",
 ];
+/// Run metadata, not a Cargo environment input: caller Unix file creation mask.
+pub const CLIENT_UMASK: &str = "JUSTRUST_CLIENT_UMASK";
+
 /// Per-file cap: a run log larger than this is truncated, not dropped.
 const MAX_RUN_FILE: u64 = 64 << 20;
 

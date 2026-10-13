@@ -609,6 +609,15 @@ pub fn run_remote(
             env.push((var.to_string(), v));
         }
     }
+    // SSH login defaults can differ from the caller (Ubuntu: 0002 versus
+    // local 0022), changing permissions and even security-sensitive tests.
+    // This metadata is consumed before exec and never passed to Cargo.
+    if let Some(mask) = crate::procfs::current_umask() {
+        env.push((
+            crate::remote_proto::CLIENT_UMASK.to_string(),
+            format!("{mask:04o}"),
+        ));
+    }
     // The machine builds with its cargo home at our path, so dependency
     // artifacts are interchangeable with ours (peer cache).
     if let Some(h) = crate::depcache::cargo_home()

@@ -46,6 +46,44 @@ pub fn running_executable() -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+/// Read the caller's file creation mask without changing process-global state.
+/// Linux exposes it in procfs. Other Unix callers use an isolated shell child.
+pub fn current_umask() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let value = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Umask:"))?;
+        parse_umask(value.trim())
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let output = std::process::Command::new("sh")
+            .args(["-c", "umask"])
+            .env_remove("BASH_ENV")
+            .env_remove("ENV")
+            .output()
+            .ok()?;
+        output.status.success().then_some(())?;
+        parse_umask(std::str::from_utf8(&output.stdout).ok()?.trim())
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+#[cfg(unix)]
+pub fn parse_umask(value: &str) -> Option<u32> {
+    if value.is_empty() || value.len() > 4 || !value.bytes().all(|b| (b'0'..=b'7').contains(&b)) {
+        return None;
+    }
+    u32::from_str_radix(value, 8)
+        .ok()
+        .filter(|mask| *mask <= 0o777)
+}
+
 pub fn ncpu() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
@@ -743,6 +781,49 @@ fn join_args(b: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn umask_parser_accepts_only_permission_bits() {
+        for (value, expected) in [
+            ("0000", 0),
+            ("0002", 0o002),
+            ("0022", 0o022),
+            ("0077", 0o077),
+            ("777", 0o777),
+        ] {
+            assert_eq!(parse_umask(value), Some(expected));
+        }
+        for value in [
+            "",
+            "-022",
+            "+022",
+            "888",
+            "1777",
+            "00022",
+            "0o22",
+            "022;touch x",
+            "0022\n",
+        ] {
+            assert_eq!(parse_umask(value), None, "{value}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn caller_umask_is_read_without_changing_it() {
+        let read_shell = || {
+            let out = std::process::Command::new("sh")
+                .args(["-c", "umask"])
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            parse_umask(std::str::from_utf8(&out.stdout).unwrap().trim()).unwrap()
+        };
+        let before = read_shell();
+        assert_eq!(current_umask(), Some(before));
+        assert_eq!(read_shell(), before);
+    }
 
     /// A child spawned through `close_inherited_fds` does not keep a flock
     /// its parent held (the bench-lock leak through `justrust __daemon`).

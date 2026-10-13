@@ -546,14 +546,31 @@ fn start_run(
     c.args(args)
         .current_dir(cwd)
         .envs(
-            env.iter()
-                .map(|(k, v)| (k, v))
-                .filter(|(k, _)| *k != CLIENT_CARGO_HOME),
+            env.iter().map(|(k, v)| (k, v)).filter(|(k, _)| {
+                *k != CLIENT_CARGO_HOME && *k != crate::remote_proto::CLIENT_UMASK
+            }),
         )
+        .env_remove(crate::remote_proto::CLIENT_UMASK)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .detached();
+    if let Some((_, value)) = env
+        .iter()
+        .find(|(k, _)| k == crate::remote_proto::CLIENT_UMASK)
+    {
+        let mask =
+            crate::procfs::parse_umask(value).context("invalid caller file creation mask")?;
+        use std::os::unix::process::CommandExt;
+        // SAFETY: this runs only after fork in this child, before exec. umask
+        // is async-signal-safe; no allocation, locking or parent-global change.
+        unsafe {
+            c.pre_exec(move || {
+                libc::umask(mask as libc::mode_t);
+                Ok(())
+            });
+        }
+    }
     if !run_id.is_empty() {
         c.env("JUSTRUST_RUN_ID_OVERRIDE", run_id);
     }
