@@ -36,8 +36,19 @@ fn scratch(name: &str) -> PathBuf {
 
 impl Agent {
     fn start(name: &str) -> Agent {
+        Self::start_copy(name, false)
+    }
+
+    fn start_copy(name: &str, copy: bool) -> Agent {
         let dir = scratch(name);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_justrust"))
+        let executable = if copy {
+            let path = dir.join("justrust");
+            std::fs::copy(env!("CARGO_BIN_EXE_justrust"), &path).unwrap();
+            path
+        } else {
+            PathBuf::from(env!("CARGO_BIN_EXE_justrust"))
+        };
+        let mut child = Command::new(executable)
             .arg("__agent")
             .arg(dir.join("root"))
             .env("JUSTRUST_HOME", dir.join("home"))
@@ -45,6 +56,13 @@ impl Agent {
             .env("JUSTRUST_NO_UPDATE", "1")
             .env("JUSTRUST_PREBUILT", "off")
             .env_remove("JUSTRUST_DEPCACHE_DIR")
+            .env_remove("JUSTRUST_RUN_DIR")
+            .env_remove("JUSTRUST_DISABLE")
+            .env_remove("RUSTC")
+            .env_remove("RUSTDOC")
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env_remove("JUSTRUST_REAL_RUSTC")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -330,6 +348,111 @@ fn runs_stream_output_and_exit_codes() {
         (Msg::Error { id: 9, .. }, _) => {}
         other => panic!("expected Error, got {other:?}"),
     }
+}
+
+#[test]
+fn replaced_agent_executable_still_checks_with_stable_recording_shims() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut a = Agent::start_copy("replace-check", true);
+    let replacement = a.dir.join("replacement");
+    std::fs::write(&replacement, b"#!/bin/sh\nexit 97\n").unwrap();
+    std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(&replacement, a.dir.join("justrust")).unwrap();
+    // The old agent has now lost its installed pathname. Running the new
+    // pathname exits 97, while spawning current_exe on Linux gives ENOENT.
+    assert!(
+        !std::fs::read_link(format!("/proc/{}/exe", a.child.id()))
+            .unwrap()
+            .exists()
+    );
+    for (path, data) in [
+        (
+            "/proj/Cargo.toml",
+            b"[package]\nname='snapshot-check'\nversion='0.0.0'\nedition='2021'\n[workspace]\n"
+                .as_slice(),
+        ),
+        (
+            "/proj/src/lib.rs",
+            b"pub fn answer() -> u32 { 42 }\n".as_slice(),
+        ),
+    ] {
+        a.send(
+            Msg::Write {
+                path: path.into(),
+                mode: 0o644,
+            },
+            data,
+        );
+    }
+    assert!(a.barrier(100).is_empty());
+    let mut snapshots = std::fs::read_dir(a.dir.join("home/bin/agent")).unwrap();
+    let pinned = snapshots.next().unwrap().unwrap().path().join("justrust");
+    assert!(
+        snapshots.next().is_none(),
+        "one reusable snapshot per running binary"
+    );
+    for id in [101, 102, 103] {
+        let recorded = id != 102;
+        a.send(
+            Msg::Run {
+                id,
+                cwd: "/proj".into(),
+                args: if recorded {
+                    vec!["check".into(), "--offline".into()]
+                } else {
+                    vec!["cargo".into(), "check".into(), "--offline".into()]
+                },
+                env: vec![
+                    ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
+                    (
+                        "JUSTRUST_DISABLE".into(),
+                        if recorded { "0" } else { "1" }.into(),
+                    ),
+                    (
+                        "CARGO_TARGET_DIR".into(),
+                        a.at("/proj/target").to_string_lossy().into_owned(),
+                    ),
+                ],
+                roots: vec![],
+                start: false,
+                run_id: if recorded {
+                    format!("snapshot-check-{}-{id}", std::process::id())
+                } else {
+                    String::new()
+                },
+            },
+            &[],
+        );
+        let mut output = String::new();
+        loop {
+            match a.recv() {
+                (Msg::Out { .. }, data) => output.push_str(&String::from_utf8_lossy(&data)),
+                (Msg::RunFiles { .. }, _) => {}
+                (Msg::Exit { id: got, code }, data) => {
+                    assert_eq!(got, id);
+                    assert_eq!(code, 0, "real check after replacement: {output}");
+                    if recorded {
+                        let summary: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                        assert_eq!(
+                            summary["units"]["compiled"].as_u64().unwrap(),
+                            if id == 101 { 1 } else { 0 },
+                            "recorded and unrecorded checks must share fresh artifacts: {output}"
+                        );
+                    }
+                    break;
+                }
+                (Msg::Error { msg, .. }, _) => {
+                    panic!("run after atomic replacement failed: {msg}\n{output}")
+                }
+                other => panic!("unexpected frame {other:?}"),
+            }
+        }
+    }
+    let shim = a.dir.join("home/bin/shim/rustc");
+    assert_eq!(
+        std::fs::canonicalize(shim).unwrap(),
+        std::fs::canonicalize(pinned).unwrap()
+    );
 }
 
 /// `justrust cargo <secs>` with the real cargo pointed at `sleep` is a

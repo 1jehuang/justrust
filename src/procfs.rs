@@ -35,6 +35,17 @@ pub fn page_size() -> u64 {
     4096
 }
 
+/// Open the running executable itself, including after an atomic installer
+/// replacement removed its original pathname. Keep procfs details here.
+#[cfg(unix)]
+pub fn running_executable() -> std::io::Result<std::fs::File> {
+    #[cfg(target_os = "linux")]
+    let path = std::path::PathBuf::from("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
+    let path = std::env::current_exe()?;
+    std::fs::File::open(path)
+}
+
 pub fn ncpu() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())

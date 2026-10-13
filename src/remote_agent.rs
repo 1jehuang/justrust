@@ -117,6 +117,65 @@ pub fn main(prefix: Option<String>) -> ! {
     std::process::exit(code)
 }
 
+/// Runs need a real, immutable path: an atomic agent upgrade unlinks the
+/// original executable, and re-execing /proc/self/exe alone still leaves a
+/// child whose current_exe cannot be canonicalized by the recording shims.
+/// Identify the open inode, publish a copy without replacing any existing
+/// snapshot, and retain it for all connections and children using that build.
+fn executable_snapshot() -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut source = crate::procfs::running_executable()?;
+    let meta = source.metadata()?;
+    let mut hash = crate::depcache::H128::new();
+    for field in [
+        meta.dev(),
+        meta.ino(),
+        meta.len(),
+        meta.mtime() as u64,
+        meta.mtime_nsec() as u64,
+    ] {
+        hash.field(&field.to_le_bytes());
+    }
+    let dir = crate::paths::home()?.join("bin/agent").join(hash.hex());
+    let snapshot = dir.join("justrust");
+    if crate::sys::is_executable(&snapshot) && std::fs::metadata(&snapshot)?.len() == meta.len() {
+        return Ok(snapshot);
+    }
+    std::fs::create_dir_all(&dir)?;
+    let tmp = dir.join(format!(
+        ".snapshot-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| -> Result<()> {
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        std::io::copy(&mut source, &mut output)?;
+        crate::sys::set_mode(&tmp, 0o755)?;
+        // A rename would unlink an already-running concurrent snapshot. A
+        // same-directory hard link installs atomically without replacement.
+        match std::fs::hard_link(&tmp, &snapshot) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if crate::sys::is_executable(&snapshot)
+                    && std::fs::metadata(&snapshot)?.len() == meta.len()
+                {
+                    Ok(())
+                } else {
+                    bail!("invalid agent executable snapshot {}", snapshot.display())
+                }
+            }
+            Err(e) => Err(e.into()),
+        }
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result?;
+    Ok(snapshot)
+}
+
 /// Serve one daemon connection until it closes. Builds still running when
 /// it does are interrupted: nobody is left to read their output, and they
 /// would hold the cargo lock against the next connection's builds.
@@ -140,6 +199,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         }
         _ => bail!("expected Hello"),
     };
+    let executable = executable_snapshot()?;
     send(&out, &Msg::Hello { version }, &[]);
     // Peer dependency cache: this machine's cache serves the daemon's
     // requests, and this machine's rustc shims reach the daemon's machine
@@ -227,21 +287,23 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 let out = out.clone();
                 let pids = pids.clone();
                 let cwd = at(&cwd);
+                let executable = executable.clone();
                 std::thread::spawn(move || {
-                    let code = match start_run(id, &cwd, &args, &env, &run_id, &out, &pids) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            send(
-                                &out,
-                                &Msg::Error {
-                                    id,
-                                    msg: format!("{e:#}"),
-                                },
-                                &[],
-                            );
-                            return;
-                        }
-                    };
+                    let code =
+                        match start_run(&executable, id, &cwd, &args, &env, &run_id, &out, &pids) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                send(
+                                    &out,
+                                    &Msg::Error {
+                                        id,
+                                        msg: format!("{e:#}"),
+                                    },
+                                    &[],
+                                );
+                                return;
+                            }
+                        };
                     let summary = summary_for(&run_id).unwrap_or_default();
                     if version >= RUN_FILES_VERSION
                         && let Some(dir) = run_dir(&run_id)
@@ -421,7 +483,9 @@ fn mirror_cargo_home(client: &Path) -> Option<PathBuf> {
     ready(client).then(|| client.to_path_buf())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_run(
+    executable: &Path,
     id: u64,
     cwd: &Path,
     args: &[String],
@@ -430,8 +494,7 @@ fn start_run(
     out: &Out,
     pids: &Arc<Mutex<HashMap<u64, i32>>>,
 ) -> Result<i32> {
-    let me = std::env::current_exe()?;
-    let mut c = Command::new(me);
+    let mut c = Command::new(executable);
     c.args(args)
         .current_dir(cwd)
         .envs(
