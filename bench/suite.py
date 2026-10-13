@@ -463,6 +463,15 @@ def reuse_ledger(sm: dict, run_dir: Path) -> dict:
 
 # Set by `prebuilt_store()` for prebuilt scenarios.
 PREBUILT_URL = ""
+REMOTE = False
+
+
+def remote_measurement(summary: dict) -> dict:
+    """A remote sample must prove it ran remotely, never a silent fallback."""
+    remote = summary.get("remote")
+    if not isinstance(remote, dict) or not remote.get("machine"):
+        raise ValueError("forced remote benchmark fell back locally")
+    return {**remote, "host_wall": summary["wall"], "target_state": "persistent remote target"}
 
 
 def prebuilt_store(s: Scenario, root: Path) -> None:
@@ -554,6 +563,8 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     # samples; scenarios that measure it turn it on.
     env.setdefault("JUSTRUST_BUILDD", "0")
     env.update(s.env)
+    if REMOTE:
+        env["JUSTRUST_REMOTE"] = "force"
     if s.prebuilt:
         # A new machine: nothing in the local depcache, the store has it.
         cache = target.with_name(target.name + "-depcache")
@@ -597,6 +608,12 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     if not summ_path.exists():
         sys.exit(f"bench: {s.name}: no summary for run {rid} (exit {p.returncode})\n{p.stderr[-3000:]}")
     sm = json.loads(summ_path.read_text())
+    remote = None
+    if REMOTE:
+        try:
+            remote = remote_measurement(sm)
+        except ValueError as e:
+            sys.exit(f"bench: {s.name}: {e} (justrust log {rid})\n{p.stderr[-3000:]}")
     failed = p.returncode != 0
     compile_failed = sm.get("diagnostics", {}).get("compile_failed", False)
     tests_failed = sm.get("tests", {}).get("failed", 0)
@@ -627,6 +644,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         "early": {k: early.get(k) for k in ("secs", "ready", "shown", "matched", "early_only", "rustc_only")}
         if early else None,
         "recorded_wall": round(sm["wall"], 3),
+        **({"remote": remote} if remote is not None else {}),
         "cpu": round(sm.get("cpu_secs", 0.0), 2),
         "startup": round(sm["phases"]["startup"], 3),
         "compile": round(sm["phases"]["compile"], 3),
@@ -791,8 +809,11 @@ def cmd_list(_args) -> None:
 
 
 def cmd_run(args) -> None:
-    global TOOLCHAIN
+    global TOOLCHAIN, REMOTE
     TOOLCHAIN = args.toolchain
+    REMOTE = getattr(args, "remote", False)
+    if REMOTE and args.synth is not None:
+        sys.exit("bench: hosted synthetic measurements use bench/versus.py --remote")
     if TOOLCHAIN != "system":
         # Install up front so the first sample does not include the download.
         subprocess.run([J, "toolchain", "install", TOOLCHAIN], check=True, stdout=subprocess.DEVNULL)
@@ -804,6 +825,9 @@ def cmd_run(args) -> None:
     for n in names:
         if n not in BY_NAME:
             sys.exit(f"bench: unknown scenario {n} (see `bench/suite.py list`)")
+        if REMOTE and (BY_NAME[n].cold or BY_NAME[n].prebuilt):
+            sys.exit("bench: --remote supports warm scenarios only. Clearing a local target/cache "
+                     "does not clear the persistent remote target/cache; it is not a cold hosted build.")
     # Fail before hours of building, not after: every anchor must exist once.
     for n in names:
         s = BY_NAME[n]
@@ -813,6 +837,9 @@ def cmd_run(args) -> None:
             if c != 1:
                 sys.exit(f"bench: {n}: anchor occurs {c} times in {s.edit.file}")
     info = env_info()
+    info["execution"] = "remote" if REMOTE else "local"
+    if REMOTE:
+        info["target_state"] = "persistent remote target; first run is warmup"
     started = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     result = {"started": started, "env": info, "runs_per_scenario": args.n, "scenarios": {}}
     for k, name in enumerate(names):
@@ -821,7 +848,7 @@ def cmd_run(args) -> None:
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
         time.strftime("%Y%m%d-%H%M%S") + f"-{info['justrust_rev']}{'-dirty' if info['justrust_dirty'] else ''}"
-        + ("" if TOOLCHAIN == "system" else f"-{TOOLCHAIN}") + ".json"
+        + ("" if TOOLCHAIN == "system" else f"-{TOOLCHAIN}") + ("-remote" if REMOTE else "") + ".json"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=1) + "\n")
@@ -888,6 +915,8 @@ def cmd_compare(args) -> None:
         print("WARNING: different pinned snapshots, numbers are not comparable", file=sys.stderr)
     if a["env"].get("host") != b["env"].get("host"):
         print("WARNING: different machines", file=sys.stderr)
+    if a["env"].get("execution", "local") != b["env"].get("execution", "local"):
+        print("WARNING: comparing local and remote execution; remote wall includes transport", file=sys.stderr)
     print(f"A {args.a} (justrust {a['env']['justrust_rev']})\nB {args.b} (justrust {b['env']['justrust_rev']})")
     print(f"{'scenario':28s} {'A med':>7s} {'B med':>7s} {'delta':>7s} {'%':>6s}  verdict")
     for name in a["scenarios"]:
@@ -938,6 +967,9 @@ def main() -> None:
     r.add_argument("-n", type=int, default=5, help="measured runs per scenario (default 5)")
     r.add_argument("--warmup", type=int, default=1, help="discarded runs first (default 1)")
     r.add_argument("--cold", action="store_true", help="also run the cold (fresh target dir) scenarios")
+    r.add_argument("--remote", action="store_true",
+                   help="force warm scenarios through the real remote route and reject local fallback; "
+                        "not a cold hosted benchmark")
     r.add_argument("--quiet-wait", type=float, default=0, metavar="SECS",
                    help="before each run wait up to SECS for no foreign rustc and load < 2")
     r.add_argument("-o", "--out", help="result file (default bench/results/<time>-<rev>.json)")
