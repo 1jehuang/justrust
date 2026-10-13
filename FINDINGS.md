@@ -5622,3 +5622,8 @@ incremental0.560s, link0.177s. Profiling warmup115543316-2282562904 reported
 
 Same frozen7096694 client, own M8azn host and JR compiler: seven samples per scenario with actual workspace rustc flags checked. Eight-thread recheck versus six: reference5.008->4.968s(-1%) and body2.419->2.581s(+7%), both within noise by `bench/suite.py compare`. Compile medians3.658->3.638s and1.128->1.127s are effectively unchanged. Do not promote a six-thread default.
 Both real type-error probes failed as expected and exposed first diagnostics (six1.441s, eight1.492s), not a statistical speed comparison. Actual eight-thread state restored. All30 exact measured hosted records and four raw result files are retained, starting `20261013-131510004-2764782945`; see `docs/hosted-workspace-threads-20261013.md`. The10x target remains unmet.
+
+## 2026-10-13: cloud-worker colocation trial rejected and exact live version restored
+
+Cloud e857502 added explicit USwest placement only,68Node+6Python tests passed. Read-only primary probeLAX/WNAM and immutable binding/runtime equality verified. Same installed7096694 binary hashes equal: seven matched samples original->candidate noop0.673->0.731s(+9%),body1.859->1.910s(+3%),reference5.202->5.260s(+1%), all withinnoise by suitecompare. Actual ingressSJC bothepochs, not the earlierKIX/SYD.
+Candidatefa372f4c rejected; exactpriora81f280e restoredhealthy and conditional15minrollback canceled after actualhostedcheck133228254-2861734. Full own351hostedtests/lint passed,0compiled56fresh. Recovery7noop samples0.981s are not a restored-latencyclaim. All49measured+4acceptance exactrecords and raw3results/controlmetadata published, see `docs/hosted-cloud-placement-20261013.md`. No host/compiler/billing/auth changes and10x unmet.

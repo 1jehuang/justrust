@@ -1,0 +1,371 @@
+{
+  "date": "2026-10-13",
+  "candidate_source": "e857502",
+  "candidate_version": "fa372f4c-4d58-41a0-afcc-ae350b3353bb",
+  "prior_version": "a81f280e-d738-442b-bbfb-9f4fd47fc977",
+  "final_version": "a81f280e-d738-442b-bbfb-9f4fd47fc977",
+  "accepted": false,
+  "reason": "All three seven-sample before/after comparisons within noise. Existing SJC ingress already near western primary, so no measured improvement. Exact prior restored.",
+  "placement_region": "aws:us-west-1",
+  "bindings_equal": true,
+  "runtime_equal": true,
+  "live_cloud_source_changed": false,
+  "host_region_changed": false,
+  "compiler_default_changed": false,
+  "backend_version": "b0d2a727-9cf0-4bef-ae66-dddec389686b",
+  "binary_source": "7096694",
+  "binary_sha256": "df08132d448939a857127f2fe8b039fa3996cee65b27f75d109415378a2caa41",
+  "raw_before_after_repo_revision": "22b1ea10cdaf",
+  "binary_provenance_note": "Initial JUSTRUST_BIN variable is not recognized by harness, which used installed CLI. Installed and saved binaries hash-identical at verification. Raw metadata is repository revision, not binary build revision. Restore uses supported JUSTRUST and explicit binary-revision provenance.",
+  "cloud_node_tests": 68,
+  "cloud_python_tests": 6,
+  "hosted_tests_passed": 351,
+  "hosted_tests_failed": 0,
+  "hosted_tests_ignored": 2,
+  "validation_ids": [
+    "20261013-133117022-2854785",
+    "20261013-133120739-2855088",
+    "20261013-133123662-2855543",
+    "20261013-133228254-2861734"
+  ],
+  "measured_run_ids": [
+    "20261013-132253337-2804543235",
+    "20261013-132255452-2804543419",
+    "20261013-132257344-2804543812",
+    "20261013-132259192-2804543513",
+    "20261013-132301077-2804543118",
+    "20261013-132302958-2804543761",
+    "20261013-132305192-2804543544",
+    "20261013-132240271-2804543497",
+    "20261013-132240993-2804543463",
+    "20261013-132241684-2804543950",
+    "20261013-132242379-2804543161",
+    "20261013-132243086-2804543374",
+    "20261013-132243781-2804543317",
+    "20261013-132244511-2804543271",
+    "20261013-132318588-2804543516",
+    "20261013-132324011-2804543735",
+    "20261013-132329513-2804543983",
+    "20261013-132334718-2804543231",
+    "20261013-132339903-2804543239",
+    "20261013-132345068-2804543324",
+    "20261013-132350291-2804543664",
+    "20261013-133014159-2846947862",
+    "20261013-133016074-2846947585",
+    "20261013-133017943-2846947552",
+    "20261013-133019875-2846947660",
+    "20261013-133021737-2846947366",
+    "20261013-133023763-2846947220",
+    "20261013-133025695-2846947227",
+    "20261013-133005011-2846947564",
+    "20261013-133005768-2846947665",
+    "20261013-133006520-2846947911",
+    "20261013-133007390-2846947748",
+    "20261013-133008160-2846947606",
+    "20261013-133008903-2846947583",
+    "20261013-133009658-2846947507",
+    "20261013-133039705-2846947302",
+    "20261013-133045052-2846947636",
+    "20261013-133050341-2846947715",
+    "20261013-133055537-2846947639",
+    "20261013-133100921-2846947348",
+    "20261013-133106420-2846947149",
+    "20261013-133111701-2846947407",
+    "20261013-133234467-2861900901",
+    "20261013-133235468-2861900935",
+    "20261013-133236486-2861900798",
+    "20261013-133237714-2861900483",
+    "20261013-133238812-2861900263",
+    "20261013-133239681-2861900697",
+    "20261013-133240475-2861900554"
+  ],
+  "d1_read_only_primary_probe": [
+    {
+      "meta": {
+        "changed_db": false,
+        "changes": 0,
+        "duration": 0.198,
+        "last_row_id": 0,
+        "rows_read": 0,
+        "rows_written": 0,
+        "served_by": "v3-prod",
+        "served_by_colo": "LAX",
+        "served_by_primary": true,
+        "served_by_region": "WNAM",
+        "size_after": 18493440,
+        "timings": {
+          "sql_duration_ms": 0.198
+        },
+        "total_attempts": 1
+      },
+      "results": [
+        {
+          "location_probe": 1
+        }
+      ],
+      "success": true
+    }
+  ],
+  "health_probes": [
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.07258,
+        "time_connect": 0.046267,
+        "time_starttransfer": 0.102278,
+        "time_total": 0.102645
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:28:40 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=%2BO7Sidy288%2FY0aG0F9Mzaei%2FJ%2FmNLeLyG3YlHCoGyPfCzctlyOEnbIzCRe6bacCJForq%2BTD8ie%2BuYex3PR0Ut8AWG9DKBh2nNXVhvE5GbzA%2BL3SFVRCAqHg%2F6cvSOBVw2bq74kngPq2e8Qzj1g%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a1178e9e2558dc-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "before",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:28:40.115695+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.06114,
+        "time_connect": 0.034958,
+        "time_starttransfer": 0.132544,
+        "time_total": 0.133234
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:28:40 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=Y%2Fy09iA8sanabSMeL8YVrC%2FYWh3TL6rtPzdOiKgsjsbi5mDxCIGWTFtj00ZE%2FpYM0uEQYWvBkKb3IzN4NO7lNoN%2BFgiRyplghMotB%2BSHZ742yr3eqqXVOLHIQ%2Fib0dTty8QnWdKnu1IwvdU%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a1178f3d48eb31-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "before",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:28:40.255098+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.058608,
+        "time_connect": 0.032178,
+        "time_starttransfer": 0.082432,
+        "time_total": 0.083397
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:28:40 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=17tNdPQZLk2Yl%2FAlVHYGG5ckdCT8Y4ciBviGUcvI5d3ecvLN4%2FXDMthlznVsStezK8DNHVJGRm5RBeqTFRZR70oESQlFQ%2BhgSQ4jzoRU%2B6Gl5AA7RJ19SW4EyF6wHZH%2BmJFfrnURwVlsIHxztQ%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a117900b5aed3a-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "before",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:28:40.344109+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.056981,
+        "time_connect": 0.032634,
+        "time_starttransfer": 0.124154,
+        "time_total": 0.124998
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:28:40 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=SFHkve8ROFkwwkCicDmooyf7iEtPwtM8l4ylRMT9S9%2BiCdKeNhlS1IFqe1WZfUIDpda56JlzBbY5IiN992brVUY6hxVMPI%2FTezEDQs8%2FIOeEdQHpoNLVimtNj3Toisf4FYoou0OKNW4sGYs%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a117909902c38b-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "before",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:28:40.475126+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.058753,
+        "time_connect": 0.03076,
+        "time_starttransfer": 0.08099,
+        "time_total": 0.081192
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:28:40 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=NBX56fbebMM0nW0GRrtpgfu6P9gU4WnTJcqU97VNkDDwB3CWMQl4%2FE3AZcMn9nF%2BGbOPWvChcifskyzjapHfR1jcFYH82nUoFyt7BxRGbXs%2F%2F3vuCYPlsTF%2FeFZkRlswiMnfay2II%2FTh%2Fgu38A%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a117916db48f74-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "before",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:28:40.562277+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.084159,
+        "time_connect": 0.056057,
+        "time_starttransfer": 0.165985,
+        "time_total": 0.166363
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:28:40 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=IVw7m0BgK0BEN5OJbnG3Ui1m7BZUq3HotmttW7LeBN8U0O%2BWshPi29sg4sQLO9AYJIHKbMIXkDwm7RzDrik3oxtMw7PUXu5LiAT0zmZ3lo42XxnMdJ%2BDiHDG%2FDnNfRkLm7EoGogYHvbWrf0%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a117922cab2157-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "before",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:28:40.734650+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.073703,
+        "time_connect": 0.048636,
+        "time_starttransfer": 0.118953,
+        "time_total": 0.119375
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:29:56 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=r42vHD4m34EdN1IGBb10waOxBE0Qytgt2E3B8%2FQcGkDXsOdFkY96KgK2vUOu6Uqv3ZYe42h88dl3yOhkji5woMr5EKfgCSOHSaT7IeTULQcyu7NtZ68GO25KNkMUeEcIjcGNqntWwKX5h3%2BFig%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a1196bac440dac-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "after",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:29:56.467792+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.061777,
+        "time_connect": 0.034255,
+        "time_starttransfer": 0.134242,
+        "time_total": 0.135167
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:29:56 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=NNmCyEQeoQMUabR3Veo%2FZrseY5p7ijW%2BMPkTv1wKlPXOxnPit8ji%2FZZHFhxr4R28ehrNTL%2FpiFTcluaW0m6thfYdl9ZnHVGcvXC6W9fbDnqWix1cM3xZBZNiGmskANsSe2WNGaRVeRo6Bxk%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a1196c6f8ae196-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "after",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:29:56.607878+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.056192,
+        "time_connect": 0.030912,
+        "time_starttransfer": 0.123544,
+        "time_total": 0.123926
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:29:56 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=ov10Gu%2Fgc5M8dTsS5%2BG1sWBJG%2F5Wo5oa7CGd1tMjUhrC93FCNCAD4Br84Ts13ZWBigJ%2Ff3OMGu8drB36WcuwrEywNEfhSXin%2FMeQQLD7heaOxmhX9B06%2Fnr5f%2BZw2tMUIa4GV6ZAsc5l3Y1gCw%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a1196d3a1774f9-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "after",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:29:56.737430+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.334878,
+        "time_connect": 0.033566,
+        "time_starttransfer": 0.417284,
+        "time_total": 0.417368
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:29:57 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=GB6OiQwkov9wEYXOSIAklUkfwu4AYWeidhhi7APlMtKBVM8uvCuCO5tIIpi5ptDl94h7ZA4ped47KzNO9bdXEQCG4ALRRXGo4sNB2payWAFjhNCjNMTcL1AD2ezcxpTerdfIdPeEa4xukMk%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a1196fcb5bf9cc-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "after",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:29:57.160160+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.056065,
+        "time_connect": 0.033393,
+        "time_starttransfer": 0.108142,
+        "time_total": 0.108927
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:29:57 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=QEgz4m68T26QTZ6W3mNq3M36XCyc81GqnJXQH7gOCNy7HsqCv8m7SqG0Er4YRWTi0M8dLQmLJFaGc7Ll2NoiB65SgIg78J%2FvQyh5g94N29Iibeom6foW4AP6ZIOeBBHyOa5YZXXLF%2FlxYBiO8A%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a11970aa70eb1e-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "after",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:29:57.274073+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.070397,
+        "time_connect": 0.034155,
+        "time_starttransfer": 0.159395,
+        "time_total": 0.159725
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:29:57 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=4f%2FD%2FcKm3VJda4FIhVMJxUpRrq6w1DwTLWAmkC%2FRISRmm50B3FcIK6mdJ3jTPLvsH%2FZkA9GfsgnjIKOAMkOnqzU6QsZ4c6SQMzJWvJVcjUx2XGbgbygEGvXIxUwJMaifzjfmzQ75kafz2OM%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a119717f0fcf9f-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "after",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:29:57.438272+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.070524,
+        "time_connect": 0.037035,
+        "time_starttransfer": 0.113951,
+        "time_total": 0.1148
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:32:41 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=3591ZD9o1FiB1BOIcHpPETmQHTJwzpBG0jJPGZL%2FJgkX1bxvZARO5N3fkxBTh70%2By4OS1ziEsc8LgPV6W%2BNZI%2BRuxlJb1lxdDsYQO4RX8fJqFhfbFXXtXUoVkBCvjNiQE%2BnZuNRXAlKJT8fLHQ%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a11d72494d1698-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "restored",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:32:41.367219+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.069724,
+        "time_connect": 0.042078,
+        "time_starttransfer": 0.138653,
+        "time_total": 0.139467
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:32:41 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=uxRKYMUtMX0MA1gY8xIP2Inhaan6r94HJK%2FEVpCnDR8sCvQKKdGL5Blwb7DXfR33kNdaYzaoW14%2Brtfmmc1tQ06Xo3MiGVbnZpIxBK2yPWt6Ukv3M6D5Okm3MjOmM8k57YSlENHVwe67YII%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a11d731bc4ebe2-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "restored",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:32:41.511655+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.069076,
+        "time_connect": 0.035866,
+        "time_starttransfer": 0.101361,
+        "time_total": 0.102327
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:32:41 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=H9ZJhQZYR28I07Nk6cmPKv34EDmWc2fCJmtbMjs5cjcNS%2BPkhR%2BmPwQqy8om%2FpUL3XkTjMwXjYddxroPcMWFFfWvyMws1Q4ODhGW%2FQRiUmXHX3nq0YnWe5bnzjpnmiXhk0sE%2BD1k5yuL%2BZ8hjg%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a11d73fae914c7-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "restored",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:32:41.621017+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.068215,
+        "time_connect": 0.042122,
+        "time_starttransfer": 0.131722,
+        "time_total": 0.13275
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:32:41 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=%2B3EiWI%2FK%2F4kN3a8GiVQjmgPpAo1Y3KDKuAc58NlMkDnmAOhlHegfXtZi7s1HOjonQl6l4UQqnrB43IJQ5Dpz0hua1Kr1hUu9CW52OrFOX6ksbXVb5bhFMrOKxRlH8VPNcfpw7iYyUGCYMsM%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a11d74a8ac327e-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "restored",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:32:41.761244+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3036::6815:5a3",
+        "time_appconnect": 0.053408,
+        "time_connect": 0.029846,
+        "time_starttransfer": 0.077976,
+        "time_total": 0.078704
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:32:41 GMT\ncontent-type: application/json\ncontent-length: 11\ncache-control: no-store\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=h8j7vsb9U7UdVsC%2BImxj%2Batgh5aPeDLJJ9zb5fj84beEHAHMjAzvMp5hQ5EKQ7ZsUAHQr8QLuiLSuWsJ6gP40LAU1bv8HwXX9rONItdss15QiVZ6xiy7e6WMxQa8%2BBBlOqYARRUCveiWgubRvQ%3D%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a11d756ee741ce-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "restored",
+      "url": "https://build.jcode.sh/health",
+      "utc": "2026-10-13T20:32:41.846212+00:00"
+    },
+    {
+      "curl": {
+        "http_code": 200,
+        "remote_ip": "2606:4700:3033::ac43:859f",
+        "time_appconnect": 0.054233,
+        "time_connect": 0.029434,
+        "time_starttransfer": 0.12091,
+        "time_total": 0.121153
+      },
+      "headers": "HTTP/2 200 \ndate: Tue, 13 Oct 2026 20:32:41 GMT\ncontent-type: application/json\ncontent-length: 36\ncf-placement: local-SJC\nreport-to: {\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=V4nOv4YuJAjaL2ovekTNaGaXOmDrMZA%2Fg6QDqCW%2FxZMyxDZ%2BB3Kqm5omEbghl8u4zWcgWRrzhlK7rOOuLoy5yqvcOEUaGjOmjKq%2BmraWjVvwc91B3OHene8epzFykm9SzfqOdOe6NPEy05Q%3D\"}]}\nnel: {\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}\nserver: cloudflare\ncf-ray: a4a11d75ed10e0ce-SJC\nalt-svc: h3=\":443\"; ma=86400\n\n",
+      "phase": "restored",
+      "url": "https://api.jcode.sh/v1/health",
+      "utc": "2026-10-13T20:32:41.973842+00:00"
+    }
+  ],
+  "benchmark_files": [
+    "hosted-cloud-placement-before-20261013.json",
+    "hosted-cloud-placement-after-20261013.json",
+    "hosted-cloud-placement-restored-20261013.json"
+  ],
+  "restored_noop_seconds": 0.981,
+  "restored_noop_note": "Seven-sample0.981s, not a recovered-latency or isolated placement speed claim.",
+  "target_10x_achieved": false
+}
