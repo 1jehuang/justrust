@@ -4808,3 +4808,13 @@ not compile at HEAD (project issue). Fleet logs
 
 Host run ids: 20261012-215912915-1857 .. 20261012-220339511-36302 (before),
 20261013-001826 .. 20261013-003715 (after, `~/.justrust/runs` on the host).
+
+### 65b. Acceptance through the agent route (f67c993)
+
+The agent now sets `JUSTRUST_PREBUILT_ALWAYS=1` on the machine. From the laptop,
+`JUSTRUST_REMOTE=force justrust check -p jcode-tui` in a fresh `git worktree`
+of jcode: 530 dependency hits (529 prebuilt) of 575, build 32.4 s on the host,
+38.2 s remote total (sync 3.1 s, the sibling-mirror seed of FINDINGS 54), 41 s
+from the agent's seat. Before this session the same shape of build had 0 hits
+and 85-95 s over plain ssh, ~41-44 s through the agent (jobs 32, no hits). The
+immediate rerun is a no-op in 2.4 s.
