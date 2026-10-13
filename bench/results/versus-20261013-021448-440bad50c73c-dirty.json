@@ -1,0 +1,935 @@
+{
+ "started": "2026-10-13T02:01:30-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.13",
+  "justrust_rev": "440bad50c73c",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)",
+  "toolchain": "system",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "stock_cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "stock_rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)"
+ },
+ "runs": 3,
+ "warmup": 1,
+ "stacks": [
+  "stock",
+  "justrust",
+  "remote"
+ ],
+ "stack_defs": [
+  {
+   "name": "stock",
+   "what": "plain cargo + system rustc, no justrust",
+   "env": {},
+   "justrust": false
+  },
+  {
+   "name": "justrust",
+   "what": "justrust defaults, private depcache warmed by the warmup round",
+   "env": {},
+   "justrust": true
+  },
+  {
+   "name": "remote",
+   "what": "justrust, JUSTRUST_REMOTE=force: check/clippy/test on the remote machine, wall includes sync and ssh",
+   "env": {
+    "JUSTRUST_REMOTE": "force"
+   },
+   "justrust": true
+  }
+ ],
+ "workloads": {
+  "reference-loop": {
+   "what": "edit a #[test] fn in the 118k-line UI crate, run its tests",
+   "scenario": "desktop-test-edit",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 6.803,
+      "exit": 0,
+      "cpu": 7.34,
+      "max_rss_mb": 2133.0,
+      "instructions": 49046810132,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.56,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.389,
+      "exit": 0,
+      "cpu": 7.9,
+      "max_rss_mb": 2155.9,
+      "instructions": 49194193306,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.43,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.172,
+      "exit": 0,
+      "cpu": 7.69,
+      "max_rss_mb": 2170.6,
+      "instructions": 49163029778,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.52,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 4.663,
+      "exit": 0,
+      "cpu": 6.03,
+      "max_rss_mb": 1858.5,
+      "instructions": 35550716918,
+      "id": "20261013-020344924-2845647537",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.75,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 4.612,
+      "exit": 0,
+      "cpu": 6.15,
+      "max_rss_mb": 1916.5,
+      "instructions": 35584459047,
+      "id": "20261013-020422343-2845647614",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.4,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 4.628,
+      "exit": 0,
+      "cpu": 5.98,
+      "max_rss_mb": 1850.8,
+      "instructions": 35619522572,
+      "id": "20261013-020434181-2845647392",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.36,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 10.982,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 3252
+      },
+      "id": "20261013-020349614-2845647405",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.93,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.446,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 94
+      },
+      "id": "20261013-020407456-2845647728",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.52,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 7.581,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 93
+      },
+      "id": "20261013-020438835-2845647577",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 2.65,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 7.172,
+     "min": 6.803,
+     "max": 7.389,
+     "quiet_median": 7.172,
+     "cpu": 7.69,
+     "max_rss_mb": 2155.9,
+     "instructions": 49163029778,
+     "instructions_spread": 0.003
+    },
+    "justrust": {
+     "n": 3,
+     "median": 4.628,
+     "min": 4.612,
+     "max": 4.663,
+     "quiet_median": 4.628,
+     "cpu": 6.03,
+     "max_rss_mb": 1858.5,
+     "instructions": 35584459047,
+     "instructions_spread": 0.0019
+    },
+    "remote": {
+     "n": 3,
+     "median": 7.581,
+     "min": 7.446,
+     "max": 10.982,
+     "quiet_median": 7.581,
+     "cpu": 0.03,
+     "max_rss_mb": 14.6,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "body-check": {
+   "what": "one-line body edit, `check` (the inner type-check loop)",
+   "scenario": "desktop-body-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 1.743,
+      "exit": 0,
+      "cpu": 1.86,
+      "max_rss_mb": 740.2,
+      "instructions": 10137251535,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.98,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.033,
+      "exit": 0,
+      "cpu": 2.16,
+      "max_rss_mb": 740.2,
+      "instructions": 10138118886,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.58,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.923,
+      "exit": 0,
+      "cpu": 2.04,
+      "max_rss_mb": 739.8,
+      "instructions": 10136706848,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.29,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 1.281,
+      "exit": 0,
+      "cpu": 1.46,
+      "max_rss_mb": 698.5,
+      "instructions": 9635761514,
+      "id": "20261013-020523730-2845647178",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.98,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.497,
+      "exit": 0,
+      "cpu": 1.71,
+      "max_rss_mb": 692.6,
+      "instructions": 9639286973,
+      "id": "20261013-020534352-2845647467",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.29,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.374,
+      "exit": 0,
+      "cpu": 1.58,
+      "max_rss_mb": 692.7,
+      "instructions": 9647896747,
+      "id": "20261013-020537824-2845647718",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.29,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 2.775,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 91
+      },
+      "id": "20261013-020525037-2845647706",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.98,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.66,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 96
+      },
+      "id": "20261013-020529608-2845647961",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 5.58,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 2.757,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 163
+      },
+      "id": "20261013-020539225-2845647473",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 4.95,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 1.923,
+     "min": 1.743,
+     "max": 2.033,
+     "quiet_median": 0,
+     "cpu": 2.04,
+     "max_rss_mb": 740.2,
+     "instructions": 10137251535,
+     "instructions_spread": 0.0001
+    },
+    "justrust": {
+     "n": 3,
+     "median": 1.374,
+     "min": 1.281,
+     "max": 1.497,
+     "quiet_median": 0,
+     "cpu": 1.58,
+     "max_rss_mb": 692.7,
+     "instructions": 9639286973,
+     "instructions_spread": 0.0013
+    },
+    "remote": {
+     "n": 3,
+     "median": 2.757,
+     "min": 2.66,
+     "max": 2.775,
+     "quiet_median": 0,
+     "cpu": 0.03,
+     "max_rss_mb": 14.6,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "noop-test": {
+   "what": "no edit: fixed cost of a `test` call",
+   "scenario": "desktop-noop-test",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 0.351,
+      "exit": 0,
+      "cpu": 0.36,
+      "max_rss_mb": 177.1,
+      "instructions": 2230069583,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 4.02,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.487,
+      "exit": 0,
+      "cpu": 0.49,
+      "max_rss_mb": 176.8,
+      "instructions": 2230494433,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.77,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.288,
+      "exit": 0,
+      "cpu": 0.3,
+      "max_rss_mb": 177.2,
+      "instructions": 2230436929,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.77,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 0.316,
+      "exit": 0,
+      "cpu": 0.41,
+      "max_rss_mb": 249.2,
+      "instructions": 1447407223,
+      "id": "20261013-020606333-2845647971",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 4.02,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.293,
+      "exit": 0,
+      "cpu": 0.38,
+      "max_rss_mb": 257.1,
+      "instructions": 1446384807,
+      "id": "20261013-020609832-2845647486",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.77,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 0.327,
+      "exit": 0,
+      "cpu": 0.43,
+      "max_rss_mb": 247.4,
+      "instructions": 1445803818,
+      "id": "20261013-020610460-2845647806",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.77,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 1.111,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 87
+      },
+      "id": "20261013-020606673-2845647161",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 4.02,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.093,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 97
+      },
+      "id": "20261013-020608196-2845647240",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.77,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 1.151,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 14.6,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 97
+      },
+      "id": "20261013-020610807-2845647280",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.77,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 0.351,
+     "min": 0.288,
+     "max": 0.487,
+     "quiet_median": 0.387,
+     "cpu": 0.36,
+     "max_rss_mb": 177.1,
+     "instructions": 2230436929,
+     "instructions_spread": 0.0002
+    },
+    "justrust": {
+     "n": 3,
+     "median": 0.316,
+     "min": 0.293,
+     "max": 0.327,
+     "quiet_median": 0.31,
+     "cpu": 0.41,
+     "max_rss_mb": 249.2,
+     "instructions": 1446384807,
+     "instructions_spread": 0.0011
+    },
+    "remote": {
+     "n": 3,
+     "median": 1.111,
+     "min": 1.093,
+     "max": 1.151,
+     "quiet_median": 1.122,
+     "cpu": 0.03,
+     "max_rss_mb": 14.6,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "cold-check": {
+   "what": "fresh target dir (new checkout, worktree): `check`",
+   "scenario": "desktop-cold-check",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "cold": true,
+   "samples": {
+    "stock": [
+     {
+      "wall": 76.918,
+      "exit": 0,
+      "cpu": 676.43,
+      "max_rss_mb": 1276.8,
+      "instructions": 1625693477986,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 8.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 69.656,
+      "exit": 0,
+      "cpu": 648.51,
+      "max_rss_mb": 1276.4,
+      "instructions": 1625787727899,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 16.95,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 72.565,
+      "exit": 0,
+      "cpu": 667.95,
+      "max_rss_mb": 1279.9,
+      "instructions": 1625787174367,
+      "id": null,
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.41,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 13.449,
+      "exit": 0,
+      "cpu": 76.2,
+      "max_rss_mb": 1451.6,
+      "instructions": 199663933690,
+      "id": "20261013-020750922-2845647560",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 7.98,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 14.917,
+      "exit": 0,
+      "cpu": 86.07,
+      "max_rss_mb": 1443.6,
+      "instructions": 197793036329,
+      "id": "20261013-021039028-2845647720",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 12.907,
+      "exit": 0,
+      "cpu": 75.89,
+      "max_rss_mb": 1473.2,
+      "instructions": 196585894872,
+      "id": "20261013-021207378-2845647484",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 14.35,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 1.133,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 15.0,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 92
+      },
+      "id": "20261013-020804747-2845647414",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 8.94,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 5.92,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 4883
+      },
+      "id": "20261013-020923090-2845647270",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 19.69,
+      "foreign_rustc_before": 2
+     },
+     {
+      "wall": 1.346,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 151
+      },
+      "id": "20261013-021220661-2845647164",
+      "tests_passed": 0,
+      "noisy": true,
+      "load_before": 12.54,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 72.565,
+     "min": 69.656,
+     "max": 76.918,
+     "quiet_median": 0,
+     "cpu": 667.95,
+     "max_rss_mb": 1276.8,
+     "instructions": 1625787174367,
+     "instructions_spread": 0.0001
+    },
+    "justrust": {
+     "n": 3,
+     "median": 13.449,
+     "min": 12.907,
+     "max": 14.917,
+     "quiet_median": 0,
+     "cpu": 76.2,
+     "max_rss_mb": 1451.6,
+     "instructions": 197793036329,
+     "instructions_spread": 0.0156
+    },
+    "remote": {
+     "n": 3,
+     "median": 1.346,
+     "min": 1.133,
+     "max": 5.92,
+     "quiet_median": 0,
+     "cpu": 0.03,
+     "max_rss_mb": 15.1,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  },
+  "deep-edit": {
+   "what": "body edit deep in the graph (16 crates rebuild), run tests",
+   "scenario": "desktop-jcode-core-body",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "cold": false,
+   "samples": {
+    "stock": [
+     {
+      "wall": 12.81,
+      "exit": 0,
+      "cpu": 18.49,
+      "max_rss_mb": 2126.3,
+      "instructions": 88192993735,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 5.84,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 13.049,
+      "exit": 0,
+      "cpu": 18.65,
+      "max_rss_mb": 2159.6,
+      "instructions": 88332710439,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 4.38,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 12.806,
+      "exit": 0,
+      "cpu": 18.13,
+      "max_rss_mb": 2150.7,
+      "instructions": 87525138723,
+      "id": null,
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.49,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "justrust": [
+     {
+      "wall": 10.853,
+      "exit": 0,
+      "cpu": 17.76,
+      "max_rss_mb": 1864.2,
+      "instructions": 78251586980,
+      "id": "20261013-021258718-2845647608",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 7.72,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 9.925,
+      "exit": 0,
+      "cpu": 16.03,
+      "max_rss_mb": 1837.8,
+      "instructions": 77054035195,
+      "id": "20261013-021402810-2845647805",
+      "tests_passed": 3,
+      "noisy": false,
+      "load_before": 3.86,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 9.636,
+      "exit": 0,
+      "cpu": 15.82,
+      "max_rss_mb": 1833.7,
+      "instructions": 77030622129,
+      "id": "20261013-021425596-2845647364",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 4.57,
+      "foreign_rustc_before": 0
+     }
+    ],
+    "remote": [
+     {
+      "wall": 13.584,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 97
+      },
+      "id": "20261013-021309596-2845647622",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 6.84,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 13.655,
+      "exit": 0,
+      "cpu": 0.04,
+      "max_rss_mb": 15.3,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 92
+      },
+      "id": "20261013-021336050-2845647117",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 5.25,
+      "foreign_rustc_before": 0
+     },
+     {
+      "wall": 13.655,
+      "exit": 0,
+      "cpu": 0.03,
+      "max_rss_mb": 15.1,
+      "instructions": null,
+      "remote": {
+       "machine": "hosted",
+       "sync_ms": 99
+      },
+      "id": "20261013-021435257-2845647603",
+      "tests_passed": 3,
+      "noisy": true,
+      "load_before": 4.32,
+      "foreign_rustc_before": 0
+     }
+    ]
+   },
+   "stats": {
+    "stock": {
+     "n": 3,
+     "median": 12.81,
+     "min": 12.806,
+     "max": 13.049,
+     "quiet_median": 12.806,
+     "cpu": 18.49,
+     "max_rss_mb": 2150.7,
+     "instructions": 88192993735,
+     "instructions_spread": 0.0092
+    },
+    "justrust": {
+     "n": 3,
+     "median": 9.925,
+     "min": 9.636,
+     "max": 10.853,
+     "quiet_median": 9.925,
+     "cpu": 16.03,
+     "max_rss_mb": 1837.8,
+     "instructions": 77054035195,
+     "instructions_spread": 0.0158
+    },
+    "remote": {
+     "n": 3,
+     "median": 13.655,
+     "min": 13.584,
+     "max": 13.655,
+     "quiet_median": 0,
+     "cpu": 0.03,
+     "max_rss_mb": 15.1,
+     "instructions": null,
+     "instructions_spread": null
+    }
+   }
+  }
+ },
+ "finished": "2026-10-13T02:14:48-0700"
+}
