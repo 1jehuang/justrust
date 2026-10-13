@@ -474,6 +474,13 @@ fn push_loop(d: &Daemon, rx: Receiver<PathBuf>) {
             .cloned()
             .collect();
         for r in roots {
+            if !r.is_dir() {
+                // Deleted (a removed worktree): forget it instead of
+                // dropping the link over a failed rsync.
+                st.roots.remove(&r);
+                log(&format!("forgot {} (deleted)", r.display()));
+                continue;
+            }
             if let Err(e) = push_root(d, &mut st, &r) {
                 log(&format!("push {}: {e:#}", r.display()));
                 drop_link(d, &mut st);
@@ -662,9 +669,16 @@ fn ensure_link(d: &Daemon, st: &mut Sync, start: bool) -> Result<Arc<Link>> {
     st.link = Some(link.clone());
     d.set_info(|i| i.connected = true);
     // Everything the machine had may be stale: start from a full mirror.
+    // Roots deleted since (a removed worktree) are forgotten, not mirrored:
+    // rsync of a missing dir failed the whole connect and sent the next
+    // build local (FINDINGS 65).
     let roots: Vec<PathBuf> = st.roots.keys().cloned().collect();
     st.roots.clear();
     for r in roots {
+        if !r.is_dir() {
+            log(&format!("forgot {} (deleted)", r.display()));
+            continue;
+        }
         add_root(d, st, &link, &r)?;
     }
     Ok(link)
