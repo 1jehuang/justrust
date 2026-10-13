@@ -182,6 +182,20 @@ Scenarios (warm unless marked):
 | `desktop-cold-check` (cold) | fresh target dir, depcache on: a new agent checkout |
 | `desktop-cold-check-nocache` (cold) | fresh target dir, all justrust caches off |
 
+## Committed evidence correspondence
+
+`python3 bench/audit_hosted_evidence.py` audits the committed October 13 hosted
+and cumulative documents/results against committed exported run summaries. It
+checks full run IDs (including `-pre`), dictionary-key references, suite and
+round-robin samples, compiler/host identity, exits, arguments, test counts and
+compiled/fresh units where reported. A missing reference or mismatch exits
+nonzero. It reads Git and JSON only, with no network or builds.
+
+This checks reporting fidelity, not current runtime correctness or speed. Real
+hosted public-interface and pinned end-user acceptance remain separate gates.
+`python3 -m unittest discover -s bench` covers both the benchmark runner and
+negative audit regressions. See `docs/cumulative-acceptance-20261013.md`.
+
 ## Focused scripts
 
 These measure one mechanism each. Keep using them for that purpose:
