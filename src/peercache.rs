@@ -1264,6 +1264,15 @@ mod relay_tests {
         // Stale set (the peer may have gained the key since): ask again.
         r.keys.lock().unwrap().as_mut().unwrap().0 -= KEYSET_TTL * 2;
         assert_eq!(r.query(&other).0.len(), 1);
+        // That query started a background refresh. Let it land first, or it
+        // can store a fresh set right after the invalidation below (seen on
+        // a slow macOS CI runner).
+        for _ in 0..400 {
+            if !r.keys_loading.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         // Invalidated after a push: ask again.
         r.invalidate_keys();
         assert_eq!(r.query(&other).0.len(), 1);

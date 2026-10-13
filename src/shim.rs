@@ -397,10 +397,17 @@ fn early_reply_on() -> bool {
         )
 }
 
+/// Write end of the early-reply pipe (unix only; never set elsewhere).
+#[cfg(unix)]
+type ReplyFd = std::os::fd::OwnedFd;
+#[cfg(not(unix))]
+type ReplyFd = std::fs::File;
+
 /// The pipe jr-rustc writes one byte to once it can be considered done.
 struct EarlyReply {
     read: std::fs::File,
-    write: Option<std::os::fd::OwnedFd>,
+    #[allow(dead_code)]
+    write: Option<ReplyFd>,
 }
 
 impl EarlyReply {
