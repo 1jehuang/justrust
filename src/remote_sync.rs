@@ -409,7 +409,7 @@ impl Mirror {
     /// pushed, the default branch) at depth 1 straight from the forge, so
     /// the following `--checksum` rsync sends only local changes. A first
     /// sync of a repo with no mirrored relative sent every file over the
-    /// home uplink: jcode-website 320 s, gear-perf 250 s (FINDINGS 67).
+    /// home uplink: jcode-website 320 s, gear-perf 250 s (FINDINGS 68).
     /// Only anonymous https origins: the machine holds no credentials, and
     /// a URL with userinfo is never sent. Fail open.
     pub fn seed_from_origin(&self, root: &Path) -> bool {
