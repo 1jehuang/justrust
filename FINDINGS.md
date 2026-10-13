@@ -5694,3 +5694,9 @@ us-west-1 is closer (~36 ms) but has no m8azn/c8a.
 West acceptance (installed client, hosted): check 20261013-155617354-3849552,
 full tests 20261013-155805477-3862970, strict all-target clippy
 20261013-155821546-3865896, all exit 0.
+
+### Independent west dogfood acceptance, 2026-10-13 23:01 UTC
+
+- Installed plain default-hosted check `20261013-160058612-3890266`, full tests `20261013-160059348-3890346` (360 passed, 0 failed, 2 ignored), and strict all-target lint `20261013-160102069-3890192` all exit 0, truly hosted, 24 cores, 0 compiled / 56 fresh. Exact three own records exported.
+- Regional owner confirmed accepted west M8azn and live counted-reclamation guard. Independent actual-source regional/outage checks passed 11 cases after reproducing a compound AWS + failed database rollback cap leak. Details and attribution: `docs/hosted-west-acceptance-20261013.md`.
+- Acceptance completed at 23:01:02 UTC; the owner subsequently announced an exclusive trial window starting at 23:01 UTC. No subsequent host calls or speed claim. Matched warm east/west results remain within noise, and 10x stock-local remains unmet.
