@@ -5261,3 +5261,58 @@ blocked. Do not equate our hosted acceptance or native Mac CI with a
 successful customer retry. The audit also identified unchecked oversized
 runtime-directory fallbacks as separate hardening work, beyond the
 ordinary-home-path incident fixed by alpha.14.
+
+### 66e. Alpha.15 release and automatic update acceptance
+
+2026-10-13, 14:20 UTC: prepared alpha.15 at `90e1c3d`, containing the
+hosted prebuilt-policy regression repair in 66d. `cargo fmt --check`,
+`justrust check --locked` (`20261013-071958930-461076`), full
+`justrust test --locked` (`20261013-072000047-461400`, 326 passed,
+0 failed, 2 ignored) and warning-free all-target clippy
+(`20261013-072021320-464137`) passed through the real hosted service.
+These three run summaries are exported. This is release correctness
+validation, not a measured compile speedup.
+
+The published alpha.13 and alpha.14 clients already have the same
+automatic updater: release installations check after commands/builds,
+in a detached background process, normally at most once per day.
+Source installations are notify-only. Explicit opt-outs, CI and remote
+agents remain excluded. Publishing a release cannot retroactively change
+an old client's daily schedule or turn on a customer's deliberately
+disabled setting. Verify the normal background path with the actual old
+release binaries against production, not just the manual updater.
+
+Alpha.15 was published at 14:25:06 UTC by release workflow `38412590601`
+for `90e1c3d`: all five target builds and archive/checksum pairs succeeded.
+Clean-commit CI `38412570868` passed all five native jobs (Linux, Intel
+macOS, arm64 macOS, Windows and MSRV), including platform integration,
+release execution and Linux package validation.
+
+At 14:26 UTC, checksum-verified actual alpha.13 and alpha.14 Linux release
+binaries, in isolated writable installations with default update settings,
+each received alpha.15 automatically after a normal `justrust update
+status` command. The detached workers fetched the real production
+endpoint and assets, replaced the executable and wrote the applied-update
+receipt. The next command reported the old-to-alpha.15 update. Neither
+`justrust update` nor `__bg` was invoked directly, and no check interval was
+shortened. Telemetry was disabled throughout, confirming update delivery
+does not depend on telemetry consent.
+
+All five production `/v1/release/latest` target responses offered
+alpha.15 with `update: true` to alpha.13; all downloaded archives matched
+their published checksums and contained the expected executable. The
+production installer installed alpha.15. Public `update off`, environment
+opt-out and CI checks left alpha.14 untouched without making update
+checks. An actual source-built alpha.14 binary fetched the new version,
+notified the user and remained alpha.14. The server follows GitHub latest
+with a five-minute edge tag cache; no worker deployment or client-setting
+override was necessary.
+
+The fresh public installer binary also passed the real hosted workspace
+library suite: `20261013-072720834-540166`, exit 0, 309 passed and 2 ignored
+(the saved test-result line verifies a nonzero suite even though this
+warm run's compact report omitted the count). Reinstalled the local
+source build as alpha.15. Customers still must run an eligible client
+online, after its daily check becomes due, with a writable executable
+directory. This verifies rollout availability and real old-client update
+behavior, not that every customer's machine has already applied it.
