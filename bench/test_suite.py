@@ -12,6 +12,43 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    PHASE_LINE = ("justrust trace: admission identity 54.0 ms | charge 225.0 ms | "
+                  "identity_wait 0.0 ms | queue 67.0 ms | total 292.0 ms "
+                  "(awaited paths, identity overlaps)")
+
+    def test_remote_trace_retains_actual_client_and_overlapping_admission_phases(self):
+        text = "\n".join(("justrust trace:     0.1 ms roots", self.PHASE_LINE,
+                          "justrust trace:   413.4 ms charged", "justrust trace:   700.2 ms flushed",
+                          "justrust trace:   844.8 ms first output", "justrust trace:   900.0 ms exit",
+                          "justrust trace:   900.1 ms recording"))
+        self.assertEqual(suite.remote_trace_timings(text), {
+            "client_elapsed_ms": {"roots": 0.1, "charged": 413.4, "flushed": 700.2,
+                                  "first_output": 844.8, "exit": 900.0, "recording": 900.1},
+            "admission_awaited_ms": {"identity": 54.0, "charge": 225.0, "identity_wait": 0.0,
+                                     "queue": 67.0, "total": 292.0},
+        })
+
+    def test_remote_trace_never_retains_arbitrary_text_or_invalid_numeric_fields(self):
+        for line in ("", "Authorization: Bearer secret", "justrust trace: 1.0 ms secret",
+                     "justrust trace: NaN ms charged", "justrust trace: inf ms charged",
+                     "justrust trace: -1 ms charged", "justrust trace: 86400001 ms charged",
+                     "justrust trace: 1 ms charged credential=secret", "x" * 513,
+                     self.PHASE_LINE.replace("54.0", "60000.1"),
+                     self.PHASE_LINE.replace("54.0", "1e2"),
+                     self.PHASE_LINE.replace("identity", "account_id", 1),
+                     self.PHASE_LINE + " credential=secret"):
+            with self.subTest(line=line):
+                self.assertEqual(suite.remote_trace_timings(line), {})
+
+    def test_remote_trace_omits_duplicate_or_nonmonotonic_measurements(self):
+        self.assertEqual(suite.remote_trace_timings(self.PHASE_LINE + "\n" + self.PHASE_LINE), {})
+        self.assertEqual(suite.remote_trace_timings("justrust trace: 5 ms charged\n"
+                                                  "justrust trace: 6 ms charged"), {})
+        self.assertEqual(suite.remote_trace_timings("justrust trace: 5 ms roots\n"
+                                                  "justrust trace: 4 ms charged"), {})
+        self.assertEqual(suite.remote_trace_timings("justrust trace: 0 ms roots"),
+                         {"client_elapsed_ms": {"roots": 0.0}})
+
     def test_hosted_early_requires_real_shown_confirmed_nonfinal_diagnostics(self):
         good = {"ready": True, "shown": True, "matched": 1, "early_only": 0, "exited": False}
         self.assertEqual(suite.hosted_early_provenance({"early": good}), good)

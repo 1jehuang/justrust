@@ -122,6 +122,16 @@ How it works:
   inferred from that checkout. The legacy `justrust_rev` label remains for
   older consumers, so use the SHA for exact client identity.
 
+- **Hosted timing diagnostics.** With `--remote`, explicitly set
+  `JUSTRUST_REMOTE_TRACE=1` to retain existing fixed numeric client trace
+  timestamps in each sample's optional `remote_trace.client_elapsed_ms`.
+  Newer clients also report `remote_trace.admission_awaited_ms`: identity,
+  charge, residual identity wait, queue, and total. These are awaited paths,
+  not isolated database execution times. Identity overlaps charge, so do not
+  sum all fields. Parsing happens after the timed command exits, adds no
+  requests, and never stores raw headers or credentials. Missing, duplicate,
+  or invalid fields are omitted. Tracing is not enabled automatically.
+
 - **Pinned sources.** `git archive` of fixed commits of Jcode Desktop
   (+ sibling Jcode) and justrust, extracted once to
   `~/.justrust/bench/work/`. Bumping a pin in `SNAPSHOTS` makes old results

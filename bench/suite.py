@@ -27,6 +27,7 @@ import json
 import os
 import platform
 import random
+import re
 import shutil
 import statistics
 import subprocess
@@ -597,6 +598,43 @@ def admission_transport(stderr: str, requested: bool) -> str:
     return "pooled"
 
 
+def remote_trace_timings(stderr: str) -> dict:
+    """Keep fixed numeric client diagnostics, never raw headers or credentials."""
+    steps = ("roots", "charged", "flushed", "first output", "exit", "recording")
+    elapsed, duplicates = {}, set()
+    admission = []
+    number = r"([0-9]+(?:\.[0-9]+)?)"
+    phase_pattern = re.compile(
+        r"justrust trace: admission identity " + number + r" ms \| charge "
+        + number + r" ms \| identity_wait " + number + r" ms \| queue "
+        + number + r" ms \| total " + number
+        + r" ms \(awaited paths, identity overlaps\)"
+    )
+    for line in stderr.splitlines():
+        if len(line) > 512 or not line.isascii():
+            continue
+        step = re.fullmatch(r"justrust trace:\s+" + number + r" ms (" + "|".join(steps) + r")", line)
+        if step:
+            value, name = float(step[1]), step[2]
+            if name in elapsed:
+                duplicates.add(name)
+            if value <= 86_400_000:
+                elapsed[name] = value
+        phase = phase_pattern.fullmatch(line)
+        if phase:
+            values = [float(value) for value in phase.groups()]
+            if all(value <= 60_000 for value in values):
+                admission.append(dict(zip(("identity", "charge", "identity_wait", "queue", "total"), values)))
+    elapsed = {name: elapsed[name] for name in steps if name in elapsed and name not in duplicates}
+    values = list(elapsed.values())
+    if values != sorted(values):
+        elapsed = {}
+    return {
+        **({"client_elapsed_ms": {name.replace(" ", "_"): value for name, value in elapsed.items()}} if elapsed else {}),
+        **({"admission_awaited_ms": admission[0]} if len(admission) == 1 else {}),
+    }
+
+
 def hosted_early_provenance(summary: dict) -> dict:
     early = summary.get("early") or {}
     if (not early.get("ready") or not early.get("shown") or early.get("exited")
@@ -679,10 +717,12 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
     sm = json.loads(summ_path.read_text())
     remote = None
     admission = None
+    trace = {}
     if REMOTE:
         try:
             remote = remote_measurement(sm)
             admission = admission_transport(p.stderr, env.get("JUSTRUST_HOSTED_HTTP_POOL") in ("1", "on", "true"))
+            trace = remote_trace_timings(p.stderr)
             if env.get("JUSTRUST_EARLY") == "query":
                 hosted_early_provenance(sm)
         except ValueError as e:
@@ -723,6 +763,7 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
         "recorded_wall": round(sm["wall"], 3),
         **({"remote": remote} if remote is not None else {}),
         **({"admission_transport": admission} if admission is not None else {}),
+        **({"remote_trace": trace} if trace else {}),
         "cpu": round(sm.get("cpu_secs", 0.0), 2),
         "startup": round(sm["phases"]["startup"], 3),
         "compile": round(sm["phases"]["compile"], 3),
