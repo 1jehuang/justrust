@@ -454,6 +454,14 @@ fn start_run(
     if let Some(j) = machine_jobs(args, env) {
         c.env("CARGO_BUILD_JOBS", j.to_string());
     }
+    // Fetch every store hit here. The per-fetch overhead the cost model
+    // assumes (700 ms, a laptop under agent load) declined 487 of 529
+    // available hits on a 32-job build machine, where fetches overlap:
+    // cold `check -p jcode-tui` 37.5-41.3 s costed vs 35.7-38.7 s fetching
+    // all (FINDINGS 65). A client-sent value wins.
+    if !env.iter().any(|(k, _)| k == "JUSTRUST_PREBUILT_ALWAYS") {
+        c.env("JUSTRUST_PREBUILT_ALWAYS", "1");
+    }
     // cargo and rustup live in ~/.cargo/bin, which a non-login ssh shell
     // may not have on PATH.
     if let Some(home) = dirs::home_dir() {
