@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Safety checks for hosted benchmark accounting (no network or builds)."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,84 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_explicit_binary_alias_is_absolute_and_never_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "justrust"
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
+            for key in ("JUSTRUST", "JUSTRUST_BIN"):
+                self.assertEqual(suite.resolve_justrust_binary({key: str(binary)}), str(binary.resolve()))
+            alias = Path(tmp) / "alias"
+            alias.symlink_to(binary)
+            self.assertEqual(suite.resolve_justrust_binary({"JUSTRUST": str(binary),
+                                                           "JUSTRUST_BIN": str(alias)}), str(binary.resolve()))
+
+    def test_invalid_or_conflicting_binary_overrides_fail_before_install(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binaries = [Path(tmp) / name for name in ("a", "b")]
+            for binary in binaries:
+                binary.write_text("#!/bin/sh\nexit 0\n")
+                binary.chmod(0o755)
+            for env in ({"JUSTRUST_BIN": ""}, {"JUSTRUST": str(Path(tmp) / "missing")},
+                        {"JUSTRUST": str(binaries[0]), "JUSTRUST_BIN": str(binaries[1])}):
+                with self.subTest(env=env), patch.object(suite.subprocess, "run") as run, \
+                        self.assertRaises(ValueError):
+                    suite.resolve_justrust_binary(env)
+                run.assert_not_called()
+            binaries[0].chmod(0o644)
+            with self.assertRaises(ValueError):
+                suite.resolve_justrust_binary({"JUSTRUST_BIN": str(binaries[0])})
+
+    def test_atomic_binary_replacement_rejects_mixed_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary, replacement = (Path(tmp) / name for name in ("justrust", "replacement"))
+            binary.write_bytes(b"first executable")
+            with patch.object(suite, "J", str(binary)):
+                info = {"justrust_binary_sha256": suite.binary_sha256()}
+                self.assertEqual(info["justrust_binary_sha256"], hashlib.sha256(binary.read_bytes()).hexdigest())
+                suite.verify_binary_identity(info)
+                replacement.write_bytes(b"second executable")
+                replacement.replace(binary)
+                with self.assertRaisesRegex(ValueError, "changed during the benchmark"):
+                    suite.verify_binary_identity(info)
+                binary.unlink()
+                with self.assertRaisesRegex(ValueError, "cannot identify executable"):
+                    suite.binary_sha256()
+
+    def test_binary_revision_is_not_invented_from_repository_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "justrust"
+            binary.write_bytes(b"fixture executable")
+            with patch.object(suite, "J", str(binary)), patch.object(suite, "sh", return_value="repo-rev"), \
+                    patch.dict(suite.os.environ, {}, clear=True):
+                info = suite.env_info()
+                self.assertEqual(info["benchmark_repo_rev"], "repo-rev")
+                self.assertIsNone(info["justrust_binary_revision"])
+                self.assertEqual(info["justrust_revision_source"], "repository HEAD, not binary revision")
+                with patch.dict(suite.os.environ, {"JUSTRUST_BENCH_REV": "binary-rev"}):
+                    declared = suite.env_info()
+                self.assertEqual(declared["justrust_binary_revision"], "binary-rev")
+                self.assertEqual(declared["benchmark_repo_rev"], "repo-rev")
+                self.assertEqual(declared["justrust_binary_sha256"], info["justrust_binary_sha256"])
+
+    def test_changed_binary_never_writes_a_completed_suite_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary, replacement, out = (Path(tmp) / name for name in ("binary", "replacement", "result.json"))
+            binary.write_bytes(b"first")
+            info = {"justrust_binary_sha256": suite.binary_sha256(str(binary))}
+            def replace_during_sample(*args):
+                replacement.write_bytes(b"second")
+                replacement.replace(binary)
+                return {}
+            args = argparse.Namespace(toolchain="system", remote=False, synth=None, cold=False,
+                                      scenarios=["desktop-noop-test"], n=1, warmup=0,
+                                      quiet_wait=0, out=str(out))
+            with patch.object(suite, "J", str(binary)), patch.object(suite, "env_info", return_value=info), \
+                    patch.object(suite, "run_scenario", side_effect=replace_during_sample), \
+                    self.assertRaisesRegex(ValueError, "changed during the benchmark"):
+                suite.cmd_run(args)
+            self.assertFalse(out.exists())
+
     def test_requested_pool_fallback_is_not_a_pooled_measurement(self):
         for text in ("", "justrust hosted: HTTP pool unavailable, using curl", "justrust hosted: HTTP pool bypassed for custom proxy/certificate configuration"):
             with self.subTest(text=text), self.assertRaises(ValueError):

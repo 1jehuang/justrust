@@ -22,6 +22,7 @@ the build. Medians are over all samples, `quiet` medians over the rest. Use --qu
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -40,9 +41,52 @@ HOME = Path.home()
 JR_HOME = Path(os.environ.get("JUSTRUST_HOME", HOME / ".justrust"))
 WORK = Path(os.environ.get("JUSTRUST_BENCH_WORK", JR_HOME / "bench" / "work"))
 RESULTS = ROOT / "bench" / "results"
+
+
+def resolve_justrust_binary(env=None) -> str:
+    """Explicit overrides must never silently benchmark a different executable."""
+    env = os.environ if env is None else env
+    selected = []
+    for key in ("JUSTRUST", "JUSTRUST_BIN"):
+        if key in env:
+            path = shutil.which(env[key]) if env[key] else None
+            if path is None:
+                raise ValueError(f"bench: {key} must name an executable: {env[key]!r}")
+            selected.append((key, str(Path(path).resolve())))
+    if len(selected) == 2 and selected[0][1] != selected[1][1]:
+        raise ValueError("bench: JUSTRUST and JUSTRUST_BIN select different executables")
+    return selected[0][1] if selected else shutil.which("justrust") or "justrust"
+
+
+def binary_sha256(binary=None) -> str:
+    """Hash outside timed samples, and reject a replacement while reading."""
+    binary = J if binary is None else binary
+    path = Path(shutil.which(str(binary)) or binary)
+    try:
+        with path.open("rb") as source:
+            before = os.fstat(source.fileno())
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+            after = os.fstat(source.fileno())
+        current = path.stat()
+    except OSError as err:
+        raise ValueError(f"bench: cannot identify executable {path.name}: {err.strerror}") from err
+    signature = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    if signature(before) != signature(after) or signature(after) != signature(current):
+        raise ValueError("bench: justrust executable changed while recording its identity")
+    return digest
+
+
+def verify_binary_identity(info: dict) -> None:
+    if binary_sha256() != info["justrust_binary_sha256"]:
+        raise ValueError("bench: justrust executable changed during the benchmark; refusing mixed results")
+
+
 # Absolute, so a child env (versus stacks, os.execvpe) never resolves it
 # differently from this process.
-J = os.environ.get("JUSTRUST") or shutil.which("justrust") or "justrust"
+try:
+    J = resolve_justrust_binary()
+except ValueError as err:
+    sys.exit(str(err))
 # `run --toolchain SPEC`: build with a justrust-pinned toolchain
 # (JUSTRUST_TOOLCHAIN) in its own target dir. "system" = the system rustc.
 TOOLCHAIN = "system"
@@ -839,15 +883,25 @@ def env_info() -> dict:
         if line.startswith("model name"):
             cpu = line.split(":", 1)[1].strip()
             break
+    repo_rev = tryrun(["git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"])
+    declared_rev = os.environ.get("JUSTRUST_BENCH_REV") or None
+    digest = binary_sha256()
+    version = tryrun([J, "-V"])
+    verify_binary_identity({"justrust_binary_sha256": digest})
     return {
         "host": platform.node(),
         "cpu": cpu,
         "ncpu": os.cpu_count(),
         "mem_gb": round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
         "kernel": platform.release(),
-        "justrust": tryrun([J, "-V"]),
-        "justrust_rev": os.environ.get("JUSTRUST_BENCH_REV")
-        or tryrun(["git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"]),
+        "justrust": version,
+        # Legacy label retained for old compare consumers. Repository HEAD is
+        # not necessarily the installed executable's build revision.
+        "justrust_rev": declared_rev or repo_rev,
+        "benchmark_repo_rev": repo_rev,
+        "justrust_binary_revision": declared_rev,
+        "justrust_revision_source": "declared JUSTRUST_BENCH_REV" if declared_rev else "repository HEAD, not binary revision",
+        "justrust_binary_sha256": digest,
         "justrust_dirty": os.environ.get("JUSTRUST_BENCH_DIRTY") == "1"
         if "JUSTRUST_BENCH_DIRTY" in os.environ
         else bool(tryrun(["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"])),
@@ -942,6 +996,7 @@ def cmd_run(args) -> None:
         print(f"bench: {name} ({k + 1}/{len(names)})", file=sys.stderr)
         scenario = compiler_scenario(BY_NAME[name], RUSTC_THREADS, PASS_TIMES, WORKSPACE_THREADS)
         result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait)
+    verify_binary_identity(info)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
         time.strftime("%Y%m%d-%H%M%S") + f"-{info['justrust_rev']}{'-dirty' if info['justrust_dirty'] else ''}"
@@ -971,6 +1026,7 @@ def cmd_run_synth(args) -> None:
     info = env_info()
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
               "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume)}
+    verify_binary_identity(info)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
         f"synth{args.synth}-" + time.strftime("%Y%m%d-%H%M%S")

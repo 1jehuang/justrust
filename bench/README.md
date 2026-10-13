@@ -105,6 +105,16 @@ bench/suite.py show bench/results/A.json
 
 How it works:
 
+- **Executable identity.** Set `JUSTRUST=/absolute/path/to/justrust` (or
+  `JUSTRUST_BIN`) to select a frozen client. Missing, non-executable, empty,
+  or conflicting explicit selections fail before installing toolchains.
+  Results record `justrust_binary_sha256` outside timed samples and reject
+  a changed executable before writing completed suite/versus results.
+  `benchmark_repo_rev` is the harness checkout, not the installed client.
+  `justrust_binary_revision` is only a declared `JUSTRUST_BENCH_REV`, never
+  inferred from that checkout. The legacy `justrust_rev` label remains for
+  older consumers, so use the SHA for exact client identity.
+
 - **Pinned sources.** `git archive` of fixed commits of Jcode Desktop
   (+ sibling Jcode) and justrust, extracted once to
   `~/.justrust/bench/work/`. Bumping a pin in `SNAPSHOTS` makes old results

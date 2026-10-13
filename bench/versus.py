@@ -511,6 +511,7 @@ def cmd_run(args) -> None:
     for k, n in enumerate(names):
         print(f"versus: {n} ({k + 1}/{len(names)})", file=sys.stderr)
         res["workloads"][n] = run_workload(BY_NAME[n], stacks, args.n, args.warmup, args.quiet_wait)
+    suite.verify_binary_identity(info)
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = suite.RESULTS / (f"versus-{time.strftime('%Y%m%d-%H%M%S')}-{info['justrust_rev']}"
                            f"{'-dirty' if info['justrust_dirty'] else ''}.json")
@@ -537,6 +538,7 @@ def cmd_run_synth(args, stacks: list[Stack]) -> None:
     res["synth"] = synth_run.run(stacks, args.synth, args.points, args.n, args.quiet_wait,
                                  partial=suite.RESULTS / "partial" / f"synth{args.synth}.json", only=only,
                                  resume=args.resume)
+    suite.verify_binary_identity(info)
     if only:  # a subset is for debugging, never a result to compare
         print(synth_run.table(res["synth"]))
         return
