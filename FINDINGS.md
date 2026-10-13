@@ -5666,3 +5666,31 @@ Candidatefa372f4c rejected; exactpriora81f280e restoredhealthy and conditional15
 - Same frozen6c binary/native-curl-native, 11samples each workload: noop.691/.778/.709s, body1.855/1.990/1.839s, reference5.185/5.280/5.221s. Both `bench/suite.py compare` reports classify every row within noise. All99 measured actual hosted exit0, transport provenance and6 client milestones verified. No pool library or transport default restored.
 - Peer disclosed possible same-host load22:28:33-22:30:58UTC, covering11 curl reference samples. Controls explicitly flag those records rather than falsely changing original local-noise flags. Peer confirms no live deployment/host type/region/quota/binding changes during the experiment. No causal transport speed claim.
 - All121 exact own measured/warmup/recovery/plain-acceptance records preserved. First native warmups18.037/17.057s sync and final daemon restoration10.462s sync disclosed. Final installed plain check `20261013-153339304-3627414`, full360 tests `20261013-153339994-3627461` and strict all-target clippy `20261013-153342838-3627413` all hosted,0compiled56fresh. Details: `docs/hosted-native-current-20261013.md`.10x still unmet.
+
+## 2026-10-13: build hosts moved to us-west-2; same-type warm loop within noise
+
+Launch region us-east-1 -> us-west-2 (justrust-cloud fa581a6, b01662a; worker
+fe38bf38, rollback b5757617). Recorded hosts stay managed in their own
+region, so the other account's stopped east c7i and its disk are untouched.
+Own host: fresh us-west-2a i-0e052af0d41ab457e resized to m8azn.6xlarge, so
+type is matched. Old east m8azn i-0a3369f2adbb5d2cf stopped, volume kept,
+retagged `build-retired-east` pending deletion.
+
+RTT from the laptop (TCP connect, medians): EC2 endpoint us-east-1 ~146 ms,
+us-west-2 ~56 ms, west build host port 22 ~31 ms (min 28).
+
+Same frozen client (sha e2bc9269), nightly-2026-10-08, 2 warmups, 7 samples:
+`bench/suite.py compare hosted-region-before-east-20261013.json
+hosted-region-after-west-20261013.json`: noop 0.72 -> 0.81 (+11%), body
+1.94 -> 1.93 (-1%), reference 5.33 -> 5.37 (+1%), all within noise. The
+east baseline overlapped a peer's hosted runs on the same host
+(22:28:33-22:30:58 UTC). So the RTT drop (~70-110 ms) does not show
+in warm loop wall time: the warm path already holds a persistent SSH
+connection and very few round trips per build. No speed claim. The move
+pays off for wake/connect and per-request admission, and puts us next to
+the regions that have every candidate type (m8azn, c8a, m8a, metal).
+us-west-1 is closer (~36 ms) but has no m8azn/c8a.
+
+West acceptance (installed client, hosted): check 20261013-155617354-3849552,
+full tests 20261013-155805477-3862970, strict all-target clippy
+20261013-155821546-3865896, all exit 0.
