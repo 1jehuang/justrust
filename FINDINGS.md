@@ -4897,3 +4897,52 @@ Still open: wake time is dominated by EC2 start (~45 s) plus install for dev
 binaries; one 503 from before the worker fix was never explained; Desktop's
 `test --no-run` does not compile at its HEAD, so the fleet publishes only its
 `check` dependencies.
+
+## 66. Hosted service at scale: idle hosts cost 93% of machine time, the cron was O(hosts), and the fleet cap raced (2026-10-13)
+
+justrust-cloud cb13088..d13fb5e, deployed as worker c37452da. Details and all
+tables: `~/justrust-cloud/docs/scaling.md`, load test results in
+`docs/loadtest/` there.
+
+**Utilization.** Production D1: 20.5 machine-hours billed for 1.47 h of
+builds (233 runs, 7%). Every on-period ended 36-88 min after its last run:
+the client's ssh ControlMaster (ControlPersist, plus the daemon's link) keeps
+an established ssh connection, which the host's idle script counts as busy.
+The control plane now stops a host after 15 min without a connect, charged
+run or run event (and no run in flight). Replaying production history: 19.6 ->
+10.8 machine-hours, 14 of 233 builds would wait for a wake (10 min: 9.8 h,
+22 wakes; 30 min: 13.5 h, 11 wakes).
+
+**Control plane.** `tools/loadtest.mjs` (real worker code, fake EC2/D1/backend):
+
+| | before | after |
+|---|---:|---:|
+| cron AWS calls, 200 hosts | 201 | 1 (2 at 2000) |
+| warm connect AWS calls | 3 | 1 |
+| 200 simultaneous first connects, cap 8 | 200 launched | 8 launched, 192 `build_capacity`, 0 AWS calls |
+
+The first cap attempt (count, then launch) let all 200 through: concurrent
+requests all read "7 of 8". A single-statement D1 reservation fixed it
+(burst test in `npm test`).
+
+Production warm connect (`POST /v1/build/host/connect`, curl, interleaved by
+rolling the worker back and forth): **2.10 s -> 1.23 s median** (n=8 / n=16).
+
+**Capacity.** The EC2 vCPU quota is 256 = 8 concurrent c7i.8xlarge. At the
+quota, users used to get `build_unavailable` after a failing RunInstances
+each. Now: `BUILD_MAX_HOSTS=8`, the newcomer reclaims the longest-idle host
+of another account (5 min idle, no run in flight), launch falls back over 5
+zones and c7i.4xlarge, and a full fleet answers `503 build_capacity` with
+`retry_after`. The client (9ce2d91) prints its own message for it and keeps
+the 10 min route backoff. 202s now carry `retry_after_ms` (10 s while a host
+is provisioning, was a 2 s poll for minutes).
+
+**Caching: S3 regional vs CloudFront for the store on hosts, rejected.** Cold
+`check -p jcode-tui` on the host, 529 store hits, interleaved n=3: CloudFront
+43.0/34.8/34.6 s (median 34.8), S3 regional 37.7/37.5/37.1 s (median 37.5).
+Small single objects are faster from S3 (0.06 vs 0.12 s), the build is not.
+Host run ids 20261013-043603521-10727 .. 20261013-043912220-57910 (on the host).
+
+Next: raise the vCPU quota before the cap binds; a golden AMI (bootstrap is
+about a minute on first launch); pre-warm a new host's depcache from the store
+for the account's lockfile.
