@@ -535,6 +535,10 @@ pub struct Outcome {
     pub run_id: String,
 }
 
+fn fallback_safe(flushed: bool, submitted: bool) -> bool {
+    !flushed && !submitted
+}
+
 /// Run `justrust <sub> <args>` remotely. `Ok(Err(Infra))` means nothing was
 /// built and the caller may build locally instead. Output is streamed to
 /// our stdout/stderr as it arrives.
@@ -622,7 +626,7 @@ pub fn run_remote(
     full.extend(args.iter().cloned());
     write_frame(
         &mut w,
-        &Msg::Run {
+        &Msg::RunSync {
             id: 0,
             cwd: cwd.display().to_string(),
             args: full.clone(),
@@ -634,6 +638,7 @@ pub fn run_remote(
         &[],
     )?;
     let mut sync = None;
+    let mut submitted = false;
     let mut first_out = false;
     let mut run_files: Vec<u8> = Vec::new();
     let mut so = std::io::stdout();
@@ -641,7 +646,7 @@ pub fn run_remote(
     loop {
         let frame = match read_frame(&mut r) {
             Ok(Some(f)) => f,
-            Ok(None) | Err(_) if sync.is_none() => {
+            Ok(None) | Err(_) if fallback_safe(sync.is_some(), submitted) => {
                 return infra("sync daemon closed the connection".into());
             }
             Ok(None) | Err(_) => {
@@ -651,6 +656,14 @@ pub fn run_remote(
             }
         };
         match frame {
+            (
+                Msg::RunState {
+                    may_have_started, ..
+                },
+                _,
+            ) => {
+                submitted = may_have_started;
+            }
             (
                 Msg::Flushed {
                     files,
@@ -722,7 +735,9 @@ pub fn run_remote(
                 );
                 return Ok(Ok(Outcome { code, run_id }));
             }
-            (Msg::Error { msg, .. }, _) if sync.is_none() => return infra(msg),
+            (Msg::Error { msg, .. }, _) if fallback_safe(sync.is_some(), submitted) => {
+                return infra(msg);
+            }
             (Msg::Error { msg, .. }, _) => {
                 report("abandoned", None);
                 bail!("remote build failed mid-run: {msg}")
@@ -878,6 +893,20 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ambiguous_submission_never_falls_back_but_confirmed_rejection_can() {
+        assert!(super::fallback_safe(false, false));
+        assert!(!super::fallback_safe(false, true));
+        assert!(!super::fallback_safe(true, true));
+        assert!(!super::fallback_safe(true, false));
+        let mut submitted = false;
+        assert!(super::fallback_safe(false, submitted));
+        submitted = true;
+        assert!(!super::fallback_safe(false, submitted));
+        // An explicit failed-sync acknowledgement proves no run launched.
+        submitted = false;
+        assert!(super::fallback_safe(false, submitted));
+    }
     use super::*;
 
     #[test]

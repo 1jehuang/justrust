@@ -14,7 +14,7 @@
 //! paths cannot be created) every path is rebased under it.
 
 use crate::sys::Detach;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -25,6 +25,12 @@ use std::sync::{Arc, Mutex};
 use crate::remote_proto::{
     CACHE_VERSION, MIN_VERSION, Msg, RUN_FILES_VERSION, VERSION, read_frame, write_frame,
 };
+
+#[derive(Default)]
+struct RunStatus {
+    pid: Option<i32>,
+    cancelled: bool,
+}
 
 type Out = Arc<Mutex<Box<dyn Write + Send>>>;
 
@@ -228,7 +234,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             Path::new(&prefix).join(p.trim_start_matches('/'))
         }
     };
-    let pids: Arc<Mutex<HashMap<u64, i32>>> = Arc::default();
+    let pids: Arc<Mutex<HashMap<u64, RunStatus>>> = Arc::default();
     // Paths whose latest Write or Delete failed: the tree differs from what
     // the daemon believes. Reported with every barrier until a later frame
     // for the same path succeeds, so no build runs on a stale file.
@@ -242,6 +248,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         if relay.capable && relay.on_frame(&msg, &payload) {
             continue;
         }
+        let sync_run = matches!(&msg, Msg::RunSync { .. });
         match msg {
             Msg::Write { path, mode } => match write_atomic(&at(&path), &payload, mode) {
                 Ok(()) => {
@@ -283,16 +290,49 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 env,
                 run_id,
                 ..
+            }
+            | Msg::RunSync {
+                id,
+                cwd,
+                args,
+                env,
+                run_id,
+                ..
             } => {
+                if sync_run {
+                    send(
+                        &out,
+                        &Msg::BarrierAck {
+                            id,
+                            failed: failed.iter().cloned().collect(),
+                        },
+                        &[],
+                    );
+                    if !failed.is_empty() {
+                        send(
+                            &out,
+                            &Msg::Error {
+                                id,
+                                msg: "source sync failed, build not started".into(),
+                            },
+                            &[],
+                        );
+                        continue;
+                    }
+                }
                 let out = out.clone();
                 let pids = pids.clone();
                 let cwd = at(&cwd);
                 let executable = executable.clone();
+                // Register before spawning the worker: an immediate Cancel
+                // must survive the window before its process has a PID.
+                pids.lock().unwrap().insert(id, RunStatus::default());
                 std::thread::spawn(move || {
                     let code =
                         match start_run(&executable, id, &cwd, &args, &env, &run_id, &out, &pids) {
                             Ok(c) => c,
                             Err(e) => {
+                                pids.lock().unwrap().remove(&id);
                                 send(
                                     &out,
                                     &Msg::Error {
@@ -317,10 +357,15 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 });
             }
             Msg::Cancel { id } => {
-                if let Some(pid) = pids.lock().ok().and_then(|p| p.get(&id).copied()) {
-                    // SAFETY: signalling our own child's process group.
-                    unsafe {
-                        libc::kill(-pid, libc::SIGINT);
+                if let Ok(mut pids) = pids.lock()
+                    && let Some(run) = pids.get_mut(&id)
+                {
+                    run.cancelled = true;
+                    if let Some(pid) = run.pid {
+                        // SAFETY: signalling our own child's process group.
+                        unsafe {
+                            libc::kill(-pid, libc::SIGINT);
+                        }
                     }
                 }
             }
@@ -341,11 +386,14 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         }
     };
     relay.close();
-    if let Ok(p) = pids.lock() {
-        for pid in p.values() {
-            // SAFETY: signalling our own child's process group.
-            unsafe {
-                libc::kill(-pid, libc::SIGTERM);
+    if let Ok(mut p) = pids.lock() {
+        for run in p.values_mut() {
+            run.cancelled = true;
+            if let Some(pid) = run.pid {
+                // SAFETY: signalling our own child's process group.
+                unsafe {
+                    libc::kill(-pid, libc::SIGTERM);
+                }
             }
         }
     }
@@ -492,7 +540,7 @@ fn start_run(
     env: &[(String, String)],
     run_id: &str,
     out: &Out,
-    pids: &Arc<Mutex<HashMap<u64, i32>>>,
+    pids: &Arc<Mutex<HashMap<u64, RunStatus>>>,
 ) -> Result<i32> {
     let mut c = Command::new(executable);
     c.args(args)
@@ -536,9 +584,17 @@ fn start_run(
     {
         c.env("CARGO_HOME", home);
     }
+    // Hold the state lock only across spawn and PID publication. A Cancel
+    // either prevents spawning or observes the exact child to interrupt.
+    let mut states = pids.lock().unwrap();
+    let state = states.get_mut(&id).context("run no longer active")?;
+    if state.cancelled {
+        bail!("run cancelled before starting");
+    }
     let mut child = c.spawn()?;
-    pids.lock().unwrap().insert(id, child.id() as i32);
+    state.pid = Some(child.id() as i32);
     track_pgid(child.id() as i32);
+    drop(states);
     let mut pumps = Vec::new();
     for (stream, pipe) in [
         (

@@ -12,10 +12,11 @@ use std::io::{Read, Write};
 
 /// Bumped when frames change incompatibly. The daemon requires an agent
 /// that answers in this version.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 /// Oldest daemon protocol the agent still serves (v1 is v2 without
 /// `Synced` and without write-failure reports, v2 is v3 without the
-/// `Cache*` frames, v3 is v4 without `RunFiles`).
+/// `Cache*` frames, v3 is v4 without `RunFiles`, v4 is v5 without
+/// sync-guarded `RunSync` and client `RunState`).
 pub const MIN_VERSION: u32 = 1;
 /// First version with the peer dependency cache (`Cache*` frames).
 pub const CACHE_VERSION: u32 = 3;
@@ -173,6 +174,28 @@ pub enum Msg {
         /// Run id to record under, so local and remote ids match.
         #[serde(default)]
         run_id: String,
+    },
+    /// v5: apply all preceding source frames, acknowledge their failures,
+    /// then start only if none failed. Combines Barrier + Run without a
+    /// second SSH round trip. Legacy Run keeps its original semantics.
+    RunSync {
+        id: u64,
+        cwd: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        #[serde(default)]
+        roots: Vec<String>,
+        #[serde(default)]
+        start: bool,
+        #[serde(default)]
+        run_id: String,
+    },
+    /// v5 daemon -> client: a run may now be executing even if its sync
+    /// acknowledgement has not arrived. Never rerun locally on an ambiguous
+    /// disconnect. False is sent only after a confirmed rejection.
+    RunState {
+        id: u64,
+        may_have_started: bool,
     },
     /// Output of a run: payload bytes, stream 1 = stdout, 2 = stderr.
     Out {
@@ -344,6 +367,44 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<(Msg, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guarded_run_and_submission_state_roundtrip_without_changing_legacy_run() {
+        let legacy: Msg = serde_json::from_value(serde_json::json!({
+            "t":"Run", "id":9, "cwd":"/proj", "args":["check"], "env":[]
+        }))
+        .unwrap();
+        assert!(matches!(legacy, Msg::Run { id: 9, .. }));
+        let guarded: Msg = serde_json::from_value(serde_json::json!({
+            "t":"RunSync", "id":10, "cwd":"/proj", "args":["check"], "env":[]
+        }))
+        .unwrap();
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &guarded, &[]).unwrap();
+        for state in [true, false] {
+            write_frame(
+                &mut buf,
+                &Msg::RunState {
+                    id: 10,
+                    may_have_started: state,
+                },
+                &[],
+            )
+            .unwrap();
+        }
+        let mut input = &buf[..];
+        assert_eq!(read_frame(&mut input).unwrap().unwrap().0, guarded);
+        for state in [true, false] {
+            assert_eq!(
+                read_frame(&mut input).unwrap().unwrap().0,
+                Msg::RunState {
+                    id: 10,
+                    may_have_started: state
+                }
+            );
+        }
+        assert!(read_frame(&mut input).unwrap().is_none());
+    }
 
     #[test]
     fn roundtrip() {

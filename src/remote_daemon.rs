@@ -520,6 +520,7 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
         if !matches!(msg, Msg::Ping) {
             d.set_info(|i| i.last_client = Some(Instant::now()));
         }
+        let pipeline = matches!(&msg, Msg::RunSync { .. });
         match msg {
             Msg::Ping => {
                 // `connected` is only updated on connect/drop: a link the
@@ -570,9 +571,20 @@ fn client(stream: UnixStream, d: &Arc<Daemon>) -> Result<()> {
                 start,
                 run_id,
                 ..
+            }
+            | Msg::RunSync {
+                cwd,
+                args,
+                env,
+                roots,
+                start,
+                run_id,
+                ..
             } => {
                 d.set_info(|i| i.active += 1);
-                let res = run(d, &mut r, &mut w, cwd, args, env, roots, start, run_id);
+                let res = run(
+                    d, &mut r, &mut w, cwd, args, env, roots, start, run_id, pipeline,
+                );
                 d.set_info(|i| i.active = i.active.saturating_sub(1));
                 if let Err(e) = res {
                     let _ = write_frame(
@@ -971,10 +983,15 @@ fn barrier(d: &Daemon, st: &mut Sync, link: &Link) -> Result<()> {
     let failed = rx
         .recv_timeout(BARRIER_TIMEOUT)
         .map_err(|_| anyhow::anyhow!("remote machine did not acknowledge the sync"))?;
+    check_sync_failures(st, &failed)
+}
+
+/// Both standalone and run-integrated barriers repair the same manifest.
+fn check_sync_failures(st: &mut Sync, failed: &[String]) -> Result<()> {
     if failed.is_empty() {
         return Ok(());
     }
-    for f in &failed {
+    for f in failed {
         let f = Path::new(f);
         for (root, r) in st.roots.iter_mut() {
             if let Ok(rel) = f.strip_prefix(root) {
@@ -1052,6 +1069,7 @@ fn run(
     roots: Vec<String>,
     start: bool,
     run_id: String,
+    pipeline: bool,
 ) -> Result<()> {
     let t = Instant::now();
     let roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
@@ -1072,7 +1090,83 @@ fn run(
                 }
             }
             let pushed = t.elapsed();
-            barrier(d, &mut st, &link)?;
+            let note = oversized_note(&st, &roots)?;
+            if !pipeline {
+                barrier(d, &mut st, &link)?;
+            }
+            let (barrier_tx, barrier_rx) = channel();
+            {
+                let mut rt = link.routes.lock().unwrap();
+                if rt.dead {
+                    bail!("connection to the remote machine was lost");
+                }
+                rt.runs.insert(id, tx);
+                if pipeline {
+                    rt.barriers.insert(id, barrier_tx);
+                }
+            }
+            if pipeline {
+                // Once sent upstream, a lost acknowledgement is ambiguous:
+                // the client must not silently run a second local build.
+                write_frame(
+                    w,
+                    &Msg::RunState {
+                        id,
+                        may_have_started: true,
+                    },
+                    &[],
+                )?;
+            }
+            let msg = if pipeline {
+                Msg::RunSync {
+                    id,
+                    cwd: cwd.clone(),
+                    args,
+                    env,
+                    roots: Vec::new(),
+                    start: false,
+                    run_id,
+                }
+            } else {
+                Msg::Run {
+                    id,
+                    cwd: cwd.clone(),
+                    args,
+                    env,
+                    roots: Vec::new(),
+                    start: false,
+                    run_id,
+                }
+            };
+            link.send(&msg, &[])?;
+            if pipeline {
+                let failed = match barrier_rx.recv_timeout(BARRIER_TIMEOUT) {
+                    Ok(failed) => failed,
+                    Err(_) => {
+                        let _ = link.send(&Msg::Cancel { id }, &[]);
+                        let mut rt = link.routes.lock().unwrap();
+                        rt.barriers.remove(&id);
+                        rt.runs.remove(&id);
+                        bail!(
+                            "remote machine did not acknowledge the sync; build may have started"
+                        );
+                    }
+                };
+                if let Err(e) = check_sync_failures(&mut st, &failed) {
+                    // The agent confirmed it never launched this request.
+                    // A local fallback is safe only after this rejection.
+                    write_frame(
+                        w,
+                        &Msg::RunState {
+                            id,
+                            may_have_started: false,
+                        },
+                        &[],
+                    )?;
+                    link.routes.lock().unwrap().runs.remove(&id);
+                    return Err(e);
+                }
+            }
             if t.elapsed() > Duration::from_millis(1000) {
                 log(&format!(
                     "slow sync {:.2}s: lock {:.2}s, link {:.2}s, push {:.2}s, barrier {:.2}s",
@@ -1083,32 +1177,18 @@ fn run(
                     (t.elapsed() - pushed).as_secs_f64()
                 ));
             }
-            let note = oversized_note(&st, &roots)?;
-            {
-                let mut rt = link.routes.lock().unwrap();
-                if rt.dead {
-                    bail!("connection to the remote machine was lost");
-                }
-                rt.runs.insert(id, tx);
-            }
-            link.send(
-                &Msg::Run {
-                    id,
-                    cwd: cwd.clone(),
-                    args,
-                    env,
-                    roots: Vec::new(),
-                    start: false,
-                    run_id,
-                },
-                &[],
-            )?;
             Ok((link, files, note))
         })();
         match res {
             Ok(v) => v,
             Err(e) => {
                 // A broken pipe or lost session: start over next time.
+                if let Some(link) = &st.link {
+                    let _ = link.send(&Msg::Cancel { id }, &[]);
+                    let mut routes = link.routes.lock().unwrap();
+                    routes.runs.remove(&id);
+                    routes.barriers.remove(&id);
+                }
                 if st.link.as_ref().is_some_and(|l| !l.alive()) {
                     drop_link(d, &mut st);
                 }
@@ -1117,7 +1197,7 @@ fn run(
         }
     };
     let machine = d.info.lock().map(|i| i.machine.clone()).unwrap_or_default();
-    write_frame(
+    if let Err(e) = write_frame(
         w,
         &Msg::Flushed {
             id,
@@ -1128,11 +1208,22 @@ fn run(
             note,
         },
         &[],
-    )?;
+    ) {
+        let _ = link.send(&Msg::Cancel { id }, &[]);
+        link.routes.lock().unwrap().runs.remove(&id);
+        return Err(e);
+    }
     // A client that sends Cancel or goes away (Ctrl+C, killed agent) cancels
     // the remote run, unless it already finished.
     let finished = Arc::new(AtomicBool::new(false));
-    let cr = r.get_ref().try_clone()?;
+    let cr = match r.get_ref().try_clone() {
+        Ok(cr) => cr,
+        Err(e) => {
+            let _ = link.send(&Msg::Cancel { id }, &[]);
+            link.routes.lock().unwrap().runs.remove(&id);
+            return Err(e.into());
+        }
+    };
     {
         let finished = finished.clone();
         let link = link.clone();
@@ -1220,6 +1311,43 @@ fn peer_sync_loop(d: &Daemon) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_sync_invalidates_writes_and_deletes_without_touching_other_roots() {
+        let stamp = remote_sync::Stamp {
+            mtime_ns: 1,
+            size: 12,
+            mode: 0o644,
+        };
+        let root = PathBuf::from("/workspace");
+        let other = PathBuf::from("/workspace-other");
+        let entry = PathBuf::from("src/lib.rs");
+        let make_root = || Root {
+            manifest: Manifest::from([(entry.clone(), stamp)]),
+            oversized: Vec::new(),
+            needs_full_sync: false,
+        };
+        let mut sync = Sync {
+            backend: Backend::Hosted,
+            link: None,
+            roots: BTreeMap::from([(root.clone(), make_root()), (other.clone(), make_root())]),
+        };
+        assert!(check_sync_failures(&mut sync, &[]).is_ok());
+        assert_eq!(sync.roots[&root].manifest[&entry], stamp);
+        assert!(
+            check_sync_failures(
+                &mut sync,
+                &[
+                    "/workspace/src/lib.rs".into(),
+                    "/workspace/deleted.rs".into()
+                ]
+            )
+            .is_err()
+        );
+        assert_eq!(sync.roots[&root].manifest[&entry], UNKNOWN);
+        assert_eq!(sync.roots[&root].manifest[Path::new("deleted.rs")], UNKNOWN);
+        assert_eq!(sync.roots[&other].manifest[&entry], stamp);
+    }
 
     #[test]
     fn reconnect_invalidates_all_live_roots_but_forgets_deleted_ones() {

@@ -351,6 +351,120 @@ fn runs_stream_output_and_exit_codes() {
 }
 
 #[test]
+fn sync_run_rejects_failed_writes_then_checks_latest_source_and_reuses_artifacts() {
+    let mut a = Agent::start("pipeline-check");
+    for (path, data) in [
+        (
+            "/proj/Cargo.toml",
+            &br#"[package]
+name="pipeline-check"
+version="0.0.0"
+edition="2024"
+"#[..],
+        ),
+        ("/proj/src/lib.rs", &b"pub fn answer() -> u32 { 42 }\n"[..]),
+        ("/block", &b"not a directory"[..]),
+        ("/block/nested.rs", &b"this write must fail"[..]),
+    ] {
+        a.send(
+            Msg::Write {
+                path: path.into(),
+                mode: 0o644,
+            },
+            data,
+        );
+    }
+    let request = |a: &Agent, id| Msg::RunSync {
+        id,
+        cwd: "/proj".into(),
+        args: vec!["check".into(), "--offline".into()],
+        env: vec![
+            ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
+            ("JUSTRUST_DISABLE".into(), "0".into()),
+            (
+                "CARGO_TARGET_DIR".into(),
+                a.at("/proj/target").to_string_lossy().into_owned(),
+            ),
+        ],
+        roots: vec![],
+        start: false,
+        run_id: format!("pipeline-check-{}-{id}", std::process::id()),
+    };
+    for id in [50, 51] {
+        let msg = request(&a, id);
+        a.send(msg, &[]);
+        assert_eq!(
+            a.recv().0,
+            Msg::BarrierAck {
+                id,
+                failed: vec!["/block/nested.rs".into()]
+            }
+        );
+        assert!(matches!(a.recv().0, Msg::Error { id: got, .. } if got == id));
+        assert!(
+            !a.at("/proj/target").exists(),
+            "rejected request must never invoke cargo"
+        );
+    }
+    a.send(
+        Msg::Delete {
+            path: "/block".into(),
+        },
+        &[],
+    );
+    a.send(
+        Msg::Write {
+            path: "/block/nested.rs".into(),
+            mode: 0o644,
+        },
+        b"repaired",
+    );
+    for (id, source, success, compiled) in [
+        (52, "pub fn answer() -> u32 { 42 }\n", true, 1),
+        (53, "pub fn answer() -> u32 { false }\n", false, 1),
+        (54, "pub fn answer() -> u32 { 43 }\n", true, 1),
+        (55, "pub fn answer() -> u32 { 43 }\n", true, 0),
+    ] {
+        // No standalone barrier, source write and run are ordered on one stream.
+        if id != 55 {
+            a.send(
+                Msg::Write {
+                    path: "/proj/src/lib.rs".into(),
+                    mode: 0o644,
+                },
+                source.as_bytes(),
+            );
+        }
+        let msg = request(&a, id);
+        a.send(msg, &[]);
+        assert_eq!(a.recv().0, Msg::BarrierAck { id, failed: vec![] });
+        let mut output = String::new();
+        loop {
+            match a.recv() {
+                (Msg::Out { id: got, .. }, data) if got == id => {
+                    output.push_str(&String::from_utf8_lossy(&data))
+                }
+                (Msg::RunFiles { id: got }, _) if got == id => {}
+                (Msg::Exit { id: got, code }, data) if got == id => {
+                    assert_eq!(
+                        code == 0,
+                        success,
+                        "latest source must determine verdict: {output}"
+                    );
+                    let summary: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                    assert_eq!(summary["units"]["compiled"], compiled, "{output}");
+                    if !success {
+                        assert!(output.contains("mismatched types"), "{output}");
+                    }
+                    break;
+                }
+                other => panic!("unexpected pipeline frame {other:?}: {output}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn replaced_agent_executable_still_checks_with_stable_recording_shims() {
     use std::os::unix::fs::PermissionsExt;
     let mut a = Agent::start_copy("replace-check", true);
@@ -502,6 +616,56 @@ fn cancel_interrupts_a_run_and_others_continue() {
     let (_, code) = a.wait_run(1);
     assert_eq!(code, 128 + libc_sigint());
     assert!(!running("sleep 30.101"));
+}
+
+#[test]
+fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
+    let mut a = Agent::start("immediate-cancel");
+    a.send(
+        Msg::Mkdir {
+            path: "/proj".into(),
+        },
+        &[],
+    );
+    for id in 100..112 {
+        let start = std::time::Instant::now();
+        a.send(
+            Msg::RunSync {
+                id,
+                cwd: "/proj".into(),
+                args: vec!["cargo".into(), "30.404".into()],
+                env: vec![("JUSTRUST_REAL_CARGO".into(), "sleep".into())],
+                roots: vec![],
+                start: false,
+                run_id: String::new(),
+            },
+            &[],
+        );
+        // Do not wait for Pong, output, or PID publication before cancelling.
+        a.send(Msg::Cancel { id }, &[]);
+        assert_eq!(a.recv().0, Msg::BarrierAck { id, failed: vec![] });
+        loop {
+            match a.recv().0 {
+                Msg::Out { id: got, .. } if got == id => {}
+                Msg::Exit { id: got, code } if got == id => {
+                    assert_ne!(code, 0);
+                    break;
+                }
+                Msg::Error { id: got, msg } if got == id => {
+                    assert!(msg.contains("cancelled before starting"), "{msg}");
+                    break;
+                }
+                other => panic!("unexpected cancel frame {other:?}"),
+            }
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "Cancel must not wait for sleep to finish"
+        );
+    }
+    assert!(!running("sleep 30.404"));
+    a.send(Msg::Ping, &[]);
+    assert!(matches!(a.recv().0, Msg::Pong { active: 0, .. }));
 }
 
 #[test]
