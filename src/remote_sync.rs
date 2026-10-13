@@ -422,12 +422,15 @@ impl Mirror {
     fn seed_from_url(&self, root: &Path, url: &str, head: &str) -> bool {
         let dst = shell_quote(&self.remote(root));
         let (url, head) = (shell_quote(url), shell_quote(head));
+        // `timeout` is GNU coreutils: on the Linux machines always, but not on
+        // macOS, where the script also runs for a local mirror (and the test).
         let script = format!(
             "test -d {dst} && test -z \"$(ls -A {dst} | grep -vx -e target -e .justrust)\" || exit 1; \
              g=$(mktemp -d); trap 'rm -rf \"$g\"' EXIT; export GIT_TERMINAL_PROMPT=0; \
+             t=; command -v timeout >/dev/null 2>&1 && t='timeout 120'; \
              git init -q --bare \"$g\" && \
-             {{ timeout 120 git --git-dir=\"$g\" fetch -q --depth 1 {url} {head} \
-                || timeout 120 git --git-dir=\"$g\" fetch -q --depth 1 {url} HEAD; }} && \
+             {{ $t git --git-dir=\"$g\" fetch -q --depth 1 {url} {head} \
+                || $t git --git-dir=\"$g\" fetch -q --depth 1 {url} HEAD; }} && \
              git --git-dir=\"$g\" --work-tree={dst} checkout -q -f FETCH_HEAD -- ."
         );
         let mut c = match &self.target {
