@@ -226,15 +226,49 @@ fn worth_fetching(root: &Path, base: &str, key: &str) -> bool {
         return base != DEFAULT_STORE;
     };
     let rate = download_rate(root);
-    // Per-unit fixed cost: a curl process, TLS, manifest round trip.
-    let fetch_ms = FETCH_OVERHEAD_MS + bytes as f64 * 1000.0 / rate;
+    // Per-unit fixed cost: two requests (manifest, bundle), measured on this
+    // machine, plus curl and unpack.
+    let fetch_ms = fetch_overhead_ms(root) + bytes as f64 * 1000.0 / rate;
     // The fleet machine compiles ~1.5x faster per thread than a laptop under
     // agent load; leaving that out errs toward compiling, which is safe.
     fetch_ms < compile_ms as f64
 }
 
-/// Fixed time one store hit costs beyond its transfer.
+/// Fixed time one store hit costs beyond its transfer, until this machine has
+/// measured its own request latency. 700 ms was a laptop over home Wi-Fi; a
+/// build host next to CloudFront measured 20 ms per request (FINDINGS 67).
 const FETCH_OVERHEAD_MS: f64 = 700.0;
+
+fn latency_path(root: &Path) -> PathBuf {
+    root.join("prebuilt.latency")
+}
+
+/// Fixed cost of one hit: two store requests at this machine's measured
+/// latency (EWMA of manifest requests) plus process and unpack overhead.
+fn fetch_overhead_ms(root: &Path) -> f64 {
+    std::fs::read_to_string(latency_path(root))
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|l| l.is_finite() && *l > 0.0)
+        .map(|l| (2.0 * l * 1000.0 + 30.0).clamp(30.0, 3000.0))
+        .unwrap_or(FETCH_OVERHEAD_MS)
+}
+
+/// Fold one manifest request (small, so all latency) into the estimate.
+fn note_latency(root: &Path, secs: f64) {
+    if !(secs.is_finite() && secs > 0.0) {
+        return;
+    }
+    let prev = std::fs::read_to_string(latency_path(root))
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|l| l.is_finite() && *l > 0.0);
+    let l = match prev {
+        Some(p) => 0.8 * p + 0.2 * secs,
+        None => secs,
+    };
+    let _ = std::fs::write(latency_path(root), format!("{l:.4}"));
+}
 
 fn costs_path(root: &Path, base: &str) -> PathBuf {
     index_path(root, base).with_extension("costs")
@@ -360,12 +394,20 @@ fn fetch_from(base: &str, plan: &Plan, err: &mut dyn Write) -> Option<depcache::
         return None;
     }
     let m = tmp(root, "m");
+    let t_m = std::time::Instant::now();
     let got = get(base, &format!("m/{}.jsonl", plan.base), &m, 8, 1 << 20);
+    let m_secs = t_m.elapsed().as_secs_f64();
     let text = std::fs::read_to_string(&m).unwrap_or_default();
     let _ = std::fs::remove_file(&m);
     match got {
-        Got::Ok => note_success(root),
-        Got::Missing => return None,
+        Got::Ok => {
+            note_success(root);
+            note_latency(root, m_secs);
+        }
+        Got::Missing => {
+            note_latency(root, m_secs);
+            return None;
+        }
         Got::Failed(why) => {
             note_failure(root, &format!("manifest: {why}"));
             return None;
@@ -716,6 +758,7 @@ mod tests {
     #[test]
     fn fetches_only_units_that_cost_more_to_compile() {
         let root = std::env::temp_dir().join(format!("jr-worth-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
         let store = root.join("store");
         std::fs::create_dir_all(store.join("v1")).unwrap();
         let (cheap, slow, big, unpriced) = (
@@ -742,6 +785,19 @@ mod tests {
         // Measured downloads move the rate.
         note_download(&root, 4_000_000, 4.0);
         assert!(download_rate(&root) < 10_000_000.0);
+        // A build host next to the store (20 ms per request): the 180 ms
+        // unit is now worth fetching, the 20 s transfer still is not.
+        std::fs::write(rate_path(&root), "10000000").unwrap();
+        note_latency(&root, 0.02);
+        assert!((fetch_overhead_ms(&root) - 70.0).abs() < 1.0);
+        assert!(worth_fetching(&root, &base, &cheap));
+        assert!(!worth_fetching(&root, &base, &big));
+        // A slow request pulls the estimate back up, bounded.
+        for _ in 0..50 {
+            note_latency(&root, 10.0);
+        }
+        assert_eq!(fetch_overhead_ms(&root), 3000.0);
+        assert!(!worth_fetching(&root, &base, &cheap));
         let _ = std::fs::remove_dir_all(&root);
     }
 

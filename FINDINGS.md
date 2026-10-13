@@ -4946,3 +4946,49 @@ Host run ids 20261013-043603521-10727 .. 20261013-043912220-57910 (on the host).
 Next: raise the vCPU quota before the cap binds; a golden AMI (bootstrap is
 about a minute on first launch); pre-warm a new host's depcache from the store
 for the account's lockfile.
+
+## 67. Prebuilt fetch overhead measured per machine instead of a fixed 700 ms (2026-10-13)
+
+Follow-up named in FINDINGS 55 and 65. The cost model (`worth_fetching`)
+charged every store hit 700 ms of fixed overhead, a laptop over home Wi-Fi.
+The hosted c7i.8xlarge in us-east-1 measured 19-20 ms per CloudFront
+request (5 samples, TLS 18 ms), the laptop 37 ms warm. So on a host the model
+declined nearly every hit, and the agent compensates with
+`JUSTRUST_PREBUILT_ALWAYS=1` (65b), which also fetches units that are
+cheaper to compile on 32 cores.
+
+Change: every manifest request (hit or 404) feeds an EWMA of request latency
+(`prebuilt.latency` in the depcache dir). Fixed cost = 2 requests + 30 ms,
+clamped 30 ms to 3 s, and the old 700 ms until measured. Unit test covers a
+20 ms host flipping a 180 ms unit to fetch, a 200 MB unit still compiled, and
+a slow network pulling it back to the 3 s bound. `justrust test` 322/322.
+
+Fleet: uploaded `prebuild/run.sh` to `s3://.../fleet/run.sh` (approved by
+the user; only diff vs live was the telemetry/update opt-out from 5d894ca).
+`seeds.toml` and `workspaces.txt` already matched. Store: 7185 manifests.
+
+Cold `check -p jcode-tui` on the host over ssh, fresh target + depcache,
+nightly-2026-10-08, jobs 30, localcache off (host run ids below):
+
+| mode | wall (3 runs) | prebuilt hits |
+|---|---|---:|
+| store off (`JUSTRUST_PREBUILT=off`) | 28.2, 38.3, 37.2 s | 0 |
+| old model, 700 ms (before this change) | 36.0, 35.7, 36.3 s | 42-43 |
+| measured latency (this change) | 34.8, 33.8, 26.6 s | 138, 220, 231 |
+| fetch all (`PREBUILT_ALWAYS`) | 34.0, 33.2, 33.4 s | 529 |
+
+The measured model learns within one build (latency 76 ms on its first
+manifests, 27 ms after) and lands between: it fetches 230 of 529, skipping
+units that are cheaper to compile. Wall differences are inside the noise of
+this host (store-off spans 28-38 s), so **no measured speedup**: the change
+makes the default model right on servers without the env override, not a
+faster build. The critical path is unchanged: aws_sdk_bedrock (9.8 s, the
+store has no matching key: the fleet's build of it is a `link` unit under
+jcode-desktop's lockfile, while jcode-tui check needs `metadata`), then
+jcode_app_core 5.5 s, jcode_base 4.4 s, jcode_tui 3.8 s. Next: publish
+`check` (metadata-only) units for the big leaf deps, starting with
+aws-sdk-bedrock.
+
+Host runs: 20261013-051819907-233191 .. 20261013-052104092-284623 (this
+change), 20261013-051206447-165622 .. -051428313-209773 (before),
+20261013-052214469-294010 .. -052321715-316128 (store off).
