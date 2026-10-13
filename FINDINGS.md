@@ -6,6 +6,64 @@ Data: `~/.jcode/sessions` on one developer machine (16-thread Core Ultra X9,
 blocked waiting on the tool call. Calls over 30 minutes (hung processes) are
 excluded.
 
+## 2026-10-13: Claude stale-provider-failure regression validation
+
+Hosted check `20261013-073407319-605237` ran remotely and took 10.33s,
+with 9.95s compiling the 165k-line `jcode_app_core` test unit. Test run
+`20261013-073441261-610471` encountered a verified hosted connection reset
+(`curl: (56) Recv failure: Connection reset by peer`) and fell back locally.
+It took 71.1s, including 50.47s for the 1570-test app-core binary and 16.54s
+for `jcode_base`, to run 21 provider-control tests. The warm rerun
+`20261013-073631256-628246` took 3.2s with 466 fresh units. Large test units
+and concurrent upstream invalidation dominate the cold edit loop. No crate
+restructuring or routing change was made, and these different conditions are
+not a measured implementation speedup.
+
+## 2026-10-13: Jcode OAuth retry regression edit loop
+
+Whole-result verification follow-up: run `20261013-074413945-725744` (`justrust check` across five changed Jcode packages with `--tests`) passed in 134.51s, but automatically selected local because of recent hosted failure. `justrust show` reports 132.46s compiling, 90.99s machine-wide CPU stalls, other processes averaging 14.1 of 16 cores, up to 19 competing rustc processes, and `docs` triggering app-core rebuilds. No project restructuring was performed. Hosted provider-core run `20261013-074628834-748806` took 15.9s with 13.948s sync. Hosted TUI rejection run `20261013-074658699-755366` took 47.6s with 25.547s sync. These are observations, not a speedup claim. The corrected `credential_failure_breaker` filter encountered two hosted mid-run `No such file or directory (os error 2)` failures at 14:48:58 and 14:49:09 UTC. The hosted owner was notified. The verified-outage local rerun `20261013-074936502-779903` passed all three tests in 18.4s. Full requirement/run ledger: `/home/jeremy/.jcode/scratch/oauth-acceptance.DlQN9r/whole-result.md`.
+
+
+Hosted run `20261013-071601854-429318` spent 10.26s of 13.2s waiting for
+another Cargo build-directory lock before a 2.51s provider-core test compile.
+Coordinating one owner for sequential checks/tests avoided that lock wait in
+subsequent runs. Run `20261013-072151410-478023` then spent 16.37s compiling
+(`jcode_app_core` 6.98s, `jcode_tui` test 9.39s) to execute three tests in
+0.26s after an unrelated concurrent app-core edit. This is measured upstream
+invalidation and a large TUI test unit, not a reason to change routing or claim
+a speedup. Consider future leaf-crate extraction only with project approval.
+
+Also, TUI tests included from files such as `remote_events_reload_04.rs` are
+flattened into `tui::app::tests`. Filtering on the included filename selected
+zero tests in runs `20261013-072033291-465912` and
+`20261013-072058102-470040`. Use actual test names and verify nonzero counts.
+
+## 2026-10-13: Native MCP verification build costs
+
+Jcode MCP validation showed existing contention and large-unit costs, not a
+reason to restructure the user's project during the feature implementation.
+Hosted check `20261013-071447869-422258` took 88.4s overall, including 66.5s
+source sync and 18.6s measured Cargo/check time. Hosted base MCP tests
+`20261013-071706772-437129` took 40.0s overall, with 13.38s of build-directory
+lock wait, 19.34s compilation, and 112 passing tests in 1.10s. The later
+113-test run `20261013-072154290-478171` still waited 13.51s for the lock even
+though a local-cache hit avoided roughly 11.4s of rustc.
+
+A forced hosted CLI test at 14:38:51 UTC failed after 5.4s with
+`remote build failed mid-run: No such file or directory (os error 2)`.
+This verified hosted-path error justified the subsequent local checks, rather
+than disabling hosted builds routinely or bypassing tenant/billing controls.
+Local app-core run `20261013-074441115-730779` spent 64.10s compiling its
+165k-line test unit and finished 54 MCP tests in a 72.2s run under heavy CPU
+contention. No controlled implementation speedup is claimed across these
+machines, toolchains, or load conditions.
+
+The root Jcode CLI lives in the library target. Run
+`justrust test -p jcode --lib mcp`, not `--bin jcode mcp` (the latter matched
+zero of eight binary glue tests in `20261013-073508257-614585`). The corrected
+local library run `20261013-073940009-664079` executed 11 tests successfully
+in 14.7s. Always verify a nonzero test count before treating a filter as proof.
+
 ## Headline numbers
 
 | Repo                     | Foreground cargo calls | Agent-blocked time | p50   | p90    |
@@ -5392,6 +5450,28 @@ during tests, but rebuilding the 47k-line local crate still took 5.3s for
 check and about 12.3s in the test build. This records the remaining crate-size
 cost rather than claiming a speedup from release correctness changes.
 
+## 2026-10-13: website Trunk builds need the wasm target in the selected compiler
+
+While restyling the justrust product page, normal `trunk build` failed with
+E0463 because justrust's selected compiler did not have
+`wasm32-unknown-unknown` installed. Turning remote routing off alone did not
+help: local default `jr-ac20de5e7921` lacked that target as well. Failed
+runs: `20261013-072440930-513193` and `20261013-072656708-535682`.
+The installed system Rust 1.98.1 has the wasm standard library. The explicit,
+command-scoped workaround `JUSTRUST_REMOTE=off JUSTRUST_TOOLCHAIN=system
+trunk build --dist .trunk/hierarchy-preview` passed in 44.11s, without
+changing global routing, cache isolation, or compiler pins.
+
+Measured constituent runs: `20261013-072749747-544294` (solar, 32.42s,
+31.89s compiling, 11 dependency rebuilds, web_sys 19.1s rustc wall) and
+`20261013-072749747-544295` (website, 40.12s, 32.36s waiting for the shared
+Cargo build-directory lock, 7.59s compiling). Trunk launches both binaries
+against the same target directory, so the second build serialized. No
+speedup is claimed. Follow-up: validate requested target support before
+selecting a compiler, and investigate target-aware provisioning plus reuse
+of Trunk's two-binary build. The unrelated hosted native check and gallery
+test passed (`20261013-072347781-500391`, `20261013-072829320-550561`).
+
 ## 2026-10-13: hosted dogfooding, native cargo and upgrade-safe agents
 
 The 10x stock-local target is not achieved. Details and pinned results are in
@@ -5628,7 +5708,6 @@ Both real type-error probes failed as expected and exposed first diagnostics (si
 Cloud e857502 added explicit USwest placement only,68Node+6Python tests passed. Read-only primary probeLAX/WNAM and immutable binding/runtime equality verified. Same installed7096694 binary hashes equal: seven matched samples original->candidate noop0.673->0.731s(+9%),body1.859->1.910s(+3%),reference5.202->5.260s(+1%), all withinnoise by suitecompare. Actual ingressSJC bothepochs, not the earlierKIX/SYD.
 Candidatefa372f4c rejected; exactpriora81f280e restoredhealthy and conditional15minrollback canceled after actualhostedcheck133228254-2861734. Full own351hostedtests/lint passed,0compiled56fresh. Recovery7noop samples0.981s are not a restored-latencyclaim. All49measured+4acceptance exactrecords and raw3results/controlmetadata published, see `docs/hosted-cloud-placement-20261013.md`. No host/compiler/billing/auth changes and10x unmet.
 
-
 ### Bounded hosted provisional first errors, 2026-10-13
 
 - Public57440a9/ba5fc2d/7d4474b and private321324f shipped an opt-in, query-only, resource-bounded hosted analyzer. Same frozen7d4474b SHA, pinned Desktop snapshot and7samples per setting: first visible E0308 median2.192->1.369s,37.5% earlier with nonoverlapping ranges by `bench/suite.py compare`. Full Cargo median2.430->2.400s remains within noise. All7provisional errors confirmed by full rustc/exit101, zero early-only. Not a10x compile win or stock-local comparison.
@@ -5649,6 +5728,8 @@ Candidatefa372f4c rejected; exactpriora81f280e restoredhealthy and conditional15
 - Installed trace check20261013-145150385-3352742 reports identity54/charge225/queue67/total292ms,0residualidentitywait;8.160s sync is first new-client daemon reconnect, not compiler time. Plain subsequent check/test/lint all0compiled56fresh. Actual Desktop one-line source acceptance20261013-145211504-3355155 passes3FPS tests and restores exact backup, but12local crates also rebuilt for unrelated user changes:44.5s is not a controlled speed measurement.
 - All11exact owned validation records exported, including initial and final hosted gates. Python harness import-root and unrelated peer whitespace staging guards corrected without changing peer files. See docs/hosted-admission-client-20261013.md.10x remains unmet.
 
+
+
 ## 2026-10-13: HTTP version control does not explain rejected native-pool regression
 
 - Normally billed HTTP2/HTTP1/HTTP2 pinned no-op medians 0.959/0.832/0.841 s, seven measured plus two warmups each. Both suite comparisons within noise. All 27 actual negotiated protocols/status200/hosted exit0/three FPS passes verified; first epoch PDX-only versus later PDX/SJC confounds first pair. Keep curl defaults, no speed claim or billing/instance change.
@@ -5666,6 +5747,8 @@ Candidatefa372f4c rejected; exactpriora81f280e restoredhealthy and conditional15
 - Same frozen6c binary/native-curl-native, 11samples each workload: noop.691/.778/.709s, body1.855/1.990/1.839s, reference5.185/5.280/5.221s. Both `bench/suite.py compare` reports classify every row within noise. All99 measured actual hosted exit0, transport provenance and6 client milestones verified. No pool library or transport default restored.
 - Peer disclosed possible same-host load22:28:33-22:30:58UTC, covering11 curl reference samples. Controls explicitly flag those records rather than falsely changing original local-noise flags. Peer confirms no live deployment/host type/region/quota/binding changes during the experiment. No causal transport speed claim.
 - All121 exact own measured/warmup/recovery/plain-acceptance records preserved. First native warmups18.037/17.057s sync and final daemon restoration10.462s sync disclosed. Final installed plain check `20261013-153339304-3627414`, full360 tests `20261013-153339994-3627461` and strict all-target clippy `20261013-153342838-3627413` all hosted,0compiled56fresh. Details: `docs/hosted-native-current-20261013.md`.10x still unmet.
+
+
 
 ## 2026-10-13: build hosts moved to us-west-2; same-type warm loop within noise
 
@@ -5721,3 +5804,13 @@ gap is about the clock ratio (5.0/4.5), as expected for a serial-bound loop.
 Per dollar c8a is ~30% cheaper for ~5% more latency. Own host restored to
 m8azn. Fleet default (c7i.8xlarge) unchanged. Revisit c8a once the toolchain
 uses >8 threads productively.
+
+Desktop unblocked (jcode-desktop 8d2bca1): `origin/main` had misplaced
+lines from two commits (`panel.rs` needs_surface_update /
+set_surface_focused, `workspace.rs` todo-progress update and its sidebar
+test), test initializers missing jcode-sdk's new `pending_soft_interrupts`,
+a stale uppercase assertion, and a lockfile that `--locked` rejected
+against jcode HEAD. After the fix: `check --workspace --all-targets
+--locked` passes, 1778 workspace tests pass. Fleet run
+`fleet/logs/20261013T231926Z.log`: all 21 passes ok, including all five
+jcode-desktop shapes. Store: 10513 manifests.
