@@ -18,6 +18,9 @@ pub struct Summary {
     pub exit: i32,
     /// CPU seconds used by cargo and everything it ran.
     pub cpu_secs: f64,
+    /// A disclosed lower bound when detached workers escape wait4 accounting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_secs_note: Option<String>,
     pub ncpu: usize,
     pub phases: Phases,
     pub units: UnitStats,
@@ -596,6 +599,23 @@ pub fn build(
     procs: &[ProcRecord],
     units: &[Unit],
 ) -> Summary {
+    // Parked Cargo workers are outside wait4's child tree. These measurements
+    // overlap, so never add them. Sampled processes cover detached linkers too.
+    let sampled_cpu: f64 = procs.iter().map(|p| p.cpu_secs).sum();
+    let compiler_cpu: f64 = units.iter().map(|u| u.user + u.sys).sum();
+    let lower_bound = sampled_cpu.max(compiler_cpu);
+    let (cpu_secs, cpu_secs_note) = if lower_bound > cpu_secs {
+        (
+            lower_bound,
+            Some(if sampled_cpu >= compiler_cpu {
+                "sampled process lower bound".to_owned()
+            } else {
+                "compiler CPU lower bound".to_owned()
+            }),
+        )
+    } else {
+        (cpu_secs, None)
+    };
     let wall = (end - start).max(0.0);
     let rel = |t: f64| (t - start).clamp(0.0, wall);
 
@@ -946,6 +966,7 @@ pub fn build(
         wall,
         exit,
         cpu_secs,
+        cpu_secs_note,
         ncpu: meta.ncpu,
         phases,
         units: stats,
@@ -1220,8 +1241,12 @@ impl Summary {
         let r = &self.resources;
         let _ = writeln!(
             o,
-            "  cpu     {:.1}s total, avg {:.1}/peak {:.1} of {} cores; others used {:.1} cores{}",
+            "  cpu     {:.1}s total{}, avg {:.1}/peak {:.1} of {} cores; others used {:.1} cores{}",
             self.cpu_secs,
+            self.cpu_secs_note
+                .as_ref()
+                .map(|n| format!(" ({n})"))
+                .unwrap_or_default(),
             r.avg_build_cores,
             r.peak_build_cores,
             self.ncpu,
@@ -1507,6 +1532,55 @@ mod tests {
         assert!(footer.contains("ok: 2 tests passed"), "{footer}");
         assert!(footer.contains("2 passed, 0 failed"), "{footer}");
         assert!(footer.contains("binary timing unavailable"), "{footer}");
+    }
+
+    #[test]
+    fn detached_cpu_is_a_disclosed_lower_bound_not_double_counted() {
+        let proc = |pid, cpu_secs| ProcRecord {
+            pid,
+            cpu_secs,
+            comm: "cargo".into(),
+            cmdline: "cargo test".into(),
+            kind: "other".into(),
+            first_seen: 0.0,
+            last_seen: 2.0,
+            max_rss_mb: 0.0,
+        };
+        let procs = [proc(1, 3.0), proc(2, 2.0)];
+        let units = [Unit {
+            user: 4.0,
+            ..Default::default()
+        }];
+        let make = |waited, procs: &[ProcRecord]| {
+            build(
+                &Meta::default(),
+                GitInfo::default(),
+                0.0,
+                2.0,
+                0,
+                waited,
+                &[],
+                &[],
+                procs,
+                &units,
+            )
+        };
+        let sampled = make(0.02, &procs);
+        assert_eq!(sampled.cpu_secs, 5.0);
+        assert_eq!(sampled.resources.avg_build_cores, 2.5);
+        assert_eq!(
+            sampled.cpu_secs_note.as_deref(),
+            Some("sampled process lower bound")
+        );
+        let normal = make(7.0, &procs);
+        assert_eq!(normal.cpu_secs, 7.0);
+        assert_eq!(normal.cpu_secs_note, None);
+        let short = make(0.02, &[]);
+        assert_eq!(short.cpu_secs, 4.0);
+        assert_eq!(
+            short.cpu_secs_note.as_deref(),
+            Some("compiler CPU lower bound")
+        );
     }
 
     #[test]

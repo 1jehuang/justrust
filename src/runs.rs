@@ -186,6 +186,9 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
         s.wall, s.cpu_secs, s.resources.avg_build_cores, s.ncpu
     );
 
+    if let Some(note) = &s.cpu_secs_note {
+        let _ = writeln!(o, "CPU accounting: {note}");
+    }
     let _ = writeln!(o, "Where the wall time went");
     let p = &s.phases;
     for (label, v, note) in [
