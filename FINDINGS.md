@@ -5376,6 +5376,22 @@ for publication and live-service verification, including the boundary that
 the customer's own Mac retry is not observable here. Linux hosted builds
 still require Linux-compatible projects, not macOS-specific native targets.
 
+Alpha.16 was published at 15:06:34 UTC. All five release builds and all
+exact-tag native CI jobs passed, including Intel and Apple Silicon Mac
+integration paths. Both live Mac updater targets offered alpha.16 by
+15:09 UTC. The public installer and the exact cross-platform template
+installed the checksum-verified published Linux binary successfully, the
+latter in an isolated HOME on the live account host.
+
+The public release binary then checked an untouched tag archive on hosted:
+`20261013-081121855-923025` (12.8s client wall), full 330-test run
+`20261013-081134607-924206` (19.0s, 0 failed, 2 ignored), and warning-free
+clippy `20261013-081153578-926111` (7.7s). All three summaries are exported.
+The fresh checkout hit 66 dependency-cache artifacts during check and 47
+during tests, but rebuilding the 47k-line local crate still took 5.3s for
+check and about 12.3s in the test build. This records the remaining crate-size
+cost rather than claiming a speedup from release correctness changes.
+
 ## 2026-10-13: hosted dogfooding, native cargo and upgrade-safe agents
 
 The 10x stock-local target is not achieved. Details and pinned results are in
