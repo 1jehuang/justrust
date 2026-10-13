@@ -5164,3 +5164,9 @@ against 2714 s of server build wall (p50 3.5 s, p90 22.5 s, 66 runs over
 Left to another session: the prebuilt cost model's fixed 700 ms
 default (FINDINGS 67). A machine with no measured latency declines nearly
 every unit, so it never makes the request that would measure it.
+
+Second fleet run (`fleet/logs/20261013T090908Z.log`, with `--no-fail-fast`):
+the jcode and justrust `test --no-run` passes now complete, and the store
+has 10210 manifests. Every jcode-desktop pass still fails on the upstream
+syntax error. Only the dependency units compiled before that error get
+published.
