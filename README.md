@@ -17,10 +17,15 @@ A faster, vertically integrated Rust build toolchain optimized for agents.
 
 ---
 
-Coding agents run `cargo check` and `cargo test` hundreds of times a day and
-spend most of that time waiting on the compiler. justrust takes cargo's
-exact arguments, makes the loop faster (locally and remotely), prints only
-what an agent needs, and records where every second went.
+Your coding agents spend valuable time waiting for Rust checks, builds, and
+tests. Running those operations locally can slow down your machine, drive up
+CPU usage, temperature, and RAM consumption, and fill your disk with build
+artifacts.
+
+justrust vertically integrates and optimizes the Rust build toolchain to make
+the entire edit, check, and test loop faster. Its remote build service offloads
+compilation, test execution, and build artifact storage to our machines, so
+your agents can keep working without tying up yours.
 
 On [uv](https://github.com/astral-sh/uv) (674 units, measured 2026-10-10,
 laptop under typical multi-agent load vs a 16 vCPU build machine):
