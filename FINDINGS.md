@@ -6588,3 +6588,30 @@ source/client identities and retry provenance are in
 `bench/results/readme-uv-20261014.json` and
 `docs/readme-uv-benchmark-20261014.md`. All 214 benchmark tests, formatting and
 diff checks passed. The README Install section was also condensed.
+
+## Windows sampler cycle allocation (2026-10-14)
+
+Jcode v97 Windows x64 alpha17 aborted allocating 30,064,771,072 bytes.
+`record::tree_of` had unbounded traversal of historical parent PID links:
+cycles from Windows PID reuse append `ProcStat` forever. Its 56-byte x64
+layout times a vector growth to 2^29 entries exactly matches the allocation.
+The runner snapshot is unavailable, so this is a strongly supported diagnosis,
+not a native Windows reproduction. Added unique-PID traversal and rejected
+parent-newer-than-child edges, with synthetic cycle/reuse regression tests.
+Immediate Windows-only mitigation: `JUSTRUST_DISABLE=1` with `--local` and
+system toolchain, bypassing measurement while preserving cargo exit status.
+Details: `docs/windows-sampler-allocation-20261014.md`.
+
+Check run `20261014-032322437-1579906`, regression run
+`20261014-032341564-1584429` (2 passed), clippy run
+`20261014-032428669-1596636`, recorder test run
+`20261014-032449198-1599286` (13 passed). Hosted was attempted explicitly but
+returned HTTP 404 for `/internal/builds/charge`, falling back to Linux locally.
+No Windows execution or performance speedup is claimed. Contention and the
+large single crate dominated validation compilation (17.9s check, 46.4s test
+compile), unrelated to this correctness repair.
+Full library suite `20261014-032511105-1606621`: 380 passed, 3 ignored.
+Reinstalled with `cargo install --path . --locked` and exercised the repaired
+installed recorder on this repository's `justrust check --local`: successful
+report, 62 fresh units, zero recompilation. The five cited validation summaries
+are in `data/runs/xps14/windows-sampler-20261014.jsonl`.

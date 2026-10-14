@@ -1083,11 +1083,23 @@ fn tree_of(root: i32, all: &[procfs::ProcStat]) -> Vec<procfs::ProcStat> {
     if let Some(r) = all.iter().find(|s| s.pid == root) {
         out.push(r.clone());
     }
+    // Windows retains historical creator PIDs. Reuse can produce cycles
+    // or attach an older process to an unrelated new parent.
+    let mut seen = std::collections::HashSet::from([root]);
+    let starts: HashMap<i32, u64> = all.iter().map(|p| (p.pid, p.start_ticks)).collect();
     let mut stack = vec![root];
     while let Some(pid) = stack.pop() {
         for &i in children.get(&pid).into_iter().flatten() {
-            out.push(all[i].clone());
-            stack.push(all[i].pid);
+            let child = &all[i];
+            if starts
+                .get(&pid)
+                .is_some_and(|start| *start > child.start_ticks)
+                || !seen.insert(child.pid)
+            {
+                continue;
+            }
+            out.push(child.clone());
+            stack.push(child.pid);
         }
     }
     out
@@ -1216,6 +1228,67 @@ mod tests {
             start_ticks,
             rss_pages: 0,
         }
+    }
+
+    fn tree_stat(pid: i32, ppid: i32, start: u64) -> procfs::ProcStat {
+        procfs::ProcStat {
+            ppid,
+            ..cpu_stat(pid, start, 0)
+        }
+    }
+
+    #[test]
+    fn process_tree_cycles_and_duplicates_are_bounded() {
+        for all in [
+            vec![tree_stat(1, 1, 10)],
+            vec![tree_stat(1, 2, 10), tree_stat(2, 1, 10)],
+            vec![
+                tree_stat(1, 3, 10),
+                tree_stat(2, 1, 10),
+                tree_stat(3, 2, 10),
+            ],
+            vec![
+                tree_stat(1, 0, 10),
+                tree_stat(2, 1, 11),
+                tree_stat(2, 1, 11),
+            ],
+        ] {
+            let tree = tree_of(1, &all);
+            let pids: std::collections::HashSet<_> = tree.iter().map(|p| p.pid).collect();
+            assert_eq!(tree.len(), pids.len());
+            assert_eq!(
+                tree.len(),
+                all.iter()
+                    .map(|p| p.pid)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+            );
+        }
+        // Exact x64 OOM signature of the old unbounded Vec<ProcStat>.
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            std::mem::size_of::<procfs::ProcStat>() as u64 * (1 << 29),
+            30_064_771_072
+        );
+    }
+
+    #[test]
+    fn process_tree_rejects_reused_parent_and_preserves_valid_descendants() {
+        let all = [
+            tree_stat(1, 0, 20),
+            tree_stat(2, 1, 10),
+            tree_stat(3, 2, 11),
+            tree_stat(4, 1, 20),
+            tree_stat(5, 4, 21),
+            tree_stat(6, 0, 1),
+        ];
+        assert_eq!(
+            tree_of(1, &all).iter().map(|p| p.pid).collect::<Vec<_>>(),
+            [1, 4, 5]
+        );
+        assert!(tree_of(99, &all).is_empty());
+        // A root may exit between enumeration and reading process stats.
+        assert_eq!(tree_of(1, &[tree_stat(2, 1, 10)]).len(), 1);
     }
 
     #[test]
