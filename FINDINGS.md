@@ -6046,3 +6046,26 @@ JR coverage or an independent cold-cache experiment. The new pinned runner
 explicitly disables public reads. Native script portability claims in
 `docs/c-sysroot.md` are corrected: compiler-only identity is insufficient,
 and the tested rootfs candidate remains non-authorizing.
+
+## 2026-10-14: target-named source modules survive bulk source sync
+
+Hosted Cargo integration exposed a mismatch: the source scanner preserved
+Git-listed `tests/testsuite/*/target/` modules, but the initial/bulk rsync still
+excluded every directory named `target`. Its mirror could therefore be missing
+files that the manifest incorrectly considered uploaded. A bounded, hash-checked
+manual upload unblocked the experimental Cargo tests while the client was fixed.
+
+The correction allows exact Git-listed source files and symlinks plus their
+necessary directories, not whole target trees. Sender-only hiding keeps ignored
+untracked files out. Existing receiver protection retains root and nested build
+caches, and the 8 MiB per-file cap still applies. The actual rsync regression
+also exercises escaped wildcard/backslash paths, stale-source deletion and a
+same-size/same-mtime checksum edit.
+
+Forced-hosted check `20261013-202127298-948860` passed. The real rsync regression
+passed in `20261013-202136435-948825`; full acceptance
+`20261013-202306617-955157` passed 382 tests with three ignored; strict all-target
+lint `20261013-202325996-955156` passed without warnings. These four exact
+path-redacted exports are under `data/runs/hosted-west-syncfix/`. This is compiled
+source correctness evidence, not proof of a newly installed client or a speedup.
+Installation and new-root end-user acceptance are a separate rollout gate.

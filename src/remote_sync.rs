@@ -192,6 +192,94 @@ fn walk(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+// Git-listed target directories can contain source, not build output. Keep
+// these exceptions exact: including target/*** would expose ignored files.
+fn target_source_filters(root: &Path) -> Vec<String> {
+    let Ok(listed) = Command::new("git")
+        .args(["ls-files", "-co", "--exclude-standard", "-z"])
+        .current_dir(root)
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !listed.status.success() {
+        return Vec::new();
+    }
+    let mut files = BTreeSet::new();
+    let mut directories = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+    for name in listed
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+    {
+        let rel = PathBuf::from(String::from_utf8_lossy(name).into_owned());
+        if !rel
+            .parent()
+            .is_some_and(|parent| parent.components().any(|c| c.as_os_str() == "target"))
+            || skip_listed(root, &rel)
+        {
+            continue;
+        }
+        let mut parent = rel.parent();
+        while let Some(dir) = parent {
+            if !dir.components().any(|c| c.as_os_str() == "target") {
+                break;
+            }
+            directories.insert(dir.to_path_buf());
+            if dir.file_name().is_some_and(|name| name == "target") {
+                targets.insert(dir.to_path_buf());
+            }
+            parent = dir.parent();
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(root.join(&rel)) else {
+            continue;
+        };
+        if !(metadata.is_file() || metadata.file_type().is_symlink()) || metadata.len() > MAX_FILE {
+            continue;
+        }
+        files.insert(rel);
+    }
+    let literal = |path: &Path| {
+        let mut pattern = String::from("/");
+        for (i, component) in path.components().enumerate() {
+            if i > 0 {
+                pattern.push('/');
+            }
+            let component = component.as_os_str().to_string_lossy();
+            if component == "target" {
+                // Ensure wildcard parsing is active, including escaped backslashes.
+                pattern.push_str("[t]arget");
+            } else {
+                for c in component.chars() {
+                    if matches!(c, '\\' | '*' | '?' | '[' | ']') {
+                        pattern.push('\\');
+                    }
+                    pattern.push(c);
+                }
+            }
+        }
+        pattern
+    };
+    directories
+        .iter()
+        .map(|dir| format!("--include={}/", literal(dir)))
+        .chain(
+            files
+                .iter()
+                .map(|file| format!("--include={}", literal(file))),
+        )
+        // Sender-only hiding retains normal deletion of stale source entries.
+        // The later receiver target protection still keeps nested build caches.
+        .chain(
+            targets
+                .iter()
+                .map(|dir| format!("--filter=H {}/***", literal(dir))),
+        )
+        .collect()
+}
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Diff {
     pub changed: Vec<PathBuf>,
@@ -503,6 +591,7 @@ impl Mirror {
         let src = format!("{}/", root.display());
         let remote = self.remote(root);
         let mut c = Command::new("rsync");
+        c.args(target_source_filters(root));
         c.args([
             "-a",
             "--delete",
@@ -575,6 +664,141 @@ mod tests {
         assert!(skip_listed(&d, Path::new(".git/config")));
         assert!(!skip_listed(&d, Path::new("src/target.rs")));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rsync_keeps_target_sources_without_uploading_ignored_files_or_build_caches() {
+        let d = std::env::temp_dir().join(format!("jr-target-source-rsync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let root = d.join("source");
+        let rel = Path::new("tests/a[?]\\*/target");
+        std::fs::create_dir_all(root.join(rel).join("out")).unwrap();
+        std::fs::create_dir_all(root.join(rel).join("nested/target")).unwrap();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(root.join(".gitignore"), "target/\n*.secret\n").unwrap();
+        std::fs::write(root.join("normal.rs"), "normal source").unwrap();
+        std::fs::write(root.join(rel).join("mod.rs"), "first").unwrap();
+        std::fs::write(root.join(rel).join("out/Cargo.toml"), "source fixture").unwrap();
+        std::os::unix::fs::symlink("mod.rs", root.join(rel).join("in")).unwrap();
+        std::fs::write(
+            root.join(rel).join("private.rs"),
+            "ignored by its target parent",
+        )
+        .unwrap();
+        std::fs::write(root.join(rel).join("password.secret"), "ignored secret").unwrap();
+        std::fs::write(root.join("target/CACHEDIR.TAG"), "cargo build directory").unwrap();
+        std::fs::write(root.join("target/debug/local"), "do not upload").unwrap();
+        std::fs::write(
+            root.join(rel).join("nested/target/CACHEDIR.TAG"),
+            "cargo build directory",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(rel).join("nested/target/local.rs"),
+            "even tracked build output is not source",
+        )
+        .unwrap();
+        let huge = root.join(rel).join("huge.rs");
+        std::fs::File::create(&huge)
+            .unwrap()
+            .set_len(MAX_FILE + 1)
+            .unwrap();
+        for path in [
+            rel.join("mod.rs"),
+            rel.join("out/Cargo.toml"),
+            rel.join("in"),
+            rel.join("huge.rs"),
+            rel.join("nested/target/local.rs"),
+        ] {
+            git(&["add", "-f", "--", path.to_str().unwrap()]);
+        }
+        let mirror = Mirror {
+            target: None,
+            prefix: d.join("machine").display().to_string(),
+        };
+        let dst = PathBuf::from(mirror.remote(&root));
+        std::fs::create_dir_all(dst.join("target/debug")).unwrap();
+        std::fs::create_dir_all(dst.join(rel).join("nested/target")).unwrap();
+        std::fs::write(dst.join("target/debug/warm"), "root cache stays warm").unwrap();
+        std::fs::write(
+            dst.join(rel).join("nested/target/warm"),
+            "nested cache stays warm",
+        )
+        .unwrap();
+        std::fs::write(dst.join(rel).join("stale.rs"), "stale source").unwrap();
+
+        mirror.rsync(&root).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dst.join(rel).join("mod.rs")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join(rel).join("out/Cargo.toml")).unwrap(),
+            "source fixture"
+        );
+        assert_eq!(
+            std::fs::read_link(dst.join(rel).join("in")).unwrap(),
+            Path::new("mod.rs")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join("normal.rs")).unwrap(),
+            "normal source"
+        );
+        for absent in [
+            "private.rs",
+            "password.secret",
+            "huge.rs",
+            "stale.rs",
+            "nested/target/local.rs",
+        ] {
+            assert!(
+                !dst.join(rel).join(absent).exists(),
+                "unexpected transfer: {absent}"
+            );
+        }
+        assert!(!dst.join("target/debug/local").exists());
+        assert_eq!(
+            std::fs::read_to_string(dst.join("target/debug/warm")).unwrap(),
+            "root cache stays warm"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join(rel).join("nested/target/warm")).unwrap(),
+            "nested cache stays warm"
+        );
+
+        let source = root.join(rel).join("mod.rs");
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+        std::fs::write(&source, "NEXT!").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        mirror.rsync_with(&root, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dst.join(rel).join("mod.rs")).unwrap(),
+            "NEXT!"
+        );
+        std::fs::remove_file(&source).unwrap();
+        mirror.rsync(&root).unwrap();
+        assert!(
+            !dst.join(rel).join("mod.rs").exists(),
+            "deleted tracked source survived bulk sync"
+        );
+        assert!(dst.join("target/debug/warm").is_file());
+        assert!(dst.join(rel).join("nested/target/warm").is_file());
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     /// The real case: cargo's testsuite fixtures under `.../target/`.
