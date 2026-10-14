@@ -548,6 +548,28 @@ fn r2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PersistenceFailure {
+    Log,
+    Summary,
+}
+
+/// Fixed-label persistence evidence only. Never accepts an error chain or path.
+pub(crate) fn record_persistence_failure(id: &str, detail: PersistenceFailure, exit: i32) {
+    record("build_failure", persistence_failure_data(id, detail, exit));
+    maybe_spawn_background();
+}
+
+fn persistence_failure_data(id: &str, detail: PersistenceFailure, exit: i32) -> Value {
+    let mut data = json!({"schema_version": 2, "stage": "recording_persist",
+        "detail": match detail { PersistenceFailure::Log => "log", PersistenceFailure::Summary => "summary" },
+        "exit": exit});
+    if valid_run_id(id) {
+        data["run_id"] = json!(id);
+    }
+    data
+}
+
 /// The run event for a finished build: numbers and fixed labels only.
 pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
     let findings = crate::findings::analyze(s);
@@ -1172,6 +1194,24 @@ mod tests {
         assert!(data.as_object().unwrap().len() <= 80);
     }
     use super::*;
+
+    #[test]
+    fn persistence_failures_are_bounded_and_validate_run_ids() {
+        for (detail, expected) in [
+            (PersistenceFailure::Log, "log"),
+            (PersistenceFailure::Summary, "summary"),
+        ] {
+            let data = persistence_failure_data("20261014-112403320-1234", detail, 101);
+            assert_eq!(data["stage"], "recording_persist");
+            assert_eq!(data["detail"], expected);
+            assert_eq!(data["exit"], 101);
+            assert_eq!(data["schema_version"], 2);
+            assert_eq!(data["run_id"], "20261014-112403320-1234");
+            let invalid = persistence_failure_data("/private/path?token=secret", detail, 0);
+            assert!(invalid.get("run_id").is_none());
+            assert!(!invalid.to_string().contains("secret"));
+        }
+    }
 
     #[test]
     fn lifecycle_contract_is_closed_and_private() {
