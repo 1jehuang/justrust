@@ -40,3 +40,32 @@ The README instead uses the separately completed [three-round pinned uv
 comparison](readme-uv-benchmark-20261014.md), explicitly scoped to those workloads.
 Its ratios divide the unrounded stock median by each unrounded justrust median.
 Warm-edit sample ranges overlap, so those ratios do not prove a stable ranking.
+
+## End-user acceptance checks, 11:05 UTC
+
+The live GitHub README was opened in Firefox after publication. Its rendered
+DOM contained exactly one benchmark table, with the three requested stacks and
+all six stock-relative factors. The first two rows displayed 81.2/34.5/14.3 s
+and 85.8/33.3/15.2 s, followed by the warm-edit row. The table followed the single
+intro paragraph. The only README image was the project icon, not a benchmark
+SVG. The warm-edit overlap caveat was visible, and the methodology link opened
+the published document successfully.
+
+The installed public CLI was exercised against the real pinned uv checkout:
+
+```sh
+justrust check --local -p uv-resolver --locked
+justrust check --remote -p uv-resolver --locked
+```
+
+The local command succeeded in 16.1 s, with 488 dependency-cache hits and 52
+local units. Recording: `20261014-040524708-2378822`.
+The requested remote command encountered API HTTP 404 (`not_found`) for
+`POST /internal/builds/charge`, explicitly fell back locally, and returned a
+successful no-op local check in 0.3 s. Recording:
+`20261014-040541589-2383230`. Its exit zero is **not** a hosted acceptance pass.
+These are functional acceptance observations, not matched speed measurements,
+and they do not replace the earlier valid uv benchmark cells. Current hosted
+CLI acceptance remains externally blocked by the admission API route.
+The [two exported acceptance recordings](../data/runs/xps14/readme-cli-acceptance-20261014.jsonl)
+retain the observed build results.
