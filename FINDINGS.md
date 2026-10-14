@@ -1,5 +1,29 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: diagnostic telemetry covers pre-result failures
+
+Local recorder setup failures, required-toolchain refusals, and cargo exec
+failures now emit bounded `build_failure` events without raw error chains.
+Remote setup/admission/transport/artifact/summary failures also retain their
+stage, elapsed time and any known exit code without changing the original
+Result, rerun, billing, or build-exit semantics.
+
+Actual installed-binary acceptance on an isolated local Rust workspace passed:
+`20261014-040142704-2318604` compiled the fixture, an unrecorded check reported
+`Fresh`, and `20261014-040143226-2318732` compiled zero units. A required system
+toolchain refusal preserved exit 1 and queued exactly one `toolchain_required`
+event. `telemetry off` removed unsent fixture events, and the subsequent check
+`20261014-040143596-2318864` queued no telemetry. The three summaries are exported
+under `data/runs/xps14-telemetry-acceptance/`. Local routing was intentional for
+this artifact-sharing and opt-out acceptance, not a hosted-build substitute.
+
+The focused recorder privacy test and ten remote tests passed, as did check and
+warning-free all-target clippy. Plain hosted validation encountered a live
+backend 404 for `POST /internal/builds/charge` and correctly fell back locally.
+Hosted acceptance must not be claimed until that service route is restored.
+This is correctness/coverage work, not a compile-speedup claim.
+
+
 ## 2026-10-14: Jcode custom search configuration rebuild cascade
 
 Hosted run `20261013-235133714-2340696` spent 24.8s in compilation/testing
