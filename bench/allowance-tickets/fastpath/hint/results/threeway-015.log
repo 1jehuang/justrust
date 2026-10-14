@@ -1,0 +1,408 @@
+round 1/15 disabled 0 original: 6 samples, 0 failures
+round 1/15 disabled 1 fast: 6 samples, 0 failures
+round 1/15 disabled 2 hint: 6 samples, 0 failures
+round 1/15 disabled 3 hint: 6 samples, 0 failures
+round 1/15 disabled 4 fast: 6 samples, 0 failures
+round 1/15 disabled 5 original: 6 samples, 0 failures
+round 1/15 enabled 0 original: 6 samples, 0 failures
+round 1/15 enabled 1 fast: 6 samples, 0 failures
+round 1/15 enabled 2 hint: 6 samples, 0 failures
+round 1/15 enabled 3 hint: 6 samples, 0 failures
+round 1/15 enabled 4 fast: 6 samples, 0 failures
+round 1/15 enabled 5 original: 6 samples, 0 failures
+round 2/15 enabled 0 original: 6 samples, 0 failures
+round 2/15 enabled 1 hint: 6 samples, 0 failures
+round 2/15 enabled 2 fast: 6 samples, 0 failures
+round 2/15 enabled 3 fast: 6 samples, 0 failures
+round 2/15 enabled 4 hint: 6 samples, 0 failures
+round 2/15 enabled 5 original: 6 samples, 0 failures
+round 2/15 disabled 0 original: 6 samples, 0 failures
+round 2/15 disabled 1 hint: 6 samples, 0 failures
+round 2/15 disabled 2 fast: 6 samples, 0 failures
+round 2/15 disabled 3 fast: 6 samples, 0 failures
+round 2/15 disabled 4 hint: 6 samples, 0 failures
+round 2/15 disabled 5 original: 6 samples, 0 failures
+round 3/15 disabled 0 hint: 6 samples, 0 failures
+round 3/15 disabled 1 original: 6 samples, 0 failures
+round 3/15 disabled 2 fast: 6 samples, 0 failures
+round 3/15 disabled 3 fast: 6 samples, 0 failures
+round 3/15 disabled 4 original: 6 samples, 0 failures
+round 3/15 disabled 5 hint: 6 samples, 0 failures
+round 3/15 enabled 0 hint: 6 samples, 0 failures
+round 3/15 enabled 1 original: 6 samples, 0 failures
+round 3/15 enabled 2 fast: 6 samples, 0 failures
+round 3/15 enabled 3 fast: 6 samples, 0 failures
+round 3/15 enabled 4 original: 6 samples, 0 failures
+round 3/15 enabled 5 hint: 6 samples, 0 failures
+round 4/15 enabled 0 hint: 6 samples, 0 failures
+round 4/15 enabled 1 fast: 6 samples, 0 failures
+round 4/15 enabled 2 original: 6 samples, 0 failures
+round 4/15 enabled 3 original: 6 samples, 0 failures
+round 4/15 enabled 4 fast: 6 samples, 0 failures
+round 4/15 enabled 5 hint: 6 samples, 0 failures
+round 4/15 disabled 0 hint: 6 samples, 0 failures
+round 4/15 disabled 1 fast: 6 samples, 0 failures
+round 4/15 disabled 2 original: 6 samples, 0 failures
+round 4/15 disabled 3 original: 6 samples, 0 failures
+round 4/15 disabled 4 fast: 6 samples, 0 failures
+round 4/15 disabled 5 hint: 6 samples, 0 failures
+round 5/15 disabled 0 fast: 6 samples, 0 failures
+round 5/15 disabled 1 hint: 6 samples, 0 failures
+round 5/15 disabled 2 original: 6 samples, 0 failures
+round 5/15 disabled 3 original: 6 samples, 0 failures
+round 5/15 disabled 4 hint: 6 samples, 0 failures
+round 5/15 disabled 5 fast: 6 samples, 0 failures
+round 5/15 enabled 0 fast: 6 samples, 0 failures
+round 5/15 enabled 1 hint: 6 samples, 0 failures
+round 5/15 enabled 2 original: 6 samples, 0 failures
+round 5/15 enabled 3 original: 6 samples, 0 failures
+round 5/15 enabled 4 hint: 6 samples, 0 failures
+round 5/15 enabled 5 fast: 6 samples, 0 failures
+round 6/15 enabled 0 fast: 6 samples, 0 failures
+round 6/15 enabled 1 original: 6 samples, 0 failures
+round 6/15 enabled 2 hint: 6 samples, 0 failures
+round 6/15 enabled 3 hint: 6 samples, 0 failures
+round 6/15 enabled 4 original: 6 samples, 0 failures
+round 6/15 enabled 5 fast: 6 samples, 0 failures
+round 6/15 disabled 0 fast: 6 samples, 0 failures
+round 6/15 disabled 1 original: 6 samples, 0 failures
+round 6/15 disabled 2 hint: 6 samples, 0 failures
+round 6/15 disabled 3 hint: 6 samples, 0 failures
+round 6/15 disabled 4 original: 6 samples, 0 failures
+round 6/15 disabled 5 fast: 6 samples, 0 failures
+round 7/15 disabled 0 original: 6 samples, 0 failures
+round 7/15 disabled 1 fast: 6 samples, 0 failures
+round 7/15 disabled 2 hint: 6 samples, 0 failures
+round 7/15 disabled 3 hint: 6 samples, 0 failures
+round 7/15 disabled 4 fast: 6 samples, 0 failures
+round 7/15 disabled 5 original: 6 samples, 0 failures
+round 7/15 enabled 0 original: 6 samples, 0 failures
+round 7/15 enabled 1 fast: 6 samples, 0 failures
+round 7/15 enabled 2 hint: 6 samples, 0 failures
+round 7/15 enabled 3 hint: 6 samples, 0 failures
+round 7/15 enabled 4 fast: 6 samples, 0 failures
+round 7/15 enabled 5 original: 6 samples, 0 failures
+round 8/15 enabled 0 original: 6 samples, 0 failures
+round 8/15 enabled 1 hint: 6 samples, 0 failures
+round 8/15 enabled 2 fast: 6 samples, 0 failures
+round 8/15 enabled 3 fast: 6 samples, 0 failures
+round 8/15 enabled 4 hint: 6 samples, 0 failures
+round 8/15 enabled 5 original: 6 samples, 0 failures
+round 8/15 disabled 0 original: 6 samples, 0 failures
+round 8/15 disabled 1 hint: 6 samples, 0 failures
+round 8/15 disabled 2 fast: 6 samples, 0 failures
+round 8/15 disabled 3 fast: 6 samples, 0 failures
+round 8/15 disabled 4 hint: 6 samples, 0 failures
+round 8/15 disabled 5 original: 6 samples, 0 failures
+round 9/15 disabled 0 hint: 6 samples, 0 failures
+round 9/15 disabled 1 original: 6 samples, 0 failures
+round 9/15 disabled 2 fast: 6 samples, 0 failures
+round 9/15 disabled 3 fast: 6 samples, 0 failures
+round 9/15 disabled 4 original: 6 samples, 0 failures
+round 9/15 disabled 5 hint: 6 samples, 0 failures
+round 9/15 enabled 0 hint: 6 samples, 0 failures
+round 9/15 enabled 1 original: 6 samples, 0 failures
+round 9/15 enabled 2 fast: 6 samples, 0 failures
+round 9/15 enabled 3 fast: 6 samples, 0 failures
+round 9/15 enabled 4 original: 6 samples, 0 failures
+round 9/15 enabled 5 hint: 6 samples, 0 failures
+round 10/15 enabled 0 hint: 6 samples, 0 failures
+round 10/15 enabled 1 fast: 6 samples, 0 failures
+round 10/15 enabled 2 original: 6 samples, 0 failures
+round 10/15 enabled 3 original: 6 samples, 0 failures
+round 10/15 enabled 4 fast: 6 samples, 0 failures
+round 10/15 enabled 5 hint: 6 samples, 0 failures
+round 10/15 disabled 0 hint: 6 samples, 0 failures
+round 10/15 disabled 1 fast: 6 samples, 0 failures
+round 10/15 disabled 2 original: 6 samples, 0 failures
+round 10/15 disabled 3 original: 6 samples, 0 failures
+round 10/15 disabled 4 fast: 6 samples, 0 failures
+round 10/15 disabled 5 hint: 6 samples, 0 failures
+round 11/15 disabled 0 fast: 6 samples, 0 failures
+round 11/15 disabled 1 hint: 6 samples, 0 failures
+round 11/15 disabled 2 original: 6 samples, 0 failures
+round 11/15 disabled 3 original: 6 samples, 0 failures
+round 11/15 disabled 4 hint: 6 samples, 0 failures
+round 11/15 disabled 5 fast: 6 samples, 0 failures
+round 11/15 enabled 0 fast: 6 samples, 0 failures
+round 11/15 enabled 1 hint: 6 samples, 0 failures
+round 11/15 enabled 2 original: 6 samples, 0 failures
+round 11/15 enabled 3 original: 6 samples, 0 failures
+round 11/15 enabled 4 hint: 6 samples, 0 failures
+round 11/15 enabled 5 fast: 6 samples, 0 failures
+round 12/15 enabled 0 fast: 6 samples, 0 failures
+round 12/15 enabled 1 original: 6 samples, 0 failures
+round 12/15 enabled 2 hint: 6 samples, 0 failures
+round 12/15 enabled 3 hint: 6 samples, 0 failures
+round 12/15 enabled 4 original: 6 samples, 0 failures
+round 12/15 enabled 5 fast: 6 samples, 0 failures
+round 12/15 disabled 0 fast: 6 samples, 0 failures
+round 12/15 disabled 1 original: 6 samples, 0 failures
+round 12/15 disabled 2 hint: 6 samples, 0 failures
+round 12/15 disabled 3 hint: 6 samples, 0 failures
+round 12/15 disabled 4 original: 6 samples, 0 failures
+round 12/15 disabled 5 fast: 6 samples, 0 failures
+round 13/15 disabled 0 original: 6 samples, 0 failures
+round 13/15 disabled 1 fast: 6 samples, 0 failures
+round 13/15 disabled 2 hint: 6 samples, 0 failures
+round 13/15 disabled 3 hint: 6 samples, 0 failures
+round 13/15 disabled 4 fast: 6 samples, 0 failures
+round 13/15 disabled 5 original: 6 samples, 0 failures
+round 13/15 enabled 0 original: 6 samples, 0 failures
+round 13/15 enabled 1 fast: 6 samples, 0 failures
+round 13/15 enabled 2 hint: 6 samples, 0 failures
+round 13/15 enabled 3 hint: 6 samples, 0 failures
+round 13/15 enabled 4 fast: 6 samples, 0 failures
+round 13/15 enabled 5 original: 6 samples, 0 failures
+round 14/15 enabled 0 original: 6 samples, 0 failures
+round 14/15 enabled 1 hint: 6 samples, 0 failures
+round 14/15 enabled 2 fast: 6 samples, 0 failures
+round 14/15 enabled 3 fast: 6 samples, 0 failures
+round 14/15 enabled 4 hint: 6 samples, 0 failures
+round 14/15 enabled 5 original: 6 samples, 0 failures
+round 14/15 disabled 0 original: 6 samples, 0 failures
+round 14/15 disabled 1 hint: 6 samples, 0 failures
+round 14/15 disabled 2 fast: 6 samples, 0 failures
+round 14/15 disabled 3 fast: 6 samples, 0 failures
+round 14/15 disabled 4 hint: 6 samples, 0 failures
+round 14/15 disabled 5 original: 6 samples, 0 failures
+round 15/15 disabled 0 hint: 6 samples, 0 failures
+round 15/15 disabled 1 original: 6 samples, 0 failures
+round 15/15 disabled 2 fast: 6 samples, 0 failures
+round 15/15 disabled 3 fast: 6 samples, 0 failures
+round 15/15 disabled 4 original: 6 samples, 0 failures
+round 15/15 disabled 5 hint: 6 samples, 0 failures
+round 15/15 enabled 0 hint: 6 samples, 0 failures
+round 15/15 enabled 1 original: 6 samples, 0 failures
+round 15/15 enabled 2 fast: 6 samples, 0 failures
+round 15/15 enabled 3 fast: 6 samples, 0 failures
+round 15/15 enabled 4 original: 6 samples, 0 failures
+round 15/15 enabled 5 hint: 6 samples, 0 failures
+{
+  "summary": {
+    "original-disabled": {
+      "one": {
+        "samples": 30,
+        "min_ns": 216670014,
+        "median_ns": 274841013.0,
+        "max_ns": 498339176,
+        "median_pairs_per_second": 291083.10720521165
+      },
+      "multi": {
+        "samples": 30,
+        "min_ns": 118586961,
+        "median_ns": 177024627.0,
+        "max_ns": 313649303,
+        "median_pairs_per_second": 451915.960525721
+      },
+      "immediate": {
+        "samples": 30,
+        "min_ns": 839492,
+        "median_ns": 1073450.5,
+        "max_ns": 1610673,
+        "median_pairs_per_second": 9315755.609188408
+      },
+      "pending-one": {
+        "samples": 30,
+        "min_ns": 12808972,
+        "median_ns": 20951720.5,
+        "max_ns": 53799751,
+        "median_pairs_per_second": 76402.64802663893
+      },
+      "pending-multi": {
+        "samples": 30,
+        "min_ns": 10816488,
+        "median_ns": 15925952.5,
+        "max_ns": 126118477,
+        "median_pairs_per_second": 100473.77848192462
+      }
+    },
+    "original-enabled": {
+      "one": {
+        "samples": 30,
+        "min_ns": 197296640,
+        "median_ns": 274421025.0,
+        "max_ns": 450116226,
+        "median_pairs_per_second": 291522.965183503
+      },
+      "multi": {
+        "samples": 30,
+        "min_ns": 128102264,
+        "median_ns": 185876300.0,
+        "max_ns": 253040753,
+        "median_pairs_per_second": 430396.8227301387
+      },
+      "immediate": {
+        "samples": 30,
+        "min_ns": 952547,
+        "median_ns": 1205255.5,
+        "max_ns": 1670037,
+        "median_pairs_per_second": 8297000.366251971
+      },
+      "pending-one": {
+        "samples": 30,
+        "min_ns": 25032231,
+        "median_ns": 37331013.0,
+        "max_ns": 57579912,
+        "median_pairs_per_second": 42864.29023478402
+      },
+      "pending-multi": {
+        "samples": 30,
+        "min_ns": 16507634,
+        "median_ns": 24316450.5,
+        "max_ns": 32995523,
+        "median_pairs_per_second": 65819.60361951255
+      }
+    },
+    "fast-disabled": {
+      "one": {
+        "samples": 30,
+        "min_ns": 211241877,
+        "median_ns": 288706222.5,
+        "max_ns": 582498977,
+        "median_pairs_per_second": 277112.1834216702
+      },
+      "multi": {
+        "samples": 30,
+        "min_ns": 158410010,
+        "median_ns": 190520716.0,
+        "max_ns": 527150981,
+        "median_pairs_per_second": 419907.54275957705
+      },
+      "immediate": {
+        "samples": 30,
+        "min_ns": 212667,
+        "median_ns": 273216.5,
+        "max_ns": 829113,
+        "median_pairs_per_second": 36601010.68739089
+      },
+      "pending-one": {
+        "samples": 30,
+        "min_ns": 13741775,
+        "median_ns": 21442924.5,
+        "max_ns": 218850990,
+        "median_pairs_per_second": 74617.23620993481
+      },
+      "pending-multi": {
+        "samples": 30,
+        "min_ns": 12814835,
+        "median_ns": 16283986.5,
+        "max_ns": 70141727,
+        "median_pairs_per_second": 98279.35919193111
+      }
+    },
+    "fast-enabled": {
+      "one": {
+        "samples": 30,
+        "min_ns": 194705498,
+        "median_ns": 280020775.5,
+        "max_ns": 645637313,
+        "median_pairs_per_second": 285699.1571879155
+      },
+      "multi": {
+        "samples": 30,
+        "min_ns": 153267497,
+        "median_ns": 204724416.0,
+        "max_ns": 407556438,
+        "median_pairs_per_second": 390770.9333068171
+      },
+      "immediate": {
+        "samples": 30,
+        "min_ns": 280033,
+        "median_ns": 359494.5,
+        "max_ns": 496321,
+        "median_pairs_per_second": 27820225.77316309
+      },
+      "pending-one": {
+        "samples": 30,
+        "min_ns": 28071160,
+        "median_ns": 39665145.0,
+        "max_ns": 53415659,
+        "median_pairs_per_second": 40337.826802565556
+      },
+      "pending-multi": {
+        "samples": 30,
+        "min_ns": 15253840,
+        "median_ns": 23561635.0,
+        "max_ns": 38508639,
+        "median_pairs_per_second": 67908.17528216059
+      }
+    },
+    "hint-disabled": {
+      "one": {
+        "samples": 30,
+        "min_ns": 203863408,
+        "median_ns": 273728690.0,
+        "max_ns": 926321426,
+        "median_pairs_per_second": 292260.42534793494
+      },
+      "multi": {
+        "samples": 30,
+        "min_ns": 128871463,
+        "median_ns": 170861729.0,
+        "max_ns": 414293946,
+        "median_pairs_per_second": 468222.4274089986
+      },
+      "immediate": {
+        "samples": 30,
+        "min_ns": 260177,
+        "median_ns": 323714.0,
+        "max_ns": 800711,
+        "median_pairs_per_second": 30891465.999090668
+      },
+      "pending-one": {
+        "samples": 30,
+        "min_ns": 15545818,
+        "median_ns": 21711507.0,
+        "max_ns": 47568905,
+        "median_pairs_per_second": 73695.37169510749
+      },
+      "pending-multi": {
+        "samples": 30,
+        "min_ns": 10345719,
+        "median_ns": 15828140.0,
+        "max_ns": 87519947,
+        "median_pairs_per_second": 101108.0414823076
+      }
+    },
+    "hint-enabled": {
+      "one": {
+        "samples": 30,
+        "min_ns": 190047180,
+        "median_ns": 280244090.0,
+        "max_ns": 377406733,
+        "median_pairs_per_second": 285471.1050899674
+      },
+      "multi": {
+        "samples": 30,
+        "min_ns": 131562443,
+        "median_ns": 176426170.0,
+        "max_ns": 233663700,
+        "median_pairs_per_second": 453471.3537721148
+      },
+      "immediate": {
+        "samples": 30,
+        "min_ns": 323206,
+        "median_ns": 398261.0,
+        "max_ns": 491995,
+        "median_pairs_per_second": 25109741.4262952
+      },
+      "pending-one": {
+        "samples": 30,
+        "min_ns": 25196467,
+        "median_ns": 38414607.5,
+        "max_ns": 49719234,
+        "median_pairs_per_second": 41650.84663472722
+      },
+      "pending-multi": {
+        "samples": 30,
+        "min_ns": 16997030,
+        "median_ns": 22966841.0,
+        "max_ns": 34232926,
+        "median_pairs_per_second": 69666.8512472819
+      }
+    }
+  },
+  "failures": [],
+  "out": "/home/jeremy/justrust/bench/allowance-tickets/fastpath/hint/results/threeway-015.json"
+}

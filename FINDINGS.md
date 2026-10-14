@@ -7145,3 +7145,30 @@ The extra initial State lock on the contended path motivates a separately
 measured advisory-idle-hint alternative. Correct native predicates remain the
 only admission authority. Full pipeline/resource mapping, fairness and general
 compile-speed claims are still unsupported.
+
+## 2026-10-14: advisory hint preserves native authority and lowers idle fixture cost
+
+The `f3849e80` unwired TicketedProxy uses an advisory Relaxed idle hint only to
+select whether to attempt the slot-free path. The owning State lock still
+checks every grant. Forced stale-true and stale-false tests preserve admission,
+registration and conservation. Actual compiler/std/proc_macro rebuild and all
+nine native compatibility cases passed in task `326345s2gi`, followed by 136
+native crate tests and five doctests. Those compiler cases still exercise the
+legacy frontend, not TicketedProxy frontend or query/resource integration.
+
+The matched three-way production fixture retained 1,080 samples in 180 batches.
+Idle 10,000-pair medians were 1.073451/0.273216/0.323714 ms with event rows off
+and 1.205256/0.359494/0.398261 ms on for original/extra-lock/hint respectively.
+Hint beat the original idle path in all 15 paired blocks per mode, but was
+slower than the extra-lock candidate in 13/15 off and 14/15 on blocks. Natural
+multi-token hint/extra-lock paired ratios were 0.9273 off and 0.9216 on. Against
+the original, the corresponding ratios were 0.9966 and 1.0186, so lower aggregate
+medians do not establish a robust multi-token win over the original. One-token
+and forced-pending tradeoffs remain explicit in the retained raw evidence.
+
+Hosted full run `20261014-140406450-1639310` reported 559 passed after an isolated
+retry of an existing parallel ETXTBSY bundle test. A separate deliberate rerun
+`20261014-140447126-1646208` passed that test. Check and strict all-target lint
+also passed. This supports only a targeted idle-path improvement in the unwired
+prototype. Legacy default, full resource mapping and general compile-speed
+promotion remain unchanged or unsupported.

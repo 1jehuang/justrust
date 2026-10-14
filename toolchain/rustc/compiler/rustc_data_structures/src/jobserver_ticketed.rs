@@ -2,6 +2,7 @@
 //! Sources name release operations, not holders or physical tokens.
 use super::{Client, HelperThread, client};
 use parking_lot::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,10 +139,16 @@ pub struct TicketedProxy {
     client: Client,
     helper: OnceLock<HelperThread>,
     state: Arc<Mutex<State>>,
+    // Selects whether to try the slot-free path, never authorizes a grant.
+    // Relaxed is sufficient: State protects every actual admission predicate.
+    // A stale false misses an optimization, a stale true merely takes a lock.
+    idle_hint: AtomicBool,
     #[cfg(test)]
     pending_rechecked: TestHook,
     #[cfg(test)]
     before_ack: TestHook,
+    #[cfg(test)]
+    before_slot_allocation: TestHook,
 }
 impl TicketedProxy {
     pub fn new() -> Arc<Self> {
@@ -160,6 +167,7 @@ impl TicketedProxy {
         let proxy = Arc::new(Self {
             client,
             helper: OnceLock::new(),
+            idle_hint: AtomicBool::new(false),
             state: Arc::new(Mutex::new(State {
                 used: 1,
                 pending: 0,
@@ -177,6 +185,8 @@ impl TicketedProxy {
             pending_rechecked: Mutex::new(None),
             #[cfg(test)]
             before_ack: Mutex::new(None),
+            #[cfg(test)]
+            before_slot_allocation: Mutex::new(None),
         });
         // Only state is captured. No proxy/helper cycle and no last proxy drop
         // on the helper thread (HelperThread::drop joins its own worker).
@@ -239,7 +249,50 @@ impl TicketedProxy {
         granted
     }
     pub fn acquire_thread(&self) {
+        if self.idle_hint.load(Ordering::Relaxed) {
+            let mut guard = self.state.lock();
+            if guard.used == 0 {
+                let state = &mut *guard;
+                assert_eq!(state.pending, 0);
+                let ticket = state.identity(0);
+                increment(&mut state.inventory.requests, &mut state.inventory.overflow);
+                state.record(Transition::Requested { ticket });
+                // No request can already be pending when the retained implicit
+                // allowance is idle. Reserve and acknowledge it under State,
+                // without allocating a slot or locking a subordinate predicate.
+                state.used = 1;
+                self.idle_hint.store(false, Ordering::Relaxed);
+                let source = GrantSource::IdleImplicit;
+                increment(&mut state.inventory.grants, &mut state.inventory.overflow);
+                state.record(Transition::Granted { ticket, source });
+                #[cfg(test)]
+                {
+                    // Preserve the actual grant-before-ack pause seam without
+                    // letting a controller wait while State is protected.
+                    drop(guard);
+                    let hook = self.before_ack.lock().clone();
+                    if let Some(hook) = hook {
+                        hook(ticket);
+                    }
+                    guard = self.state.lock();
+                }
+                let state = &mut *guard;
+                increment(&mut state.inventory.acks, &mut state.inventory.overflow);
+                state.record(Transition::Ack { ticket, source });
+                return;
+            }
+        }
+        #[cfg(test)]
+        {
+            let hook = self.before_slot_allocation.lock().clone();
+            if let Some(hook) = hook {
+                hook(None);
+            }
+        }
         // Allocate before taking the protected proxy lock. Queue linking does not allocate.
+        // Registration checks used regardless of the advisory hint, because a
+        // release can make the implicit allowance idle during this allocation.
+        // Register exactly one request here, as in the original slow path.
         let mut slot = Arc::new(Slot {
             ticket: None,
             next: Mutex::new(None),
@@ -256,6 +309,7 @@ impl TicketedProxy {
             if state.used == 0 {
                 assert_eq!(state.pending, 0);
                 state.used = 1;
+                self.idle_hint.store(false, Ordering::Relaxed);
                 state.grant(&slot, GrantSource::IdleImplicit);
             } else {
                 state.push(Arc::clone(&slot));
@@ -305,6 +359,11 @@ impl TicketedProxy {
                 true
             } else {
                 state.used = state.used.checked_sub(1).expect("used count underflow");
+                if state.used == 0 {
+                    // Publish the optimization hint under the same State guard
+                    // as the idle transition. Acquirers still recheck State.
+                    self.idle_hint.store(true, Ordering::Relaxed);
+                }
                 false
             };
             state.record(Transition::Released { operation, transferred });
@@ -672,5 +731,281 @@ mod tests {
         assert!(s.head.is_none());
         assert!(s.tail.is_none());
         s.pending = 0;
+    }
+
+    #[test]
+    fn idle_grant_is_reserved_before_outside_lock_ack_hook() {
+        let (proxy, client, held) = supply_fixture();
+        proxy.release_thread();
+        let gate = Arc::new(Barrier::new(2));
+        let g = gate.clone();
+        let (tx, rx) = mpsc::channel();
+        *proxy.before_ack.lock() = Some(Arc::new(move |ticket| {
+            if ticket == Some(0) {
+                tx.send(()).unwrap();
+                g.wait();
+            }
+        }));
+        let (w1, r1) = worker(&proxy);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let s = proxy.debug_snapshot();
+        assert_eq!(
+            (s.used, s.pending, s.inventory.requests, s.inventory.grants, s.inventory.acks),
+            (1, 0, 1, 1, 0)
+        );
+        assert!(
+            s.events.contains(&Transition::Granted {
+                ticket: Some(0),
+                source: GrantSource::IdleImplicit
+            })
+        );
+        let (w2, r2) = worker(&proxy);
+        wait_until(|| proxy.debug_snapshot().pending == 1);
+        drop(held);
+        r2.recv_timeout(Duration::from_secs(5)).unwrap();
+        w2.join().unwrap();
+        assert!(r1.try_recv().is_err());
+        let s = proxy.debug_snapshot();
+        assert_eq!((s.used, s.inventory.grants, s.inventory.acks), (2, 2, 1));
+        proxy.release_thread();
+        gate.wait();
+        r1.recv_timeout(Duration::from_secs(5)).unwrap();
+        w1.join().unwrap();
+        proxy.release_thread();
+        wait_until(|| proxy.debug_snapshot().inventory.callbacks_completed == 1);
+        assert_eq!(client.available().unwrap(), 1);
+    }
+
+    #[test]
+    fn slow_registration_rechecks_idle_after_allocation_gap() {
+        let (proxy, _) = fixture(64);
+        let gate = Arc::new(Barrier::new(2));
+        let g = gate.clone();
+        let (tx, rx) = mpsc::channel();
+        *proxy.before_slot_allocation.lock() = Some(Arc::new(move |_| {
+            tx.send(()).unwrap();
+            g.wait();
+        }));
+        let (w, r) = worker(&proxy);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        *proxy.before_slot_allocation.lock() = None;
+        assert_eq!(proxy.debug_snapshot().inventory.requests, 0);
+        proxy.release_thread();
+        assert_eq!(proxy.debug_snapshot().used, 0);
+        gate.wait();
+        r.recv_timeout(Duration::from_secs(5)).unwrap();
+        w.join().unwrap();
+        let s = proxy.debug_snapshot();
+        assert_eq!(
+            (s.used, s.pending, s.inventory.requests, s.inventory.grants, s.inventory.acks),
+            (1, 0, 1, 1, 1)
+        );
+        assert!(!s.events.iter().any(|e| matches!(e, Transition::Pending { .. })));
+        assert!(
+            s.events.contains(&Transition::Granted {
+                ticket: Some(0),
+                source: GrantSource::IdleImplicit
+            })
+        );
+        proxy.release_thread();
+    }
+
+    #[test]
+    fn allocation_gap_cannot_leapfrog_a_registered_pending_request() {
+        let (proxy, _) = fixture(64);
+        let gate = Arc::new(Barrier::new(2));
+        let g = gate.clone();
+        let (tx, rx) = mpsc::channel();
+        *proxy.before_slot_allocation.lock() = Some(Arc::new(move |_| {
+            tx.send(()).unwrap();
+            g.wait();
+        }));
+        let (w1, r1) = worker(&proxy);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        *proxy.before_slot_allocation.lock() = None;
+        let (w2, r2) = worker(&proxy);
+        wait_until(|| proxy.debug_snapshot().pending == 1);
+        proxy.release_thread();
+        r2.recv_timeout(Duration::from_secs(5)).unwrap();
+        w2.join().unwrap();
+        gate.wait();
+        wait_until(|| proxy.debug_snapshot().pending == 1);
+        let slot = proxy.state.lock().head.clone().unwrap();
+        notify_and_confirm_pending(&proxy, &slot);
+        assert!(r1.try_recv().is_err());
+        let s = proxy.debug_snapshot();
+        assert_eq!(
+            (s.used, s.inventory.requests, s.inventory.grants, s.inventory.acks),
+            (1, 2, 1, 1)
+        );
+        proxy.release_thread();
+        r1.recv_timeout(Duration::from_secs(5)).unwrap();
+        w1.join().unwrap();
+        let s = proxy.debug_snapshot();
+        assert!(s.events.contains(&Transition::Granted {
+            ticket: Some(0),
+            source: GrantSource::Release(Some(0))
+        }));
+        assert!(s.events.contains(&Transition::Granted {
+            ticket: Some(1),
+            source: GrantSource::Release(Some(1))
+        }));
+        proxy.release_thread();
+    }
+
+    #[test]
+    fn slot_free_idle_path_preserves_event_modes_and_overflow() {
+        for capture in [false, true] {
+            let proxy = TicketedProxy::with_client_capture(Client::new(0).unwrap(), 2, capture);
+            proxy.release_thread();
+            *proxy.before_slot_allocation.lock() =
+                Some(Arc::new(|_| panic!("idle acquired a slot")));
+            {
+                let mut state = proxy.state.lock();
+                state.next_ticket = None;
+                state.inventory.requests = u64::MAX;
+                state.inventory.grants = u64::MAX;
+                state.inventory.acks = u64::MAX;
+            }
+            proxy.acquire_thread();
+            let s = proxy.debug_snapshot();
+            assert_eq!((s.used, s.pending), (1, 0));
+            assert_eq!(
+                (s.inventory.requests, s.inventory.grants, s.inventory.acks),
+                (u64::MAX, u64::MAX, u64::MAX)
+            );
+            assert!(s.inventory.overflow);
+            assert_eq!(s.events.is_empty(), !capture);
+            assert_eq!(s.inventory.lost_events > 0, capture);
+            proxy.release_thread();
+            assert_eq!(proxy.debug_snapshot().used, 0);
+        }
+    }
+
+    #[test]
+    fn stale_true_hint_does_not_authorize_a_grant() {
+        let mut inventories = Vec::new();
+        for capture in [false, true] {
+            let proxy = TicketedProxy::with_client_capture(Client::new(0).unwrap(), 64, capture);
+            assert_eq!(proxy.debug_snapshot().used, 1);
+            proxy.idle_hint.store(true, Ordering::Relaxed);
+            let (w, r) = worker(&proxy);
+            wait_until(|| proxy.debug_snapshot().pending == 1);
+            let slot = proxy.state.lock().head.clone().unwrap();
+            notify_and_confirm_pending(&proxy, &slot);
+            let s = proxy.debug_snapshot();
+            assert_eq!(
+                (s.used, s.inventory.requests, s.inventory.grants, s.inventory.acks),
+                (1, 1, 0, 0)
+            );
+            assert!(r.try_recv().is_err());
+            proxy.release_thread();
+            r.recv_timeout(Duration::from_secs(5)).unwrap();
+            w.join().unwrap();
+            let s = proxy.debug_snapshot();
+            assert_eq!((s.used, s.pending, s.inventory.grants, s.inventory.acks), (1, 0, 1, 1));
+            if capture {
+                assert!(s.events.contains(&Transition::Granted {
+                    ticket: Some(0),
+                    source: GrantSource::Release(Some(0))
+                }));
+                assert!(!s.events.iter().any(|e| matches!(
+                    e,
+                    Transition::Granted { source: GrantSource::IdleImplicit, .. }
+                )));
+            }
+            proxy.release_thread();
+            assert!(proxy.idle_hint.load(Ordering::Relaxed));
+            inventories.push(proxy.debug_snapshot().inventory);
+        }
+        assert_eq!(inventories[0], inventories[1]);
+    }
+
+    #[test]
+    fn stale_false_hint_uses_original_registration_and_rechecks_idle() {
+        use std::sync::atomic::AtomicUsize;
+        let mut inventories = Vec::new();
+        for capture in [false, true] {
+            let proxy = TicketedProxy::with_client_capture(Client::new(0).unwrap(), 64, capture);
+            proxy.release_thread();
+            assert!(proxy.idle_hint.load(Ordering::Relaxed));
+            proxy.idle_hint.store(false, Ordering::Relaxed);
+            let allocations = Arc::new(AtomicUsize::new(0));
+            let count = allocations.clone();
+            *proxy.before_slot_allocation.lock() = Some(Arc::new(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+            }));
+            let acks = Arc::new(AtomicUsize::new(0));
+            let count = acks.clone();
+            *proxy.before_ack.lock() = Some(Arc::new(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+            }));
+            proxy.acquire_thread();
+            assert_eq!(allocations.load(Ordering::Relaxed), 1);
+            assert_eq!(acks.load(Ordering::Relaxed), 1);
+            assert!(!proxy.idle_hint.load(Ordering::Relaxed));
+            let s = proxy.debug_snapshot();
+            assert_eq!(
+                (s.used, s.pending, s.inventory.requests, s.inventory.grants, s.inventory.acks),
+                (1, 0, 1, 1, 1)
+            );
+            if capture {
+                assert!(s.events.contains(&Transition::Granted {
+                    ticket: Some(0),
+                    source: GrantSource::IdleImplicit
+                }));
+                assert!(!s.events.iter().any(|e| matches!(e, Transition::Pending { .. })));
+            }
+            proxy.release_thread();
+            assert!(proxy.idle_hint.load(Ordering::Relaxed));
+            inventories.push(proxy.debug_snapshot().inventory);
+        }
+        assert_eq!(inventories[0], inventories[1]);
+    }
+
+    #[test]
+    fn advisory_hint_release_acquire_races_conserve_allowance_in_both_event_modes() {
+        let mut inventories = Vec::new();
+        for capture in [false, true] {
+            for _ in 0..40 {
+                let proxy =
+                    TicketedProxy::with_client_capture(Client::new(0).unwrap(), 64, capture);
+                let gate = Arc::new(Barrier::new(3));
+                let g = gate.clone();
+                let p = proxy.clone();
+                let release = thread::spawn(move || {
+                    g.wait();
+                    p.release_thread();
+                });
+                let g = gate.clone();
+                let p = proxy.clone();
+                let acquire = thread::spawn(move || {
+                    g.wait();
+                    p.acquire_thread();
+                });
+                gate.wait();
+                release.join().unwrap();
+                acquire.join().unwrap();
+                let s = proxy.debug_snapshot();
+                assert_eq!(
+                    (
+                        s.used,
+                        s.pending,
+                        s.inventory.requests,
+                        s.inventory.grants,
+                        s.inventory.acks,
+                        s.inventory.releases
+                    ),
+                    (1, 0, 1, 1, 1, 1)
+                );
+                assert!(!proxy.idle_hint.load(Ordering::Relaxed));
+                proxy.release_thread();
+                assert!(proxy.idle_hint.load(Ordering::Relaxed));
+                let s = proxy.debug_snapshot();
+                assert_eq!((s.used, s.pending, s.inventory.lost_events), (0, 0, 0));
+                inventories.push(s.inventory);
+            }
+        }
+        assert!(inventories.windows(2).all(|pair| pair[0] == pair[1]));
     }
 }

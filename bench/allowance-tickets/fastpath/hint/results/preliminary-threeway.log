@@ -1,0 +1,240 @@
+round 1/1 disabled 0 original: 6 samples, 0 failures
+round 1/1 disabled 1 fast: 6 samples, 0 failures
+round 1/1 disabled 2 hint: 6 samples, 0 failures
+round 1/1 disabled 3 hint: 6 samples, 0 failures
+round 1/1 disabled 4 fast: 6 samples, 0 failures
+round 1/1 disabled 5 original: 6 samples, 0 failures
+round 1/1 enabled 0 original: 6 samples, 0 failures
+round 1/1 enabled 1 fast: 6 samples, 0 failures
+round 1/1 enabled 2 hint: 6 samples, 0 failures
+round 1/1 enabled 3 hint: 6 samples, 0 failures
+round 1/1 enabled 4 fast: 6 samples, 0 failures
+round 1/1 enabled 5 original: 6 samples, 0 failures
+{
+  "summary": {
+    "original-disabled": {
+      "one": {
+        "samples": 2,
+        "min_ns": 226661123,
+        "median_ns": 242479821.5,
+        "max_ns": 258298520,
+        "median_pairs_per_second": 331334.483098386
+      },
+      "multi": {
+        "samples": 2,
+        "min_ns": 144528461,
+        "median_ns": 186460908.0,
+        "max_ns": 228393355,
+        "median_pairs_per_second": 451898.5412752626
+      },
+      "immediate": {
+        "samples": 2,
+        "min_ns": 849038,
+        "median_ns": 1077003.5,
+        "max_ns": 1304969,
+        "median_pairs_per_second": 9720526.565016393
+      },
+      "pending-one": {
+        "samples": 2,
+        "min_ns": 13398718,
+        "median_ns": 20603159.5,
+        "max_ns": 27807601,
+        "median_pairs_per_second": 88476.31726881646
+      },
+      "pending-multi": {
+        "samples": 2,
+        "min_ns": 12840993,
+        "median_ns": 16134720.0,
+        "max_ns": 19428447,
+        "median_pairs_per_second": 103477.21215344957
+      }
+    },
+    "original-enabled": {
+      "one": {
+        "samples": 2,
+        "min_ns": 234248961,
+        "median_ns": 417385806.0,
+        "max_ns": 600522651,
+        "median_pairs_per_second": 237367.13972295585
+      },
+      "multi": {
+        "samples": 2,
+        "min_ns": 154882215,
+        "median_ns": 208695767.5,
+        "max_ns": 262509320,
+        "median_pairs_per_second": 410636.3116443404
+      },
+      "immediate": {
+        "samples": 2,
+        "min_ns": 1170435,
+        "median_ns": 1450905.5,
+        "max_ns": 1731376,
+        "median_pairs_per_second": 7159792.460619626
+      },
+      "pending-one": {
+        "samples": 2,
+        "min_ns": 25378772,
+        "median_ns": 34271360.5,
+        "max_ns": 43163949,
+        "median_pairs_per_second": 50056.39316911834
+      },
+      "pending-multi": {
+        "samples": 2,
+        "min_ns": 22371977,
+        "median_ns": 23945117.0,
+        "max_ns": 25518257,
+        "median_pairs_per_second": 67109.12478251147
+      }
+    },
+    "fast-disabled": {
+      "one": {
+        "samples": 2,
+        "min_ns": 297849635,
+        "median_ns": 317605750.0,
+        "max_ns": 337361865,
+        "median_pairs_per_second": 252862.9977358638
+      },
+      "multi": {
+        "samples": 2,
+        "min_ns": 166110048,
+        "median_ns": 166916459.0,
+        "max_ns": 167722870,
+        "median_pairs_per_second": 479292.86172147293
+      },
+      "immediate": {
+        "samples": 2,
+        "min_ns": 201480,
+        "median_ns": 228281.5,
+        "max_ns": 255083,
+        "median_pairs_per_second": 44417821.997018054
+      },
+      "pending-one": {
+        "samples": 2,
+        "min_ns": 13227462,
+        "median_ns": 17474400.0,
+        "max_ns": 21721338,
+        "median_pairs_per_second": 97310.37793262658
+      },
+      "pending-multi": {
+        "samples": 2,
+        "min_ns": 11458233,
+        "median_ns": 15379171.0,
+        "max_ns": 19300109,
+        "median_pairs_per_second": 111269.33628007388
+      }
+    },
+    "fast-enabled": {
+      "one": {
+        "samples": 2,
+        "min_ns": 241856302,
+        "median_ns": 292566222.5,
+        "max_ns": 343276143,
+        "median_pairs_per_second": 281911.7264367564
+      },
+      "multi": {
+        "samples": 2,
+        "min_ns": 163677554,
+        "median_ns": 177011242.5,
+        "max_ns": 190344931,
+        "median_pairs_per_second": 454527.7420103464
+      },
+      "immediate": {
+        "samples": 2,
+        "min_ns": 342163,
+        "median_ns": 347647.5,
+        "max_ns": 353132,
+        "median_pairs_per_second": 28771929.76557693
+      },
+      "pending-one": {
+        "samples": 2,
+        "min_ns": 40792488,
+        "median_ns": 42662506.5,
+        "max_ns": 44532525,
+        "median_pairs_per_second": 37575.85188363609
+      },
+      "pending-multi": {
+        "samples": 2,
+        "min_ns": 20501555,
+        "median_ns": 21156662.5,
+        "max_ns": 21811770,
+        "median_pairs_per_second": 75698.87557654068
+      }
+    },
+    "hint-disabled": {
+      "one": {
+        "samples": 2,
+        "min_ns": 214822285,
+        "median_ns": 226271985.0,
+        "max_ns": 237721685,
+        "median_pairs_per_second": 354464.4146811492
+      },
+      "multi": {
+        "samples": 2,
+        "min_ns": 133635894,
+        "median_ns": 133933132.5,
+        "max_ns": 134230371,
+        "median_pairs_per_second": 597315.9332116214
+      },
+      "immediate": {
+        "samples": 2,
+        "min_ns": 249879,
+        "median_ns": 255098.5,
+        "max_ns": 260318,
+        "median_pairs_per_second": 39216961.94059439
+      },
+      "pending-one": {
+        "samples": 2,
+        "min_ns": 18782657,
+        "median_ns": 24468418.5,
+        "max_ns": 30154180,
+        "median_pairs_per_second": 69122.80157135145
+      },
+      "pending-multi": {
+        "samples": 2,
+        "min_ns": 10718007,
+        "median_ns": 15814366.5,
+        "max_ns": 20910726,
+        "median_pairs_per_second": 112898.62024317452
+      }
+    },
+    "hint-enabled": {
+      "one": {
+        "samples": 2,
+        "min_ns": 312769550,
+        "median_ns": 320094416.0,
+        "max_ns": 327419282,
+        "median_pairs_per_second": 250057.20233366243
+      },
+      "multi": {
+        "samples": 2,
+        "min_ns": 149142353,
+        "median_ns": 162599921.5,
+        "max_ns": 176057490,
+        "median_pairs_per_second": 495398.65369956754
+      },
+      "immediate": {
+        "samples": 2,
+        "min_ns": 389533,
+        "median_ns": 422131.5,
+        "max_ns": 454730,
+        "median_pairs_per_second": 23831418.7800136
+      },
+      "pending-one": {
+        "samples": 2,
+        "min_ns": 34887112,
+        "median_ns": 37317704.5,
+        "max_ns": 39748297,
+        "median_pairs_per_second": 43057.75263024584
+      },
+      "pending-multi": {
+        "samples": 2,
+        "min_ns": 22900134,
+        "median_ns": 23410445.0,
+        "max_ns": 23920756,
+        "median_pairs_per_second": 68378.0524493469
+      }
+    }
+  },
+  "failures": [],
+  "out": "/home/jeremy/justrust/bench/allowance-tickets/fastpath/hint/results/preliminary-threeway.json"
+}
