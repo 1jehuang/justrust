@@ -1,0 +1,550 @@
+{
+  "original-status-red": [
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2496743,
+        "child": 2496744,
+        "mode": "command",
+        "exit": 0,
+        "cleanup": {
+          "killed": [
+            2496748
+          ],
+          "reaped": [
+            2496746,
+            2496748
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2496871,
+        "child": 2496872,
+        "mode": "command",
+        "exit": 0,
+        "cleanup": {
+          "killed": [
+            2496875
+          ],
+          "reaped": [
+            2496874,
+            2496875
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2496985,
+        "child": 2496986,
+        "mode": "command",
+        "exit": 0,
+        "cleanup": {
+          "killed": [
+            2496989
+          ],
+          "reaped": [
+            2496988,
+            2496989
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    }
+  ],
+  "final-focused-green": [
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497003,
+        "child": 2497004,
+        "mode": "plain",
+        "probe": {
+          "pid": 2497004,
+          "sid": 2497003,
+          "pgid": 2497004,
+          "tty": true,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "stop_signal": 21,
+        "cleanup": {
+          "killed": [
+            2497004
+          ],
+          "reaped": [
+            2497004
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497093,
+        "child": 2497094,
+        "mode": "command",
+        "exit": 87,
+        "cleanup": {
+          "killed": [
+            2497099
+          ],
+          "reaped": [
+            2497097,
+            2497099
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_EARLY_KILL",
+      "value": {
+        "pid": 2497131,
+        "sid": 2497131,
+        "pgid": 2497131,
+        "start": "17108470",
+        "tty_error": 6,
+        "detached_alive": true
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_CLEANUP",
+      "value": {
+        "pid": 2497131,
+        "pidfd_opened": true,
+        "identity_verified": true,
+        "pidfd_send_signal": true,
+        "remaining_alive": false,
+        "fdclosed": true
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497155,
+        "child": 2497156,
+        "mode": "timeout",
+        "probe": {
+          "pid": 2497157,
+          "sid": 2497155,
+          "pgid": 2497156,
+          "tty": true,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "payload_stopped": "T (stopped)",
+        "cleanup": {
+          "killed": [
+            2497156,
+            2497157
+          ],
+          "reaped": [
+            2497156,
+            2497157
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_NATURAL_EXIT",
+      "value": {
+        "pid": 2497165,
+        "sid": 2497165,
+        "pgid": 2497165,
+        "start": "17108517",
+        "tty_error": 6
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_CLEANUP",
+      "value": {
+        "pid": 2497165,
+        "pidfd_opened": true,
+        "identity_verified": true,
+        "pidfd_send_signal": false,
+        "remaining_alive": false,
+        "fdclosed": true
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497227,
+        "child": 2497232,
+        "mode": "command",
+        "exit": 23,
+        "cleanup": {
+          "killed": [
+            2497236
+          ],
+          "reaped": [
+            2497234,
+            2497236
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497305,
+        "child": 2497306,
+        "mode": "command",
+        "exit": 143,
+        "cleanup": {
+          "killed": [
+            2497310
+          ],
+          "reaped": [
+            2497308,
+            2497310
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497374,
+        "child": 2497375,
+        "mode": "command",
+        "exit": 0,
+        "cleanup": {
+          "killed": [
+            2497379
+          ],
+          "reaped": [
+            2497377,
+            2497379
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497384,
+        "child": 2497403,
+        "mode": "setsid",
+        "probe": {
+          "pid": 2497404,
+          "sid": 2497404,
+          "pgid": 2497404,
+          "tty": false,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "exit": 23,
+        "cleanup": {
+          "killed": [],
+          "reaped": [],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497405,
+        "child": 2497425,
+        "mode": "setsid",
+        "probe": {
+          "pid": 2497426,
+          "sid": 2497426,
+          "pgid": 2497426,
+          "tty": false,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "exit": 15,
+        "cleanup": {
+          "killed": [],
+          "reaped": [],
+          "remaining": []
+        },
+        "stderr": "setsid: child 2497426 did not exit normally: Success\n"
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497447,
+        "child": 2497448,
+        "mode": "command",
+        "exit": 1,
+        "cleanup": {
+          "killed": [],
+          "reaped": [],
+          "remaining": []
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"
+      }
+    }
+  ],
+  "whole-green": [
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497491,
+        "child": 2497492,
+        "mode": "plain",
+        "probe": {
+          "pid": 2497492,
+          "sid": 2497491,
+          "pgid": 2497492,
+          "tty": true,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "stop_signal": 21,
+        "cleanup": {
+          "killed": [
+            2497492
+          ],
+          "reaped": [
+            2497492
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497533,
+        "child": 2497534,
+        "mode": "command",
+        "exit": 87,
+        "cleanup": {
+          "killed": [
+            2497538
+          ],
+          "reaped": [
+            2497536,
+            2497538
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_EARLY_KILL",
+      "value": {
+        "pid": 2497548,
+        "sid": 2497548,
+        "pgid": 2497548,
+        "start": "17108878",
+        "tty_error": 6,
+        "detached_alive": true
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_CLEANUP",
+      "value": {
+        "pid": 2497548,
+        "pidfd_opened": true,
+        "identity_verified": true,
+        "pidfd_send_signal": true,
+        "remaining_alive": false,
+        "fdclosed": true
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497554,
+        "child": 2497557,
+        "mode": "timeout",
+        "probe": {
+          "pid": 2497558,
+          "sid": 2497554,
+          "pgid": 2497557,
+          "tty": true,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "payload_stopped": "T (stopped)",
+        "cleanup": {
+          "killed": [
+            2497557,
+            2497558
+          ],
+          "reaped": [
+            2497557,
+            2497558
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_NATURAL_EXIT",
+      "value": {
+        "pid": 2497582,
+        "sid": 2497582,
+        "pgid": 2497582,
+        "start": "17108920",
+        "tty_error": 6
+      }
+    },
+    {
+      "record_type": "PRIVATE_TMUX_CLEANUP",
+      "value": {
+        "pid": 2497582,
+        "pidfd_opened": true,
+        "identity_verified": true,
+        "pidfd_send_signal": false,
+        "remaining_alive": false,
+        "fdclosed": true
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497666,
+        "child": 2497673,
+        "mode": "command",
+        "exit": 23,
+        "cleanup": {
+          "killed": [
+            2497688
+          ],
+          "reaped": [
+            2497685,
+            2497688
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497791,
+        "child": 2497792,
+        "mode": "command",
+        "exit": 143,
+        "cleanup": {
+          "killed": [
+            2497795
+          ],
+          "reaped": [
+            2497794,
+            2497795
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497892,
+        "child": 2497895,
+        "mode": "command",
+        "exit": 0,
+        "cleanup": {
+          "killed": [
+            2497906
+          ],
+          "reaped": [
+            2497903,
+            2497906
+          ],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497924,
+        "child": 2497925,
+        "mode": "setsid",
+        "probe": {
+          "pid": 2497926,
+          "sid": 2497926,
+          "pgid": 2497926,
+          "tty": false,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "exit": 23,
+        "cleanup": {
+          "killed": [],
+          "reaped": [],
+          "remaining": []
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2497958,
+        "child": 2497962,
+        "mode": "setsid",
+        "probe": {
+          "pid": 2497963,
+          "sid": 2497963,
+          "pgid": 2497963,
+          "tty": false,
+          "stdin": "/dev/null",
+          "jobserver": true
+        },
+        "exit": 15,
+        "cleanup": {
+          "killed": [],
+          "reaped": [],
+          "remaining": []
+        },
+        "stderr": "setsid: child 2497963 did not exit normally: Success\n"
+      }
+    },
+    {
+      "record_type": "OBSERVED",
+      "value": {
+        "supervisor": 2498030,
+        "child": 2498047,
+        "mode": "command",
+        "exit": 1,
+        "cleanup": {
+          "killed": [],
+          "reaped": [],
+          "remaining": []
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"
+      }
+    }
+  ],
+  "shell-syntax": [],
+  "source-whitespace": []
+}

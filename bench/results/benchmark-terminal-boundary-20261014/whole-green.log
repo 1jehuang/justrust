@@ -1,0 +1,32 @@
+.....................................FIXTURE <fixture>
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+OBSERVED {"supervisor": 2497491, "child": 2497492, "mode": "plain", "probe": {"pid": 2497492, "sid": 2497491, "pgid": 2497492, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [2497492], "reaped": [2497492], "remaining": []}, "stderr": ""}
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497533, "child": 2497534, "mode": "command", "exit": 87, "cleanup": {"killed": [2497538], "reaped": [2497536, 2497538], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:52 AM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nWed Oct 14 04:19:52 AM PDT 2026\n'
+.PRIVATE_TMUX_EARLY_KILL {"pid": 2497548, "sid": 2497548, "pgid": 2497548, "start": "17108878", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 2497548, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+.OBSERVED {"supervisor": 2497554, "child": 2497557, "mode": "timeout", "probe": {"pid": 2497558, "sid": 2497554, "pgid": 2497557, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [2497557, 2497558], "reaped": [2497557, 2497558], "remaining": []}, "stderr": ""}
+.PRIVATE_TMUX_NATURAL_EXIT {"pid": 2497582, "sid": 2497582, "pgid": 2497582, "start": "17108920", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 2497582, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497666, "child": 2497673, "mode": "command", "exit": 23, "cleanup": {"killed": [2497688], "reaped": [2497685, 2497688], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:53 AM PDT 2026\nEXIT 23\nWed Oct 14 04:19:53 AM PDT 2026\n'
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497791, "child": 2497792, "mode": "command", "exit": 143, "cleanup": {"killed": [2497795], "reaped": [2497794, 2497795], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:54 AM PDT 2026\nTerminated                 /usr/bin/python3 <fixture>/public-status-143/home/payload.py\nEXIT 143\nWed Oct 14 04:19:54 AM PDT 2026\n'
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497892, "child": 2497895, "mode": "command", "exit": 0, "cleanup": {"killed": [2497906], "reaped": [2497903, 2497906], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:54 AM PDT 2026\nEXIT 0\nWed Oct 14 04:19:54 AM PDT 2026\n'
+.OBSERVED {"supervisor": 2497924, "child": 2497925, "mode": "setsid", "probe": {"pid": 2497926, "sid": 2497926, "pgid": 2497926, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+.CHILD_STDERR 'setsid: child 2497963 did not exit normally: Success\n'
+OBSERVED {"supervisor": 2497958, "child": 2497962, "mode": "setsid", "probe": {"pid": 2497963, "sid": 2497963, "pgid": 2497963, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 2497963 did not exit normally: Success\n"}
+.CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 2498030, "child": 2498047, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}
+............................................................................round 1 remote fresh-check measured=True: failed exit=1 wall=0.000s
+......................................................bench: desktop-noop-test (1/1)
+......................................................
+----------------------------------------------------------------------
+Ran 231 tests in 8.982s
+
+OK

@@ -1,0 +1,43 @@
+FIXTURE <fixture>
+SOURCE_SHA256 a79bfd5d89f2870ff0c84ffbab32c503c2182d9bb97e7cbba5c539bba7a140de
+test_public_start_preserves_success0 (__main__.HeadlessLaunch.test_public_start_preserves_success0) ... CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2496743, "child": 2496744, "mode": "command", "exit": 0, "cleanup": {"killed": [2496748], "reaped": [2496746, 2496748], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:46 AM PDT 2026\nEXIT 0\nWed Oct 14 04:19:46 AM PDT 2026\n'
+ok
+test_public_start_preserves_failure23 (__main__.HeadlessLaunch.test_public_start_preserves_failure23) ... CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2496871, "child": 2496872, "mode": "command", "exit": 0, "cleanup": {"killed": [2496875], "reaped": [2496874, 2496875], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:47 AM PDT 2026\nEXIT 23\nWed Oct 14 04:19:47 AM PDT 2026\n'
+FAIL
+test_public_start_preserves_signal143 (__main__.HeadlessLaunch.test_public_start_preserves_signal143) ... CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2496985, "child": 2496986, "mode": "command", "exit": 0, "cleanup": {"killed": [2496989], "reaped": [2496988, 2496989], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:47 AM PDT 2026\nTerminated                 /usr/bin/python3 <fixture>/public-status-143/home/payload.py\nEXIT 143\nWed Oct 14 04:19:47 AM PDT 2026\n'
+FAIL
+
+======================================================================
+FAIL: test_public_start_preserves_failure23 (__main__.HeadlessLaunch.test_public_start_preserves_failure23)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<repository>/bench/test_headless_launch.py", line 475, in test_public_start_preserves_failure23
+    self.check_public_status(23)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^
+  File "<repository>/bench/test_headless_launch.py", line 469, in check_public_status
+    self.assertEqual(result['exit'], status, 'date/echo must not overwrite command exit status')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 23 : date/echo must not overwrite command exit status
+
+======================================================================
+FAIL: test_public_start_preserves_signal143 (__main__.HeadlessLaunch.test_public_start_preserves_signal143)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<repository>/bench/test_headless_launch.py", line 478, in test_public_start_preserves_signal143
+    self.check_public_status(143)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "<repository>/bench/test_headless_launch.py", line 469, in check_public_status
+    self.assertEqual(result['exit'], status, 'date/echo must not overwrite command exit status')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 143 : date/echo must not overwrite command exit status
+
+----------------------------------------------------------------------
+Ran 3 tests in 2.069s
+
+FAILED (failures=2)

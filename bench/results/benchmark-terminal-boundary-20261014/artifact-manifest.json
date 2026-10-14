@@ -1,0 +1,41 @@
+{
+  "schema": "benchmark-terminal-artifacts-v1",
+  "files": [
+    {
+      "path": "acceptance.json",
+      "bytes": 10728,
+      "sha256": "982180ef754f41f126dd5c5ec2d2e99ebf1a2bc71b45ace3a4dc7c7a3ecfa71a"
+    },
+    {
+      "path": "actual-observations.json",
+      "bytes": 11863,
+      "sha256": "bc9167b784b60cc24d6445f9a70764220098c79ccd8a8aaf3bf1d59892e1f362"
+    },
+    {
+      "path": "final-focused-green.log",
+      "bytes": 5380,
+      "sha256": "a04cba47eb63a908fca68a84ff9bb358490c715457afc6f66c48126d099ed95c"
+    },
+    {
+      "path": "original-status-red.log",
+      "bytes": 3275,
+      "sha256": "88e6340c8af4cbbbd15f655e8dd5c228134cb01cf7ab48b9b01c8339702800e9"
+    },
+    {
+      "path": "shell-syntax.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "source-whitespace.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "whole-green.log",
+      "bytes": 4474,
+      "sha256": "c9aa2f8ad782ed4926370e4d50df9ed69e825d167317f53d73eb6f8ec668caa2"
+    }
+  ],
+  "preservation": "lossless_except_explicit_operator_fixture_and_repository_path_redaction"
+}

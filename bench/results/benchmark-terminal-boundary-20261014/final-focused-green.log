@@ -1,0 +1,41 @@
+FIXTURE <fixture>
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+test_devnull_still_sigttin (__main__.HeadlessLaunch.test_devnull_still_sigttin) ... OBSERVED {"supervisor": 2497003, "child": 2497004, "mode": "plain", "probe": {"pid": 2497004, "sid": 2497003, "pgid": 2497004, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [2497004], "reaped": [2497004], "remaining": []}, "stderr": ""}
+ok
+test_diagnostic_public_start_still_has_tty (__main__.HeadlessLaunch.test_diagnostic_public_start_still_has_tty) ... CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497093, "child": 2497094, "mode": "command", "exit": 87, "cleanup": {"killed": [2497099], "reaped": [2497097, 2497099], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:48 AM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nWed Oct 14 04:19:48 AM PDT 2026\n'
+ok
+test_diagnostic_rejected_setsid_tmux_kill_leaks (__main__.HeadlessLaunch.test_diagnostic_rejected_setsid_tmux_kill_leaks) ... PRIVATE_TMUX_EARLY_KILL {"pid": 2497131, "sid": 2497131, "pgid": 2497131, "start": "17108470", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 2497131, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+ok
+test_gnu_timeout_background_group (__main__.HeadlessLaunch.test_gnu_timeout_background_group) ... OBSERVED {"supervisor": 2497155, "child": 2497156, "mode": "timeout", "probe": {"pid": 2497157, "sid": 2497155, "pgid": 2497156, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [2497156, 2497157], "reaped": [2497156, 2497157], "remaining": []}, "stderr": ""}
+ok
+test_private_tmux_natural_session_lifetime (__main__.HeadlessLaunch.test_private_tmux_natural_session_lifetime) ... PRIVATE_TMUX_NATURAL_EXIT {"pid": 2497165, "sid": 2497165, "pgid": 2497165, "start": "17108517", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 2497165, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+ok
+test_public_start_preserves_failure23 (__main__.HeadlessLaunch.test_public_start_preserves_failure23) ... CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497227, "child": 2497232, "mode": "command", "exit": 23, "cleanup": {"killed": [2497236], "reaped": [2497234, 2497236], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:49 AM PDT 2026\nEXIT 23\nWed Oct 14 04:19:49 AM PDT 2026\n'
+ok
+test_public_start_preserves_signal143 (__main__.HeadlessLaunch.test_public_start_preserves_signal143) ... CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497305, "child": 2497306, "mode": "command", "exit": 143, "cleanup": {"killed": [2497310], "reaped": [2497308, 2497310], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:50 AM PDT 2026\nTerminated                 /usr/bin/python3 <fixture>/public-status-143/home/payload.py\nEXIT 143\nWed Oct 14 04:19:50 AM PDT 2026\n'
+ok
+test_public_start_preserves_success0 (__main__.HeadlessLaunch.test_public_start_preserves_success0) ... CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2497374, "child": 2497375, "mode": "command", "exit": 0, "cleanup": {"killed": [2497379], "reaped": [2497377, 2497379], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:19:51 AM PDT 2026\nEXIT 0\nWed Oct 14 04:19:51 AM PDT 2026\n'
+ok
+test_setsid_wait_exit23_inherited_jobserver (__main__.HeadlessLaunch.test_setsid_wait_exit23_inherited_jobserver) ... OBSERVED {"supervisor": 2497384, "child": 2497403, "mode": "setsid", "probe": {"pid": 2497404, "sid": 2497404, "pgid": 2497404, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+ok
+test_setsid_wait_reports_child_signal_number (__main__.HeadlessLaunch.test_setsid_wait_reports_child_signal_number) ... CHILD_STDERR 'setsid: child 2497426 did not exit normally: Success\n'
+OBSERVED {"supervisor": 2497405, "child": 2497425, "mode": "setsid", "probe": {"pid": 2497426, "sid": 2497426, "pgid": 2497426, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 2497426 did not exit normally: Success\n"}
+ok
+test_terminal_failure_is_not_suppressed (__main__.HeadlessLaunch.test_terminal_failure_is_not_suppressed) ... CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 2497447, "child": 2497448, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}
+ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 4.077s
+
+OK

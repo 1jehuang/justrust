@@ -124,8 +124,11 @@ PY
     echo "export JUSTRUST_BENCH_REPO_REV=$rev JUSTRUST_BENCH_DIRTY=$dirty"
     echo 'date'
     printf '%q ' "$@"; echo
-    echo 'echo EXIT $?'
+    # Logging the finish time must not turn a failed payload into script success.
+    echo 'status=$?'
+    echo 'printf "EXIT %s\n" "$status"'
     echo 'date'
+    echo 'exit "$status"'
   } | ssh_t "cat >~/bench-$NAME.sh && chmod +x ~/bench-$NAME.sh"
   ssh_t "tmux new-session -d -s $NAME 'bash ~/bench-$NAME.sh >~/bench-$NAME.log 2>&1'"
   echo "on-remote: started in tmux session $NAME on $DEST ($KIND); log ~/bench-$NAME.log there"

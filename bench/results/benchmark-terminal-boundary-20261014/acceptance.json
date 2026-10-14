@@ -1,0 +1,205 @@
+{
+  "schema": "benchmark-terminal-boundary-acceptance-v1",
+  "root_head": "522e6b21f2fc5a5553e7b8357cc7f872d0b00c94",
+  "original_source_commit": "29c74460394fc3586ff999827d8ed6b065ea6736",
+  "original_source_sha256": "a79bfd5d89f2870ff0c84ffbab32c503c2182d9bb97e7cbba5c539bba7a140de",
+  "source_hashes": {
+    "bench/attr-cache-accept.py": "3360a3c505238ff5abb8ea092d1af9570455780065518e6984648ca793e464fc",
+    "bench/attr-cache-check.py": "76dbb5eaccb5336023df7a276f0fba55750029165c0d0b89f2addefa6ef83511",
+    "bench/audit_hosted_evidence.py": "7d226a518250d0033ad90361278b214bd813fb0560a3eca131fe568e6d621995",
+    "bench/buildd-correctness.py": "944da79ed96b3df76a1ef383385858974cc35334dfe506bb7ed1a72c5f75ef8c",
+    "bench/collect-profile-evidence.py": "8b8f7af184b8231da6599633dd3a8d470abcf63048548477b40999fc37134437",
+    "bench/critpath.py": "5cc7434f34657be556a246e00af3b70503e18665741ade05ab5501606ddbbdbc",
+    "bench/early_accuracy.py": "9e0151be35b247ecd5d2af4d0e5ac9ac84066e47a82257a1c399ee5be97c601c",
+    "bench/early_exit/mine_codes.py": "6930e474fac6856cf32b0dd8e1e84a1d8e43afa8950a254c7b7304c4a5188971",
+    "bench/early_exit/mutations.py": "99791140878a20bba0185dd7172065b64fbe1b85482fdda5c0756bfd14a1efa3",
+    "bench/early_exit/replay_policy.py": "f6813503f2646bf8111ea9ce0be6f902421574dba2a03831255ffe075535d6ea",
+    "bench/early_exit/replay_runs.py": "44cfe8a5150dea6d003a85e38496b5766448533d0a82f6335e03dc0e2b1981bc",
+    "bench/early_exit/replay_savings.py": "45e2ce4a7724e3dee9c983c73514d4ee2fa12c0d5bba05b40634955ea47521fc",
+    "bench/early_probe.py": "7820985bb54d0583a3e4cf6d67bb8e7a5395ac10c829a73c91c89e06b35a141f",
+    "bench/factors.py": "f6d1f326ff3183d2d07a32c650c62ae684f2c17c6b416677322c1ac3adf275cc",
+    "bench/frozen-acceptance.py": "edd7722e1c478d23c4a9a085071d807a106a59f420fb466317c7183b6acdff77",
+    "bench/hotpatch/bench.py": "db5a5512b8afd33c199d106a47b3ea0267057d799f662c51fcc94240ae521cff",
+    "bench/noop-overhead.py": "5a40f88517818ab55ee4e4feabc6ea7af4ed11d5bd0522bdde36f23dd6c7456f",
+    "bench/pass_ledger.py": "b6ac0162c1ff3837d56d5248db1c401e5891938cdfa4a25ce9e5ad47a499a11b",
+    "bench/query_activities.py": "c33b7c7a7d2b8a4dcbb2d0b0797cc6309195d5dc6bcd81f7e7241362f49aae1f",
+    "bench/query_graph.py": "2e1fe93a5e5b6de2a8045af004296a85ce7c9dadd788ffe424bfd0d7e76afe42",
+    "bench/query_mapping.py": "d3e5bb1f5d2fdff9ed024149c5fb6a549c38f6616b968b16b3095ec69afa074d",
+    "bench/query_profile.py": "4915e3d44fb585cdd73ec38a0fe92ff5c5464738071d4444d27227470e8ce4e1",
+    "bench/ra_spike.py": "357721f290e7da2cb0236318c61877e8304d5b58fdb13220167be233b22520c2",
+    "bench/readme_uv.py": "a12ac26f884ce34d2657135368959757f21790ee9b7777bab902ec532857b7f6",
+    "bench/runlog.py": "e795a8f8d7b9b701a5a1b9f7e6dc5bf807b0ca68bf16688725af23dca97b2ca4",
+    "bench/runlog_misses.py": "717fbb9602bdeae291c1f108cec0e31dfc7f053ea789a2be746acc3b01618deb",
+    "bench/scheduler-sweep.py": "30828cc284cec2beee90742715c1b5a05d47a7690e8536ec9417401a7022827e",
+    "bench/scheduler_costs.py": "5364592bd3fa3d172a29bcd7f2891aa58505c2fa54923415117fca6ede55cd1c",
+    "bench/suite.py": "db89fc7f5eceaa0e10b630b6ee38f336bb9322ab4275daf6b8f0193d7ebcb68f",
+    "bench/synth/gen.py": "6c05a4a0242b3713afaa05a317d9fc11cc0df0eb9f399815f2dc856973872d29",
+    "bench/synth/mine.py": "6fb23bee8a54dc28b4fb5d72826e7c3b26d6e87cfa4c5475d591bbecec103b6f",
+    "bench/synth/run.py": "d4d7234429c7d2d6cd444bf20b38930ef15552fc0e53c3bf0e96d7a5574dfbc0",
+    "bench/test_audit_hosted_evidence.py": "26cee8f28fa339b20162b23b349bd98b5e6affe4493d1536b48bd8a259d21262",
+    "bench/test_critpath.py": "c939e42cc903b963b33d80afb94db1191c5c0c4429f3c1687a99be18289b7a34",
+    "bench/test_frozen_acceptance.py": "5ffd0c456b3ccd37b96cee69ea399e419cfc13d77a065033be7fe1363a2dc460",
+    "bench/test_headless_launch.py": "a39c763de982390234ef856115093a6226cc30a4a7a89c2b96add9ffcab4afbb",
+    "bench/test_profile_evidence.py": "ee7a00cbef930e6ec719783507972f014bb49b8dd4ea0e1262c5482da655176b",
+    "bench/test_query_activities.py": "e376ff42e7e13044fe24c5aea671b84b9256a77769ee74a75130c2b75fc1bc84",
+    "bench/test_query_graph.py": "c69fb70194d69b4476b47f2bc2d769c66625018ddb43c738e49025c2da0764e7",
+    "bench/test_query_mapping.py": "279c4bfc834dff130c99b645e289e88346f5e50cf9dfeee4f51f5cd6cddd266c",
+    "bench/test_query_profile.py": "d6fec14b06aeafe56e97afb98124d01faf8f5845b6d41689be38994c15687324",
+    "bench/test_readme_uv.py": "6b1e83fd0f7abc8f1067ae6e920d6aac9145effc444ca7457f8f8e2eab50dcb6",
+    "bench/test_remote_evidence_sync.py": "c6510b4dc2021e4d0fd36572bba66017d7b456b817fabe96f10ce58397ea7800",
+    "bench/test_run_counted.py": "5a6baa92ac24bae36904cb107b7e1b597f98cc751f12fb1245fe0aa5b32f1896",
+    "bench/test_scheduler_costs.py": "bc12bdbf85c6014f5c43269d0cd78da32b5e1f4daa7730730636dd379b470315",
+    "bench/test_scheduler_sweep.py": "ec4e1313bef9a21c43bf240d40c53fbf4551d691e2705d2b9a00bf3847c147ce",
+    "bench/test_suite.py": "74a04b008c792c877ff6d76f6c6c2d7e59e05136bf0b4a477f89c500b8ce7416",
+    "bench/test_synth_context.py": "abef109ca619aa29ccbbfdaf4fdc828b7fe3e6c5e66ebb3fa6d5b5915def8750",
+    "bench/test_synth_reporting.py": "e986c4a33cf39a29a51792d9da17950e904da126e32ce0a0077d68c232aafa62",
+    "bench/test_versus.py": "edaaa609668b3d57bc8fa25fca7b58c184c6972142e9deaf04234dacb42f459d",
+    "bench/threads_sweep.py": "edf7ec6b084fa1caca90c5fd88ef4c6b9c28b94a6d39fac4febd68ea22a11187",
+    "bench/trend.py": "b86f16c3ded8e21a0b0cf81e602b4c5fa9b4e03093bb46d6be9dca40a28cde90",
+    "bench/versus.py": "4f02ec983d27f6ba85c6a2525b299d0f67ed4bccdcc1f45ca8d2709671d4ae60",
+    "bench/on-remote.sh": "1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4"
+  },
+  "checks": [
+    {
+      "name": "original-status-red",
+      "argv": [
+        "python3",
+        "bench/test_headless_launch.py",
+        "-v",
+        "HeadlessLaunch.test_public_start_preserves_success0",
+        "HeadlessLaunch.test_public_start_preserves_failure23",
+        "HeadlessLaunch.test_public_start_preserves_signal143"
+      ],
+      "exit": 1,
+      "expected_exit": 1,
+      "seconds": 2.1586953809892293,
+      "log": "original-status-red.log",
+      "log_sha256": "af352d2ab6b2931119bb755f9b914549ce337a0cd82794bbc6788ef460ed8d01"
+    },
+    {
+      "name": "final-focused-green",
+      "argv": [
+        "python3",
+        "bench/test_headless_launch.py",
+        "-v"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "seconds": 4.158379968983354,
+      "log": "final-focused-green.log",
+      "log_sha256": "e6b007376b3227619fe6985b27f1b5ff7c42820c65e1a039da42468779514487"
+    },
+    {
+      "name": "whole-green",
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_*.py"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "seconds": 9.098712389008142,
+      "log": "whole-green.log",
+      "log_sha256": "398842b8063817cc08cb728ad8e3e8b908b5ad4a14281b3e0815d03618d139a4"
+    },
+    {
+      "name": "shell-syntax",
+      "argv": [
+        "bash",
+        "-n",
+        "bench/on-remote.sh"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "seconds": 0.0017479920061305165,
+      "log": "shell-syntax.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "source-whitespace",
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "--",
+        "bench/on-remote.sh"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "seconds": 0.0015676949988119304,
+      "log": "source-whitespace.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "scope": "local generated-script exit preservation and real diagnostic kernel/utilities/private-tmux boundaries; fake transport, not hosted acceptance",
+  "candidate_detachment": "rejected: early kill-session leaves detached child alive",
+  "legacy_stop_cause": null,
+  "speedup": null,
+  "cpu_work": null,
+  "span": null,
+  "hardware_ceiling": null,
+  "logs": [
+    {
+      "path": "original-status-red.log",
+      "original_sha256": "af352d2ab6b2931119bb755f9b914549ce337a0cd82794bbc6788ef460ed8d01",
+      "public_sha256": "88e6340c8af4cbbbd15f655e8dd5c228134cb01cf7ab48b9b01c8339702800e9",
+      "bytes": 3275,
+      "preservation": "lossless_except_explicit_operator_fixture_and_repository_path_redaction"
+    },
+    {
+      "path": "final-focused-green.log",
+      "original_sha256": "e6b007376b3227619fe6985b27f1b5ff7c42820c65e1a039da42468779514487",
+      "public_sha256": "a04cba47eb63a908fca68a84ff9bb358490c715457afc6f66c48126d099ed95c",
+      "bytes": 5380,
+      "preservation": "lossless_except_explicit_operator_fixture_and_repository_path_redaction"
+    },
+    {
+      "path": "whole-green.log",
+      "original_sha256": "398842b8063817cc08cb728ad8e3e8b908b5ad4a14281b3e0815d03618d139a4",
+      "public_sha256": "c9aa2f8ad782ed4926370e4d50df9ed69e825d167317f53d73eb6f8ec668caa2",
+      "bytes": 4474,
+      "preservation": "lossless_except_explicit_operator_fixture_and_repository_path_redaction"
+    },
+    {
+      "path": "shell-syntax.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "public_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "preservation": "lossless_except_explicit_operator_fixture_and_repository_path_redaction"
+    },
+    {
+      "path": "source-whitespace.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "public_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "preservation": "lossless_except_explicit_operator_fixture_and_repository_path_redaction"
+    }
+  ],
+  "diagnostic_records": "actual-observations.json",
+  "final_test_counts": {
+    "focused": 11,
+    "whole": 231,
+    "skipped_focused": 0
+  },
+  "original_controls": {
+    "count": 3,
+    "failures": 2,
+    "success0_passed": true,
+    "failure23_and_signal143_script_returned": 0
+  },
+  "documentation_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+  "limitations": [
+    "fake transport is not real SSH/auth/hosted acceptance",
+    "real private tmux probes reject naive detached candidate",
+    "default tmux/session/keepalive/deadline paths unchanged",
+    "local terminal mechanism not legacy signal attribution",
+    "anonymous-pipe functionality not exhaustive Cargo jobserver verification",
+    "no eligible full OFF/ON comparison",
+    "historical pre-pidfd receipts retained privately, not current source acceptance"
+  ]
+}
