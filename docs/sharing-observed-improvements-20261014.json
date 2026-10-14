@@ -1,0 +1,256 @@
+{
+  "audit_harness_correction": "CLI tee report bytes are not the recorded output.jsonl bytes. The first audit compared the wrong representation and failed. Correct recorded-output hashes match all eight immutable receipt entries.",
+  "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+  "limits": {
+    "cross_cpu_stale_execution_demonstrated": false,
+    "current_final_client_native_assertions_passed_in_hosted_test": true,
+    "genuine_new_tenant_boot_observed": false,
+    "historical_native_green_is_current_final_client_binary": false,
+    "native_public_script_sharing_authorized": false,
+    "speedup_claim": false
+  },
+  "native_after": {
+    "actual_executable_series": [
+      {
+        "depcache": "miss",
+        "executable_output": 1,
+        "native_version": 1
+      },
+      {
+        "depcache": "miss",
+        "executable_output": 2,
+        "native_version": 2
+      },
+      {
+        "depcache": "hit",
+        "executable_output": 2,
+        "native_version": 2
+      }
+    ],
+    "exit": 0,
+    "raw_output_jsonl_sha256": "ac511f62910cc8c17d96e4844203340173fbd01b591ee05511e7da5455379b51",
+    "result": "changed native payload invalidates; unchanged payload safely restores",
+    "run_id": "20261013-201333279-898502"
+  },
+  "native_before": {
+    "cached_executable_output": 1,
+    "observed_changed_native_version": 2,
+    "raw_sha256": "2f937c5bce08a91d67d5b5040ac947a7b24a87cdf353c800fe50be9f2c6a0a26",
+    "result": "stale cached result demonstrated, original acceptance failed",
+    "uncached_same_invocation_output": 2
+  },
+  "normal_hosted_commands_verified": [
+    "20261013-230247223-2028894",
+    "20261013-230247657-2029635",
+    "20261013-230258167-2038008",
+    "20261013-230258921-2038403"
+  ],
+  "observed_improvement": [
+    "Actual fresh check/test restores a trusted public dependency in all eight compiler/profile cells, with zero misses and two tests passing in every test command.",
+    "Actual bundled native change no longer returns stale output1: corrected executable produces2, then restores2 on unchanged repetition."
+  ],
+  "public_interface_runs": [
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230143882-2018034",
+      "misses": 0,
+      "passed": 0,
+      "public_hits": 1,
+      "raw_output_sha256": "ce0aff4b441ca490119ed713dcb02e7546c2905f40127808313b3825d1df74da",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230144909-2018143",
+      "misses": 0,
+      "passed": 2,
+      "public_hits": 1,
+      "raw_output_sha256": "7e86f12f39d9434446dea4f3154835e7cf290e3310e73d20542c02ca661aaaa5",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230145670-2018305",
+      "misses": 0,
+      "passed": 0,
+      "public_hits": 1,
+      "raw_output_sha256": "4444fb1d51403ae898045e2001dfb2138f5a95f72758ad14d8b42441768d449f",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230146448-2018458",
+      "misses": 0,
+      "passed": 2,
+      "public_hits": 1,
+      "raw_output_sha256": "88df1d30f60560c95aa66f2ad0a9d9a38b6a18ebbf3cd8864b077ad7470fe332",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230147089-2018665",
+      "misses": 0,
+      "passed": 0,
+      "public_hits": 1,
+      "raw_output_sha256": "92f73e6035c398232b8350417e3bb900eeb2f0d4704e0498a3cb12036219a54c",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230147995-2018818",
+      "misses": 0,
+      "passed": 2,
+      "public_hits": 1,
+      "raw_output_sha256": "aa8a87b731caa386ce35217b555f5677d14210e173cec5c23e819c4644445dc8",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    },
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230148688-2018981",
+      "misses": 0,
+      "passed": 0,
+      "public_hits": 1,
+      "raw_output_sha256": "cf6fe3e2d5975d08c51c920d66749402029dfcb0e7ea701538b06b72651a201c",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230149595-2019101",
+      "misses": 0,
+      "passed": 2,
+      "public_hits": 1,
+      "raw_output_sha256": "9d115ff0f56043fe5b1eaf3593ae015bacad32613a12381d382eb046539486ff",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    }
+  ],
+  "requirements_reaudited": [
+    {
+      "actual_observation": "nightly/fullJR load correctly; actual install reuse exits0 and markers unchanged",
+      "id": "S01",
+      "requirement": "Share complete immutable public toolchains",
+      "scope": "real CLI/package runtime"
+    },
+    {
+      "actual_observation": "inactive unchanged",
+      "id": "S02",
+      "requirement": "Downloaded JR never automatically activated",
+      "scope": "actual prefix observation"
+    },
+    {
+      "actual_observation": "wrongschema/identity/digest/size/path/link/device/duplicate/truncatedgzip/helperloader rejection, atomic independentprocess locks and officialfallback all named PASS",
+      "id": "S03",
+      "requirement": "Reject corrupt identities, malicious archives and unavailable distribution safely",
+      "scope": "boundary tests plus previous real broken Ubuntu helper127, not malicious production upload"
+    },
+    {
+      "actual_observation": "96MiB incompressible public roundtrip above95MiB cap succeeds/private rejects; bedrock restored hash-identically but already fit oldgzip cap",
+      "id": "S04",
+      "requirement": "Larger public bundles without increasing private tier limits",
+      "scope": "synthetic large boundary plus actual compiled artifact roundtrip, no speed claim"
+    },
+    {
+      "actual_observation": "103verified archives; fresh authoritative sparse index; tamper/private/git/redirect/symlink/overwrite reject",
+      "id": "S05",
+      "requirement": "Verified public registry archives without mutable index/config/credential sharing",
+      "scope": "real fetch plus offline transport edge tests; no private Cargo-home publish"
+    },
+    {
+      "actual_observation": "seed1.697s median vs direct1.057s; default off",
+      "id": "S06",
+      "requirement": "Count complete network cost before seed default promotion",
+      "scope": "workload-specific measured negative result, no universal speed claim"
+    },
+    {
+      "actual_observation": "8publichits/0misses, four2test passes; historical producer9193newbundles/19917index and4newJRkeys separately observed",
+      "id": "S07",
+      "requirement": "Compatible prebuilt compiler/profile keys actually reused",
+      "scope": "real public CDN consumption, no account-cache attribution"
+    },
+    {
+      "actual_observation": "normal existing-host authorization/charge workflows pass; named fixture tests privateotheraccount reject/trustedpublishtoken only/95MiBquota/failedreclaim cap preserved",
+      "id": "S08",
+      "requirement": "Account-private source/cache, trusted-only public writes and normal authorization preserved",
+      "scope": "real existing-account accepted; cross-account live hostile attempts not performed, fixture boundary tests not misrepresented as live tenant proof"
+    },
+    {
+      "actual_observation": "test42; sentinel absent; source identity and later Desktop backup restoration verified",
+      "id": "S09",
+      "requirement": "Source mirroring preserves tracked target modules but excludes private ignored files",
+      "scope": "actual hosted source interface, not a manual source copy"
+    },
+    {
+      "actual_observation": "historical native metadata and hermeticbit alone refused; sharing_authorized=false; header mutation withsamecompiler observed",
+      "id": "N01",
+      "requirement": "Native script public replay must not trust compiler or filesystem hash alone",
+      "scope": "guard accepted; native sharing authorization remains BLOCKED on trusted mounted closure/kernelCPU/environment/ABI"
+    },
+    {
+      "actual_observation": "whole executable hash changes with expansion behavior; old metadata-only memo invalidated",
+      "id": "N02",
+      "requirement": "Executed proc-macro code is fully keyed",
+      "scope": "actual compiler macro execution within real-project integration, not a cross-machine native closure proof"
+    },
+    {
+      "actual_observation": "old staleoutput1 on helper2 repaired; current outputs1/2/2 and misses1/2 thenhit2",
+      "id": "N03",
+      "requirement": "Bundled native rlib code must invalidate dependent artifacts",
+      "scope": "real compiler/link/runtime integration, no claim all native determinants solved"
+    },
+    {
+      "actual_observation": "16native ordinaryCLI runs bypass dep/local caches and pass2runtime tests each",
+      "id": "N04",
+      "requirement": "Host native CPU flags cannot get portable/local cache eligibility without CPU determinant",
+      "scope": "actual Cargo/publiccrate/runtime; crossCPU staleexecution not demonstrated"
+    },
+    {
+      "actual_observation": "2ordinaryCLI runs bypass allartifactcaches/pass2tests each, no file reinterpretation by cache",
+      "id": "N05",
+      "requirement": "Opaque response files cannot evade cache determinant review",
+      "scope": "actual rustc response consumption; opaque missing/@shell checks remain explicit conservative parser boundary"
+    },
+    {
+      "actual_observation": "genericdep miss/hit preserved; nativefailure101 diagnosticE0308 full retained; repairpasses2tests withcachebypass",
+      "id": "N06",
+      "requirement": "Generic explicit CPU/flags remain cached and compiler errors are not masked",
+      "scope": "actual ordinary Cargo failure/recovery, not only mocked exit codes"
+    },
+    {
+      "actual_observation": "all0; actual named outputs now audited, source restored exact; new independent fresh consumer/native workflows pass",
+      "id": "S10",
+      "requirement": "Final installed client works through ordinary complete project and end-user edit loops",
+      "scope": "actual hosted project acceptance; no new hosted rerun during peerexclusive graph lease"
+    },
+    {
+      "actual_observation": "onlyUserData changed; allnonUserDataequal; safe0a19/fullJR/opaqueUUID configured;3hlifetime and09UTC schedule same",
+      "id": "S11",
+      "requirement": "Future fleet pin changes preserve infrastructure/security/lifetime and report sanitized status",
+      "scope": "actual configuration plus executablefake-AWS/status contracts; new version3producer runtime receipt UNOBSERVED until natural next schedule"
+    },
+    {
+      "actual_observation": "BLOCKED/unobserved, never inferred from bootstrap source or existinghost reuse",
+      "id": "S12",
+      "requirement": "Genuine new-tenant boot acceptance without destroying data",
+      "scope": "no account fabrication/host deletion/security weakening"
+    }
+  ],
+  "scheduled_producer_followup": {
+    "index_unique_keys": 19994,
+    "private_receipt_commit": "ca2e957",
+    "public_build_script_runs": 0,
+    "public_receipt_commit": "e73e103",
+    "reported_new_bundle_files": 81,
+    "terminal_succeeded": true
+  },
+  "schema_version": 1,
+  "scope": "Read-only re-audit of actual recorded public-interface outcomes, not new builds or timing comparisons",
+  "source_receipt_commit": "085425e",
+  "source_receipt_sha256": "311d45fe65f5f6dabe6d836a00a22ab32ddfb4c962659a119f6ec0b9d29cd5fd"
+}
