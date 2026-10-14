@@ -35,6 +35,7 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_PEER_CACHE",
     "JUSTRUST_TOOLCHAIN",
     "JUSTRUST_PREBUILT",
+    "JUSTRUST_SHADOW",
     "JUSTRUST_TEST_FILTER_COMPILE",
     "JUSTRUST_CACHE_PROC_MACROS",
     "JUSTRUST_CUTOFF",
@@ -923,6 +924,7 @@ mod tests {
     #[test]
     fn hosted_forwards_explicit_optimization_controls_not_secrets_or_local_paths() {
         for var in [
+            "JUSTRUST_SHADOW",
             "JUSTRUST_TEST_FILTER_COMPILE",
             "JUSTRUST_CACHE_PROC_MACROS",
             "JUSTRUST_CUTOFF",
@@ -947,6 +949,7 @@ mod tests {
             "JUSTRUST_HOME",
             "JUSTRUST_RUN_DIR",
             "JUSTRUST_REAL_RUSTC",
+            "JUSTRUST_SHADOW_CHILD",
             "JUSTRUST_EARLY_EXIT",
             "JUSTRUST_EARLY_LAUNCHER",
             "JUSTRUST_EARLY_RESOURCE_LIMITED",

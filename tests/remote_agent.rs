@@ -721,6 +721,165 @@ fn replaced_agent_executable_still_checks_with_stable_recording_shims() {
     );
 }
 
+#[test]
+fn remote_shadow_preserves_leaf_verdicts_and_normal_build_fallback() {
+    let mut a = Agent::start("shadow-routing");
+    for (path, data) in [
+        (
+            "/proj/Cargo.toml",
+            "[workspace]\nmembers=['big']\nresolver='2'\n[profile.dev]\ndebug=0\n",
+        ),
+        (
+            "/proj/big/Cargo.toml",
+            "[package]\nname='big'\nversion='0.0.0'\nedition='2021'\n",
+        ),
+        (
+            "/proj/big/src/lib.rs",
+            "mod leaf;\nmod other;\npub fn api() -> u32 { leaf::double(other::three()) }\n",
+        ),
+        (
+            "/proj/big/src/other.rs",
+            "pub(crate) fn three() -> u32 { 3 }\n",
+        ),
+        (
+            "/proj/big/src/leaf.rs",
+            "pub(crate) fn double(x: u32) -> u32 { x * 2 }\n#[cfg(test)]\nmod tests {\nuse super::*;\n#[test]\nfn doubles() { assert_eq!(double(2), 4); }\n}\n",
+        ),
+    ] {
+        a.send(
+            Msg::Write {
+                path: path.into(),
+                mode: 0o644,
+            },
+            data.as_bytes(),
+        );
+    }
+    assert!(a.barrier(200).is_empty());
+    let leaf = read(&a.at("/proj/big/src/leaf.rs"));
+    // First use records the normal build. Leaf-only edits use the existing
+    // opt-in route, including failed tests. Other edits and explicit opt-out
+    // must still run the original package. The final repeat reuses artifacts.
+    for (id, changed, source, enabled, shadow, code) in [
+        (201, "", "".into(), true, false, 0),
+        (
+            202,
+            "/proj/big/src/leaf.rs",
+            leaf.replace("x * 2", "x + x"),
+            true,
+            true,
+            0,
+        ),
+        (
+            203,
+            "/proj/big/src/leaf.rs",
+            leaf.replace("x * 2", "x * 3"),
+            true,
+            true,
+            101,
+        ),
+        (
+            204,
+            "/proj/big/src/other.rs",
+            "pub(crate) fn three() -> u32 { 1 + 2 }\n".into(),
+            true,
+            false,
+            101,
+        ),
+        (205, "/proj/big/src/leaf.rs", leaf.clone(), true, false, 0),
+        (206, "", "".into(), false, false, 0),
+        (207, "", "".into(), true, true, 0),
+        (208, "", "".into(), true, true, 0),
+    ] {
+        if !changed.is_empty() {
+            a.send(
+                Msg::Write {
+                    path: changed.into(),
+                    mode: 0o644,
+                },
+                source.as_bytes(),
+            );
+            assert!(a.barrier(id + 100).is_empty());
+        }
+        a.send(
+            Msg::Run {
+                id,
+                cwd: "/proj".into(),
+                args: vec![
+                    "test".into(),
+                    "-p".into(),
+                    "big".into(),
+                    "--lib".into(),
+                    "--offline".into(),
+                    "--".into(),
+                    "leaf".into(),
+                ],
+                env: vec![
+                    ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
+                    (
+                        "JUSTRUST_SHADOW".into(),
+                        if enabled { "1" } else { "0" }.into(),
+                    ),
+                    ("JUSTRUST_BUILDD".into(), "0".into()),
+                    (
+                        "CARGO_TARGET_DIR".into(),
+                        a.at("/proj/target").to_string_lossy().into_owned(),
+                    ),
+                ],
+                roots: vec![],
+                start: false,
+                run_id: format!("shadow-routing-{}-{id}", std::process::id()),
+            },
+            &[],
+        );
+        let mut output = String::new();
+        loop {
+            match a.recv() {
+                (Msg::Out { id: got, .. }, data) if got == id => {
+                    output.push_str(&String::from_utf8_lossy(&data))
+                }
+                (Msg::RunFiles { id: got }, _) if got == id => {}
+                (
+                    Msg::Exit {
+                        id: got,
+                        code: actual,
+                    },
+                    data,
+                ) if got == id => {
+                    assert_eq!(
+                        actual, code,
+                        "latest source must determine verdict: {output}"
+                    );
+                    assert_eq!(
+                        output.contains("leaf crate jr-shadow-leaf"),
+                        shadow,
+                        "{output}"
+                    );
+                    let summary: serde_json::Value = serde_json::from_slice(&data).unwrap();
+                    assert_eq!(
+                        summary["tests"][if code == 0 { "passed" } else { "failed" }],
+                        1,
+                        "{output}"
+                    );
+                    assert_eq!(
+                        summary["args"][2],
+                        if shadow { "jr-shadow-leaf" } else { "big" },
+                        "{output}"
+                    );
+                    if id == 208 {
+                        assert_eq!(summary["units"]["compiled"], 0, "{output}");
+                    }
+                    break;
+                }
+                other => panic!("unexpected shadow frame {other:?}: {output}"),
+            }
+        }
+    }
+    assert!(
+        !a.at("/proj/jr-shadow-leaf").exists(),
+        "user workspace must not be rewritten"
+    );
+}
+
 /// `justrust cargo <secs>` with the real cargo pointed at `sleep` is a
 /// long-running run that needs no toolchain.
 fn sleep_run(id: u64, secs: &str) -> Msg {
