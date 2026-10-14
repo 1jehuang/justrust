@@ -1,0 +1,22 @@
+justrust: remote (JUSTRUST_REMOTE=force)
+justrust remote: not mirrored (over 8 MB): /home/jeremy/justrust/.wrangler/wasm-fix-export/xps14/2026-10.jsonl (27.6 MB), /home/jeremy/justrust/data/runs/xps14/2026-10.jsonl (41.1 MB), /home/jeremy/justrust/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+{"scenario":"contention","capacity":1,"threads":8,"operations":16000,"peak_active":1,"elapsed_ns":58021573}
+{"scenario":"contention","capacity":4,"threads":8,"operations":16000,"peak_active":3,"elapsed_ns":69171010}
+{"scenario":"immediate","operations":2000,"elapsed_ns":84101}
+{"scenario":"surplus","operations":2,"available_after":1}
+
+
+justrust: ok: 1 test passed in 2.3s
+  time    startup 0.01s | compile 1.87s | gaps 0.26s | after 0.16s
+  rustc   pinned toolchain nightly-2026-10-08
+  units   11 compiled (3 local, 8 deps, 0 build scripts), 0 fresh, depcache 4 hit (2 prebuilt)/4 miss (saved ~2.9s of rustc), localcache 0 hit/3 miss
+          lock_api                           0.88s  cpu   0.0s      0 MB
+          scopeguard                         0.56s  cpu   0.0s      0 MB
+          allowance_tickets_baseline         0.11s  cpu   0.3s    159 MB
+  tests   1 passed, 0 failed, 0 ignored, 0 filtered out, binary timing unavailable
+  cpu     1.4s total, avg 0.6/peak 0.3 of 24 cores; others used 0.7 cores
+  memory  peak 402 MB build, 159 MB largest rustc, 90.8 GB free; stalls cpu 0.00s mem 0.00s io 0.01s
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  1.7s  rebuilt 8 registry dependencies and 0 build scripts (1.7s)
+  more    `justrust log 20261014-130116764-936679` full output, `justrust show 20261014-130116764-936679` full profile
+justrust remote: ok on hosted in 3.8s (sync 1061 ms, 0 files at build time)

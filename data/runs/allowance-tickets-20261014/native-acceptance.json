@@ -1,0 +1,565 @@
+{
+  "benchmark": {
+    "batch_hashes": [
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/00-baseline.json",
+        "sha256": "619a436908e2ae7a0f42a2ee2aadce1ee5b93ad73298c5447eb542cd1bf2808e"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/00-candidate-disabled.json",
+        "sha256": "f00785c9536504546db2bdf34a876e4afb2a248c9fca3e7ecd614a74e6340805"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/00-candidate-enabled.json",
+        "sha256": "04ec4dce805dd34fcd48c9d6d618f9887a21392c01a0b533347bda7c5d1ffe27"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/01-candidate-disabled.json",
+        "sha256": "5c8f6be5228b33ec7c58af28ab070112df7dfcdd5190b22382a5c9d5cd7ec74b"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/01-candidate-enabled.json",
+        "sha256": "225d5bca6c49c235a5c840aa932aae8a67967097d98e88bd9e361b0d37de7181"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/01-baseline.json",
+        "sha256": "432ff85b294770bc661fd062bf25ba3d1e51a78f13aa7a02a7b39dbf4f9a2789"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/02-candidate-enabled.json",
+        "sha256": "460ce863ef33d8579bb95aa4a42c6e418d53fd0378638f9b0c9f7df5f258a8a1"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/02-baseline.json",
+        "sha256": "240bb38bdb6837b69c00974b7796ed1a601b6a4c4ca8195212508e2661a2e3e5"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/02-candidate-disabled.json",
+        "sha256": "4cf126f59534964e931438a6bc3ca58dbcd63002ff93ccbef7a3122879b2e203"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/03-baseline.json",
+        "sha256": "c4000b522800352f958badbcc4c893200b094ea0d831b367813e61072bd063ca"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/03-candidate-disabled.json",
+        "sha256": "07132b7c392301e8718ee6d2a143dd2ac2e554e010ff7687d926a958651440e3"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/03-candidate-enabled.json",
+        "sha256": "ab4c8930e2f4b8bb12a11174bb16852e1c3f73dea05131c8c07167831ab10a41"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/04-candidate-disabled.json",
+        "sha256": "d010f95008a0f5996bc6d292a77f2bfb50c9fe98bc2cbaedd5495f1389d112db"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/04-candidate-enabled.json",
+        "sha256": "bdc641197d004673b21a5f769c297c187583aa66e2f42704ea1eb34bf1243bcb"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/04-baseline.json",
+        "sha256": "4ac575e7e1bb0e8316f41a9f3af41850d5a8967990339153bbf368aab13adb22"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/05-candidate-enabled.json",
+        "sha256": "3e3997dcf48a98ffc70338542aab64234f5cf7566ee160899425a777dd447b0e"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/05-baseline.json",
+        "sha256": "be6cde3274810abfa81db746399f7aa639095692646261ed08f08a20e2a1f1fd"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/05-candidate-disabled.json",
+        "sha256": "1a08307667e3e5217cbf76de9dcbb718a9b5ec7c83c75e38d1ad0673380a2151"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/06-baseline.json",
+        "sha256": "27771964db6f824052b7559b2faa11f533afda313f491597442bad4847bf9a68"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/06-candidate-disabled.json",
+        "sha256": "edf11bb8fe0d95963abe6beeb92fbf9af67324fd0bc7f22fa00cde5cc8706c8f"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/06-candidate-enabled.json",
+        "sha256": "1ae603ad85073aec1c77cf566dead14b9013b0fc0e2397783b276dd59a240552"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/07-candidate-disabled.json",
+        "sha256": "dbf903fb9df2377f4257d709f4209656d043d929757d5f53a0e9febc4390cf7c"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/07-candidate-enabled.json",
+        "sha256": "09d7374531437c1dc44d68ed05769a11dbb4ac8ced2d0dd1586120d822fef268"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/07-baseline.json",
+        "sha256": "fcf822f9a1508c7b5cadbd8888cb63dc63e1631487792120787a644d11591498"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/08-candidate-enabled.json",
+        "sha256": "06675099b20943cbcc70477d8f72044a933594ef3e4eac383e7424ca1800c343"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/08-baseline.json",
+        "sha256": "65a1c9c840b0b9518165e9a3c1f4e52d85b93e02c5917a66072eaa3d853b8d2d"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/08-candidate-disabled.json",
+        "sha256": "4622b24c7b09a12bcc092fc41c8f3cec7a40e61ce14c00f862bb972c9531721a"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/09-baseline.json",
+        "sha256": "784b6d155aed0f34b9b60221d0c54bef080e73e8da61c04b2298383e9cd7b512"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/09-candidate-disabled.json",
+        "sha256": "aa4afc491681175b9b2f1b8810a72772aeff54d9c0951a212488367cbd1f75ec"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/09-candidate-enabled.json",
+        "sha256": "d5baf5caa50353e60fdda6d3ada46ff4226324ba5fe61894c3365982d1f467ec"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/10-candidate-disabled.json",
+        "sha256": "5ca1921f631675564cee9ee003c007428c7bb9b155352a0a44dfaa1f41182dc7"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/10-candidate-enabled.json",
+        "sha256": "2037d72e26a363dcc7cb28e70e3cb4ee665f443edfa1c3b570379639e1ac8c61"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/10-baseline.json",
+        "sha256": "e4c9fa08669746e737317427925d119dca4b2584aee8690d72028564abab2eca"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/11-candidate-enabled.json",
+        "sha256": "505cccc397cec2b8b9869eb7599a9416c87856a87057ad631c1ed8613b8bc2db"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/11-baseline.json",
+        "sha256": "ac6c0425bbd04785d71d23a46af4c54f4f617b340bb161fdc5cc55579fc1f59e"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/11-candidate-disabled.json",
+        "sha256": "a41c4fc2add6c0001f3a99f28bb12b59da0e66f38f308cb95e086708b4b846ee"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/12-baseline.json",
+        "sha256": "acaff07aef323a3b4a90489b4d00b75dbe3648a146b87fdd2761450dfdd5549a"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/12-candidate-disabled.json",
+        "sha256": "a3e9b6ff2223a503b3c4e8b9201d2b55bd1d9903369c029ba1a8aeee8902a5ac"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/12-candidate-enabled.json",
+        "sha256": "26d58eb4ac5404354c2ae89a90b0547f8b7e9cb38cc2c9e9e9614dac552544f9"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/13-candidate-disabled.json",
+        "sha256": "53529c430b948293ac3bb56dbd845ac9721bdc4ef03c862dfdbf405e58b9f9a0"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/13-candidate-enabled.json",
+        "sha256": "9dba41df32f5c1da6d14651fa7f7aa5bdc3353ad7e84e17b372e1483a8fe3740"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/13-baseline.json",
+        "sha256": "cb4d6bf958915adfbe022acc059ab1bb900724943e386f3edcc8cbdd10683eb3"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/14-candidate-enabled.json",
+        "sha256": "8d29296bb1f424a9c09dc663f4a5c2968ae6d923f17f6be3a412b27e5747ea7b"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/14-baseline.json",
+        "sha256": "307ce924cadc440e7de4f956e3cd4f89bc7dcaf723dbd16007e2aa5ea69a168b"
+      },
+      {
+        "exit_code": 0,
+        "path": "bench/allowance-tickets/results/comparison-034-individual/14-candidate-disabled.json",
+        "sha256": "194a4ae255c2db29ff13047abb76e814f0892099137c12fc8d4b63763e594f3a"
+      }
+    ],
+    "batches": 45,
+    "checks": {
+      "all_candidate_surplus_callbacks_completed": true,
+      "all_completed_pairs_exact": true,
+      "all_exit_zero": true,
+      "candidate_releases_include_bootstrap": true,
+      "candidate_request_grant_ack_exact": true,
+      "candidate_used_pending_zero": true,
+      "contention_peak_within_capacity": true,
+      "enabled_surplus_trace_names_no_grant": true,
+      "surplus_acknowledged_samples": 30
+    },
+    "dependency": "jobserver =0.1.34",
+    "failures": [],
+    "path": "bench/allowance-tickets/results/comparison-034.json",
+    "provenance": {
+      "baseline": {
+        "artifact_compiler_stamp": "\nString dump of section '.comment':\n  [     1]  rustc version 1.101.0-nightly (1d81eb4ad 2026-10-07)\n  [    36]  GCC: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n  [    63]  Linker: Wild 0.10.0 (compatible with GNU linkers)\n\n",
+        "artifact_sha256": "e7a7fd459d3275c2f6997f664396e45d2e2547471e816cd88fc7191f679daf40",
+        "binary": "archive/baseline-executable-0.1.34",
+        "blockers": [
+          "immutable baseline has no helper callback acknowledgment; available() snapshot is not a completion oracle"
+        ],
+        "capture_event_capacity": 0,
+        "compiler_version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+        "cpu_description": "Intel(R) Core(TM) Ultra X9 388H",
+        "harness_sha256": "5436794490ce3a0502dcf52ba38e765f5992962d27bc2167f17e572457efe439",
+        "local_pinned_compiler_binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "lockfile_sha256": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+        "machine": [
+          "Linux",
+          "xps14",
+          "7.2.3-arch1-2",
+          "#1 SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 17:55:06 +0000",
+          "x86_64"
+        ],
+        "operations_per_thread": 10000,
+        "runner_sha256": "170f0655155875d80b0d98fd1ad3159a9f4e1a65f349a677f3035679e769c27e",
+        "scope": "actual archived Proxy microfixture, no resource identity, lease or broad speed claim",
+        "source_sha256": "941b83d84a8c29b3f0d6267b12120787a765ee6f18055e7bf5666ddb23f8684b",
+        "variant": "baseline"
+      },
+      "candidate-disabled": {
+        "artifact_compiler_stamp": "\nString dump of section '.comment':\n  [     1]  rustc version 1.101.0-nightly (1d81eb4ad 2026-10-07)\n  [    36]  GCC: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n  [    63]  Linker: Wild 0.10.0 (compatible with GNU linkers)\n\n",
+        "artifact_sha256": "4c46fb86ee8c79c4d3d0cd03b58df23336be25d5d2e7ce366624777ee06ab543",
+        "binary": "archive/candidate-executable-0.1.34",
+        "blockers": [],
+        "capture_event_capacity": 0,
+        "compiler_version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+        "cpu_description": "Intel(R) Core(TM) Ultra X9 388H",
+        "harness_sha256": "5436794490ce3a0502dcf52ba38e765f5992962d27bc2167f17e572457efe439",
+        "local_pinned_compiler_binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "lockfile_sha256": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+        "machine": [
+          "Linux",
+          "xps14",
+          "7.2.3-arch1-2",
+          "#1 SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 17:55:06 +0000",
+          "x86_64"
+        ],
+        "operations_per_thread": 10000,
+        "runner_sha256": "170f0655155875d80b0d98fd1ad3159a9f4e1a65f349a677f3035679e769c27e",
+        "scope": "actual archived Proxy microfixture, no resource identity, lease or broad speed claim",
+        "sibling_source_sha256": "96d803532813f0cd7e27c704ca5ed84eaf8a145995e3111b354586a095c0cc18",
+        "source_sha256": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+        "variant": "candidate-disabled"
+      },
+      "candidate-enabled": {
+        "artifact_compiler_stamp": "\nString dump of section '.comment':\n  [     1]  rustc version 1.101.0-nightly (1d81eb4ad 2026-10-07)\n  [    36]  GCC: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n  [    63]  Linker: Wild 0.10.0 (compatible with GNU linkers)\n\n",
+        "artifact_sha256": "4c46fb86ee8c79c4d3d0cd03b58df23336be25d5d2e7ce366624777ee06ab543",
+        "binary": "archive/candidate-executable-0.1.34",
+        "blockers": [],
+        "capture_event_capacity": 4096,
+        "compiler_version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+        "cpu_description": "Intel(R) Core(TM) Ultra X9 388H",
+        "harness_sha256": "5436794490ce3a0502dcf52ba38e765f5992962d27bc2167f17e572457efe439",
+        "local_pinned_compiler_binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "lockfile_sha256": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+        "machine": [
+          "Linux",
+          "xps14",
+          "7.2.3-arch1-2",
+          "#1 SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 17:55:06 +0000",
+          "x86_64"
+        ],
+        "operations_per_thread": 10000,
+        "runner_sha256": "170f0655155875d80b0d98fd1ad3159a9f4e1a65f349a677f3035679e769c27e",
+        "scope": "actual archived Proxy microfixture, no resource identity, lease or broad speed claim",
+        "sibling_source_sha256": "96d803532813f0cd7e27c704ca5ed84eaf8a145995e3111b354586a095c0cc18",
+        "source_sha256": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+        "variant": "candidate-enabled"
+      }
+    },
+    "rounds": 15,
+    "samples": 180,
+    "sha256": "cf6ba0ac4b1e67b9b31d553335f0b77f292aacbb9f09b8f063976373f9868cd9",
+    "summary": {
+      "baseline": {
+        "immediate": {
+          "max_ns": 606549,
+          "median_ns": 276737,
+          "median_throughput_pairs_per_second": 36135392.08707184,
+          "min_ns": 244094,
+          "samples": 15
+        },
+        "multi": {
+          "max_ns": 219192080,
+          "median_ns": 165949040,
+          "median_throughput_pairs_per_second": 482075.7022758312,
+          "min_ns": 122922020,
+          "samples": 15
+        },
+        "one": {
+          "max_ns": 375193709,
+          "median_ns": 286793334,
+          "median_throughput_pairs_per_second": 278946.5113578965,
+          "min_ns": 242232492,
+          "samples": 15
+        }
+      },
+      "candidate-disabled": {
+        "immediate": {
+          "max_ns": 2051739,
+          "median_ns": 1243929,
+          "median_throughput_pairs_per_second": 8039044.029040243,
+          "min_ns": 1115372,
+          "samples": 15
+        },
+        "multi": {
+          "max_ns": 239339136,
+          "median_ns": 201658871,
+          "median_throughput_pairs_per_second": 396709.5501590902,
+          "min_ns": 149334658,
+          "samples": 15
+        },
+        "one": {
+          "max_ns": 402854724,
+          "median_ns": 314301961,
+          "median_throughput_pairs_per_second": 254532.2967297681,
+          "min_ns": 247894074,
+          "samples": 15
+        }
+      },
+      "candidate-enabled": {
+        "immediate": {
+          "max_ns": 2716899,
+          "median_ns": 1308402,
+          "median_throughput_pairs_per_second": 7642910.970787265,
+          "min_ns": 1174438,
+          "samples": 15
+        },
+        "multi": {
+          "max_ns": 368137966,
+          "median_ns": 204503646,
+          "median_throughput_pairs_per_second": 391191.0695225453,
+          "min_ns": 11936544,
+          "samples": 15
+        },
+        "one": {
+          "max_ns": 2034054248,
+          "median_ns": 311409250,
+          "median_throughput_pairs_per_second": 256896.672144453,
+          "min_ns": 258622769,
+          "samples": 15
+        }
+      }
+    }
+  },
+  "caveats": [
+    "Prototype is not frontend-wired. Existing native compiler harnesses exercise unchanged legacy admission only.",
+    "All candidate medians exceed baseline in matched focused run. No speedup or default promotion. Old jobserver 0.1.35 comparison is superseded.",
+    "Baseline surplus fixture has setup/availability only, no helper callback acknowledgment oracle. Candidate all 30 surplus samples acknowledge supply=completed=1.",
+    "Timed multi-contention snapshots may catch callback between supply and completion. They are not quiescent seal evidence.",
+    "Tiny work sections and OS scheduling noise, including large outliers, are retained. No fairness/optimality/physical token/held lease conclusion.",
+    "Artifact hashes identify separate compiler/build roles. Local benchmark compiler binary pin plus hosted artifact version stamp does not establish hosted ELF identity.",
+    "Legacy callback count 33316 points and 8 wait pairs is a historical actual observation, not deterministic expected scheduling count.",
+    "No full mapping, resource/query integrated graph, thread ceiling, CPU work/span or full-pipeline coverage claim."
+  ],
+  "compiler": {
+    "driver_sha256": "94f8d6443482ad714acbf728b815032a8869976da2c7612761db7c7a7b43ad0f",
+    "launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+    "note": "Native stage1 compiler includes prototype source, frontend still selects legacy Proxy. Benchmark compiler provenance is separate."
+  },
+  "date": "2026-10-14",
+  "evidence_root": "scratch/allowance-native-acceptance-20261014",
+  "frontend_default": "legacy Proxy unchanged",
+  "mode_semantics": {
+    "disabled": "event-buffer-off only, optional identity allocation and independent inventory counters still run",
+    "enabled": "4096 preallocated event rows, saturates with retained lost-event count",
+    "fully_zero_telemetry_mode": false
+  },
+  "native_build_log": {
+    "path": "task-output/8934935a2k.output",
+    "sha256": "76b5bfffe31a1d1bb9440f07577ce30264645f7dfd8bd8b5d9634152bcb1a900"
+  },
+  "native_receipts": [
+    {
+      "all_targets_bound": false,
+      "binding_lost_events": 0,
+      "expected_points": 33316,
+      "path": "query/native-task-binding-n7np45uo/capture/1792009310636653698-1165393-1.json",
+      "points": 33316,
+      "read_lost_events": 0,
+      "records_complete": true,
+      "sha256": "7b1787cb8d40a9e5042564488b320ac82651569f0f51f98af534048cd6965d66",
+      "wait_pairs": 8
+    }
+  ],
+  "provenance_files": [
+    {
+      "path": "source-before.sha256",
+      "sha256": "2987276bf88c812dc6a0ed8a0f4d2def945538fdc4607430a1f1469ea2a48f6c"
+    },
+    {
+      "path": "compiler.sha256",
+      "sha256": "14b068078919e268726c9bfa8bcfa5e862f839a0a591e8b4172552f77e1a096d"
+    }
+  ],
+  "remaining_gates": [
+    "Callback already in-flight teardown owning Acquired/State while Proxy drops. Existing drop test covers helper blocked acquiring only.",
+    "Real Client/helper IO failure and raw-release outcome validation. Current error test injects State::error directly.",
+    "Actual TicketedProxy frontend Registry startup/sleep/query-cycle/error/reacquire/shutdown integration and reservation convoy/fairness.",
+    "Resource wire format, reciprocal namespace attachment/checkpoint/seal, independent complete resource receipt authority and explicit query-wait resource linkage.",
+    "Comprehensive session-weighted before/after build workload plus relevant cold/incremental and contention regression gates before any speed or default-promotion claim."
+  ],
+  "schema": 1,
+  "scope": "experimental unwired TicketedProxy A/P protocol, unknown holder and physical-token lineage",
+  "source_hashes": {
+    "bench/allowance-tickets/Cargo.lock": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+    "bench/allowance-tickets/archive/baseline-jobserver.rs": "941b83d84a8c29b3f0d6267b12120787a765ee6f18055e7bf5666ddb23f8684b",
+    "bench/allowance-tickets/compare.py": "39006025af370594ede107c54560864bea816cfb3a8689d8a2650930fa1da351",
+    "bench/allowance-tickets/measure.py": "170f0655155875d80b0d98fd1ad3159a9f4e1a65f349a677f3035679e769c27e",
+    "bench/allowance-tickets/src/main.rs": "5436794490ce3a0502dcf52ba38e765f5992962d27bc2167f17e572457efe439",
+    "toolchain/rustc/compiler/rustc_data_structures/src/jobserver.rs": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+    "toolchain/rustc/compiler/rustc_data_structures/src/jobserver_ticketed.rs": "96d803532813f0cd7e27c704ca5ed84eaf8a145995e3111b354586a095c0cc18"
+  },
+  "source_review": {
+    "authority": "exact grant decision only, not holder/lease/physical token ownership",
+    "legacy_body": "unchanged except module/reexport prefix",
+    "mode": "read-only source inspection, no tests run by reviewer",
+    "result": "no substantive blocker in frozen narrow A/P protocol",
+    "reviewer": "mouse"
+  },
+  "tasks": {
+    "actual_native_crate": {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 118,
+      "id": "341800bv8v",
+      "ignored": 0,
+      "profile": "release + debuginfo",
+      "tests": 11,
+      "wall_provenance": "coordinator task wall time",
+      "wall_seconds": 15.2
+    },
+    "benchmark_candidate_hosted": {
+      "check": "20261014-131523267-1085919",
+      "note": "11 actual included-module tests plus integration workflow, not native Registry wiring",
+      "release": "20261014-131527584-1086391",
+      "test": "20261014-131525176-1086123",
+      "tests": 12
+    },
+    "native_build_and_legacy_harnesses": {
+      "build_log_seconds": 385,
+      "exit": 0,
+      "harnesses": [
+        {
+          "name": "admission",
+          "seconds": 1.429,
+          "tests": 1
+        },
+        {
+          "name": "wait",
+          "seconds": 29.712,
+          "tests": 4
+        },
+        {
+          "name": "task_binding",
+          "seconds": 4.166,
+          "tests": 1
+        },
+        {
+          "name": "compiler_binding",
+          "seconds": 13.77,
+          "tests": 2
+        },
+        {
+          "name": "macro_argv",
+          "seconds": 1.542,
+          "tests": 1
+        }
+      ],
+      "id": "8934935a2k",
+      "scope": "unchanged legacy frontend neutrality, NOT TicketedProxy Registry/query acceptance",
+      "total_harness_tests": 9,
+      "wall_provenance": "coordinator task wall time",
+      "wall_seconds": 436.3
+    },
+    "root": {
+      "check_run": "20261014-132303169-1180201",
+      "execution": "hosted",
+      "exit": 0,
+      "failed": 0,
+      "fmt_check": "pass",
+      "id": "382669zlwm",
+      "ignored": 3,
+      "lint": "all targets",
+      "lint_run": "20261014-132315425-1180084",
+      "passed": 559,
+      "test_run": "20261014-132304295-1180347"
+    },
+    "wrong_cwd_attempt": {
+      "id": "3355241u1v",
+      "outcome": "failed preflight from wrong cwd, superseded by corrected native crate invocation"
+    },
+    "native_crate_full": {
+      "id": "5016119dkd",
+      "exit": 0,
+      "passed": 129,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "wall_seconds": 11.9,
+      "wall_provenance": "coordinator task wall time",
+      "doctests_passed": 5,
+      "doctests_ignored": 1,
+      "doctests_failed": 0
+    }
+  },
+  "export_subset": {
+    "path": "data/runs/allowance-tickets-20261014/2026-10.jsonl",
+    "runs": 20,
+    "owner": "coordinator",
+    "note": "nine sloth, eight sheep, three root cited summaries, path-redacted"
+  }
+}

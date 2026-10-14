@@ -1,0 +1,120 @@
+round 1/15 baseline: 4 samples, 0 failures
+round 1/15 candidate-disabled: 4 samples, 0 failures
+round 1/15 candidate-enabled: 4 samples, 0 failures
+round 2/15 candidate-disabled: 4 samples, 0 failures
+round 2/15 candidate-enabled: 4 samples, 0 failures
+round 2/15 baseline: 4 samples, 0 failures
+round 3/15 candidate-enabled: 4 samples, 0 failures
+round 3/15 baseline: 4 samples, 0 failures
+round 3/15 candidate-disabled: 4 samples, 0 failures
+round 4/15 baseline: 4 samples, 0 failures
+round 4/15 candidate-disabled: 4 samples, 0 failures
+round 4/15 candidate-enabled: 4 samples, 0 failures
+round 5/15 candidate-disabled: 4 samples, 0 failures
+round 5/15 candidate-enabled: 4 samples, 0 failures
+round 5/15 baseline: 4 samples, 0 failures
+round 6/15 candidate-enabled: 4 samples, 0 failures
+round 6/15 baseline: 4 samples, 0 failures
+round 6/15 candidate-disabled: 4 samples, 0 failures
+round 7/15 baseline: 4 samples, 0 failures
+round 7/15 candidate-disabled: 4 samples, 0 failures
+round 7/15 candidate-enabled: 4 samples, 0 failures
+round 8/15 candidate-disabled: 4 samples, 0 failures
+round 8/15 candidate-enabled: 4 samples, 0 failures
+round 8/15 baseline: 4 samples, 0 failures
+round 9/15 candidate-enabled: 4 samples, 0 failures
+round 9/15 baseline: 4 samples, 0 failures
+round 9/15 candidate-disabled: 4 samples, 0 failures
+round 10/15 baseline: 4 samples, 0 failures
+round 10/15 candidate-disabled: 4 samples, 0 failures
+round 10/15 candidate-enabled: 4 samples, 0 failures
+round 11/15 candidate-disabled: 4 samples, 0 failures
+round 11/15 candidate-enabled: 4 samples, 0 failures
+round 11/15 baseline: 4 samples, 0 failures
+round 12/15 candidate-enabled: 4 samples, 0 failures
+round 12/15 baseline: 4 samples, 0 failures
+round 12/15 candidate-disabled: 4 samples, 0 failures
+round 13/15 baseline: 4 samples, 0 failures
+round 13/15 candidate-disabled: 4 samples, 0 failures
+round 13/15 candidate-enabled: 4 samples, 0 failures
+round 14/15 candidate-disabled: 4 samples, 0 failures
+round 14/15 candidate-enabled: 4 samples, 0 failures
+round 14/15 baseline: 4 samples, 0 failures
+round 15/15 candidate-enabled: 4 samples, 0 failures
+round 15/15 baseline: 4 samples, 0 failures
+round 15/15 candidate-disabled: 4 samples, 0 failures
+{
+  "summary": {
+    "baseline": {
+      "one": {
+        "samples": 15,
+        "min_ns": 242232492,
+        "median_ns": 286793334,
+        "max_ns": 375193709,
+        "median_throughput_pairs_per_second": 278946.5113578965
+      },
+      "multi": {
+        "samples": 15,
+        "min_ns": 122922020,
+        "median_ns": 165949040,
+        "max_ns": 219192080,
+        "median_throughput_pairs_per_second": 482075.7022758312
+      },
+      "immediate": {
+        "samples": 15,
+        "min_ns": 244094,
+        "median_ns": 276737,
+        "max_ns": 606549,
+        "median_throughput_pairs_per_second": 36135392.08707184
+      }
+    },
+    "candidate-disabled": {
+      "one": {
+        "samples": 15,
+        "min_ns": 247894074,
+        "median_ns": 314301961,
+        "max_ns": 402854724,
+        "median_throughput_pairs_per_second": 254532.2967297681
+      },
+      "multi": {
+        "samples": 15,
+        "min_ns": 149334658,
+        "median_ns": 201658871,
+        "max_ns": 239339136,
+        "median_throughput_pairs_per_second": 396709.5501590902
+      },
+      "immediate": {
+        "samples": 15,
+        "min_ns": 1115372,
+        "median_ns": 1243929,
+        "max_ns": 2051739,
+        "median_throughput_pairs_per_second": 8039044.029040243
+      }
+    },
+    "candidate-enabled": {
+      "one": {
+        "samples": 15,
+        "min_ns": 258622769,
+        "median_ns": 311409250,
+        "max_ns": 2034054248,
+        "median_throughput_pairs_per_second": 256896.672144453
+      },
+      "multi": {
+        "samples": 15,
+        "min_ns": 11936544,
+        "median_ns": 204503646,
+        "max_ns": 368137966,
+        "median_throughput_pairs_per_second": 391191.0695225453
+      },
+      "immediate": {
+        "samples": 15,
+        "min_ns": 1174438,
+        "median_ns": 1308402,
+        "max_ns": 2716899,
+        "median_throughput_pairs_per_second": 7642910.970787265
+      }
+    }
+  },
+  "failures": [],
+  "out": "/home/jeremy/justrust/bench/allowance-tickets/results/comparison-034.json"
+}

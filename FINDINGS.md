@@ -7091,3 +7091,29 @@ four threads. This is an opt-in mapping capability with measured capture cost,
 not a speedup or default promotion. Quiet-machine provenance is unknown, and
 no comprehensive session-weighted speed gate was run. Full pipeline mapping,
 resource-grant causality and CPU/span ceilings remain unsupported.
+
+## 2026-10-14: targeted allowance prototype has measurable admission cost
+
+A separate experimental `TicketedProxy` now records actual protected request,
+selected grant and acknowledgment transitions. The legacy Proxy body is
+unchanged, and the experimental protocol is not wired into frontend pools.
+Actual owned compiler tests passed all 11 targeted cases, and the rebuilt
+compiler passed admission, wait/read/pool, query-task, Cargo authority and
+proc-macro neutrality acceptance. Whole-client hosted run
+`20261014-132304295-1180347` passed 559 tests, with check
+`20261014-132303169-1180201` and strict lint
+`20261014-132315425-1180084` also passing.
+
+The matched real-source microfixture pins jobserver 0.1.34. Across 15 rotating
+rounds and 180 samples, median one-token/four-token/immediate costs were
+286.793/165.949/0.277 ms for legacy, 314.302/201.659/1.244 ms with ticket event
+rows disabled, and 311.409/204.504/1.308 ms with event rows enabled. All candidate
+medians were larger. Event-row disabling retains IDs and independent counters.
+The earlier 0.1.35 baseline is preserved as superseded, not compared against
+these candidates. Raw results are in `bench/allowance-tickets/results/`.
+
+This establishes a scoped protocol experiment, not faster compilation or a
+default promotion. Callback-in-flight teardown, real helper IO error injection,
+Registry/query integration, resource receipt reconciliation and comprehensive
+session-weighted performance gates remain open. No full graph or CPU/span
+ceiling follows from these results.

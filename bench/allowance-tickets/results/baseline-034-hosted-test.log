@@ -1,0 +1,24 @@
+justrust: remote (JUSTRUST_REMOTE=force)
+justrust remote: not mirrored (over 8 MB): /home/jeremy/justrust/.wrangler/wasm-fix-export/xps14/2026-10.jsonl (27.6 MB), /home/jeremy/justrust/data/runs/xps14/2026-10.jsonl (41.1 MB), /home/jeremy/justrust/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+{"scenario":"contention","capacity":1,"threads":8,"operations":16000,"peak_active":1,"elapsed_ns":53939401}
+{"variant":"baseline","capture":"not-applicable","completed_pairs":16000,"conservation":"external-counts-only"}
+{"scenario":"contention","capacity":4,"threads":8,"operations":16000,"peak_active":2,"elapsed_ns":71079490}
+{"variant":"baseline","capture":"not-applicable","completed_pairs":16000,"conservation":"external-counts-only"}
+{"scenario":"immediate","operations":2000,"elapsed_ns":86361}
+{"variant":"baseline","capture":"not-applicable","completed_pairs":2000,"conservation":"external-counts-only"}
+{"scenario":"surplus","operations":2,"available_after":1}
+{"variant":"baseline","capture":"not-applicable","completed_pairs":2,"conservation":"external-counts-only"}
+
+
+justrust: ok: 1 test passed in 0.5s
+  time    startup 0.02s | compile 0.27s | gaps 0.02s | after 0.17s
+  rustc   pinned toolchain nightly-2026-10-08
+  units   4 compiled (3 local, 1 deps, 0 build scripts), 7 fresh, depcache 0 hit/1 miss, localcache 0 hit/3 miss
+          allowance_tickets_baseline         0.11s  cpu   0.3s    156 MB
+          jobserver                          0.11s  cpu   0.1s    158 MB
+  tests   1 passed, 0 failed, 0 ignored, 0 filtered out, binary timing unavailable
+  cpu     1.0s total, avg 2.1/peak 1.1 of 24 cores; others used 2.0 cores
+  memory  peak 334 MB build, 158 MB largest rustc, 90.8 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261014-131410816-1072848` full output, `justrust show 20261014-131410816-1072848` full profile
+justrust remote: ok on hosted in 11.0s (sync 10049 ms, 0 files at build time)

@@ -1,0 +1,14 @@
+justrust: remote (JUSTRUST_REMOTE=force)
+justrust remote: not mirrored (over 8 MB): /home/jeremy/justrust/.wrangler/wasm-fix-export/xps14/2026-10.jsonl (27.6 MB), /home/jeremy/justrust/data/runs/xps14/2026-10.jsonl (41.1 MB), /home/jeremy/justrust/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+
+justrust: ok in 0.3s
+  time    startup 0.01s | compile 0.25s
+  rustc   pinned toolchain nightly-2026-10-08
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 8 fresh, localcache 0 hit/1 miss
+          allowance_tickets_baseline         0.25s  cpu   0.7s    168 MB
+  cpu     0.8s total, avg 2.9/peak 3.2 of 24 cores; others used 1.5 cores
+  memory  peak 172 MB build, 168 MB largest rustc, 90.8 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261014-131527584-1086391` full output, `justrust show 20261014-131527584-1086391` full profile
+justrust remote: brought back 1 artifact (0.1 MB, 1 as delta) in 0.70s
+justrust remote: ok on hosted in 3.3s (sync 1649 ms, 0 files at build time)

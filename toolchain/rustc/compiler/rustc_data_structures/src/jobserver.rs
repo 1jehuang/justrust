@@ -1,3 +1,7 @@
+#[path = "jobserver_ticketed.rs"]
+pub mod ticketed;
+pub use ticketed::TicketedProxy;
+
 use std::sync::{Arc, OnceLock};
 
 pub use jobserver_crate::Acquired;
