@@ -24,6 +24,16 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 - **Build lifecycle visibility** asynchronously reports authenticated queued,
   running, heartbeat, and terminal states correlated by run ID. Log availability
   describes client-local persistence, not centrally uploaded raw logs.
+- **Recoverable local logs** use a bounded client-local JSONL journal with a
+  nominal one-second persistence tick, without `fsync`. Interrupted logs can be
+  retrieved using the exact run ID. Raw logs are never uploaded, and this is not
+  a crash-proof or lossless durability guarantee.
+- **Persistence diagnostics** expose fixed-label local recording failures while
+  preserving Cargo's exit status.
+- **Bounded lifecycle delivery** captures authentication scope when events are
+  queued and retries in a detached sender, with at most four attempts and a
+  one-second timeout per attempt. Telemetry status includes local HTTP/curl
+  health diagnostics. Delivery remains best-effort.
 - **Build provenance** distinguishes source and release builds with a compile-time
   `release_build` marker in structured run metrics.
 - Windows sampling bounds process traversal against reused-PID cycles.
