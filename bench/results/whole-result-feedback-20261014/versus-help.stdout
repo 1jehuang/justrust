@@ -1,0 +1,42 @@
+usage: versus.py [-h] {list,run,report,compare,clean} ...
+
+System 3: the stock Rust toolchain against justrust, head to head.
+
+One question, one table: how much faster is an agent's build with justrust
+than with plain `cargo` + the system `rustc`? Every workload runs on every
+"stack" on the same pinned sources, round-robin, so each round sees the
+identical source edit and the same machine state:
+
+  stock      /usr/bin/cargo + system rustc, no justrust anywhere
+  jr-nocache justrust with every cache off (depcache, build-script cache,
+             remote): what the toolchain, forks and integration buy alone
+  justrust   justrust as agents run it (its default toolchain, a private
+             depcache filled by the warmup round)
+
+`stock -> jr-nocache` is the part that does not depend on caching (forked
+rustc/cargo, flags, linker, scheduling). `jr-nocache -> justrust` is what
+the caches add. Try a candidate component as an extra stack:
+
+  bench/versus.py run --stack jr-rustc:RUSTC=$HOME/jr-rustc/build/host/stage1/bin/rustc
+
+Besides wall time, every run counts user-space CPU instructions retired by
+the whole process tree (perf_event_open, inherited by every rustc, linker
+and build script). Instructions barely move with machine noise (well under
+1% run to run, where wall time moves 5-20%), so a compiler change that does
+less work shows up even when the wall-time ranges overlap. Work done by
+processes outside the build's tree (a daemon, a remote host) is not counted.
+
+  bench/versus.py list                     workloads and stacks
+  bench/versus.py run [workload...]        default: every warm workload
+  bench/versus.py run --cold               plus the fresh-target-dir workloads
+  bench/versus.py report [file]            rebuild bench/VERSUS.md (default: newest result)
+  bench/versus.py compare A.json B.json    same stacks, two result files
+  bench/versus.py clean                    delete versus target dirs and caches
+
+Results: bench/results/versus-<time>-<rev>.json (commit them and VERSUS.md).
+
+positional arguments:
+  {list,run,report,compare,clean}
+
+options:
+  -h, --help            show this help message and exit

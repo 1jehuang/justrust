@@ -1,0 +1,1131 @@
+[
+  {
+    "id": "compiler-query-graph:1",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Actual invocation IDs, not kind DOT or serialization ordinal",
+    "checks": [
+      "tiny-graph-default",
+      "tiny-graph-large",
+      "mapping-t1",
+      "mapping-t4",
+      "mapping-desktop-t4"
+    ],
+    "named_tests": [
+      "test_out_of_order_actual_ids_and_holes",
+      "test_fixed_seed_sparse_dag_record_permutations"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actual t1/t4 nodes3379/edges8215, t4holes366; Desktop CHECK1052237/6496600. Default/large tiny graph stdout byte-identical; no serialization-ordinal identities."
+  },
+  {
+    "id": "compiler-query-graph:2",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Exact source/compiler format",
+    "checks": [
+      "pinned-compiler-source-object-audit",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_magic_version_and_trailer_rejected",
+      "test_footer_only_mutations_rejected",
+      "test_leb_corruption_rejected"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Exact pinned compiler Git objects verified; named format/footer/LEB failure cases pass. Pinned337-kind capture labels unchanged."
+  },
+  {
+    "id": "compiler-query-graph:3",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Same-session graph/profile join",
+    "checks": [
+      "mapping-t1",
+      "mapping-t4",
+      "mapping-desktop-t4",
+      "wrong-real-pair-rejected"
+    ],
+    "named_tests": [
+      "test_each_receipt_identity_mismatch_is_rejected",
+      "test_metadata_mismatch_is_rejected"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "All three actual CHECK-pair mapping metrics equal published results; wrong actual pair exits2 and creates no output."
+  },
+  {
+    "id": "compiler-query-graph:4",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "No nested time double-count",
+    "checks": [
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_nested_query_and_known_wait_not_double_counted",
+      "test_cross_thread_producer_is_not_caller",
+      "test_equal_labels_do_not_merge_numeric_ids",
+      "test_crossing_same_thread_query_intervals_rejected"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Named nesting, producer/caller and numeric identity cases pass; invalid crossings reject, not reclassified as parallel work."
+  },
+  {
+    "id": "compiler-query-graph:5",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Missing coverage retained",
+    "checks": [
+      "mapping-desktop-t4",
+      "tiny-unmapped-strict-rejected",
+      "tiny-unmapped-explicit"
+    ],
+    "named_tests": [
+      "test_unresolved_labels_and_unknown_nodes_retained"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Desktop79132untimed/55missingwaitedges retained. Tinystrict exits2; explicit mode preserves41509records/21427unresolved label records."
+  },
+  {
+    "id": "compiler-query-graph:6",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "CPU/span claims constrained",
+    "checks": [
+      "mapping-desktop-t4",
+      "mapping-desktop-release-t4",
+      "phase-large-real"
+    ],
+    "named_tests": [
+      "test_noninterval_counters_never_become_elapsed"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "All actual outputs CPU/span remainnull. No frontier, instruction counter or threadelapsed substituted for CPU work."
+  },
+  {
+    "id": "compiler-query-graph:7",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Public failure semantics / packaging",
+    "checks": [
+      "query_graph-help",
+      "query_profile-help",
+      "query_mapping-help",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_public_cli_writes_bounded_readonly_mapping_and_refuses_overwrite",
+      "test_bounded_regular_input_and_exclusive_output"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Current real CLIs accept supported inputs and preserve expected failure semantics; all named whole-current cases pass."
+  },
+  {
+    "id": "compiler-query-graph:8",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Filesystem/resource safety",
+    "checks": [
+      "mapping-existing-output-preserved",
+      "profile-symlink-rejected",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_receipt_read_cap_and_symlink_rejection",
+      "test_bounded_regular_input_and_exclusive_output"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Existing t4mapping SHA unchanged after exit2 refusal; real input symlink rejected with no output. Named readcap/output safety cases pass."
+  },
+  {
+    "id": "compiler-query-graph:9",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Actual real workload, not only synthetic fixtures",
+    "checks": [
+      "mapping-desktop-t4",
+      "mapping-desktop-release-t4"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Real retained Desktop CHECK and optimized BUILD inputs analyzed through current public tools, not copied-source fixtures; all mapped published metrics reproduced."
+  },
+  {
+    "id": "compiler-query-graph:10",
+    "source_doc": "docs/compiler-query-graph-20261014.md",
+    "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "requirement": "Improvements are useful, not claimed performance gains",
+    "checks": [
+      "mapping-desktop-t4",
+      "mapping-desktop-release-t4"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Observed numeric provider->node and caller->producer/wait relationships are inspectable, an improvement over occupancy-only output. Complete execution DAG and speedup remainblocked."
+  },
+  {
+    "id": "compiler-query-build-graph:1",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Actual optimized BUILD, not CHECK",
+    "checks": [
+      "actual-optimized-build-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Original raw meta/summary confirms hosted BUILD --release exit0 and UIopt3/linkemit, delivered library artifact; fresh audit is offline, not another build."
+  },
+  {
+    "id": "compiler-query-build-graph:2",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Same-session graph/profile identity",
+    "checks": [
+      "mapping-desktop-release-t4"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Original raw input hashes checked. Fresh mapping joins2695071providers to2809610nodes;0invented provider nodes."
+  },
+  {
+    "id": "compiler-query-build-graph:3",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Real public large mapping",
+    "checks": [
+      "mapping-desktop-release-t4"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Real large public mapping exit0, all published output fields except documented limitation prose unchanged; CPU/spannull."
+  },
+  {
+    "id": "compiler-query-build-graph:4",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Public graph and profile interfaces",
+    "checks": [
+      "release-graph-large",
+      "release-profile-large"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Public large graph/profile summary exit0 on167MB/263MB actual inputs;6851280records and0unresolved labels."
+  },
+  {
+    "id": "compiler-query-build-graph:5",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "No silent default resource expansion",
+    "checks": [
+      "release-graph-default-rejected",
+      "release-profile-default-rejected",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_large_capture_is_explicit_and_still_bounded",
+      "test_large_capture_requires_opt_in_and_preserves_record_api"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Both actual default CLIs exit2, no profile output; explicit limits selected separately, malformed flag/count APIs tested."
+  },
+  {
+    "id": "compiler-query-build-graph:6",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "No filtering or nested-time invention",
+    "checks": [
+      "release-profile-large",
+      "mapping-desktop-release-t4",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_streamed_records_match_materialized_mapping",
+      "test_nested_waits_partition_without_double_counting"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "All6851280events retained,2695071provider records mapped; streaming/materialized and nested-wait semantics pass named tests."
+  },
+  {
+    "id": "compiler-query-build-graph:7",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Whole package and boundaries",
+    "checks": [
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_receipt_read_cap_and_symlink_rejection",
+      "test_limits_without_large_allocations",
+      "test_footer_only_mutations_rejected"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Current231-test package ran verbosely; exact named resource/provenance/format failures map to these requirements, not only aggregate count."
+  },
+  {
+    "id": "compiler-query-build-graph:8",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Independent whole-result review",
+    "checks": [
+      "tiny-graph-default",
+      "tiny-graph-large",
+      "phase-independent-reference"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Fresh public tiny parity and independent250-forest reference pass. Earlier independent real-release review retained, not described as a fresh second external review."
+  },
+  {
+    "id": "compiler-query-build-graph:9",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Exact exported records and privacy",
+    "checks": [
+      "actual-optimized-build-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Cited BUILD export and raw private meta/summary hashes verified. Only compact observations/log hashes published; full command/profile staysprivate."
+  },
+  {
+    "id": "compiler-query-build-graph:10",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "Infrastructure and lifetime boundaries",
+    "checks": [
+      "actual-optimized-build-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Saved BUILD06:24 and host release06:41 evidence retained. This pass contains no host/start/install/capture call, so no new live-state or lifetime claim."
+  },
+  {
+    "id": "compiler-query-build-graph:11",
+    "source_doc": "docs/compiler-query-build-graph-20261014.md",
+    "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "requirement": "No performance or core-ceiling claim",
+    "checks": [
+      "actual-optimized-build-export-audit",
+      "mapping-desktop-release-t4"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Oneforeign rustc/107cachemiss epoch retained; no before/afterpair and no performance or core-ceiling claim."
+  },
+  {
+    "id": "compiler-phase-activities:1",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Account for real optimized BUILD, not only CHECK",
+    "checks": [
+      "actual-optimized-build-export-audit",
+      "phase-large-real"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actual optimized BUILD profile source identity matched; fresh activities JSON byte-identical to23d71f4e... committed output."
+  },
+  {
+    "id": "compiler-phase-activities:2",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Avoid nested double counting across event kinds",
+    "checks": [
+      "phase-large-real"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "6851280intervals/584groups/517RustIDs; exclusive=covered148396651246ns over15826062441ns window. No inclusive overlap sums used as CPU."
+  },
+  {
+    "id": "compiler-phase-activities:3",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Validate mathematical partition independently",
+    "checks": [
+      "phase-independent-reference"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Independent fixed-seed reference exercises250shuffled nested forests across3threads; group allocation and coverage pass."
+  },
+  {
+    "id": "compiler-phase-activities:4",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Exercise whole implementation and integration boundaries",
+    "checks": [
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_nested_cross_thread_adjacent_and_gaps",
+      "test_crossing_rejected_for_every_kind",
+      "test_limits_and_consumption",
+      "test_cli_privacy_forwarding_preservation_and_bounds"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Named all-kind interval, crossing, consumption and public-IO methods pass over final implementation."
+  },
+  {
+    "id": "compiler-phase-activities:5",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Preserve large-input default guard and small-input compatibility",
+    "checks": [
+      "phase-default-rejected",
+      "phase-large-real",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_cli_privacy_forwarding_preservation_and_bounds"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Real large default exits2/nooutput; explicit large exits0. Named small-input public CLI compatibility passes."
+  },
+  {
+    "id": "compiler-phase-activities:6",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Preserve failures and controlled opt-ins",
+    "checks": [
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_symlinks_and_invalid_input",
+      "test_cli_privacy_forwarding_preservation_and_bounds"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Named actual subprocess CLI cases retain invalid/missing-label rejection, explicit unmappedlabels, existingbytes and symlink targets."
+  },
+  {
+    "id": "compiler-phase-activities:7",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Verify source semantics, not name-based CPU assumptions",
+    "checks": [
+      "pinned-compiler-source-object-audit"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Six exact pinned compiler Gitobjects and17literal label anchors freshlyverified; coordinator/LLVMlabel naming is notCPUcausality."
+  },
+  {
+    "id": "compiler-phase-activities:8",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Keep privacy and provenance",
+    "checks": [
+      "phase-large-real",
+      "actual-optimized-build-export-audit"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actual fresh activity output SHA matches committed23d71f4e...; exact inputhash checked. Captured command remainsprivate; no new BUILD record."
+  },
+  {
+    "id": "compiler-phase-activities:9",
+    "source_doc": "docs/compiler-phase-activities-20261014.md",
+    "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "requirement": "Leave unsupported conclusions unknown",
+    "checks": [
+      "phase-large-real"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "CPU/span remainnull;517RustIDs not517cores,148.396elapsed not129.698processCPU. No speedup/runnable-count/pureidle claim."
+  },
+  {
+    "id": "scheduler-legacy-attempt:1",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Sufficient effective scratch capacity",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Actual saved guest capacity permitted15points on500GiB; fresh manifest audit verifies recorded guest output. No new guest capacity probe or bound on full-workload peak."
+  },
+  {
+    "id": "scheduler-legacy-attempt:2",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Exact compiler/Cargo/CLI and flags",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "37exact exportIDs and15outcomes rejoined;35completed boundary records preserve actualprivateCLI/Cargo/rustc/jobs24 flags. Earlier private raw identity audit retained."
+  },
+  {
+    "id": "scheduler-legacy-attempt:3",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Preserve generator, seed, points and weights",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Existing frozen seed1/40points/weights/generator notchanged or filtered. Partial remains15/40, no substituted points."
+  },
+  {
+    "id": "scheduler-legacy-attempt:4",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Use real public build/check/test interfaces",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Real saved calls include releaseBUILD/CHECK/fullandfilteredTEST.35completed calls and preservedinterrupted/diagnostic records, not another actual compile run."
+  },
+  {
+    "id": "scheduler-legacy-attempt:5",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Match outcome to measurement",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "All15sample execwall/exit/compilefailure/testsfailed match exactcommands;3normal-success plans failed, not expectederror successes."
+  },
+  {
+    "id": "scheduler-legacy-attempt:6",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Clean full paired comparison",
+    "checks": [
+      "legacy-current-public-show",
+      "legacy-current-public-compare",
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "BLOCKED",
+    "observed": "OFF15/40,ON0,7noisy/3unexpected failures. Valid full paired expected-session gain remainsunobserved."
+  },
+  {
+    "id": "scheduler-legacy-attempt:7",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "End-user report refuses invalid claims",
+    "checks": [
+      "legacy-current-public-show",
+      "legacy-current-public-compare"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Fresh current public show refuses weightedaggregate; selfcompare refuses ratio, not an OFF/ON comparison."
+  },
+  {
+    "id": "scheduler-legacy-attempt:8",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Full harness regression check",
+    "checks": [
+      "whole-current-tests"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Current231named tests pass over final reporter/runner/launcher modules; frozen199 historical package acceptance separate. No compiler performance acceptance."
+  },
+  {
+    "id": "scheduler-legacy-attempt:9",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Preserve interrupted execution",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Interrupted16 remains separate from15samples, no fabricated after-exec or benchmarkwall. Diagnostic remains separate; compressed5nonzero outputs allparse."
+  },
+  {
+    "id": "scheduler-legacy-attempt:10",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Bound lifetime and credit burn",
+    "checks": [
+      "retained-resource-restoration-receipt-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Savedearly ownedshutdown and originalstopped restoration receipt preserved. No provider call in this pass, historical bound notnewAWSstate."
+  },
+  {
+    "id": "scheduler-legacy-attempt:11",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Restore initial resource state",
+    "checks": [
+      "retained-resource-restoration-receipt-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Savedprovider response confirms stopped10:27:09 and500GiBpreserved/no termination. Freshlocalhash audit only, no newEC2request."
+  },
+  {
+    "id": "scheduler-legacy-attempt:12",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Keep tenant security/defaults intact",
+    "checks": [
+      "retained-resource-restoration-receipt-audit",
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Actualattempt usedseparatedeveloper resource; savednormaltenantchangedfalse. No hostedcredentials/security/live mutation in freshscripts; legacybootstrap notnormaltenantproof."
+  },
+  {
+    "id": "scheduler-legacy-attempt:13",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Preserve honest CPU/scaling scope",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join",
+      "mapping-desktop-release-t4"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "No comparative speedup,W/S or96coreceiling. SampledCPUlowerbound and processCPU notquerywork."
+  },
+  {
+    "id": "scheduler-legacy-attempt:14",
+    "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+    "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "requirement": "Preserve public privacy and auditability",
+    "checks": [
+      "legacy-real-outcome-export-manifest-join"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "All39legacy manifestentries rechecked,37exports rejoined and5fullnonzeroJSONL files parsed. Publicpath/addressredaction retained, failures notdiscarded."
+  },
+  {
+    "id": "benchmark-stdin-boundary:1",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "An open inherited pipe cannot hold a benchmark on stdin",
+    "checks": [
+      "stdin-current-real-exec"
+    ],
+    "named_tests": [
+      "test_open_pipe_becomes_empty_non_tty_stdin"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Executed child seesEOF/nonTTY withparentpipe heldopen; samePGID/env/stderr/resource schema preserved."
+  },
+  {
+    "id": "benchmark-stdin-boundary:2",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "Noncontrolling PTY input is also noninteractive",
+    "checks": [
+      "stdin-current-real-exec"
+    ],
+    "named_tests": [
+      "test_pty_becomes_empty_non_tty_stdin"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Executed child seesEOF/nonTTY while both noncontrollingPTY endpoints stayopen."
+  },
+  {
+    "id": "benchmark-stdin-boundary:3",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "The temporary `/dev/null` descriptor does not leak through exec",
+    "checks": [
+      "stdin-current-real-exec"
+    ],
+    "named_tests": [
+      "test_temporary_null_descriptor_is_closed"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Executed child seesEBADF on deliberately inheritable temporaryfd."
+  },
+  {
+    "id": "benchmark-stdin-boundary:4",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "Opening `/dev/null` directly as fd 0 works despite Python's close-on-exec default",
+    "checks": [
+      "stdin-current-real-exec"
+    ],
+    "named_tests": [
+      "test_null_open_returning_zero_keeps_stdin_open"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Forcedopen returns0; child canreadEOF despite Python defaultCLOEXEC."
+  },
+  {
+    "id": "benchmark-stdin-boundary:5",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "Existing context and output survive",
+    "checks": [
+      "stdin-current-real-exec"
+    ],
+    "named_tests": [
+      "test_open_pipe_becomes_empty_non_tty_stdin",
+      "test_pty_becomes_empty_non_tty_stdin"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actualexec child matches driverPGID/envsentinel andstderrmarker; no processgroup change."
+  },
+  {
+    "id": "benchmark-stdin-boundary:6",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "Nonzero and signal exits are not rewritten",
+    "checks": [
+      "stdin-current-real-exec"
+    ],
+    "named_tests": [
+      "test_real_exec_failure_status_and_output_are_preserved",
+      "test_signal_exit_is_preserved"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actual23/stderr and-15signal statuses preserved, not rewritten."
+  },
+  {
+    "id": "benchmark-stdin-boundary:7",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "Existing Python benchmark integrations do not regress",
+    "checks": [
+      "whole-current-tests"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "Currentwhole231named cases pass, including all6execution regressions andreport/graph/launcher integrations."
+  },
+  {
+    "id": "benchmark-stdin-boundary:8",
+    "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+    "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "requirement": "Verification does not overwrite unrelated changes or claim old samples use the new runner",
+    "checks": [
+      "stdin-current-real-exec",
+      "whole-current-tests"
+    ],
+    "named_tests": [],
+    "state": "FRESH_OBSERVED",
+    "observed": "All54current benchmarksource hashesunchanged throughpass; oldsamples remainineligible. ControllingTTY unaffected, no oldcontext remapping."
+  },
+  {
+    "id": "benchmark-terminal-boundary:1",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Preserve a payload's failure status after logging",
+    "checks": [
+      "terminal-original-red",
+      "terminal-current-real-exec"
+    ],
+    "named_tests": [
+      "test_public_start_preserves_failure23"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Exactoriginal29c7446 generatedpayload failure23returned0; currentreturns23. RetainedEXIT agrees. Original87example remainshistorical."
+  },
+  {
+    "id": "benchmark-terminal-boundary:2",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Retain ordinary success and failure cases",
+    "checks": [
+      "terminal-current-real-exec"
+    ],
+    "named_tests": [
+      "test_public_start_preserves_success0",
+      "test_public_start_preserves_failure23",
+      "test_public_start_preserves_signal143"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "RealgeneratedBash scriptstatuses0/23/143 matchEXITlog. Transportsynthetic/asynchronous realdispatch notcertified."
+  },
+  {
+    "id": "benchmark-terminal-boundary:3",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Separate stdin from controlling terminal",
+    "checks": [
+      "terminal-current-real-exec"
+    ],
+    "named_tests": [
+      "test_devnull_still_sigttin"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actualfixture fd0null+/dev/tty read receivesSIGTTIN21. Stdinintegration notTTYisolation."
+  },
+  {
+    "id": "benchmark-terminal-boundary:4",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Test the real timeout grouping boundary",
+    "checks": [
+      "terminal-current-real-exec"
+    ],
+    "named_tests": [
+      "test_gnu_timeout_background_group"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "ActualGNUtimeout backgroundpayload stops inownedPTY; noforeground option orchildtimeout weakening."
+  },
+  {
+    "id": "benchmark-terminal-boundary:5",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Verify a detached recipe's natural lifecycle and inherited context",
+    "checks": [
+      "terminal-current-real-exec"
+    ],
+    "named_tests": [
+      "test_setsid_wait_exit23_inherited_jobserver",
+      "test_private_tmux_natural_session_lifetime"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Realsetsid normal23 andinheritedpipe preserved; private tmuxnaturallifetime passes. NotactualCargo jobserverproof."
+  },
+  {
+    "id": "benchmark-terminal-boundary:6",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Check the likely unsafe early-teardown edge",
+    "checks": [
+      "terminal-current-real-exec"
+    ],
+    "named_tests": [
+      "test_diagnostic_rejected_setsid_tmux_kill_leaks"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actualprivatekill-session leaves detachedchildalive; candidateREJECTED. Stablepidfd verifiesandcleans exactownedchild withfdclosed/nochildremaining."
+  },
+  {
+    "id": "benchmark-terminal-boundary:7",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Preserve existing launcher/evidence interfaces",
+    "checks": [
+      "shell-syntax",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_diagnostic_public_start_still_has_tty"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Publicgeneratedscript retainsordinaryTTY/default;11focused0skips+231namedwhole passon54unchangedsourceblobs."
+  },
+  {
+    "id": "benchmark-terminal-boundary:8",
+    "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+    "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "requirement": "Avoid misattribution and accidental live changes",
+    "checks": [
+      "terminal-current-real-exec"
+    ],
+    "named_tests": [],
+    "state": "REPRESENTATIVE_ONLY",
+    "observed": "No realSSH/auth/host actionorheadlessdefault promotion; localtransporttests nothosted lifecycleacceptance. Fullremote supervisedlauncher remainsblocked."
+  },
+  {
+    "id": "synthetic-report-eligibility:1",
+    "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+    "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "requirement": "Preserve raw point observations and annotate noisy or unknown noise provenance.",
+    "checks": [
+      "report-current-real-partial-show",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_invalid_coverage_and_noise"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actualnoisy20.53detail preserved withannotation; partial expectedwaitaggregate removed, no inconvenientpointdrop."
+  },
+  {
+    "id": "synthetic-report-eligibility:2",
+    "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+    "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "requirement": "Emit comprehensive expected-wait aggregates and comparative ratios only when every requested point and replicate is present, all noise markers explicitly say false, outcomes match the planned successful or expected-compile-error command, and timing summaries agree with the actual samples.",
+    "checks": [
+      "report-current-real-partial-compare",
+      "report-clean-show",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_exit_outcome_provenance",
+      "test_invalid_timing_and_stale_summary",
+      "test_clean_and_expected_compile_error"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Actualpartialcomparerefused; cleancontrolsretain2.00report andexpectedE0308behavior; invalidoutcome/stale/boolwall casesblocked."
+  },
+  {
+    "id": "synthetic-report-eligibility:3",
+    "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+    "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "requirement": "Block malformed identities, missing outcome evidence, duplicate or out-of-range point IDs, measurement errors, suspect harness artifacts, and incomplete runs. Do not silently drop inconvenient points and call the surviving subset comprehensive.",
+    "checks": [
+      "report-malformed",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_malformed_public_payloads",
+      "test_empty_results_blocked",
+      "test_remaining_schema"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Malformedpublicdata returnsblocked/nottraceback; typedcoverage/pointidentity/errorcounter checks pass."
+  },
+  {
+    "id": "synthetic-report-eligibility:4",
+    "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+    "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "requirement": "Compare identical generator, seed, sampling information, point plans, source snapshots, execution mode and machine context. Toolchain or optimization versions can intentionally differ, but changed commands or incompatible source/machine context are not a matched compiler comparison.",
+    "checks": [
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_incompatible_identity",
+      "test_public_environment_identity"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Matchedplan/generator/snapshot/hostCPU/mode exactcontract tests pass; wrongcontextsblocked, no compilerclaim fromfixture."
+  },
+  {
+    "id": "synthetic-report-eligibility:5",
+    "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+    "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "requirement": "Require complete valid counter coverage across all required replicates before emitting instruction ratios. Missing counters stay unknown rather than disappearing from the median. Otherwise valid wall comparisons may remain available without an instruction claim.",
+    "checks": [
+      "report-missing-counter",
+      "report-full-counter",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_instruction_counter_coverage"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Missingrawreplicate counter suppressesinstrratio butretainsvalidwall; completecounter preservesratio, allnullstaysunknown."
+  },
+  {
+    "id": "synthetic-report-eligibility:6",
+    "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+    "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "requirement": "Preserve positional stack renaming by mapping sample, statistic and error keys through the original stack identities, not dictionary value order. Do not mutate loaded input results.",
+    "checks": [
+      "report-clean-renamed",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_public_positional_remap_noise_and_clean",
+      "test_clean_replicates_and_stats_key_order"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Renamed/reordered cleanstacksretain+0%report, mapping followsoriginalkeysanddoesnotmutateloadedinputs."
+  },
+  {
+    "id": "synthetic-report-eligibility:7",
+    "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+    "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "requirement": "Retain valid complete clean reports and expected compile-error workloads. Malformed report data should produce an actionable blocked message rather than a traceback or empty-mean arithmetic.",
+    "checks": [
+      "report-clean-show",
+      "report-faster-control",
+      "report-malformed",
+      "whole-current-tests"
+    ],
+    "named_tests": [
+      "test_clean_and_expected_compile_error"
+    ],
+    "state": "FRESH_OBSERVED",
+    "observed": "Completeclean2.00 andsynthetic-50%mathretained; malformeddata blocked. Controls notrealperformancebenchmarks."
+  },
+  {
+    "id": "measurement-acceptance:1",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Preserve survivor CPU after a different child exits",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Actualcompiled record::tests::sampled_cpu_preserves_survivor_work_when_other_child_exits failedbefore/passafter; exactoriginalsummarySHA verified."
+  },
+  {
+    "id": "measurement-acceptance:2",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Do not recount a process's lifetime after one missing snapshot",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Actualcompiled record::tests::sampled_cpu_missing_snapshot_does_not_count_lifetime_again failedbefore/passafter; exactoriginalsummarySHA verified."
+  },
+  {
+    "id": "measurement-acceptance:3",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Distinguish PID reuse and overlapping process roots",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Actualcompiled record::tests::sampled_cpu_distinguishes_pid_reuse_and_overlapping_roots failedbefore/passafter; exactoriginalsummarySHA verified."
+  },
+  {
+    "id": "measurement-acceptance:4",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Do not turn a regressing counter into a later spike",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Actualcompiled record::tests::sampled_cpu_counter_regression_does_not_create_later_spike failedbefore/passafter; exactoriginalsummarySHA verified."
+  },
+  {
+    "id": "measurement-acceptance:5",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Correct success despite intentional nested compiler failures",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Named summary::tests::successful_test_run_ignores_nested_compile_failure actualcompiled pass inclunit/output cases;21rawsummaryhashesverified."
+  },
+  {
+    "id": "measurement-acceptance:6",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Preserve genuine compiler failures",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Named unsuccessful_build_keeps_unit_and_output_compile_failure_verdicts actualcompiled pass; realouterE0308/101compile_failedtrue retained."
+  },
+  {
+    "id": "measurement-acceptance:7",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Preserve runtime test-failure classification",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Named runtime_test_failure_is_not_a_compile_failure actualcompiled pass. Frozenoutcomes verified, notcurrentpeer-dirtysource certification."
+  },
+  {
+    "id": "measurement-acceptance:8",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Exercise the installed CLI with a real nested compiler failure",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Realretained expectednestedE0308 output withouter2tests/exit0/compile_failedfalse rejoined tooriginalsummary+export."
+  },
+  {
+    "id": "measurement-acceptance:9",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Dogfood normal hosted routing and packaging",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Retained exacte629client hostedcheck/404tests/strictlint/recheck passed; frozen08d identity separate fromlater0a19/currentmutableglobal."
+  },
+  {
+    "id": "measurement-acceptance:10",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Preserve unchanged Cargo artifacts",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Allfour installede629acceptance records0compiled/62fresh verified; notactualfreshRustinvocations now."
+  },
+  {
+    "id": "measurement-acceptance:11",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Validate a real reference body edit",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "RealretainedDesktop bodyedit3tests/1compiled/745fresh recordjoinedexactly. No new referenceedit thispass."
+  },
+  {
+    "id": "measurement-acceptance:12",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Preserve unchanged Desktop reuse",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "RealretainedunchangedDesktoprepeat3tests/0compiled/746fresh recordverified."
+  },
+  {
+    "id": "measurement-acceptance:13",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Restore unrelated repository bytes",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "SavedbackuprestorationSHA24de30f7... andrestored3testrecord retained; no change toanotherrepo now."
+  },
+  {
+    "id": "measurement-acceptance:14",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Recording must not invalidate artifacts",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Saved actualrecorded/unrecorded/repeatedFresh/rmetabyteparity verifiedinacceptance; no fabricatedDirty-free performancegain."
+  },
+  {
+    "id": "measurement-acceptance:15",
+    "source_doc": "docs/measurement-acceptance-20261014.md",
+    "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+    "requirement": "Retain failed experiments and harness mistakes",
+    "checks": [
+      "frozen-real-measurement-export-audit"
+    ],
+    "named_tests": [],
+    "state": "RETAINED_ACTUAL_VERIFIED",
+    "observed": "Original397successbadverdict and4compiledredfailures remainunaltered; unsupportedcargo--local error retained. Frozenhistoricalrawhashesall21match."
+  }
+]

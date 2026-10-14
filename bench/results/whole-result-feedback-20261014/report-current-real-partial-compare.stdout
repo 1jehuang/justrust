@@ -1,0 +1,9 @@
+Synthetic comparison blocked:
+- A: missing or malformed host environment provenance
+- A: missing or malformed cpu environment provenance
+- A: missing or malformed snapshots environment provenance
+- A: missing or malformed ncpu environment provenance
+- B: missing or malformed host environment provenance
+- B: missing or malformed cpu environment provenance
+- B: missing or malformed snapshots environment provenance
+- B: missing or malformed ncpu environment provenance

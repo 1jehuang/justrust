@@ -1,0 +1,2609 @@
+{
+  "schema": "whole-published-result-acceptance-v1",
+  "root_head": "41b787cbb8f2e3987451310bcf8a043e857734ed",
+  "source_sha256": {
+    "bench/attr-cache-accept.py": "3360a3c505238ff5abb8ea092d1af9570455780065518e6984648ca793e464fc",
+    "bench/attr-cache-check.py": "76dbb5eaccb5336023df7a276f0fba55750029165c0d0b89f2addefa6ef83511",
+    "bench/audit_hosted_evidence.py": "7d226a518250d0033ad90361278b214bd813fb0560a3eca131fe568e6d621995",
+    "bench/buildd-correctness.py": "944da79ed96b3df76a1ef383385858974cc35334dfe506bb7ed1a72c5f75ef8c",
+    "bench/collect-profile-evidence.py": "8b8f7af184b8231da6599633dd3a8d470abcf63048548477b40999fc37134437",
+    "bench/critpath.py": "5cc7434f34657be556a246e00af3b70503e18665741ade05ab5501606ddbbdbc",
+    "bench/early_accuracy.py": "9e0151be35b247ecd5d2af4d0e5ac9ac84066e47a82257a1c399ee5be97c601c",
+    "bench/early_exit/mine_codes.py": "6930e474fac6856cf32b0dd8e1e84a1d8e43afa8950a254c7b7304c4a5188971",
+    "bench/early_exit/mutations.py": "99791140878a20bba0185dd7172065b64fbe1b85482fdda5c0756bfd14a1efa3",
+    "bench/early_exit/replay_policy.py": "f6813503f2646bf8111ea9ce0be6f902421574dba2a03831255ffe075535d6ea",
+    "bench/early_exit/replay_runs.py": "44cfe8a5150dea6d003a85e38496b5766448533d0a82f6335e03dc0e2b1981bc",
+    "bench/early_exit/replay_savings.py": "45e2ce4a7724e3dee9c983c73514d4ee2fa12c0d5bba05b40634955ea47521fc",
+    "bench/early_probe.py": "7820985bb54d0583a3e4cf6d67bb8e7a5395ac10c829a73c91c89e06b35a141f",
+    "bench/factors.py": "f6d1f326ff3183d2d07a32c650c62ae684f2c17c6b416677322c1ac3adf275cc",
+    "bench/frozen-acceptance.py": "edd7722e1c478d23c4a9a085071d807a106a59f420fb466317c7183b6acdff77",
+    "bench/hotpatch/bench.py": "db5a5512b8afd33c199d106a47b3ea0267057d799f662c51fcc94240ae521cff",
+    "bench/noop-overhead.py": "5a40f88517818ab55ee4e4feabc6ea7af4ed11d5bd0522bdde36f23dd6c7456f",
+    "bench/on-remote.sh": "1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4",
+    "bench/pass_ledger.py": "b6ac0162c1ff3837d56d5248db1c401e5891938cdfa4a25ce9e5ad47a499a11b",
+    "bench/query_activities.py": "c33b7c7a7d2b8a4dcbb2d0b0797cc6309195d5dc6bcd81f7e7241362f49aae1f",
+    "bench/query_graph.py": "2e1fe93a5e5b6de2a8045af004296a85ce7c9dadd788ffe424bfd0d7e76afe42",
+    "bench/query_mapping.py": "d3e5bb1f5d2fdff9ed024149c5fb6a549c38f6616b968b16b3095ec69afa074d",
+    "bench/query_profile.py": "4915e3d44fb585cdd73ec38a0fe92ff5c5464738071d4444d27227470e8ce4e1",
+    "bench/ra_spike.py": "357721f290e7da2cb0236318c61877e8304d5b58fdb13220167be233b22520c2",
+    "bench/readme_uv.py": "a12ac26f884ce34d2657135368959757f21790ee9b7777bab902ec532857b7f6",
+    "bench/runlog.py": "e795a8f8d7b9b701a5a1b9f7e6dc5bf807b0ca68bf16688725af23dca97b2ca4",
+    "bench/runlog_misses.py": "717fbb9602bdeae291c1f108cec0e31dfc7f053ea789a2be746acc3b01618deb",
+    "bench/scheduler-sweep.py": "30828cc284cec2beee90742715c1b5a05d47a7690e8536ec9417401a7022827e",
+    "bench/scheduler_costs.py": "5364592bd3fa3d172a29bcd7f2891aa58505c2fa54923415117fca6ede55cd1c",
+    "bench/suite.py": "db89fc7f5eceaa0e10b630b6ee38f336bb9322ab4275daf6b8f0193d7ebcb68f",
+    "bench/synth/gen.py": "6c05a4a0242b3713afaa05a317d9fc11cc0df0eb9f399815f2dc856973872d29",
+    "bench/synth/mine.py": "6fb23bee8a54dc28b4fb5d72826e7c3b26d6e87cfa4c5475d591bbecec103b6f",
+    "bench/synth/run.py": "d4d7234429c7d2d6cd444bf20b38930ef15552fc0e53c3bf0e96d7a5574dfbc0",
+    "bench/test_audit_hosted_evidence.py": "26cee8f28fa339b20162b23b349bd98b5e6affe4493d1536b48bd8a259d21262",
+    "bench/test_critpath.py": "c939e42cc903b963b33d80afb94db1191c5c0c4429f3c1687a99be18289b7a34",
+    "bench/test_frozen_acceptance.py": "5ffd0c456b3ccd37b96cee69ea399e419cfc13d77a065033be7fe1363a2dc460",
+    "bench/test_headless_launch.py": "a39c763de982390234ef856115093a6226cc30a4a7a89c2b96add9ffcab4afbb",
+    "bench/test_profile_evidence.py": "ee7a00cbef930e6ec719783507972f014bb49b8dd4ea0e1262c5482da655176b",
+    "bench/test_query_activities.py": "e376ff42e7e13044fe24c5aea671b84b9256a77769ee74a75130c2b75fc1bc84",
+    "bench/test_query_graph.py": "c69fb70194d69b4476b47f2bc2d769c66625018ddb43c738e49025c2da0764e7",
+    "bench/test_query_mapping.py": "279c4bfc834dff130c99b645e289e88346f5e50cf9dfeee4f51f5cd6cddd266c",
+    "bench/test_query_profile.py": "d6fec14b06aeafe56e97afb98124d01faf8f5845b6d41689be38994c15687324",
+    "bench/test_readme_uv.py": "6b1e83fd0f7abc8f1067ae6e920d6aac9145effc444ca7457f8f8e2eab50dcb6",
+    "bench/test_remote_evidence_sync.py": "c6510b4dc2021e4d0fd36572bba66017d7b456b817fabe96f10ce58397ea7800",
+    "bench/test_run_counted.py": "5a6baa92ac24bae36904cb107b7e1b597f98cc751f12fb1245fe0aa5b32f1896",
+    "bench/test_scheduler_costs.py": "bc12bdbf85c6014f5c43269d0cd78da32b5e1f4daa7730730636dd379b470315",
+    "bench/test_scheduler_sweep.py": "ec4e1313bef9a21c43bf240d40c53fbf4551d691e2705d2b9a00bf3847c147ce",
+    "bench/test_suite.py": "74a04b008c792c877ff6d76f6c6c2d7e59e05136bf0b4a477f89c500b8ce7416",
+    "bench/test_synth_context.py": "abef109ca619aa29ccbbfdaf4fdc828b7fe3e6c5e66ebb3fa6d5b5915def8750",
+    "bench/test_synth_reporting.py": "e986c4a33cf39a29a51792d9da17950e904da126e32ce0a0077d68c232aafa62",
+    "bench/test_versus.py": "edaaa609668b3d57bc8fa25fca7b58c184c6972142e9deaf04234dacb42f459d",
+    "bench/threads_sweep.py": "edf7ec6b084fa1caca90c5fd88ef4c6b9c28b94a6d39fac4febd68ea22a11187",
+    "bench/trend.py": "b86f16c3ded8e21a0b0cf81e602b4c5fa9b4e03093bb46d6be9dca40a28cde90",
+    "bench/versus.py": "4f02ec983d27f6ba85c6a2525b299d0f67ed4bccdcc1f45ca8d2709671d4ae60"
+  },
+  "requirement_doc_sha256": {
+    "docs/compiler-query-graph-20261014.md": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+    "docs/compiler-query-build-graph-20261014.md": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+    "docs/compiler-phase-activities-20261014.md": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+    "docs/scheduler-legacy-attempt-20261014.md": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+    "docs/synthetic-report-eligibility-20261014.md": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+    "docs/benchmark-stdin-boundary-20261014.md": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+    "docs/benchmark-terminal-boundary-20261014.md": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+    "docs/measurement-acceptance-20261014.md": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069"
+  },
+  "checks": [
+    {
+      "name": "query_graph-help",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_graph.py",
+        "--help"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.05866532999789342,
+      "logs": {
+        "stdout": {
+          "file": "query_graph-help.stdout",
+          "sha256": "67ebf946c1b33c7df70e960a7fb8664f3b7334fef3c0ffe5fc8be931cabd979e",
+          "bytes": 613,
+          "original_sha256": "67ebf946c1b33c7df70e960a7fb8664f3b7334fef3c0ffe5fc8be931cabd979e",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "query_graph-help.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "query_profile-help",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_profile.py",
+        "--help"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.05849451900576241,
+      "logs": {
+        "stdout": {
+          "file": "query_profile-help.stdout",
+          "sha256": "87dac97329431e301acff86fdc611914b7d9f6910ebed9af61a89a3ab598a721",
+          "bytes": 1325,
+          "original_sha256": "87dac97329431e301acff86fdc611914b7d9f6910ebed9af61a89a3ab598a721",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "query_profile-help.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "query_mapping-help",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_mapping.py",
+        "--help"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.06142143299803138,
+      "logs": {
+        "stdout": {
+          "file": "query_mapping-help.stdout",
+          "sha256": "5813be2964e92347b9ef7a0ff10d5ee6204f2b18a74d1cc5e414601fd3998317",
+          "bytes": 777,
+          "original_sha256": "5813be2964e92347b9ef7a0ff10d5ee6204f2b18a74d1cc5e414601fd3998317",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "query_mapping-help.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "query_activities-help",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_activities.py",
+        "--help"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.05688624799950048,
+      "logs": {
+        "stdout": {
+          "file": "query_activities-help.stdout",
+          "sha256": "70aa737dda0066f5f5a4f7289961dad0ed81cc2d361d5ffccd869f0adfbd4a94",
+          "bytes": 534,
+          "original_sha256": "70aa737dda0066f5f5a4f7289961dad0ed81cc2d361d5ffccd869f0adfbd4a94",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "query_activities-help.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "suite-help",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "--help"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.07927379000466317,
+      "logs": {
+        "stdout": {
+          "file": "suite-help.stdout",
+          "sha256": "da376108a207b68504a0b9918ac8eca94c538216925593dbc92bfb7e98fe1316",
+          "bytes": 1351,
+          "original_sha256": "da376108a207b68504a0b9918ac8eca94c538216925593dbc92bfb7e98fe1316",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "suite-help.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "versus-help",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/versus.py",
+        "--help"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.084194918978028,
+      "logs": {
+        "stdout": {
+          "file": "versus-help.stdout",
+          "sha256": "e2c6d1b61bcc99dd7557460aaac7db502f79c08096b4913ccaab70eff0641391",
+          "bytes": 2147,
+          "original_sha256": "e2c6d1b61bcc99dd7557460aaac7db502f79c08096b4913ccaab70eff0641391",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "versus-help.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "whole-current-tests",
+      "argv": [
+        "/usr/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 13.516818837990286,
+      "logs": {
+        "stdout": {
+          "file": "whole-current-tests.stdout",
+          "sha256": "9645193aaa235768773ae1e7ccbf3d6c50eb9fd8af4778d83d08be37cdcff5a1",
+          "bytes": 4090,
+          "original_sha256": "0fa6aa76acee2dc6ad20c7798e27356ca34d3f2b675cb48ae2bd8e6fd22636b2",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "whole-current-tests.stderr",
+          "sha256": "5ff8a7b57f552751759707950f428ebd4182eabce7bd2a22c114f84ff88b4871",
+          "bytes": 31201,
+          "original_sha256": "5ff8a7b57f552751759707950f428ebd4182eabce7bd2a22c114f84ff88b4871",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "stdin-current-real-exec",
+      "argv": [
+        "/usr/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_run_counted.py",
+        "-v"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 1.0176649159984663,
+      "logs": {
+        "stdout": {
+          "file": "stdin-current-real-exec.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "stdin-current-real-exec.stderr",
+          "sha256": "4cbd884295999d61d2789a393bd00b464fe352825c15b35c15a8e9a29cdd084a",
+          "bytes": 856,
+          "original_sha256": "4cbd884295999d61d2789a393bd00b464fe352825c15b35c15a8e9a29cdd084a",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "terminal-current-real-exec",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/test_headless_launch.py",
+        "-v"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 3.6901129290054087,
+      "logs": {
+        "stdout": {
+          "file": "terminal-current-real-exec.stdout",
+          "sha256": "87942e84c8289fbd0645e9d8e7d8ad3007d4044757fbad2261f29c9c7f9b9e49",
+          "bytes": 4022,
+          "original_sha256": "177f9fcb2405eea6023519a5bb1dcfed65df3c20cc334f244a98890b960bd2e2",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "terminal-current-real-exec.stderr",
+          "sha256": "219f4ea58e4c6939dc8ea74d187eac0014f54ffeab2fc6ac1bfd6f3d7f226bd1",
+          "bytes": 1336,
+          "original_sha256": "219f4ea58e4c6939dc8ea74d187eac0014f54ffeab2fc6ac1bfd6f3d7f226bd1",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "shell-syntax",
+      "argv": [
+        "bash",
+        "-n",
+        "bench/on-remote.sh"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.002144807018339634,
+      "logs": {
+        "stdout": {
+          "file": "shell-syntax.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "shell-syntax.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "terminal-original-red",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/test_headless_launch.py",
+        "-v",
+        "HeadlessLaunch.test_public_start_preserves_success0",
+        "HeadlessLaunch.test_public_start_preserves_failure23",
+        "HeadlessLaunch.test_public_start_preserves_signal143"
+      ],
+      "exit": 1,
+      "expected_exit": 1,
+      "analysis_wall_seconds": 1.8112903090077452,
+      "logs": {
+        "stdout": {
+          "file": "terminal-original-red.stdout",
+          "sha256": "f33eb89b5d931c3465f1567173d8ea23ed523a8dd55e39223ddcd5f58f5d622c",
+          "bytes": 1184,
+          "original_sha256": "5334e5625635016cb6122d03299af94e05d61a801ef504cb5e263783b7820bb8",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "terminal-original-red.stderr",
+          "sha256": "07ea565a642fed9a8846c32b1ba2f0bb0a2302fcea5894f3713da3c05c7faa18",
+          "bytes": 1957,
+          "original_sha256": "0a9845766cbcc6f346efd82caf201b0a14dcc20f37a4aff8e10173a55244d743",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "phase-independent-reference",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/results/compiler-phase-activities-20261014/reference-check.py"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.1530153719941154,
+      "logs": {
+        "stdout": {
+          "file": "phase-independent-reference.stdout",
+          "sha256": "c7a4ab5eba88c75b860492c3d244a0f760aea85fb4c11bc99495f1001ecdfb77",
+          "bytes": 140,
+          "original_sha256": "c7a4ab5eba88c75b860492c3d244a0f760aea85fb4c11bc99495f1001ecdfb77",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "phase-independent-reference.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "tiny-graph-default",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_graph.py",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.08002515797852539,
+      "logs": {
+        "stdout": {
+          "file": "tiny-graph-default.stdout",
+          "sha256": "6ab956e6bd5fd5c81c793ebd859bb5f642c09628f9a833002d9ae5a17bfa9c96",
+          "bytes": 920,
+          "original_sha256": "6ab956e6bd5fd5c81c793ebd859bb5f642c09628f9a833002d9ae5a17bfa9c96",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "tiny-graph-default.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "tiny-graph-large",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_graph.py",
+        "<private-path>",
+        "--large-capture"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.08023480899282731,
+      "logs": {
+        "stdout": {
+          "file": "tiny-graph-large.stdout",
+          "sha256": "6ab956e6bd5fd5c81c793ebd859bb5f642c09628f9a833002d9ae5a17bfa9c96",
+          "bytes": 920,
+          "original_sha256": "6ab956e6bd5fd5c81c793ebd859bb5f642c09628f9a833002d9ae5a17bfa9c96",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "tiny-graph-large.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "mapping-t1",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_mapping.py",
+        "--graph",
+        "<private-path>",
+        "--profile",
+        "<private-path>",
+        "--receipt",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--allow-unmapped-event-labels"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.17486897599883378,
+      "logs": {
+        "stdout": {
+          "file": "mapping-t1.stdout",
+          "sha256": "841e76a3fb57732851a68f9b6f8ac11ac5d9dbf734d7743365ccbf95e3bece8f",
+          "bytes": 365,
+          "original_sha256": "841e76a3fb57732851a68f9b6f8ac11ac5d9dbf734d7743365ccbf95e3bece8f",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "mapping-t1.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "mapping-t4",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_mapping.py",
+        "--graph",
+        "<private-path>",
+        "--profile",
+        "<private-path>",
+        "--receipt",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--allow-unmapped-event-labels"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.17421079199993983,
+      "logs": {
+        "stdout": {
+          "file": "mapping-t4.stdout",
+          "sha256": "814ead9a02c0b056d475743be4b1198642358f2376746b6a4efe0c0e40863bc5",
+          "bytes": 374,
+          "original_sha256": "814ead9a02c0b056d475743be4b1198642358f2376746b6a4efe0c0e40863bc5",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "mapping-t4.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "mapping-desktop-t4",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_mapping.py",
+        "--graph",
+        "<private-path>",
+        "--profile",
+        "<private-path>",
+        "--receipt",
+        "<private-path>",
+        "--output",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 37.74782304800465,
+      "logs": {
+        "stdout": {
+          "file": "mapping-desktop-t4.stdout",
+          "sha256": "30aa34a7277423b5143efab049025cde3fc1dee1ef7397d6ff76b43a1652696f",
+          "bytes": 396,
+          "original_sha256": "30aa34a7277423b5143efab049025cde3fc1dee1ef7397d6ff76b43a1652696f",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "mapping-desktop-t4.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "wrong-real-pair-rejected",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_mapping.py",
+        "--graph",
+        "<private-path>",
+        "--profile",
+        "<private-path>",
+        "--receipt",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--allow-unmapped-event-labels"
+      ],
+      "exit": 2,
+      "expected_exit": 2,
+      "analysis_wall_seconds": 0.1669930909993127,
+      "logs": {
+        "stdout": {
+          "file": "wrong-real-pair-rejected.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "wrong-real-pair-rejected.stderr",
+          "sha256": "871814292f11e763c4ced1201ce37239d4c8de07dba6138c050ad019e52b9e1d",
+          "bytes": 54,
+          "original_sha256": "871814292f11e763c4ced1201ce37239d4c8de07dba6138c050ad019e52b9e1d",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "tiny-unmapped-strict-rejected",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_profile.py",
+        "--input",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--summary-only"
+      ],
+      "exit": 2,
+      "expected_exit": 2,
+      "analysis_wall_seconds": 0.1824160190008115,
+      "logs": {
+        "stdout": {
+          "file": "tiny-unmapped-strict-rejected.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "tiny-unmapped-strict-rejected.stderr",
+          "sha256": "3d1f2df7ece93cf366af76300825aa6d553554263843e350f24cc0e6c6d3f716",
+          "bytes": 42,
+          "original_sha256": "3d1f2df7ece93cf366af76300825aa6d553554263843e350f24cc0e6c6d3f716",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "tiny-unmapped-explicit",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_profile.py",
+        "--input",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--summary-only",
+        "--allow-unmapped-event-labels"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.2516089740092866,
+      "logs": {
+        "stdout": {
+          "file": "tiny-unmapped-explicit.stdout",
+          "sha256": "a843c6929f7812fe666d35d658a42db6b2d869f05d5bba4dd8bd948688563f9d",
+          "bytes": 74,
+          "original_sha256": "a843c6929f7812fe666d35d658a42db6b2d869f05d5bba4dd8bd948688563f9d",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "tiny-unmapped-explicit.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "mapping-existing-output-preserved",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_mapping.py",
+        "--graph",
+        "<private-path>",
+        "--profile",
+        "<private-path>",
+        "--receipt",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--allow-unmapped-event-labels"
+      ],
+      "exit": 2,
+      "expected_exit": 2,
+      "analysis_wall_seconds": 0.4100785329937935,
+      "logs": {
+        "stdout": {
+          "file": "mapping-existing-output-preserved.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "mapping-existing-output-preserved.stderr",
+          "sha256": "598a479c6106cd31d89739247a8b7fb31b88b419d8675fe27c6fc934c3aa4087",
+          "bytes": 65,
+          "original_sha256": "598a479c6106cd31d89739247a8b7fb31b88b419d8675fe27c6fc934c3aa4087",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "profile-symlink-rejected",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_profile.py",
+        "--input",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--summary-only",
+        "--allow-unmapped-event-labels"
+      ],
+      "exit": 2,
+      "expected_exit": 2,
+      "analysis_wall_seconds": 0.12650737699004821,
+      "logs": {
+        "stdout": {
+          "file": "profile-symlink-rejected.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "profile-symlink-rejected.stderr",
+          "sha256": "44d04d1114f10dc7bb3385b67786dd99fdaddaf7424cdf973cdcbe40670bed33",
+          "bytes": 55,
+          "original_sha256": "44d04d1114f10dc7bb3385b67786dd99fdaddaf7424cdf973cdcbe40670bed33",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "release-graph-default-rejected",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_graph.py",
+        "<private-path>"
+      ],
+      "exit": 2,
+      "expected_exit": 2,
+      "analysis_wall_seconds": 0.25667480198899284,
+      "logs": {
+        "stdout": {
+          "file": "release-graph-default-rejected.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "release-graph-default-rejected.stderr",
+          "sha256": "56216c3881fbee074d58de199986d489c2b67fdc29fbbf00c9fe6b70adc4f10d",
+          "bytes": 47,
+          "original_sha256": "56216c3881fbee074d58de199986d489c2b67fdc29fbbf00c9fe6b70adc4f10d",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "release-profile-default-rejected",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_profile.py",
+        "--input",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--summary-only"
+      ],
+      "exit": 2,
+      "expected_exit": 2,
+      "analysis_wall_seconds": 0.475814540986903,
+      "logs": {
+        "stdout": {
+          "file": "release-profile-default-rejected.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "release-profile-default-rejected.stderr",
+          "sha256": "52fd30bad18a1cba477dc19b83d93486bc8482a25ae339c80c3f04008074e038",
+          "bytes": 52,
+          "original_sha256": "52fd30bad18a1cba477dc19b83d93486bc8482a25ae339c80c3f04008074e038",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "release-graph-large",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_graph.py",
+        "<private-path>",
+        "--large-capture"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 37.299315053998725,
+      "logs": {
+        "stdout": {
+          "file": "release-graph-large.stdout",
+          "sha256": "0d4442a1e2ead026fff1f6ff54c1002180a18294eea85724273c5aab0d8ce66b",
+          "bytes": 1582,
+          "original_sha256": "0d4442a1e2ead026fff1f6ff54c1002180a18294eea85724273c5aab0d8ce66b",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "release-graph-large.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "release-profile-large",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_profile.py",
+        "--input",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--summary-only",
+        "--large-capture"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 9.068976959999418,
+      "logs": {
+        "stdout": {
+          "file": "release-profile-large.stdout",
+          "sha256": "8d38e4dfb3ac2151c44d41014a2f99722a334d4a65225779a21d92f105a45781",
+          "bytes": 72,
+          "original_sha256": "8d38e4dfb3ac2151c44d41014a2f99722a334d4a65225779a21d92f105a45781",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "release-profile-large.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "mapping-desktop-release-t4",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_mapping.py",
+        "--graph",
+        "<private-path>",
+        "--profile",
+        "<private-path>",
+        "--receipt",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--large-capture"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 60.172535911988234,
+      "logs": {
+        "stdout": {
+          "file": "mapping-desktop-release-t4.stdout",
+          "sha256": "946770f163a8d0b3ec3fd16bc2e253359b4313016b1fb04b2902fccd6f36eb20",
+          "bytes": 400,
+          "original_sha256": "946770f163a8d0b3ec3fd16bc2e253359b4313016b1fb04b2902fccd6f36eb20",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "mapping-desktop-release-t4.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "phase-default-rejected",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<private-path>",
+        "--output",
+        "<private-path>"
+      ],
+      "exit": 2,
+      "expected_exit": 2,
+      "analysis_wall_seconds": 0.2217568859923631,
+      "logs": {
+        "stdout": {
+          "file": "phase-default-rejected.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "phase-default-rejected.stderr",
+          "sha256": "cd125273cdddc6156cf52e472dfb4cb0bb25b422711e6d50d69ee3e70a1f721d",
+          "bytes": 55,
+          "original_sha256": "cd125273cdddc6156cf52e472dfb4cb0bb25b422711e6d50d69ee3e70a1f721d",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "phase-large-real",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<private-path>",
+        "--output",
+        "<private-path>",
+        "--large-capture"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 28.586876472982112,
+      "logs": {
+        "stdout": {
+          "file": "phase-large-real.stdout",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "phase-large-real.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-original-real-partial-show",
+      "argv": [
+        "/usr/bin/python3",
+        "<private-path>",
+        "show",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.0701843930000905,
+      "logs": {
+        "stdout": {
+          "file": "report-original-real-partial-show.stdout",
+          "sha256": "c171f9f21d1cd82fa006254b8a07a231371f36f4edb4d00388fbf4532ca02989",
+          "bytes": 506,
+          "original_sha256": "c171f9f21d1cd82fa006254b8a07a231371f36f4edb4d00388fbf4532ca02989",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-original-real-partial-show.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-current-real-partial-show",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "show",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.074449570995057,
+      "logs": {
+        "stdout": {
+          "file": "report-current-real-partial-show.stdout",
+          "sha256": "bb0d6aa0bd089168bdedf3f76e06328a04c481033e033be7a56f69af304210b2",
+          "bytes": 490,
+          "original_sha256": "bb0d6aa0bd089168bdedf3f76e06328a04c481033e033be7a56f69af304210b2",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-current-real-partial-show.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-current-real-partial-compare",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "compare",
+        "<private-path>",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.04987082100706175,
+      "logs": {
+        "stdout": {
+          "file": "report-current-real-partial-compare.stdout",
+          "sha256": "1d0a4f5f0a240cd5acb221530e5a6dc24331536e8825618df69ca27c6d3b9fd8",
+          "bytes": 470,
+          "original_sha256": "1d0a4f5f0a240cd5acb221530e5a6dc24331536e8825618df69ca27c6d3b9fd8",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-current-real-partial-compare.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-clean-show",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "show",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.0598715839732904,
+      "logs": {
+        "stdout": {
+          "file": "report-clean-show.stdout",
+          "sha256": "3e7d51bc3bfa15eb7364621a561dbb2a1daa0b2ecf6913898cfa5f95b2c88e09",
+          "bytes": 559,
+          "original_sha256": "3e7d51bc3bfa15eb7364621a561dbb2a1daa0b2ecf6913898cfa5f95b2c88e09",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-clean-show.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-clean-renamed",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "compare",
+        "<private-path>",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.06841222400544211,
+      "logs": {
+        "stdout": {
+          "file": "report-clean-renamed.stdout",
+          "sha256": "90824155e010b1c24e054b544ae3183e8ad04682efadbb91ad8d9a4c71c29b7a",
+          "bytes": 432,
+          "original_sha256": "9213cca7188aa5833d33c6d0135ddcab55f9bd5a5fff301ca2d9cec530216aa3",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-clean-renamed.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-faster-control",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "compare",
+        "<private-path>",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.06643045099917799,
+      "logs": {
+        "stdout": {
+          "file": "report-faster-control.stdout",
+          "sha256": "05d366acafd192a6f4e5ece758af5738473527d520824299def4d389175e40b9",
+          "bytes": 432,
+          "original_sha256": "bbfbb3c59a941bb4f23d88f6facfe306902bd761991811ff31dc45bc613d6cf9",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-faster-control.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-malformed",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "compare",
+        "<private-path>",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.06607269600499421,
+      "logs": {
+        "stdout": {
+          "file": "report-malformed.stdout",
+          "sha256": "d5883127796b0c91dce371293f8b39e828cf84ca7b0b2fc666838ba44a3fe484",
+          "bytes": 229,
+          "original_sha256": "e2736c8c3194826fa07753d5b4a1aad46d4d69150f9752875bc46c2b98b8baa1",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-malformed.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-missing-counter",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "compare",
+        "<private-path>",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.06363978999434039,
+      "logs": {
+        "stdout": {
+          "file": "report-missing-counter.stdout",
+          "sha256": "90824155e010b1c24e054b544ae3183e8ad04682efadbb91ad8d9a4c71c29b7a",
+          "bytes": 432,
+          "original_sha256": "36212d634dfaaa334ad099a92ec9f5b7fc52d281563c173d555e5bf2c5cae585",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-missing-counter.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "report-full-counter",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "compare",
+        "<private-path>",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.06366330099990591,
+      "logs": {
+        "stdout": {
+          "file": "report-full-counter.stdout",
+          "sha256": "407ae3d4ba5becf65f19711e2edd7cd817eaf9fbc628ef396294734e38c8fea4",
+          "bytes": 224,
+          "original_sha256": "7c055137ebafbb10025ca7cd19690c19765c362a73abd074e35c499abc77c80f",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "report-full-counter.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "legacy-current-public-show",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "show",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.06772072199964896,
+      "logs": {
+        "stdout": {
+          "file": "legacy-current-public-show.stdout",
+          "sha256": "8618605edf4721aa7bee161f450fe979be594a600c72773a193bd39cd807ccc8",
+          "bytes": 2365,
+          "original_sha256": "8618605edf4721aa7bee161f450fe979be594a600c72773a193bd39cd807ccc8",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "legacy-current-public-show.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "legacy-current-public-compare",
+      "argv": [
+        "/usr/bin/python3",
+        "bench/suite.py",
+        "compare",
+        "<private-path>",
+        "<private-path>"
+      ],
+      "exit": 0,
+      "expected_exit": 0,
+      "analysis_wall_seconds": 0.052923348994227126,
+      "logs": {
+        "stdout": {
+          "file": "legacy-current-public-compare.stdout",
+          "sha256": "2e58b77f693b0fa4dd602b5c9410c05ccf71283cc13931b202fd784f6388d4bf",
+          "bytes": 102,
+          "original_sha256": "2e58b77f693b0fa4dd602b5c9410c05ccf71283cc13931b202fd784f6388d4bf",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        },
+        "stderr": {
+          "file": "legacy-current-public-compare.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0,
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "redaction": "lossless except explicit operator/scratch/repository path and nonloopback address replacements"
+        }
+      }
+    },
+    {
+      "name": "legacy-real-outcome-export-manifest-join",
+      "exit": 0,
+      "observed": {
+        "records": 37,
+        "OFF": 15,
+        "ON": 0,
+        "noisy": 7,
+        "unexpected_failed_samples": 3,
+        "speedup": null
+      },
+      "argv": []
+    }
+  ],
+  "observed_metrics": {
+    "tiny_t1": {
+      "graph_counts": {
+        "edge_count": 8215,
+        "holes": 0,
+        "index_space": 3379,
+        "node_count": 3379
+      },
+      "provider_records": 3336,
+      "unobserved_node_count": 43,
+      "blocked_records": 0,
+      "blocked_read_edge_missing": 0,
+      "blocked_caller_missing": 0,
+      "exclusive_query_elapsed_ns": 12004727,
+      "cpu_work_ns": null,
+      "execution_span_ns": null
+    },
+    "tiny_t4": {
+      "graph_counts": {
+        "edge_count": 8215,
+        "holes": 366,
+        "index_space": 3745,
+        "node_count": 3379
+      },
+      "provider_records": 3336,
+      "unobserved_node_count": 43,
+      "blocked_records": 23,
+      "blocked_read_edge_missing": 1,
+      "blocked_caller_missing": 0,
+      "exclusive_query_elapsed_ns": 27489536,
+      "cpu_work_ns": null,
+      "execution_span_ns": null
+    },
+    "desktop_check": {
+      "graph_counts": {
+        "edge_count": 6496600,
+        "holes": 340,
+        "index_space": 1052577,
+        "node_count": 1052237
+      },
+      "provider_records": 973105,
+      "unobserved_node_count": 79132,
+      "blocked_records": 151,
+      "blocked_read_edge_missing": 55,
+      "blocked_caller_missing": 0,
+      "exclusive_query_elapsed_ns": 10759626971,
+      "cpu_work_ns": null,
+      "execution_span_ns": null
+    },
+    "desktop_release": {
+      "graph_counts": {
+        "edge_count": 20496477,
+        "holes": 320,
+        "index_space": 2809930,
+        "node_count": 2809610
+      },
+      "provider_records": 2695071,
+      "unobserved_node_count": 114539,
+      "blocked_records": 177,
+      "blocked_read_edge_missing": 68,
+      "blocked_caller_missing": 2,
+      "exclusive_query_elapsed_ns": 21568632374,
+      "cpu_work_ns": null,
+      "execution_span_ns": null
+    },
+    "phase": {
+      "records": 6851280,
+      "covered_elapsed_ns": 148396651246,
+      "exclusive_elapsed_ns": 148396651246,
+      "observation_window_ns": 15826062441,
+      "cpu_work_ns": null,
+      "execution_span_ns": null,
+      "groups": 584,
+      "rust_thread_ids": 517
+    }
+  },
+  "legacy": {
+    "records": 37,
+    "OFF": 15,
+    "ON": 0,
+    "noisy": 7,
+    "unexpected_failed_samples": 3,
+    "full_pair": "BLOCKED",
+    "speedup": null
+  },
+  "scope": "fresh offline public CLI analysis of real retained inputs and local real execution. No new compiler/host/provider/install or performance calls. Synthetic report positive controls and launcher transport remain explicitly synthetic.",
+  "blocked": [
+    "complete execution DAG and CPU work/span/core ceiling",
+    "eligible full weighted OFF/ON speedup comparison",
+    "actual hosted asynchronous launcher lifecycle acceptance",
+    "archived workload runtime prerequisites and failures",
+    "precise historical legacy stop-signal cause"
+  ],
+  "retained_audit": {
+    "schema": "whole-retained-boundary-audit-v1",
+    "checks": [
+      {
+        "name": "pinned-compiler-source-object-audit",
+        "exit": 0,
+        "source_files": 6,
+        "literal_anchors": 17,
+        "compiler_commit": "1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6",
+        "scope": "fresh local Git-object identity verification, not a compiler semantic change or live host proof"
+      },
+      {
+        "name": "frozen-real-measurement-export-audit",
+        "named_compiled_cases": {
+          "cpu_red": [
+            "test record::tests::sampled_cpu_missing_snapshot_does_not_count_lifetime_again ... FAILED <0.000s>",
+            "test record::tests::sampled_cpu_preserves_survivor_work_when_other_child_exits ... FAILED <0.000s>",
+            "test record::tests::sampled_cpu_distinguishes_pid_reuse_and_overlapping_roots ... FAILED <0.000s>",
+            "test record::tests::sampled_cpu_counter_regression_does_not_create_later_spike ... FAILED <0.000s>"
+          ],
+          "cpu_green": [
+            "test record::tests::sampled_cpu_distinguishes_pid_reuse_and_overlapping_roots ... ok <0.000s>",
+            "test record::tests::sampled_cpu_preserves_survivor_work_when_other_child_exits ... ok <0.000s>",
+            "test record::tests::sampled_cpu_counter_regression_does_not_create_later_spike ... ok <0.000s>",
+            "test record::tests::sampled_cpu_missing_snapshot_does_not_count_lifetime_again ... ok <0.000s>"
+          ],
+          "summary_green": [
+            "test summary::tests::parses_libtest_results ... ok <0.000s>",
+            "test summary::tests::clippy_driver_processes_become_units ... ok <0.000s>",
+            "test summary::tests::detached_cpu_is_a_disclosed_lower_bound_not_double_counted ... ok <0.000s>",
+            "test summary::tests::shares_overlapping_time ... ok <0.000s>",
+            "test summary::tests::runtime_test_failure_is_not_a_compile_failure ... ok <0.000s>",
+            "test summary::tests::test_failures_are_not_compile_errors ... ok <0.000s>",
+            "test summary::tests::pooled_tests_outside_deps_keep_counts_timing_and_verdict ... ok <0.000s>",
+            "test summary::tests::splits_passes_without_double_counting ... ok <0.000s>",
+            "test summary::tests::successful_test_run_ignores_nested_compile_failure ... ok <0.000s>",
+            "test summary::tests::test_results_without_binary_headers_are_not_hidden ... ok <0.000s>",
+            "test summary::tests::timed_test_lines_become_the_slowest_tests ... ok <0.000s>",
+            "test summary::tests::unsuccessful_build_keeps_unit_and_output_compile_failure_verdicts ... ok <0.000s>"
+          ]
+        },
+        "raw_summary_hashes_verified": 21,
+        "exit": 0,
+        "observations": 21,
+        "compiled_cpu_red": {
+          "id": "20261013-213037568-1395671",
+          "failed": 4,
+          "exit": 101
+        },
+        "compiled_cpu_green": {
+          "id": "20261013-213336102-1409383",
+          "passed": 4,
+          "exit": 0
+        },
+        "actual_nested": {
+          "id": "20261013-214356941-1470803",
+          "passed": 2,
+          "exit": 0,
+          "compile_failed": false
+        },
+        "actual_genuine_error": {
+          "id": "20261013-214408640-1471875",
+          "exit": 101,
+          "compile_failed": true
+        },
+        "recording_cache_parity": true,
+        "source_commit": "e629a004068923360bc2cb8880ca160020c758f7",
+        "installed_sha256": "08d0601aa8bfa33decdcdbeb986a2d9558ba0873d5f1b5d3659117c034660abe",
+        "scope": "fresh verification of frozen real compiled/public-CLI outcomes, not a rerun on current mutable global frontend or peer-dirty record.rs"
+      },
+      {
+        "name": "actual-optimized-build-export-audit",
+        "exit": 0,
+        "run_id": "20261013-232242825-2161355",
+        "command": "build --release -p jcode-desktop-ui --lib",
+        "host_wall_seconds": 77.27686023712158,
+        "client_wall_seconds": 89.474384324,
+        "ui_wall_seconds": 15.908533573150635,
+        "artifact_delivery": "one 22.9 MB artifact downloaded successfully; no executable link or launch acceptance claimed for this --lib build",
+        "foreign_rustc": 1,
+        "depcache_misses": 107,
+        "scope": "retained actual hosted optimized BUILD, not fresh performance or executable acceptance",
+        "raw_meta_sha256": "ce72848bebe0ad3c88cd6ad80caba8d1e30d92f40faf3dc398e6baf1a3f63486",
+        "raw_summary_sha256": "900c7e2dbc11e1475684ed88315c63266780752c2a8aabf63f587698104a9eae",
+        "harness_correction": "initial export-only assertion expected --release, but private exports intentionally retain args=[build]. Corrected to original private meta/summary without altering exports."
+      },
+      {
+        "name": "retained-resource-restoration-receipt-audit",
+        "exit": 0,
+        "receipts": [
+          {
+            "file": "bench/results/scheduler-legacy-3f47-20261014/owner/stop-restoration.json",
+            "sha256": "f13b653beb4589eab3b4d1e306b93580116d89cd684421d73d562358a6d4a3b6",
+            "restored_state": "stopped",
+            "volume_size_gib": 500,
+            "stopped_verified_at": 1791973629.1091716
+          }
+        ],
+        "scope": "fresh local integrity check of saved10:27 provider response; no new AWS or current instance-state request"
+      }
+    ],
+    "new_host_calls": false,
+    "new_compiler_calls": false,
+    "current_mutable_frontend_certified": false,
+    "speedup": null
+  },
+  "requirement_rows": [
+    {
+      "id": "compiler-query-graph:1",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Actual invocation IDs, not kind DOT or serialization ordinal",
+      "checks": [
+        "tiny-graph-default",
+        "tiny-graph-large",
+        "mapping-t1",
+        "mapping-t4",
+        "mapping-desktop-t4"
+      ],
+      "named_tests": [
+        "test_out_of_order_actual_ids_and_holes",
+        "test_fixed_seed_sparse_dag_record_permutations"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actual t1/t4 nodes3379/edges8215, t4holes366; Desktop CHECK1052237/6496600. Default/large tiny graph stdout byte-identical; no serialization-ordinal identities."
+    },
+    {
+      "id": "compiler-query-graph:2",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Exact source/compiler format",
+      "checks": [
+        "pinned-compiler-source-object-audit",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_magic_version_and_trailer_rejected",
+        "test_footer_only_mutations_rejected",
+        "test_leb_corruption_rejected"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Exact pinned compiler Git objects verified; named format/footer/LEB failure cases pass. Pinned337-kind capture labels unchanged."
+    },
+    {
+      "id": "compiler-query-graph:3",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Same-session graph/profile join",
+      "checks": [
+        "mapping-t1",
+        "mapping-t4",
+        "mapping-desktop-t4",
+        "wrong-real-pair-rejected"
+      ],
+      "named_tests": [
+        "test_each_receipt_identity_mismatch_is_rejected",
+        "test_metadata_mismatch_is_rejected"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "All three actual CHECK-pair mapping metrics equal published results; wrong actual pair exits2 and creates no output."
+    },
+    {
+      "id": "compiler-query-graph:4",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "No nested time double-count",
+      "checks": [
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_nested_query_and_known_wait_not_double_counted",
+        "test_cross_thread_producer_is_not_caller",
+        "test_equal_labels_do_not_merge_numeric_ids",
+        "test_crossing_same_thread_query_intervals_rejected"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Named nesting, producer/caller and numeric identity cases pass; invalid crossings reject, not reclassified as parallel work."
+    },
+    {
+      "id": "compiler-query-graph:5",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Missing coverage retained",
+      "checks": [
+        "mapping-desktop-t4",
+        "tiny-unmapped-strict-rejected",
+        "tiny-unmapped-explicit"
+      ],
+      "named_tests": [
+        "test_unresolved_labels_and_unknown_nodes_retained"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Desktop79132untimed/55missingwaitedges retained. Tinystrict exits2; explicit mode preserves41509records/21427unresolved label records."
+    },
+    {
+      "id": "compiler-query-graph:6",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "CPU/span claims constrained",
+      "checks": [
+        "mapping-desktop-t4",
+        "mapping-desktop-release-t4",
+        "phase-large-real"
+      ],
+      "named_tests": [
+        "test_noninterval_counters_never_become_elapsed"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "All actual outputs CPU/span remainnull. No frontier, instruction counter or threadelapsed substituted for CPU work."
+    },
+    {
+      "id": "compiler-query-graph:7",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Public failure semantics / packaging",
+      "checks": [
+        "query_graph-help",
+        "query_profile-help",
+        "query_mapping-help",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_public_cli_writes_bounded_readonly_mapping_and_refuses_overwrite",
+        "test_bounded_regular_input_and_exclusive_output"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Current real CLIs accept supported inputs and preserve expected failure semantics; all named whole-current cases pass."
+    },
+    {
+      "id": "compiler-query-graph:8",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Filesystem/resource safety",
+      "checks": [
+        "mapping-existing-output-preserved",
+        "profile-symlink-rejected",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_receipt_read_cap_and_symlink_rejection",
+        "test_bounded_regular_input_and_exclusive_output"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Existing t4mapping SHA unchanged after exit2 refusal; real input symlink rejected with no output. Named readcap/output safety cases pass."
+    },
+    {
+      "id": "compiler-query-graph:9",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Actual real workload, not only synthetic fixtures",
+      "checks": [
+        "mapping-desktop-t4",
+        "mapping-desktop-release-t4"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Real retained Desktop CHECK and optimized BUILD inputs analyzed through current public tools, not copied-source fixtures; all mapped published metrics reproduced."
+    },
+    {
+      "id": "compiler-query-graph:10",
+      "source_doc": "docs/compiler-query-graph-20261014.md",
+      "source_doc_sha256": "03a36382e481ba4b1579c3dccd7ab576282c0be66b067f784b81b7f7c2544c4c",
+      "requirement": "Improvements are useful, not claimed performance gains",
+      "checks": [
+        "mapping-desktop-t4",
+        "mapping-desktop-release-t4"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Observed numeric provider->node and caller->producer/wait relationships are inspectable, an improvement over occupancy-only output. Complete execution DAG and speedup remainblocked."
+    },
+    {
+      "id": "compiler-query-build-graph:1",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Actual optimized BUILD, not CHECK",
+      "checks": [
+        "actual-optimized-build-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Original raw meta/summary confirms hosted BUILD --release exit0 and UIopt3/linkemit, delivered library artifact; fresh audit is offline, not another build."
+    },
+    {
+      "id": "compiler-query-build-graph:2",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Same-session graph/profile identity",
+      "checks": [
+        "mapping-desktop-release-t4"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Original raw input hashes checked. Fresh mapping joins2695071providers to2809610nodes;0invented provider nodes."
+    },
+    {
+      "id": "compiler-query-build-graph:3",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Real public large mapping",
+      "checks": [
+        "mapping-desktop-release-t4"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Real large public mapping exit0, all published output fields except documented limitation prose unchanged; CPU/spannull."
+    },
+    {
+      "id": "compiler-query-build-graph:4",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Public graph and profile interfaces",
+      "checks": [
+        "release-graph-large",
+        "release-profile-large"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Public large graph/profile summary exit0 on167MB/263MB actual inputs;6851280records and0unresolved labels."
+    },
+    {
+      "id": "compiler-query-build-graph:5",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "No silent default resource expansion",
+      "checks": [
+        "release-graph-default-rejected",
+        "release-profile-default-rejected",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_large_capture_is_explicit_and_still_bounded",
+        "test_large_capture_requires_opt_in_and_preserves_record_api"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Both actual default CLIs exit2, no profile output; explicit limits selected separately, malformed flag/count APIs tested."
+    },
+    {
+      "id": "compiler-query-build-graph:6",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "No filtering or nested-time invention",
+      "checks": [
+        "release-profile-large",
+        "mapping-desktop-release-t4",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_streamed_records_match_materialized_mapping",
+        "test_nested_waits_partition_without_double_counting"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "All6851280events retained,2695071provider records mapped; streaming/materialized and nested-wait semantics pass named tests."
+    },
+    {
+      "id": "compiler-query-build-graph:7",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Whole package and boundaries",
+      "checks": [
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_receipt_read_cap_and_symlink_rejection",
+        "test_limits_without_large_allocations",
+        "test_footer_only_mutations_rejected"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Current231-test package ran verbosely; exact named resource/provenance/format failures map to these requirements, not only aggregate count."
+    },
+    {
+      "id": "compiler-query-build-graph:8",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Independent whole-result review",
+      "checks": [
+        "tiny-graph-default",
+        "tiny-graph-large",
+        "phase-independent-reference"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Fresh public tiny parity and independent250-forest reference pass. Earlier independent real-release review retained, not described as a fresh second external review."
+    },
+    {
+      "id": "compiler-query-build-graph:9",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Exact exported records and privacy",
+      "checks": [
+        "actual-optimized-build-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Cited BUILD export and raw private meta/summary hashes verified. Only compact observations/log hashes published; full command/profile staysprivate."
+    },
+    {
+      "id": "compiler-query-build-graph:10",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "Infrastructure and lifetime boundaries",
+      "checks": [
+        "actual-optimized-build-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Saved BUILD06:24 and host release06:41 evidence retained. This pass contains no host/start/install/capture call, so no new live-state or lifetime claim."
+    },
+    {
+      "id": "compiler-query-build-graph:11",
+      "source_doc": "docs/compiler-query-build-graph-20261014.md",
+      "source_doc_sha256": "6a1bd685c77ae924cd9c235c2d5ab5ce5857af385acdddbd80e251d07149170d",
+      "requirement": "No performance or core-ceiling claim",
+      "checks": [
+        "actual-optimized-build-export-audit",
+        "mapping-desktop-release-t4"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Oneforeign rustc/107cachemiss epoch retained; no before/afterpair and no performance or core-ceiling claim."
+    },
+    {
+      "id": "compiler-phase-activities:1",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Account for real optimized BUILD, not only CHECK",
+      "checks": [
+        "actual-optimized-build-export-audit",
+        "phase-large-real"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actual optimized BUILD profile source identity matched; fresh activities JSON byte-identical to23d71f4e... committed output."
+    },
+    {
+      "id": "compiler-phase-activities:2",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Avoid nested double counting across event kinds",
+      "checks": [
+        "phase-large-real"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "6851280intervals/584groups/517RustIDs; exclusive=covered148396651246ns over15826062441ns window. No inclusive overlap sums used as CPU."
+    },
+    {
+      "id": "compiler-phase-activities:3",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Validate mathematical partition independently",
+      "checks": [
+        "phase-independent-reference"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Independent fixed-seed reference exercises250shuffled nested forests across3threads; group allocation and coverage pass."
+    },
+    {
+      "id": "compiler-phase-activities:4",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Exercise whole implementation and integration boundaries",
+      "checks": [
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_nested_cross_thread_adjacent_and_gaps",
+        "test_crossing_rejected_for_every_kind",
+        "test_limits_and_consumption",
+        "test_cli_privacy_forwarding_preservation_and_bounds"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Named all-kind interval, crossing, consumption and public-IO methods pass over final implementation."
+    },
+    {
+      "id": "compiler-phase-activities:5",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Preserve large-input default guard and small-input compatibility",
+      "checks": [
+        "phase-default-rejected",
+        "phase-large-real",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_cli_privacy_forwarding_preservation_and_bounds"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Real large default exits2/nooutput; explicit large exits0. Named small-input public CLI compatibility passes."
+    },
+    {
+      "id": "compiler-phase-activities:6",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Preserve failures and controlled opt-ins",
+      "checks": [
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_symlinks_and_invalid_input",
+        "test_cli_privacy_forwarding_preservation_and_bounds"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Named actual subprocess CLI cases retain invalid/missing-label rejection, explicit unmappedlabels, existingbytes and symlink targets."
+    },
+    {
+      "id": "compiler-phase-activities:7",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Verify source semantics, not name-based CPU assumptions",
+      "checks": [
+        "pinned-compiler-source-object-audit"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Six exact pinned compiler Gitobjects and17literal label anchors freshlyverified; coordinator/LLVMlabel naming is notCPUcausality."
+    },
+    {
+      "id": "compiler-phase-activities:8",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Keep privacy and provenance",
+      "checks": [
+        "phase-large-real",
+        "actual-optimized-build-export-audit"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actual fresh activity output SHA matches committed23d71f4e...; exact inputhash checked. Captured command remainsprivate; no new BUILD record."
+    },
+    {
+      "id": "compiler-phase-activities:9",
+      "source_doc": "docs/compiler-phase-activities-20261014.md",
+      "source_doc_sha256": "c92c8a23654e1b7cefb1193c3d9c981767d2506a586be16a03afa0daeec73e74",
+      "requirement": "Leave unsupported conclusions unknown",
+      "checks": [
+        "phase-large-real"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "CPU/span remainnull;517RustIDs not517cores,148.396elapsed not129.698processCPU. No speedup/runnable-count/pureidle claim."
+    },
+    {
+      "id": "scheduler-legacy-attempt:1",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Sufficient effective scratch capacity",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Actual saved guest capacity permitted15points on500GiB; fresh manifest audit verifies recorded guest output. No new guest capacity probe or bound on full-workload peak."
+    },
+    {
+      "id": "scheduler-legacy-attempt:2",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Exact compiler/Cargo/CLI and flags",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "37exact exportIDs and15outcomes rejoined;35completed boundary records preserve actualprivateCLI/Cargo/rustc/jobs24 flags. Earlier private raw identity audit retained."
+    },
+    {
+      "id": "scheduler-legacy-attempt:3",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Preserve generator, seed, points and weights",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Existing frozen seed1/40points/weights/generator notchanged or filtered. Partial remains15/40, no substituted points."
+    },
+    {
+      "id": "scheduler-legacy-attempt:4",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Use real public build/check/test interfaces",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Real saved calls include releaseBUILD/CHECK/fullandfilteredTEST.35completed calls and preservedinterrupted/diagnostic records, not another actual compile run."
+    },
+    {
+      "id": "scheduler-legacy-attempt:5",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Match outcome to measurement",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "All15sample execwall/exit/compilefailure/testsfailed match exactcommands;3normal-success plans failed, not expectederror successes."
+    },
+    {
+      "id": "scheduler-legacy-attempt:6",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Clean full paired comparison",
+      "checks": [
+        "legacy-current-public-show",
+        "legacy-current-public-compare",
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "BLOCKED",
+      "observed": "OFF15/40,ON0,7noisy/3unexpected failures. Valid full paired expected-session gain remainsunobserved."
+    },
+    {
+      "id": "scheduler-legacy-attempt:7",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "End-user report refuses invalid claims",
+      "checks": [
+        "legacy-current-public-show",
+        "legacy-current-public-compare"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Fresh current public show refuses weightedaggregate; selfcompare refuses ratio, not an OFF/ON comparison."
+    },
+    {
+      "id": "scheduler-legacy-attempt:8",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Full harness regression check",
+      "checks": [
+        "whole-current-tests"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Current231named tests pass over final reporter/runner/launcher modules; frozen199 historical package acceptance separate. No compiler performance acceptance."
+    },
+    {
+      "id": "scheduler-legacy-attempt:9",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Preserve interrupted execution",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Interrupted16 remains separate from15samples, no fabricated after-exec or benchmarkwall. Diagnostic remains separate; compressed5nonzero outputs allparse."
+    },
+    {
+      "id": "scheduler-legacy-attempt:10",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Bound lifetime and credit burn",
+      "checks": [
+        "retained-resource-restoration-receipt-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Savedearly ownedshutdown and originalstopped restoration receipt preserved. No provider call in this pass, historical bound notnewAWSstate."
+    },
+    {
+      "id": "scheduler-legacy-attempt:11",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Restore initial resource state",
+      "checks": [
+        "retained-resource-restoration-receipt-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Savedprovider response confirms stopped10:27:09 and500GiBpreserved/no termination. Freshlocalhash audit only, no newEC2request."
+    },
+    {
+      "id": "scheduler-legacy-attempt:12",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Keep tenant security/defaults intact",
+      "checks": [
+        "retained-resource-restoration-receipt-audit",
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Actualattempt usedseparatedeveloper resource; savednormaltenantchangedfalse. No hostedcredentials/security/live mutation in freshscripts; legacybootstrap notnormaltenantproof."
+    },
+    {
+      "id": "scheduler-legacy-attempt:13",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Preserve honest CPU/scaling scope",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join",
+        "mapping-desktop-release-t4"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "No comparative speedup,W/S or96coreceiling. SampledCPUlowerbound and processCPU notquerywork."
+    },
+    {
+      "id": "scheduler-legacy-attempt:14",
+      "source_doc": "docs/scheduler-legacy-attempt-20261014.md",
+      "source_doc_sha256": "3aeb76304fb9d461e5f0446fcf2d1bde598e09fed597e4327cff0bfd6a356439",
+      "requirement": "Preserve public privacy and auditability",
+      "checks": [
+        "legacy-real-outcome-export-manifest-join"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "All39legacy manifestentries rechecked,37exports rejoined and5fullnonzeroJSONL files parsed. Publicpath/addressredaction retained, failures notdiscarded."
+    },
+    {
+      "id": "benchmark-stdin-boundary:1",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "An open inherited pipe cannot hold a benchmark on stdin",
+      "checks": [
+        "stdin-current-real-exec"
+      ],
+      "named_tests": [
+        "test_open_pipe_becomes_empty_non_tty_stdin"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Executed child seesEOF/nonTTY withparentpipe heldopen; samePGID/env/stderr/resource schema preserved."
+    },
+    {
+      "id": "benchmark-stdin-boundary:2",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "Noncontrolling PTY input is also noninteractive",
+      "checks": [
+        "stdin-current-real-exec"
+      ],
+      "named_tests": [
+        "test_pty_becomes_empty_non_tty_stdin"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Executed child seesEOF/nonTTY while both noncontrollingPTY endpoints stayopen."
+    },
+    {
+      "id": "benchmark-stdin-boundary:3",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "The temporary `/dev/null` descriptor does not leak through exec",
+      "checks": [
+        "stdin-current-real-exec"
+      ],
+      "named_tests": [
+        "test_temporary_null_descriptor_is_closed"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Executed child seesEBADF on deliberately inheritable temporaryfd."
+    },
+    {
+      "id": "benchmark-stdin-boundary:4",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "Opening `/dev/null` directly as fd 0 works despite Python's close-on-exec default",
+      "checks": [
+        "stdin-current-real-exec"
+      ],
+      "named_tests": [
+        "test_null_open_returning_zero_keeps_stdin_open"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Forcedopen returns0; child canreadEOF despite Python defaultCLOEXEC."
+    },
+    {
+      "id": "benchmark-stdin-boundary:5",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "Existing context and output survive",
+      "checks": [
+        "stdin-current-real-exec"
+      ],
+      "named_tests": [
+        "test_open_pipe_becomes_empty_non_tty_stdin",
+        "test_pty_becomes_empty_non_tty_stdin"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actualexec child matches driverPGID/envsentinel andstderrmarker; no processgroup change."
+    },
+    {
+      "id": "benchmark-stdin-boundary:6",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "Nonzero and signal exits are not rewritten",
+      "checks": [
+        "stdin-current-real-exec"
+      ],
+      "named_tests": [
+        "test_real_exec_failure_status_and_output_are_preserved",
+        "test_signal_exit_is_preserved"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actual23/stderr and-15signal statuses preserved, not rewritten."
+    },
+    {
+      "id": "benchmark-stdin-boundary:7",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "Existing Python benchmark integrations do not regress",
+      "checks": [
+        "whole-current-tests"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "Currentwhole231named cases pass, including all6execution regressions andreport/graph/launcher integrations."
+    },
+    {
+      "id": "benchmark-stdin-boundary:8",
+      "source_doc": "docs/benchmark-stdin-boundary-20261014.md",
+      "source_doc_sha256": "5ed9fb0cf78d417d5a571208c907b0d3aa72ab99d9820a440b1a7f5459413094",
+      "requirement": "Verification does not overwrite unrelated changes or claim old samples use the new runner",
+      "checks": [
+        "stdin-current-real-exec",
+        "whole-current-tests"
+      ],
+      "named_tests": [],
+      "state": "FRESH_OBSERVED",
+      "observed": "All54current benchmarksource hashesunchanged throughpass; oldsamples remainineligible. ControllingTTY unaffected, no oldcontext remapping."
+    },
+    {
+      "id": "benchmark-terminal-boundary:1",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Preserve a payload's failure status after logging",
+      "checks": [
+        "terminal-original-red",
+        "terminal-current-real-exec"
+      ],
+      "named_tests": [
+        "test_public_start_preserves_failure23"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Exactoriginal29c7446 generatedpayload failure23returned0; currentreturns23. RetainedEXIT agrees. Original87example remainshistorical."
+    },
+    {
+      "id": "benchmark-terminal-boundary:2",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Retain ordinary success and failure cases",
+      "checks": [
+        "terminal-current-real-exec"
+      ],
+      "named_tests": [
+        "test_public_start_preserves_success0",
+        "test_public_start_preserves_failure23",
+        "test_public_start_preserves_signal143"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "RealgeneratedBash scriptstatuses0/23/143 matchEXITlog. Transportsynthetic/asynchronous realdispatch notcertified."
+    },
+    {
+      "id": "benchmark-terminal-boundary:3",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Separate stdin from controlling terminal",
+      "checks": [
+        "terminal-current-real-exec"
+      ],
+      "named_tests": [
+        "test_devnull_still_sigttin"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actualfixture fd0null+/dev/tty read receivesSIGTTIN21. Stdinintegration notTTYisolation."
+    },
+    {
+      "id": "benchmark-terminal-boundary:4",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Test the real timeout grouping boundary",
+      "checks": [
+        "terminal-current-real-exec"
+      ],
+      "named_tests": [
+        "test_gnu_timeout_background_group"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "ActualGNUtimeout backgroundpayload stops inownedPTY; noforeground option orchildtimeout weakening."
+    },
+    {
+      "id": "benchmark-terminal-boundary:5",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Verify a detached recipe's natural lifecycle and inherited context",
+      "checks": [
+        "terminal-current-real-exec"
+      ],
+      "named_tests": [
+        "test_setsid_wait_exit23_inherited_jobserver",
+        "test_private_tmux_natural_session_lifetime"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Realsetsid normal23 andinheritedpipe preserved; private tmuxnaturallifetime passes. NotactualCargo jobserverproof."
+    },
+    {
+      "id": "benchmark-terminal-boundary:6",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Check the likely unsafe early-teardown edge",
+      "checks": [
+        "terminal-current-real-exec"
+      ],
+      "named_tests": [
+        "test_diagnostic_rejected_setsid_tmux_kill_leaks"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actualprivatekill-session leaves detachedchildalive; candidateREJECTED. Stablepidfd verifiesandcleans exactownedchild withfdclosed/nochildremaining."
+    },
+    {
+      "id": "benchmark-terminal-boundary:7",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Preserve existing launcher/evidence interfaces",
+      "checks": [
+        "shell-syntax",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_diagnostic_public_start_still_has_tty"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Publicgeneratedscript retainsordinaryTTY/default;11focused0skips+231namedwhole passon54unchangedsourceblobs."
+    },
+    {
+      "id": "benchmark-terminal-boundary:8",
+      "source_doc": "docs/benchmark-terminal-boundary-20261014.md",
+      "source_doc_sha256": "6c81a7dd4f9010ebf9d7a80b5d88b665c18952160f008da2ec34e811ea15cef9",
+      "requirement": "Avoid misattribution and accidental live changes",
+      "checks": [
+        "terminal-current-real-exec"
+      ],
+      "named_tests": [],
+      "state": "REPRESENTATIVE_ONLY",
+      "observed": "No realSSH/auth/host actionorheadlessdefault promotion; localtransporttests nothosted lifecycleacceptance. Fullremote supervisedlauncher remainsblocked."
+    },
+    {
+      "id": "synthetic-report-eligibility:1",
+      "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+      "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+      "requirement": "Preserve raw point observations and annotate noisy or unknown noise provenance.",
+      "checks": [
+        "report-current-real-partial-show",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_invalid_coverage_and_noise"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actualnoisy20.53detail preserved withannotation; partial expectedwaitaggregate removed, no inconvenientpointdrop."
+    },
+    {
+      "id": "synthetic-report-eligibility:2",
+      "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+      "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+      "requirement": "Emit comprehensive expected-wait aggregates and comparative ratios only when every requested point and replicate is present, all noise markers explicitly say false, outcomes match the planned successful or expected-compile-error command, and timing summaries agree with the actual samples.",
+      "checks": [
+        "report-current-real-partial-compare",
+        "report-clean-show",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_exit_outcome_provenance",
+        "test_invalid_timing_and_stale_summary",
+        "test_clean_and_expected_compile_error"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Actualpartialcomparerefused; cleancontrolsretain2.00report andexpectedE0308behavior; invalidoutcome/stale/boolwall casesblocked."
+    },
+    {
+      "id": "synthetic-report-eligibility:3",
+      "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+      "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+      "requirement": "Block malformed identities, missing outcome evidence, duplicate or out-of-range point IDs, measurement errors, suspect harness artifacts, and incomplete runs. Do not silently drop inconvenient points and call the surviving subset comprehensive.",
+      "checks": [
+        "report-malformed",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_malformed_public_payloads",
+        "test_empty_results_blocked",
+        "test_remaining_schema"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Malformedpublicdata returnsblocked/nottraceback; typedcoverage/pointidentity/errorcounter checks pass."
+    },
+    {
+      "id": "synthetic-report-eligibility:4",
+      "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+      "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+      "requirement": "Compare identical generator, seed, sampling information, point plans, source snapshots, execution mode and machine context. Toolchain or optimization versions can intentionally differ, but changed commands or incompatible source/machine context are not a matched compiler comparison.",
+      "checks": [
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_incompatible_identity",
+        "test_public_environment_identity"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Matchedplan/generator/snapshot/hostCPU/mode exactcontract tests pass; wrongcontextsblocked, no compilerclaim fromfixture."
+    },
+    {
+      "id": "synthetic-report-eligibility:5",
+      "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+      "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+      "requirement": "Require complete valid counter coverage across all required replicates before emitting instruction ratios. Missing counters stay unknown rather than disappearing from the median. Otherwise valid wall comparisons may remain available without an instruction claim.",
+      "checks": [
+        "report-missing-counter",
+        "report-full-counter",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_instruction_counter_coverage"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Missingrawreplicate counter suppressesinstrratio butretainsvalidwall; completecounter preservesratio, allnullstaysunknown."
+    },
+    {
+      "id": "synthetic-report-eligibility:6",
+      "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+      "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+      "requirement": "Preserve positional stack renaming by mapping sample, statistic and error keys through the original stack identities, not dictionary value order. Do not mutate loaded input results.",
+      "checks": [
+        "report-clean-renamed",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_public_positional_remap_noise_and_clean",
+        "test_clean_replicates_and_stats_key_order"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Renamed/reordered cleanstacksretain+0%report, mapping followsoriginalkeysanddoesnotmutateloadedinputs."
+    },
+    {
+      "id": "synthetic-report-eligibility:7",
+      "source_doc": "docs/synthetic-report-eligibility-20261014.md",
+      "source_doc_sha256": "f865c2f817fa6e625f99644af6bf49e7e22f16e2e76bab662dfbd217c95e1c7d",
+      "requirement": "Retain valid complete clean reports and expected compile-error workloads. Malformed report data should produce an actionable blocked message rather than a traceback or empty-mean arithmetic.",
+      "checks": [
+        "report-clean-show",
+        "report-faster-control",
+        "report-malformed",
+        "whole-current-tests"
+      ],
+      "named_tests": [
+        "test_clean_and_expected_compile_error"
+      ],
+      "state": "FRESH_OBSERVED",
+      "observed": "Completeclean2.00 andsynthetic-50%mathretained; malformeddata blocked. Controls notrealperformancebenchmarks."
+    },
+    {
+      "id": "measurement-acceptance:1",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Preserve survivor CPU after a different child exits",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Actualcompiled record::tests::sampled_cpu_preserves_survivor_work_when_other_child_exits failedbefore/passafter; exactoriginalsummarySHA verified."
+    },
+    {
+      "id": "measurement-acceptance:2",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Do not recount a process's lifetime after one missing snapshot",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Actualcompiled record::tests::sampled_cpu_missing_snapshot_does_not_count_lifetime_again failedbefore/passafter; exactoriginalsummarySHA verified."
+    },
+    {
+      "id": "measurement-acceptance:3",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Distinguish PID reuse and overlapping process roots",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Actualcompiled record::tests::sampled_cpu_distinguishes_pid_reuse_and_overlapping_roots failedbefore/passafter; exactoriginalsummarySHA verified."
+    },
+    {
+      "id": "measurement-acceptance:4",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Do not turn a regressing counter into a later spike",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Actualcompiled record::tests::sampled_cpu_counter_regression_does_not_create_later_spike failedbefore/passafter; exactoriginalsummarySHA verified."
+    },
+    {
+      "id": "measurement-acceptance:5",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Correct success despite intentional nested compiler failures",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Named summary::tests::successful_test_run_ignores_nested_compile_failure actualcompiled pass inclunit/output cases;21rawsummaryhashesverified."
+    },
+    {
+      "id": "measurement-acceptance:6",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Preserve genuine compiler failures",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Named unsuccessful_build_keeps_unit_and_output_compile_failure_verdicts actualcompiled pass; realouterE0308/101compile_failedtrue retained."
+    },
+    {
+      "id": "measurement-acceptance:7",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Preserve runtime test-failure classification",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Named runtime_test_failure_is_not_a_compile_failure actualcompiled pass. Frozenoutcomes verified, notcurrentpeer-dirtysource certification."
+    },
+    {
+      "id": "measurement-acceptance:8",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Exercise the installed CLI with a real nested compiler failure",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Realretained expectednestedE0308 output withouter2tests/exit0/compile_failedfalse rejoined tooriginalsummary+export."
+    },
+    {
+      "id": "measurement-acceptance:9",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Dogfood normal hosted routing and packaging",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Retained exacte629client hostedcheck/404tests/strictlint/recheck passed; frozen08d identity separate fromlater0a19/currentmutableglobal."
+    },
+    {
+      "id": "measurement-acceptance:10",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Preserve unchanged Cargo artifacts",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Allfour installede629acceptance records0compiled/62fresh verified; notactualfreshRustinvocations now."
+    },
+    {
+      "id": "measurement-acceptance:11",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Validate a real reference body edit",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "RealretainedDesktop bodyedit3tests/1compiled/745fresh recordjoinedexactly. No new referenceedit thispass."
+    },
+    {
+      "id": "measurement-acceptance:12",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Preserve unchanged Desktop reuse",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "RealretainedunchangedDesktoprepeat3tests/0compiled/746fresh recordverified."
+    },
+    {
+      "id": "measurement-acceptance:13",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Restore unrelated repository bytes",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "SavedbackuprestorationSHA24de30f7... andrestored3testrecord retained; no change toanotherrepo now."
+    },
+    {
+      "id": "measurement-acceptance:14",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Recording must not invalidate artifacts",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Saved actualrecorded/unrecorded/repeatedFresh/rmetabyteparity verifiedinacceptance; no fabricatedDirty-free performancegain."
+    },
+    {
+      "id": "measurement-acceptance:15",
+      "source_doc": "docs/measurement-acceptance-20261014.md",
+      "source_doc_sha256": "99a76a1287774dc0d6b18150d859881b77c0e79596af729564db72995c638069",
+      "requirement": "Retain failed experiments and harness mistakes",
+      "checks": [
+        "frozen-real-measurement-export-audit"
+      ],
+      "named_tests": [],
+      "state": "RETAINED_ACTUAL_VERIFIED",
+      "observed": "Original397successbadverdict and4compiledredfailures remainunaltered; unsupportedcargo--local error retained. Frozenhistoricalrawhashesall21match."
+    }
+  ],
+  "fresh_checks": 41,
+  "retained_boundary_audits": 4,
+  "scope_notice": "82requirements checked individually: fresh actualoffline graph/reportCLIs andreal localexec, syntheticpositivecontrols, retainedcompiled/provider evidence, andexplicitblocked realremote/performance gates. No aggregate testcount substitutes for namedcase mapping."
+}

@@ -1,0 +1,26 @@
+FIXTURE <terminal-fixture>
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+OBSERVED {"supervisor": 2639455, "child": 2639463, "mode": "plain", "probe": {"pid": 2639463, "sid": 2639455, "pgid": 2639463, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [2639463], "reaped": [2639463], "remaining": []}, "stderr": ""}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2639589, "child": 2639590, "mode": "command", "exit": 87, "cleanup": {"killed": [2639593], "reaped": [2639592, 2639593], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:15 AM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nWed Oct 14 04:32:15 AM PDT 2026\n'
+PRIVATE_TMUX_EARLY_KILL {"pid": 2639604, "sid": 2639604, "pgid": 2639604, "start": "17183189", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 2639604, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+OBSERVED {"supervisor": 2639647, "child": 2639652, "mode": "timeout", "probe": {"pid": 2639654, "sid": 2639647, "pgid": 2639652, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [2639652, 2639654], "reaped": [2639652, 2639654], "remaining": []}, "stderr": ""}
+PRIVATE_TMUX_NATURAL_EXIT {"pid": 2639707, "sid": 2639707, "pgid": 2639707, "start": "17183236", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 2639707, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2639815, "child": 2639825, "mode": "command", "exit": 23, "cleanup": {"killed": [2639829], "reaped": [2639827, 2639829], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:16 AM PDT 2026\nEXIT 23\nWed Oct 14 04:32:16 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2639956, "child": 2639957, "mode": "command", "exit": 143, "cleanup": {"killed": [2639960], "reaped": [2639959, 2639960], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:17 AM PDT 2026\nTerminated                 /usr/bin/python3 <terminal-fixture> 143\nWed Oct 14 04:32:17 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2640015, "child": 2640030, "mode": "command", "exit": 0, "cleanup": {"killed": [2640033], "reaped": [2640032, 2640033], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:18 AM PDT 2026\nEXIT 0\nWed Oct 14 04:32:18 AM PDT 2026\n'
+OBSERVED {"supervisor": 2640038, "child": 2640061, "mode": "setsid", "probe": {"pid": 2640062, "sid": 2640062, "pgid": 2640062, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+CHILD_STDERR 'setsid: child 2640072 did not exit normally: Success\n'
+OBSERVED {"supervisor": 2640070, "child": 2640071, "mode": "setsid", "probe": {"pid": 2640072, "sid": 2640072, "pgid": 2640072, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 2640072 did not exit normally: Success\n"}
+CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 2640103, "child": 2640112, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}
+round 1 remote fresh-check measured=True: failed exit=1 wall=0.000s

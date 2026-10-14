@@ -1,0 +1,11 @@
+test_null_open_returning_zero_keeps_stdin_open (test_run_counted.RunCountedTests.test_null_open_returning_zero_keeps_stdin_open) ... ok
+test_open_pipe_becomes_empty_non_tty_stdin (test_run_counted.RunCountedTests.test_open_pipe_becomes_empty_non_tty_stdin) ... ok
+test_pty_becomes_empty_non_tty_stdin (test_run_counted.RunCountedTests.test_pty_becomes_empty_non_tty_stdin) ... ok
+test_real_exec_failure_status_and_output_are_preserved (test_run_counted.RunCountedTests.test_real_exec_failure_status_and_output_are_preserved) ... ok
+test_signal_exit_is_preserved (test_run_counted.RunCountedTests.test_signal_exit_is_preserved) ... ok
+test_temporary_null_descriptor_is_closed (test_run_counted.RunCountedTests.test_temporary_null_descriptor_is_closed) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.945s
+
+OK

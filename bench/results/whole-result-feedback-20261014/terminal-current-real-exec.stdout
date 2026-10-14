@@ -1,0 +1,25 @@
+FIXTURE <terminal-fixture>
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+OBSERVED {"supervisor": 2644502, "child": 2644515, "mode": "plain", "probe": {"pid": 2644515, "sid": 2644502, "pgid": 2644515, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [2644515], "reaped": [2644515], "remaining": []}, "stderr": ""}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2644560, "child": 2644604, "mode": "command", "exit": 87, "cleanup": {"killed": [2644615], "reaped": [2644611, 2644615], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:29 AM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nWed Oct 14 04:32:29 AM PDT 2026\n'
+PRIVATE_TMUX_EARLY_KILL {"pid": 2644639, "sid": 2644639, "pgid": 2644639, "start": "17184594", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 2644639, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+OBSERVED {"supervisor": 2644648, "child": 2644665, "mode": "timeout", "probe": {"pid": 2644666, "sid": 2644648, "pgid": 2644665, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [2644665, 2644666], "reaped": [2644665, 2644666], "remaining": []}, "stderr": ""}
+PRIVATE_TMUX_NATURAL_EXIT {"pid": 2644675, "sid": 2644675, "pgid": 2644675, "start": "17184641", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 2644675, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2644740, "child": 2644741, "mode": "command", "exit": 23, "cleanup": {"killed": [2644744], "reaped": [2644743, 2644744], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:30 AM PDT 2026\nEXIT 23\nWed Oct 14 04:32:30 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2644834, "child": 2644835, "mode": "command", "exit": 143, "cleanup": {"killed": [2644839], "reaped": [2644837, 2644839], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:31 AM PDT 2026\nTerminated                 /usr/bin/python3 <terminal-fixture> 143\nWed Oct 14 04:32:31 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2644971, "child": 2644972, "mode": "command", "exit": 0, "cleanup": {"killed": [2644976], "reaped": [2644974, 2644976], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:32 AM PDT 2026\nEXIT 0\nWed Oct 14 04:32:32 AM PDT 2026\n'
+OBSERVED {"supervisor": 2644979, "child": 2644981, "mode": "setsid", "probe": {"pid": 2644982, "sid": 2644982, "pgid": 2644982, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+CHILD_STDERR 'setsid: child 2645003 did not exit normally: Success\n'
+OBSERVED {"supervisor": 2644985, "child": 2645002, "mode": "setsid", "probe": {"pid": 2645003, "sid": 2645003, "pgid": 2645003, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 2645003 did not exit normally: Success\n"}
+CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 2645007, "child": 2645008, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}

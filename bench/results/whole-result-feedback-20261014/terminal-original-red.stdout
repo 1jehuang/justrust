@@ -1,0 +1,11 @@
+FIXTURE <terminal-fixture>
+SOURCE_SHA256 a79bfd5d89f2870ff0c84ffbab32c503c2182d9bb97e7cbba5c539bba7a140de
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2645078, "child": 2645079, "mode": "command", "exit": 0, "cleanup": {"killed": [2645082], "reaped": [2645081, 2645082], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:33 AM PDT 2026\nEXIT 0\nWed Oct 14 04:32:33 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2645164, "child": 2645166, "mode": "command", "exit": 0, "cleanup": {"killed": [2645169], "reaped": [2645168, 2645169], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:33 AM PDT 2026\nEXIT 23\nWed Oct 14 04:32:33 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 2645242, "child": 2645244, "mode": "command", "exit": 0, "cleanup": {"killed": [2645248], "reaped": [2645246, 2645248], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Wed Oct 14 04:32:34 AM PDT 2026\nTerminated                 /usr/bin/python3 <terminal-fixture> 143\nWed Oct 14 04:32:34 AM PDT 2026\n'

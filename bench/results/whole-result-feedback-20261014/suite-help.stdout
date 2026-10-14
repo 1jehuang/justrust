@@ -1,0 +1,26 @@
+usage: suite.py [-h] {list,run,show,compare} ...
+
+justrust benchmark suite: the agent edit -> check/test loop, reproducibly.
+
+Every scenario runs on a pinned source snapshot (a `git archive` of a fixed
+commit, extracted once under ~/.justrust/bench/work), with its own target dir,
+so results do not depend on what is checked out in ~/jcode-desktop today or on
+another agent's build state. Each iteration applies a unique one-line edit
+(never reverting to an already-compiled state), runs the command through
+justrust, and reads the recorded summary.json for the phase breakdown.
+
+  bench/suite.py list                      scenarios and what they measure
+  bench/suite.py run [-n 5] [scenario...]  run (default: every non-cold scenario)
+  bench/suite.py compare A.json B.json     per-scenario median delta
+  bench/suite.py show RESULT.json          print a saved result
+
+Results go to bench/results/<timestamp>-<justrust rev>.json (commit them).
+A sample is flagged `noisy` when another rustc was running at its start or
+other processes averaged more than BENCH_NOISY_CORES (default 4) cores during
+the build. Medians are over all samples, `quiet` medians over the rest. Use --quiet-wait to wait for a quiet machine before each sample.
+
+positional arguments:
+  {list,run,show,compare}
+
+options:
+  -h, --help            show this help message and exit

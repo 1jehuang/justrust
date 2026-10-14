@@ -1,0 +1,15 @@
+usage: query_graph.py [-h] [--output OUTPUT] [--large-capture] graph
+
+Decode the exact stock 2026-10-08 incremental query graph outside rustc. Edges
+are consumer -> dependency. This is an invalidation/read graph, not a complete
+execution DAG. Query-kind DOT output is deliberately not accepted. Wire
+constants are pinned to rustc 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6.
+
+positional arguments:
+  graph
+
+options:
+  -h, --help       show this help message and exit
+  --output OUTPUT  exclusive new full graph JSON
+  --large-capture  opt in to 4M nodes/32M edges; byte and index bounds
+                   unchanged

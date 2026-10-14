@@ -1,0 +1,14 @@
+usage: query_activities.py [-h] --profile PROFILE --output OUTPUT
+                           [--large-capture] [--allow-unmapped-event-labels]
+
+Bounded all-kind activity elapsed accounting for decoded measureme records.
+Retains compact interval tuples per Rust thread, not constant-memory
+streaming. No activity classification, CPU-work estimate, or execution-DAG
+span inference.
+
+options:
+  -h, --help            show this help message and exit
+  --profile PROFILE
+  --output OUTPUT
+  --large-capture
+  --allow-unmapped-event-labels

@@ -1,0 +1,13 @@
+Synthetic agent workload: seed 1, 2/2 points measured on every stack, sampled from 100 real calls (100% mappable to the snapshots). Mean wall per point = expected wait per agent call.
+
+|  | points | old |
+|---|---:|---:|
+| **expected wait per call** | 2 | 2.00s |
+| command: check | 2 | 2.00s |
+| change: body | 2 | 2.00s |
+
+Instructions unavailable for old: missing or partial counter coverage; no instruction ratio claimed.
+| # | command | change | edits | old |
+|---:|---|---|---|---:|
+| 0 | `check` | body | 0 | 2.00s |
+| 1 | `check` | body | 0 | 2.00s |

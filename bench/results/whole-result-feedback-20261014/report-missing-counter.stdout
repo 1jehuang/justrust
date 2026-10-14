@@ -1,0 +1,6 @@
+A <private-path> (justrust synthetic-control-not-a-build)
+B <private-path> (justrust synthetic-control-not-a-build)
+stack            A mean   B mean      %  instr %  points 2
+old                2.00     2.00    +0%        -
+A: Instructions unavailable for old: missing or partial counter coverage; no instruction ratio claimed.
+B: Instructions unavailable for old: missing or partial counter coverage; no instruction ratio claimed.

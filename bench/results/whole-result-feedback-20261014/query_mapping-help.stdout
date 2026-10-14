@@ -1,0 +1,18 @@
+usage: query_mapping.py [-h] --graph GRAPH --profile PROFILE --receipt RECEIPT
+                        --output OUTPUT [--allow-unmapped-event-labels]
+                        [--large-capture]
+
+Join observed same-session query/wait IDs to actual dependency nodes. Elapsed
+wall-clock attribution is not CPU work. This deliberately does not claim
+execution span or a core-utilization ceiling from an invalidation graph. The
+caller must establish paired-file provenance before invoking map_events.
+
+options:
+  -h, --help            show this help message and exit
+  --graph GRAPH
+  --profile PROFILE
+  --receipt RECEIPT
+  --output OUTPUT
+  --allow-unmapped-event-labels
+  --large-capture       opt in to 4M nodes/32M edges/8M events; file bounds
+                        unchanged

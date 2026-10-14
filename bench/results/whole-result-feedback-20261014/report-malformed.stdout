@@ -1,0 +1,4 @@
+A <private-path> (justrust synthetic-control-not-a-build)
+B <private-path> (justrust synthetic-control-not-a-build)
+Synthetic comparison blocked:
+- B: synthetic result must be an object; repair report provenance before comparing

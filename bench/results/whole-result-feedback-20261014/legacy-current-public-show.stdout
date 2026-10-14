@@ -1,0 +1,31 @@
+Synthetic agent workload: seed 1, 15/40 points observed.
+Expected-session report blocked (raw observations remain in detail):
+- partial run: finish the full workload
+- incomplete coverage: 15/40 points; measure every point
+- point 0 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+- point 1 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+- point 1 suite-nightly-2026-10-08: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail
+- point 2 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+- point 4 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+- point 5 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+- point 8 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+- point 11 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+- point 11 suite-nightly-2026-10-08: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail
+- point 13 suite-nightly-2026-10-08: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail
+| # | command | change | edits | suite-nightly-2026-10-08 |
+|---:|---|---|---|---:|
+| 0 | `build --release -p jcode-desktop` | first | 6 | 29.30s (noisy/unknown) |
+| 1 | `test -p jcode-desktop-ui --lib` | body | 1 | 15.14s (noisy/unknown) |
+| 2 | `test -- reload_config` | new-file | 3 | 10.95s (noisy/unknown) |
+| 3 | `test -- remote_watch` | item | 1 | 1.67s |
+| 4 | `test -p jcode-tui --lib -- backend` | body | 9 | 15.87s (noisy/unknown) |
+| 5 | `build -p jcode-desktop-ui` | vcs | 5 | 5.45s (noisy/unknown) |
+| 6 | `test -p jcode-desktop-ui --lib` | test | 1 | 14.00s |
+| 7 | `build` | rerun | 0 | 0.25s |
+| 8 | `check -p jcode-desktop-motion` | switch | 1 | 0.19s (noisy/unknown) |
+| 9 | `test -p jcode-desktop-ui --lib` | switch | 1 | 13.67s |
+| 10 | `build -p jcode-desktop` | rerun | 0 | 0.25s |
+| 11 | `test --workspace` | switch | 1 | 60.16s (noisy/unknown) |
+| 12 | `test -p jcode-desktop-model -- diff` | switch | 1 | 0.91s |
+| 13 | `test -p jcode-base --lib -- tests` | vcs | 6 | 22.65s |
+| 14 | `build --release` | body | 2 | 64.85s |

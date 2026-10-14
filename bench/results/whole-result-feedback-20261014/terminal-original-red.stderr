@@ -1,0 +1,32 @@
+test_public_start_preserves_success0 (__main__.HeadlessLaunch.test_public_start_preserves_success0) ... ok
+test_public_start_preserves_failure23 (__main__.HeadlessLaunch.test_public_start_preserves_failure23) ... FAIL
+test_public_start_preserves_signal143 (__main__.HeadlessLaunch.test_public_start_preserves_signal143) ... FAIL
+
+======================================================================
+FAIL: test_public_start_preserves_failure23 (__main__.HeadlessLaunch.test_public_start_preserves_failure23)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<private-path>", line 475, in test_public_start_preserves_failure23
+    self.check_public_status(23)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^
+  File "<private-path>", line 469, in check_public_status
+    self.assertEqual(result['exit'], status, 'date/echo must not overwrite command exit status')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 23 : date/echo must not overwrite command exit status
+
+======================================================================
+FAIL: test_public_start_preserves_signal143 (__main__.HeadlessLaunch.test_public_start_preserves_signal143)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<private-path>", line 478, in test_public_start_preserves_signal143
+    self.check_public_status(143)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "<private-path>", line 469, in check_public_status
+    self.assertEqual(result['exit'], status, 'date/echo must not overwrite command exit status')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 143 : date/echo must not overwrite command exit status
+
+----------------------------------------------------------------------
+Ran 3 tests in 1.741s
+
+FAILED (failures=2)
