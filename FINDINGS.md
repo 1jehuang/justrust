@@ -6141,6 +6141,16 @@ only expected names. Native libraries, toolchain availability and end-user glibc
 compatibility still need application validation. No cloud deployment, public
 release, API-secret provisioning or billing change was made.
 
+## 2026-10-14: installed native-flag safety and fresh public reuse
+
+Guard832e362 and actual shim059674b were installed from exact committed059674 snapshot as0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d. Red native eligibility20261013-215342851-1568478 and real response-file eligibility20261013-215708557-1600890 both exit101 are retained. Early red automatic-update/telemetry/private-daemon network isolation caveat is explicit, not erased.
+
+Actual hosted shim test20261013-220413535-1642867 passes40 invocations:36 native/@ bypasses,4 generic controls,38 compiler calls and2 cache restores, all executable output42. Frozen source guard verifies69 blobs, hosted check/full410tests3ignored/strictalltargetlint/recheck actual IDs220816567-1669580/220822907-1670409/220843215-1671710/220848764-1671939 (all20261013 prefix). Desktop FPS edit/repeat/restoration220940404-1675420/220951644-1676602/220955119-1676852 each3pass, original backup bytes restored.
+
+New installed-safe client fresh public nightly/JR ×default/debug0×check/test all8 hit1/miss0, four runtime2-test workflows pass. Exact26 selected exports and mapped output/log hashes live in docs/sharing-native-safety-20261014.{md,json} and data/runs/sharing-native-flags-20261014. No speed claim or cross-CPU stale-execution claim. Native public authorization remains false and registry eager seeding remains off.
+
+Future-only fleet update completed05:19:45UTC, actual launch-template3 and UPDATE_COMPLETE independently checked; onlyUserData changes, all other actual launch properties identical. Scheduler $Latest/daily09:00UTC unchanged. New opaque runtime receipts and genuine new-tenant boot remain unobserved, not inferred from configuration. Cloud deployment JSON records immutable client/source and runner S3 versions.
+
 ## 2026-10-14: native archive identity and actual toolchain helper closure
 
 A real bundled C helper changed behavior from 1 to 2 with byte-identical Rust

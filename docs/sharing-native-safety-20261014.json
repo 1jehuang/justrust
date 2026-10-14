@@ -1,0 +1,403 @@
+{
+  "schema_version": 1,
+  "source_commit": "059674bf76fa218ba7e475279a86b4b6caf32aac",
+  "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+  "frozen_receipt": {
+    "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+    "complete": true,
+    "finished": 1791954529.2190006,
+    "schema_version": 1,
+    "scope": "hosted functionality and executable identity, not speed",
+    "started": 1791954496.4243488,
+    "steps": [
+      {
+        "args": [
+          "check"
+        ],
+        "exit": 0,
+        "finished": 1791954502.7955997,
+        "name": "check",
+        "output_sha256": "b7f35368cc7cb475af6de1b85b9f2c6675c8769f5d15d65deb1d0602cdaf18ef",
+        "run": {
+          "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+          "args": [
+            "check"
+          ],
+          "id": "20261013-220816567-1669580",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791954496.484193
+      },
+      {
+        "args": [
+          "test"
+        ],
+        "exit": 0,
+        "finished": 1791954523.091598,
+        "name": "test",
+        "output_sha256": "7f63fe52582efcca6ed632eb5793e574094ddc167b17c3940148831fe768eaea",
+        "run": {
+          "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+          "args": [
+            "test"
+          ],
+          "id": "20261013-220822907-1670409",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791954502.90635
+      },
+      {
+        "args": [
+          "clippy",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "finished": 1791954528.6454496,
+        "name": "clippy",
+        "output_sha256": "352dffadae522ce326111b5dd7533f6f18cd0cb2e951b1c98e9b80099de62a1a",
+        "run": {
+          "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+          "args": [
+            "clippy",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "id": "20261013-220843215-1671710",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791954523.2145088
+      },
+      {
+        "args": [
+          "check"
+        ],
+        "exit": 0,
+        "finished": 1791954529.1864948,
+        "name": "recheck",
+        "output_sha256": "696e987102696087e198b2b9198ea869ecd2b5891ff467ab052d6faa85a872a9",
+        "run": {
+          "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+          "args": [
+            "check"
+          ],
+          "id": "20261013-220848764-1671939",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791954528.7627978
+      }
+    ],
+    "toolchain": "nightly-2026-10-08"
+  },
+  "records": [
+    {
+      "id": "20261013-220411030-1642533",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220413535-1642867",
+      "exit": 0,
+      "tests": 2,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220417764-1643114",
+      "exit": 0,
+      "tests": 410,
+      "ignored": 3,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220431970-1644192",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220816567-1669580",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220822907-1670409",
+      "exit": 0,
+      "tests": 410,
+      "ignored": 3,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220843215-1671710",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220848764-1671939",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220940404-1675420",
+      "exit": 0,
+      "tests": 3,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220951644-1676602",
+      "exit": 0,
+      "tests": 3,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220955119-1676852",
+      "exit": 0,
+      "tests": 3,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-215342851-1568478",
+      "exit": 101,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-215708557-1600890",
+      "exit": 101,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220212601-1632702",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220213700-1632916",
+      "exit": 0,
+      "tests": 23,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220218197-1633818",
+      "exit": 0,
+      "tests": 2,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220218365-1633875",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-220220162-1634105",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 0
+    },
+    {
+      "id": "20261013-221102336-1688570",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 1
+    },
+    {
+      "id": "20261013-221103246-1688719",
+      "exit": 0,
+      "tests": 2,
+      "ignored": 0,
+      "public_hits": 1
+    },
+    {
+      "id": "20261013-221103828-1688906",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 1
+    },
+    {
+      "id": "20261013-221104518-1689051",
+      "exit": 0,
+      "tests": 2,
+      "ignored": 0,
+      "public_hits": 1
+    },
+    {
+      "id": "20261013-221105094-1689198",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 1
+    },
+    {
+      "id": "20261013-221105897-1689289",
+      "exit": 0,
+      "tests": 2,
+      "ignored": 0,
+      "public_hits": 1
+    },
+    {
+      "id": "20261013-221106484-1689478",
+      "exit": 0,
+      "tests": 0,
+      "ignored": 0,
+      "public_hits": 1
+    },
+    {
+      "id": "20261013-221107219-1689580",
+      "exit": 0,
+      "tests": 2,
+      "ignored": 0,
+      "public_hits": 1
+    }
+  ],
+  "public_matrix": [
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-default",
+      "compiler": "nightly-2026-10-08",
+      "id": "20261013-221102336-1688570",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-default",
+      "compiler": "nightly-2026-10-08",
+      "id": "20261013-221103246-1688719",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    },
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-debug0",
+      "compiler": "nightly-2026-10-08",
+      "id": "20261013-221103828-1688906",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-debug0",
+      "compiler": "nightly-2026-10-08",
+      "id": "20261013-221104518-1689051",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    },
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-default",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "id": "20261013-221105094-1689198",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-default",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "id": "20261013-221105897-1689289",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    },
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-debug0",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "id": "20261013-221106484-1689478",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-debug0",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "id": "20261013-221107219-1689580",
+      "place": "local",
+      "public_hits": 1,
+      "registry_misses": 0,
+      "unit_exit": 0
+    }
+  ],
+  "actual_shim_invocations": 40,
+  "native_and_response_bypasses": 36,
+  "generic_controls": 4,
+  "actual_compiler_runs": 38,
+  "cache_restorations": 2,
+  "source_blobs_verified": 69,
+  "new_tenant_boot_observed": false,
+  "native_public_sharing_authorized": false,
+  "cross_cpu_stale_execution_demonstrated": false
+}

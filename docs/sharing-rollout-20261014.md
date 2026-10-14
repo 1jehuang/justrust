@@ -91,3 +91,9 @@ New-host toolchain sharing is a fixed-origin bootstrap opt-in, not arbitrary ten
 Pinned native rootfs publication, verified installer/mount receipts, complete environment and kernel/CPU determinants, audited sandbox execution and native ABI/runtime acceptance are not completed. The prototype says `sharing_authorized=false`. Do not describe the script guard as making all compiled native dependencies unshareable or all remaining native cache keys sound.
 
 No performance speedup is claimed by this rollout document. No matched `bench/suite.py` before/after result was produced for these changes, and noisy concurrent functional test timings are not substitutes.
+
+## Final installed safety and future deployment observation
+
+The exact native-safe `059674b` snapshot/`0a19acdd...` executable passed final hosted check, full **410 tests with three ignored**, strict all-target lint and recheck. Actual shim controls prove36 native/response bypasses and4 generic miss/hit controls; Desktop FPS edit/repeat/backup restoration passed. All eight independently fresh public compiler/profile/check/test runs also passed after installing the guard. See `docs/sharing-native-safety-20261014.{md,json}` and its26 exact selected run records.
+
+Future-only fleet launch-template version3 was accepted UPDATE_COMPLETE at05:19:45UTC, and scheduler $Latest was independently observed at05:24:22UTC. Its safe client/fullJR/status pins changed only UserData; all other actual launch properties remained identical. This is a verified configuration deployment, not yet a runtime receipt from a new producer or genuine new-tenant bootstrap. Native public closure authorization and registry eager seeding remain off.
