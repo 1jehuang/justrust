@@ -125,6 +125,15 @@ PY
   ssh_t "tmux new-session -d -s $NAME 'bash ~/bench-$NAME.sh >~/bench-$NAME.log 2>&1'"
   echo "on-remote: started in tmux session $NAME on $DEST ($KIND); log ~/bench-$NAME.log there"
   echo "  $0 status $NAME    $0 fetch $NAME"
+  if [[ $KIND == hosted ]]; then
+    # Hosted machines are stopped by the control plane's cron after
+    # BUILD_IDLE_STOP_MINUTES with no connect, charge or run event; the
+    # in-machine marker above does not count. Keep connecting from here
+    # (an authenticated connect is activity) while the session runs.
+    nohup bash -c 'while '"${SSH[*]@Q}"' '"$DEST"' "tmux has-session -t '"$NAME"' 2>/dev/null"; do '"$JR"' remote env >/dev/null 2>&1; sleep 240; done' \
+      >"${TMPDIR:-/tmp}/on-remote-keepalive-$NAME.log" 2>&1 &
+    echo "on-remote: hosted keepalive pid $! (connects every 4 min until the session ends)"
+  fi
   ;;
 status)
   if ssh_t "tmux has-session -t $NAME 2>/dev/null"; then echo "running"; else echo "finished (or not started)"; fi
