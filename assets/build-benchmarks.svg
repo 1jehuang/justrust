@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 440" role="img" aria-labelledby="title desc">
+  <title id="title">uv build times: standard local versus justrust remote</title>
+  <desc id="desc">Seconds, lower is better. Fresh checkout: 77.7 versus 22.9. Test compilation: 73.6 versus 38.5. Cold check: 70.3 versus 52.2. justrust local is not measured. Laptop under load versus a 16 vCPU hosted machine, October 10, 2026.</desc>
+  <rect width="880" height="440" rx="16" fill="#111827"/>
+  <g font-family="system-ui, sans-serif" fill="#f3f4f6">
+    <text x="28" y="38" font-size="22" font-weight="700">Less waiting. Faster build results.</text>
+    <text x="28" y="64" font-size="14" fill="#9ca3af">uv · wall time in seconds · lower is better</text>
+    <rect x="28" y="84" width="12" height="12" rx="2" fill="#94a3b8"/>
+    <text x="48" y="95" font-size="13">Standard toolchain (local)</text>
+    <rect x="290" y="84" width="12" height="12" rx="2" fill="#34d399"/>
+    <text x="310" y="95" font-size="13">justrust (remote)</text>
+    <text x="510" y="95" font-size="13" fill="#9ca3af">justrust (local): not measured</text>
+    <g stroke="#374151" stroke-width="1">
+      <path d="M280 120V350 M405 120V350 M530 120V350 M655 120V350 M780 120V350"/>
+    </g>
+    <g font-size="14">
+      <text x="28" y="155">Fresh checkout</text>
+      <text x="28" y="175" fill="#9ca3af">shared cache</text>
+      <rect x="280" y="133" width="485.625" height="20" rx="3" fill="#94a3b8"/>
+      <text x="776" y="148">77.7 s</text>
+      <rect x="280" y="161" width="143.125" height="20" rx="3" fill="#34d399"/>
+      <text x="433" y="176">22.9 s</text>
+      <text x="28" y="233">Test compilation</text>
+      <text x="28" y="253" fill="#9ca3af">uv-resolver · no-run</text>
+      <rect x="280" y="211" width="460" height="20" rx="3" fill="#94a3b8"/>
+      <text x="750" y="226">73.6 s</text>
+      <rect x="280" y="239" width="240.625" height="20" rx="3" fill="#34d399"/>
+      <text x="531" y="254">38.5 s</text>
+      <text x="28" y="311">Cold workspace check</text>
+      <rect x="280" y="289" width="439.375" height="20" rx="3" fill="#94a3b8"/>
+      <text x="729" y="304">70.3 s</text>
+      <rect x="280" y="317" width="326.25" height="20" rx="3" fill="#34d399"/>
+      <text x="616" y="332">52.2 s</text>
+    </g>
+    <g font-size="12" fill="#9ca3af" text-anchor="middle">
+      <text x="280" y="369">0</text><text x="405" y="369">20</text><text x="530" y="369">40</text><text x="655" y="369">60</text><text x="780" y="369">80 s</text>
+    </g>
+    <text x="28" y="401" font-size="12" fill="#9ca3af">Laptop under multi-agent load vs 16 vCPU hosted machine · measured October 10, 2026</text>
+    <text x="28" y="421" font-size="12" fill="#9ca3af">Hardware and cache conditions differ. This is not a toolchain-only comparison.</text>
+  </g>
+</svg>

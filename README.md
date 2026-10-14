@@ -24,12 +24,17 @@ build service.
 On [uv](https://github.com/astral-sh/uv) (674 units, measured 2026-10-10,
 laptop under typical multi-agent load vs a 16 vCPU build machine):
 
-| | local cargo | justrust remote |
-|---|---:|---:|
-| fresh checkout, shared cache | 77.7 s | **22.9 s** (3.4x) |
-| `test -p uv-resolver --no-run` | 73.6 s | **38.5 s** (1.9x) |
-| cold `check --workspace` | 70.3 s | **52.2 s** (1.3x) |
-| one-line edit, `check -p uv-resolver` | | **1.0 s** |
+| Operation | Standard toolchain (local) | justrust (local) | justrust (remote) |
+|---|---:|---:|---:|
+| Fresh checkout, shared cache | 77.7 s | Not measured | **22.9 s** |
+| `test -p uv-resolver --no-run` | 73.6 s | Not measured | **38.5 s** |
+| Cold `check --workspace` | 70.3 s | Not measured | **52.2 s** |
+| One-line edit, `check -p uv-resolver` | Not measured | Not measured | **1.0 s** |
+
+![Build time comparison for uv. Standard local: 77.7, 73.6, and 70.3 seconds. justrust remote: 22.9, 38.5, and 52.2 seconds. justrust local has not been measured.](assets/build-benchmarks.svg)
+
+Lower is better. Missing measurements are not estimates. These results compare
+a laptop under load with a hosted build machine, not toolchain-only performance.
 
 Your coding agents spend valuable time waiting for Rust checks, builds, and
 tests. Running those operations locally can slow down your machine, drive up
