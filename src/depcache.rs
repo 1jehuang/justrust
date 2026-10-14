@@ -78,9 +78,10 @@ const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// lines are the same on every machine and can be shared remotely.
 const CARGO_HOME_TOKEN: &str = "@@JUSTRUST_CARGO_HOME@@";
 const XATTR: &str = "user.justrust.h";
-/// Memoized `extern_hash`, same `<stamp>|<hash>` format. Version 2 does not
-/// accept metadata-only memo entries for executable dynamic libraries.
-const XATTR_META: &str = "user.justrust.m2";
+/// Memoized `extern_hash`, same `<stamp>|<hash>` format. Version 3 also
+/// invalidates metadata-only archive keys: bundled native objects participate
+/// in dependent codegen and linking even when `lib.rmeta` is unchanged.
+const XATTR_META: &str = "user.justrust.m3";
 
 pub fn enabled() -> bool {
     !matches!(
@@ -835,15 +836,15 @@ fn key_extern(
     Some(())
 }
 
-/// Key of an `--extern` artifact. Ordinary Rust libraries use crate metadata
-/// for compiler inputs (`.rmeta`, or the `lib.rmeta` member of an `.rlib`).
-/// Dynamic libraries use the whole file: a proc macro EXECUTES its code and
-/// native helper code, neither of which is fully described by `.rustc` metadata.
-/// Metadata-only dynamic-library hashes could replay a dependent compiled with
-/// a different macro implementation even when the Rust metadata was unchanged.
+/// Key of an `--extern` artifact. Metadata-only `.rmeta` files use their
+/// compiler metadata. Archives and dynamic libraries use the whole file:
+/// bundled native objects can change linked behavior without changing
+/// `lib.rmeta`, and proc macros EXECUTE code not fully described by `.rustc`.
+/// Ignoring those bytes could replay a dependent compiled or linked against
+/// a different implementation even when the Rust metadata was unchanged.
 ///
 /// Anything unparsable falls back to the whole-file content hash. Memoized
-/// in `user.justrust.m2`, validated like `file_hash`. This does not establish
+/// in `user.justrust.m3`, validated like `file_hash`. This does not establish
 /// purity of macro expansions or permit sharing tenant expansion outputs.
 pub(crate) fn extern_hash(path: &Path) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
@@ -854,11 +855,11 @@ pub(crate) fn extern_hash(path: &Path) -> Option<String> {
     {
         return Some(hash.to_owned());
     }
-    let executable_library = path
+    let contains_code = path
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| matches!(e, "so" | "dylib" | "dll"));
-    let metadata = if executable_library {
+        .is_some_and(|e| matches!(e, "rlib" | "so" | "dylib" | "dll"));
+    let metadata = if contains_code {
         None
     } else {
         metadata_bytes(path)
@@ -1897,7 +1898,7 @@ mod tests {
     }
 
     #[test]
-    fn extern_keys_use_only_the_crate_metadata() {
+    fn extern_archive_keys_include_bundled_object_code() {
         let d = std::env::temp_dir().join(format!("jr-extern-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -1928,8 +1929,17 @@ mod tests {
         std::fs::write(&a, ar(b"object code /home/alice/sysroot", b"rust-meta-1")).unwrap();
         std::fs::write(&b, ar(b"other object code, other paths!", b"rust-meta-1")).unwrap();
         assert_eq!(ar_member(&a, "lib.rmeta").unwrap(), b"rust-meta-1");
-        // Same metadata, different object code: same key.
-        assert_eq!(extern_hash(&a), extern_hash(&b));
+        // Same metadata, different object code: different dependent key.
+        assert_eq!(metadata_bytes(&a), metadata_bytes(&b));
+        let st = stamp(&std::fs::metadata(&a).unwrap());
+        for old in ["user.justrust.m", "user.justrust.m2"] {
+            xattr_set(&a, old, &format!("{st}|old-metadata-only"));
+        }
+        let first = extern_hash(&a).unwrap();
+        assert!(first.starts_with('f'));
+        assert_ne!(first, "old-metadata-only");
+        assert_ne!(Some(first.clone()), extern_hash(&b));
+        assert_eq!(Some(first), extern_hash(&a));
         // Different metadata: different key (and the memo follows the file).
         std::fs::write(&b, ar(b"other object code, other paths!", b"rust-meta-2")).unwrap();
         assert_ne!(extern_hash(&a), extern_hash(&b));
