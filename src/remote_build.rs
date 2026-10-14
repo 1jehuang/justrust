@@ -564,6 +564,52 @@ pub fn run_remote(
     args: &[String],
     start: bool,
 ) -> Result<std::result::Result<Outcome, Infra>> {
+    let started = Instant::now();
+    let mut diagnostic = RemoteDiagnostic::default();
+    let result = run_remote_inner(sub, args, start, &mut diagnostic);
+    if !matches!(&result, Ok(Ok(_))) {
+        report_remote_failure(sub, &diagnostic, started.elapsed().as_secs_f64());
+    }
+    result
+}
+
+struct RemoteDiagnostic {
+    stage: &'static str,
+    may_have_started: bool,
+    exit: Option<i32>,
+}
+
+impl Default for RemoteDiagnostic {
+    fn default() -> Self {
+        Self {
+            stage: "remote_setup",
+            may_have_started: false,
+            exit: None,
+        }
+    }
+}
+
+fn remote_failure_data(sub: &str, d: &RemoteDiagnostic, elapsed: f64) -> serde_json::Value {
+    let sub = match sub {
+        "check" | "test" | "build" | "clippy" | "run" | "bench" | "doc" | "rustc" => sub,
+        _ => "other",
+    };
+    serde_json::json!({ "schema_version": 2, "sub": sub, "stage": d.stage,
+        "may_have_started": d.may_have_started,
+        "exit": d.exit, "elapsed_s": (elapsed * 100.0).round() / 100.0 })
+}
+
+fn report_remote_failure(sub: &str, d: &RemoteDiagnostic, elapsed: f64) {
+    crate::telemetry::record("build_failure", remote_failure_data(sub, d, elapsed));
+    crate::telemetry::maybe_spawn_background();
+}
+
+fn run_remote_inner(
+    sub: &str,
+    args: &[String],
+    start: bool,
+    diagnostic: &mut RemoteDiagnostic,
+) -> Result<std::result::Result<Outcome, Infra>> {
     let total = Instant::now();
     let trace = std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some();
     let mark = |what: &str| {
@@ -594,6 +640,7 @@ pub fn run_remote(
         .and_then(|n| n.to_str())
         .map(str::to_string);
     mark("roots");
+    diagnostic.stage = "remote_admission";
     let hosted = match charge_hosted(&run_id, &label.join(" "), project.as_deref()) {
         Ok(h) => h,
         Err(m) => return infra(m),
@@ -616,6 +663,7 @@ pub fn run_remote(
         report("abandoned", None);
         Ok(Err(Infra(m)))
     };
+    diagnostic.stage = "remote_transport";
     let sock = match crate::remote_daemon::connect() {
         Ok(s) => s,
         Err(e) => return infra(format!("{e:#}")),
@@ -689,6 +737,7 @@ pub fn run_remote(
                 _,
             ) => {
                 submitted = may_have_started;
+                diagnostic.may_have_started |= may_have_started;
             }
             (
                 Msg::Flushed {
@@ -709,8 +758,10 @@ pub fn run_remote(
                     live.phase("building", &machine);
                 }
                 sync = Some((files, ms, machine));
+                diagnostic.may_have_started = true;
             }
             (Msg::Out { stream, .. }, data) => {
+                diagnostic.may_have_started = true;
                 if trace && !first_out {
                     first_out = true;
                     mark("first output");
@@ -728,11 +779,14 @@ pub fn run_remote(
                 run_files = data
             }
             (Msg::Exit { code, .. }, summary) => {
+                diagnostic.exit = Some(code);
+                diagnostic.may_have_started = true;
                 mark("exit");
                 report("done", Some(code));
                 // A build is only done once its outputs are here. Counted in
                 // the client wall the router compares against local.
                 if code == 0 && sub == "build" {
+                    diagnostic.stage = "remote_artifacts";
                     match crate::remote_artifacts::fetch(&full, started_at) {
                         Ok(line) => eprintln!("justrust remote: {line}"),
                         Err(e) => {
@@ -744,14 +798,17 @@ pub fn run_remote(
                 }
                 let (files, ms, machine) = sync.unwrap_or((0, 0.0, String::new()));
                 mark("recording");
-                record_remote(
+                diagnostic.stage = "remote_summary";
+                if !record_remote(
                     &run_id,
                     &summary,
                     &run_files,
                     &machine,
                     ms,
                     total.elapsed().as_secs_f64(),
-                );
+                ) {
+                    report_remote_failure(sub, diagnostic, total.elapsed().as_secs_f64());
+                }
                 eprintln!(
                     "justrust remote: {} on {machine} in {:.1}s (sync {:.0} ms, {files} file{} at build time)",
                     if code == 0 { "ok" } else { "failed" },
@@ -855,15 +912,15 @@ fn record_remote(
     machine: &str,
     sync_ms: f64,
     wall: f64,
-) {
+) -> bool {
     let Ok(mut s) = serde_json::from_slice::<crate::summary::Summary>(summary) else {
-        return;
+        return false;
     };
     let Ok(dir) = crate::paths::runs_dir().map(|d| d.join(run_id)) else {
-        return;
+        return false;
     };
     if std::fs::create_dir_all(&dir).is_err() {
-        return;
+        return false;
     }
     if !run_files.is_empty()
         && let Err(e) = crate::remote_proto::unpack_run_files(run_files, &dir)
@@ -903,12 +960,14 @@ fn record_remote(
     crate::split_index::maybe_refresh(&s);
     crate::telemetry::record_run(&s, true);
     crate::telemetry::maybe_spawn_background();
+    true
 }
 
 /// `justrust remote check|test|...`: always remote (starting the machine if
 /// it is stopped). Infrastructure failures are errors here, not fallbacks.
 pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
     if remote_backend::load().is_none() {
+        report_remote_failure(sub, &RemoteDiagnostic::default(), 0.0);
         bail!("no remote machine configured. Sign in to hosted builds: `justrust login`");
     }
     match run_remote(sub, &args, true)? {
@@ -919,6 +978,34 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_failure_diagnostics_preserve_known_outcome_without_private_text() {
+        let d = RemoteDiagnostic {
+            stage: "remote_artifacts",
+            may_have_started: true,
+            exit: Some(0),
+        };
+        let data = remote_failure_data("private-subcommand", &d, 1.234);
+        assert_eq!(data["sub"], "other");
+        assert_eq!(data["stage"], "remote_artifacts");
+        assert_eq!(data["exit"], 0);
+        assert_eq!(data["elapsed_s"], 1.23);
+        assert_eq!(data["may_have_started"], true);
+        assert!(!data.to_string().contains("private"));
+        assert!(data.get("fallback_safe").is_none());
+    }
+
+    #[test]
+    fn malformed_remote_summary_is_reportable_not_silently_successful() {
+        assert!(!record_remote(
+            "unused",
+            b"not-json",
+            &[],
+            "private-machine",
+            0.0,
+            0.0
+        ));
+    }
     #[test]
     fn ambiguous_submission_never_falls_back_but_confirmed_rejection_can() {
         assert!(super::fallback_safe(false, false));
