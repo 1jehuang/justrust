@@ -93,6 +93,32 @@ caller owner still has pending changes. Final publication remains explicitly
 held for the coordinator's complete source and installer audit. No alpha.18 tag
 or release has been pushed, and the previous latest release remains alpha.17.
 
+## Recovered release observation, 12:19 UTC
+
+Source main `2dd8f347dfc38be0eb44e60dfac638b1e305c412`, CI 38561542585,
+has passed native Linux (fmt, strict all-target clippy, tests, smoke and package),
+Windows (strict all-target clippy, tests, smoke, integration and release binary)
+and MSRV. Both `macos-latest` and `macos-15-intel` remain queued with no
+executed steps. This is an external queue blocker, not a demonstrated global
+outage or permission to substitute platforms.
+
+This source includes typed persistence callers and strict fixture opt-outs
+(`68b20fe`), bounded asynchronous sending (`02edd55`) and recoverable logs
+(`c9961bf`). The coordinator reports final installed-source check, 437 passing
+tests with 3 ignored, and strict all-target clippy passed, plus real local
+success/failure, heartbeat, SIGKILL recovery, expired `unknown_lost` ledger and
+fresh billed hosted delivery acceptance. These coordinator-reported checks do
+not replace native CI for the final exact release candidate.
+
+The coordinator's final docs/data acceptance commit is still incoming, so
+`2dd8f34` is the observed source snapshot, not yet an approved final tag target.
+Publication remains explicitly HOLD until the coordinator lifts it for the
+exact candidate and all five native jobs are green. The release workflow has
+no dependency on CI, so neither a tag nor a release dispatch is authorized.
+GitHub's latest published release was rechecked at 12:19 UTC: alpha.17,
+published at 08:25:19 UTC. No source, version, changelog, workflow, tag or
+publication changes were made by the recovered observer.
+
 ## Publication and rollout
 
 Pending exact-candidate native CI and release build, asset/checksum verification,
