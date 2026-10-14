@@ -193,6 +193,17 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         .ok()
         .and_then(|d| crate::toolchain::resolve(&d).ok().flatten())
         .and_then(|p| crate::toolchain::installed(&p.spec).ok().flatten());
+    if matches!(
+        std::env::var("JUSTRUST_TOOLCHAIN_REQUIRED").as_deref(),
+        Ok("1" | "true" | "yes")
+    ) && subcommand(args).is_some_and(|s| RECORDED.contains(&s.as_str()))
+        && pinned.is_none()
+    {
+        eprintln!(
+            "justrust: toolchain required: no installed explicit pin, refusing unrecorded system compiler fallback"
+        );
+        std::process::exit(1);
+    }
     let mut cmd;
     match &pinned {
         Some(tc) => {

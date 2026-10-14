@@ -42,7 +42,12 @@ fn strict_toolchain_rejects_system_and_uninstalled_pins_before_cargo() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"strict-toolchain-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[lib]\npath = \"lib.rs\"\n").unwrap();
     std::fs::write(root.join("lib.rs"), "pub fn fixture() {}\n").unwrap();
-    for pin in ["system", "0.0.0"] {
+    for (pin, disable) in [
+        ("system", "0"),
+        ("0.0.0", "0"),
+        ("system", "1"),
+        ("0.0.0", "1"),
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_justrust"))
             .args(["build", "--local", "--release"])
             .current_dir(&root)
@@ -52,7 +57,7 @@ fn strict_toolchain_rejects_system_and_uninstalled_pins_before_cargo() {
             .env("JUSTRUST_TOOLCHAIN_AUTO_INSTALL", "0")
             .env_remove("JUSTRUST_REMOTE_REQUIRED")
             .env_remove("JUSTRUST_RUN_DIR")
-            .env_remove("JUSTRUST_DISABLE")
+            .env("JUSTRUST_DISABLE", disable)
             .env_remove("JUSTRUST_ON_REMOTE_AGENT")
             .env_remove("JUSTRUST_RUN_ID_OVERRIDE")
             .env_remove("JCODE_API_KEY")

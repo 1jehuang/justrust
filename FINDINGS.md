@@ -6107,6 +6107,12 @@ uninstalled `0.0.0` pin with auto-install disabled exited 1 without compiling or
 falling back. Final lint `20261013-205524366-1143599` passed with `-D warnings`,
 and strict requirement integration `20261013-205530034-1144008` passed both tests.
 These are correctness and transfer measurements, not a speedup claim.
+Follow-up hardening also rejects uninstalled pins when nested Cargo or
+`JUSTRUST_DISABLE=1` bypasses recording. Hosted check
+`20261013-205722281-1156150`, the expanded integration test
+`20261013-205724321-1156248` (system and unavailable pins, recording on/off),
+and warning-free lint `20261013-205726886-1156590` passed. The reinstalled client
+also rejected an unavailable pin with recording disabled on the real fixture.
 The existing slow large-bundle publish fixture dominated the lib test run at
 9.9 s; optimizing it is follow-up, not part of this release support change.
 
