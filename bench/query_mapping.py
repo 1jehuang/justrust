@@ -105,6 +105,7 @@ def map_events(graph, events):
                             "Missing provider timings remain unknown, not zero CPU-cost work.",
                             "Exclusive elapsed subtracts nested query and known blocked intervals, but still contains unreported locks and OS descheduling.",
                             "QueryBlocked identifies the waited producer. Caller is observed enclosing query context, not the blocked event ID.",
+                            "QueryBlocked includes latch waiting plus post-wake cache lookup, not pure idle time. Profiler thread IDs are Rust thread IDs, not proven OS TIDs.",
                             "Dependency edges omit eval-always/ignored reads and ordered continuations. No complete execution DAG or W/S ceiling is claimed."]}
 
 
@@ -177,17 +178,19 @@ def main(argv=None):
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-unmapped-event-labels", action="store_true")
+    parser.add_argument("--large-capture", action="store_true", help="opt in to 4M nodes/32M edges/8M events; file bounds unchanged")
     args = parser.parse_args(argv)
     try:
-        graph = query_graph.decode(query_graph.read(args.graph))
+        graph = query_graph.decode(query_graph.read(args.graph), large_capture=args.large_capture)
         raw = query_profile.read_input(args.profile)
         receipt_raw = read_receipt(args.receipt)
         receipt = json.loads(receipt_raw)
         if not isinstance(receipt, dict):
             raise ValueError("capture receipt must be an object")
         proof = verify_pair(graph, hashlib.sha256(raw).hexdigest(),
-                            query_profile.profile_metadata(raw), receipt)
-        events = query_profile.decode(raw, allow_unmapped_event_labels=args.allow_unmapped_event_labels)
+                            query_profile.profile_metadata(raw, large_capture=args.large_capture), receipt)
+        event_stream, strings = query_profile.prepare(raw, args.allow_unmapped_event_labels, args.large_capture)
+        events = query_profile.iter_prepared_records(event_stream, strings, args.allow_unmapped_event_labels)
         result = map_events(graph, events)
         observed = result.pop("observed_queries")
         blocked = result.pop("blocked_relations")

@@ -36,6 +36,19 @@ def capture(rows, node_max=None):
 
 
 class DecodeTests(unittest.TestCase):
+    def test_large_capture_is_explicit_and_still_bounded(self):
+        raw = capture([(0, 8, [1]), (1, 9, [])])
+        with mock.patch.object(graph, "MAX_NODES", 1), mock.patch.object(graph, "MAX_EDGES", 0):
+            with self.assertRaises(ValueError):
+                graph.decode(raw)
+            self.assertEqual(graph.decode(raw, large_capture=True)["node_count"], 2)
+        with mock.patch.object(graph, "LARGE_MAX_NODES", 1), self.assertRaises(ValueError):
+            graph.decode(raw, large_capture=True)
+        with mock.patch.object(graph, "LARGE_MAX_EDGES", 0), self.assertRaises(ValueError):
+            graph.decode(raw, large_capture=True)
+        with self.assertRaises(ValueError):
+            graph.decode(raw, large_capture="yes")
+
     def test_out_of_order_actual_ids_and_holes(self):
         result = graph.decode(capture([(256, 2, [0]), (0, 3, [])], 512))
         self.assertEqual(result["nodes"][256]["dependencies"], [0])

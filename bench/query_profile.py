@@ -22,8 +22,10 @@ import struct
 
 MAX_FILE_BYTES = 256 * 1024 * 1024
 MAX_EVENTS = 4_000_000
+LARGE_MAX_EVENTS = 8_000_000
 MAX_PAGE_BYTES = 256 * 1024
 MAX_STRINGS = 2_000_000
+LARGE_MAX_STRINGS = 4_000_000
 MAX_STRING_BYTES = 1024 * 1024
 MAX_EXPANDED_BYTES = 64 * 1024 * 1024
 MAX_REFERENCE_DEPTH = 128
@@ -66,10 +68,11 @@ def split_streams(data):
 
 class Strings:
     """Parse all entries and validate even unused references, strictly bounded."""
-    def __init__(self, data, index):
+    def __init__(self, data, index, large_capture=False):
+        max_strings = LARGE_MAX_STRINGS if large_capture else MAX_STRINGS
         if (len(index) - 8) % 16:
             raise ValueError('misaligned string index')
-        if (len(index) - 8) // 16 > MAX_STRINGS:
+        if (len(index) - 8) // 16 > max_strings:
             raise ValueError('too many string mappings')
         self.entries, self.index, self.cache = {}, {}, {}
         self.active = set()
@@ -108,7 +111,7 @@ class Strings:
                         raise ValueError('invalid UTF-8 string') from error
                     position = end
             self.entries[address] = parts
-            if len(self.entries) > MAX_STRINGS:
+            if len(self.entries) > max_strings:
                 raise ValueError('too many strings')
         for sid, address in struct.iter_unpack('<QQ', index[8:]):
             if sid > METADATA_ID or sid in self.index or address not in self.entries:
@@ -166,7 +169,7 @@ def label_of(text):
     return parts[0]
 
 
-def decode(data, allow_unmapped_event_labels=False):
+def decode(data, allow_unmapped_event_labels=False, large_capture=False):
     """Return all raw records in stream order, raising ValueError on bad input.
 
     Common keys: event_id:int, kind:str, label:str|None, label_resolved:bool,
@@ -176,24 +179,26 @@ def decode(data, allow_unmapped_event_labels=False):
     <=100000000, represented as label=None, label_resolved=False. Kinds and
     all string references, headers, payloads and mapped label grammar stay strict.
     """
-    events, strings = prepare(data, allow_unmapped_event_labels)
+    events, strings = prepare(data, allow_unmapped_event_labels, large_capture)
     return list(iter_prepared_records(events, strings, allow_unmapped_event_labels))
 
 
-def prepare(data, allow_unmapped_event_labels=False):
+def prepare(data, allow_unmapped_event_labels=False, large_capture=False):
     if not isinstance(data, bytes):
         raise ValueError('decode requires bytes')
     if type(allow_unmapped_event_labels) is not bool:
         raise ValueError('allow_unmapped_event_labels requires an explicit boolean')
+    if type(large_capture) is not bool:
+        raise ValueError('large_capture requires an explicit boolean')
     if len(data) > MAX_FILE_BYTES:
         raise ValueError('profile exceeds 256MiB bound')
     events, string_data, string_index = split_streams(data)
     if (len(events) - 8) % RAW_EVENT.size:
         raise ValueError('misaligned raw event stream')
     count = (len(events) - 8) // RAW_EVENT.size
-    if count > MAX_EVENTS:
-        raise ValueError('profile exceeds 4M event bound')
-    return events, Strings(string_data, string_index)
+    if count > (LARGE_MAX_EVENTS if large_capture else MAX_EVENTS):
+        raise ValueError('profile exceeds selected event bound')
+    return events, Strings(string_data, string_index, large_capture)
 
 
 def iter_prepared_records(events, strings, allow_unmapped_event_labels=False):
@@ -238,23 +243,23 @@ def metadata_from_strings(strings):
     return {key: value[key] for key in ('process_id', 'start_time', 'cmd')}
 
 
-def profile_metadata(data):
+def profile_metadata(data, large_capture=False):
     """Return exact process_id, start_time and cmd from the metadata string.
 
     No path redaction or inferred flags: cmd is original recording provenance.
     This validates the container/string table, not individual event payloads.
     """
-    _, strings = prepare(data)
+    _, strings = prepare(data, large_capture=large_capture)
     return metadata_from_strings(strings)
 
 
-def summarize(data, allow_unmapped_event_labels=False):
+def summarize(data, allow_unmapped_event_labels=False, large_capture=False):
     """Validate every raw record, returning compact counts and exact provenance.
 
     Does not filter events, alter the raw capture, or infer DAG/span/CPU work.
     Uses the same record decoder without retaining the entire record list.
     """
-    events, strings = prepare(data, allow_unmapped_event_labels)
+    events, strings = prepare(data, allow_unmapped_event_labels, large_capture)
     metadata = metadata_from_strings(strings)
     types = dict(interval=0, instant=0, integer=0)
     count = resolved = unresolved = 0
@@ -342,17 +347,18 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--summary-only', action='store_true',
                         help='validate all raw records but write compact counts/hash/metadata instead of event JSON')
+    parser.add_argument('--large-capture', action='store_true', help='opt in to 8M events/4M string mappings; 256MiB byte bound unchanged')
     parser.add_argument('--allow-unmapped-event-labels', action='store_true',
                         help='retain missing user-virtual event labels as null with label_resolved=false')
     args = parser.parse_args(argv)
     try:
         data = read_input(args.input)
         if args.summary_only:
-            output = summarize(data, allow_unmapped_event_labels=args.allow_unmapped_event_labels)
+            output = summarize(data, allow_unmapped_event_labels=args.allow_unmapped_event_labels, large_capture=args.large_capture)
             count = output['records']
             unresolved = output['label_coverage']['unresolved_records']
         else:
-            output = decode(data, allow_unmapped_event_labels=args.allow_unmapped_event_labels)
+            output = decode(data, allow_unmapped_event_labels=args.allow_unmapped_event_labels, large_capture=args.large_capture)
             count = len(output)
             unresolved = sum(not r['label_resolved'] for r in output)
         write_output(args.output, output)

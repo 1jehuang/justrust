@@ -48,6 +48,28 @@ def fixture(strings=None, index=None, events=None, split=False):
 
 
 class DecodeTests(unittest.TestCase):
+    def test_large_capture_requires_opt_in_and_preserves_record_api(self):
+        data = fixture()
+        with mock.patch.object(qp, 'MAX_EVENTS', 0):
+            with self.assertRaises(ValueError):
+                qp.decode(data)
+            records = qp.decode(data, large_capture=True)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]['event_id'], 42)
+        with mock.patch.object(qp, 'LARGE_MAX_EVENTS', 0), self.assertRaises(ValueError):
+            qp.decode(data, large_capture=True)
+        with self.assertRaises(ValueError):
+            qp.decode(data, large_capture='yes')
+
+    def test_large_string_index_is_opt_in_and_still_bounded(self):
+        data = fixture()
+        with mock.patch.object(qp, 'MAX_STRINGS', 0):
+            with self.assertRaises(ValueError):
+                qp.decode(data)
+            self.assertEqual(len(qp.decode(data, large_capture=True)), 1)
+        with mock.patch.object(qp, 'LARGE_MAX_STRINGS', 0), self.assertRaises(ValueError):
+            qp.decode(data, large_capture=True)
+
     def test_raw_id_and_interval_label(self):
         self.assertEqual(qp.decode(fixture()), [dict(event_id=42, kind='Query',
             label='label', label_resolved=True, thread=7, record_type='interval',

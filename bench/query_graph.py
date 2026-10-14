@@ -22,6 +22,8 @@ MAX_BYTES = 256 * 1024 * 1024
 MAX_NODES = 2_000_000
 MAX_NODE_SPACE = 4_000_000
 MAX_EDGES = 20_000_000
+LARGE_MAX_NODES = 4_000_000
+LARGE_MAX_EDGES = 32_000_000
 TRAILER = b"rust-end-file"
 
 
@@ -51,16 +53,20 @@ class Reader:
         raise ValueError("unterminated LEB integer")
 
 
-def decode(raw):
+def decode(raw, large_capture=False):
+    if type(large_capture) is not bool:
+        raise ValueError("large_capture requires an explicit boolean")
+    max_nodes = LARGE_MAX_NODES if large_capture else MAX_NODES
+    max_edges = LARGE_MAX_EDGES if large_capture else MAX_EDGES
     if not isinstance(raw, bytes) or len(raw) > MAX_BYTES:
         raise ValueError("graph exceeds bounded byte input")
     if not raw.endswith(TRAILER) or len(raw) < len(TRAILER) + 24:
         raise ValueError("missing compiler file trailer")
     payload = raw[:-len(TRAILER)]
     node_max, node_count, edge_count = struct.unpack("<QQQ", payload[-24:])
-    if not 0 < node_count <= MAX_NODES or not node_count <= node_max <= MAX_NODE_SPACE:
+    if not 0 < node_count <= max_nodes or not node_count <= node_max <= MAX_NODE_SPACE:
         raise ValueError("invalid bounded graph node counts")
-    if edge_count > MAX_EDGES:
+    if edge_count > max_edges:
         raise ValueError("edge count exceeds bound")
     reader = Reader(payload[:-24])
     if reader.take(6) != b"RSIC\0\0":
@@ -150,9 +156,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("graph", type=Path)
     parser.add_argument("--output", type=Path, help="exclusive new full graph JSON")
+    parser.add_argument("--large-capture", action="store_true", help="opt in to 4M nodes/32M edges; byte and index bounds unchanged")
     args = parser.parse_args(argv)
     try:
-        parsed = decode(read(args.graph))
+        parsed = decode(read(args.graph), large_capture=args.large_capture)
         stats = structure(parsed)
         if args.output:
             with os.fdopen(open_safe(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL), "w") as output:

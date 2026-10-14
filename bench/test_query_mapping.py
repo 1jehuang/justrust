@@ -27,6 +27,10 @@ def graph():
 
 
 class MappingTests(unittest.TestCase):
+    def test_streamed_records_match_materialized_mapping(self):
+        records = [event(0, 0, 10), event(1, 2, 6), event(1, 6, 8, 'QueryBlocked')]
+        self.assertEqual(mapping.map_events(graph(), iter(records)), mapping.map_events(graph(), records))
+
     def test_nested_query_and_known_wait_not_double_counted(self):
         result = mapping.map_events(graph(), [event(0, 0, 10), event(1, 2, 6),
                                               event(1, 6, 8, "QueryBlocked")])
@@ -165,6 +169,22 @@ class ProvenanceTests(unittest.TestCase):
                 mapping.main(args)
             self.assertEqual(error.exception.code, 2)
             self.assertEqual((root / "output").read_bytes(), before)
+
+    def test_large_capture_public_cli_and_postwake_scope(self):
+        wire, profile, _, receipt = paired_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'graph').write_bytes(wire)
+            (root / 'profile').write_bytes(profile)
+            (root / 'receipt').write_text(json.dumps(receipt))
+            args = ['--graph', str(root / 'graph'), '--profile', str(root / 'profile'),
+                    '--receipt', str(root / 'receipt'), '--output', str(root / 'output'), '--large-capture']
+            with contextlib.redirect_stdout(io.StringIO()):
+                mapping.main(args)
+            result = json.loads((root / 'output').read_text())
+            self.assertEqual(result['provider_records'], 1)
+            self.assertTrue(any('post-wake' in item for item in result['limitations']))
+            self.assertIsNone(result['cpu_work_ns'])
 
     def test_receipt_read_cap_and_symlink_rejection(self):
         with tempfile.TemporaryDirectory() as directory:
