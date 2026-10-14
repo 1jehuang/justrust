@@ -170,7 +170,7 @@ fn write_frame(w: &mut impl Write, f: &Frame, data: &[u8]) -> Result<()> {
 
 fn profile_dir(cwd: &Path, args: &[String]) -> Result<PathBuf> {
     let os: Vec<OsString> = args.iter().map(OsString::from).collect();
-    let target = crate::slots::target_dir_in(cwd, &os)
+    let target = crate::slots::target_dir_in_result(cwd, &os)
         .context("could not resolve the target dir (cargo metadata)")?;
     Ok(target.join(crate::slots::profile_dir(&os)))
 }

@@ -242,7 +242,14 @@ fn shared_target_dir(args: &[OsString]) -> Option<PathBuf> {
 
 /// [`shared_target_dir`] for a build run in `cwd`.
 pub fn target_dir_in(cwd: &Path, args: &[OsString]) -> Option<PathBuf> {
-    let cargo = paths::real_cargo().ok()?;
+    target_dir_in_result(cwd, args).ok()
+}
+
+/// Resolve Cargo's output root, retaining causal diagnostics for artifact
+/// downloads. Slot selection intentionally discards these errors and fails open.
+pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<PathBuf> {
+    use anyhow::{Context, bail};
+    let cargo = paths::real_cargo().context("locating Cargo for target-directory metadata")?;
     let mut cmd = Command::new(cargo);
     cmd.current_dir(cwd);
     cmd.args([
@@ -266,12 +273,24 @@ pub fn target_dir_in(cwd: &Path, args: &[OsString]) -> Option<PathBuf> {
             cmd.arg(&a);
         }
     }
-    let out = cmd.stderr(Stdio::null()).output().ok()?;
+    let out = cmd
+        .stderr(Stdio::piped())
+        .output()
+        .context("running Cargo metadata to resolve target directory")?;
     if !out.status.success() {
-        return None;
+        bail!(
+            "Cargo metadata for {} failed ({}): {}",
+            cwd.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    v.get("target_directory")?.as_str().map(PathBuf::from)
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).context("decoding Cargo metadata target directory")?;
+    v.get("target_directory")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .context("Cargo metadata returned no target_directory")
 }
 
 fn try_lock(path: &Path) -> Option<File> {

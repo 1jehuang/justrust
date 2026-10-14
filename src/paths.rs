@@ -117,7 +117,11 @@ pub fn real_cargo() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("JUSTRUST_REAL_CARGO") {
         return Ok(PathBuf::from(p));
     }
-    let me = std::env::current_exe()?.canonicalize()?;
+    // Atomic installation can unlink this running executable on Linux.
+    // current_exe then names a deleted inode, but PATH's proxy detection is
+    // still sufficient to locate Cargo without canonicalizing that inode.
+    let exe = std::env::current_exe()?;
+    let me = exe.canonicalize().unwrap_or(exe);
     find_on_path("cargo", &me).context("could not find the real cargo on PATH")
 }
 
