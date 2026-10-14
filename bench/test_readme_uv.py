@@ -160,6 +160,47 @@ class ReadmeUvTests(unittest.TestCase):
         self.assertTrue(all("--locked" in command for command in uv.ROWS.values()))
         self.assertEqual(uv.ROWS["fresh-test-no-run"], ["test", "-p", "uv-resolver", "--no-run", "--locked"])
 
+    def test_resume_preserves_completed_samples_and_excludes_interrupted(self):
+        samples = self.samples()
+        for sample in samples:
+            sample["exit"] = 0
+        before = json.dumps(samples, sort_keys=True)
+        interrupted = dict(samples[0], status="running", exit=None)
+        result = {"samples": samples + [interrupted]}
+        uv.mark_interrupted(result)
+        self.assertEqual(json.dumps(result["samples"][:-1], sort_keys=True), before)
+        self.assertEqual(interrupted["status"], "interrupted")
+        self.assertEqual(interrupted["phase"], "interrupted")
+        self.assertFalse(interrupted["measured"])
+        self.assertIs(uv.completed_sample(result, "fresh-check", "stock", 0), samples[0])
+        self.assertTrue(uv.aggregate(result["samples"], 3)["fresh-check"]["stock"]["all_ok"])
+
+    def test_resume_retry_checkout_unique_without_touching_original(self):
+        original = self.work / "round-1/stock/fresh-test-no-run"
+        original.mkdir(parents=True)
+        marker = original / "preserve"
+        marker.write_text("original artifacts")
+        with mock.patch.object(uv, "extract_checkout", side_effect=lambda archive, path: path):
+            retry = uv.fresh_checkout(self.work / "uv.tar", self.work, "fresh-test-no-run", "stock", 0)
+            another = uv.fresh_checkout(self.work / "uv.tar", self.work, "fresh-test-no-run", "stock", 0)
+        self.assertNotEqual(retry, original)
+        self.assertNotEqual(retry, another)
+        self.assertIn("-retry-", retry.name)
+        self.assertEqual(marker.read_text(), "original artifacts")
+
+    def test_resume_completed_round_never_executes_again(self):
+        samples = self.samples(rounds=1)
+        for sample in samples:
+            sample["exit"] = 0
+            sample["checkout"] = str(self.work / sample["stack"])
+        result = {"rounds": 1, "stacks": uv.STACKS, "samples": samples}
+        before = json.dumps(samples, sort_keys=True)
+        with mock.patch.object(uv, "execute") as execute, mock.patch.object(uv, "fresh_checkout") as fresh:
+            uv.run_rounds(result, self.work / "receipt.json", self.work / "uv.tar", {}, self.work)
+        execute.assert_not_called()
+        fresh.assert_not_called()
+        self.assertEqual(json.dumps(result["samples"], sort_keys=True), before)
+
 
 if __name__ == "__main__":
     unittest.main()

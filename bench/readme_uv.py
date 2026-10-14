@@ -300,7 +300,132 @@ def execute(result, output, stack, row, round_index, checkout, binaries, work, m
                 stream.seek(max(0, log.stat().st_size - 12000))
                 sample["error_tail"] = sanitize(stream.read().decode(errors="replace"), work)
         save_result(output, result)
+        print(f"round {sample['round']} {stack} {row} measured={measured}: "
+              f"{sample['status']} exit={sample['exit']} wall={sample['wall_seconds']:.3f}s", flush=True)
     return sample
+
+
+def completed_sample(result, row, stack, round_index):
+    matches = [sample for sample in result["samples"]
+               if sample["row"] == row and sample["stack"] == stack
+               and sample["round"] == round_index + 1 and sample.get("measured", True)
+               and sample.get("status") in ("ok", "failed")]
+    if len(matches) > 1:
+        raise ValueError("duplicate completed evidence for a row/stack/round")
+    return matches[0] if matches else None
+
+
+def mark_interrupted(result):
+    for sample in result["samples"]:
+        if sample.get("status") == "running" or (sample.get("status") == "ok" and sample.get("exit") is None):
+            sample["status"] = "interrupted"
+            sample["measured"] = False
+            sample["phase"] = "interrupted"
+
+
+def fresh_checkout(archive, work, row, stack, round_index):
+    destination = work / f"round-{round_index + 1}" / stack / row
+    if destination.exists():
+        destination = destination.with_name(row + "-retry-" + uuid.uuid4().hex)
+    return extract_checkout(archive, destination)
+
+
+def restore_interrupted_edit(result, archive, checkout):
+    path = checkout / EDIT_FILE
+    with tarfile.open(archive) as stream:
+        original = stream.extractfile(EDIT_FILE).read()
+    current = path.read_bytes()
+    if current == original:
+        return
+    digest = hashlib.sha256(current).hexdigest()
+    known = any(sample.get("status") == "interrupted" and sample.get("checkout") == str(checkout)
+                and (sample.get("edit") or {}).get("edited_sha256") == digest
+                for sample in result["samples"])
+    if not known:
+        raise ValueError("check workspace differs from archive without an identified interrupted edit")
+    backup = path.with_name(path.name + ".interrupted-" + uuid.uuid4().hex)
+    shutil.copy2(path, backup)
+    path.write_bytes(original)
+    result.setdefault("restored_interrupted_edits", []).append({"checkout": str(checkout), "backup": str(backup)})
+
+
+def run_rounds(result, output, archive, binaries, work):
+    for round_index in range(result["rounds"]):
+        order = rotating_order(round_index, tuple(result["stacks"]))
+        checks = {}
+        for row in ("fresh-check", "fresh-test-no-run"):
+            for stack in order:
+                prior = completed_sample(result, row, stack, round_index)
+                if prior:
+                    if row == "fresh-check":
+                        checks[stack] = Path(prior["checkout"])
+                    continue
+                checkout = fresh_checkout(archive, work, row, stack, round_index)
+                if row == "fresh-check":
+                    checks[stack] = checkout
+                execute(result, output, stack, row, round_index, checkout, binaries, work)
+        for stack in order:
+            if completed_sample(result, "warm-edit-check", stack, round_index):
+                continue
+            checkout = checks[stack]
+            restore_interrupted_edit(result, archive, checkout)
+            # Always prewarm again on resume, even if an earlier prewarm passed.
+            prewarm = execute(result, output, stack, "warm-edit-check", round_index,
+                              checkout, binaries, work, measured=False)
+            prewarm["phase"] = "untimed-prewarm"
+            save_result(output, result)
+            if prewarm["status"] != "ok":
+                result["samples"].append({"row": "warm-edit-check", "stack": stack,
+                                          "round": round_index + 1, "status": "failed", "measured": True,
+                                          "exit": None, "wall_seconds": None, "run_id": None,
+                                          "errors": ["prewarm failed, edit measurement blocked"]})
+                save_result(output, result)
+                continue
+            with body_edit(checkout, uuid.uuid4().hex) as edit:
+                execute(result, output, stack, "warm-edit-check", round_index,
+                        checkout, binaries, work, edit=edit)
+            result["samples"][-1]["edit_restored"] = sha256(checkout / EDIT_FILE) == edit["original_sha256"]
+            save_result(output, result)
+
+
+def resume(output):
+    output = output.expanduser().resolve()
+    result = json.loads(output.read_text())
+    if result.get("source", {}).get("commit") != PIN:
+        raise ValueError("resume source pin mismatch")
+    work = Path(result["work"]).resolve(strict=True)
+    archive = work / "uv.tar"
+    if sha256(archive) != result["source"]["archive_sha256"]:
+        raise ValueError("resume archive identity mismatch")
+    binaries = result["binaries"]
+    identities = list(binaries.values())
+    for sample in result["samples"]:
+        if sample.get("status") == "ok":
+            identities.extend(sample[key] for key in ("compiler_identity", "cargo_identity") if sample.get(key))
+    for identity in identities:
+        if sha256(identity["path"]) != identity["sha256"]:
+            raise ValueError("resume binary/toolchain identity mismatch")
+    # Keep a byte-for-byte copy of the interrupted receipt before changing it.
+    backup = work / ("resume-before-" + uuid.uuid4().hex + ".json")
+    shutil.copy2(output, backup)
+    mark_interrupted(result)
+    result.setdefault("resumes", []).append({"utc": utc_now(), "previous_status": result["status"], "receipt_backup": str(backup)})
+    result["status"] = "running"
+    save_result(output, result)
+    try:
+        run_rounds(result, output, archive, binaries, work)
+        result["status"] = "complete"
+    except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
+        result["status"] = "failed"
+        result["error"] = sanitize(str(error), work)
+    except KeyboardInterrupt:
+        mark_interrupted(result)
+        result["status"] = "interrupted"
+    finally:
+        result["finished_utc"] = utc_now()
+        save_result(output, result)
+    print(f"uv receipt: {output}, all_ok={result['all_ok']}")
+    return 0 if result["all_ok"] else 1
 
 
 def main(argv=None):
@@ -310,7 +435,12 @@ def main(argv=None):
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--work", type=Path, help="new directory inside JCODE_SCRATCH_DIR or ~/.jcode/scratch")
     parser.add_argument("--output", type=Path, help="JSON receipt, incrementally atomically written")
+    parser.add_argument("--resume", type=Path, metavar="OUTPUT", help="resume existing receipt, preserving completed evidence and identities")
     args = parser.parse_args(argv)
+    if args.resume:
+        if args.work or args.output:
+            parser.error("--resume uses the receipt's original work/output")
+        return resume(args.resume)
     stacks = tuple(args.stacks.split(","))
     if not stacks or len(set(stacks)) != len(stacks) or any(stack not in STACKS for stack in stacks):
         parser.error("--stacks must select distinct stock,local,remote entries")
@@ -358,38 +488,13 @@ def main(argv=None):
         result["binaries"] = binaries
         result["status"] = "running"
         save_result(output, result)
-        for round_index in range(args.rounds):
-            order = rotating_order(round_index, stacks)
-            checks = {}
-            for row in ("fresh-check", "fresh-test-no-run"):
-                for stack in order:
-                    checkout = extract_checkout(archive, work / f"round-{round_index + 1}" / stack / row)
-                    if row == "fresh-check":
-                        checks[stack] = checkout
-                    execute(result, output, stack, row, round_index, checkout, binaries, work)
-            for stack in order:
-                checkout = checks[stack]
-                prewarm = execute(result, output, stack, "warm-edit-check", round_index,
-                                  checkout, binaries, work, measured=False)
-                prewarm["phase"] = "untimed-prewarm"
-                save_result(output, result)
-                if prewarm["status"] != "ok":
-                    result["samples"].append({"row": "warm-edit-check", "stack": stack,
-                                              "round": round_index + 1, "status": "failed", "measured": True,
-                                              "exit": None, "wall_seconds": None, "run_id": None,
-                                              "errors": ["prewarm failed, edit measurement blocked"]})
-                    save_result(output, result)
-                    continue
-                with body_edit(checkout, uuid.uuid4().hex) as edit:
-                    execute(result, output, stack, "warm-edit-check", round_index,
-                            checkout, binaries, work, edit=edit)
-                result["samples"][-1]["edit_restored"] = sha256(checkout / EDIT_FILE) == edit["original_sha256"]
-                save_result(output, result)
+        run_rounds(result, output, archive, binaries, work)
         result["status"] = "complete"
     except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
         result["status"] = "failed"
         result["error"] = sanitize(str(error), work)
     except KeyboardInterrupt:
+        mark_interrupted(result)
         result["status"] = "interrupted"
     finally:
         result["finished_utc"] = utc_now()
