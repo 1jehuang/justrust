@@ -17,8 +17,18 @@
   "heartbeat_event_at": 1791978201,
   "heartbeat_received_at": 1791978201,
   "terminal_event_observed": false,
+  "operator_state": "unknown_lost",
   "operator_outcome": "unknown",
   "expiry_unit_test_outcome": "unknown_lost",
-  "actual_expiry_observed": false,
+  "actual_expiry_observed": true,
+  "actual_expiry_observation_window_utc": "2026-10-14T12:06:31Z/2026-10-14T12:07:05Z",
+  "additional_interrupted_fixture_recheck": {
+    "run_id": "20261014-044013076-2711739",
+    "summary_exists": false,
+    "saved_output_lines": 6,
+    "exact_run_log_command_exit": 0,
+    "synthetic_marker_recovered": true,
+    "compile_exit": null
+  },
   "notes": "Interrupted runs intentionally lack summary.json and cannot be exported as finished-run summaries. This is bounded acceptance evidence, not a fabricated compile verdict or a raw log upload."
 }

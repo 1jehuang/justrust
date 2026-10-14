@@ -71,8 +71,10 @@ This is the acceptance gate for the token-bearing installer audit begun on
   30 seconds, then its recording process was killed with SIGKILL. The exact
   `justrust log` command recovered the synthetic output marker. There was no
   summary or terminal telemetry event. Production projection reported running
-  with unknown outcome, not success. A deterministic expiry test reported
-  `unknown_lost`; this does not claim that wall-clock expiry had yet occurred.
+  with unknown outcome, not success. Independent production queries at actual
+  wall-clock time on 2026-10-14 at 12:06:31 UTC through 12:07:05 UTC confirmed
+  `unknown_lost`, still with no summary or terminal event. This is observed
+  expiry, not only a synthetic future-time test.
   The privacy-safe interrupted observation is recorded separately under
   `data/runs/xps14-install-observability/observations/`, rather than fabricating
   a finished-run summary.
@@ -82,11 +84,55 @@ This is the acceptance gate for the token-bearing installer audit begun on
   queue with status `retry`. An explicit same-environment background retry at
   11:51:01 UTC changed delivery status to accepted and drained the retained
   queue. Initial compile success alone was not treated as proof of terminal
-  telemetry delivery. A bounded detached retry improvement and a new automatic
-  hosted-delivery acceptance check remain required before final freeze.
+  telemetry delivery. After the bounded detached retry improvement, fresh normal
+  billed hosted run `20261014-045550863-2888689` automatically delivered trusted
+  queued/running/summary/done events with exit 0 and `local_only` logs. Its server
+  ledger independently agreed `done`, exit 0. No manual flush was used for this
+  fresh run. Local delivery health recorded HTTP 200 and curl exit 0.
+- The original delayed hosted completion exposed a separate stale-ledger gap:
+  trusted client telemetry said done while the server ledger became lost. Cloud
+  source `29af27f`, deployed version `7b61a917-3821-4b79-93e6-03bf5bd1c865`,
+  now reconciles only an already existing same-account hosted row from an exact
+  accepted stable-ID remote completion. It preserves explicit terminal rows and
+  never creates a charged run or changes billing. The full cloud gate passed
+  247 JavaScript, 23 Python, and 17 dashboard tests.
+  Replaying the original accepted event, without changing UUID, observation time,
+  or data, changed that old ledger to done, exit 0. An independent query confirmed
+  its original queued time and single stored done-event row were preserved.
+  A second exact replay was accepted idempotently. Authoritative account checks
+  before/after matched the original owner, and all three compared build-counter
+  fields were present and unchanged. Ledger completion receipt time is not a
+  claim that the original compile ran until the delayed replay.
+- Actual disk-limit run `20261014-051059525-3009368` applied a 64 KiB file limit
+  to the synthetic recorder with the resident daemon disabled. Journal and staging
+  writes failed, but Cargo/test exit remained 0 and the final stdout marker was
+  preserved. Production accepted the bounded `recording_persist` / `log` failure
+  with actual exit 0, and done reported exit 0 with no complete log claimed.
+  Raw error text, file paths, and synthetic log content were absent from that
+  diagnostic payload.
 
-The guarded public installer live deployment, final settled source validation,
-and exact-source native release checks remain separate acceptance gates.
+## Final validation and rollout boundary
+
+- Final source integration: `68b20fe` persistence diagnostics and `2dd8f34`
+  isolated strict-fixture telemetry/update opt-outs. `cargo fmt --check`,
+  `justrust check`, `justrust test`, and strict all-target clippy passed. Tests
+  reported 437 passed, 0 failed, 3 ignored on the first pass. Runs are
+  `20261014-050608672-2967094`, `20261014-050619264-2972060`, and
+  `20261014-050712859-2984510`. These plain invocations routed locally because
+  of the recent-remote-failure cooldown, rather than being mislabeled hosted.
+  Explicit root hosted check `20261014-051329269-3025066` also passed normally.
+  `cargo install --path . --locked` installed the settled client.
+- Website installer source `c48b57a` passed 48 installer/Pages acceptance tests
+  and 37 beacon/layout tests. Actual Pages workflow `38559761963` deployed it.
+  Live artifact equality, response privacy headers, token-free URL rendering,
+  default-origin credential guards, and parent-shell override handling were
+  verified without minting a production user's token or key.
+- Backend source `7151e33` and cloud services are deployed. The client is
+  installed on the development machine. Public alpha.18 publication remains
+  gated on the final exact-source native platform workflow, including both
+  macOS runners. Linux, Windows, and MSRV passed for source `2dd8f34`, but queued
+  macOS jobs are not treated as passing native macOS validation. Installer macOS
+  path mocks do not substitute for that gate.
 
 ## Delivery and identity limits
 
