@@ -154,11 +154,78 @@ class SchedulerSweepTests(unittest.TestCase):
                     self.assertTrue((out / 'on.json').is_file())
             with patch.dict(os.environ, {'JUSTRUST_HOME': tmp}, clear=True), patch('sys.argv', argv), \
                  patch.object(sweep, 'identities', return_value={'cargo_sha256': 'fixed'}), \
+                 patch.object(sweep, 'verify_recorded_selection') as verify, \
                  patch.object(sweep.subprocess, 'run', side_effect=execute) as run:
                 sweep.main()
             self.assertEqual(seen, ['off', 'on', 'on', 'off'])
             self.assertEqual(run.call_count, 5)
+            self.assertEqual(verify.call_count, 4)
             self.assertTrue((out / 'partial.json').is_file())
+
+    def test_recorded_selection_rejects_fallback_missing_and_escaped_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            binaries = home / 'toolchains/nightly-2026-10-08/bin'
+            binaries.mkdir(parents=True)
+            for name in ('rustc', 'jr-cargo', 'cargo'):
+                (binaries / name).write_bytes(name.encode())
+            run = home / 'runs/owned-run'
+            run.mkdir(parents=True)
+            meta = {'id': 'owned-run', 'toolchain': 'nightly-2026-10-08', 'place': 'local',
+                    'env': {'CARGO_BUILD_JOBS': '24'},
+                    'real_cargo': str(binaries / 'jr-cargo'), 'real_rustc': str(binaries / 'rustc')}
+            identity = {'cargo_sha256': suite.binary_sha256(binaries / 'jr-cargo'),
+                        'rustc_sha256': suite.binary_sha256(binaries / 'rustc')}
+            result = segment('off')['result']
+            result['scenarios']['desktop-body-check']['samples'][0]['id'] = 'owned-run'
+            with patch.object(suite, 'JR_HOME', home), \
+                 patch.object(suite, 'toolchain_rustc', return_value=binaries / 'rustc'):
+                (run / 'meta.json').write_text(json.dumps(meta))
+                sweep.verify_recorded_selection(result, 'nightly-2026-10-08', identity, 24)
+                for key, value in [('real_cargo', str(binaries / 'cargo')),
+                                   ('real_rustc', '/different/compiler'), ('toolchain', 'system'),
+                                   ('place', 'hosted'), ('id', 'different'),
+                                   ('env', {'CARGO_BUILD_JOBS': '8'}), ('env', None),
+                                   ('real_cargo', 'bin/jr-cargo'), ('real_rustc', ''),
+                                   ('real_cargo', None)]:
+                    (run / 'meta.json').write_text(json.dumps({**meta, key: value}))
+                    with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'selection'):
+                        sweep.verify_recorded_selection(result, 'nightly-2026-10-08', identity, 24)
+                for content in ('not json', '{}', '[]'):
+                    (run / 'meta.json').write_text(content)
+                    with self.subTest(content=content), self.assertRaisesRegex(ValueError, 'selection'):
+                        sweep.verify_recorded_selection(result, 'nightly-2026-10-08', identity, 24)
+                (run / 'meta.json').unlink()
+                with self.assertRaisesRegex(ValueError, 'selection'):
+                    sweep.verify_recorded_selection(result, 'nightly-2026-10-08', identity, 24)
+                for rid in ('../escape', '/absolute', '', None, '.', '..'):
+                    result['scenarios']['desktop-body-check']['samples'][0]['id'] = rid
+                    with self.subTest(rid=rid), self.assertRaisesRegex(ValueError, 'selection'):
+                        sweep.verify_recorded_selection(result, 'nightly-2026-10-08', identity, 24)
+                result['scenarios']['desktop-body-check']['samples'][0]['id'] = 'owned-run'
+                (run / 'meta.json').write_text(json.dumps(meta))
+                (binaries / 'jr-cargo').write_bytes(b'replaced')
+                with self.assertRaisesRegex(ValueError, 'selection binary identity'):
+                    sweep.verify_recorded_selection(result, 'nightly-2026-10-08', identity, 24)
+
+    def test_recorded_selection_failure_never_writes_completed_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'out'
+            argv = ['scheduler-sweep.py', '--toolchain', 'nightly-2026-10-08',
+                    '--out-dir', str(out), 'desktop-body-check']
+            def execute(cmd, **kwargs):
+                Path(cmd[cmd.index('--out')+1]).write_text(json.dumps(segment('off')['result']))
+            with patch.dict(os.environ, {'JUSTRUST_HOME': tmp}, clear=True), patch('sys.argv', argv), \
+                 patch.object(sweep, 'identities', return_value={'cargo_sha256': 'fixed'}), \
+                 patch.object(sweep, 'verify_recorded_selection', side_effect=ValueError('selection')) as verify, \
+                 patch.object(sweep.subprocess, 'run', side_effect=execute) as run, \
+                 self.assertRaisesRegex(ValueError, 'selection'):
+                sweep.main()
+            verify.assert_called_once()
+            run.assert_called_once()
+            self.assertFalse((out / 'off.json').exists())
+            self.assertFalse((out / 'on.json').exists())
+            self.assertTrue((out / '0-off.json').exists())
 
     def test_replaced_toolchain_never_produces_completed_comparison(self):
         with tempfile.TemporaryDirectory() as tmp:

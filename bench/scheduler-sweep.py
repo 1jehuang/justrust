@@ -50,6 +50,39 @@ def identities(toolchain):
             "cargo_version": suite.sh([str(cargo), "-vV"])}
 
 
+def verify_recorded_selection(result, toolchain, identity, jobs):
+    rustc = suite.toolchain_rustc(toolchain).resolve()
+    cargo = rustc.with_name("jr-cargo").resolve()
+    if (suite.binary_sha256(cargo) != identity["cargo_sha256"]
+            or suite.binary_sha256(rustc) != identity["rustc_sha256"]):
+        raise ValueError("recorded selection binary identity changed")
+    scenarios = result.get("scenarios", {})
+    if not scenarios:
+        raise ValueError("recorded selection has no scenarios")
+    for scenario in scenarios.values():
+        if not scenario.get("samples"):
+            raise ValueError("recorded selection has no samples")
+        for sample in scenario["samples"]:
+            rid = sample.get("id")
+            if not isinstance(rid, str) or not rid or Path(rid).name != rid or rid in (".", ".."):
+                raise ValueError("recorded selection has an invalid run ID")
+            try:
+                meta = json.loads((suite.JR_HOME / "runs" / rid / "meta.json").read_text())
+                if (not isinstance(meta, dict) or meta.get("id") != rid
+                        or meta.get("toolchain") != toolchain or meta.get("place") != "local"
+                        or not isinstance(meta.get("real_cargo"), str)
+                        or not isinstance(meta.get("real_rustc"), str)
+                        or not Path(meta["real_cargo"]).is_absolute()
+                        or not Path(meta["real_rustc"]).is_absolute()
+                        or Path(meta["real_cargo"]).resolve() != cargo
+                        or Path(meta["real_rustc"]).resolve() != rustc
+                        or not isinstance(meta.get("env"), dict)
+                        or meta["env"].get("CARGO_BUILD_JOBS") != str(jobs)):
+                    raise ValueError("recorded selection does not match the scheduler experiment")
+            except (OSError, json.JSONDecodeError) as error:
+                raise ValueError("recorded selection lacks a valid invocation record") from error
+
+
 def aggregate(segments, mode, identity, jobs):
     chosen = [segment for segment in segments if segment["mode"] == mode]
     result = json.loads(json.dumps(chosen[0]["result"]))
@@ -108,7 +141,9 @@ def main():
         subprocess.run(command, check=True)
         if identities(args.toolchain) != identity:
             raise ValueError("toolchain or justrust changed during scheduler sweep")
-        segments.append({"mode": mode, "result": json.loads(out.read_text())})
+        result = json.loads(out.read_text())
+        verify_recorded_selection(result, args.toolchain, identity, args.jobs)
+        segments.append({"mode": mode, "result": result})
         (args.out_dir / "partial.json").write_text(json.dumps({"segments": segments,
                                                                 "identities": identity}, indent=2) + "\n")
     for mode in ("off", "on"):

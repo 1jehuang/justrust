@@ -200,7 +200,11 @@ The initial experiment uses uniform costs, not unrecorded package hints. Each
 segment is an actual `suite.py run`; the final `off.json` and `on.json` are
 compared by `suite.py compare`. All samples and contamination flags are retained.
 The harness hashes justrust, rustc, Cargo and the installed toolchain marker,
-rejects changing identities, and preserves partial completed segments. It records
+rejects changing identities, and preserves partial completed segments. Every
+measured run's actual invocation record must select that private Cargo/compiler,
+the requested nightly and job count, and the controlled local route. Missing
+records or silent fallback prevent a completed comparison, even if the expected
+candidate files remain on disk. It records
 `JUSTRUST_CARGO_CRITICAL_PATH`, not private hint paths or arbitrary environment.
 This is controlled host-local scheduling evidence, not hosted transport latency,
 a proof of a causal compiler DAG, or a reason to promote the default-off scheduler
