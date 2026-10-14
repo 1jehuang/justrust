@@ -1,5 +1,19 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: end-to-end profiling diagnostic, rejected baseline
+
+All 40 synth seed-1 points were attempted. The final gate rejected mixed
+client binaries after a concurrent reinstall. Across 32 noisy hosted samples,
+recorded wait was 51.93% outside host execution, 29.01% compilation and
+16.95% tests. Sync was a nested 314.335s of 688.580s total. Run
+`20261014-074749669-140934645` spent 120.048s syncing versus 11.123s host
+work, matching daemon logs dominated by sync lock wait behind a large
+unrelated source mirror. This is diagnostic evidence, not a speed claim or
+accepted session score. See `docs/e2e-profile-20261014.md` and its rejected
+checkpoint and isolated exported phase receipts. Compiler pass attribution
+was unavailable. Preserve the identity rejection and investigate sync
+head-of-line blocking before using this run as an optimization baseline.
+
 ## 2026-10-14: final owned-source archive acceptance
 
 Fresh verification of frozen migration commit `6d898a9ea` is mapped in
