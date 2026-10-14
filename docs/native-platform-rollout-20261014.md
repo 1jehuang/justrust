@@ -124,3 +124,24 @@ contract without a reviewed live allocation adapter. No Mac host was allocated.
 Interrupted Image Builder observation also needs resumable bounded monitoring
 before a new reviewed run. Windows/macOS customer routing remains disabled until
 real native Jcode executable and project-test acceptance succeeds.
+
+## Native retry checkpoint, 09:05 UTC
+
+A fresh independently verified security foundation and immutable recipe passed
+actual IAM/control-plane checks. The committed asynchronous controller passed 34
+pinned SDK tests and the complete cloud suite. One reviewed Windows acquisition
+started at 08:59 UTC with a durable config-bound journal and unchanged absolute
+cleanup deadline. Its worker became SSM Online, passed initial verification and
+AWS bootstrap, then reached the signed VS acquisition component. This confirms
+the initial-directory correction, not a completed SDK image.
+
+The component failed with an unavailable PowerShell process exit code. The image
+was FAILED with no AMI. Exact worker termination, root-volume absence and zero
+matching live instances were verified at 09:05 UTC without manual termination.
+Logs/journals were preserved. Process-handle retention and typed exit validation
+are under scoped correction, never treating a missing code as success.
+
+Bounded resumable observation and durable start are now implemented. Native
+Windows compiler/Jcode acceptance remains blocked, and the Mac live adapter and
+crash reconciliation gates remain unresolved. No Mac was allocated. Offline
+regressions and successful Linux compatibility are not native runtime proof.
