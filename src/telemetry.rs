@@ -880,7 +880,25 @@ fn delivery_events(events: &[Value], authenticate: bool) -> Vec<&Value> {
         .collect()
 }
 
-fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> Delivery {
+struct PostOutcome {
+    delivery: Delivery,
+    http_status: Option<u16>,
+    curl_exit: Option<i32>,
+}
+
+fn post_outcome(curl_exit: Option<i32>, code: u16) -> PostOutcome {
+    PostOutcome {
+        delivery: if curl_exit == Some(0) {
+            delivery(code)
+        } else {
+            Delivery::Retry
+        },
+        http_status: (100..=599).contains(&code).then_some(code),
+        curl_exit: curl_exit.filter(|code| (0..=255).contains(code)),
+    }
+}
+
+fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> PostOutcome {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let Ok(mut child) = Command::new("curl")
@@ -911,7 +929,7 @@ fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> Delivery {
         .stderr(Stdio::null())
         .spawn()
     else {
-        return Delivery::Retry;
+        return post_outcome(None, 0);
     };
     if let Some(mut i) = child.stdin.take() {
         let mut config = auth.map(|c| c.curl_auth_config()).unwrap_or_default();
@@ -925,16 +943,13 @@ fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> Delivery {
         let _ = i.write_all(config.as_bytes());
     }
     let Ok(out) = child.wait_with_output() else {
-        return Delivery::Retry;
+        return post_outcome(None, 0);
     };
-    if !out.status.success() {
-        return Delivery::Retry;
-    }
     let code: u16 = String::from_utf8_lossy(&out.stdout)
         .trim()
         .parse()
         .unwrap_or(0);
-    delivery(code)
+    post_outcome(out.status.code(), code)
 }
 
 /// Send everything queued. Runs in the background process.
@@ -993,7 +1008,7 @@ pub(crate) fn flush() {
             discard();
             return;
         }
-        let label = match outcome {
+        let label = match outcome.delivery {
             Delivery::Accepted => "accepted",
             Delivery::Retry => "retry",
             Delivery::Auth => "auth_required",
@@ -1001,9 +1016,11 @@ pub(crate) fn flush() {
         };
         let _ = std::fs::write(
             d.join("delivery.json"),
-            json!({"status": label, "at": paths::now() as i64}).to_string(),
+            json!({"status": label, "at": paths::now() as i64,
+                "http_status": outcome.http_status, "curl_exit": outcome.curl_exit})
+            .to_string(),
         );
-        if matches!(outcome, Delivery::Retry | Delivery::Auth) {
+        if matches!(outcome.delivery, Delivery::Retry | Delivery::Auth) {
             // Retry later, unless it has been failing for days.
             if mtime(&sending).is_some_and(|t| paths::now() - t > 7.0 * 86400.0) {
                 let _ = std::fs::remove_file(&sending);
@@ -1075,6 +1092,10 @@ fn spawn_background(lifecycle: bool) {
         .spawn();
 }
 
+fn retry_lifecycle_delivery(lifecycle: bool, attempt: usize, status: Option<&str>) -> bool {
+    lifecycle && attempt < 3 && status == Some("retry")
+}
+
 /// `justrust __bg`: one at a time, lowest priority.
 pub fn background_main() -> ! {
     crate::sys::lower_priority();
@@ -1094,12 +1115,27 @@ pub fn background_main() -> ! {
             // Drain events appended during the first POST too. Otherwise a short
             // build's terminal event can be stranded behind the active sender.
             // Bounded even with concurrent writers and an offline endpoint.
-            for _ in 0..if lifecycle { 4 } else { 1 } {
+            for attempt in 0..if lifecycle { 4 } else { 1 } {
                 flush();
                 let Some(d) = dir() else { break };
-                if d.join("sending.jsonl").exists()
-                    || !std::fs::metadata(d.join("queue.jsonl")).is_ok_and(|m| m.len() > 0)
-                {
+                if d.join("sending.jsonl").exists() {
+                    let health = std::fs::read(d.join("delivery.json"))
+                        .ok()
+                        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+                    if retry_lifecycle_delivery(
+                        lifecycle,
+                        attempt,
+                        health.as_ref().and_then(|v| v["status"].as_str()),
+                    ) {
+                        // Only the detached sender waits. A transient first POST
+                        // failure must not strand a short build's terminal event
+                        // behind senders which lost the background lock race.
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        continue;
+                    }
+                    break;
+                }
+                if !std::fs::metadata(d.join("queue.jsonl")).is_ok_and(|m| m.len() > 0) {
                     break;
                 }
             }
@@ -1194,6 +1230,41 @@ mod tests {
         assert!(data.as_object().unwrap().len() <= 80);
     }
     use super::*;
+
+    #[test]
+    fn transport_diagnostics_are_codes_only_and_bounded() {
+        let ok = post_outcome(Some(0), 200);
+        assert_eq!(ok.delivery, Delivery::Accepted);
+        assert_eq!(ok.http_status, Some(200));
+        assert_eq!(ok.curl_exit, Some(0));
+        let auth = post_outcome(Some(0), 403);
+        assert_eq!(auth.delivery, Delivery::Auth);
+        let failed = post_outcome(Some(7), 0);
+        assert_eq!(failed.delivery, Delivery::Retry);
+        assert_eq!(failed.curl_exit, Some(7));
+        assert_eq!(failed.http_status, None);
+        let invalid = post_outcome(Some(999), 999);
+        assert_eq!(invalid.delivery, Delivery::Retry);
+        assert_eq!(invalid.curl_exit, None);
+        assert_eq!(invalid.http_status, None);
+    }
+
+    #[test]
+    fn lifecycle_retry_is_bounded_and_never_retries_rejected_auth() {
+        for attempt in 0..3 {
+            assert!(retry_lifecycle_delivery(true, attempt, Some("retry")));
+        }
+        assert!(!retry_lifecycle_delivery(true, 3, Some("retry")));
+        assert!(!retry_lifecycle_delivery(false, 0, Some("retry")));
+        for status in [
+            None,
+            Some("accepted"),
+            Some("auth_required"),
+            Some("invalid_batch"),
+        ] {
+            assert!(!retry_lifecycle_delivery(true, 0, status));
+        }
+    }
 
     #[test]
     fn persistence_failures_are_bounded_and_validate_run_ids() {
