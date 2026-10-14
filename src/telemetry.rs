@@ -375,6 +375,7 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
         d.insert(k.to_string(), v);
     };
     put("schema_version", json!(2));
+    put("release_build", json!(crate::update::release_build()));
     if valid_run_id(&s.id) {
         put("run_id", json!(s.id));
     }
@@ -930,6 +931,7 @@ mod tests {
             max_sample_gap_secs: 0.407,
         });
         let data = run_data(&s, false);
+        assert_eq!(data["release_build"], crate::update::release_build());
         assert_eq!(data["measurement_samples"], 8);
         assert_eq!(data["measurement_processes"], 5);
         assert_eq!(data["measurement_span_s"], 1.4);
