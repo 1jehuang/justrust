@@ -1,5 +1,29 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: native causal mapping passes scoped acceptance, full graph still partial
+
+Actual rebuilt stage1 wait/read/pool acceptance passed: serial zero waits,
+331 waits at 4 threads and 1253 at 8 threads, plus real cycle and poison
+notifications. The small incremental read fixture resolved 5870 job edges
+with zero loss. Large contention semantic-read capture overflowed its bounded
+inventory and remains explicitly partial. Executable off/on/off identity and
+error diagnostics were preserved. No CPU/span or full-pipeline claim is made.
+
+Client full hosted test run `20261014-104130902-3437189` passed 540 tests,
+with check `20261014-104125366-3435193` and strict all-target lint
+`20261014-104152011-3434666`. Exported summaries are committed under
+`data/runs/causal-map-20261014`. Details and bootstrap evidence are in
+`docs/native-causal-map-results-20261014.md`.
+
+Scoped sequential overhead medians for the same frozen fixture were
+0.1617s off / 0.2862s on at one frontend thread and 0.1233s off / 0.3007s
+on at four threads. Quiet provenance is unknown and the baseline showed
+an on/off inversion, so these are recorder-cost diagnostics, not speedup
+or comprehensive promotion evidence. Capture overhead needs optimization.
+Cargo/compiler binding publication remains held for actual proc-macro
+recording-neutrality verification. Existing language behavior and cache keys
+must not be changed by recording.
+
 ## 2026-10-14: toolchain cleanup completed, default promotion blocked
 
 Owned release compiler/Cargo `jr-910e39a6c3ef` was built and staged without
