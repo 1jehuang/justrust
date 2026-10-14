@@ -25,11 +25,16 @@ A separate `git cat-file -t` confirmed that absence. The combined shell
 command exited zero because subsequent Cargo preservation succeeded, so
 that exit code is not evidence that rustc was archived successfully.
 
-The rustc repository and its local branches must therefore be retained
-intact. Do not delete its Git metadata or claim complete backup coverage.
-Prefer reversible directory retirement, preserving source, Git metadata,
-ignored artifacts and logs together, after toolchain activation checks.
-No disk-space reclamation is claimed by such a move.
+The rustc repository and its local branches are retained intact. On October
+14 both old directories were moved, with all Git metadata and ignored artifacts,
+to `~/.justrust/retired-sources/2026-10-14/jr-rustc` and the adjacent `jr-cargo`.
+Post-move Git status matched the audit (only rustc's `.fetch.log` untracked).
+`justrust toolchain status` still selected `jr-ac20de5e7921` with its existing
+`jr-cargo`; installed fallback prefixes were unchanged. The move is reversible
+by moving each directory back to its original home path, provided that path is
+unoccupied. No files or build artifacts were deleted, and no disk-space
+reclamation is claimed. The retirement does not depend on candidate activation,
+since installed toolchains contain independent artifacts, not legacy symlinks.
 
 ## Boundaries
 
