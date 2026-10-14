@@ -59,6 +59,15 @@ pub(super) struct Envelope {
 }
 
 impl Owner {
+    pub(crate) fn compiler_identity(&self) -> Option<(PathBuf, String, String, String)> {
+        let e = self.enabled.as_ref()?;
+        Some((
+            e.dir.clone(),
+            e.manifest.run_id.clone(),
+            e.manifest.authority_root.clone(),
+            e.manifest.owners[0].tickets[0].capture_id.clone(),
+        ))
+    }
     pub(crate) fn from_env(gctx: &crate::util::GlobalContext) -> Self {
         Self::new(
             gctx.get_env_os("JUSTRUST_EXECUTION_GRAPH_DIR")

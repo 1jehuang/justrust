@@ -1,4 +1,4 @@
-//! Opt-in anonymous diagnostics for admitted QueryJobs only, not a compiler graph.
+//! Opt-in bounded admission and registered-wait diagnostics, not a complete compiler graph.
 //! Never call publication methods while holding query shard or latch locks.
 use std::fmt::Write as _;
 use std::fs::{self, File};
@@ -13,6 +13,11 @@ use rustc_data_structures::sync::AtomicU64 as JobAtomicU64;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64 as JobAtomicU64;
 
+#[cfg(not(test))]
+use rustc_thread_pool::execution_observer::{ExecutionObserver, InterfaceOutcome};
+#[cfg(not(test))]
+use std::sync::OnceLock;
+
 const MAX_EVENTS: usize = 100_000;
 const MAX_CONTEXTS: usize = 1024;
 static FILE_ID: AtomicU64 = AtomicU64::new(1);
@@ -22,9 +27,14 @@ pub struct QueryAdmissionObserver(Arc<Inner>);
 struct Inner {
     // FD-relative publication stays private if the original path is replaced.
     _directory_handle: File,
+    capture_id: Option<String>,
     epoch: Instant,
     next_context: AtomicU64,
+    next_wait: AtomicU64,
+    reads: crate::query_reads::QueryReadObserver,
     returned: AtomicBool,
+    #[cfg(not(test))]
+    pool: OnceLock<Arc<ExecutionObserver>>,
     data: Mutex<Data>,
 }
 #[derive(Default)]
@@ -32,6 +42,76 @@ struct Data {
     contexts: Vec<(u64, Option<u64>)>,
     events: Vec<Event>,
     lost: u64,
+    waits: Vec<WaitRecord>,
+}
+struct WaitRecord {
+    id: u64,
+    context: u64,
+    waitee: u64,
+    consumer: Option<u64>,
+    times: [u64; 4],
+    reason: u64,
+}
+
+/// Facts only while compiler locks are held. Publication is explicit after resume.
+/// Dropping this token never acquires the observer mutex, even during unwinding.
+#[derive(Clone)]
+pub struct QueryWaitToken(Arc<WaitFacts>);
+struct WaitFacts {
+    context: QueryAdmissionContext,
+    id: u64,
+    waitee: u64,
+    consumer: Option<u64>,
+    registered: u64,
+    notified: AtomicU64,
+    reason: AtomicU64,
+}
+impl std::fmt::Debug for QueryWaitToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("QueryWaitToken").field(&self.0.id).finish()
+    }
+}
+impl QueryWaitToken {
+    /// Called immediately before notification under the existing synchronization.
+    pub fn notify(&self, reason: &'static str) {
+        self.0.notified.store(self.0.context.now(), Ordering::Relaxed);
+        self.0.reason.store(
+            match reason {
+                "completed" => 1,
+                "poisoned" => 2,
+                "cycle" => 3,
+                _ => 0,
+            },
+            Ordering::Release,
+        );
+    }
+    pub fn now(&self) -> u64 {
+        self.0.context.now()
+    }
+    /// Only the waiting thread calls this, after pool allowance reacquisition.
+    pub fn resumed(&self, condvar_returned: u64) {
+        let resumed = self.now();
+        let reason = self.0.reason.load(Ordering::Acquire);
+        let record = WaitRecord {
+            id: self.0.id,
+            context: self.0.context.id,
+            waitee: self.0.waitee,
+            consumer: self.0.consumer,
+            times: [
+                self.0.registered,
+                self.0.notified.load(Ordering::Relaxed),
+                condvar_returned,
+                resumed,
+            ],
+            reason,
+        };
+        let mut data = self.0.context.observer.0.data();
+        if data.waits.len() < MAX_EVENTS / 4 && data.waits.try_reserve(1).is_ok() {
+            data.waits.push(record);
+        } else {
+            data.lost = data.lost.saturating_add(1);
+        }
+    }
 }
 struct Event {
     kind: &'static str,
@@ -100,6 +180,25 @@ impl Inner {
 }
 
 impl QueryAdmissionObserver {
+    /// Called only from inside the actual frontend pool, never from session setup.
+    /// Failure disables pool capture without changing compilation or query capture.
+    pub fn attach_current_pool(&self) {
+        #[cfg(not(test))]
+        {
+            if self.0.pool.get().is_some() {
+                return;
+            }
+            let Some(observer) = ExecutionObserver::new(MAX_EVENTS) else {
+                return;
+            };
+            if rustc_thread_pool::Registry::current()
+                .attach_execution_observer(Arc::clone(&observer))
+            {
+                let _ = self.0.pool.set(observer);
+            }
+        }
+    }
+
     /// Requires a private directory. Unsupported platforms fail open by disabling capture.
     pub fn new(directory: &Path) -> Option<Self> {
         #[cfg(not(target_os = "linux"))]
@@ -140,9 +239,52 @@ impl QueryAdmissionObserver {
             }
             Some(Self(Arc::new(Inner {
                 _directory_handle: handle,
+                capture_id: None,
                 epoch: Instant::now(),
                 next_context: AtomicU64::new(1),
+                next_wait: AtomicU64::new(1),
+                reads: crate::query_reads::QueryReadObserver::default(),
                 returned: AtomicBool::new(false),
+                #[cfg(not(test))]
+                pool: OnceLock::new(),
+                data: Mutex::new(Data::default()),
+            })))
+        }
+    }
+    /// Uses only a validated owned private directory and a transport-assigned identity.
+    /// The schema and query accounting remain identical to standalone observation.
+    pub fn new_from_directory(directory: File, capture_id: String) -> Option<Self> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (directory, capture_id);
+            None
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            unsafe extern "C" {
+                fn geteuid() -> u32;
+            }
+            let metadata = directory.metadata().ok()?;
+            if !metadata.is_dir()
+                || metadata.mode() & 0o077 != 0
+                || metadata.uid() != unsafe { geteuid() }
+                || capture_id.is_empty()
+                || capture_id.len() > 128
+                || !capture_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            {
+                return None;
+            }
+            Some(Self(Arc::new(Inner {
+                _directory_handle: directory,
+                capture_id: Some(capture_id),
+                epoch: Instant::now(),
+                next_context: AtomicU64::new(1),
+                next_wait: AtomicU64::new(1),
+                reads: crate::query_reads::QueryReadObserver::default(),
+                returned: AtomicBool::new(false),
+                #[cfg(not(test))]
+                pool: OnceLock::new(),
                 data: Mutex::new(Data::default()),
             })))
         }
@@ -157,12 +299,33 @@ impl QueryAdmissionObserver {
         }
         QueryAdmissionContext { observer: self.clone(), id }
     }
+    pub fn reads(&self) -> &crate::query_reads::QueryReadObserver {
+        &self.0.reads
+    }
     /// This is an interface callback outcome, never a process/driver outcome.
     pub fn finalize_interface_returned(&self) {
         self.0.returned.store(true, Ordering::Relaxed);
     }
 }
 impl QueryAdmissionContext {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    fn now(&self) -> u64 {
+        u64::try_from(self.observer.0.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    }
+    /// Lock-free observer facts allocation, called only for an actual registration.
+    pub fn register_wait(&self, waitee: u64, consumer: Option<u64>) -> QueryWaitToken {
+        QueryWaitToken(Arc::new(WaitFacts {
+            context: self.clone(),
+            id: self.observer.0.next_wait.fetch_add(1, Ordering::Relaxed),
+            waitee,
+            consumer,
+            registered: self.now(),
+            notified: AtomicU64::new(0),
+            reason: AtomicU64::new(0),
+        }))
+    }
     /// Lock-free identity check. Numeric context IDs alone are not unique across roots.
     pub fn same_context(&self, other: &Self) -> bool {
         self.id == other.id && Arc::ptr_eq(&self.observer.0, &other.observer.0)
@@ -196,6 +359,11 @@ impl QueryAdmissionContext {
     }
 }
 impl QueryAdmissionJob {
+    /// Identifies the admitted job publishing this result, not provider execution.
+    /// The cache's own critical section must have returned before calling this.
+    pub fn result_produced(&self, index: u32) {
+        self.context.observer.reads().result_produced(self.context.id, self.id, index);
+    }
     pub fn complete(mut self) {
         self.terminal = true;
         self.context.event("completed", self.id, None, Instant::now());
@@ -210,6 +378,93 @@ impl Drop for QueryAdmissionJob {
     }
 }
 impl Data {
+    fn waits_complete(&self, expected: u64) -> bool {
+        if self.lost != 0 || self.waits.len() as u64 != expected {
+            return false;
+        }
+        let mut ids = Vec::new();
+        if ids.try_reserve(self.waits.len()).is_err() {
+            return false;
+        }
+        let mut admissions = Vec::new();
+        let mut terminals = Vec::new();
+        if admissions.try_reserve(self.events.len()).is_err()
+            || terminals.try_reserve(self.events.len()).is_err()
+        {
+            return false;
+        }
+        for event in &self.events {
+            if event.kind == "admitted" {
+                admissions.push((event.context, event.job, event.at));
+            } else {
+                terminals.push((event.context, event.job, event.kind));
+            }
+        }
+        admissions.sort_unstable();
+        terminals.sort_unstable();
+        ids.extend(self.waits.iter().map(|wait| wait.id));
+        ids.sort_unstable();
+        ids.iter().enumerate().all(|(i, &id)| id == i as u64 + 1)
+            && self.waits.iter().all(|wait| {
+                let admitted = |job| {
+                    admissions
+                        .binary_search_by_key(&(wait.context, job), |&(context, job, _)| {
+                            (context, job)
+                        })
+                        .ok()
+                        .is_some_and(|index| admissions[index].2 <= wait.times[0])
+                };
+                admitted(wait.waitee)
+                    && wait.consumer.is_none_or(admitted)
+                    && wait.times.windows(2).all(|pair| pair[0] <= pair[1])
+                    && matches!(wait.reason, 1..=3)
+                    && (wait.reason == 3
+                        || terminals
+                            .binary_search(&(
+                                wait.context,
+                                wait.waitee,
+                                if wait.reason == 1 { "completed" } else { "poisoned" },
+                            ))
+                            .is_ok())
+            })
+    }
+
+    fn append_wait_json(&self, out: &mut String, high: u64, returned: bool) {
+        let expected = high.saturating_sub(1);
+        let _ = write!(
+            out,
+            ",\"wait_allocator_baseline\":1,\"wait_allocator_high_water\":{high},\"expected_waits\":{expected},\"wait_capture_complete\":{},\"wait_events\":[",
+            returned && self.waits_complete(expected)
+        );
+        let mut first = true;
+        for wait in &self.waits {
+            for (stage, kind) in
+                ["registered", "notified", "condvar_returned", "resumed"].iter().enumerate()
+            {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                let consumer = wait.consumer.map_or_else(|| "null".into(), |id| id.to_string());
+                let _ = write!(
+                    out,
+                    "{{\"kind\":\"{kind}\",\"wait_id\":{},\"context_id\":{},\"waitee_job_id\":{},\"consumer_job_id\":{consumer},\"at_ns\":{}",
+                    wait.id, wait.context, wait.waitee, wait.times[stage]
+                );
+                if stage == 1 {
+                    let reason = match wait.reason {
+                        1 => "completed",
+                        2 => "poisoned",
+                        3 => "cycle",
+                        _ => "unknown",
+                    };
+                    let _ = write!(out, ",\"reason\":\"{reason}\"");
+                }
+                out.push('}');
+            }
+        }
+        out.push(']');
+    }
     fn context_inventory_matches(&self, expected_contexts: u64) -> bool {
         // This count comes from the root allocator, never from the captured context list.
         // Removing an entire context and all of its events must still fail reconciliation.
@@ -290,7 +545,7 @@ impl Data {
     }
     fn json(&self, returned: bool, capture_id: &str, expected_contexts: u64) -> String {
         let mut out = format!(
-            "{{\"schema\":1,\"capture_id\":\"{capture_id}\",\"producer\":\"rustc-query-admission\",\"scope\":\"query-job-admission-lifecycle\",\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"interface_outcome\":\"{}\",\"capture_complete\":{},\"lost_events\":{},\"expected_contexts\":{expected_contexts},\"opaque_boundaries\":[\"fast-cache-hits\",\"race-cache-hits\",\"green-ensure-no-job\",\"feeds\",\"direct-paths\",\"nonquery\",\"resource-internals\",\"driver-and-process-outcome\",\"cargo-parent-binding\",\"cache-read-dependencies\",\"wait-and-resource-dependencies\"],\"contexts\":[",
+            "{{\"schema\":3,\"capture_id\":\"{capture_id}\",\"producer\":\"rustc-query-admission\",\"scope\":\"query-job-admission-lifecycle\",\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"interface_outcome\":\"{}\",\"capture_complete\":{},\"lost_events\":{},\"expected_contexts\":{expected_contexts},\"opaque_boundaries\":[\"fast-cache-hits\",\"race-cache-hits\",\"green-ensure-no-job\",\"feeds\",\"direct-paths\",\"nonquery\",\"resource-internals\",\"driver-and-process-outcome\",\"cargo-parent-binding\",\"cache-read-dependencies\",\"wait-and-resource-dependencies\"],\"contexts\":[",
             if returned { "returned" } else { "interrupted" },
             returned && self.complete(expected_contexts),
             self.lost
@@ -340,35 +595,61 @@ impl Drop for Inner {
         };
         let id = FILE_ID.fetch_add(1, Ordering::Relaxed);
         let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let name = format!("{epoch}-{}-{id}", std::process::id());
+        let name = self
+            .capture_id
+            .clone()
+            .unwrap_or_else(|| format!("{epoch}-{}-{id}", std::process::id()));
         // All context/job handles own this root Arc. Its final Drop observes a stable
         // independent allocator highwater, including contexts whose receipts were lost.
         let expected_contexts = self.next_context.load(Ordering::Relaxed).saturating_sub(1);
         if !data.context_inventory_matches(expected_contexts) {
             data.lost = data.lost.saturating_add(1);
         }
-        let json = data.json(self.returned.load(Ordering::Relaxed), &name, expected_contexts);
+        let returned = self.returned.load(Ordering::Relaxed);
+        let wait_high = self.next_wait.load(Ordering::Relaxed);
+        let missing_waits = wait_high.saturating_sub(1).saturating_sub(data.waits.len() as u64);
+        data.lost = data.lost.saturating_add(missing_waits);
+        let mut json = data.json(returned, &name, expected_contexts);
+        // Preserve admission completeness as its own scope, not full causal coverage.
+        json.truncate(json.len().saturating_sub(2));
+        data.append_wait_json(&mut json, wait_high, returned);
+        self.reads.append_json(&mut json);
+        json.push_str("}\n");
         #[cfg(target_os = "linux")]
-        publish(&self._directory_handle, &name, json.as_bytes());
+        let _ = publish(&self._directory_handle, &name, json.as_bytes());
         #[cfg(not(target_os = "linux"))]
         let _ = json;
+        // Final root drop follows frontend return and pool teardown. Keep the pool
+        // protocol separate: its clock and task IDs are not query bindings.
+        #[cfg(all(not(test), target_os = "linux"))]
+        if let Some(pool) = self.pool.get() {
+            if returned {
+                pool.seal(InterfaceOutcome::Returned);
+            } else {
+                pool.seal(InterfaceOutcome::Unwound);
+            }
+            let mut receipt = Vec::new();
+            if pool.write_json(&mut receipt).is_ok() {
+                let _ = publish(&self._directory_handle, &format!("{name}-pool"), &receipt);
+            }
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
-fn publish(directory: &File, name: &str, bytes: &[u8]) {
+pub(crate) fn publish(directory: &File, name: &str, bytes: &[u8]) -> bool {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::fs::PermissionsExt;
     // Refuse publication if the directory was made public while capture ran.
     if !directory.metadata().is_ok_and(|m| m.permissions().mode() & 0o077 == 0) {
-        return;
+        return false;
     }
     let Ok(temp) = CString::new(format!(".{name}.tmp")) else {
-        return;
+        return false;
     };
     let Ok(receipt) = CString::new(format!("{name}.json")) else {
-        return;
+        return false;
     };
     unsafe extern "C" {
         fn openat(fd: i32, path: *const std::ffi::c_char, flags: i32, mode: u32) -> i32;
@@ -386,18 +667,20 @@ fn publish(directory: &File, name: &str, bytes: &[u8]) {
     // O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC refuse existing files and symlinks.
     let output = unsafe { openat(fd, temp.as_ptr(), 1 | 64 | 128 | 524288, 0o600) };
     if output < 0 {
-        return;
+        return false;
     }
     // SAFETY: openat returned a newly owned FD, transferred exactly once to File.
     let mut file = unsafe { File::from_raw_fd(output) };
+    let mut published = false;
     if file.write_all(bytes).is_ok() && file.sync_all().is_ok() {
         // SAFETY: both names remain valid for the call, FD is held. linkat is atomic
         // and cannot replace an existing destination, unlike rename.
-        let _ = unsafe { linkat(fd, temp.as_ptr(), fd, receipt.as_ptr(), 0) };
+        published = unsafe { linkat(fd, temp.as_ptr(), fd, receipt.as_ptr(), 0) } == 0;
         let _ = directory.sync_all();
     }
     // SAFETY: only our successfully created temporary anonymous file is unlinked.
     let _ = unsafe { unlinkat(fd, temp.as_ptr(), 0) };
+    published
 }
 
 #[cfg(test)]
@@ -690,6 +973,7 @@ mod tests {
                 Event { kind: "completed", context: 1, job: 1, parent: None, at: 40 },
             ],
             lost: 0,
+            waits: Vec::new(),
         };
         assert!(!data.complete(1));
         data.events[1].at = 20;
@@ -706,6 +990,7 @@ mod tests {
                 Event { kind: "completed", context: 1, job: 1, parent: None, at: 11 },
             ],
             lost: 0,
+            waits: Vec::new(),
         };
         assert!(data.complete(1));
         data.events[0].parent = Some(1);
@@ -741,6 +1026,99 @@ mod tests {
         assert!(receipt(&path).contains("\"capture_complete\":false"));
         fs::remove_dir_all(path).unwrap();
     }
+    #[cfg(target_os = "linux")]
+    fn wait_receipt(f: impl FnOnce(&QueryAdmissionContext)) -> String {
+        let path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        let context = observer.context();
+        let waitee = context.admit(1, None, Instant::now());
+        let consumer = context.admit(2, None, Instant::now());
+        f(&context);
+        waitee.result_produced(7);
+        waitee.complete();
+        consumer.complete();
+        context.snapshot(3);
+        drop(context);
+        observer.finalize_interface_returned();
+        drop(observer);
+        let text = receipt(&path);
+        fs::remove_dir_all(path).unwrap();
+        text
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn registered_wait_resume_before_terminal_is_valid() {
+        let text = wait_receipt(|context| {
+            let wait = context.register_wait(1, Some(2));
+            wait.notify("completed");
+            wait.resumed(wait.now());
+        });
+        assert!(text.contains("\"schema\":3"));
+        assert!(text.contains("\"wait_capture_complete\":true"));
+        for kind in ["registered", "notified", "condvar_returned", "resumed"] {
+            assert_eq!(text.matches(&format!("\"kind\":\"{kind}\"")).count(), 1);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn registered_wait_abandonment_duplicate_and_foreign_endpoint_are_incomplete() {
+        let text = wait_receipt(|context| {
+            let _wait = context.register_wait(1, Some(2));
+        });
+        assert!(text.contains("\"expected_waits\":1"));
+        assert!(text.contains("\"wait_capture_complete\":false"));
+        assert!(text.contains("\"lost_events\":1"));
+        let text = wait_receipt(|context| {
+            let wait = context.register_wait(1, Some(2));
+            wait.notify("completed");
+            let returned = wait.now();
+            wait.resumed(returned);
+            wait.resumed(returned);
+        });
+        assert!(text.contains("\"wait_capture_complete\":false"));
+        let text = wait_receipt(|context| {
+            let wait = context.register_wait(3, Some(2));
+            wait.notify("completed");
+            wait.resumed(wait.now());
+        });
+        assert!(text.contains("\"wait_capture_complete\":false"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn registered_wait_cycle_and_wrong_terminal_reason() {
+        let text = wait_receipt(|context| {
+            let wait = context.register_wait(1, Some(2));
+            wait.notify("cycle");
+            wait.resumed(wait.now());
+        });
+        assert!(text.contains("\"wait_capture_complete\":true"));
+        assert!(text.contains("\"reason\":\"cycle\""));
+        let text = wait_receipt(|context| {
+            let wait = context.register_wait(1, Some(2));
+            wait.notify("poisoned");
+            wait.resumed(wait.now());
+        });
+        assert!(text.contains("\"wait_capture_complete\":false"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn registered_wait_bound_marks_loss() {
+        let text = wait_receipt(|context| {
+            for _ in 0..25_001 {
+                let wait = context.register_wait(1, Some(2));
+                wait.notify("completed");
+                wait.resumed(wait.now());
+            }
+        });
+        assert!(text.contains("\"expected_waits\":25001"));
+        assert!(text.contains("\"wait_capture_complete\":false"));
+        assert_eq!(text.matches("\"kind\":\"resumed\"").count(), 25_000);
+    }
+
     #[test]
     fn missing_snapshot_and_empty_baseline() {
         let mut data = Data { contexts: vec![(1, None)], ..Data::default() };

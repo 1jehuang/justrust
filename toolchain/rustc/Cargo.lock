@@ -4821,6 +4821,7 @@ dependencies = [
  "rustc_span",
  "rustc_structures",
  "rustc_target",
+ "rustc_thread_pool",
  "termize",
  "tracing",
  "windows 0.61.3",

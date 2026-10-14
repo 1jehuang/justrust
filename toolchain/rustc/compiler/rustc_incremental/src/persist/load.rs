@@ -183,7 +183,7 @@ pub fn setup_dep_graph(
     stable_crate_id: StableCrateId,
 ) -> (DepGraph, Option<IncrCompSession>) {
     if sess.opts.incremental.is_none() {
-        return (DepGraph::new_disabled(), None);
+        return (DepGraph::new_disabled_with_observation(sess.query_admission.is_some()), None);
     }
 
     // `load_dep_graph` can only be called after `prepare_session_directory`.

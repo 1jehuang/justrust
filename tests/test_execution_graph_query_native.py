@@ -18,9 +18,15 @@ import unittest
                      'requires an actual rebuilt native query producer')
 class NativeQueryAdmissionAcceptance(unittest.TestCase):
     def test_actual_admission_counts_artifact_reuse_and_fail_open(self):
+        evidence = os.environ.get('JR_QUERY_EVIDENCE_DIR')
+        if evidence:
+            Path(evidence).mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='jr-query-acceptance-',
                                          dir=os.environ.get('JCODE_SCRATCH_DIR')) as tmp:
-            root = Path(tmp)
+            root = (Path(tempfile.mkdtemp(prefix='admission-', dir=evidence))
+                    if evidence else Path(tmp))
+            print(json.dumps({'evidence_dir': str(root), 'retained': bool(evidence)}), flush=True)
+            serial = 0
             rustc = str(Path(os.environ['JR_QUERY_RUSTC']).resolve())
             justrust = os.environ.get('JR_QUERY_JUSTRUST', shutil.which('justrust'))
             self.assertIsNotNone(justrust)
@@ -38,6 +44,8 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
                     '-Zincremental-info', '-o', str(artifact), str(source)]
 
             def compile(capture=None, parallel=False, success=True):
+                nonlocal serial
+                serial += 1
                 command = args.copy()
                 if capture is not None:
                     command.insert(1, '-Zjr-query-graph=' + str(capture))
@@ -46,30 +54,57 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
                 p = subprocess.run(command, cwd=root, env=env, capture_output=True,
                                    text=True, timeout=180)
                 output = p.stdout + p.stderr
+                (root / f'compile-{serial}.json').write_text(json.dumps({
+                    'command': command, 'exit_code': p.returncode, 'output': output,
+                    'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2))
+                shutil.copyfile(source, root / f'source-{serial}.rs')
                 if success:
                     self.assertEqual(p.returncode, 0, output)
                 else:
                     self.assertNotEqual(p.returncode, 0, output)
                 return output
 
-            def inspect(capture, complete=True):
+            def inspect(capture, complete=True, parallel=False):
                 p = subprocess.run([justrust, 'graph', str(capture), '--json'],
                                    cwd=root, env=env, capture_output=True, text=True,
                                    timeout=30)
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 assessments = json.loads(p.stdout)
                 self.assertTrue(assessments)
-                self.assertTrue(all(a['producer'] == 'rustc-query-admission'
-                                    for a in assessments))
+                producers = {'rustc-query-admission', 'rustc-thread-pool-join'}
+                self.assertTrue(all(a['producer'] in producers for a in assessments), p.stdout)
+                (root / f'{capture.name}-assessment.json').write_text(json.dumps({
+                    'stdout': p.stdout, 'stderr': p.stderr, 'exit_code': p.returncode}, indent=2))
                 self.assertTrue(all(not a['full_pipeline_complete'] for a in assessments))
                 self.assertTrue(all(a['cpu_work_ns'] is None and a['execution_span_ns'] is None
                                     for a in assessments))
+                query_assessments = [a for a in assessments
+                                     if a['producer'] == 'rustc-query-admission']
+                pool_assessments = [a for a in assessments
+                                    if a['producer'] == 'rustc-thread-pool-join']
+                self.assertTrue(query_assessments, p.stdout)
                 if complete:
                     self.assertTrue(all(a['structural_complete'] for a in assessments), p.stdout)
                 else:
-                    self.assertTrue(all(not a['structural_complete'] for a in assessments), p.stdout)
-                receipts = [json.loads(p.read_text()) for p in capture.glob('*.json')]
-                self.assertTrue(receipts)
+                    self.assertTrue(all(not a['structural_complete']
+                                        for a in query_assessments), p.stdout)
+                all_receipts = [json.loads(p.read_text()) for p in capture.glob('*.json')]
+                for receipt in all_receipts:
+                    self.assertIn(receipt['producer'], producers, receipt)
+                receipts = [r for r in all_receipts if r['producer'] == 'rustc-query-admission']
+                pools = [r for r in all_receipts if r['producer'] == 'rustc-thread-pool-join']
+                self.assertTrue(receipts, 'query receipts required')
+                if parallel:
+                    self.assertTrue(pools, 'parallel capture requires separate pool receipts')
+                self.assertEqual(len(receipts), len(query_assessments))
+                self.assertEqual(len(pools), len(pool_assessments))
+                for pool in pools:
+                    self.assertFalse(pool['full_pipeline_complete'])
+                    self.assertIsNone(pool['cpu_work_ns'])
+                    self.assertIsNone(pool['execution_span_ns'])
+                    if complete:
+                        self.assertTrue(pool['sealed'])
+                        self.assertEqual(pool['interface_outcome'], 'returned')
                 for receipt in receipts:
                     self.assertEqual(receipt['scope'], 'query-job-admission-lifecycle')
                     self.assertFalse(receipt['full_pipeline_complete'])
@@ -117,7 +152,7 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
                 '-Cincremental=' + str(root / 'parallel-incremental'))
             parallel = root / 'parallel-capture'
             compile(parallel, parallel=True)
-            receipts = inspect(parallel)
+            receipts = inspect(parallel, parallel=True)
             self.assertTrue(any(e['kind'] == 'admitted' for r in receipts for e in r['events']))
 
             source.write_text('pub fn bad() -> u32 { "intentional query type error" }\nfn main() {}\n')

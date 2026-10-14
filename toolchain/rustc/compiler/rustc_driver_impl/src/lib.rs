@@ -170,6 +170,14 @@ impl Callbacks for TimePassesCallbacks {
 
 /// This is the primary entry point for rustc.
 pub fn compiler_entrypoint(at_args: &[String], callbacks: &mut (dyn Callbacks + Send)) {
+    compiler_entrypoint_with_binding(at_args, callbacks, None);
+}
+
+fn compiler_entrypoint_with_binding(
+    at_args: &[String],
+    callbacks: &mut (dyn Callbacks + Send),
+    query_admission: Option<rustc_session::query_admission::QueryAdmissionObserver>,
+) {
     let mut default_early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
 
     // Throw away the first argument, the name of the binary.
@@ -216,6 +224,7 @@ pub fn compiler_entrypoint(at_args: &[String], callbacks: &mut (dyn Callbacks + 
     drop(default_early_dcx);
 
     let mut config = interface::Config {
+        query_admission: query_admission.clone(),
         opts: sopts,
         crate_cfg: matches.opt_strs("cfg"),
         crate_check_cfg: matches.opt_strs("check-cfg"),
@@ -938,6 +947,10 @@ pub fn version_at_macro_invocation(
     safe_println!("{binary} {version}");
 
     if verbose {
+        #[cfg(target_os = "linux")]
+        if binary == "rustc" {
+            safe_println!("jr-query-admission-binding: reserved-fd-v2,query-schema=3");
+        }
         safe_println!("binary: {binary}");
         safe_println!("commit-hash: {commit_hash}");
         safe_println!("commit-date: {commit_date}");
@@ -1698,7 +1711,22 @@ pub fn install_ctrlc_handler() {
     .expect("Unable to install ctrlc handler");
 }
 
-pub fn main() -> ExitCode {
+/// Run the native compiler process entrypoint.
+///
+/// # Safety
+/// Call only once at native process startup, before spawning threads, with exclusive
+/// ownership of the inherited binding transport descriptors. Embedded callers must
+/// use `compiler_entrypoint`, which does not discover or consume inherited descriptors.
+pub unsafe fn main() -> ExitCode {
+    // Native process entry, before logger/signal threads and argument expansion.
+    // SAFETY: the native launch protocol transfers validated inherited transport
+    // descriptors exclusively to process main. Foreign invalid probes stay intact.
+    // Safe embedded compiler_entrypoint never probes or consumes inherited fds.
+    let query_admission = unsafe {
+        rustc_session::query_binding::admit_inherited(
+            rustc_session::query_binding::protocol::RESERVED_TICKET_FD,
+        )
+    };
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
 
@@ -1710,8 +1738,13 @@ pub fn main() -> ExitCode {
     install_ice_hook(DEFAULT_BUG_REPORT_URL, |_| ());
     install_ctrlc_handler();
 
-    let exit_code =
-        catch_with_exit_code(|| compiler_entrypoint(&args::raw_args(&early_dcx), &mut callbacks));
+    let exit_code = catch_with_exit_code(|| {
+        compiler_entrypoint_with_binding(
+            &args::raw_args(&early_dcx),
+            &mut callbacks,
+            query_admission,
+        )
+    });
 
     if let Some(format) = callbacks.time_passes {
         let end_rss = get_resident_set_size();

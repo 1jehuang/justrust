@@ -56,6 +56,7 @@ fn compile(code: String, output: PathBuf, sysroot: Sysroot, linker: Option<&Path
     let input = Input::Str { name, input: code };
 
     let config = interface::Config {
+        query_admission: None,
         opts,
         crate_cfg: Default::default(),
         crate_check_cfg: Default::default(),

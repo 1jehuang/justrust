@@ -21,6 +21,8 @@ pub mod code_stats;
 pub mod diagnostics;
 pub mod parse;
 pub mod query_admission;
+pub mod query_binding;
+pub mod query_reads;
 pub mod utils;
 #[macro_use]
 pub mod config;

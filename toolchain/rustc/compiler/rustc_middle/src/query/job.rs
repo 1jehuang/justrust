@@ -94,6 +94,7 @@ pub struct QueryCycle<'tcx> {
 
 #[derive(Debug)]
 pub struct QueryWaiter<'tcx> {
+    pub diagnostic_wait: Option<rustc_session::query_admission::QueryWaitToken>,
     pub parent: Option<QueryJobId>,
     pub condvar: Condvar,
     pub span: Span,

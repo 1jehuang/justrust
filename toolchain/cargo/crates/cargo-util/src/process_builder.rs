@@ -1,5 +1,7 @@
 use crate::process_error::ProcessError;
 use crate::read2;
+#[path = "jr_query_binding.rs"]
+pub mod jr_query_binding;
 
 use anyhow::{Context, Result, bail};
 use jobserver::Client;
@@ -45,6 +47,8 @@ pub struct ProcessBuilder {
     stdin: Option<Vec<u8>>,
     stdout: Option<Stdio>,
     stderr: Option<Stdio>,
+    #[cfg(target_os = "linux")]
+    jr_query_launch: Option<jr_query_binding::Launch>,
 }
 
 impl fmt::Display for ProcessBuilder {
@@ -75,6 +79,45 @@ impl fmt::Display for ProcessBuilder {
 }
 
 impl ProcessBuilder {
+    /// Attach a private compiler ticket without changing logical args or env.
+    #[cfg(target_os = "linux")]
+    pub fn jr_query_launch(&mut self, launch: jr_query_binding::Launch) {
+        self.jr_query_launch = Some(launch);
+    }
+
+    /// Whether the original executable is invoked without wrappers.
+    pub fn is_unwrapped(&self) -> bool {
+        self.wrappers.is_empty()
+    }
+
+    fn jr_spawn_attempt(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(launch) = &self.jr_query_launch {
+            launch.observer.spawn_attempt();
+        }
+    }
+    fn jr_spawn_result(&self, spawned: bool, retry: bool) {
+        #[cfg(target_os = "linux")]
+        if let Some(launch) = &self.jr_query_launch {
+            launch.observer.spawn_result(spawned, retry);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (spawned, retry);
+    }
+    fn jr_wait(&self, status: ExitStatus) {
+        #[cfg(target_os = "linux")]
+        if let Some(launch) = &self.jr_query_launch {
+            launch.observer.wait(status);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = status;
+    }
+    fn jr_observation_lost(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(launch) = &self.jr_query_launch {
+            launch.observer.lost();
+        }
+    }
     /// Creates a new [`ProcessBuilder`] with the given executable path.
     pub fn new<T: AsRef<OsStr>>(cmd: T) -> ProcessBuilder {
         ProcessBuilder {
@@ -90,6 +133,8 @@ impl ProcessBuilder {
             stdin: None,
             stdout: None,
             stderr: None,
+            #[cfg(target_os = "linux")]
+            jr_query_launch: None,
         }
     }
 
@@ -390,14 +435,33 @@ impl ProcessBuilder {
 
         let spawn = |mut cmd| {
             if !debug_force_argfile(self.retry_with_argfile) {
+                self.jr_spawn_attempt();
                 match piped(&mut cmd, false).spawn() {
-                    Err(ref e) if self.should_retry_with_argfile(e) => {}
-                    Err(e) => return Err(e),
-                    Ok(child) => return Ok((child, None)),
+                    Err(ref e) if self.should_retry_with_argfile(e) => {
+                        self.jr_spawn_result(false, true);
+                    }
+                    Err(e) => {
+                        self.jr_spawn_result(false, false);
+                        return Err(e);
+                    }
+                    Ok(child) => {
+                        self.jr_spawn_result(true, false);
+                        return Ok((child, None));
+                    }
                 }
             }
             let (mut cmd, argfile) = self.build_command_with_argfile()?;
-            Ok((piped(&mut cmd, false).spawn()?, Some(argfile)))
+            self.jr_spawn_attempt();
+            match piped(&mut cmd, false).spawn() {
+                Ok(child) => {
+                    self.jr_spawn_result(true, false);
+                    Ok((child, Some(argfile)))
+                }
+                Err(error) => {
+                    self.jr_spawn_result(false, false);
+                    Err(error)
+                }
+            }
         };
 
         let status = (|| {
@@ -405,7 +469,7 @@ impl ProcessBuilder {
             let (mut child, argfile) = spawn(cmd)?;
             let out = child.stdout.take().unwrap();
             let err = child.stderr.take().unwrap();
-            read2(out, err, &mut |is_out, data, eof| {
+            let read_result = read2(out, err, &mut |is_out, data, eof| {
                 let pos = if is_out {
                     &mut stdout_pos
                 } else {
@@ -447,11 +511,19 @@ impl ProcessBuilder {
 
                 data.drain(..idx);
                 *pos = 0;
-            })?;
+            });
+            if read_result.is_err() {
+                self.jr_observation_lost();
+            }
             let status = child.wait();
+            match &status {
+                Ok(status) => self.jr_wait(*status),
+                Err(_) => self.jr_observation_lost(),
+            }
             if let Some(argfile) = argfile {
                 close_tempfile_and_log_error(argfile);
             }
+            read_result?;
             status
         })()
         .with_context(|| ProcessError::could_not_execute(self))?;
@@ -549,6 +621,14 @@ impl ProcessBuilder {
         }
         if let Some(ref c) = self.jobserver {
             c.configure(&mut command);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(launch) = &self.jr_query_launch {
+            if self.is_unwrapped() {
+                launch.materialize(&mut command);
+            } else {
+                launch.observer.lost();
+            }
         }
         command
     }
@@ -704,6 +784,163 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    mod jr_launch {
+        use super::super::*;
+        use std::sync::{Arc, Mutex};
+        #[derive(Default)]
+        struct Seen(Mutex<Vec<String>>);
+        impl jr_query_binding::Observer for Seen {
+            fn spawn_attempt(&self) {
+                self.0.lock().unwrap().push("attempt".into());
+            }
+            fn spawn_result(&self, spawned: bool, retry: bool) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(format!("spawn:{spawned}:{retry}"));
+            }
+            fn wait(&self, status: ExitStatus) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(format!("wait:{}", status.success()));
+            }
+            fn lost(&self) {
+                self.0.lock().unwrap().push("lost".into());
+            }
+        }
+        fn private_directory() -> tempfile::TempDir {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            dir
+        }
+        fn launch(directory: &Path, seen: Arc<Seen>) -> jr_query_binding::Launch {
+            jr_query_binding::Launch {
+                directory: directory.into(),
+                observer: seen,
+                binding: jr_query_binding::Binding {
+                    schema: 1,
+                    protocol: "jr-rustc-query-binding-v1".into(),
+                    run_id: "run".into(),
+                    invocation_id: "invocation".into(),
+                    parent_invocation_id: "parent".into(),
+                    parent_task_id: "cargo-unit-0".into(),
+                    entry_capture_id: "entry".into(),
+                    capture_id: "query".into(),
+                    receipt_schema: 3,
+                },
+            }
+        }
+        #[test]
+        fn private_ticket_never_changes_generated_argv_or_env() {
+            let directory = private_directory();
+            let seen = Arc::new(Seen::default());
+            let mut cmd = ProcessBuilder::new("/bin/true");
+            cmd.arg("ordinary").env("EXAMPLE", "value");
+            let display = cmd.to_string();
+            let env = cmd.get_envs().clone();
+            let args = cmd.get_args().cloned().collect::<Vec<_>>();
+            cmd.jr_query_launch(launch(directory.path(), seen.clone()));
+            assert_eq!(cmd.to_string(), display);
+            assert_eq!(cmd.get_envs(), &env);
+            assert_eq!(cmd.get_args().cloned().collect::<Vec<_>>(), args);
+            let generated = cmd.build_command();
+            assert_eq!(
+                generated.get_args().collect::<Vec<_>>(),
+                args.iter().collect::<Vec<_>>()
+            );
+            let baseline = {
+                let mut plain = ProcessBuilder::new("/bin/true");
+                plain.arg("ordinary").env("EXAMPLE", "value");
+                plain.build_command()
+            };
+            assert_eq!(
+                generated.get_envs().collect::<Vec<_>>(),
+                baseline.get_envs().collect::<Vec<_>>()
+            );
+            cmd.exec_with_streaming(&mut |_| Ok(()), &mut |_| Ok(()), false)
+                .unwrap();
+            assert_eq!(
+                *seen.0.lock().unwrap(),
+                ["attempt", "spawn:true:false", "wait:true"]
+            );
+        }
+        #[test]
+        fn argfile_retry_keeps_private_ticket_out_of_argfile() {
+            let directory = private_directory();
+            let seen = Arc::new(Seen::default());
+            let mut cmd = ProcessBuilder::new("/bin/true");
+            cmd.arg("x".repeat(256 * 1024)).retry_with_argfile(true);
+            cmd.jr_query_launch(launch(directory.path(), seen.clone()));
+            let (generated, argfile) = cmd.build_command_with_argfile().unwrap();
+            assert_eq!(generated.get_args().count(), 1);
+            assert!(
+                generated
+                    .get_args()
+                    .next()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with('@')
+            );
+            assert!(
+                !std::fs::read_to_string(argfile.path())
+                    .unwrap()
+                    .contains("jr-query-binding")
+            );
+            cmd.exec_with_streaming(&mut |_| Ok(()), &mut |_| Ok(()), false)
+                .unwrap();
+            assert_eq!(
+                *seen.0.lock().unwrap(),
+                [
+                    "attempt",
+                    "spawn:false:true",
+                    "attempt",
+                    "spawn:true:false",
+                    "wait:true"
+                ]
+            );
+        }
+        #[test]
+        fn transport_failure_runs_original_command_and_marks_loss() {
+            let directory = private_directory();
+            let seen = Arc::new(Seen::default());
+            let mut cmd = ProcessBuilder::new("/bin/true");
+            cmd.jr_query_launch(launch(&directory.path().join("missing"), seen.clone()));
+            assert!(cmd.build_command().get_args().next().is_none());
+            cmd.exec_with_streaming(&mut |_| Ok(()), &mut |_| Ok(()), false)
+                .unwrap();
+            assert!(seen.0.lock().unwrap().iter().any(|e| e == "lost"));
+            assert_eq!(seen.0.lock().unwrap().last().unwrap(), "wait:true");
+        }
+        #[test]
+        fn spawn_failure_never_reports_wait() {
+            let directory = private_directory();
+            let seen = Arc::new(Seen::default());
+            let mut cmd = ProcessBuilder::new("/definitely-missing-compiler");
+            cmd.jr_query_launch(launch(directory.path(), seen.clone()));
+            assert!(
+                cmd.exec_with_streaming(&mut |_| Ok(()), &mut |_| Ok(()), false)
+                    .is_err()
+            );
+            assert_eq!(*seen.0.lock().unwrap(), ["attempt", "spawn:false:false"]);
+        }
+        #[test]
+        fn wrapper_cannot_materialize_binding() {
+            let directory = private_directory();
+            let seen = Arc::new(Seen::default());
+            let mut cmd = ProcessBuilder::new("/bin/true").wrapped(Some("/bin/true"));
+            cmd.jr_query_launch(launch(directory.path(), seen.clone()));
+            assert!(!cmd.is_unwrapped());
+            assert!(
+                !cmd.build_command()
+                    .get_args()
+                    .any(|arg| arg.to_string_lossy().contains("jr-query-binding"))
+            );
+            assert_eq!(*seen.0.lock().unwrap(), ["lost"]);
+        }
+    }
     use super::ProcessBuilder;
     use std::fs;
 

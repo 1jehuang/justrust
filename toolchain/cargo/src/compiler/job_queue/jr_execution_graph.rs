@@ -79,6 +79,12 @@ struct Event {
 }
 
 impl<K: Eq + Hash + Clone> Capture<K> {
+    pub(super) fn unit_id(&self, unit: &K) -> Option<u64> {
+        self.enabled.as_ref()?.ids.get(unit).map(|id| *id as u64)
+    }
+    pub(super) fn reserve_unit(&mut self, unit: &K) -> Option<u64> {
+        self.enabled.as_mut()?.id(unit).map(|id| id as u64)
+    }
     pub(super) fn for_owner(owner: &owner::Owner) -> Self {
         let Some((dir, envelope)) = owner.binding() else {
             return Self::new(None);
@@ -361,7 +367,7 @@ impl<K: Eq + Hash> Enabled<K> {
     }
 }
 
-fn unique_id(prefix: &str) -> String {
+pub(super) fn unique_id(prefix: &str) -> String {
     let epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -373,13 +379,20 @@ fn unique_id(prefix: &str) -> String {
     )
 }
 
-fn publish_json(
+pub(super) fn publish_json(
     dir: &std::path::Path,
     stem: &str,
     value: &impl Serialize,
     budget: usize,
 ) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
+    let mut directory = std::fs::DirBuilder::new();
+    directory.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directory.mode(0o700);
+    }
+    directory.create(dir)?;
     let path = dir.join(format!("{stem}.json"));
     let partial = dir.join(format!("{stem}.partial"));
     let mut options = std::fs::OpenOptions::new();

@@ -15,6 +15,7 @@ use rustc_session::config;
 
 fn main() {
     let config = rustc_interface::Config {
+        query_admission: None,
         // Command line options
         opts: config::Options::default(),
         // cfg! configuration in addition to the default ones

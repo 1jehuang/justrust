@@ -50,6 +50,7 @@ fn main() {
     let buffer: Arc<Mutex<Vec<DiagInner>>> = Arc::default();
     let diagnostics = buffer.clone();
     let config = rustc_interface::Config {
+        query_admission: None,
         opts: config::Options::default(),
         // This program contains a type error.
         input: config::Input::Str {

@@ -17,6 +17,7 @@ use rustc_index::IndexVec;
 use rustc_macros::{Decodable, Encodable};
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use rustc_session::Session;
+use rustc_session::query_reads::DepReadOutcome;
 use rustc_span::Symbol;
 use smallvec::SmallVec;
 use tracing::instrument;
@@ -56,6 +57,7 @@ pub enum QuerySideEffect {
 
 #[derive(Clone)]
 pub struct DepGraph {
+    observation_enabled: bool,
     data: Option<Arc<DepGraphData>>,
 
     /// This field is used for assigning DepNodeIndices when running in
@@ -210,6 +212,7 @@ impl DepGraph {
         }
 
         DepGraph {
+            observation_enabled: session.query_admission.is_some(),
             data: Some(Arc::new(DepGraphData {
                 previous_work_products: prev_work_products,
                 current,
@@ -224,7 +227,15 @@ impl DepGraph {
     }
 
     pub fn new_disabled() -> DepGraph {
-        DepGraph { data: None, virtual_dep_node_index: Arc::new(AtomicU32::new(0)) }
+        Self::new_disabled_with_observation(false)
+    }
+
+    pub fn new_disabled_with_observation(observation_enabled: bool) -> DepGraph {
+        DepGraph {
+            observation_enabled,
+            data: None,
+            virtual_dep_node_index: Arc::new(AtomicU32::new(0)),
+        }
     }
 
     #[inline]
@@ -505,16 +516,29 @@ impl DepGraphData {
 impl DepGraph {
     #[inline]
     pub fn read_index(&self, dep_node_index: DepNodeIndex) {
+        self.read_index_with_request(dep_node_index, None);
+    }
+
+    /// A request is attached only by the direct caller, never inferred from thread
+    /// identity or inherited query ancestry. Native reads remain exactly unchanged.
+    #[inline]
+    pub fn read_index_with_request(&self, dep_node_index: DepNodeIndex, request: Option<u64>) {
+        let outcome = Cell::new(DepReadOutcome::Disabled);
         if let Some(ref data) = self.data {
+            outcome.set(DepReadOutcome::MissingContext);
             read_deps(|task_deps| {
                 let mut task_deps = match task_deps {
                     TaskDepsRef::Allow(deps) => deps.lock(),
                     TaskDepsRef::EvalAlways => {
+                        outcome.set(DepReadOutcome::EvalAlways);
                         // We don't need to record dependencies of eval_always
                         // queries. They are re-evaluated unconditionally anyway.
                         return;
                     }
-                    TaskDepsRef::Ignore => return,
+                    TaskDepsRef::Ignore => {
+                        outcome.set(DepReadOutcome::Ignore);
+                        return;
+                    }
                     TaskDepsRef::Forbid => {
                         // Reading is forbidden in this context. ICE with a useful error message.
                         panic_on_forbidden_read(data, dep_node_index)
@@ -527,6 +551,11 @@ impl DepGraph {
                 }
 
                 let new_read = task_deps.reads.insert(dep_node_index, &data.read_recorder_pool);
+                outcome.set(if new_read {
+                    DepReadOutcome::TrackedNew
+                } else {
+                    DepReadOutcome::TrackedDuplicate
+                });
                 if new_read {
                     #[cfg(debug_assertions)]
                     {
@@ -542,8 +571,28 @@ impl DepGraph {
                 } else if cfg!(debug_assertions) {
                     data.current.total_duplicate_read_count.fetch_add(1, Ordering::Relaxed);
                 }
-            })
+            });
         }
+        // read_deps has returned and its TaskDeps lock guard is gone. Observation
+        // is strictly outside the native dependency lock. No observer mutex is
+        // acquired with a query shard/latch or TaskDeps lock held.
+        if !self.observation_enabled {
+            return;
+        }
+        crate::ty::tls::with_context_opt(|icx| {
+            if let Some(icx) = icx
+                && let Some(observer) = icx.tcx.sess.query_admission.as_ref()
+            {
+                let context = icx.tcx.query_system.jobs.observer().map(|context| context.id());
+                observer.reads().read(
+                    context,
+                    icx.query.map(|job| job.0.get()),
+                    request,
+                    dep_node_index.as_u32(),
+                    outcome.get(),
+                );
+            }
+        });
     }
 
     /// This encodes a side effect by creating a node with an unique index and associating

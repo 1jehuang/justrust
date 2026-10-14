@@ -15,6 +15,18 @@ use crate::util::interning::InternedString;
 use crate::util::{CargoResult, GlobalContext, StableHasher};
 
 /// Information on the `rustc` executable
+fn query_binding_schema(verbose: &str) -> Option<u32> {
+    let markers = verbose
+        .lines()
+        .filter(|line| line.starts_with("jr-query-admission-binding:"));
+    let mut markers = markers;
+    match (markers.next(), markers.next()) {
+        (Some("jr-query-admission-binding: reserved-fd-v2,query-schema=3"), None) => Some(3),
+        _ => None,
+    }
+}
+
+/// Information on the `rustc` executable
 #[derive(Debug)]
 pub struct Rustc {
     /// The location of the exe
@@ -36,6 +48,22 @@ pub struct Rustc {
 }
 
 impl Rustc {
+    /// Exact native capability only. Never infer support from a version or path.
+    pub(crate) fn jr_query_binding_schema(&self) -> Option<u32> {
+        if !cfg!(target_os = "linux")
+            || self
+                .wrapper
+                .as_ref()
+                .is_some_and(|path| !path.as_os_str().is_empty())
+            || self
+                .workspace_wrapper
+                .as_ref()
+                .is_some_and(|path| !path.as_os_str().is_empty())
+        {
+            return None;
+        }
+        query_binding_schema(&self.verbose_version)
+    }
     /// Runs the compiler at `path` to learn various pieces of information about
     /// it, with an optional wrapper.
     ///
@@ -390,4 +418,56 @@ fn process_fingerprint(cmd: &ProcessBuilder, extra_fingerprint: u64) -> u64 {
     env.sort_unstable();
     env.hash(&mut hasher);
     Hasher::finish(&hasher)
+}
+
+#[cfg(test)]
+mod jr_binding_tests {
+    use super::*;
+    #[test]
+    fn capability_requires_one_exact_native_line() {
+        let marker = "jr-query-admission-binding: reserved-fd-v2,query-schema=3";
+        assert_eq!(query_binding_schema(marker), Some(3));
+        for unsupported in [
+            "rustc 1.98.0-nightly",
+            "jr-query-admission-binding: fd-v1,query-schema=3",
+            "jr-query-admission-binding: fd-v1,query-schema=2",
+            "jr-query-admission-binding: reserved-fd-v2,query-schema=30",
+            "jr-query-admission-binding: reserved-fd-v2,query-schema=3 extra",
+        ] {
+            assert_eq!(query_binding_schema(unsupported), None);
+        }
+        assert_eq!(query_binding_schema(&format!("{marker}\n{marker}")), None);
+    }
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn private_launch_is_not_a_process_fingerprint_input() {
+        struct Ignore;
+        impl cargo_util::jr_query_binding::Observer for Ignore {
+            fn spawn_attempt(&self) {}
+            fn spawn_result(&self, _: bool, _: bool) {}
+            fn wait(&self, _: std::process::ExitStatus) {}
+            fn lost(&self) {}
+        }
+        let mut cmd = ProcessBuilder::new("rustc");
+        cmd.arg("--crate-name")
+            .arg("example")
+            .env("RUST_LOG", "info");
+        let before = process_fingerprint(&cmd, 0);
+        cmd.jr_query_launch(cargo_util::jr_query_binding::Launch {
+            directory: std::path::PathBuf::from("unused-private-directory"),
+            binding: cargo_util::jr_query_binding::Binding {
+                schema: 1,
+                protocol: "jr-rustc-query-binding-v1".into(),
+                run_id: "run".into(),
+                invocation_id: "invocation".into(),
+                parent_invocation_id: "parent".into(),
+                parent_task_id: "cargo-unit-0".into(),
+                entry_capture_id: "entry".into(),
+                capture_id: "query".into(),
+                receipt_schema: 3,
+            },
+            observer: std::sync::Arc::new(Ignore),
+        });
+        assert_eq!(process_fingerprint(&cmd, 0), before);
+    }
 }

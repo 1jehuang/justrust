@@ -4,6 +4,7 @@
 use std::ops::Deref;
 
 use rustc_hir::def_id::LocalDefId;
+use rustc_session::query_reads::{QueryReadRequest, RequestMode, RequestOutcome};
 use rustc_span::{DUMMY_SP, ErrorGuaranteed, Span, bug};
 
 use crate::dep_graph;
@@ -123,18 +124,42 @@ impl<'tcx> TyCtxt<'tcx> {
 ///
 /// (Also performs some associated bookkeeping, if a value was found.)
 #[inline(always)]
-fn try_get_cached<'tcx, C>(tcx: TyCtxt<'tcx>, cache: &C, key: C::Key) -> Option<C::Value>
+fn try_get_cached<'tcx, C>(
+    tcx: TyCtxt<'tcx>,
+    cache: &C,
+    key: C::Key,
+    request: Option<&QueryReadRequest<'_>>,
+) -> Option<C::Value>
 where
     C: QueryCache,
 {
     match cache.lookup(&key) {
         Some((value, index)) => {
             tcx.prof.query_cache_hit(index.into());
-            tcx.dep_graph.read_index(index);
+            if let Some(request) = request {
+                request.cache_hit(index.as_u32());
+                tcx.dep_graph.read_index_with_request(index, Some(request.id()));
+            } else {
+                tcx.dep_graph.read_index(index);
+            }
             Some(value)
         }
         None => None,
     }
+}
+
+#[inline]
+fn begin_read(tcx: TyCtxt<'_>, mode: RequestMode) -> Option<QueryReadRequest<'_>> {
+    let observer = tcx.sess.query_admission.as_ref()?;
+    let context = tcx.query_system.jobs.observer();
+    let consumer = ty::tls::with_context_opt(|icx| {
+        icx.and_then(|icx| {
+            let current = icx.tcx.query_system.jobs.observer()?;
+            context.filter(|context| context.same_context(current))?;
+            icx.query.map(|job| job.0.get())
+        })
+    });
+    Some(observer.reads().begin(context.map(|context| context.id()), consumer, mode))
 }
 
 /// Shared implementation of `tcx.$query(..)` and `tcx.at(span).$query(..)`
@@ -149,10 +174,15 @@ pub(crate) fn query_get_at<'tcx, C>(
 where
     C: QueryCache,
 {
-    match try_get_cached(tcx, &query.cache, key) {
+    let request = begin_read(tcx, RequestMode::Get);
+    let value = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
         Some(value) => value,
         None => (query.execute_query_fn)(tcx, span, key, QueryMode::Get).unwrap(),
+    };
+    if let Some(request) = request {
+        request.finish(RequestOutcome::Value);
     }
+    value
 }
 
 /// Implementation of `tcx.ensure_ok().$query(..)` for all queries.
@@ -164,11 +194,19 @@ pub(crate) fn query_ensure_ok<'tcx, C>(
 ) where
     C: QueryCache,
 {
-    match try_get_cached(tcx, &query.cache, key) {
-        Some(_value) => {}
+    let request = begin_read(tcx, RequestMode::EnsureOk);
+    let outcome = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
+        Some(_value) => RequestOutcome::Ensured,
         None => {
-            (query.execute_query_fn)(tcx, DUMMY_SP, key, QueryMode::EnsureOk);
+            if (query.execute_query_fn)(tcx, DUMMY_SP, key, QueryMode::EnsureOk).is_some() {
+                RequestOutcome::Ensured
+            } else {
+                RequestOutcome::GreenEnsure
+            }
         }
+    };
+    if let Some(request) = request {
+        request.finish(outcome);
     }
 }
 
@@ -191,7 +229,9 @@ where
         }
     };
 
-    match try_get_cached(tcx, &query.cache, key) {
+    let request = begin_read(tcx, RequestMode::EnsureResult);
+    let mut outcome = RequestOutcome::Ensured;
+    let result = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
         Some(value) => convert(value),
         None => {
             match (query.execute_query_fn)(tcx, DUMMY_SP, key, QueryMode::EnsureOk) {
@@ -204,10 +244,17 @@ where
                 // compiles successfully. That is only possible if the cache entry was `Ok(())`, so
                 // we emit that here, without actually encoding the `Result` in the cache or
                 // loading it from there.
-                None => Ok(()),
+                None => {
+                    outcome = RequestOutcome::GreenEnsure;
+                    Ok(())
+                }
             }
         }
+    };
+    if let Some(request) = request {
+        request.finish(outcome);
     }
+    result
 }
 
 /// "Feeds" a feedable query by adding a given key/value pair to its in-memory cache.
@@ -222,9 +269,10 @@ pub(crate) fn query_feed<'tcx, C>(
     C::Key: DepNodeKey<'tcx>,
 {
     let format_value = query.format_value;
+    let request = begin_read(tcx, RequestMode::Feed);
 
     // Check whether the in-memory cache already has a value for this key.
-    match try_get_cached(tcx, &query.cache, key) {
+    match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
         Some(old) => {
             // The query already has a cached value for this key.
             // That's OK if both values are the same, i.e. they have the same hash,
@@ -269,5 +317,8 @@ pub(crate) fn query_feed<'tcx, C>(
             );
             query.cache.complete(key, value, dep_node_index);
         }
+    }
+    if let Some(request) = request {
+        request.finish(RequestOutcome::Fed);
     }
 }

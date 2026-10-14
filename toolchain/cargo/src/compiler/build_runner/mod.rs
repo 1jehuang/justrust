@@ -171,7 +171,9 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         // Declaration is durable before child construction. Keep the owner outside
         // the fallible body so every normal return, including errors, is sealed.
         let queue = JobQueue::new(self.bcx, &owner);
+        let compiler_registry = queue.compiler_registry();
         let result = self.compile_owned(exec, queue, &mut owner);
+        compiler_registry.finish(result.is_ok());
         owner.finish(result.is_ok());
         result
     }

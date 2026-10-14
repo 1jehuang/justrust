@@ -125,7 +125,7 @@ const RUSTDOC_CRATE_VERSION_FLAG: &str = "--crate-version";
 /// A glorified callback for executing calls to rustc. Rather than calling rustc
 /// directly, we'll use an `Executor`, giving clients an opportunity to intercept
 /// the build calls.
-pub trait Executor: Send + Sync + 'static {
+pub trait Executor: Send + Sync + std::any::Any + 'static {
     /// Called after a rustc process invocation is prepared up-front for a given
     /// unit of work (may still be modified for runtime-known dependencies, when
     /// the work is actually executed).
@@ -219,6 +219,7 @@ fn compile<'gctx>(
     // dependency, skip compiling the unit and jumps to dependencies, which still
     // have chances to be compile time dependencies
     if !unit.skip_non_compile_time_dep {
+        jobs.declare_compiler_unit(unit);
         // Build up the work to be done to compile this unit, enqueuing it once
         // we've got everything constructed.
         fingerprint::prepare_init(build_runner, unit)?;
@@ -248,7 +249,13 @@ fn compile<'gctx>(
                 let work = if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
                     rustdoc(build_runner, unit)?
                 } else {
-                    rustc(build_runner, unit, exec)?
+                    rustc(
+                        build_runner,
+                        unit,
+                        exec,
+                        jobs.compiler_registry(),
+                        jobs.compiler_unit_id(unit),
+                    )?
                 };
                 work.then(link_targets(build_runner, unit, false)?)
             } else {
@@ -323,8 +330,18 @@ fn rustc(
     build_runner: &mut BuildRunner<'_, '_>,
     unit: &Unit,
     exec: &Arc<dyn Executor>,
+    compiler_registry: job_queue::jr_compiler_launch::Registry,
+    compiler_unit: Option<u64>,
 ) -> CargoResult<Work> {
     let mut rustc = prepare_rustc(build_runner, unit)?;
+    let direct_native = exec.as_ref().type_id() == std::any::TypeId::of::<DefaultExecutor>()
+        && build_runner.bcx.rustc().jr_query_binding_schema().is_some()
+        && rustc.is_unwrapped();
+    let receipt_schema = build_runner
+        .bcx
+        .rustc()
+        .jr_query_binding_schema()
+        .unwrap_or(0);
 
     let name = unit.pkg.name();
 
@@ -492,6 +509,22 @@ fn rustc(
                 tracing::debug!("writing unremap file to {}", file.display());
                 paths::write_atomic(file, content)?;
             }
+        }
+
+        #[cfg(target_os = "linux")]
+        if let Some(launch) = compiler_unit
+            .and_then(|id| compiler_registry.launch(&id, direct_native, receipt_schema))
+        {
+            rustc.jr_query_launch(launch);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (
+                compiler_registry,
+                compiler_unit,
+                direct_native,
+                receipt_schema,
+            );
         }
 
         let result = exec

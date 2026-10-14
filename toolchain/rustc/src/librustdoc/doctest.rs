@@ -184,6 +184,7 @@ pub(crate) fn run(dcx: DiagCtxtHandle<'_>, input: Input, options: RustdocOptions
     cfgs.push("doc".to_owned());
     cfgs.push("doctest".to_owned());
     let config = interface::Config {
+        query_admission: None,
         opts: sessopts,
         crate_cfg: cfgs,
         crate_check_cfg: options.check_cfgs.clone(),

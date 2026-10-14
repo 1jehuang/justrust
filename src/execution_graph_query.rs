@@ -48,6 +48,172 @@ struct Receipt {
     events: Vec<Event>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptV2 {
+    schema: u32,
+    producer: String,
+    scope: String,
+    capture_id: String,
+    full_pipeline_complete: bool,
+    #[serde(deserialize_with = "nullable")]
+    cpu_work_ns: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    execution_span_ns: Option<u64>,
+    interface_outcome: InterfaceOutcome,
+    capture_complete: bool,
+    lost_events: u64,
+    opaque_boundaries: Vec<String>,
+    expected_contexts: u64,
+    contexts: Vec<QueryContext>,
+    events: Vec<Event>,
+    wait_allocator_baseline: u64,
+    #[serde(deserialize_with = "nullable")]
+    wait_allocator_high_water: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    expected_waits: Option<u64>,
+    wait_capture_complete: bool,
+    wait_events: Vec<WaitEvent>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptV3 {
+    schema: u32,
+    producer: String,
+    scope: String,
+    capture_id: String,
+    full_pipeline_complete: bool,
+    #[serde(deserialize_with = "nullable")]
+    cpu_work_ns: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    execution_span_ns: Option<u64>,
+    interface_outcome: InterfaceOutcome,
+    capture_complete: bool,
+    lost_events: u64,
+    opaque_boundaries: Vec<String>,
+    expected_contexts: u64,
+    contexts: Vec<QueryContext>,
+    events: Vec<Event>,
+    wait_allocator_baseline: u64,
+    #[serde(deserialize_with = "nullable")]
+    wait_allocator_high_water: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    expected_waits: Option<u64>,
+    wait_capture_complete: bool,
+    wait_events: Vec<WaitEvent>,
+    query_reads: crate::execution_graph_reads::ReadCapture,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum WaitReason {
+    Completed,
+    Poisoned,
+    Cycle,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum WaitEvent {
+    Registered {
+        wait_id: u64,
+        context_id: u64,
+        waitee_job_id: u64,
+        #[serde(deserialize_with = "nullable")]
+        consumer_job_id: Option<u64>,
+        at_ns: u64,
+    },
+    Notified {
+        wait_id: u64,
+        context_id: u64,
+        waitee_job_id: u64,
+        #[serde(deserialize_with = "nullable")]
+        consumer_job_id: Option<u64>,
+        at_ns: u64,
+        reason: WaitReason,
+    },
+    CondvarReturned {
+        wait_id: u64,
+        context_id: u64,
+        waitee_job_id: u64,
+        #[serde(deserialize_with = "nullable")]
+        consumer_job_id: Option<u64>,
+        at_ns: u64,
+    },
+    Resumed {
+        wait_id: u64,
+        context_id: u64,
+        waitee_job_id: u64,
+        #[serde(deserialize_with = "nullable")]
+        consumer_job_id: Option<u64>,
+        at_ns: u64,
+    },
+}
+
+type WaitEndpoints = (u64, u64, Option<u64>);
+type WaitParts = (u64, WaitEndpoints, u64, usize, Option<WaitReason>);
+
+impl WaitEvent {
+    fn parts(&self) -> WaitParts {
+        match *self {
+            Self::Registered {
+                wait_id,
+                context_id,
+                waitee_job_id,
+                consumer_job_id,
+                at_ns,
+            } => (
+                wait_id,
+                (context_id, waitee_job_id, consumer_job_id),
+                at_ns,
+                0,
+                None,
+            ),
+            Self::Notified {
+                wait_id,
+                context_id,
+                waitee_job_id,
+                consumer_job_id,
+                at_ns,
+                reason,
+            } => (
+                wait_id,
+                (context_id, waitee_job_id, consumer_job_id),
+                at_ns,
+                1,
+                Some(reason),
+            ),
+            Self::CondvarReturned {
+                wait_id,
+                context_id,
+                waitee_job_id,
+                consumer_job_id,
+                at_ns,
+            } => (
+                wait_id,
+                (context_id, waitee_job_id, consumer_job_id),
+                at_ns,
+                2,
+                None,
+            ),
+            Self::Resumed {
+                wait_id,
+                context_id,
+                waitee_job_id,
+                consumer_job_id,
+                at_ns,
+            } => (
+                wait_id,
+                (context_id, waitee_job_id, consumer_job_id),
+                at_ns,
+                3,
+                None,
+            ),
+        }
+    }
+}
+
 #[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum InterfaceOutcome {
@@ -98,8 +264,16 @@ pub struct QueryAssessment {
     pub full_pipeline_complete: bool,
     /// Unique admitted jobs, namespaced by context.
     pub nodes: usize,
-    /// Descriptive parent links only, not waits or dependency edges.
+    /// Legacy count of descriptive parents only, never waits or semantic reads.
     pub edges: usize,
+    pub descriptive_parent_edges: usize,
+    /// Observed notification -> post-token-acquisition resume, never semantic reads.
+    pub control_causal_edges: usize,
+    /// None for v1: absence of a wait inventory is not evidence of zero waits.
+    pub wait_structural_complete: Option<bool>,
+    pub waits: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
     pub issues: Vec<String>,
     pub opaque_boundaries: Vec<String>,
     pub cpu_work_ns: Option<u64>,
@@ -113,7 +287,23 @@ pub fn assess_bytes(bytes: &[u8]) -> Result<QueryAssessment> {
     if bytes.len() > MAX_BYTES {
         bail!("query receipt exceeds 64 MiB byte budget");
     }
-    let r: Receipt = serde_json::from_slice(bytes).context("invalid query admission receipt")?;
+    #[derive(Deserialize)]
+    struct Version {
+        schema: u32,
+    }
+    let version: Version =
+        serde_json::from_slice(bytes).context("invalid query receipt version")?;
+    match version.schema {
+        1 => assess_admissions(
+            serde_json::from_slice(bytes).context("invalid query admission receipt")?,
+        ),
+        2 => assess_waits(serde_json::from_slice(bytes).context("invalid query wait receipt")?),
+        3 => assess_reads(serde_json::from_slice(bytes).context("invalid query read receipt")?),
+        _ => bail!("unsupported query receipt schema"),
+    }
+}
+
+fn assess_admissions(r: Receipt) -> Result<QueryAssessment> {
     if r.schema != 1
         || r.producer != "rustc-query-admission"
         || r.scope != "query-job-admission-lifecycle"
@@ -315,11 +505,248 @@ pub fn assess_bytes(bytes: &[u8]) -> Result<QueryAssessment> {
         full_pipeline_complete: false,
         nodes: admitted.len(),
         edges,
+        descriptive_parent_edges: edges,
+        control_causal_edges: 0,
+        wait_structural_complete: None,
+        waits: None,
+        query_reads: None,
         issues: issues.into_iter().collect(),
         opaque_boundaries: r.opaque_boundaries,
         cpu_work_ns: None,
         execution_span_ns: None,
     })
+}
+
+#[derive(Default)]
+struct WaitLifecycle {
+    endpoints: Option<WaitEndpoints>,
+    stages: [Option<(usize, u64)>; 4],
+    reason: Option<WaitReason>,
+    invalid: bool,
+}
+
+fn assess_reads(r: ReceiptV3) -> Result<QueryAssessment> {
+    if r.schema != 3 {
+        bail!("unsupported query read receipt schema");
+    }
+    let admitted = r
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Admitted {
+                context_id, job_id, ..
+            } => Some((*context_id, *job_id)),
+            _ => None,
+        })
+        .collect();
+    let expected_contexts = r.expected_contexts;
+    let mut assessment = assess_waits(ReceiptV2 {
+        schema: 2,
+        producer: r.producer,
+        scope: r.scope,
+        capture_id: r.capture_id,
+        full_pipeline_complete: r.full_pipeline_complete,
+        cpu_work_ns: r.cpu_work_ns,
+        execution_span_ns: r.execution_span_ns,
+        interface_outcome: r.interface_outcome,
+        capture_complete: r.capture_complete,
+        lost_events: r.lost_events,
+        opaque_boundaries: r.opaque_boundaries,
+        expected_contexts: r.expected_contexts,
+        contexts: r.contexts,
+        events: r.events,
+        wait_allocator_baseline: r.wait_allocator_baseline,
+        wait_allocator_high_water: r.wait_allocator_high_water,
+        expected_waits: r.expected_waits,
+        wait_capture_complete: r.wait_capture_complete,
+        wait_events: r.wait_events,
+    })?;
+    assessment.schema = 3;
+    let reads = crate::execution_graph_reads::assess(&r.query_reads, &admitted, expected_contexts)?;
+    if !reads.records_complete {
+        assessment.structural_complete = false;
+        assessment
+            .issues
+            .push("query read records are incomplete or invalid".into());
+    }
+    assessment.query_reads = Some(reads);
+    Ok(assessment)
+}
+
+fn assess_waits(r: ReceiptV2) -> Result<QueryAssessment> {
+    if r.schema != 2 {
+        bail!("unsupported query wait receipt schema");
+    }
+    if r.wait_events.len() > MAX_EVENTS
+        || r.expected_waits.is_some_and(|n| n > MAX_JOBS)
+        || r.wait_allocator_high_water
+            .is_some_and(|n| n > MAX_JOBS + 1)
+    {
+        bail!("query wait receipt exceeds wait budget");
+    }
+    let mut issues = BTreeSet::new();
+    if !r.wait_capture_complete {
+        issues.insert("wait capture is incomplete".into());
+    }
+    if r.wait_allocator_baseline != 1 {
+        issues.insert("wait allocator baseline is not 1".into());
+    }
+    match (r.wait_allocator_high_water, r.expected_waits) {
+        (Some(high), Some(expected)) => {
+            if high.checked_sub(r.wait_allocator_baseline) != Some(expected) {
+                issues.insert("independent wait allocator count mismatch".into());
+            }
+        }
+        _ => {
+            issues.insert("missing independent wait allocator accounting".into());
+        }
+    }
+    let admissions: BTreeMap<_, _> = r
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Admitted {
+                context_id,
+                job_id,
+                at_ns,
+                ..
+            } => Some(((*context_id, *job_id), *at_ns)),
+            _ => None,
+        })
+        .collect();
+    let terminals: BTreeMap<_, _> = r
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Completed {
+                context_id,
+                job_id,
+                at_ns,
+            } => Some(((*context_id, *job_id), (*at_ns, WaitReason::Completed))),
+            Event::Poisoned {
+                context_id,
+                job_id,
+                at_ns,
+            } => Some(((*context_id, *job_id), (*at_ns, WaitReason::Poisoned))),
+            _ => None,
+        })
+        .collect();
+    let contexts: BTreeSet<_> = r.contexts.iter().map(|c| c.context_id).collect();
+    let mut waits: BTreeMap<u64, WaitLifecycle> = BTreeMap::new();
+    for (index, event) in r.wait_events.iter().enumerate() {
+        let (id, endpoints, at_ns, stage, reason) = event.parts();
+        let wait = waits.entry(id).or_default();
+        if id < r.wait_allocator_baseline
+            || !r.wait_allocator_high_water.is_some_and(|high| id < high)
+        {
+            issues.insert(format!("wait {id} outside allocator range"));
+            wait.invalid = true;
+        }
+        if wait.endpoints.is_some_and(|previous| previous != endpoints) {
+            issues.insert(format!("wait {id} has inconsistent endpoints"));
+            wait.invalid = true;
+        } else {
+            wait.endpoints = Some(endpoints);
+        }
+        let (context, waitee, consumer) = endpoints;
+        if !contexts.contains(&context)
+            || !admissions.contains_key(&(context, waitee))
+            || consumer.is_some_and(|job| !admissions.contains_key(&(context, job)))
+        {
+            issues.insert(format!("wait {id} has foreign or unadmitted endpoint"));
+            wait.invalid = true;
+        }
+        if wait.stages[stage].is_some() {
+            issues.insert(format!("wait {id} has duplicate lifecycle stage {stage}"));
+            wait.invalid = true;
+        } else {
+            wait.stages[stage] = Some((index, at_ns));
+        }
+        if reason.is_some() {
+            wait.reason = reason;
+        }
+    }
+    if let (Some(high), Some(expected)) = (r.wait_allocator_high_water, r.expected_waits) {
+        if waits.len() as u64 != expected {
+            issues.insert("independent wait inventory count mismatch".into());
+        }
+        if (r.wait_allocator_baseline..high).any(|id| !waits.contains_key(&id)) {
+            issues.insert("missing contiguous wait lifecycle records".into());
+        }
+    }
+    let mut control_causal_edges = 0;
+    for (&id, wait) in &mut waits {
+        if wait.stages.iter().any(Option::is_none) {
+            issues.insert(format!("wait {id} has missing lifecycle records"));
+            wait.invalid = true;
+        }
+        for pair in wait.stages.windows(2) {
+            if let [Some((left_index, left_ns)), Some((right_index, right_ns))] = pair
+                && (left_index >= right_index || left_ns > right_ns)
+            {
+                issues.insert(format!(
+                    "wait {id} has invalid lifecycle order or timestamp"
+                ));
+                wait.invalid = true;
+            }
+        }
+        if let (Some((context, waitee, consumer)), Some((_, registered_ns))) =
+            (wait.endpoints, wait.stages[0])
+        {
+            if admissions
+                .get(&(context, waitee))
+                .is_some_and(|&ns| ns > registered_ns)
+                || consumer.is_some_and(|job| {
+                    admissions
+                        .get(&(context, job))
+                        .is_some_and(|&ns| ns > registered_ns)
+                })
+            {
+                issues.insert(format!(
+                    "wait {id} registration precedes endpoint admission"
+                ));
+                wait.invalid = true;
+            }
+            if let Some(reason @ (WaitReason::Completed | WaitReason::Poisoned)) = wait.reason
+                && !terminals
+                    .get(&(context, waitee))
+                    .is_some_and(|&(_, terminal_reason)| terminal_reason == reason)
+            {
+                issues.insert(format!(
+                    "wait {id} notification reason disagrees with waitee terminal"
+                ));
+                wait.invalid = true;
+            }
+        }
+        if !wait.invalid {
+            control_causal_edges += 1;
+        }
+    }
+    let mut assessment = assess_admissions(Receipt {
+        schema: 1,
+        producer: r.producer,
+        scope: r.scope,
+        capture_id: r.capture_id,
+        full_pipeline_complete: r.full_pipeline_complete,
+        cpu_work_ns: r.cpu_work_ns,
+        execution_span_ns: r.execution_span_ns,
+        interface_outcome: r.interface_outcome,
+        capture_complete: r.capture_complete,
+        lost_events: r.lost_events,
+        opaque_boundaries: r.opaque_boundaries,
+        expected_contexts: r.expected_contexts,
+        contexts: r.contexts,
+        events: r.events,
+    })?;
+    assessment.schema = 2;
+    assessment.wait_structural_complete = Some(assessment.structural_complete && issues.is_empty());
+    assessment.structural_complete &= issues.is_empty();
+    assessment.waits = Some(waits.len());
+    assessment.control_causal_edges = control_causal_edges;
+    assessment.issues.extend(issues);
+    assessment.issues.sort();
+    assessment.issues.dedup();
+    Ok(assessment)
 }
 
 #[cfg(test)]
@@ -576,5 +1003,380 @@ mod tests {
         v["opaque_boundaries"][0] = json!("x".repeat(129));
         assert!(assess_bytes(&serde_json::to_vec(&v).unwrap()).is_err());
         assert!(assess_bytes(&vec![b' '; MAX_BYTES + 1]).is_err());
+    }
+
+    fn wait_fixture() -> Value {
+        let mut v = fixture();
+        v["schema"] = json!(2);
+        v["wait_allocator_baseline"] = json!(1);
+        v["wait_allocator_high_water"] = json!(2);
+        v["expected_waits"] = json!(1);
+        v["wait_capture_complete"] = json!(true);
+        v["events"][3]["at_ns"] = json!(30);
+        v["wait_events"] = json!([
+            {"kind":"registered","wait_id":1,"context_id":1,"waitee_job_id":2,"consumer_job_id":1,"at_ns":10},
+            {"kind":"notified","wait_id":1,"context_id":1,"waitee_job_id":2,"consumer_job_id":1,"at_ns":11,"reason":"completed"},
+            {"kind":"condvar_returned","wait_id":1,"context_id":1,"waitee_job_id":2,"consumer_job_id":1,"at_ns":12},
+            {"kind":"resumed","wait_id":1,"context_id":1,"waitee_job_id":2,"consumer_job_id":1,"at_ns":13}
+        ]);
+        v
+    }
+
+    fn malformed(v: &Value) {
+        assert!(
+            assess_bytes(&serde_json::to_vec(v).unwrap()).is_err(),
+            "{v}"
+        );
+    }
+
+    #[test]
+    fn v2_wait_control_is_separate_from_descriptive_admission() {
+        let a = assess(&wait_fixture());
+        assert!(a.structural_complete, "{a:?}");
+        assert_eq!(a.schema, 2);
+        assert_eq!(a.wait_structural_complete, Some(true));
+        assert_eq!(a.waits, Some(1));
+        assert_eq!(
+            (a.edges, a.descriptive_parent_edges, a.control_causal_edges),
+            (1, 1, 1)
+        );
+        assert!(!a.full_pipeline_complete);
+        assert_eq!((a.cpu_work_ns, a.execution_span_ns), (None, None));
+        let legacy = assess(&fixture());
+        assert_eq!(
+            (legacy.waits, legacy.wait_structural_complete),
+            (None, None)
+        );
+        assert_eq!(legacy.control_causal_edges, 0);
+    }
+
+    #[test]
+    fn v1_v2_fields_are_strict_and_not_optional_extensions() {
+        let mut v = wait_fixture();
+        v["schema"] = json!(1);
+        malformed(&v);
+        for field in [
+            "wait_allocator_baseline",
+            "wait_allocator_high_water",
+            "expected_waits",
+            "wait_capture_complete",
+            "wait_events",
+        ] {
+            let mut v = wait_fixture();
+            v.as_object_mut().unwrap().remove(field);
+            malformed(&v);
+        }
+        let mut v = wait_fixture();
+        v["query_reads"] = json!({"semantic_complete":true});
+        malformed(&v);
+    }
+
+    #[test]
+    fn independent_wait_inventory_detects_whole_deletion_and_gaps() {
+        let mut v = wait_fixture();
+        v["wait_events"] = json!([]);
+        incomplete(&v);
+        for id in [0, 2, u64::MAX] {
+            let mut v = wait_fixture();
+            for e in v["wait_events"].as_array_mut().unwrap() {
+                e["wait_id"] = json!(id);
+            }
+            incomplete(&v);
+            assert_eq!(assess(&v).control_causal_edges, 0);
+        }
+        let mut v = wait_fixture();
+        v["wait_allocator_high_water"] = json!(3);
+        v["expected_waits"] = json!(2);
+        incomplete(&v);
+    }
+
+    #[test]
+    fn every_wait_stage_is_required_once() {
+        for index in 0..4 {
+            let mut v = wait_fixture();
+            v["wait_events"].as_array_mut().unwrap().remove(index);
+            incomplete(&v);
+            assert_eq!(assess(&v).control_causal_edges, 0);
+            let mut v = wait_fixture();
+            let duplicate = v["wait_events"][index].clone();
+            v["wait_events"].as_array_mut().unwrap().push(duplicate);
+            incomplete(&v);
+            assert_eq!(assess(&v).control_causal_edges, 0);
+        }
+    }
+
+    #[test]
+    fn wait_stage_order_and_timestamps_are_per_token() {
+        for index in 0..3 {
+            let mut v = wait_fixture();
+            v["wait_events"]
+                .as_array_mut()
+                .unwrap()
+                .swap(index, index + 1);
+            incomplete(&v);
+            let mut v = wait_fixture();
+            v["wait_events"][index + 1]["at_ns"] = json!(0);
+            incomplete(&v);
+        }
+        let mut v = wait_fixture();
+        for e in v["wait_events"].as_array_mut().unwrap() {
+            e["at_ns"] = json!(10);
+        }
+        assert!(assess(&v).structural_complete);
+    }
+
+    #[test]
+    fn wait_ids_are_global_and_interleaving_is_not_global_chronology() {
+        let mut v = wait_fixture();
+        v["wait_allocator_high_water"] = json!(3);
+        v["expected_waits"] = json!(2);
+        let extra: Vec<_> = v["wait_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .cloned()
+            .map(|mut e| {
+                e["wait_id"] = json!(2);
+                e["consumer_job_id"] = Value::Null;
+                e["at_ns"] = json!(10);
+                e
+            })
+            .collect();
+        v["wait_events"].as_array_mut().unwrap().extend(extra);
+        let a = assess(&v);
+        assert!(a.structural_complete, "{a:?}");
+        assert_eq!((a.waits, a.control_causal_edges), (Some(2), 2));
+    }
+
+    #[test]
+    fn wait_endpoints_must_exist_and_remain_identical() {
+        for field in ["context_id", "waitee_job_id", "consumer_job_id"] {
+            let mut v = wait_fixture();
+            for e in v["wait_events"].as_array_mut().unwrap() {
+                e[field] = json!(99);
+            }
+            incomplete(&v);
+            assert_eq!(assess(&v).control_causal_edges, 0);
+            let mut v = wait_fixture();
+            v["wait_events"][2][field] = json!(1);
+            if field == "context_id" {
+                v["wait_events"][2][field] = json!(2);
+            }
+            if field == "consumer_job_id" {
+                v["wait_events"][2][field] = Value::Null;
+            }
+            incomplete(&v);
+        }
+        let mut v = wait_fixture();
+        for e in v["wait_events"].as_array_mut().unwrap() {
+            e["consumer_job_id"] = Value::Null;
+        }
+        assert!(assess(&v).structural_complete);
+        let mut v = wait_fixture();
+        v["wait_events"][0]["at_ns"] = json!(9);
+        incomplete(&v);
+    }
+
+    #[test]
+    fn notification_reasons_are_closed_and_terminal_kinds_must_align() {
+        for reason in ["completed", "poisoned", "cycle"] {
+            let mut v = wait_fixture();
+            v["wait_events"][1]["reason"] = json!(reason);
+            if reason == "poisoned" {
+                v["events"][2]["kind"] = json!("poisoned");
+            }
+            assert!(assess(&v).structural_complete, "{v}");
+        }
+        let mut v = wait_fixture();
+        v["wait_events"][1]["reason"] = json!("poisoned");
+        incomplete(&v);
+        for reason in [Value::Null, json!("unknown"), json!(1)] {
+            let mut v = wait_fixture();
+            v["wait_events"][1]["reason"] = reason;
+            malformed(&v);
+        }
+        // Terminal publication may follow resume, so no cross-vector append order is imposed.
+        let mut v = wait_fixture();
+        v["events"][2]["at_ns"] = json!(50);
+        assert!(assess(&v).structural_complete);
+    }
+
+    #[test]
+    fn wait_loss_accounting_and_unjustified_measurements_never_pass() {
+        for (field, value) in [
+            ("wait_capture_complete", json!(false)),
+            ("lost_events", json!(1)),
+            ("capture_complete", json!(false)),
+            ("interface_outcome", json!("interrupted")),
+            ("wait_allocator_baseline", json!(0)),
+            ("wait_allocator_high_water", Value::Null),
+            ("expected_waits", Value::Null),
+            ("expected_waits", json!(0)),
+            ("wait_allocator_high_water", json!(0)),
+            ("full_pipeline_complete", json!(true)),
+            ("cpu_work_ns", json!(1)),
+            ("execution_span_ns", json!(1)),
+        ] {
+            let mut v = wait_fixture();
+            v[field] = value;
+            incomplete(&v);
+            let a = assess(&v);
+            assert_eq!(a.wait_structural_complete, Some(false));
+            assert!(!a.full_pipeline_complete);
+            assert_eq!((a.cpu_work_ns, a.execution_span_ns), (None, None));
+        }
+    }
+
+    #[test]
+    fn strict_wait_records_reject_unknown_missing_and_duplicate_fields() {
+        for stage in 0..4 {
+            for field in [
+                "wait_id",
+                "context_id",
+                "waitee_job_id",
+                "consumer_job_id",
+                "at_ns",
+                "kind",
+            ] {
+                let mut v = wait_fixture();
+                v["wait_events"][stage]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+                malformed(&v);
+            }
+            let mut v = wait_fixture();
+            v["wait_events"][stage]["raw_pointer"] = json!(42);
+            malformed(&v);
+            if stage != 1 {
+                let mut v = wait_fixture();
+                v["wait_events"][stage]["reason"] = Value::Null;
+                malformed(&v);
+            }
+        }
+        let mut v = wait_fixture();
+        v["wait_events"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("reason");
+        malformed(&v);
+        let raw = serde_json::to_string(&wait_fixture()).unwrap();
+        for (needle, replacement) in [
+            ("\"schema\":2", "\"schema\":2,\"schema\":2"),
+            (
+                "\"expected_waits\":1",
+                "\"expected_waits\":1,\"expected_waits\":1",
+            ),
+            ("\"wait_id\":1", "\"wait_id\":1,\"wait_id\":1"),
+            (
+                "\"kind\":\"registered\"",
+                "\"kind\":\"registered\",\"kind\":\"registered\"",
+            ),
+            (
+                "\"consumer_job_id\":1",
+                "\"consumer_job_id\":1,\"consumer_job_id\":1",
+            ),
+            (
+                "\"reason\":\"completed\"",
+                "\"reason\":\"completed\",\"reason\":\"completed\"",
+            ),
+        ] {
+            assert!(assess_bytes(raw.replacen(needle, replacement, 1).as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn v2_empty_inventory_is_explicit_zero_not_missing() {
+        let mut v = wait_fixture();
+        v["wait_events"] = json!([]);
+        v["wait_allocator_high_water"] = json!(1);
+        v["expected_waits"] = json!(0);
+        let a = assess(&v);
+        assert!(a.structural_complete);
+        assert_eq!(
+            (a.waits, a.wait_structural_complete, a.control_causal_edges),
+            (Some(0), Some(true), 0)
+        );
+    }
+
+    #[test]
+    fn wait_count_budgets_and_types_fail_parsing() {
+        for field in ["expected_waits", "wait_allocator_high_water"] {
+            for value in [json!(u64::MAX), json!("1"), json!(-1)] {
+                let mut v = wait_fixture();
+                v[field] = value;
+                malformed(&v);
+            }
+        }
+        let mut v = wait_fixture();
+        let e = v["wait_events"][0].clone();
+        v["wait_events"] = Value::Array(vec![e; MAX_EVENTS + 1]);
+        malformed(&v);
+    }
+
+    fn read_fixture() -> Value {
+        let mut v = wait_fixture();
+        v["schema"] = json!(3);
+        v["query_reads"] = json!({
+            "schema":1,"records_complete":true,"semantic_complete":false,
+            "full_pipeline_complete":false,"dep_node_namespace":"current-context",
+            "request_high_water":1,"read_high_water":1,"result_high_water":1,
+            "expected_requests":0,"expected_reads":0,"expected_results":0,"lost_events":0,
+            "opaque_boundaries":["execution-request-read-binding","previous-session-promotion",
+                "feed-producer-provenance","missing-consumer-context","no-implicit-context-reads","nonquery"],
+            "events":[]
+        });
+        v
+    }
+
+    #[test]
+    fn schema3_requires_typed_reads_and_preserves_exact_older_versions() {
+        let a = assess(&read_fixture());
+        assert!(a.structural_complete, "{a:?}");
+        assert_eq!(a.schema, 3);
+        assert_eq!(a.wait_structural_complete, Some(true));
+        let output = serde_json::to_value(a).unwrap();
+        assert_eq!(output["query_reads"]["records_complete"], true);
+        assert_eq!(output["query_reads"]["semantic_complete"], false);
+        let mut v = read_fixture();
+        v.as_object_mut().unwrap().remove("query_reads");
+        malformed(&v);
+        for schema in [1, 2] {
+            let mut v = read_fixture();
+            v["schema"] = json!(schema);
+            malformed(&v);
+        }
+        let mut v = read_fixture();
+        v["query_reads"]["unvalidated_extra"] = json!({"semantic_complete":true});
+        malformed(&v);
+        let raw = serde_json::to_string(&read_fixture()).unwrap();
+        let duplicated = raw.replacen(
+            "\"records_complete\":true",
+            "\"records_complete\":true,\"records_complete\":true",
+            1,
+        );
+        assert!(assess_bytes(duplicated.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn read_capture_loss_does_not_erase_independent_wait_assessment() {
+        for (field, value) in [
+            ("records_complete", json!(false)),
+            ("lost_events", json!(1)),
+        ] {
+            let mut v = read_fixture();
+            v["query_reads"][field] = value;
+            v["query_reads"]["records_complete"] = json!(false);
+            let a = assess(&v);
+            assert!(!a.structural_complete, "{a:?}");
+            assert_eq!(a.wait_structural_complete, Some(true));
+            assert_eq!(a.control_causal_edges, 1);
+            assert!(!a.full_pipeline_complete);
+            assert_eq!((a.cpu_work_ns, a.execution_span_ns), (None, None));
+            assert!(!a.query_reads.unwrap().records_complete);
+        }
+        let mut v = read_fixture();
+        v["query_reads"]["semantic_complete"] = json!(true);
+        malformed(&v);
     }
 }

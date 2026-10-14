@@ -73,6 +73,8 @@ use std::{env, fmt, io, thread};
 #[macro_use]
 mod private;
 
+pub mod execution_observer;
+
 mod broadcast;
 mod job;
 mod join;

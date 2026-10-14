@@ -129,6 +129,20 @@ where
 
     registry::in_worker(|worker_thread, injected| unsafe {
         let tlv = tlv::get();
+        // Roots mark an instrumented entry, not complete scheduler coverage.
+        // A cross-pool entry must never inherit another registry's task ID.
+        let observer = worker_thread.registry().execution_observer();
+        let parent = crate::execution_observer::current_context()
+            .filter(|task| observer.is_some_and(|observer| observer.owns(task)));
+        let root = if parent.is_none() {
+            observer.and_then(|observer| observer.root())
+        } else {
+            None
+        };
+        let _root_guard = root.as_ref().and_then(|task| task.enter());
+        let fork = parent.or(root).and_then(|task| task.fork(2));
+        let task_a = fork.as_ref().map(|fork| fork.children()[0].clone());
+        let task_b = fork.as_ref().map(|fork| fork.children()[1].clone());
         // Create virtual wrapper for task b; this all has to be
         // done here so that the stack frame can keep it all live
         // long enough.
@@ -137,6 +151,9 @@ where
             tlv,
             |migrated| {
                 job_b_started.store(true, Ordering::Relaxed);
+                // Inside the closure, so run_inline and the stolen Job path
+                // both enter the same logical child and see unwinding.
+                let _task_guard = task_b.as_ref().and_then(|task| task.enter());
                 call_b(oper_b)(migrated)
             },
             SpinLatch::new(worker_thread),
@@ -146,7 +163,10 @@ where
         worker_thread.push(job_b_ref);
 
         // Execute task a; hopefully b gets stolen in the meantime.
-        let status_a = unwind::halt_unwinding(call_a(oper_a, injected));
+        let status_a = unwind::halt_unwinding(|| {
+            let _task_guard = task_a.as_ref().and_then(|task| task.enter());
+            call_a(oper_a, injected)()
+        });
         worker_thread.wait_for_jobs::<_, false>(
             &job_b.latch,
             || job_b_started.load(Ordering::Relaxed),
@@ -159,6 +179,12 @@ where
 
         // Restore the TLV since we might have run some jobs overwriting it when waiting for job b.
         tlv::set(tlv);
+
+        if let Some(fork) = fork {
+            // The real latch completed. Recorder failure cannot alter results
+            // or suppress either closure's panic propagation.
+            let _ = fork.resume();
+        }
 
         let result_a = match status_a {
             Ok(v) => v,

@@ -446,6 +446,9 @@ pub fn break_query_cycle<'tcx>(job_map: QueryJobMap<'tcx>, registry: &rustc_thre
     // Mark the thread we're about to wake up as unblocked.
     rustc_thread_pool::mark_unblocked(registry);
 
+    if let Some(token) = &waiter.diagnostic_wait {
+        token.notify("cycle");
+    }
     assert!(waiter.condvar.notify_one(), "unable to wake the waiter");
 }
 

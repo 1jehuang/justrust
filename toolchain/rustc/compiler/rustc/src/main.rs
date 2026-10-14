@@ -34,5 +34,7 @@ use std::process::ExitCode;
 rustc_driver::override_c_allocator_in_binary!();
 
 fn main() -> ExitCode {
-    rustc_driver::main()
+    // SAFETY: this is the native process entrypoint, before any compiler threads.
+    // The launch protocol transfers its inherited transport descriptors to this process.
+    unsafe { rustc_driver::main() }
 }

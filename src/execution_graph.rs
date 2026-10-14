@@ -69,6 +69,16 @@ struct Assessment {
     full_pipeline_complete: bool,
     nodes: usize,
     edges: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    descriptive_parent_edges: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    control_causal_edges: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wait_structural_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waits: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
     issues: Vec<String>,
     opaque_boundaries: Vec<String>,
     /// No CPU or execution-span estimate is inferred from elapsed lifetimes.
@@ -274,6 +284,11 @@ fn assess(r: Receipt) -> Result<Assessment> {
         full_pipeline_complete: false,
         nodes: r.nodes.len(),
         edges: r.edges.len(),
+        descriptive_parent_edges: None,
+        control_causal_edges: None,
+        wait_structural_complete: None,
+        waits: None,
+        query_reads: None,
         issues,
         opaque_boundaries: r.opaque_boundaries,
         cpu_work_ns: None,
@@ -281,7 +296,7 @@ fn assess(r: Receipt) -> Result<Assessment> {
     })
 }
 
-fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     if !std::fs::symlink_metadata(path)?.is_file() {
         bail!("receipt must be a regular, non-symlink file");
     }
@@ -314,6 +329,28 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
         serde_json::from_slice(&bytes).context("invalid execution graph document")?;
     match document.producer.as_str() {
         "cargo-scheduler" => assess(serde_json::from_slice(&bytes)?),
+        "rustc-query-admission-entry" => {
+            let entry = crate::execution_graph_compiler::parse_entry(&bytes)?;
+            Ok(Assessment {
+                schema: entry.schema,
+                producer: entry.producer,
+                scope: entry.scope,
+                capture_id: entry.capture_id,
+                structural_complete: false,
+                full_pipeline_complete: false,
+                nodes: 0,
+                edges: 0,
+                descriptive_parent_edges: None,
+                control_causal_edges: None,
+                wait_structural_complete: None,
+                waits: None,
+                query_reads: None,
+                issues: vec!["requires explicit --compiler-manifest reconciliation".into()],
+                opaque_boundaries: vec!["compiler-launch-authority".into()],
+                cpu_work_ns: None,
+                execution_span_ns: None,
+            })
+        }
         "rustc-query-admission" => {
             let query = crate::execution_graph_query::assess_bytes(&bytes)?;
             Ok(Assessment {
@@ -325,10 +362,37 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
                 full_pipeline_complete: query.full_pipeline_complete,
                 nodes: query.nodes,
                 edges: query.edges,
+                descriptive_parent_edges: Some(query.descriptive_parent_edges),
+                control_causal_edges: Some(query.control_causal_edges),
+                wait_structural_complete: query.wait_structural_complete,
+                waits: query.waits,
+                query_reads: query.query_reads,
                 issues: query.issues,
                 opaque_boundaries: query.opaque_boundaries,
                 cpu_work_ns: query.cpu_work_ns,
                 execution_span_ns: query.execution_span_ns,
+            })
+        }
+        "rustc-thread-pool-join" => {
+            let join = crate::execution_graph_continuation::assess_bytes(&bytes)?;
+            Ok(Assessment {
+                schema: join.schema,
+                producer: join.producer,
+                scope: join.scope,
+                capture_id: join.capture_id,
+                structural_complete: join.structural_complete,
+                full_pipeline_complete: join.full_pipeline_complete,
+                nodes: join.nodes,
+                edges: join.edges,
+                descriptive_parent_edges: None,
+                control_causal_edges: None,
+                wait_structural_complete: None,
+                waits: None,
+                query_reads: None,
+                issues: join.issues,
+                opaque_boundaries: join.opaque_boundaries,
+                cpu_work_ns: join.cpu_work_ns,
+                execution_span_ns: join.execution_span_ns,
             })
         }
         _ => bail!("unsupported execution graph producer"),
@@ -347,7 +411,52 @@ fn is_owner_document(path: &Path) -> bool {
             ]
             .iter()
             .any(|suffix| name.ends_with(suffix))
+                || (name.starts_with("compiler-owner-") && name.contains(".event-"))
         })
+}
+
+#[cfg(test)]
+mod compiler_entry_routing_tests {
+    use super::*;
+
+    #[test]
+    fn independent_entry_requires_parent_reconciliation() {
+        let directory = crate::paths::home()
+            .unwrap()
+            .join(format!("graph-compiler-entry-test-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("entry.json");
+        std::fs::write(
+            &file,
+            serde_json::to_vec(&serde_json::json!({
+                "schema":1,"producer":"rustc-query-admission-entry",
+                "scope":"compiler-entry-to-query-capture-binding","capture_id":"entry",
+                "run_id":"run","invocation_id":"launch","parent_invocation_id":"parent",
+                "parent_task_id":"cargo-unit-0","expected_query_captures":1,
+                "query_capture_ids":["query"],"query_receipt_schema":3,
+                "full_pipeline_complete":false,"cpu_work_ns":null,"execution_span_ns":null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let assessment = read_receipt(&file).unwrap();
+        assert!(!assessment.structural_complete);
+        assert!(!assessment.full_pipeline_complete);
+        assert!(assessment.issues[0].contains("--compiler-manifest"));
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+    }
+
+    #[test]
+    fn compiler_journals_are_authority_documents_not_standalone_receipts() {
+        assert!(is_owner_document(Path::new(
+            "compiler-owner-root.event-1.json"
+        )));
+        assert!(is_owner_document(Path::new(
+            "compiler-owner-root.manifest.json"
+        )));
+        assert!(!is_owner_document(Path::new("query.json")));
+    }
 }
 
 fn validate_owner_journal(
@@ -428,6 +537,83 @@ fn validate_owner_journal(
     }
 }
 
+pub(crate) fn compiler_scheduler_summary(
+    directory: &Path,
+    parent_id: &str,
+    scheduler_id: &str,
+) -> Result<(crate::execution_graph_compiler::SchedulerSummary, u64)> {
+    use crate::execution_graph_manifest as protocol;
+    for id in [parent_id, scheduler_id] {
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            bail!("invalid parent capture identity");
+        }
+    }
+    let mut used = 0u64;
+    let mut load = |path: &Path, limit: u64| -> Result<Vec<u8>> {
+        let bytes = read_bytes(path, limit)?;
+        used = used.saturating_add(bytes.len() as u64);
+        if used > MAX_BYTES {
+            bail!("parent reconciliation exceeds total byte budget");
+        }
+        Ok(bytes)
+    };
+    let manifest = protocol::parse_manifest(&load(
+        &directory.join(format!("owner-{parent_id}.manifest.json")),
+        protocol::MAX_BYTES as u64,
+    )?)?;
+    if manifest.authority_root != parent_id
+        || manifest.owners.len() != 1
+        || manifest.owners[0].tickets.len() != 1
+    {
+        bail!("compiler registry has a mismatched scheduler authority");
+    }
+    let mut suffixes = vec!["declaration"];
+    if manifest.owners[0].tickets[0].execute_entered {
+        suffixes.extend(["execute-entered", "execute-result"]);
+    }
+    for suffix in suffixes {
+        let name = format!("owner-{parent_id}.{suffix}.json");
+        let journal =
+            protocol::parse_manifest(&load(&directory.join(&name), protocol::MAX_BYTES as u64)?)?;
+        validate_owner_journal(&manifest, &journal, &name)?;
+    }
+    let envelope = protocol::parse_envelope(&load(
+        &directory.join(format!("{scheduler_id}.envelope.json")),
+        protocol::MAX_BYTES as u64,
+    )?)?;
+    let receipt: Receipt = serde_json::from_slice(&load(
+        &directory.join(format!("{scheduler_id}.json")),
+        MAX_BYTES,
+    )?)?;
+    if receipt.capture_id != scheduler_id {
+        bail!("scheduler filename and capture identity disagree");
+    }
+    let unit_ids = receipt.nodes.iter().map(|node| node.id).collect();
+    let raw = assess(receipt)?;
+    let summary = protocol::ReceiptSummary {
+        schema: raw.schema,
+        capture_id: raw.capture_id,
+        structural_complete: raw.structural_complete,
+        full_pipeline_complete: raw.full_pipeline_complete,
+    };
+    let coverage = protocol::reconcile(&manifest, &[envelope], &[summary])?;
+    Ok((
+        crate::execution_graph_compiler::SchedulerSummary {
+            run_id: manifest.run_id,
+            authority_root: manifest.authority_root,
+            capture_id: scheduler_id.to_owned(),
+            unit_ids,
+            structural_complete: coverage.scheduler_entry_complete,
+        },
+        used,
+    ))
+}
+
 fn command_manifest(path: &Path, manifest_path: &Path, json: bool) -> Result<()> {
     use crate::execution_graph_manifest::{
         self as protocol, ReceiptEnvelope, ReceiptSummary, reconcile,
@@ -457,6 +643,24 @@ fn command_manifest(path: &Path, manifest_path: &Path, json: bool) -> Result<()>
         total_bytes = total_bytes.saturating_add(std::fs::symlink_metadata(&file)?.len());
         if total_bytes > MAX_BYTES {
             bail!("manifest reconciliation exceeds total byte budget");
+        }
+        if file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("compiler-owner-"))
+        {
+            let bytes = read_bytes(&file, MAX_BYTES)?;
+            let name = file
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            let authority = if name.contains(".event-") {
+                crate::execution_graph_compiler::parse_journal(&bytes)?.authority_root
+            } else {
+                crate::execution_graph_compiler::parse_manifest(&bytes)?.authority_root
+            };
+            excluded_roots.insert(authority);
+            continue;
         }
         if is_owner_document(&file) {
             let journal =
@@ -587,6 +791,30 @@ pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
                     "INCOMPLETE"
                 }
             );
+            if let Some(parents) = a.descriptive_parent_edges {
+                println!("  admission parents: {parents} descriptive links, not semantic reads");
+                match a.wait_structural_complete {
+                    Some(complete) => println!(
+                        "  waits: {} observed, {} notification -> resume control-causal links, inventory {}",
+                        a.waits.unwrap_or(0),
+                        a.control_causal_edges.unwrap_or(0),
+                        if complete { "validated" } else { "INCOMPLETE" }
+                    ),
+                    None => println!("  waits: unknown (v1 has no independent wait inventory)"),
+                }
+            }
+            if let Some(reads) = &a.query_reads {
+                println!(
+                    "  direct reads: {} tracked, {} resolved job links, records {}, semantic coverage INCOMPLETE",
+                    reads.tracked_reads,
+                    reads.resolved_job_edges,
+                    if reads.records_complete {
+                        "validated"
+                    } else {
+                        "INCOMPLETE"
+                    }
+                );
+            }
             for issue in a.issues {
                 println!("  issue: {issue}");
             }
@@ -602,6 +830,7 @@ pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn receipt() -> Receipt {
         serde_json::from_value(serde_json::json!({
@@ -783,6 +1012,42 @@ mod tests {
     }
 
     #[test]
+    fn strict_query_v2_routes_with_explicit_edge_classes() {
+        let path = crate::paths::home()
+            .unwrap()
+            .join(format!("graph-query-routing-{}.json", std::process::id()));
+        let mut v = json!({
+            "schema":2,"producer":"rustc-query-admission","scope":"query-job-admission-lifecycle",
+            "capture_id":"empty-waits","full_pipeline_complete":false,"cpu_work_ns":null,
+            "execution_span_ns":null,"interface_outcome":"returned","capture_complete":true,
+            "lost_events":0,"expected_contexts":0,"contexts":[],"events":[],
+            "opaque_boundaries":["fast-cache-hits","race-cache-hits","green-ensure-no-job",
+                "feeds","direct-paths","nonquery","resource-internals","driver-and-process-outcome",
+                "cargo-parent-binding","cache-read-dependencies","wait-and-resource-dependencies"],
+            "wait_allocator_baseline":1,"wait_allocator_high_water":1,"expected_waits":0,
+            "wait_capture_complete":true,"wait_events":[]
+        });
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        let a = read_receipt(&path).unwrap();
+        assert!(a.structural_complete);
+        let output = serde_json::to_value(a).unwrap();
+        assert_eq!(output["wait_structural_complete"], true);
+        assert_eq!(output["descriptive_parent_edges"], 0);
+        assert_eq!(output["control_causal_edges"], 0);
+        assert_eq!(output["waits"], 0);
+        assert_eq!(output["cpu_work_ns"], serde_json::Value::Null);
+        assert_eq!(output["execution_span_ns"], serde_json::Value::Null);
+        assert_eq!(output["full_pipeline_complete"], false);
+        v["schema"] = json!(1);
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        assert!(read_receipt(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let cargo = serde_json::to_value(assess(receipt()).unwrap()).unwrap();
+        assert!(cargo.get("waits").is_none());
+        assert!(cargo.get("control_causal_edges").is_none());
+    }
+
+    #[test]
     fn absent_receipts_never_attest_completeness() {
         let dir = crate::paths::home()
             .unwrap()
@@ -790,5 +1055,65 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert!(command(&dir, true, None).is_err());
         std::fs::remove_dir(&dir).unwrap();
+    }
+
+    fn join_fixture() -> serde_json::Value {
+        json!({"schema":1,"producer":"rustc-thread-pool-join","scope":"native-join-continuations",
+            "capture_id":"join-routing","observer":1,"full_pipeline_complete":false,
+            "cpu_work_ns":null,"execution_span_ns":null,"scope_coverage":false,
+            "scheduler_coverage":false,"pre_attach_coverage":false,"sealed":true,
+            "interface_outcome":"returned","task_allocator_baseline":1,
+            "task_allocator_high_water":2,"expected_tasks":1,"dropped_events":0,
+            "events":[{"kind":"root","task":1,"at_ns":0},
+                {"kind":"start","task":1,"at_ns":1},
+                {"kind":"finish","task":1,"outcome":"normal","at_ns":2}]})
+    }
+
+    #[test]
+    fn native_join_receipt_routes_without_query_slice_claims() {
+        let path = crate::paths::home()
+            .unwrap()
+            .join(format!("graph-join-routing-{}.json", std::process::id()));
+        std::fs::write(&path, serde_json::to_vec(&join_fixture()).unwrap()).unwrap();
+        let a = read_receipt(&path).unwrap();
+        assert!(a.structural_complete);
+        assert_eq!((a.schema, a.nodes, a.edges), (1, 1, 0));
+        assert_eq!(a.producer, "rustc-thread-pool-join");
+        assert_eq!(a.scope, "native-join-continuations");
+        assert!(!a.full_pipeline_complete);
+        assert_eq!((a.cpu_work_ns, a.execution_span_ns), (None, None));
+        let output = serde_json::to_value(a).unwrap();
+        for field in [
+            "descriptive_parent_edges",
+            "control_causal_edges",
+            "wait_structural_complete",
+            "waits",
+            "query_reads",
+        ] {
+            assert!(output.get(field).is_none(), "{field}");
+        }
+        let mut v = join_fixture();
+        v["sealed"] = json!(false);
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        assert!(!read_receipt(&path).unwrap().structural_complete);
+        for (field, value) in [
+            ("schema", json!(2)),
+            ("full_pipeline_complete", json!(true)),
+            ("cpu_work_ns", json!(1)),
+            ("unexpected", json!(true)),
+        ] {
+            let mut v = join_fixture();
+            v[field] = value;
+            std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+            assert!(read_receipt(&path).is_err(), "{field}");
+        }
+        let raw = serde_json::to_string(&join_fixture()).unwrap();
+        std::fs::write(
+            &path,
+            raw.replacen("\"schema\":1", "\"schema\":1,\"schema\":1", 1),
+        )
+        .unwrap();
+        assert!(read_receipt(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
     }
 }

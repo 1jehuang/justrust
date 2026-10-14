@@ -112,6 +112,7 @@
 
 mod job;
 mod job_state;
+pub(crate) mod jr_compiler_launch;
 mod jr_critical_path;
 pub(crate) mod jr_execution_graph;
 
@@ -166,6 +167,7 @@ pub struct JobQueue<'gctx> {
     timings: Timings<'gctx>,
     critical_path: Option<jr_critical_path::Costs>,
     execution_graph: jr_execution_graph::Capture<Unit>,
+    compiler_launch: jr_compiler_launch::Registry,
 }
 
 /// This structure is backed by the `DependencyQueue` type and manages the
@@ -178,6 +180,7 @@ struct DrainState<'gctx> {
     // This is the length of the DependencyQueue when starting out
     total_units: usize,
     execution_graph: jr_execution_graph::Capture<Unit>,
+    compiler_launch: jr_compiler_launch::Registry,
 
     queue: DependencyQueue<Unit, Artifact, Job>,
     messages: Arc<Queue<Message>>,
@@ -398,6 +401,26 @@ enum Message {
 }
 
 impl<'gctx> JobQueue<'gctx> {
+    pub(crate) fn compiler_registry(&self) -> jr_compiler_launch::Registry {
+        self.compiler_launch.clone()
+    }
+    pub(crate) fn compiler_unit_id(&self, unit: &Unit) -> Option<u64> {
+        self.execution_graph.unit_id(unit)
+    }
+    pub(crate) fn declare_compiler_unit(&mut self, unit: &Unit) {
+        let id = self.execution_graph.reserve_unit(unit);
+        let kind = if unit.mode.is_run_custom_build() {
+            "build-script"
+        } else if unit.mode.is_doc_test() {
+            "doc-test"
+        } else if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
+            "rustdoc"
+        } else {
+            "rustc"
+        };
+        self.compiler_launch
+            .declare(&id.unwrap_or(u64::MAX), id, kind);
+    }
     pub fn new(
         bcx: &BuildContext<'_, 'gctx>,
         owner: &jr_execution_graph::owner::Owner,
@@ -408,6 +431,7 @@ impl<'gctx> JobQueue<'gctx> {
             timings: Timings::new(bcx),
             critical_path: jr_critical_path::Costs::from_env(bcx.gctx),
             execution_graph: jr_execution_graph::Capture::for_owner(owner),
+            compiler_launch: jr_compiler_launch::Registry::new(owner),
         }
     }
 
@@ -525,6 +549,7 @@ impl<'gctx> JobQueue<'gctx> {
         let state = DrainState {
             total_units: self.queue.len(),
             execution_graph: self.execution_graph,
+            compiler_launch: self.compiler_launch,
             queue: self.queue,
             // 100 here is somewhat arbitrary. It is a few screenfulls of
             // output, and hopefully at most a few megabytes of memory for
@@ -602,7 +627,18 @@ impl<'gctx> DrainState<'gctx> {
         while let Some((unit, job, priority)) = self.queue.dequeue() {
             // justrust: all dependencies of `unit` are done, so a deferred
             // cutoff decision can be made now (see `fingerprint::jr_cutoff`).
+            let was_dirty = job.freshness().is_dirty();
             let job = job.resolve_cutoff();
+            if let Some(id) = self.execution_graph.unit_id(&unit) {
+                self.compiler_launch.resolve(
+                    &id,
+                    if job.freshness().is_fresh() {
+                        if was_dirty { "cutoff" } else { "fresh" }
+                    } else {
+                        "required"
+                    },
+                );
+            }
             // We want to keep the pieces of work in the `pending_queue` sorted
             // by their priorities, and insert the current job at its correctly
             // sorted position: following the lower priority jobs, and the ones
@@ -759,6 +795,11 @@ impl<'gctx> DrainState<'gctx> {
                     },
                     result.is_ok(),
                 );
+                if matches!(artifact, Artifact::All) {
+                    if let Some(id) = self.execution_graph.unit_id(&unit) {
+                        self.compiler_launch.terminal(&id, result.is_ok());
+                    }
+                }
                 debug!("end ({:?}): {:?}", unit, result);
                 match result {
                     Ok(()) => self.finish(id, &unit, artifact, build_runner)?,

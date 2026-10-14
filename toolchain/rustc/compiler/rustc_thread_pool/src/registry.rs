@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::{fmt, io, mem, ptr, thread};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
@@ -126,6 +126,7 @@ where
 }
 
 pub struct Registry {
+    execution_observer: OnceLock<Arc<crate::execution_observer::ExecutionObserver>>,
     thread_infos: Vec<ThreadInfo>,
     sleep: Sleep,
     injected_jobs: Injector<JobRef>,
@@ -283,6 +284,7 @@ impl Registry {
             .unzip();
 
         let registry = Arc::new(Registry {
+            execution_observer: OnceLock::new(),
             thread_infos: stealers.into_iter().map(ThreadInfo::new).collect(),
             sleep: Sleep::new(n_threads),
             injected_jobs: Injector::new(),
@@ -317,6 +319,23 @@ impl Registry {
         mem::forget(t1000);
 
         Ok(registry)
+    }
+
+    /// Attach once after session recording has been enabled. Activity before
+    /// attachment is opaque. Returns false if this registry already has an
+    /// observer or the supplied observer belongs to another registry.
+    pub fn attach_execution_observer(
+        &self,
+        observer: Arc<crate::execution_observer::ExecutionObserver>,
+    ) -> bool {
+        if self.execution_observer.get().is_some() || !observer.claim_registry() {
+            return false;
+        }
+        self.execution_observer.set(observer).is_ok()
+    }
+
+    pub fn execution_observer(&self) -> Option<&Arc<crate::execution_observer::ExecutionObserver>> {
+        self.execution_observer.get()
     }
 
     pub fn current() -> Arc<Registry> {

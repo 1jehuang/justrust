@@ -300,6 +300,7 @@ pub(crate) fn create_config(
     };
 
     rustc_interface::Config {
+        query_admission: None,
         opts: sessopts,
         crate_cfg: cfgs,
         crate_check_cfg: check_cfgs,

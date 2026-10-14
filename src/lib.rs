@@ -20,8 +20,12 @@ mod depcache_prebuilt;
 mod depcache_remote;
 mod early;
 mod execution_graph;
+mod execution_graph_compiler;
+mod execution_graph_compiler_cli;
+mod execution_graph_continuation;
 mod execution_graph_manifest;
 mod execution_graph_query;
+mod execution_graph_reads;
 mod export;
 mod findings;
 mod history;
@@ -202,6 +206,9 @@ enum Command {
         /// An explicit native owner manifest defining expected scheduler captures.
         #[arg(long)]
         manifest: Option<PathBuf>,
+        /// An explicit compiler-launch authority manifest, including child receipts.
+        #[arg(long, conflicts_with = "manifest")]
+        compiler_manifest: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -760,8 +767,15 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Graph {
             path,
             manifest,
+            compiler_manifest,
             json,
-        } => execution_graph::command(&path, json, manifest.as_deref())?,
+        } => {
+            if let Some(manifest) = compiler_manifest {
+                execution_graph_compiler_cli::command(&path, &manifest, json)?;
+            } else {
+                execution_graph::command(&path, json, manifest.as_deref())?;
+            }
+        }
         Command::Cargo(p) => record::main(p.args),
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,

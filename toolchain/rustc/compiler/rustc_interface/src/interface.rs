@@ -316,6 +316,8 @@ pub(crate) fn parse_check_cfg(sess: &Session, specs: Vec<String>) -> CheckCfg {
 
 /// The compiler configuration
 pub struct Config {
+    /// Explicit compiler-entry observer root, never inferred from ambient environment.
+    pub query_admission: Option<rustc_session::query_admission::QueryAdmissionObserver>,
     /// Command line options
     pub opts: config::Options,
 
@@ -405,7 +407,7 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
     let hash_kind = config.opts.unstable_opts.src_hash_algorithm(&target);
     let checksum_hash_kind = config.opts.unstable_opts.checksum_hash_algorithm();
 
-    let mut query_admission_root = None;
+    let mut query_admission_root = config.query_admission.clone();
     let result = util::run_in_thread_pool_with_globals(
         &early_dcx,
         config.opts.edition,
@@ -450,6 +452,14 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
                 util::rustc_version_str().unwrap_or("unknown"),
                 config.using_internal_features,
             );
+            if config.query_admission.is_some() {
+                sess.query_admission = config.query_admission;
+            }
+            if sess.opts.jobs.frontend.is_some() {
+                if let Some(observer) = &sess.query_admission {
+                    observer.attach_current_pool();
+                }
+            }
 
             // STACK_SIZE is setup in run_in_thread_pool_with_globals, before arriving here.
             sess.opts.recommended_stack_size = *util::STACK_SIZE.get().unwrap();

@@ -71,7 +71,7 @@ fn handle_cycle<'tcx, C: QueryCache>(
 /// This does nothing for single threaded rustc, as there are no concurrent jobs which could be
 /// waiting on us.
 #[inline]
-fn signal_complete(job: QueryJob<'_>) {
+fn signal_complete(job: QueryJob<'_>, poison: bool) {
     if let Some(latch) = job.latch {
         // Set the latch and resume all waiters on it.
         let mut waiters_guard = latch.waiters.lock();
@@ -79,6 +79,9 @@ fn signal_complete(job: QueryJob<'_>) {
         let registry = rustc_thread_pool::Registry::current();
         for waiter in waiters {
             rustc_thread_pool::mark_unblocked(&registry);
+            if let Some(token) = &waiter.diagnostic_wait {
+                token.notify(if poison { "poisoned" } else { "completed" });
+            }
             waiter.condvar.notify_one();
         }
     }
@@ -112,6 +115,9 @@ where
         // Mark as complete before we remove the job from the active state
         // so no other thread can re-execute this query.
         cache.complete(self.key, value, dep_node_index);
+        if let Some(admission) = &self.admission {
+            admission.result_produced(dep_node_index.as_u32());
+        }
 
         // Keep the resource-owning token outside ManuallyDrop even if latch signaling panics.
         let mut this = ManuallyDrop::new(self);
@@ -146,7 +152,7 @@ where
 
         // Also signal the completion of the job, so waiters will continue execution.
         match status {
-            ActiveKeyStatus::Started(job) => signal_complete(job),
+            ActiveKeyStatus::Started(job) => signal_complete(job, poison),
             ActiveKeyStatus::Poisoned => panic!(),
         }
     }
@@ -187,6 +193,11 @@ fn latch_wait_on<'tcx>(
     latch: &QueryLatch<'tcx>,
     query: Option<QueryJobId>,
     span: Span,
+    diagnostic: Option<(
+        &rustc_session::query_admission::QueryAdmissionContext,
+        QueryJobId,
+        Option<QueryJobId>,
+    )>,
 ) -> Result<(), QueryCycle<'tcx>> {
     let mut waiters_guard = latch.waiters.lock();
     let Some(waiters) = &mut *waiters_guard else {
@@ -194,6 +205,9 @@ fn latch_wait_on<'tcx>(
     };
 
     let waiter = Arc::new(QueryWaiter {
+        diagnostic_wait: diagnostic.map(|(context, waitee, consumer)| {
+            context.register_wait(waitee.0.get(), consumer.map(|id| id.0.get()))
+        }),
         parent: query,
         span,
         cycle: Mutex::new(None),
@@ -208,11 +222,18 @@ fn latch_wait_on<'tcx>(
     // Awaits the caller on this latch by blocking the current thread. If this detects a deadlock
     // and the deadlock handler wants to resume this thread we have to be in the `wait` call. This
     // is ensured by the deadlock handler getting the waiters lock.
+    let mut condvar_returned = 0;
     rustc_thread_pool::mark_blocked_and_wait(|| {
         waiter.condvar.wait(&mut waiters_guard);
+        if let Some(token) = &waiter.diagnostic_wait {
+            condvar_returned = token.now();
+        }
         // Release the lock before we potentially block when acquiring jobserver token.
         drop(waiters_guard);
     });
+    if let Some(token) = &waiter.diagnostic_wait {
+        token.resumed(condvar_returned);
+    }
 
     // FIXME: Get rid of this lock. We have ownership of the QueryWaiter although another thread
     // may still have a Arc reference so we cannot use Arc::get_mut.
@@ -232,6 +253,7 @@ fn wait_for_query<'tcx, C: QueryCache>(
     key_hash: u64,
     latch: QueryLatch<'tcx>,
     current: Option<QueryJobId>,
+    waitee: QueryJobId,
 ) -> (C::Value, Option<DepNodeIndex>) {
     // For parallel queries, we'll block and wait until the query running
     // in another thread has completed. Record how long we wait in the
@@ -239,7 +261,28 @@ fn wait_for_query<'tcx, C: QueryCache>(
     let query_blocked_prof_timer = tcx.prof.query_blocked();
 
     // With parallel queries we might just have to wait on some other thread.
-    let result = latch_wait_on(&latch, current, span);
+    let observer = tcx.query_system.jobs.observer();
+    let consumer_matches = observer.is_none_or(|observer| {
+        current.is_none()
+            || tls::with_context(|icx| {
+                icx.tcx
+                    .query_system
+                    .jobs
+                    .observer()
+                    .is_some_and(|parent| observer.same_context(parent))
+            })
+    });
+    if !consumer_matches {
+        if let Some(observer) = observer {
+            observer.mark_loss();
+        }
+    }
+    let result = latch_wait_on(
+        &latch,
+        current,
+        span,
+        observer.map(|observer| (observer, waitee, if consumer_matches { current } else { None })),
+    );
 
     match result {
         Ok(()) => {
@@ -372,11 +415,21 @@ fn try_execute_query<'tcx, C: QueryCache, const INCR: bool>(
                     if sync::is_dyn_thread_safe() {
                         // Get the latch out
                         let latch = job.latch.get_or_insert_with(QueryLatch::new).clone();
+                        let waitee = job.id;
                         drop(state_lock);
 
                         // Only call `wait_for_query` if we're using a Rayon thread pool
                         // as it will attempt to mark the worker thread as blocked.
-                        wait_for_query(query, tcx, span, key, key_hash, latch, current_job_id)
+                        wait_for_query(
+                            query,
+                            tcx,
+                            span,
+                            key,
+                            key_hash,
+                            latch,
+                            current_job_id,
+                            waitee,
+                        )
                     } else {
                         let id = job.id;
                         drop(state_lock);
