@@ -566,7 +566,15 @@ pub fn run_remote(
 ) -> Result<std::result::Result<Outcome, Infra>> {
     let started = Instant::now();
     let mut diagnostic = RemoteDiagnostic::default();
-    let result = run_remote_inner(sub, args, start, &mut diagnostic);
+    let run_id = crate::record::new_run_id();
+    let mut lifecycle = crate::telemetry::BuildLifecycle::start(&run_id, sub, "remote");
+    let result = run_remote_inner(sub, args, start, &mut diagnostic, &run_id, &mut lifecycle);
+    if let Some(code) = diagnostic.exit {
+        let logs = crate::paths::runs_dir()
+            .ok()
+            .is_some_and(|d| std::fs::File::open(d.join(&run_id).join("output.jsonl")).is_ok());
+        lifecycle.done(code, logs);
+    }
     if !matches!(&result, Ok(Ok(_))) {
         report_remote_failure(sub, &diagnostic, started.elapsed().as_secs_f64());
     }
@@ -609,6 +617,8 @@ fn run_remote_inner(
     args: &[String],
     start: bool,
     diagnostic: &mut RemoteDiagnostic,
+    run_id: &str,
+    lifecycle: &mut crate::telemetry::BuildLifecycle,
 ) -> Result<std::result::Result<Outcome, Infra>> {
     let total = Instant::now();
     let trace = std::env::var_os("JUSTRUST_REMOTE_TRACE").is_some();
@@ -630,7 +640,6 @@ fn run_remote_inner(
     if !roots.iter().any(|r| cwd.starts_with(r)) {
         return infra(format!("{} is not inside a synced root", cwd.display()));
     }
-    let run_id = crate::record::new_run_id();
     let mut label = vec![sub.to_string()];
     label.extend(args.iter().cloned());
     let project = roots
@@ -707,7 +716,7 @@ fn run_remote_inner(
             env,
             roots: roots.iter().map(|r| r.display().to_string()).collect(),
             start,
-            run_id: run_id.clone(),
+            run_id: run_id.to_owned(),
         },
         &[],
     )?;
@@ -737,6 +746,9 @@ fn run_remote_inner(
                 _,
             ) => {
                 submitted = may_have_started;
+                if may_have_started {
+                    lifecycle.running();
+                }
                 diagnostic.may_have_started |= may_have_started;
             }
             (
@@ -754,6 +766,7 @@ fn run_remote_inner(
                 }
                 mark("flushed");
                 if sync.is_none() {
+                    lifecycle.running();
                     report("running", None);
                     live.phase("building", &machine);
                 }
@@ -816,7 +829,10 @@ fn run_remote_inner(
                     ms,
                     if files == 1 { "" } else { "s" },
                 );
-                return Ok(Ok(Outcome { code, run_id }));
+                return Ok(Ok(Outcome {
+                    code,
+                    run_id: run_id.to_owned(),
+                }));
             }
             (Msg::Error { msg, .. }, _) if fallback_safe(sync.is_some(), submitted) => {
                 return infra(msg);

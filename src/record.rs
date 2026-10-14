@@ -275,16 +275,24 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
     if !should_record(&args) {
         exec_cargo(&args);
     }
-    match record(&args, opts) {
+    let id = new_run_id();
+    let mut lifecycle = crate::telemetry::BuildLifecycle::start(
+        &id,
+        &subcommand(&args).unwrap_or_default(),
+        crate::telemetry::local_route_label(),
+    );
+    match record(&args, opts, &id, &mut lifecycle) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             if e.downcast_ref::<ToolchainRequired>().is_some() {
                 eprintln!("justrust: {e:#}");
                 report_build_failure(&args, "toolchain_required", false, Some(1));
+                lifecycle.done(1, false);
                 std::process::exit(1);
             }
             eprintln!("justrust: recording disabled for this run: {e:#}");
             report_build_failure(&args, "recording_init", true, None);
+            drop(lifecycle);
             exec_cargo(&args);
         }
     }
@@ -332,7 +340,12 @@ pub fn apply_toolchain_env(cmd: &mut Command, tc: &crate::toolchain::Toolchain) 
     cmd.env_remove("RUSTUP_TOOLCHAIN");
 }
 
-fn record(args: &[OsString], opts: Options) -> Result<i32> {
+fn record(
+    args: &[OsString],
+    opts: Options,
+    id: &str,
+    lifecycle: &mut crate::telemetry::BuildLifecycle,
+) -> Result<i32> {
     // A pinned toolchain (`justrust.toml`) replaces the system cargo and
     // rustc. Installed on first use. Fails open to the system toolchain.
     let required = matches!(
@@ -369,8 +382,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
             .context("could not find rustc")?,
     };
 
-    let id = new_run_id();
-    let run_dir = paths::runs_dir()?.join(&id);
+    let run_dir = paths::runs_dir()?.join(id);
     std::fs::create_dir_all(&run_dir)?;
 
     // Agent runs get a private target dir so parallel agents do not block.
@@ -395,7 +407,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
         .collect();
     let meta = Meta {
-        id: id.clone(),
+        id: id.to_owned(),
         args: args
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
@@ -537,6 +549,7 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
     let job = crate::sys::Job::for_child(&child);
     let pid = child.id() as i32;
+    lifecycle.running();
     CHILD_PID.store(pid, Ordering::SeqCst);
     install_signal_forwarding();
 
@@ -620,6 +633,10 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
     ) {
         eprintln!("justrust: failed to write run summary: {e:#}");
     }
+    lifecycle.done(
+        code,
+        std::fs::File::open(run_dir.join("output.jsonl")).is_ok(),
+    );
     // Early diagnostics, auto mode: warm a daemon for busy workspaces,
     // in the background, after the build.
     if opts.agent {

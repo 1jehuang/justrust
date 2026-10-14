@@ -177,9 +177,193 @@ fn queue_lock(d: &std::path::Path) -> Option<std::fs::File> {
     Some(f)
 }
 
+/// Bounded, fail-open lifecycle observer. It never performs network I/O.
+pub(crate) struct BuildLifecycle {
+    shared: std::sync::Arc<(std::sync::Mutex<(bool, bool)>, std::sync::Condvar)>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    id: String,
+    sub: String,
+    route: &'static str,
+    terminal: bool,
+    scope: Option<String>,
+}
+const HEARTBEAT_S: u64 = 30;
+
+fn lifecycle_data(
+    id: &str,
+    sub: &str,
+    route: &str,
+    state: &str,
+    exit: Option<i32>,
+    logs: bool,
+) -> Option<Value> {
+    if !valid_run_id(id)
+        || !matches!(state, "queued" | "running" | "done" | "abandoned")
+        || (state == "done" && exit.is_none())
+    {
+        return None;
+    }
+    let route = match route {
+        "remote"
+        | "local_routed"
+        | "local_unrouted"
+        | "remote_off"
+        | "forced"
+        | "recent_remote_failure"
+        | "non_linux"
+        | "not_configured"
+        | "no_history"
+        | "non_utf8_args"
+        | "cost_comparison"
+        | "remote_cost_comparison"
+        | "explore_remote"
+        | "local_only" => route,
+        _ => "other",
+    };
+    let mut data = json!({"run_id": id, "sub": safe_subcommand(sub), "route": route,
+        "state": state, "heartbeat_s": HEARTBEAT_S,
+        "log_availability": if logs { "local_only" } else { "none" }});
+    if let Some(exit) = exit {
+        data["exit"] = json!(exit);
+    }
+    Some(data)
+}
+fn emit_lifecycle(
+    id: &str,
+    sub: &str,
+    route: &str,
+    state: &str,
+    exit: Option<i32>,
+    logs: bool,
+    scope: Option<&str>,
+) {
+    let Some(scope) = scope else { return };
+    if let Some(data) = lifecycle_data(id, sub, route, state, exit, logs) {
+        record_with_scope("build_state", data, Some(scope));
+        spawn_background(true);
+    }
+}
+impl BuildLifecycle {
+    pub(crate) fn start(id: &str, sub: &str, route: &'static str) -> Self {
+        let mut observer = Self {
+            shared: Default::default(),
+            worker: None,
+            id: id.into(),
+            sub: sub.into(),
+            route,
+            terminal: false,
+            scope: telemetry_creds().as_ref().map(auth_scope),
+        };
+        if enabled() && observer.scope.is_some() && valid_run_id(id) {
+            emit_lifecycle(
+                id,
+                sub,
+                route,
+                "queued",
+                None,
+                false,
+                observer.scope.as_deref(),
+            );
+            let scope = observer.scope.clone();
+            let shared = observer.shared.clone();
+            let id = id.to_owned();
+            let sub = sub.to_owned();
+            observer.worker = std::thread::Builder::new()
+                .name("build-heartbeat".into())
+                .spawn(move || {
+                    let (lock, cv) = &*shared;
+                    let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    loop {
+                        let (next, timeout) = cv
+                            .wait_timeout(state, std::time::Duration::from_secs(HEARTBEAT_S))
+                            .unwrap_or_else(|e| e.into_inner());
+                        state = next;
+                        if state.1 {
+                            break;
+                        }
+                        if timeout.timed_out() {
+                            emit_lifecycle(
+                                &id,
+                                &sub,
+                                route,
+                                if state.0 { "running" } else { "queued" },
+                                None,
+                                false,
+                                scope.as_deref(),
+                            );
+                        }
+                    }
+                })
+                .ok();
+        }
+        observer
+    }
+    pub(crate) fn running(&self) {
+        self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).0 = true;
+        emit_lifecycle(
+            &self.id,
+            &self.sub,
+            self.route,
+            "running",
+            None,
+            false,
+            self.scope.as_deref(),
+        );
+    }
+    fn stop(&mut self) {
+        self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+        self.shared.1.notify_all();
+        // Do not wait at build exit. The stopped worker owns only telemetry state.
+        self.worker.take();
+    }
+    pub(crate) fn done(&mut self, exit: i32, logs: bool) {
+        self.stop();
+        self.terminal = true;
+        emit_lifecycle(
+            &self.id,
+            &self.sub,
+            self.route,
+            "done",
+            Some(exit),
+            logs,
+            self.scope.as_deref(),
+        );
+    }
+}
+impl Drop for BuildLifecycle {
+    fn drop(&mut self) {
+        self.stop();
+        if !self.terminal {
+            emit_lifecycle(
+                &self.id,
+                &self.sub,
+                self.route,
+                "abandoned",
+                None,
+                false,
+                self.scope.as_deref(),
+            );
+        }
+    }
+}
+
 /// Append one event to the queue. Never fails, never blocks on the network.
 pub fn record(kind: &str, data: Value) {
+    record_with_scope(kind, data, None);
+}
+
+fn lifecycle_scope_matches(expected: Option<&str>, current: Option<&str>) -> bool {
+    expected.is_some() && expected == current
+}
+
+fn record_with_scope(kind: &str, data: Value, expected_scope: Option<&str>) {
     if !enabled() {
+        return;
+    }
+    let observed_at = paths::now() as i64;
+    let creds = telemetry_creds();
+    let scope = creds.as_ref().map(auth_scope);
+    if kind == "build_state" && !lifecycle_scope_matches(expected_scope, scope.as_deref()) {
         return;
     }
     let Some(d) = dir() else { return };
@@ -192,9 +376,9 @@ pub fn record(kind: &str, data: Value) {
         return;
     }
     let mut line =
-        json!({ "event_id": random_uuid(), "kind": kind, "at": paths::now() as i64, "data": data });
-    if let Some(c) = telemetry_creds() {
-        line["_auth_scope"] = json!(auth_scope(&c));
+        json!({ "event_id": random_uuid(), "kind": kind, "at": observed_at, "data": data });
+    if let Some(scope) = scope {
+        line["_auth_scope"] = json!(scope);
     }
     let _ = paths::append_line(&q, &line.to_string());
     notice_once(&d);
@@ -327,8 +511,16 @@ fn safe_subcommand(sub: &str) -> &str {
     }
 }
 
+pub(crate) fn local_route_label() -> &'static str {
+    route_reason_label(crate::route::local_reason().as_deref(), false)
+}
+
 fn route_label(s: &crate::summary::Summary) -> &'static str {
-    match s.route.as_deref() {
+    route_reason_label(s.route.as_deref(), s.remote.is_some())
+}
+
+fn route_reason_label(reason: Option<&str>, remote: bool) -> &'static str {
+    match reason {
         Some("JUSTRUST_REMOTE=off") => "remote_off",
         Some("JUSTRUST_REMOTE=force") => "forced",
         Some("remote failed in the last 10 minutes") => "recent_remote_failure",
@@ -341,7 +533,7 @@ fn route_label(s: &crate::summary::Summary) -> &'static str {
         Some(r) if r.starts_with("trying remote: local ~") => "explore_remote",
         Some(r) if r.ends_with("always runs locally") => "local_only",
         Some(_) => "other",
-        None if s.remote.is_some() => "remote",
+        None if remote => "remote",
         None => "local_unrouted",
     }
 }
@@ -653,6 +845,13 @@ fn scoped_batch(events: &[Value], scope: Option<&str>) -> (Vec<Value>, bool) {
     (wire, auth)
 }
 
+fn delivery_events(events: &[Value], authenticate: bool) -> Vec<&Value> {
+    events
+        .iter()
+        .filter(|e| authenticate || e["kind"] != "build_state")
+        .collect()
+}
+
 fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> Delivery {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -745,12 +944,20 @@ pub(crate) fn flush() {
             discard();
             return;
         }
+        let wire = delivery_events(&chunk, authenticate);
+        if wire.is_empty() {
+            offset += chunk.len();
+            if checkpoint(&sending, &events[offset..]).is_err() {
+                return;
+            }
+            continue;
+        }
         let body = json!({
             "install_id": id,
             "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "events": chunk,
+            "events": wire,
         })
         .to_string();
         let outcome = post(&body, if authenticate { creds.as_ref() } else { None });
@@ -811,10 +1018,14 @@ fn discard() {
 /// After a run or command: if a telemetry flush or an update check is due,
 /// start one detached `justrust __bg` to do it. Costs a few `stat`s.
 pub fn maybe_spawn_background() {
+    spawn_background(false);
+}
+
+fn spawn_background(lifecycle: bool) {
     if cfg!(test) || std::env::var_os(crate::route::ON_AGENT).is_some() {
         return;
     }
-    let flush = enabled() && flush_due();
+    let flush = enabled() && (lifecycle || flush_due());
     let update = crate::update::check_due();
     if !flush && !update {
         return;
@@ -823,8 +1034,12 @@ pub fn maybe_spawn_background() {
         return;
     };
     use crate::sys::Detach;
-    let _ = std::process::Command::new(exe)
-        .arg(BG_ARG)
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(BG_ARG);
+    if lifecycle {
+        cmd.arg("--telemetry-now");
+    }
+    let _ = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -846,11 +1061,23 @@ pub fn background_main() -> ! {
         f.try_lock().is_ok().then_some(f)
     });
     if lock.is_some() {
-        if crate::update::check_due() {
-            crate::update::background();
+        let lifecycle = std::env::args().any(|a| a == "--telemetry-now");
+        if enabled() && (flush_due() || lifecycle) {
+            // Drain events appended during the first POST too. Otherwise a short
+            // build's terminal event can be stranded behind the active sender.
+            // Bounded even with concurrent writers and an offline endpoint.
+            for _ in 0..if lifecycle { 4 } else { 1 } {
+                flush();
+                let Some(d) = dir() else { break };
+                if d.join("sending.jsonl").exists()
+                    || !std::fs::metadata(d.join("queue.jsonl")).is_ok_and(|m| m.len() > 0)
+                {
+                    break;
+                }
+            }
         }
-        if enabled() && flush_due() {
-            flush();
+        if !lifecycle && crate::update::check_due() {
+            crate::update::background();
         }
     }
     std::process::exit(0)
@@ -939,6 +1166,48 @@ mod tests {
         assert!(data.as_object().unwrap().len() <= 80);
     }
     use super::*;
+
+    #[test]
+    fn lifecycle_contract_is_closed_and_private() {
+        let id = "20261014-112403320-1234";
+        let data =
+            lifecycle_data(id, "private-sub", "/private/path", "done", Some(101), true).unwrap();
+        assert_eq!(data["sub"], "other");
+        assert_eq!(data["route"], "other");
+        assert_eq!(data["exit"], 101);
+        assert_eq!(data["log_availability"], "local_only");
+        assert!((1..=300).contains(&data["heartbeat_s"].as_u64().unwrap()));
+        assert!(!data.to_string().contains("private"));
+        assert!(lifecycle_data(id, "test", "remote", "done", None, false).is_none());
+        assert!(lifecycle_data(id, "test", "remote", "unknown", None, false).is_none());
+        assert!(lifecycle_data("private-id", "test", "remote", "queued", None, false).is_none());
+        let running = lifecycle_data(id, "test", "remote", "running", None, false).unwrap();
+        assert_eq!(running["log_availability"], "none");
+        assert!(running.get("exit").is_none());
+    }
+
+    #[test]
+    fn lifecycle_never_delivers_in_anonymous_or_rotated_scope() {
+        assert!(lifecycle_scope_matches(Some("old"), Some("old")));
+        assert!(!lifecycle_scope_matches(Some("old"), Some("new")));
+        assert!(!lifecycle_scope_matches(None, None));
+        assert!(!lifecycle_scope_matches(Some("old"), None));
+        let events = vec![
+            json!({"kind":"build_state", "_auth_scope":"old", "event_id":"stable"}),
+            json!({"kind":"run", "_auth_scope":"old"}),
+        ];
+        let (chunk, auth) = scoped_batch(&events, Some("new"));
+        assert!(!auth);
+        let wire = delivery_events(&chunk, auth);
+        assert_eq!(wire.len(), 1);
+        assert_eq!(wire[0]["kind"], "run");
+        let (chunk, auth) = scoped_batch(&events, Some("old"));
+        assert!(auth);
+        let wire = delivery_events(&chunk, auth);
+        assert_eq!(wire.len(), 2);
+        assert_eq!(wire[0]["event_id"], "stable");
+        assert!(wire[0].get("_auth_scope").is_none());
+    }
 
     #[test]
     fn uuids_are_v4_and_distinct() {
