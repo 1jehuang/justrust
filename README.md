@@ -31,8 +31,6 @@ laptop under typical multi-agent load vs a 16 vCPU build machine):
 | Cold `check --workspace` | 70.3 s | Not measured | **52.2 s** |
 | One-line edit, `check -p uv-resolver` | Not measured | Not measured | **1.0 s** |
 
-![Build time comparison for uv. Standard local: 77.7, 73.6, and 70.3 seconds. justrust remote: 22.9, 38.5, and 52.2 seconds. justrust local has not been measured.](assets/build-benchmarks.svg)
-
 Lower is better. Missing measurements are not estimates. These results compare
 a laptop under load with a hosted build machine, not toolchain-only performance.
 
