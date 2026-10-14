@@ -17,19 +17,9 @@ A faster, vertically integrated Rust build toolchain optimized for agents.
 
 ---
 
-Your coding agents spend valuable time waiting for Rust checks, builds, and
-tests. Running those operations locally can slow down your machine, drive up
-CPU usage, temperature, and RAM consumption, and fill your disk with build
-artifacts.
-
 justrust vertically integrates and optimizes the Rust build toolchain to make
-the entire edit, check, and test loop faster. Its remote build service offloads
-compilation, test execution, and build artifact storage to our machines, so
-your agents can keep working without tying up yours.
-
-Each command also returns actionable build diagnostics, showing agents where
-time went, why crates rebuilt, and which bottlenecks to address, so they can
-proactively optimize builds within your codebase.
+the entire edit, check, and test loop faster. Use it locally or with our remote
+build service.
 
 On [uv](https://github.com/astral-sh/uv) (674 units, measured 2026-10-10,
 laptop under typical multi-agent load vs a 16 vCPU build machine):
@@ -41,7 +31,15 @@ laptop under typical multi-agent load vs a 16 vCPU build machine):
 | cold `check --workspace` | 70.3 s | **52.2 s** (1.3x) |
 | one-line edit, `check -p uv-resolver` | | **1.0 s** |
 
-Remote builds leave no `target/` and use no rustc RAM or CPU on your machine.
+Your coding agents spend valuable time waiting for Rust checks, builds, and
+tests. Running those operations locally can slow down your machine, drive up
+CPU usage, temperature, and RAM consumption, and fill your disk with build
+artifacts. Our remote service offloads compilation, test execution, and build
+artifact storage to our machines, freeing up yours.
+
+Each build command also returns actionable diagnostics, showing agents where
+time went, why crates rebuilt, and which bottlenecks to address, so they can
+proactively optimize builds within your codebase.
 
 ## Install
 
