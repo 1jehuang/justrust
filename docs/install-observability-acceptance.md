@@ -44,6 +44,28 @@ This is the acceptance gate for the token-bearing installer audit begun on
 - Network delivery is asynchronous and recording remains fail-open. Recording
   must not change artifact identity, compiler environment, or build results.
 
+## Observed evidence, 2026-10-14
+
+- Backend source `7151e33`, deployed version
+  `71a2227d-03f1-436b-a042-0d998c3e31a1`, adds consented installation linkage
+  to the existing atomic token exchange. The full backend suite passed 453 tests.
+  Production migration invariants reported zero invalid linkage rows. Existing
+  authenticated `/v1/me` remained available with hosted builds enabled.
+- Cloud version `057bf7b0-7a17-40d1-9514-9fb19cf6546b` accepts authenticated
+  installer outcomes and lifecycle events. Its validation passed 242 JavaScript
+  and 36 Python tests. Anonymous lifecycle events were skipped without rejecting
+  an otherwise valid batch, and invalid authentication returned 401.
+- Installed lifecycle client source `41b787c` completed actual run
+  `20261014-043509383-2672389` at 11:35:09 UTC. Production storage contained
+  trusted queued, running, finished-summary, and done events for that same run.
+  The summary reported three passing tests, no failing tests, and exit 0. The
+  terminal event reported `local_only`, with output persisted on the client.
+  All events occurred in the same second, exercising the ordering boundary.
+
+These observations do not establish the pending interrupted-log or final public
+installer/release acceptance checks. Those must be recorded separately after the
+real executable and deployment checks complete.
+
 ## Logs and support limits
 
 `local_only` means the client has a local log, not that an operator can read it.
