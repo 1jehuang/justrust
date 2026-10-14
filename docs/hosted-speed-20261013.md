@@ -13,10 +13,23 @@ source. The three-round versus result is
 | Body-edit check | 1.92 s | 1.37 s | 2.76 s |
 | No-op test | 0.35 s | 0.32 s | 1.11 s |
 
+These are historical observations, not current-host acceptance. Rechecking
+the committed raw samples confirms that all three body-check samples per
+stack are noisy, and one of the three no-op samples per stack is noisy. The
+reference samples are not marked noisy: stock median 7.172 s versus hosted
+7.581 s is an observed difference, not an isolated causal regression. Do not
+infer a general hosted-speed verdict from this table.
+
 The apparent 54x cold-check result compared a fresh local target against a
 persistent, already-built remote target. It measures cache reuse, not truly
 cold hosted compilation. `suite.py --remote` now rejects cold scenarios
 that clear only local targets and verifies every sample actually ran remotely.
+The original raw ratio is 72.565 / 1.346 = 53.91. Every cold-label sample is
+marked noisy. Its three hosted runs compiled zero units and reused 744 fresh
+units, as independently confirmed against committed records
+`20261013-020804747-2845647414`, `20261013-020923090-2845647270`, and
+`20261013-021220661-2845647164`. This is neither a matched cold-build comparison
+nor evidence that the 10x target was reached.
 
 ## Fixed-client hosted baseline
 
