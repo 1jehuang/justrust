@@ -193,8 +193,13 @@ justrust is one all-in-one solution: client, toolchain, and servers.
   pushed back to the cache so the next local build hits.
 - **Toolchain build farm.** Builds rustc/LLVM (one full build is ~1 h on 16
   threads; PGO+BOLT needs more), the std variants, and the C sysroot.
-- Rebase cadence: follow nightly weekly, cut a justrust toolchain every 6
-  weeks. CI runs the Jcode and Desktop test suites on every toolchain cut.
+- **Toolchain maintenance and releases.** Develop the owned compiler and Cargo
+  sources here, with coordinated client and cache-protocol changes. Evaluate
+  upstream correctness and security fixes and adapt them when useful, without
+  a mandatory nightly-following, rebase, or release cadence. Cut and version
+  integrated toolchains when validated changes are ready. CI runs the Jcode
+  and Desktop test suites on every toolchain cut, and default promotions need
+  the comprehensive before/after measurements described above.
 
 ## Rules
 
