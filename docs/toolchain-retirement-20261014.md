@@ -36,6 +36,13 @@ unoccupied. No files or build artifacts were deleted, and no disk-space
 reclamation is claimed. The retirement does not depend on candidate activation,
 since installed toolchains contain independent artifacts, not legacy symlinks.
 
+A subsequent normal hosted `justrust check` passed: run
+`20261014-080527034-389391`, `where remote on hosted`, 62 fresh units,
+zero diagnostics. End-to-end remote execution was 27.4s including source sync;
+reported Cargo wall was 0.07s. This verifies the existing hosted build path
+still works, not acceptance of the unpublished compiler candidate. The single
+redacted run is committed under `data/runs/xps14-toolchain-cleanup/2026-10.jsonl`.
+
 ## Boundaries
 
 Unrelated dirty client and Cargo execution-graph work is not part of this
