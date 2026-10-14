@@ -6263,3 +6263,31 @@ restored byte-for-byte from its backup, not from git. No jcode rebuild or
 reload was performed. Nine cited slim, redacted exports are in
 `data/runs/hosted-freshness-repair/2026-10.jsonl`. This is a correctness fix,
 not a speedup claim. Full rsyncs now hash source contents on both sides.
+
+## 2026-10-14: CPU identity accounting and outer-command verdict repaired
+
+`4809f23` tracks sampled CPU deltas per `(pid, start_ticks)` instead of
+subtracting live-tree totals. Four actual hosted regressions failed before
+the fix (`20261013-213037568-1395671`) and passed afterward
+(`20261013-213336102-1409383`). `e629a00` requires a failing outer exit before
+classifying nested compiler probes as a compilation failure. Original run
+`20261013-211707833-1300731` remains unchanged: 397 tests passed, exit zero,
+but the old report incorrectly classified its intentional failed compiler unit.
+
+Installed clean e629a00 client SHA08d0601aa8bf passed normal hosted
+check/full404tests/strictlint/recheck with zero compiled and 62 fresh units;
+full run `20261013-213917356-1436666` reported the correct successful verdict.
+Real Desktop edit `20261013-214047661-1443635` passed three tests/one compiled
+unit; unchanged repeat `20261013-214056105-1444107` compiled zero/746 fresh.
+Source was restored byte-for-byte from backup. Actual recorded/unrecorded
+minimal checks reused identical rmeta bytes without Dirty or recompilation.
+Real nested E0308 output stayed visible in successful outer test run
+`20261013-214356941-1470803`; genuine outer failure
+`20261013-214408640-1471875` still returned 101 and a compile-failure verdict.
+
+All21 cited records, including red tests and a precompile CLI-harness mistake,
+are in `data/runs/hosted-west-measurement/`; detailed requirement mapping and
+hash receipt are in `docs/measurement-acceptance-20261014.md` and its result
+JSON. Sampling still misses unsampled exit work and cannot establish query
+dependencies or a theoretical parallelism ceiling. No historical timing/noise
+flags were rewritten and no speedup or scheduler promotion is claimed.
