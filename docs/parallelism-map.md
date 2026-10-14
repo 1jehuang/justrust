@@ -86,3 +86,62 @@ The 96-core sweep already showed the current reference loop plateauing around
 4-8 allocated cores. That is a measurement of today's implementation, not an
 immutable ceiling. This map guides the next fork experiments without claiming
 a speedup or a proven 96-core utilization target.
+
+## Decision after the first scheduling experiment
+
+The immutable 24-job OFF/ON/ON/OFF experiment is now published in
+`cargo-scheduler-abba-20261014.md`. Forty measured samples and sixteen warmups
+selected the exact candidate Cargo and pinned compiler. Uniform-cost priority
+did not demonstrate a full-loop improvement. Four comparisons were uncontrolled
+and body check was within noise, with additional known overlapping work retained.
+Do not promote this candidate or treat that outcome as a limit on compiler
+parallelism. Its rank changes which ready crate starts, not the internal work of
+the final crate.
+
+The subsequent installed-client acceptance confirms that a real reference edit
+compiled only one UI unit with 745 fresh units. The immediate unchanged repeat
+compiled zero with 746 fresh. The edited unit took 5.18 seconds and recorded
+about 7.5 CPU-seconds in `20261013-214047661-1443635`. Their ratio is observed
+average CPU use of that invocation, not the processor requirement, dependency
+span, or maximum attainable speedup. This was one functional acceptance sample,
+not a pinned before/after performance comparison.
+
+The next investigation priorities follow the measured workflow boundary:
+
+| Workflow | Observation | Next decision boundary |
+|---|---|---|
+| Warm edited filtered test | One dirty UI unit; changing ready-crate order cannot parallelize its internal tasks | Focus localization on the UI compiler invocation before another scheduler or hardware promotion |
+| Reduced-category reference profile | t=1 exclusive labels include mono graph walk 0.561 s, expansion 0.465 s, late resolve 0.295 s, query-result encoding 0.233 s | These identify locations to investigate, not independent tasks or proven serial costs |
+| Reduced-category check profile | t=1 expansion 0.189 s, late resolve 0.137 s, metadata generation 0.123 s | A mono-only change cannot automatically explain a check-loop gain; retain both workflows |
+| Upstream generic-symbol decode | t=1 reference exclusive label 0.084 s | Do not mistake this narrow label for the entire mono walk or a route to a large full-loop win |
+| Cold multi-crate check | Current candidate uses uniform depth, not measured cost | Weighted costs remain untested; measure unit identity and Metadata/All release events before treating a coarse package hint as a causal DAG |
+| Unchanged hosted test | No compiler units rebuilt | CPU parallelism cannot remove client sync, connection and test-launch latency; keep host-local and service latency separate |
+
+The numerical labels above come from the committed schema-2 t=1 captures in
+`bench/results/critpath/`, not from summing inclusive timers. Their instrumentation
+and filtering caveats still apply, and the t=16 traces are substantially perturbed.
+No label is substituted for `w(v)` in a mathematical speedup bound.
+
+### What must be observed before a hardware decision
+
+1. Identify actual independent work and prerequisite releases, not merely
+   overlapping timestamp intervals or a Cargo package dependency graph.
+2. Establish costs on pinned inputs without intrusive profiling, retaining
+   CPU, memory, job-count and contention observations.
+3. Validate the resulting toolchain on filtered tests, body checks, upstream
+   edits, diagnostics, failure/retry and incremental artifact reuse.
+4. Compare the whole same-binary loop at multiple core allocations using
+   `bench/suite.py`, then compare throughput with multiple independent builds.
+   A single-crate latency plateau does not imply a multitenant throughput plateau.
+
+Measurement fixes `4809f23` and `e629a00` are installed and accepted, as recorded
+in `measurement-acceptance-20261014.md`. Start any new sweep in that distinct
+recorder epoch. Never rewrite the earlier ABBA noise flags to manufacture a win.
+
+Compiler semantic/query/cache/codegen implementation edits were not made. The
+compiler checkout's local LLM gates prohibit soundness-sensitive implementation
+and require a named reviewer for other changes unless its explicitly stated
+personal-use exception applies. Owning a private service is not automatically
+that statement. Reading and explaining the existing evidence does not satisfy
+or bypass those gates. This map is in the client repository, not a compiler
+patch or a substitute implementation.
