@@ -910,6 +910,25 @@ struct Tracked {
     last_cpu_ticks: u64,
 }
 
+fn sampled_tree_cpu_delta(
+    tree: &[procfs::ProcStat],
+    tracked: &mut HashMap<(i32, u64), Tracked>,
+) -> u64 {
+    // Keep each process identity's last observation after it exits. Subtracting
+    // sums of only live processes loses survivor work whenever a child exits.
+    // Repeated roots and regressing reads must not count lifetime CPU twice.
+    let mut delta = 0u64;
+    for p in tree {
+        let previous = &mut tracked
+            .entry((p.pid, p.start_ticks))
+            .or_default()
+            .last_cpu_ticks;
+        delta = delta.saturating_add(p.cpu_ticks.saturating_sub(*previous));
+        *previous = (*previous).max(p.cpu_ticks);
+    }
+    delta
+}
+
 /// A jr-cargo daemon child (`JUSTRUST_CARGO_DAEMON=1`) runs the build
 /// outside cargo's process tree and writes its pid here.
 const DAEMON_PID_FILE: &str = "cargo-daemon.pid";
@@ -928,7 +947,6 @@ fn sample_loop(
     let mut prev_cpu = procfs::cpu_times();
     let mut prev_psi = procfs::pressure();
     let mut prev_t = paths::now();
-    let mut prev_tree_ticks: u64 = 0;
     loop {
         let stop = *done.0.lock().unwrap();
         let t = paths::now();
@@ -949,7 +967,7 @@ fn sample_loop(
         for p in crate::test_pool::live_pids() {
             tree.extend(tree_of(p, &all));
         }
-        let mut tree_ticks = 0;
+        let tree_delta_ticks = sampled_tree_cpu_delta(&tree, &mut tracked);
         let mut rss = 0u64;
         let mut rustc_procs = 0;
         for p in &tree {
@@ -970,7 +988,6 @@ fn sample_loop(
                     max_rss_mb: 0.0,
                 });
             }
-            entry.last_cpu_ticks = p.cpu_ticks;
             let rec = entry.rec.as_mut().unwrap();
             rec.last_seen = t;
             rec.cpu_secs = p.cpu_ticks as f64 / hz;
@@ -978,7 +995,6 @@ fn sample_loop(
             if rec.kind == "rustc" {
                 rustc_procs += 1;
             }
-            tree_ticks += p.cpu_ticks;
             rss += p.rss_pages;
         }
         let in_tree: std::collections::HashSet<i32> = tree.iter().map(|p| p.pid).collect();
@@ -1000,8 +1016,7 @@ fn sample_loop(
             }
             _ => 0.0,
         };
-        // Tree ticks can drop when processes exit, so clamp at zero.
-        let build_cores = (tree_ticks.saturating_sub(prev_tree_ticks)) as f64 / hz / dt;
+        let build_cores = tree_delta_ticks as f64 / hz / dt;
         if !samples.is_empty() || stop {
             samples.push(Sample {
                 t,
@@ -1035,7 +1050,6 @@ fn sample_loop(
         prev_cpu = cpu;
         prev_psi = psi;
         prev_t = t;
-        prev_tree_ticks = tree_ticks;
         if stop {
             break;
         }
@@ -1192,6 +1206,79 @@ fn unify_features(cmd: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cpu_stat(pid: i32, start_ticks: u64, cpu_ticks: u64) -> procfs::ProcStat {
+        procfs::ProcStat {
+            pid,
+            ppid: 1,
+            comm: "rustc".into(),
+            cpu_ticks,
+            start_ticks,
+            rss_pages: 0,
+        }
+    }
+
+    #[test]
+    fn sampled_cpu_preserves_survivor_work_when_other_child_exits() {
+        let mut tracked = HashMap::new();
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 1, 100), cpu_stat(2, 2, 10)], &mut tracked,),
+            110
+        );
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(2, 2, 20)], &mut tracked),
+            10
+        );
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(2, 2, 30), cpu_stat(3, 3, 5)], &mut tracked,),
+            15
+        );
+    }
+
+    #[test]
+    fn sampled_cpu_missing_snapshot_does_not_count_lifetime_again() {
+        let mut tracked = HashMap::new();
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 1, 100)], &mut tracked),
+            100
+        );
+        assert_eq!(sampled_tree_cpu_delta(&[], &mut tracked), 0);
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 1, 110)], &mut tracked),
+            10
+        );
+    }
+
+    #[test]
+    fn sampled_cpu_distinguishes_pid_reuse_and_overlapping_roots() {
+        let mut tracked = HashMap::new();
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 1, 100)], &mut tracked),
+            100
+        );
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 2, 5), cpu_stat(1, 2, 5)], &mut tracked,),
+            5
+        );
+        assert_eq!(tracked.len(), 2);
+    }
+
+    #[test]
+    fn sampled_cpu_counter_regression_does_not_create_later_spike() {
+        let mut tracked = HashMap::new();
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 1, 200)], &mut tracked),
+            200
+        );
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 1, 100)], &mut tracked),
+            0
+        );
+        assert_eq!(
+            sampled_tree_cpu_delta(&[cpu_stat(1, 1, 210)], &mut tracked),
+            10
+        );
+    }
 
     #[test]
     fn required_toolchain_never_accepts_missing_or_substituted_compiler() {
