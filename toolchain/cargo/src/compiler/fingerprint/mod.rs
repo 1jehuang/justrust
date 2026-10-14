@@ -1121,6 +1121,38 @@ pub enum StaleItem {
     },
 }
 
+#[cfg(test)]
+mod execution_graph_fingerprint_tests {
+    use super::*;
+
+    #[test]
+    fn execution_graph_sink_is_not_a_build_script_input() {
+        let mut config = HashMap::default();
+        config.insert(
+            "JUSTRUST_EXECUTION_GRAPH_DIR".into(),
+            OsString::from("private-capture"),
+        );
+        config.insert(
+            "NORMAL_BUILD_INPUT".into(),
+            OsString::from("meaningful-value"),
+        );
+        let config = Arc::new(config);
+        match LocalFingerprint::from_env("JUSTRUST_EXECUTION_GRAPH_DIR", &config) {
+            LocalFingerprint::RerunIfEnvChanged { var, val } => {
+                assert_eq!(var, "JUSTRUST_EXECUTION_GRAPH_DIR");
+                assert_eq!(val, None);
+            }
+            _ => unreachable!(),
+        }
+        match LocalFingerprint::from_env("NORMAL_BUILD_INPUT", &config) {
+            LocalFingerprint::RerunIfEnvChanged { val, .. } => {
+                assert_eq!(val.as_deref(), Some("meaningful-value"));
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl LocalFingerprint {
     /// Read the environment variable of the given env `key`, and creates a new
     /// [`LocalFingerprint::RerunIfEnvChanged`] for it. The `env_config` is used firstly
@@ -1136,7 +1168,11 @@ impl LocalFingerprint {
     ) -> LocalFingerprint {
         let key = key.as_ref();
         let var = key.to_owned();
-        let val = if let Some(val) = env_config.get(key) {
+        // The native scheduler strips its observation-only sink from children.
+        // Compare the environment those children actually receive, not Cargo's.
+        let val = if key == "JUSTRUST_EXECUTION_GRAPH_DIR" {
+            None
+        } else if let Some(val) = env_config.get(key) {
             val.to_str().map(ToOwned::to_owned)
         } else {
             env::var(key).ok()
@@ -1187,7 +1223,9 @@ impl LocalFingerprint {
                         }
                     }
 
-                    let current = if key == CARGO_ENV {
+                    let current = if key == "JUSTRUST_EXECUTION_GRAPH_DIR" {
+                        None
+                    } else if key == CARGO_ENV {
                         Some(cargo_exe.to_str().ok_or_else(|| {
                             format_err!(
                                 "cargo exe path {} must be valid UTF-8",

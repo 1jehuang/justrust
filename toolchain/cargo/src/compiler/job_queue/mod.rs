@@ -113,6 +113,7 @@
 mod job;
 mod job_state;
 mod jr_critical_path;
+mod jr_execution_graph;
 
 use crate::util::data_structures::{HashMap, HashSet};
 use std::cell::RefCell;
@@ -164,6 +165,7 @@ pub struct JobQueue<'gctx> {
     counts: HashMap<PackageId, usize>,
     timings: Timings<'gctx>,
     critical_path: Option<jr_critical_path::Costs>,
+    execution_graph: jr_execution_graph::Capture<Unit>,
 }
 
 /// This structure is backed by the `DependencyQueue` type and manages the
@@ -175,6 +177,7 @@ pub struct JobQueue<'gctx> {
 struct DrainState<'gctx> {
     // This is the length of the DependencyQueue when starting out
     total_units: usize,
+    execution_graph: jr_execution_graph::Capture<Unit>,
 
     queue: DependencyQueue<Unit, Artifact, Job>,
     messages: Arc<Queue<Message>>,
@@ -401,6 +404,7 @@ impl<'gctx> JobQueue<'gctx> {
             counts: HashMap::default(),
             timings: Timings::new(bcx),
             critical_path: jr_critical_path::Costs::from_env(bcx.gctx),
+            execution_graph: jr_execution_graph::Capture::from_env(bcx.gctx),
         }
     }
 
@@ -482,6 +486,18 @@ impl<'gctx> JobQueue<'gctx> {
             .critical_path
             .as_ref()
             .map_or(100, |costs| costs.cost(unit.pkg.name().as_str()));
+        self.execution_graph.declare(
+            unit,
+            queue_deps.iter().map(|(dep, artifact)| {
+                (
+                    dep,
+                    match artifact {
+                        Artifact::All => "all",
+                        Artifact::Metadata => "rmeta",
+                    },
+                )
+            }),
+        );
         self.queue.queue(unit.clone(), job, queue_deps, cost);
         *self.counts.entry(unit.pkg.package_id()).or_insert(0) += 1;
         Ok(())
@@ -494,6 +510,7 @@ impl<'gctx> JobQueue<'gctx> {
     /// possible along each dependency chain.
     #[tracing::instrument(skip_all)]
     pub fn execute(mut self, build_runner: &mut BuildRunner<'_, '_>) -> CargoResult<()> {
+        self.execution_graph.seal();
         if self.critical_path.is_some() {
             self.queue.queue_finished_critical_path();
         } else {
@@ -504,6 +521,7 @@ impl<'gctx> JobQueue<'gctx> {
             Progress::with_style("Building", ProgressStyle::Ratio, build_runner.bcx.gctx);
         let state = DrainState {
             total_units: self.queue.len(),
+            execution_graph: self.execution_graph,
             queue: self.queue,
             // 100 here is somewhat arbitrary. It is a few screenfulls of
             // output, and hopefully at most a few megabytes of memory for
@@ -730,6 +748,14 @@ impl<'gctx> DrainState<'gctx> {
                         self.active[&id].clone()
                     }
                 };
+                self.execution_graph.finish(
+                    &unit,
+                    match artifact {
+                        Artifact::All => "all",
+                        Artifact::Metadata => "rmeta",
+                    },
+                    result.is_ok(),
+                );
                 debug!("end ({:?}): {:?}", unit, result);
                 match result {
                     Ok(()) => self.finish(id, &unit, artifact, build_runner)?,
@@ -906,6 +932,7 @@ impl<'gctx> DrainState<'gctx> {
             }
         }
 
+        self.execution_graph.finalize();
         if let Some(error) = errors.to_error() {
             // Any errors up to this point have already been printed via the
             // `display_error` inside `handle_error`.
@@ -1020,6 +1047,7 @@ impl<'gctx> DrainState<'gctx> {
 
         let messages = self.messages.clone();
         let is_fresh = job.freshness().is_fresh();
+        self.execution_graph.start(unit, is_fresh);
         let rmeta_required = build_runner.rmeta_required(unit);
         let lock_manager = build_runner.lock_manager.clone();
         let warning_handling = build_runner.bcx.gctx.warning_handling().unwrap_or_default();

@@ -468,6 +468,9 @@ impl<'gctx> Compilation<'gctx> {
         cmd.cwd(pkg.root());
 
         apply_env_config(self.gctx, &mut cmd)?;
+        // Native scheduler capture is observation-only. Do not expose its sink
+        // to rustc, proc macros, build scripts, rustdoc or executed targets.
+        cmd.env_remove("JUSTRUST_EXECUTION_GRAPH_DIR");
 
         Ok(cmd)
     }

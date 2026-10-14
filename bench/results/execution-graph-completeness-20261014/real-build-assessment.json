@@ -1,0 +1,94 @@
+[
+  {
+    "schema": 1,
+    "producer": "cargo-scheduler",
+    "scope": "cargo-unit-scheduler",
+    "capture_id": "cargo-376386-1791990264428140472-0",
+    "structural_complete": true,
+    "full_pipeline_complete": false,
+    "nodes": 86,
+    "edges": 126,
+    "issues": [],
+    "opaque_boundaries": [
+      "rustc-internals",
+      "build-script-processes",
+      "proc-macro-execution",
+      "linker-internals",
+      "test-execution",
+      "cargo-resolution-and-fingerprints",
+      "cargo-jobserver-and-resource-waits",
+      "cache-and-client-service-work"
+    ],
+    "cpu_work_ns": null,
+    "execution_span_ns": null
+  },
+  {
+    "schema": 1,
+    "producer": "cargo-scheduler",
+    "scope": "cargo-unit-scheduler",
+    "capture_id": "cargo-383019-1791990296550336577-0",
+    "structural_complete": true,
+    "full_pipeline_complete": false,
+    "nodes": 86,
+    "edges": 126,
+    "issues": [],
+    "opaque_boundaries": [
+      "rustc-internals",
+      "build-script-processes",
+      "proc-macro-execution",
+      "linker-internals",
+      "test-execution",
+      "cargo-resolution-and-fingerprints",
+      "cargo-jobserver-and-resource-waits",
+      "cache-and-client-service-work"
+    ],
+    "cpu_work_ns": null,
+    "execution_span_ns": null
+  },
+  {
+    "schema": 1,
+    "producer": "cargo-scheduler",
+    "scope": "cargo-unit-scheduler",
+    "capture_id": "cargo-383850-1791990300898630372-0",
+    "structural_complete": true,
+    "full_pipeline_complete": false,
+    "nodes": 86,
+    "edges": 126,
+    "issues": [],
+    "opaque_boundaries": [
+      "rustc-internals",
+      "build-script-processes",
+      "proc-macro-execution",
+      "linker-internals",
+      "test-execution",
+      "cargo-resolution-and-fingerprints",
+      "cargo-jobserver-and-resource-waits",
+      "cache-and-client-service-work"
+    ],
+    "cpu_work_ns": null,
+    "execution_span_ns": null
+  },
+  {
+    "schema": 1,
+    "producer": "cargo-scheduler",
+    "scope": "cargo-unit-scheduler",
+    "capture_id": "cargo-386696-1791990314305613414-0",
+    "structural_complete": true,
+    "full_pipeline_complete": false,
+    "nodes": 86,
+    "edges": 126,
+    "issues": [],
+    "opaque_boundaries": [
+      "rustc-internals",
+      "build-script-processes",
+      "proc-macro-execution",
+      "linker-internals",
+      "test-execution",
+      "cargo-resolution-and-fingerprints",
+      "cargo-jobserver-and-resource-waits",
+      "cache-and-client-service-work"
+    ],
+    "cpu_work_ns": null,
+    "execution_span_ns": null
+  }
+]

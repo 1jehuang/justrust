@@ -19,6 +19,7 @@ mod depcache_gc;
 mod depcache_prebuilt;
 mod depcache_remote;
 mod early;
+mod execution_graph;
 mod export;
 mod findings;
 mod history;
@@ -189,6 +190,13 @@ enum Command {
     Show {
         /// Run id or prefix, or "last".
         id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate native execution graph receipts without claiming full-pipeline coverage.
+    Graph {
+        /// A receipt JSON file or directory written by jr-cargo.
+        path: PathBuf,
         #[arg(long)]
         json: bool,
     },
@@ -725,6 +733,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         Command::Split { apply: Some(_), .. } => "split_apply",
         Command::Split { .. } => "split",
         Command::Login { .. } => "login",
+        Command::Graph { .. } => "graph",
         Command::Logout => "logout",
         Command::Mcp => "mcp",
         Command::Agents { .. } => "agents",
@@ -743,6 +752,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Build(p) => agent("build", p.args),
         Command::Clippy(p) => agent("clippy", p.args),
         Command::Run(p) => agent("run", p.args),
+        Command::Graph { path, json } => execution_graph::command(&path, json)?,
         Command::Cargo(p) => record::main(p.args),
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,
