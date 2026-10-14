@@ -1,0 +1,106 @@
+{
+  "scope": "bounded stock-only quiet preflight, no compilation or hosted calls",
+  "started_at": "2026-10-14T01:17:48.113976+00:00",
+  "finished_at": "2026-10-14T01:18:35.001185+00:00",
+  "quiet": false,
+  "consecutive_quiet_samples": 0,
+  "samples": [
+    {
+      "load1": 3.36,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.36,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.49,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.49,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.37,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.37,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.5,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.5,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.5,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.38,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.38,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.51,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.51,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.51,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.31,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.31,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.13,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.13,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 3.13,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 2.88,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 2.88,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 2.73,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 2.73,
+      "foreign_rustc": 0
+    },
+    {
+      "load1": 2.73,
+      "foreign_rustc": 0
+    }
+  ],
+  "stock_benchmark_entered": false
+}

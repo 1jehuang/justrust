@@ -116,3 +116,11 @@ Existing idle-stop behavior therefore remains unchanged until the host is
 relaunched from the new bootstrap. No permissions or idle/lifetime safeguards
 were weakened. Longer remote-only work still needs the owner's existing
 keepalive or the future bootstrap rollout.
+
+The next stock-only quiet preflight at 01:17:48 to 01:18:35 UTC failed: all
+24 readings had no foreign rustc, but load ranged from 2.73 to 3.51 and never
+met the three-consecutive-readings-below-2 gate. No stock compile or hosted
+benchmark was entered. Exact observations are preserved in
+`bench/results/hosted-stock-quiet-preflight-20261014-011748.json`. The one
+remaining performance todo is pending its scheduled 01:55 UTC continuation,
+not marked complete and not retried in a loop.
