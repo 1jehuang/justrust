@@ -1,5 +1,22 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: toolchain cleanup completed, default promotion blocked
+
+Owned release compiler/Cargo `jr-910e39a6c3ef` was built and staged without
+changing the existing default. Root check, 457 tests (3 ignored), strict
+Clippy, LLVM smoke and the real Desktop fps_counter edit passed. Legacy
+checkouts were retired reversibly, with all Git/build data preserved.
+
+The comprehensive seed-1, 40-point promotion baseline completed under a
+frozen client, but all 40 observations were noisy. The reporter also flags
+outcome-provenance gaps and a suspect rerun cache artifact. Baseline run
+`20261014-093757263-2242292135` detected foreign compiler activity; candidate
+run `20261014-101956044-2917310751` did too. Candidate was stopped after 15
+noisy points because the baseline cannot support a valid comparison.
+`bench/suite.py compare` blocks the pair. No speed or default-promotion claim
+is made. Full baseline, explicit partial candidate and all 55 observed run
+receipts are committed. See `docs/toolchain-cleanup-promotion-20261014.md`.
+
 ## 2026-10-14: native admitted-query lifecycle acceptance
 
 The owned stage1 compiler, std and libtest were rebuilt, then the opt-in
