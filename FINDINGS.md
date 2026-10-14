@@ -6992,3 +6992,30 @@ only for explicit paths/resources/addresses/long bearer tokens. Requirement
 mapping and limitations: `docs/scheduler-legacy-attempt-20261014.md`; artifacts:
 `bench/results/scheduler-legacy-3f47-20261014/`. All 37 cited exports are in
 `data/runs/scheduler-legacy-c7i-20261014/2026-10.jsonl`.
+
+## 2026-10-14: independently bound compiler captures, not a whole-pipeline graph
+
+Source cohort `d3a5319b9` binds selected native Cargo launch declarations to
+independent compiler entry and schema-3 query receipts. Actual dirty acceptance
+reconciled 1 unit, 1 launch and 7 journals with one entry/query; fresh reuse
+reconciled 1 unit and 3 journals with zero compiler launches. Deleted required
+evidence, a failed compiler, and a nonprivate sink never passed completeness.
+The nonprivate sink still compiled successfully while reporting one lost event.
+
+A real proc macro exposed the original late private argument in process argv
+and changed generated output. That transport was rejected before publication.
+The replacement reserved-fd-v2 transport adds no argument or environment entry,
+preserves foreign descriptors on rejected probes/collisions, and consumes valid
+transport only at an explicit unsafe process-main ownership boundary. Rebuilt
+native acceptance passed exact full argv, generated output and executable SHA
+equality, as well as warm off/on/off executable identity and fresh reuse.
+
+Focused consumer run `20261014-103451429-3329324` passed 28 tests; its export and
+six related targeted recorded runs are in
+`data/runs/compiler-binding-20261014/2026-10.jsonl`. Final actual acceptance and
+artifact fingerprints are in that directory's `native-acceptance.json`, with
+procedures and limitations in `docs/compiler-binding-native-results-20261014.md`.
+Combined hosted client gates passed 540 tests, check and strict all-target lint.
+Capture remains opt-in and scoped: full-pipeline completeness is false,
+CPU-work/span are null, wrappers and early-reply cache paths remain unsupported,
+and no speedup or thread ceiling follows from these receipts.

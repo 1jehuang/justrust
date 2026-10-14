@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "date": "2026-10-14",
+  "source_cohort": "d3a5319b9",
+  "protocol_capability": "jr-query-admission-binding: reserved-fd-v2,query-schema=3",
+  "scope": "buildrunner-compiler-launch-coverage",
+  "full_pipeline_complete": false,
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "path_redacted": true,
+  "artifact_sha256": {
+    "native_cargo": "d7c9c463885364a0f246488b86a10ff5a8426809c2ee30fcbde128be972195e1",
+    "native_rustc_launcher": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+    "proc_macro_fixture_executable": "1b8f70f31ae9808ff21793e39eec3ef6c8c70792d326096dce31866991c14c25"
+  },
+  "acceptance": {
+    "proc_macro_full_argv_equal": true,
+    "proc_macro_generated_output_equal": true,
+    "proc_macro_executable_sha_equal": true,
+    "proc_macro_genuine_entry_required": true,
+    "warm_executable_off_on_off_equal": true,
+    "deleted_required_evidence_not_complete": true,
+    "blocked_sink_preserved": true,
+    "native_admission_serial_parallel_and_failure_passed": true,
+    "macro_unittest_seconds": 1.430,
+    "binding_unittest_seconds": 7.678,
+    "admission_unittest_seconds": 0.847,
+    "timings_are_speedup_evidence": false
+  },
+  "observed_cases": [
+    {
+      "case": "dirty",
+      "expected_units": 1,
+      "expected_launches": 1,
+      "expected_journals": 7,
+      "observed_entries": 1,
+      "observed_queries": 1,
+      "lost_events": 0,
+      "outcome": "success",
+      "structural_complete": true,
+      "unreconciled_receipt_files": 1
+    },
+    {
+      "case": "fresh",
+      "expected_units": 1,
+      "expected_launches": 0,
+      "expected_journals": 3,
+      "observed_entries": 0,
+      "observed_queries": 0,
+      "lost_events": 0,
+      "outcome": "success",
+      "structural_complete": true,
+      "unreconciled_receipt_files": 1
+    },
+    {
+      "case": "failed",
+      "expected_units": 1,
+      "expected_launches": 1,
+      "expected_journals": 7,
+      "observed_entries": 1,
+      "observed_queries": 0,
+      "lost_events": 0,
+      "outcome": "failure",
+      "structural_complete": false,
+      "unreconciled_receipt_files": 1
+    },
+    {
+      "case": "nonprivate_sink",
+      "expected_units": 1,
+      "expected_launches": 1,
+      "expected_journals": 7,
+      "observed_entries": 0,
+      "observed_queries": 0,
+      "lost_events": 1,
+      "outcome": "success",
+      "structural_complete": false,
+      "unreconciled_receipt_files": 1
+    }
+  ]
+}
