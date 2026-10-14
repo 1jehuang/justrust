@@ -433,7 +433,10 @@ fn machine_jobs(args: &[String], env: &[(String, String)]) -> Option<usize> {
 /// `JUSTRUST_REMOTE_TOOLCHAIN` says otherwise (`system` keeps the machine's
 /// rustc, any other value is used as the default spec).
 fn store_toolchain(cwd: &Path, env: &[(String, String)]) -> Option<String> {
-    if env.iter().any(|(k, _)| k == "JUSTRUST_TOOLCHAIN") {
+    if env
+        .iter()
+        .any(|(k, _)| matches!(k.as_str(), "JUSTRUST_TOOLCHAIN" | "RUSTUP_TOOLCHAIN"))
+    {
         return None;
     }
     let want = std::env::var("JUSTRUST_REMOTE_TOOLCHAIN")
@@ -664,6 +667,8 @@ mod tests {
         assert_eq!(store_toolchain(&sub, &[]), want);
         // The client chose one: keep it.
         let env = [("JUSTRUST_TOOLCHAIN".to_string(), "system".to_string())];
+        assert_eq!(store_toolchain(&sub, &env), None);
+        let env = [("RUSTUP_TOOLCHAIN".to_string(), "1.90.0".to_string())];
         assert_eq!(store_toolchain(&sub, &env), None);
         // The project pins one (rustup file or justrust.toml): keep it.
         std::fs::write(d.join("a/rust-toolchain.toml"), "").unwrap();

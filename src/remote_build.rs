@@ -25,6 +25,17 @@ use crate::remote_proto::{Msg, read_frame, write_frame};
 // Forward only public build controls, never credentials or machine-local paths.
 // Opt-ins and opt-outs must mean the same thing on hosted as they do locally.
 const FORWARDED_ENV: &[&str] = &[
+    "JUSTRUST_RELEASE_BUILD",
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTUP_TOOLCHAIN",
+    "JCODE_DESKTOP_VERSION",
+    "JCODE_DESKTOP_BUILD_METADATA",
+    "SOURCE_DATE_EPOCH",
+    "JCODE_RELEASE_BUILD",
+    "JCODE_BUILD_METADATA_FILE",
+    "JCODE_BUILD_SEMVER",
+    "JCODE_BUILD_CHANGELOG_RAW",
     "JUSTRUST_MAX_WARNINGS",
     "RUST_BACKTRACE",
     "RUST_LOG",
@@ -34,6 +45,7 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_DEPCACHE",
     "JUSTRUST_PEER_CACHE",
     "JUSTRUST_TOOLCHAIN",
+    "JUSTRUST_TOOLCHAIN_REQUIRED",
     "JUSTRUST_TOOLCHAIN_DIST",
     "JUSTRUST_TOOLCHAIN_AUTO_INSTALL",
     "JUSTRUST_PREBUILT",
@@ -926,7 +938,19 @@ mod tests {
     #[test]
     fn hosted_forwards_explicit_optimization_controls_not_secrets_or_local_paths() {
         for var in [
+            "JUSTRUST_RELEASE_BUILD",
+            "RUSTFLAGS",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "RUSTUP_TOOLCHAIN",
+            "JCODE_DESKTOP_VERSION",
+            "JCODE_DESKTOP_BUILD_METADATA",
+            "SOURCE_DATE_EPOCH",
+            "JCODE_RELEASE_BUILD",
+            "JCODE_BUILD_METADATA_FILE",
+            "JCODE_BUILD_SEMVER",
+            "JCODE_BUILD_CHANGELOG_RAW",
             "JUSTRUST_TOOLCHAIN_DIST",
+            "JUSTRUST_TOOLCHAIN_REQUIRED",
             "JUSTRUST_TOOLCHAIN_AUTO_INSTALL",
             "JUSTRUST_SHADOW",
             "JUSTRUST_TEST_FILTER_COMPILE",

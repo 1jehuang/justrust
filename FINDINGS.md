@@ -6070,6 +6070,53 @@ path-redacted exports are under `data/runs/hosted-west-syncfix/`. This is compil
 source correctness evidence, not proof of a newly installed client or a speedup.
 Installation and new-root end-user acceptance are a separate rollout gate.
 
+## 2026-10-14: hosted native release binaries for CI
+
+The hosted service already admits runs and provisions tenant SSH connections;
+release artifacts use that connection, not a new cloud HTTP artifact API. The
+missing CI case was a fresh runner against warm Cargo outputs: timestamp-based
+selection omitted binaries older than the invocation. Missing local artifacts
+now transfer regardless of age. Native GNU/Linux explicit targets are routed,
+while cross/musl/custom/multiple targets remain local (or fail when required).
+`JUSTRUST_REMOTE_REQUIRED=1` rejects local routing and infrastructure fallback.
+Public compiler pins, flags, release markers and Jcode metadata inputs are
+forwarded, without forwarding credentials. A rustup variable suppresses the
+store default but is not sufficient with standalone Cargo/rustc. The release
+contract therefore uses `JUSTRUST_TOOLCHAIN=<exact version>` and
+`JUSTRUST_TOOLCHAIN_REQUIRED=1`. Typed requirement failures cannot be swallowed
+by the recorder's ordinary fail-open handler.
+
+Real fixture acceptance `20261013-204341433-1071846` fetched and executed a
+stripped x86-64 GNU/Linux binary from `target/x86_64-unknown-linux-gnu/release/`.
+After deleting only the local binary, `20261013-204353848-1072682` compiled zero
+units, reused one fresh unit and re-fetched the older output in 0.22 s (0.82 s
+client wall). Both executions printed the requested version/release/metadata/
+epoch values and produced SHA256
+`3a94b079651cf0fd1c8130d1fdfcbb4bd5c7f8dba8c0b49272da35b7e3617042`.
+The initial smoke used the host's standalone Rust 1.99.0, not a certified project
+release pin; merely setting `RUSTUP_TOOLCHAIN` is insufficient on this host.
+An official 1.90.0 toolchain was installed on the account's host for subsequent
+strict-pinning acceptance, with no change to its default compiler.
+Lib tests `20261013-204224122-1065521` passed 360 with three ignored;
+lint `20261013-204239912-1066461` had zero warnings. Exact slim exports are in
+`data/runs/hosted-release-ci/`. Full suite `20261013-205323034-1131121`
+passed 393 tests with three ignored. Exact official Rust 1.90.0 acceptance
+`20261013-205452142-1140525` selected the requested compiler, fetched the release
+binary and executed all metadata and RUSTFLAGS assertions. A real hosted
+uninstalled `0.0.0` pin with auto-install disabled exited 1 without compiling or
+falling back. Final lint `20261013-205524366-1143599` passed with `-D warnings`,
+and strict requirement integration `20261013-205530034-1144008` passed both tests.
+These are correctness and transfer measurements, not a speedup claim.
+The existing slow large-bundle publish fixture dominated the lib test run at
+9.9 s; optimizing it is follow-up, not part of this release support change.
+
+See `docs/hosted-release-ci.md` for the command contract and adoption gates.
+Git metadata is not mirrored, arbitrary environment variables are not forwarded,
+and profile-directory artifact scanning can include unselected binaries. Package
+only expected names. Native libraries, toolchain availability and end-user glibc
+compatibility still need application validation. No cloud deployment, public
+release, API-secret provisioning or billing change was made.
+
 ## 2026-10-14: native archive identity and actual toolchain helper closure
 
 A real bundled C helper changed behavior from 1 to 2 with byte-identical Rust

@@ -64,7 +64,25 @@ pub enum Mode {
 }
 
 pub fn mode() -> Mode {
-    mode_from(std::env::var("JUSTRUST_REMOTE").ok().as_deref())
+    required_mode(
+        mode_from(std::env::var("JUSTRUST_REMOTE").ok().as_deref()),
+        remote_required(),
+    )
+}
+
+fn remote_required() -> bool {
+    matches!(
+        std::env::var("JUSTRUST_REMOTE_REQUIRED").as_deref(),
+        Ok("1" | "true" | "yes")
+    )
+}
+
+fn required_mode(mode: Mode, required: bool) -> Mode {
+    if required && mode != Mode::Off {
+        Mode::Force
+    } else {
+        mode
+    }
 }
 
 fn mode_from(v: Option<&str>) -> Mode {
@@ -90,14 +108,17 @@ fn routable_build(args: &[String]) -> bool {
         return false;
     }
     let cargo: Vec<&String> = args.iter().take_while(|a| *a != "--").collect();
-    if cargo
-        .iter()
-        .any(|a| *a == "--target" || a.starts_with("--target=") || a.contains("target-dir"))
-    {
+    if cargo.iter().any(|a| a.contains("target-dir")) {
         return false;
     }
+    if let Some(target) = crate::remote_artifacts::build_target(args) {
+        let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+        if target != native {
+            return false;
+        }
+    }
     let os: Vec<OsString> = args.iter().map(OsString::from).collect();
-    crate::slots::profile_dir(&os) != Path::new("debug")
+    crate::slots::profile_dir(&os).file_name() != Some(std::ffi::OsStr::new("debug"))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -410,6 +431,10 @@ pub fn local_reason() -> Option<String> {
 static ROUTED_CMD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn say_local(why: &str) {
+    if remote_required() {
+        eprintln!("justrust: remote required, refusing local build ({why})");
+        std::process::exit(1);
+    }
     let _ = LOCAL_REASON.set(why.to_string());
     if explain() {
         eprintln!("justrust: local ({why})");
@@ -556,6 +581,10 @@ pub fn maybe_remote(full: &[OsString]) {
     match remote_build::run_remote(sub, &args[1..], start) {
         Ok(Ok(o)) => std::process::exit(o.code),
         Ok(Err(Infra(msg))) => {
+            if remote_required() {
+                eprintln!("justrust: remote required, refusing local fallback: {msg}");
+                std::process::exit(1);
+            }
             if let Some(f) = fail_file() {
                 let _ = std::fs::write(f, format!("{now} {msg}\n"));
             }
@@ -587,6 +616,43 @@ pub fn maybe_remote(full: &[OsString]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn required_remote_forces_routing_but_preserves_explicit_local_conflict() {
+        for mode in [Mode::Default, Mode::Auto, Mode::Force] {
+            assert_eq!(required_mode(mode, true), Mode::Force);
+            assert_eq!(required_mode(mode, false), mode);
+        }
+        assert_eq!(required_mode(Mode::Off, true), Mode::Off);
+    }
+
+    #[test]
+    fn release_build_accepts_only_native_gnu_target() {
+        let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+        let args = |target: &str| {
+            vec![
+                "build".into(),
+                "--release".into(),
+                format!("--target={target}"),
+            ]
+        };
+        assert!(routable_build(&args(&native)));
+        assert!(!routable_build(&[
+            "build".into(),
+            format!("--target={native}")
+        ]));
+        assert!(!routable_build(&args("x86_64-unknown-linux-musl")));
+        assert!(!routable_build(&args("wasm32-unknown-unknown")));
+        assert!(!routable_build(&args("../custom.json")));
+        let mut multiple = args(&native);
+        multiple.push(format!("--target={native}"));
+        assert!(!routable_build(&multiple));
+        assert!(!routable_build(&[
+            "build".into(),
+            "--release".into(),
+            "--target".into()
+        ]));
+    }
 
     const NOW: f64 = 1_000_000.0;
     const CWD: &str = "/w";

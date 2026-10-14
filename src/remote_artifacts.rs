@@ -144,12 +144,15 @@ fn candidates(dir: &Path) -> Vec<(String, std::fs::Metadata)> {
     out
 }
 
-/// What the machine should send: newer than the client's copy.
+/// What the machine should send: missing here or newer than the client's copy.
+/// Cargo may reuse an old output on the host for a fresh CI checkout.
 fn needed(have: Option<&Have>, rid: &str, rmtime: f64, start: f64) -> bool {
     if have.and_then(|h| h.id.as_deref()) == Some(rid) {
         return false;
     }
-    rmtime >= start - SLACK_SECS || have.is_some_and(|h| h.id.is_some() || h.mtime < rmtime)
+    have.is_none()
+        || rmtime >= start - SLACK_SECS
+        || have.is_some_and(|h| h.id.is_some() || h.mtime < rmtime)
 }
 
 /// A relative name that stays inside the profile dir.
@@ -170,6 +173,27 @@ fn profile_dir(cwd: &Path, args: &[String]) -> Result<PathBuf> {
     let target = crate::slots::target_dir_in(cwd, &os)
         .context("could not resolve the target dir (cargo metadata)")?;
     Ok(target.join(crate::slots::profile_dir(&os)))
+}
+
+/// Cargo's explicit target selector, before any trailing command arguments.
+/// Empty means malformed or multiple selectors, which routing must reject.
+pub(crate) fn build_target(args: &[String]) -> Option<&str> {
+    let mut args = args.iter().take_while(|a| a.as_str() != "--");
+    let mut target = None;
+    while let Some(arg) = args.next() {
+        if arg == "--target" {
+            if target.is_some() {
+                return Some("");
+            }
+            target = Some(args.next().map(String::as_str).unwrap_or(""));
+        } else if let Some(value) = arg.strip_prefix("--target=") {
+            if target.is_some() {
+                return Some("");
+            }
+            target = Some(value);
+        }
+    }
+    target
 }
 
 /// Machine side: `justrust __artifacts`, request on stdin, frames on stdout.
@@ -497,6 +521,29 @@ pub fn available() -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn explicit_target_forms_and_separator() {
+        let s = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            build_target(&s(&["build", "--target", "x86_64-unknown-linux-gnu"])),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            build_target(&s(&["build", "--target=x86_64-unknown-linux-gnu"])),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(build_target(&s(&["build", "--", "--target=ignored"])), None);
+        assert_eq!(build_target(&s(&["build", "--target"])), Some(""));
+        assert_eq!(
+            build_target(&s(&["build", "--target=a", "--target=b"])),
+            Some("")
+        );
+        assert_eq!(
+            build_target(&s(&["build", "--target", "a", "--target=a"])),
+            Some("")
+        );
+    }
+
     fn have(id: Option<&str>, mtime: f64) -> Have {
         Have {
             name: "x".into(),
@@ -529,8 +576,8 @@ mod tests {
         assert!(!needed(Some(&have(Some("a"), 1.0)), "a", 100.0, 100.0));
         // Built by this run: always.
         assert!(needed(None, "a", 100.0, 100.0));
-        // Old artifact the client never had: not this build's business.
-        assert!(!needed(None, "a", 10.0, 100.0));
+        // Fresh CI runner must receive cached output even when Cargo did no work.
+        assert!(needed(None, "a", 10.0, 100.0));
         // Client copy came from us and differs: send.
         assert!(needed(Some(&have(Some("b"), 50.0)), "a", 10.0, 100.0));
         // Client built it itself, older than ours: send. Newer: keep.
@@ -566,7 +613,9 @@ mod tests {
             let req = Request {
                 cwd: String::new(),
                 args: vec![],
-                start: 0.0,
+                // All outputs predate this request, as in a warm-host CI build.
+                start: crate::sys::mtime_f64(&std::fs::metadata(remote.join("app")).unwrap())
+                    + 60.0,
                 have,
             };
             let mut out = Vec::new();

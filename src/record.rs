@@ -242,6 +242,10 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
     match record(&args, opts) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
+            if e.downcast_ref::<ToolchainRequired>().is_some() {
+                eprintln!("justrust: {e:#}");
+                std::process::exit(1);
+            }
             eprintln!("justrust: recording disabled for this run: {e:#}");
             exec_cargo(&args);
         }
@@ -293,7 +297,24 @@ pub fn apply_toolchain_env(cmd: &mut Command, tc: &crate::toolchain::Toolchain) 
 fn record(args: &[OsString], opts: Options) -> Result<i32> {
     // A pinned toolchain (`justrust.toml`) replaces the system cargo and
     // rustc. Installed on first use. Fails open to the system toolchain.
+    let required = matches!(
+        std::env::var("JUSTRUST_TOOLCHAIN_REQUIRED").as_deref(),
+        Ok("1" | "true" | "yes")
+    );
+    let requested = if required {
+        let cwd = std::env::current_dir()?;
+        Some(crate::toolchain::resolve(&cwd)
+            .map_err(|e| ToolchainRequired(format!("toolchain required: invalid pin: {e:#}")))?
+            .ok_or_else(|| ToolchainRequired("toolchain required: set JUSTRUST_TOOLCHAIN to an exact version, not system".into()))?
+            .spec.id())
+    } else {
+        None
+    };
     let pinned = crate::toolchain::for_build();
+    require_selected_toolchain(
+        requested.as_deref(),
+        pinned.as_ref().map(|tc| tc.id.as_str()),
+    )?;
     let real_cargo = match &pinned {
         Some(tc) => tc.cargo(),
         None => paths::real_cargo()?,
@@ -574,6 +595,28 @@ fn record(args: &[OsString], opts: Options) -> Result<i32> {
         slots::maybe_gc_background(&s.info);
     }
     Ok(code)
+}
+
+#[derive(Debug)]
+struct ToolchainRequired(String);
+
+impl std::fmt::Display for ToolchainRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for ToolchainRequired {}
+
+fn require_selected_toolchain(requested: Option<&str>, selected: Option<&str>) -> Result<()> {
+    if let Some(want) = requested
+        && selected != Some(want)
+    {
+        return Err(ToolchainRequired(format!(
+            "toolchain required: {want} is unavailable, refusing system compiler fallback"
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1138,6 +1181,14 @@ fn unify_features(cmd: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn required_toolchain_never_accepts_missing_or_substituted_compiler() {
+        assert!(require_selected_toolchain(Some("1.99.0"), Some("1.99.0")).is_ok());
+        assert!(require_selected_toolchain(Some("1.99.0"), None).is_err());
+        assert!(require_selected_toolchain(Some("1.99.0"), Some("jr-abcdef1")).is_err());
+        assert!(require_selected_toolchain(None, None).is_ok());
+    }
 
     #[test]
     fn test_filter_lines_from_libtest_args() {
