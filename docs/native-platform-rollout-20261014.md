@@ -75,3 +75,17 @@ final validation. Later local validation avoids the separately reserved hosted
 benchmark window; it does not establish native platform acceptance. Final local
 warning-free clippy passed in `20261013-204744502-1094554` and all 25 hosted
 client tests passed locally in `20261013-204753721-1095315`.
+
+## Activation status
+
+On October 14, 2026 at 03:52 UTC, AWS reported zero quota for Mac Dedicated
+Hosts in us-west-2. A request for one `mac2-m2pro` host was submitted and is
+pending AWS approval. No Mac host was allocated. The live AWS Price List
+confirms this host costs $1.56/hour before disk and network usage, with the
+24-hour allocation constraint above. This is an activation blocker, not a
+reason to advertise native hosted builds as available.
+
+Global client reinstallation and additional hosted validation are deferred
+until a separately coordinated benchmark lease ends, to preserve other agents'
+measurements. The client and cloud protocol must be deployed in order: cloud
+first (accept explicit Linux), then client installation.
