@@ -78,8 +78,9 @@ const TARGET_TOKEN: &str = "@@JUSTRUST_TARGET_DIR@@";
 /// lines are the same on every machine and can be shared remotely.
 const CARGO_HOME_TOKEN: &str = "@@JUSTRUST_CARGO_HOME@@";
 const XATTR: &str = "user.justrust.h";
-/// Memoized `extern_hash` (metadata only), same `<stamp>|<hash>` format.
-const XATTR_META: &str = "user.justrust.m";
+/// Memoized `extern_hash`, same `<stamp>|<hash>` format. Version 2 does not
+/// accept metadata-only memo entries for executable dynamic libraries.
+const XATTR_META: &str = "user.justrust.m2";
 
 pub fn enabled() -> bool {
     !matches!(
@@ -834,19 +835,16 @@ fn key_extern(
     Some(())
 }
 
-/// Key of an `--extern` artifact: its crate metadata, which is all a
-/// dependent reads from it. Object code (debuginfo naming the sysroot) and
-/// linker or C runtime differences (another host's gcc) then stop cascading
-/// through dependents' keys, while any metadata change (SVH, spans) still
-/// changes them, so mismatched artifacts can never meet (E0460).
-/// - `.rmeta`: the whole file;
-/// - `.rlib`: the `lib.rmeta` archive member;
-/// - `.so` (proc macro, dylib): the ELF `.rustc` section;
-/// - `.dylib` on macOS: the Mach-O `__DATA,.rustc` section;
-/// - `.dll` on Windows: the PE `.rustc` section.
+/// Key of an `--extern` artifact. Ordinary Rust libraries use crate metadata
+/// for compiler inputs (`.rmeta`, or the `lib.rmeta` member of an `.rlib`).
+/// Dynamic libraries use the whole file: a proc macro EXECUTES its code and
+/// native helper code, neither of which is fully described by `.rustc` metadata.
+/// Metadata-only dynamic-library hashes could replay a dependent compiled with
+/// a different macro implementation even when the Rust metadata was unchanged.
 ///
 /// Anything unparsable falls back to the whole-file content hash. Memoized
-/// in the `user.justrust.m` xattr, validated like `file_hash`.
+/// in `user.justrust.m2`, validated like `file_hash`. This does not establish
+/// purity of macro expansions or permit sharing tenant expansion outputs.
 pub(crate) fn extern_hash(path: &Path) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     let st = stamp(&meta);
@@ -856,7 +854,16 @@ pub(crate) fn extern_hash(path: &Path) -> Option<String> {
     {
         return Some(hash.to_owned());
     }
-    let hash = match metadata_bytes(path) {
+    let executable_library = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e, "so" | "dylib" | "dll"));
+    let metadata = if executable_library {
+        None
+    } else {
+        metadata_bytes(path)
+    };
+    let hash = match metadata {
         Some(b) => {
             let mut h = H128::new();
             h.field(b"meta");
@@ -1749,6 +1756,144 @@ mod tests {
             assert!(need >= (2, 2) && need <= have, "{need:?} vs {have:?}");
         }
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn extern_keys_hash_dynamic_library_executable_bytes() {
+        let d = std::env::temp_dir().join(format!("jr-dynamic-extern-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        // Valid section table for the metadata reader. The trailing native code
+        // changes without changing the .rustc section, as can happen when a
+        // build script relinks the same Rust proc macro against another C helper.
+        let image = |code: u8| {
+            let names = b"\0.shstrtab\0.rustc\0";
+            let metadata = b"rust-meta";
+            let mut bytes = vec![0u8; 256];
+            bytes[..6].copy_from_slice(b"\x7fELF\x02\x01");
+            bytes[0x28..0x30].copy_from_slice(&64u64.to_le_bytes());
+            bytes[0x3a..0x3c].copy_from_slice(&64u16.to_le_bytes());
+            bytes[0x3c..0x3e].copy_from_slice(&3u16.to_le_bytes());
+            bytes[0x3e..0x40].copy_from_slice(&1u16.to_le_bytes());
+            for (entry, name, offset, size) in [
+                (128usize, 1u32, 256u64, names.len() as u64),
+                (192, 11, 256 + names.len() as u64, metadata.len() as u64),
+            ] {
+                bytes[entry..entry + 4].copy_from_slice(&name.to_le_bytes());
+                bytes[entry + 24..entry + 32].copy_from_slice(&offset.to_le_bytes());
+                bytes[entry + 32..entry + 40].copy_from_slice(&size.to_le_bytes());
+            }
+            bytes.extend_from_slice(names);
+            bytes.extend_from_slice(metadata);
+            bytes.push(code);
+            bytes
+        };
+        for extension in ["so", "dylib"] {
+            let a = d.join(format!("liba.{extension}"));
+            let b = d.join(format!("libb.{extension}"));
+            std::fs::write(&a, image(1)).unwrap();
+            std::fs::write(&b, image(2)).unwrap();
+            assert_eq!(metadata_bytes(&a), Some(b"rust-meta".to_vec()));
+            assert_eq!(metadata_bytes(&a), metadata_bytes(&b));
+            let st = stamp(&std::fs::metadata(&a).unwrap());
+            xattr_set(&a, "user.justrust.m", &format!("{st}|old-metadata-only"));
+            let first = extern_hash(&a).unwrap();
+            assert!(first.starts_with('f'));
+            assert_ne!(first, "old-metadata-only");
+            assert_ne!(Some(first.clone()), extern_hash(&b));
+            assert_eq!(Some(first), extern_hash(&a));
+            std::fs::write(&a, image(2)).unwrap();
+            assert_eq!(extern_hash(&a), extern_hash(&b));
+        }
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_proc_macro_code_changes_hash_and_expansion() {
+        use std::process::Command;
+        let compiler = paths::find_on_path("rustc", Path::new(""));
+        let cc = paths::find_on_path("cc", Path::new(""));
+        let ar = paths::find_on_path("ar", Path::new(""));
+        let (Some(compiler), Some(cc), Some(ar)) = (compiler, cc, ar) else {
+            eprintln!("native proc-macro acceptance requires rustc, cc and ar");
+            return;
+        };
+        let base = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let d = base.join(format!("jr-native-proc-key-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("macro.rs"),
+            "extern crate proc_macro;\n\
+             #[link(name=\"helper\", kind=\"static\")] extern \"C\" { fn native_value() -> i32; }\n\
+             #[proc_macro] pub fn value(_: proc_macro::TokenStream) -> proc_macro::TokenStream {\n\
+             unsafe { native_value() }.to_string().parse().unwrap() }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("user.rs"),
+            "fn main() { println!(\"{}\", native_macro::value!()); }\n",
+        )
+        .unwrap();
+        let run = |command: &mut Command| {
+            let result = command.current_dir(&d).output().unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            result
+        };
+        let mut hashes = Vec::new();
+        let mut metadata = Vec::new();
+        for value in [1, 2] {
+            std::fs::write(
+                d.join("helper.c"),
+                format!("int native_value(void) {{ return {value}; }}\n"),
+            )
+            .unwrap();
+            run(Command::new(&cc).args(["-fPIC", "-c", "helper.c", "-o", "helper.o"]));
+            run(Command::new(&ar).args(["crs", "libhelper.a", "helper.o"]));
+            let name = format!("libnative_{value}.so");
+            run(Command::new(&compiler).args([
+                "--edition=2021",
+                "--crate-name",
+                "native_macro",
+                "--crate-type",
+                "proc-macro",
+                "macro.rs",
+                "-L",
+                "native=.",
+                "-o",
+                &name,
+            ]));
+            let artifact = d.join(&name);
+            metadata.push(metadata_bytes(&artifact).unwrap());
+            hashes.push(extern_hash(&artifact).unwrap());
+            run(Command::new(&compiler).args([
+                "--edition=2021",
+                "user.rs",
+                "--extern",
+                &format!("native_macro={name}"),
+                "-o",
+                "user",
+            ]));
+            let output = run(&mut Command::new(d.join("user")));
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                value.to_string()
+            );
+        }
+        assert_eq!(
+            metadata[0], metadata[1],
+            "native helper bytes are absent from Rust metadata"
+        );
+        assert_ne!(
+            hashes[0], hashes[1],
+            "different executed macro code must never share a dependent key"
+        );
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]
