@@ -43,6 +43,17 @@ built compiler identity across all 5,591 selected files/symlinks and
 1,075 directories. Eighty license/attribution files and all 19 original
 CRLF/mixed entries retained their exact original blobs and modes.
 
+After the complete matrix existed in `f01b651db`, the final indexed snapshots
+were rerun through the entire mapped loop. Root 439 tests, source tests 10,
+hosted Cargo identity 4 and version 31, native bootstrap 289, Python 23,
+actual compiler/std/Cargo builds and six runtime tests all passed. The final
+indexed-project hosted version run `20261014-081644459-561932` preserved
+fixture discovery, unlike the separately documented no-Git mirror failure.
+Native job `971799pstx` took 1570.93s with explicit package-cache and another
+process's build-directory lock waits; this is a contention observation, not
+an implementation speed measurement. Exact returned outputs and a fresh
+whole-tree/identity audit are in `data/toolchain-vendoring/2026-10-14-postmap.txt`.
+
 Frozen Cargo binary build `20261014-074317981-128533` and hosted identity
 acceptance `20261014-074524962-151355` passed. Hosted archive version run
 `20261014-074614928-128514` failed before tests: no-Git source mirroring

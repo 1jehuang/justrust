@@ -24,6 +24,39 @@ archives after another session began editing their working-tree sources.
 | Make optional source dependencies explicit and safely materializable | Ten source/materializer tests include exact revision import, license preservation, policy stripping, overwrite rejection, traversal handling, and shared-source layout. Bootstrap Python suite passed 23/23. | Final root and native receipts |
 | Deliver the integrated result and durable evidence | Source commits `8f0a1aeef` and `6d898a9ea` were pushed. This verification adds evidence only, with exact-path staging/commit and remote HEAD verification recorded at completion. | Git delivery audit and exported run receipts |
 
+## Complete post-mapping rerun over the final result
+
+The entire matrix above already existed in `f01b651db` before this additional
+loop ran on October 14, 2026, from 15:16 through 15:43 UTC. This is a fresh
+run over the final result, not a reuse of the earlier pre-mapping evidence.
+`6d898a9ea` through `f01b651db` have no implementation differences in source,
+toolchain, manifests, or benchmark factors. Isolated scratch snapshots were
+materialized at the exact final commit with a fixed Git index/object metadata,
+so Git-dependent source checks and normal hosted fixture discovery work while
+concurrent execution-graph edits remain excluded.
+
+| Mapped requirement group | What the final post-mapping run actually returned |
+| --- | --- |
+| Source ownership, backtrace, policy, licenses, fixture/mode fidelity, original preservation | Fresh full final-tree audit: 66,660 ordinary entries, zero gitlinks or nested Git, root policy authority, 80 exact license/attribution entries, all 19 CRLF/mixed entries exact, 102/102 backtrace identical. Originals were read-only and tracked-clean at their separately retired locations. |
+| Optional materialization and benchmark default/override behavior | Fresh complete source/materializer suite: all 10 tests passed against the final fixed-index snapshot. |
+| Client correctness, formatting and diagnostics | Formatting, hosted check, all 439 tests (3 ignored), and strict all-target clippy passed, job `971786tmh8`. |
+| Migrated public CLI/default and explicit override | Installed nested CLI help reported the owned stage-2 path. Both parser/default and explicit override tests passed in the root suite. |
+| Cargo actual binary and public compatibility fields | Actual final-source binary built successfully and reported base `f3865b2a4d1acc5276f6b3c67d0e057f4dab3928`, suffix `3f0793ee26b30ba57130f5662c6936756e27c95d`. |
+| Cargo dirty/archive/generated identity and version behavior | All four identity tests and all 31 version tests passed **hosted** on the final indexed project, job `971786nsg6`. This does not claim the earlier no-Git archive mirror limitation fixed. |
+| Bootstrap and CI/local compiler-rt selection | All 289 native bootstrap tests and all 23 Python bootstrap tests passed, job `971799pstx`. |
+| Compiler/std/backends, metadata and runtime | Actual dev compiler, optimized std and Cranelift build passed. Metadata check passed. All three arithmetic/heap/thread runtime tests passed with LLVM and again with Cranelift. |
+| Clean source identity and generated-output exclusion | Fresh actual-versus-final snapshot audit matched all 6,666 selected entries: 5,591 files/symlinks and 1,075 directories. Both produced `910e39a6c3ef8b6fe54663a4f513213687b9bf4b`, also reported by both rebuilt stage-1 and saved dev compilers. |
+
+All three execution jobs exited zero. Native wall time included package-cache
+and another build's directory-lock waits, so it is not a speed measurement.
+The audit's initial enumeration counted 6,661 directory-walk entries while still
+hashing the five separately selected root inputs; its digest was already correct.
+The final audit explicitly enumerated all five and returned 6,666 matching entries.
+No source changes were made to get these results. Evidence, including raw returned
+outputs and the audit, is `data/toolchain-vendoring/2026-10-14-postmap.txt`.
+Six new exported run receipts are included in
+`data/runs/xps14-toolchain-verification/2026-10.jsonl`.
+
 ## Concrete improvement, and what is not claimed
 
 Before the migration, compiler/Cargo ownership depended on independently edited

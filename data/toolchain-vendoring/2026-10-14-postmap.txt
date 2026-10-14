@@ -1,0 +1,316 @@
+Post-mapping complete final-result acceptance
+Final result: f01b651dbea1392fa74f8e5479307b7b968b670c
+All requirements were already mapped in docs/toolchain-vendoring-verification.md at this commit BEFORE these commands ran. No src/toolchain/manifests/bench-factor implementation differences from originally tested6d898a9ea.
+Fresh final snapshots were materialized in scratch with fixed f01 Git index and object alternates, so Git-dependent structure checks and normal hosted fixture mirroring use actual final source entries. Live concurrent execution-graph edits were not tested or changed.
+Root971786tmh8: structure/materializer10, fmt, hosted check,439tests(3ignored), strictclippy, installed CLI default, final snapshot diff all passed.
+Cargo971786nsg6: actual binary build/public version, HOSTED4identity and HOSTED31version, final snapshot diff all passed. Basef3865b2a4d1acc5276f6b3c67d0e057f4dab3928,suffix3f0793ee26b30ba57130f5662c6936756e27c95d.
+Native971799pstx: final-source diff guards, bootstrap289, Python23, actual compiler/optimizedstd/Cranelift build, metadata,3LLVM+3Cranelift runtime, saved compiler version all passed. Built identity910e39a6c3ef8b6fe54663a4f513213687b9bf4b. Full job1570.93s included package/build-directory lock waits and contention, not a speed benchmark.
+Fresh entire final Git-tree fidelity:66660 ordinary entries,80exact licenses/attributions,19exactCRLF/mixed files,zero gitlinks/nestedGit/inherited agent policies, original repositories read-only at their separately retired locations,102backtrace entries identical. Actual and final snapshot match all6666 selected entries(5591files/symlinks+1075directories) and built compiler identity. Preliminary audit enumeration omitted5separately hashed root inputs from its count; digest already matched. Corrected enumeration includes all5and is reported below. No implementation change.
+Earlier noGit hosted Cargo mirror limitation remains documented; this final indexed-project HOSTED31 pass does not claim that limitation fixed. No full language/Cargo suites, stage2 acceptance or speed/default promotion claimed.
+
+=== Fresh complete fidelity audit ===
+{
+  "actual_and_final_snapshot_native_identity": "910e39a6c3ef8b6fe54663a4f513213687b9bf4b",
+  "directories": 1075,
+  "files_or_symlinks": 5591,
+  "final_result": "f01b651dbea1392fa74f8e5479307b7b968b670c",
+  "gitlinks": 0,
+  "inherited_policy_names": 0,
+  "matched_selected_entries": 6666,
+  "nested_git": 0,
+  "ordinary_toolchain_entries": 66660,
+  "original_crlf_mixed_entries_exact": 19,
+  "original_license_attribution_entries_exact": 80,
+  "original_repositories_read_only_tracked_status": "clean at retired locations",
+  "source_comparisons": {
+    "backtrace": {
+      "expected_native_doc_changes": 0,
+      "removed": 0,
+      "retained": 102
+    },
+    "cargo": {
+      "expected_native_doc_changes": 10,
+      "removed": 4,
+      "retained": 3082
+    },
+    "rustc": {
+      "expected_native_doc_changes": 25,
+      "removed": 35,
+      "retained": 63470
+    }
+  }
+}
+
+=== Completed phase 971786tmh8 ===
+[stderr] From $HOME/.jcode/scratch/tmphvkbm12v/upstream
+[stderr]  * branch            a530bdfc8d1ee9e43ee5af9e545ef1f0d01bb1e8 -> FETCH_HEAD
+[stderr] ..........
+[stderr] ----------------------------------------------------------------------
+[stderr] Ran 10 tests in 3.195s
+[stderr]
+[stderr] OK
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/vendoring-final-root-51500x/data/runs/xps14/2026-10.jsonl (36.6 MB), $HOME/.jcode/scratch/vendoring-final-root-51500x/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok in 0.1s
+[stderr]   time    startup 0.06s | compile 0.00s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   memory  peak 0 MB build, 0 MB largest rustc, 90.8 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261014-081616022-553104` full output, `justrust show 20261014-081616022-553104` full profile
+[stderr] justrust remote: ok on hosted in 15.5s (sync 13766 ms, 0 files at build time)
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/vendoring-final-root-51500x/data/runs/xps14/2026-10.jsonl (36.6 MB), $HOME/.jcode/scratch/vendoring-final-root-51500x/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok: 439 tests passed in 9.9s
+[stderr]   time    startup 0.04s | compile 0.00s | tests 9.85s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   tests   439 passed, 0 failed, 3 ignored, 0 filtered out, 11 binaries in 9.85s
+[stderr]           slowest tests (439 timed, 22.3s summed; a suite cannot finish before its slowest test):
+[stderr]               9.85s  depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap
+[stderr]               2.11s  telemetry_is_sent_in_the_background_and_stops_when_off
+[stderr]               1.50s  host_native_and_response_file_flags_compile_without_cache_reuse
+[stderr]   memory  peak 1059 MB build, 0 MB largest rustc, 89.4 GB free; stalls cpu 0.08s mem 0.00s io 0.20s
+[stderr]   waste   1 issue (estimated cost each; they can overlap):
+[stderr]           ~  9.8s  tests in justrust-864784662218f375 took 9.8s to run; the slowest test alone took 9.8s (depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap). Speed it up or split it, or filter to the tests you changed
+[stderr]   more    `justrust log 20261014-081631552-558294` full output, `justrust show 20261014-081631552-558294` full profile
+[stderr] justrust remote: ok on hosted in 24.2s (sync 13092 ms, 0 files at build time)
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/vendoring-final-root-51500x/data/runs/xps14/2026-10.jsonl (36.6 MB), $HOME/.jcode/scratch/vendoring-final-root-51500x/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok in 0.1s
+[stderr]   time    startup 0.06s | compile 0.00s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   memory  peak 0 MB build, 0 MB largest rustc, 89.3 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261014-081655745-565333` full output, `justrust show 20261014-081655745-565333` full profile
+[stderr] justrust remote: ok on hosted in 1.4s (sync 613 ms, 0 files at build time)
+Install a jr-rustc build (justrust's rustc fork) as toolchain `jr-<commit>`. With no pin, builds then use the newest installed jr toolchain and its proc-macro cache (`JUSTRUST_TOOLCHAIN=system` or `JUSTRUST_CACHE_PROC_MACROS=0` to opt out)
+
+Usage: justrust toolchain jr-install [OPTIONS] [SYSROOT]
+
+Arguments:
+  [SYSROOT]  Sysroot with bin/{rustc,rustdoc,clippy-driver,cargo-clippy} [default: ~/justrust/toolchain/rustc/build/host/stage2]
+
+Options:
+      --cargo-from <CARGO_FROM>  Installed official toolchain to take cargo and rustfmt from [default: nightly-2026-10-08]
+      --no-default               Stage for explicit pins only, without changing the default compiler
+  -h, --help                     Print help
+
+--- Command finished with exit code: 0 ---
+
+
+=== Completed phase 971786nsg6 ===
+[stderr]     Blocking waiting for file lock on package cache
+[stderr]
+[stderr] justrust: ok in 15.5s
+[stderr]   time    startup 0.09s | lock wait 0.26s | compile 13.04s | gaps 2.06s | after 0.03s
+[stderr]   rustc   pinned toolchain jr-ac20de5e7921
+[stderr]   units   24 compiled (10 local, 11 deps, 3 build scripts), 291 fresh, depcache 0 hit/13 miss, localcache 9 hit/2 miss (saved ~15.1s of rustc). Rebuilt because: the toolchain changed (17 crates); edited build.rs (cargo); edited crates/cargo-platform/src/cfg.rs (cargo-platform)
+[stderr]           cargo                              5.31s  cpu   4.5s   1347 MB
+[stderr]           gix                                4.24s  cpu   8.2s    698 MB
+[stderr]           cargo                              1.45s  cpu   0.8s    374 MB
+[stderr]           gix_protocol                       0.63s  cpu   1.4s    272 MB
+[stderr]   memory  peak 1993 MB build, 1347 MB largest rustc, 20.3 GB free; stalls cpu 4.13s mem 0.00s io 0.23s
+[stderr]   waste   5 issues (estimated cost each; they can overlap):
+[stderr]           ~  6.1s  rebuilt 11 registry dependencies and 3 build scripts (6.1s): the toolchain changed (x17); source file changed (x2)
+[stderr]           ~  4.3s  5.3s went to recompiling oversized crates: cargo (109k lines, 5.3s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]           ~  2.1s  2.1s inside the build with no compiler running (build scripts or scheduling)
+[stderr]           ~  1.0s  13 dependency units missed the shared dependency cache and compiled (12.8s of rustc); they are cached now, so other target dirs, slots, and checkouts reuse them
+[stderr]   more    `justrust log 20261014-081611869-550997` full output, `justrust show 20261014-081611869-550997` full profile
+cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 3f0793ee26b30ba57130f5662c6936756e27c95d)
+release: 1.101.0-nightly
+commit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928
+commit-date: 2026-09-29
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.7 (sys:0.21.0 system)
+libcurl: 8.22.0 (sys:0.4.90+curl-8.21.0 system ssl:OpenSSL/3.6.4)
+os: Arch Linux Rolling Release [64-bit]
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/final-cargo-6d898a9ea.ik67cp/data/runs/xps14/2026-10.jsonl (36.6 MB), $HOME/.jcode/scratch/final-cargo-6d898a9ea.ik67cp/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok: 4 tests passed in 0.1s
+[stderr]   time    startup 0.12s | compile 0.00s | after 0.02s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 325 fresh
+[stderr]   tests   4 passed, 0 failed, 0 ignored, 0 filtered out, binary timing unavailable
+[stderr]   memory  peak 0 MB build, 0 MB largest rustc, 90.8 GB free; stalls cpu 0.00s mem 0.00s io 0.01s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261014-081627446-556643` full output, `justrust show 20261014-081627446-556643` full profile
+[stderr] justrust remote: ok on hosted in 17.0s (sync 15164 ms, 0 files at build time)
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/final-cargo-6d898a9ea.ik67cp/data/runs/xps14/2026-10.jsonl (36.6 MB), $HOME/.jcode/scratch/final-cargo-6d898a9ea.ik67cp/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok: 31 tests passed in 18.5s
+[stderr]   time    startup 0.07s | compile 18.00s | gaps 0.01s | after 0.44s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   1 compiled (1 local, 0 deps, 0 build scripts), 324 fresh, localcache 0 hit/1 miss
+[stderr]           testsuite (test)                  18.00s  cpu  26.0s   2559 MB
+[stderr]   tests   31 passed, 0 failed, 0 ignored, 4396 filtered out, binary timing unavailable
+[stderr]   memory  peak 3429 MB build, 2559 MB largest rustc, 87.9 GB free; stalls cpu 0.02s mem 0.00s io 0.33s
+[stderr]   waste   3 issues (estimated cost each; they can overlap):
+[stderr]           ~ 14.7s  18.0s went to recompiling oversized crates: testsuite (109k lines, 18.0s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]           ~  9.0s  compiled a test binary with 4427 tests (18.0s) to run 31. Tests in a smaller crate or `justrust check` first would be faster
+[stderr]   more    `justrust log 20261014-081644459-561932` full output, `justrust show 20261014-081644459-561932` full profile
+[stderr] justrust remote: ok on hosted in 22.2s (sync 2856 ms, 0 files at build time)
+
+--- Command finished with exit code: 0 ---
+
+
+=== Completed phase 971799pstx ===
+[stderr]     Blocking waiting for file lock on package cache
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 0.17s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+WARNING: build directory locked by process 407748, waiting for lock
+[stderr]     Finished `test` profile [unoptimized] target(s) in 18.02s
+
+running 289 tests
+........................test core::builder::tests::test_test_coverage has been running for a long time
+.
+
+test result: ok. 289 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 154.44s
+
+	finished in 172.479 seconds
+[stderr] Build completed successfully in 0:24:01
+[stderr] .....................invalid checksum:
+[stderr]     found:    334d016f755cd6dc58c53a86e183882f8ec14f52fb05345887c8a5edd42c87b7
+[stderr]     expected: 64ec88ca00b268e5ba1a35678a1b5316d212f4f366b2477232534a8aeca37f3c
+[stderr] ..
+[stderr] ----------------------------------------------------------------------
+configure: build.configure-args := ['--set', 'build.cargo=$HOME/.local/bin ...
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=false', '--set', ...
+[stderr] Ran 23 tests in 0.148s
+configure: rust.deny-warnings   := False
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=false', '--set', ...
+[stderr]
+configure: rust.deny-warnings   := False
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+[stderr] OK
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=true', '--set',  ...
+configure: rust.deny-warnings   := True
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=true', '--set',  ...
+configure: rust.deny-warnings   := True
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'build.cargo=$HOME/.local/bin ...
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'build.cargo=$HOME/.local/bin ...
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: build.cargo          := $HOME/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := []
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.codegen-backends=cranelift']
+configure: rust.codegen-backends := cranelift
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.codegen-backends=cranelift,llv ...
+configure: rust.codegen-backends := cranelift,llvm
+configure: profile              := dist
+configure: build.configure-args := ['--enable-full-tools']
+configure: rust.codegen-backends := ['llvm']
+configure: rust.lld             := True
+configure: rust.llvm-tools      := True
+configure: rust.llvm-bitcode-linker := True
+configure: build.extended       := True
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'llvm.download-ci-llvm']
+configure: llvm.download-ci-llvm := True
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'target.x86_64-unknown-linux-gnu.cc= ...
+configure: target.x86_64-unknown-linux-gnu.cc := gcc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'profile=compiler']
+configure: profile              := compiler
+configure: build.configure-args := ['--enable-full-tools']
+configure: rust.codegen-backends := ['llvm']
+configure: rust.lld             := True
+configure: rust.llvm-tools      := True
+configure: rust.llvm-bitcode-linker := True
+configure: build.extended       := True
+configure: build.configure-args := ['--disable-full-tools']
+configure: rust.codegen-backends := ['llvm']
+configure: rust.lld             := True
+configure: rust.llvm-tools      := True
+configure: rust.llvm-bitcode-linker := True
+configure: build.extended       := True
+configure: build.configure-args := ['--target=x86_64-unknown-linux-gnu']
+configure: build.target         := ['x86_64-unknown-linux-gnu']
+configure: build.configure-args := ['--target', 'x86_64-unknown-linux-gnu']
+configure: build.target         := ['x86_64-unknown-linux-gnu']
+configure: build.configure-args := ['--target']
+configure: profile              := dist
+configure: build.configure-args := ['--target']
+configure: profile              := dist
+configure: build.configure-args := ['--enable-option-checking', '--target']
+configure: profile              := dist
+configure: build.configure-args := ['--disable-option-checking', '--target']
+configure: profile              := dist
+configure: build.configure-args := ['enable-full-tools']
+configure: profile              := dist
+configure: build.configure-args := ['--some-random-flag']
+configure: profile              := dist
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 0.20s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+[stderr] $HOME/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/ci-llvm/bin/llvm-strip does not exist; skipping copy
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.54s
+Creating a sysroot for stage1 compiler (use `rustup toolchain link 'name' build/host/stage1`)
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.06s
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.14s
+[stderr]     Finished `dist` profile [optimized + debuginfo] target(s) in 2m 00s
+[stderr] Build completed successfully in 0:02:07
+build-jr: dev -> build/jr/dev/bin/rustc
+rustc 1.101.0-nightly (910e39a6c 2026-10-14)
+binary: rustc
+commit-hash: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b
+commit-date: 2026-10-14
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+
+running 3 tests
+test tests::optimized_runtime_integer_arithmetic ... ok
+test tests::std_allocation_strings_and_iterators ... ok
+test tests::std_threads_and_synchronization ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 3 tests
+test tests::optimized_runtime_integer_arithmetic ... ok
+test tests::std_allocation_strings_and_iterators ... ok
+test tests::std_threads_and_synchronization ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+rustc 1.101.0-nightly (910e39a6c 2026-10-14)
+binary: rustc
+commit-hash: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b
+commit-date: 2026-10-14
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+
+--- Command finished with exit code: 0 ---
