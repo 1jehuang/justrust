@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Safety checks for hosted benchmark accounting (no network or builds)."""
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -12,6 +14,31 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_compare_never_claims_speed_from_noisy_or_unknown_samples(self):
+        for noisy_a, noisy_b in [(True, False), (False, True), (None, False),
+                                 (False, None), (False, False)]:
+            with self.subTest(noisy_a=noisy_a, noisy_b=noisy_b), tempfile.TemporaryDirectory() as tmp:
+                paths = []
+                for name, wall, noisy in [('a', 5.0, noisy_a), ('b', 1.0, noisy_b)]:
+                    sample = {'wall': wall, 'recorded_wall': wall - .1}
+                    if noisy is not None:
+                        sample['noisy'] = noisy
+                    result = {'env': {'snapshots': {}, 'justrust_rev': 'test'},
+                              'scenarios': {'edit': {'samples': [sample], 'stats': {
+                                  'median': wall, 'min': wall, 'max': wall}}}}
+                    path = Path(tmp) / (name + '.json')
+                    path.write_text(json.dumps(result))
+                    paths.append(str(path))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    suite.cmd_compare(argparse.Namespace(a=paths[0], b=paths[1], floor=10))
+                if noisy_a is False and noisy_b is False:
+                    self.assertIn('faster', output.getvalue())
+                    self.assertNotIn('uncontrolled', output.getvalue())
+                else:
+                    self.assertIn('uncontrolled', output.getvalue())
+                    self.assertNotIn('faster', output.getvalue())
+
     def test_shadow_control_provenance_never_includes_internal_or_secret_environment(self):
         with patch.dict(suite.os.environ, {"JUSTRUST_SHADOW": "1",
                                           "JUSTRUST_SHADOW_CHILD": "1",

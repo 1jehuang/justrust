@@ -1152,6 +1152,9 @@ def cmd_compare(args) -> None:
             verdict = "slower"
         else:
             verdict = "within noise"
+        samples = [a["scenarios"][name].get("samples", []), b["scenarios"][name].get("samples", [])]
+        if any(not group or any(x.get("noisy") is not False for x in group) for group in samples):
+            verdict = "uncontrolled (noisy or unknown samples)"
         print(f"{name:28s} {sa['median']:7.2f} {sb['median']:7.2f} {d:+7.2f} {pct:+5.0f}%  {verdict}")
         if sa.get("first_error") is not None and sb.get("first_error") is not None:
             print(f"{'  first error':28s} {sa['first_error']:7.2f} {sb['first_error']:7.2f}"
