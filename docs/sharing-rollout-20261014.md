@@ -74,7 +74,7 @@ Corrected hosted unit/lint records are `20261013-204019831-1054567`, `20261013-2
 
 The final truly plain hosted check/full tests/strict all-target lint/recheck passed: `20261013-204221552-1065216`, `20261013-204245695-1067158` (390 passed, three ignored), `20261013-204256351-1067708`, `20261013-204301091-1067934`. Concurrent agents subsequently replaced the mutable global CLI with other digests; these run records contain no exact client digest field. Retain their functional hosted results, but do not attribute the entire sequence to one frozen executable or claim the current global CLI is our accepted digest. The direct installer digest and separate immutable binary remain verified; subsequent benchmarks use that explicit frozen artifact.
 
-All 41 selected records in `data/runs/sharing-20261014/2026-10.jsonl` retain failures and are path-redacted. No unrelated peer rows are included.
+All 43 selected records in `data/runs/sharing-20261014/2026-10.jsonl` retain failures and are path-redacted. No unrelated peer rows are included. The two new empty-cache consumer records passed check and two runtime tests, but both had zero public hits. Their exact keys were absent from the cached index and direct CDN manifest lookups returned 403. See `docs/public-sharing-consumer-20261014.md`; compilation success is not public reuse acceptance.
 
 ## Independent frozen-client whole-workflow acceptance
 

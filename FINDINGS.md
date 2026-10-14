@@ -6168,7 +6168,7 @@ bindings, quotas or defaults. Pinned independent fleet launched at 03:21 but fin
 publication/fresh reuse and a new tenant bootstrap remain unobserved. Native
 rootfs sharing remains unauthorized. Registry archive seeding stays opt-in
 because measured full-network median 1.697 s lost to direct cold 1.057 s. No
-performance speedup is claimed. Full observations and 41 exact redacted records
+performance speedup is claimed. Full observations and 43 exact redacted records
 are mapped in `docs/sharing-rollout-20261014.md`.
 
 The prospective frozen-client guard then passed actual hosted acceptance at
@@ -6180,6 +6180,17 @@ per-step client digest and hosted/compiler-pin metadata guards passed. Receipt
 future attribution, not the historical mutable-client epoch. Initial check
 `20261013-211242111-1273414` had 68 account dependency-cache hits/five misses,
 not public-store hits or the 73 hits of an older packaging run. No speed claim.
+
+A distinct empty Cargo home/target/cache consumer subsequently passed check
+`20261013-212740419-1382686` and two tests `20261013-212741514-1383002`, but
+both compiled memchr 2.7.6 locally with zero public hits. Exact base keys were
+absent from the index and direct CDN manifests returned 403 at 04:32 UTC.
+This is a safe unpublished-key miss, not final compatible-fleet acceptance.
+The independent producer remained running at 04:33 with its previous index
+unchanged. Cloud232b53a adds future-only opt-in sanitized stage receipts;
+12 executable runner/receipt tests pass, no current-runner deployment occurred.
+Full cloud suite's unrelated native-budget failure is retained and assigned.
+See `docs/public-sharing-consumer-20261014.md` for source snapshots and limits.
 
 ## 2026-10-14: uniform-cost Cargo scheduler has no demonstrated 24-job benefit
 
