@@ -6141,6 +6141,14 @@ only expected names. Native libraries, toolchain availability and end-user glibc
 compatibility still need application validation. No cloud deployment, public
 release, API-secret provisioning or billing change was made.
 
+## 2026-10-14: final sharing and native real-interface feedback loop
+
+Whole-result follow-through on immutable059674/0a19 now maps18explicitrequirements in docs/sharing-final-whole-20261014.{md,json}. Actual05:36fresh public compiler/profile/check/test matrix again yields8publichits0misses/four2-test passes. Actual05:39–05:40 ordinaryCargo20test workflows cover8native forms plus@file twice:18bypass, genericdep miss/hit,40runtime test results. Real nativeE0308/10120261013-224400547-1905506 followed repaired2tests20261013-224401789-1906049, both cache bypass. Two actual existing-prefix CLI reuse calls and12runtimehelper probes pass, inactiveJRmarker unchanged.
+
+Re-audited actual frozen full410-pass/3ignored raw events:71named sharing/native checks individually mapped, rawSHA bd70ea176517bb21b6003731fcb8e50e49694911e1b3fc1f87d689544a802893. Fresh91named cloud sharing-boundary cases pass.31newexactredactedrows retained, including first acceptance-output-guardfailure with actualclient0 and genuinecompiler101. No aggregate-count substitute for native actualCargo acceptance, no speed claim.
+
+Genuine new-tenant boot, next naturally scheduled fleet runtime receipt and trusted native closure remain explicitly unobserved/blocked. No peer-account host call, default install or mutation during graph lease. Prior actual hosted fullcheck/test/lint and Desktop edit/restoration remain attributed to their exact source, not relabeled as a new hosted run.
+
 ## 2026-10-14: installed native-flag safety and fresh public reuse
 
 Guard832e362 and actual shim059674b were installed from exact committed059674 snapshot as0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d. Red native eligibility20261013-215342851-1568478 and real response-file eligibility20261013-215708557-1600890 both exit101 are retained. Early red automatic-update/telemetry/private-daemon network isolation caveat is explicit, not erased.

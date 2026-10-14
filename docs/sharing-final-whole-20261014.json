@@ -1,0 +1,1067 @@
+{
+  "actual_named_whole_project_tests": {
+    "id": "20261013-220822907-1670409",
+    "named_sharing_checks": [
+      "bundled_native_rlib_change_invalidates_shim_depcache",
+      "host_native_and_response_file_flags_compile_without_cache_reuse",
+      "buildscript::tests::keys_toolchain_env_but_not_noise",
+      "buildscript::tests::native_list_is_vendored_c_only",
+      "buildscript::tests::parses_directives",
+      "buildscript::tests::system_stamp_is_stable",
+      "depcache::tests::cargo_home_is_not_keyed",
+      "depcache::tests::cargo_home_is_portable_across_machines",
+      "depcache::tests::base_key_ignores_target_dir_but_not_flags",
+      "depcache::tests::libc_family_is_the_hosts",
+      "buildscript::tests::wrapper_replaces_elf_and_falls_back",
+      "buildscript::tests::non_cacheable_runs_are_not_stored",
+      "depcache::tests::finds_build_script_profile_dir",
+      "buildscript::tests::script_bundle_round_trip_and_hermetic_only",
+      "depcache::tests::finds_profile_dir",
+      "buildscript::tests::directory_inputs_track_contents",
+      "depcache::tests::glibc_needs_are_read_from_the_dynamic_string_table",
+      "depcache::tests::new_layout_out_dir_normalizes",
+      "depcache::tests::only_plain_outputs_are_cacheable",
+      "depcache::tests::normalizes_profile_and_target_dirs",
+      "depcache::tests::parses_dep_info",
+      "buildscript::tests::script_bundle_rejects_hostile_input",
+      "depcache::tests::extern_keys_hash_dynamic_library_executable_bytes",
+      "buildscript::tests::historical_native_entries_are_not_public_even_with_hermetic_bit",
+      "buildscript::tests::round_trip_between_target_dirs",
+      "depcache::tests::target_paths_only_allowed_as_input_file_names",
+      "depcache::tests::remaps_make_keys_independent_of_cargo_home_and_symlinks",
+      "depcache_gc::tests::evicts_least_recently_used_first_and_spares_recent",
+      "depcache::tests::user_keyed_env_names_only_what_cargo_does_not_set",
+      "depcache_gc::tests::default_cap_follows_free_space",
+      "depcache_gc::tests::parses_plain_and_invalid_sizes",
+      "depcache_gc::tests::parses_sizes",
+      "depcache_prebuilt::tests::base_accepts_urls_and_absolute_paths_only",
+      "depcache_prebuilt::tests::breaker_needs_consecutive_failures",
+      "depcache_prebuilt::tests::index_lookup_sorted_and_fallback",
+      "depcache_remote::tests::breaker_trips_and_expires",
+      "depcache_remote::tests::bundle_round_trip_keeps_bytes_and_modes",
+      "buildscript::tests::wrapper_runs_real_script_when_justrust_is_missing",
+      "depcache_remote::tests::keys_are_lowercase_hex_128",
+      "depcache_remote::tests::bundle_budgets_reject_oversize_and_exhaustion",
+      "depcache::tests::round_trip_and_fail_open",
+      "depcache_remote::tests::unpack_rejects_tampered_or_hostile_bundles",
+      "depcache::tests::native_cpu_bypasses_dependency_and_local_plans",
+      "depcache_prebuilt::tests::publish_then_fetch_into_an_empty_cache",
+      "depcache::tests::response_files_bypass_dependency_and_local_plans",
+      "depcache_remote::tests::public_publish_rejects_unsafe_names_and_symlinks",
+      "depcache_remote::tests::public_unpack_rejects_hostile_record_structure",
+      "hotpatch::tests::splits_response_files_like_gcc",
+      "depcache::tests::extern_archive_keys_include_bundled_object_code",
+      "depcache_prebuilt::tests::fetches_only_units_that_cost_more_to_compile",
+      "buildscript::tests::native_header_change_changes_object_with_identical_compiler",
+      "depcache::tests::native_and_response_file_bypasses_compile_with_original_args",
+      "depcache::tests::nonnative_long_codegen_flags_remain_keyed",
+      "toolchain::bundle::tests::jr_install_process_child",
+      "toolchain::bundle::tests::manifest_rejects_wrong_target_id_commit_digest_sizes_and_schema",
+      "toolchain::bundle::tests::official_fallback_child",
+      "toolchain::bundle::tests::trusted_base_requires_https_no_credentials_queries_or_redirect_controls",
+      "toolchain::bundle::tests::extraction_rejects_traversal_absolute_links_devices_duplicates_and_extensions",
+      "toolchain::bundle::tests::extraction_rejects_truncation_corrupt_gzip_and_declared_size_mismatch",
+      "depcache::tests::explicit_cpu_and_inert_native_text_remain_cacheable",
+      "toolchain::bundle::tests::official_nightly_bundle_preserves_stock_rustc_and_shared_cargo_provenance",
+      "remote_sync::tests::seeds_an_empty_mirror_from_git_then_never_over_sources",
+      "toolchain::bundle::tests::downloaded_jr_install_lock_serializes_independent_processes",
+      "toolchain::bundle::tests::unavailable_shared_bundle_falls_back_to_verified_official_dist_offline",
+      "toolchain::bundle::tests::executable_with_missing_elf_loader_is_rejected_without_compiling",
+      "toolchain::bundle::tests::downloaded_jr_is_atomic_staged_inactive_idempotent_and_concurrent",
+      "toolchain::bundle::tests::install_rejects_tampered_hash_wrong_target_incomplete_and_wrong_binary_identities",
+      "toolchain::bundle::tests::mandatory_rustdoc_must_run_and_helper_timeout_is_bounded",
+      "depcache::tests::native_proc_macro_code_changes_hash_and_expansion",
+      "toolchain::bundle::tests::declared_helpers_must_run_before_atomic_install",
+      "depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap"
+    ],
+    "passed": 410,
+    "raw_output_sha256": "bd70ea176517bb21b6003731fcb8e50e49694911e1b3fc1f87d689544a802893"
+  },
+  "boundary_suite": {
+    "python_summaries": [],
+    "sha256": "0347d6e7fd248ffa0f694507b8878f50658459bef6c06ff9fc5bd4c9f410729e",
+    "subtests": [
+      "machine-cost transparency uses configured c8a.8xlarge without changing admission",
+      "machine-cost transparency uses configured m8azn.6xlarge without changing admission",
+      "machine-cost transparency uses configured unknown.8xlarge without changing admission",
+      "connect launches one tagged build host, then authorizes the client key once ready, carrying builds",
+      "trial: a new account with 0 builds charged can connect",
+      "POST /v1/build/runs forwards to /internal/builds/charge and passes status, body and next_step through",
+      "fail closed: missing API binding or internal token, backend down, or no bearer -> no launch",
+      "402 next_step passthrough: no builds and no machine time refuses launch with next_step",
+      "no time cap: hours of machine time used this month never refuse or stop a host",
+      "the cron stops a running host only when the account has no builds at all",
+      "time from a previous UTC month does not count",
+      "just-spent last build: can_build false but paid-for time remains still connects",
+      "a stopped host is woken, and a stale readiness marker from the previous boot is not trusted",
+      "host keys are pinned at first observation and never replaced by later console output",
+      "isolation: a row pointing at an instance tagged for another account or kind fails closed",
+      "unconfigured and malformed requests launch nothing",
+      "Instance Connect ServiceException after a wake is retried, then reported as booting, never 503",
+      "provider failures surface as 503 build_unavailable and release the launch claim",
+      "accrual: ledger rows per interval, bounded steps, idempotent",
+      "accrual stops at the EC2-reported stop time and resumes on wake",
+      "cron: never calls the backend, keeps hosts with builds running, and stops entitlement loss with 0 charged",
+      "a failed first boot is terminated and replaced, and a lost machine is recreated",
+      "orphan sweep: unrecorded build instances are terminated after a grace period, recorded ones never",
+      "stop follows the contract",
+      "connect attempts are rate limited per account",
+      "pure helpers: console parsing, accrual math, stop time, instance list",
+      "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR",
+      "toolchain sharing rejects malformed deployment configuration before a launch",
+      "bootstrap contract: ubuntu user, hardened sshd, no general sudo, idle stop, toolchain, per-boot readiness",
+      "jcode-mkdir wrapper creates only normalized /home and /Users paths, mode 755, no symlinks",
+      "admission timing is opt-in, fixed numeric and secret-free with no extra charges",
+      "admission timing never releases success before the authoritative queued batch",
+      "admission timing preserves refusals, validation and fail-closed missing bindings",
+      "a charged run is recorded queued with its labels, then running, then done",
+      "charge and identity lookup overlap, but queued visibility still precedes the response",
+      "an overlapped lookup cannot record a run whose charge was refused",
+      "failed overlapped identity bookkeeping never changes successful billing",
+      "without a bookkeeping database, billing does not make an identity request",
+      "run events only touch the caller's own runs and are validated",
+      "a refused charge records nothing; labels are bounded and printable",
+      "the sweep marks silent runs lost and a late done still lands",
+      "local builds are counted per account, day, reason, and client, and validated",
+      "install events: anonymous, validated, bounded, and joined to the device flow",
+      "install events are rate limited per client address",
+      "warm connect: one AWS call (the key push) once this boot was seen ready; a stale state falls back to the full path",
+      "202 answers carry a poll hint; provisioning polls slowly",
+      "cron idle stop: a host with no activity for BUILD_IDLE_STOP_MINUTES is stopped, unless a run is in flight",
+      "a charged run and its events count as activity",
+      "cron: one DescribeInstances page per 1000 hosts, not one call per host",
+      "describeFleet follows nextToken and parses the real EC2 response shape",
+      "capacity: launch falls back across zones and types; all full answers 503 build_capacity with retry_after",
+      "capacity: a vCPU quota error skips the remaining zones of that type",
+      "fleet cap: BUILD_MAX_HOSTS reclaims the longest-idle host of another account, never a busy one",
+      "a wake with no EC2 capacity answers build_capacity and keeps the host",
+      "fleet cap holds under a burst of concurrent first connects, and a stale reservation is released by the cron",
+      "region move: an existing host stays managed in its own region, new launches go to BUILD_REGION",
+      "region: an invalid recorded region fails closed",
+      "region move: a west newcomer at the fleet cap reclaims an idle EAST host through the east client",
+      "cost estimate is region scoped: east and west verified rates, unknown region null",
+      "reclaim: a failed stop of the victim keeps it counted, so the cap is never bypassed",
+      "reclaim: AWS stop and the D1 compensation both fail, the victim still counts (reclaiming)",
+      "reclaim: a confirmed stop moves the victim to stopping and frees exactly one slot",
+      "cron idle stop: a fresh JCODE_BUILD_BUSY console marker keeps a host up, within a cap",
+      "cron idle stop: busy markers stop counting 3 h after the last client activity",
+      "parseBuildConsole reads the newest busy marker and ignores malformed ones",
+      "private tier: upload object then manifest, read back, isolated from other accounts",
+      "shared tier: only the publish token writes it, every account reads it",
+      "validation: keys, entries, sizes, quota",
+      "fail closed: disabled, no R2, or backend down",
+      "cron expires private objects unused for the TTL",
+      "native rootfs candidate builder rejects false trust and pins image bytes",
+      "fleet status: sanitized exact pin, profile transitions and bounded call count",
+      "fleet status: observer failures never change results or artifact operation ordering",
+      "fleet status: legacy/unselected pins and hostile status ids emit no receipts",
+      "fleet status: matrix receipts carry selected compiler and never workspace identity",
+      "prebuild shell: explicit exact SHA executes downloaded client, not installed release",
+      "prebuild shell: empty pin logs installed fallback and never discovers a mutable S3 pin",
+      "prebuild shell: malformed pin rejects before downloading or building",
+      "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+      "prebuild shell: explicit nightly/JR matrix runs default and manifest debug0 in separate compiler targets",
+      "prebuild shell: optional seed failure continues and uploads objects before manifests before index",
+      "prebuild shell: failed locked workspace retries without the lock and still publishes",
+      "prebuild shell: invalid explicit compiler matrix fails before store access or builds",
+      "fleet template pins full client digest and explicit compiler matrix without shell injection",
+      "fleet status opt-in is future-only, defaults off, and uses an opaque generated ID",
+      "store bucket: anonymous GetObject under v1/ only, no listing, TLS only",
+      "only the prebuild role writes, and only under v1/",
+      "publish uploads bundles, then manifests, then the index",
+      "index format matches the client's binary search",
+      "trusted public Cargo archive publication and restore security contracts",
+      "trusted toolchain publisher: deterministic archives, identity and immutable writes"
+    ],
+    "summary": [
+      "# tests 91",
+      "# suites 0",
+      "# pass 91",
+      "# fail 0"
+    ]
+  },
+  "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+  "error_recovery": [
+    {
+      "exit": 101,
+      "id": "20261013-224400547-1905506",
+      "label": "error",
+      "native_cache_bypass": true,
+      "output_sha256": "187195ab5aa3d504fa2dd9ca062dacfde4073958a67dd133b7e087ec50eaf29e"
+    },
+    {
+      "exit": 0,
+      "id": "20261013-224401789-1906049",
+      "label": "recovered",
+      "native_cache_bypass": true,
+      "output_sha256": "3edbb6f1beb380f8a9050e3473420035264168db47c8216265e8b0f8c19f0db1"
+    }
+  ],
+  "first_new_tenant_observed": false,
+  "harness_failures": [
+    {
+      "cause": "Acceptance expected raw libtest semicolon output; actual justrust emits compact comma report. Fixed report guard and used independently emptyv2 roots.",
+      "client_exit": 0,
+      "harness_exit": 1,
+      "run": "20261013-223803007-1860524"
+    },
+    {
+      "cause": "First public attribution guard used nonexistent unit name field; actual schema crate_name corrected. Actual public commands were already exit0 and were not relabeled or repeated as failures."
+    }
+  ],
+  "native_cargo": {
+    "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+    "complete": true,
+    "observations": [
+      {
+        "case": 0,
+        "dependency_cache": "miss",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=x86-64"
+        ],
+        "id": "20261013-223921742-1867697",
+        "output_sha256": "f7628e82483bee0b8079c7c34a9a638d9eb9067556a754d01a5b56f4af2715e8",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "local-miss",
+          "miss",
+          "local-miss"
+        ]
+      },
+      {
+        "case": 0,
+        "dependency_cache": "hit",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=x86-64"
+        ],
+        "id": "20261013-223922485-1867941",
+        "output_sha256": "6b46cdb4e83fdcafac50f87138f88654fb6920137d14e47b7c6a3224649bd4f9",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "hit",
+          "local",
+          "local"
+        ]
+      },
+      {
+        "case": 1,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=native"
+        ],
+        "id": "20261013-223922627-1868007",
+        "output_sha256": "7910748a34aa10d33d8490f24a623f4f48ed17247d0c9796f8475bb11e01cd98",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 1,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=native"
+        ],
+        "id": "20261013-223923253-1868194",
+        "output_sha256": "1847cf761d29bcbb83287426d8c0897920f63f8e526c602932b43c5e86f7b63f",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 2,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget-cpu=native"
+        ],
+        "id": "20261013-223923718-1868339",
+        "output_sha256": "95596d76025865b3a764cd0a85e5500d524b342f2f7307feaff01dcdebe59a3a",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 2,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget-cpu=native"
+        ],
+        "id": "20261013-223955049-1870681",
+        "output_sha256": "52e2d61f046c1a5536436b798bc958ec5627553d1582f9dc88f33e11bc2177e1",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 3,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target-cpu=native"
+        ],
+        "id": "20261013-223955426-1870787",
+        "output_sha256": "2f6a486ce73f4b4fbf4af71d439b5aa56ebfaef751ae4dceeb8d4271788aede6",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 3,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target-cpu=native"
+        ],
+        "id": "20261013-223956172-1870981",
+        "output_sha256": "e053d4350466c44fdfc41e3480e4d89a227b3c08cde6830c5f5e252fba99003c",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 4,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target-cpu=native"
+        ],
+        "id": "20261013-223956543-1871141",
+        "output_sha256": "d7cc38d122bbe5021a583ab9a890fc616072debacaba3d4c3436fa69150e15e3",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 4,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target-cpu=native"
+        ],
+        "id": "20261013-223957327-1872120",
+        "output_sha256": "ba8de4f6148f00ee98ff2fc3b72d8c4c2410dc0c23cd395c7a7ca1ab043929e5",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 5,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target_cpu=native"
+        ],
+        "id": "20261013-223957829-1872611",
+        "output_sha256": "cc85126998e4c131037e8214b8a04637dd11027da458b82bedefbafbe735d1ac",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 5,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target_cpu=native"
+        ],
+        "id": "20261013-223958475-1873325",
+        "output_sha256": "5b899b7f0152543640c2e3593fc0c54ec9da988dc051c9eaad8246898b614c2a",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 6,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget_cpu=native"
+        ],
+        "id": "20261013-223958985-1873880",
+        "output_sha256": "da78b1af6305cd03ce9ed7cfe2ee084f0c8a67dfe9129c7479505e7495508ac4",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 6,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget_cpu=native"
+        ],
+        "id": "20261013-223959576-1874366",
+        "output_sha256": "23487f6147d723cc301d1528405da336d44c6c97f7e42c035d84e985994656a8",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 7,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target_cpu=native"
+        ],
+        "id": "20261013-224000041-1874651",
+        "output_sha256": "f469492ecd6925f1dc478b6f849e0484d3feb5a9ad6fcfff9a4c6a61bcd66497",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 7,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target_cpu=native"
+        ],
+        "id": "20261013-224000632-1875084",
+        "output_sha256": "2615fedc084799047cc85bd635512cad450cfd9e6534ea8a119ad4d683d749ac",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 8,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target_cpu=native"
+        ],
+        "id": "20261013-224001159-1875424",
+        "output_sha256": "dabf4ed941274bbe4df4d21b93e83573af784e9c8476bc0f43fea3cdc769fd10",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 8,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target_cpu=native"
+        ],
+        "id": "20261013-224002580-1876192",
+        "output_sha256": "276b434c940f84657de9ce4f56ab606bcb2cc104646789131f50466fe5a71099",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 9,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "@trusted-task-response-file"
+        ],
+        "id": "20261013-224003477-1876598",
+        "output_sha256": "02ebeaa88948d110b442213071c9f57fcc01187ad5be9a64f0b969e35d56b96a",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 9,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "@trusted-task-response-file"
+        ],
+        "id": "20261013-224004314-1877030",
+        "output_sha256": "b72d5c51e5adbecda9a0e37466d6be4a5f08030efc75195123ef31f778ee75f2",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      }
+    ],
+    "schema_version": 1,
+    "scope": "actual ordinary Cargo public-crate test workflows, not compiler mocks or a speed benchmark"
+  },
+  "native_public_sharing_authorized": false,
+  "next_fleet_runtime_receipt_observed": false,
+  "package_reuse": [
+    {
+      "exit": 0,
+      "id": "nightly-2026-10-08",
+      "marker_unchanged": true,
+      "output_sha256": "b57b277be8690a5de2a95d74a4486e3d9336485325151c115a9cdb7c33ee0978"
+    },
+    {
+      "exit": 0,
+      "id": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "marker_unchanged": true,
+      "output_sha256": "a9dc4f3aeec2aa677fc2d5546138c6257c97c1f7bef15d0c010e973d433e37bd"
+    }
+  ],
+  "performance_claim": false,
+  "public_runs": [
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-default",
+      "compiler": "nightly-2026-10-08",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223601560-1850759",
+      "place": "local"
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-default",
+      "compiler": "nightly-2026-10-08",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223602544-1851044",
+      "place": "local"
+    },
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-debug0",
+      "compiler": "nightly-2026-10-08",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223603222-1851203",
+      "place": "local"
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "nightly-2026-10-08-debug0",
+      "compiler": "nightly-2026-10-08",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223603940-1851304",
+      "place": "local"
+    },
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-default",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223604528-1851451",
+      "place": "local"
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-default",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223605395-1851551",
+      "place": "local"
+    },
+    {
+      "args": [
+        "check",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-debug0",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223606062-1851743",
+      "place": "local"
+    },
+    {
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cell": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943-debug0",
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "dependency_cache": "prebuilt",
+      "id": "20261013-223606896-1851837",
+      "place": "local"
+    }
+  ],
+  "requirements": [
+    {
+      "component": "toolchain",
+      "id": "S01",
+      "names": [
+        "toolchain::bundle::tests::declared_helpers_must_run_before_atomic_install"
+      ],
+      "observed": "nightly/fullJR load correctly; actual install reuse exits0 and markers unchanged",
+      "primary": "Actual fresh HTTPS downloads earlier, final real CLI existing-prefix reuse and12helper binary probes",
+      "requirement": "Share complete immutable public toolchains",
+      "scope": "real CLI/package runtime",
+      "boundary_cases": [
+        "trusted toolchain publisher: deterministic archives, identity and immutable writes"
+      ]
+    },
+    {
+      "component": "toolchain",
+      "id": "S02",
+      "names": [
+        "toolchain::bundle::tests::downloaded_jr_is_atomic_staged_inactive_idempotent_and_concurrent"
+      ],
+      "observed": "inactive unchanged",
+      "primary": "Final real staged marker installed_at0/inode/hash guard",
+      "requirement": "Downloaded JR never automatically activated",
+      "scope": "actual prefix observation",
+      "boundary_cases": [
+        "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR"
+      ]
+    },
+    {
+      "id": "S03",
+      "names": [
+        "toolchain::bundle::tests::manifest_rejects_wrong_target_id_commit_digest_sizes_and_schema",
+        "toolchain::bundle::tests::extraction_rejects_traversal_absolute_links_devices_duplicates_and_extensions",
+        "toolchain::bundle::tests::extraction_rejects_truncation_corrupt_gzip_and_declared_size_mismatch",
+        "toolchain::bundle::tests::downloaded_jr_install_lock_serializes_independent_processes",
+        "toolchain::bundle::tests::unavailable_shared_bundle_falls_back_to_verified_official_dist_offline",
+        "toolchain::bundle::tests::executable_with_missing_elf_loader_is_rejected_without_compiling"
+      ],
+      "observed": "wrongschema/identity/digest/size/path/link/device/duplicate/truncatedgzip/helperloader rejection, atomic independentprocess locks and officialfallback all named PASS",
+      "primary": "Named actual frozen source suite and fresh publisher boundary rerun",
+      "requirement": "Reject corrupt identities, malicious archives and unavailable distribution safely",
+      "scope": "boundary tests plus previous real broken Ubuntu helper127, not malicious production upload",
+      "boundary_cases": [
+        "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+        "prebuild shell: malformed pin rejects before downloading or building",
+        "trusted toolchain publisher: deterministic archives, identity and immutable writes"
+      ]
+    },
+    {
+      "id": "S04",
+      "names": [
+        "depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap",
+        "depcache_remote::tests::bundle_budgets_reject_oversize_and_exhaustion",
+        "depcache_remote::tests::public_unpack_rejects_hostile_record_structure",
+        "depcache_remote::tests::public_publish_rejects_unsafe_names_and_symlinks"
+      ],
+      "observed": "96MiB incompressible public roundtrip above95MiB cap succeeds/private rejects; bedrock restored hash-identically but already fit oldgzip cap",
+      "primary": "Named installed whole-suite real static publish/fetch test; previous real bedrock129090240raw/25839023gzip roundtrip",
+      "requirement": "Larger public bundles without increasing private tier limits",
+      "scope": "synthetic large boundary plus actual compiled artifact roundtrip, no speed claim",
+      "boundary_cases": [
+        "validation: keys, entries, sizes, quota"
+      ]
+    },
+    {
+      "id": "S05",
+      "observed": "103verified archives; fresh authoritative sparse index; tamper/private/git/redirect/symlink/overwrite reject",
+      "primary": "Previous actual HTTPS restore+fresh Cargo fetch and final trusted archive publication/restore security contracts",
+      "requirement": "Verified public registry archives without mutable index/config/credential sharing",
+      "scope": "real fetch plus offline transport edge tests; no private Cargo-home publish",
+      "boundary_cases": [
+        "trusted public Cargo archive publication and restore security contracts"
+      ]
+    },
+    {
+      "id": "S06",
+      "observed": "seed1.697s median vs direct1.057s; default off",
+      "primary": "Previous three alternating actual full-network pairs",
+      "requirement": "Count complete network cost before seed default promotion",
+      "scope": "workload-specific measured negative result, no universal speed claim",
+      "boundary_cases": []
+    },
+    {
+      "id": "S07",
+      "observed": "8publichits/0misses, four2test passes; historical producer9193newbundles/19917index and4newJRkeys separately observed",
+      "primary": "Final8fresh ordinary CLI check/test runs with two compilers/defaultdebug0, actual prebuilt units and tests",
+      "requirement": "Compatible prebuilt compiler/profile keys actually reused",
+      "runs": [
+        "20261013-223601560-1850759",
+        "20261013-223602544-1851044",
+        "20261013-223603222-1851203",
+        "20261013-223603940-1851304",
+        "20261013-223604528-1851451",
+        "20261013-223605395-1851551",
+        "20261013-223606062-1851743",
+        "20261013-223606896-1851837"
+      ],
+      "scope": "real public CDN consumption, no account-cache attribution",
+      "boundary_cases": []
+    },
+    {
+      "id": "S08",
+      "observed": "normal existing-host authorization/charge workflows pass; named fixture tests privateotheraccount reject/trustedpublishtoken only/95MiBquota/failedreclaim cap preserved",
+      "primary": "Previous actual authenticated hosted workflows/newGitroot ignoredsentinel check plus final private/shared/cache/auth/no-launch/billing/cap regression cases",
+      "requirement": "Account-private source/cache, trusted-only public writes and normal authorization preserved",
+      "scope": "real existing-account accepted; cross-account live hostile attempts not performed, fixture boundary tests not misrepresented as live tenant proof",
+      "boundary_cases": [
+        "private tier: upload object then manifest, read back, isolated from other accounts",
+        "shared tier: only the publish token writes it, every account reads it",
+        "fail closed: missing API binding or internal token, backend down, or no bearer -> no launch",
+        "fail closed: disabled, no R2, or backend down",
+        "isolation: a row pointing at an instance tagged for another account or kind fails closed",
+        "a refused charge records nothing; labels are bounded and printable",
+        "fleet cap: BUILD_MAX_HOSTS reclaims the longest-idle host of another account, never a busy one",
+        "fleet cap holds under a burst of concurrent first connects, and a stale reservation is released by the cron",
+        "region move: a west newcomer at the fleet cap reclaims an idle EAST host through the east client",
+        "reclaim: a failed stop of the victim keeps it counted, so the cap is never bypassed",
+        "reclaim: AWS stop and the D1 compensation both fail, the victim still counts (reclaiming)",
+        "reclaim: a confirmed stop moves the victim to stopping and frees exactly one slot"
+      ]
+    },
+    {
+      "id": "S09",
+      "observed": "test42; sentinel absent; source identity and later Desktop backup restoration verified",
+      "primary": "Earlier actual fresh Git source check/test/lint with trackedsrc/target/value and ignoredsentinel plus frozen69blob guard",
+      "requirement": "Source mirroring preserves tracked target modules but excludes private ignored files",
+      "scope": "actual hosted source interface, not a manual source copy",
+      "boundary_cases": []
+    },
+    {
+      "id": "N01",
+      "names": [
+        "buildscript::tests::historical_native_entries_are_not_public_even_with_hermetic_bit",
+        "buildscript::tests::native_header_change_changes_object_with_identical_compiler",
+        "buildscript::tests::script_bundle_round_trip_and_hermetic_only",
+        "buildscript::tests::script_bundle_rejects_hostile_input"
+      ],
+      "observed": "historical native metadata and hermeticbit alone refused; sharing_authorized=false; header mutation withsamecompiler observed",
+      "primary": "Named historicalnative/publicbundle guard and realheader mutation test, final rootfs candidate boundary rerun",
+      "requirement": "Native script public replay must not trust compiler or filesystem hash alone",
+      "scope": "guard accepted; native sharing authorization remains BLOCKED on trusted mounted closure/kernelCPU/environment/ABI",
+      "boundary_cases": [
+        "native rootfs candidate builder rejects false trust and pins image bytes"
+      ]
+    },
+    {
+      "id": "N02",
+      "names": [
+        "depcache::tests::extern_keys_hash_dynamic_library_executable_bytes",
+        "depcache::tests::native_proc_macro_code_changes_hash_and_expansion"
+      ],
+      "observed": "whole executable hash changes with expansion behavior; old metadata-only memo invalidated",
+      "primary": "Named actual macro execution with nativehelper1/2 and identicalRustmetadata",
+      "requirement": "Executed proc-macro code is fully keyed",
+      "scope": "actual compiler macro execution within real-project integration, not a cross-machine native closure proof",
+      "boundary_cases": []
+    },
+    {
+      "id": "N03",
+      "names": [
+        "bundled_native_rlib_change_invalidates_shim_depcache",
+        "depcache::tests::extern_archive_keys_include_bundled_object_code"
+      ],
+      "observed": "old staleoutput1 on helper2 repaired; current outputs1/2/2 and misses1/2 thenhit2",
+      "primary": "Actual installed shim C helper1/2 sameRustmetadata miss/miss/hit, retained old executable failure",
+      "requirement": "Bundled native rlib code must invalidate dependent artifacts",
+      "scope": "real compiler/link/runtime integration, no claim all native determinants solved",
+      "boundary_cases": []
+    },
+    {
+      "id": "N04",
+      "names": [
+        "depcache::tests::native_cpu_bypasses_dependency_and_local_plans",
+        "depcache::tests::native_and_response_file_bypasses_compile_with_original_args"
+      ],
+      "observed": "16native ordinaryCLI runs bypass dep/local caches and pass2runtime tests each",
+      "primary": "Final ordinary Cargo test runs all8validflag forms twice plus earlier actualshim40checks and red23plans",
+      "requirement": "Host native CPU flags cannot get portable/local cache eligibility without CPU determinant",
+      "runs": [
+        "20261013-223922627-1868007",
+        "20261013-223923253-1868194",
+        "20261013-223923718-1868339",
+        "20261013-223955049-1870681",
+        "20261013-223955426-1870787",
+        "20261013-223956172-1870981",
+        "20261013-223956543-1871141",
+        "20261013-223957327-1872120",
+        "20261013-223957829-1872611",
+        "20261013-223958475-1873325",
+        "20261013-223958985-1873880",
+        "20261013-223959576-1874366",
+        "20261013-224000041-1874651",
+        "20261013-224000632-1875084",
+        "20261013-224001159-1875424",
+        "20261013-224002580-1876192"
+      ],
+      "scope": "actual Cargo/publiccrate/runtime; crossCPU staleexecution not demonstrated",
+      "boundary_cases": []
+    },
+    {
+      "id": "N05",
+      "names": [
+        "depcache::tests::response_files_bypass_dependency_and_local_plans"
+      ],
+      "observed": "2ordinaryCLI runs bypass allartifactcaches/pass2tests each, no file reinterpretation by cache",
+      "primary": "Final ordinary Cargo test with actual@nativefile twice, plus realRustc red and namedmissing/@shell bypass tests",
+      "requirement": "Opaque response files cannot evade cache determinant review",
+      "runs": [
+        "20261013-224003477-1876598",
+        "20261013-224004314-1877030"
+      ],
+      "scope": "actual rustc response consumption; opaque missing/@shell checks remain explicit conservative parser boundary",
+      "boundary_cases": []
+    },
+    {
+      "id": "N06",
+      "names": [
+        "depcache::tests::nonnative_long_codegen_flags_remain_keyed",
+        "depcache::tests::explicit_cpu_and_inert_native_text_remain_cacheable",
+        "depcache::tests::round_trip_and_fail_open"
+      ],
+      "observed": "genericdep miss/hit preserved; nativefailure101 diagnosticE0308 full retained; repairpasses2tests withcachebypass",
+      "primary": "Final ordinary Cargo generic miss/hit and realnativeE0308/101 then restored2tests",
+      "requirement": "Generic explicit CPU/flags remain cached and compiler errors are not masked",
+      "runs": [
+        "20261013-223921742-1867697",
+        "20261013-223922485-1867941",
+        "20261013-224400547-1905506",
+        "20261013-224401789-1906049"
+      ],
+      "scope": "actual ordinary Cargo failure/recovery, not only mocked exit codes",
+      "boundary_cases": []
+    },
+    {
+      "id": "S10",
+      "observed": "all0; actual named outputs now audited, source restored exact; new independent fresh consumer/native workflows pass",
+      "primary": "Exact059/0a19 frozen hostedcheck410tests3ignored/strictlint/recheck,69sourceblobidentity, DesktopFPS edit/repeat/restore3pass each",
+      "requirement": "Final installed client works through ordinary complete project and end-user edit loops",
+      "runs": [
+        "20261013-220816567-1669580",
+        "20261013-220822907-1670409",
+        "20261013-220843215-1671710",
+        "20261013-220848764-1671939",
+        "20261013-220940404-1675420",
+        "20261013-220951644-1676602",
+        "20261013-220955119-1676852"
+      ],
+      "scope": "actual hosted project acceptance; no new hosted rerun during peerexclusive graph lease",
+      "boundary_cases": []
+    },
+    {
+      "id": "S11",
+      "observed": "onlyUserData changed; allnonUserDataequal; safe0a19/fullJR/opaqueUUID configured;3hlifetime and09UTC schedule same",
+      "primary": "Actual deployedLT3 UPDATE_COMPLETE and scheduler$Latest; exact actualbefore/after comparison; fresh91boundary cases include shell/status/template contracts",
+      "requirement": "Future fleet pin changes preserve infrastructure/security/lifetime and report sanitized status",
+      "scope": "actual configuration plus executablefake-AWS/status contracts; new version3producer runtime receipt UNOBSERVED until natural next schedule",
+      "boundary_cases": [
+        "fleet status: sanitized exact pin, profile transitions and bounded call count",
+        "fleet status: observer failures never change results or artifact operation ordering",
+        "fleet status: legacy/unselected pins and hostile status ids emit no receipts",
+        "fleet status: matrix receipts carry selected compiler and never workspace identity",
+        "prebuild shell: explicit exact SHA executes downloaded client, not installed release",
+        "prebuild shell: empty pin logs installed fallback and never discovers a mutable S3 pin",
+        "prebuild shell: malformed pin rejects before downloading or building",
+        "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+        "prebuild shell: explicit nightly/JR matrix runs default and manifest debug0 in separate compiler targets",
+        "prebuild shell: optional seed failure continues and uploads objects before manifests before index",
+        "prebuild shell: failed locked workspace retries without the lock and still publishes",
+        "prebuild shell: invalid explicit compiler matrix fails before store access or builds",
+        "fleet template pins full client digest and explicit compiler matrix without shell injection",
+        "fleet status opt-in is future-only, defaults off, and uses an opaque generated ID"
+      ]
+    },
+    {
+      "id": "S12",
+      "observed": "BLOCKED/unobserved, never inferred from bootstrap source or existinghost reuse",
+      "primary": "Existing-host fresh-prefix package acceptance; no genuine newtenant event available",
+      "requirement": "Genuine new-tenant boot acceptance without destroying data",
+      "scope": "no account fabrication/host deletion/security weakening",
+      "boundary_cases": [
+        "bootstrap contract: ubuntu user, hardened sshd, no general sudo, idle stop, toolchain, per-boot readiness",
+        "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR"
+      ]
+    }
+  ],
+  "runtime_helpers": [
+    {
+      "helpers": [
+        {
+          "executable_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+          "exit": 0,
+          "name": "rustc",
+          "output_sha256": "94977b0fd609a043051a3172a804c8ca41bf6d8c8fdabf1a92591f47405bfe17",
+          "version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)"
+        },
+        {
+          "executable_sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+          "exit": 0,
+          "name": "cargo",
+          "output_sha256": "71de2de1f7d9ecf66030112aa59bf05781d6210a550634db5eba3920af9d08de",
+          "version": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29)"
+        },
+        {
+          "executable_sha256": "7a7f7f709c03c0f51d5a2570659906a64edaf35a18f86f39fc914516b5736295",
+          "exit": 0,
+          "name": "rustdoc",
+          "output_sha256": "0efc8a5dc4a679ae067fb56ec42d8cdcec68e528272e0371a66a7cdf08e65b03",
+          "version": "rustdoc 1.101.0-nightly (1d81eb4ad 2026-10-07)"
+        },
+        {
+          "executable_sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+          "exit": 0,
+          "name": "rustfmt",
+          "output_sha256": "c708d345a6155c6e49dc0fe31c175b8989bf9809f9998394edd51d88fbf4e221",
+          "version": "rustfmt 1.11.0-nightly (1d81eb4ad9 2026-10-07)"
+        },
+        {
+          "executable_sha256": "ac45c14da48d052f15d24fca35b7e50105866e719caa5e3c9c314448fb7cbddc",
+          "exit": 0,
+          "name": "clippy-driver",
+          "output_sha256": "f42cda6754eec5d6dd6e845202ad553e963f60c4e6afde977fe3ab0bc319fcfa",
+          "version": "clippy 0.1.101 (1d81eb4ad9 2026-10-07)"
+        },
+        {
+          "executable_sha256": "40349ded078a045e7ea718fef317b73bf2b20c918a65ae1510fb1de989779fd5",
+          "exit": 0,
+          "name": "jr-cargo",
+          "output_sha256": "3d1da04736e30532121b1e4f78f29ec1970f3a4663e67b987268613ca4fe66d3",
+          "version": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 125bdc8c1)"
+        }
+      ],
+      "id": "nightly-2026-10-08",
+      "installed_at": 1791946153.1911647,
+      "marker_inode_unchanged": true,
+      "marker_sha256": "731fd599a4dc1544d43156c6f68750df5e473d37d428466bfb3885a6934bf6c9"
+    },
+    {
+      "helpers": [
+        {
+          "executable_sha256": "efd82c516ba2b499e4a617cb97fbcbb65b8b1088e64b9c2654e98f7281d64e8a",
+          "exit": 0,
+          "name": "rustc",
+          "output_sha256": "3df2bc5c1db96ffd2fa914b8cdd78c2986965c87069222a1e621232197cd5df6",
+          "version": "rustc 1.101.0-nightly (b7907f1fe 2026-10-12)"
+        },
+        {
+          "executable_sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+          "exit": 0,
+          "name": "cargo",
+          "output_sha256": "71de2de1f7d9ecf66030112aa59bf05781d6210a550634db5eba3920af9d08de",
+          "version": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29)"
+        },
+        {
+          "executable_sha256": "37fbaaeb188472184c4af285745fab40ea2ad1558106f614c2dc0a5f19502f95",
+          "exit": 0,
+          "name": "rustdoc",
+          "output_sha256": "a94de558afe4e76462b7b71a8b4d94c280480055f496c55c248bea5b4bfb274a",
+          "version": "rustdoc 1.101.0-nightly (b7907f1fe 2026-10-12)"
+        },
+        {
+          "executable_sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+          "exit": 0,
+          "name": "rustfmt",
+          "output_sha256": "c708d345a6155c6e49dc0fe31c175b8989bf9809f9998394edd51d88fbf4e221",
+          "version": "rustfmt 1.11.0-nightly (1d81eb4ad9 2026-10-07)"
+        },
+        {
+          "executable_sha256": "7419ee274d9ae2d9e345106fbe9fbf33c7c79593ffe95fc81f8afb46f229575c",
+          "exit": 0,
+          "name": "clippy-driver",
+          "output_sha256": "dffe2fbee98a16ba5ac6af442ae053e3b7f9b586beda8f978e76c865542f3406",
+          "version": "clippy 0.1.101 (b7907f1fe8 2026-10-12)"
+        },
+        {
+          "executable_sha256": "40349ded078a045e7ea718fef317b73bf2b20c918a65ae1510fb1de989779fd5",
+          "exit": 0,
+          "name": "jr-cargo",
+          "output_sha256": "3d1da04736e30532121b1e4f78f29ec1970f3a4663e67b987268613ca4fe66d3",
+          "version": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 125bdc8c1)"
+        }
+      ],
+      "id": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "installed_at": 0,
+      "marker_inode_unchanged": true,
+      "marker_sha256": "475ec3dedddae1b7a06961e5d429a1e4238603db4f5724d1f937931d3896b370"
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "059674bf76fa218ba7e475279a86b4b6caf32aac"
+}
