@@ -21,6 +21,14 @@ justrust vertically integrates and optimizes the Rust build toolchain to make
 the entire edit, check, and test loop faster. Use it locally or with our remote
 build service.
 
+[uv benchmarks](docs/readme-uv-benchmark-20261014.md), median of three rounds. Factors are relative to Stock Cargo.
+
+| Operation | Stock Cargo (local) | justrust (local) | justrust (remote) |
+|---|---:|---:|---:|
+| Fresh checkout, `check --workspace` | 81.2 s | **34.5 s (2.35×)** | **14.3 s (5.66×)** |
+| Fresh checkout, `test -p uv-resolver --no-run` | 85.8 s | **33.3 s (2.58×)** | **15.2 s (5.63×)** |
+| Warm one-line body edit, `check -p uv-resolver` | 0.96 s | 0.85 s (1.13×) | 0.89 s (1.07×) |
+
 Your coding agents spend valuable time waiting for Rust checks, builds, and
 tests. Running those operations locally can slow down your machine, drive up
 CPU usage, temperature, and RAM consumption, and fill your disk with build
