@@ -69,6 +69,7 @@ mod remote_build;
 mod remote_daemon;
 mod remote_hosted;
 // Parts are used only by the remote agent, which is not built on Windows.
+mod feedback;
 #[cfg_attr(windows, allow(dead_code))]
 mod remote_proto;
 mod remote_sync;
@@ -382,6 +383,12 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Send an explicit message to maintainers (max 4096 UTF-8 bytes).
+    /// Do not include secrets or private paths. Respects telemetry opt-out.
+    Feedback {
+        /// Message to send. Quote it as one argument.
+        message: String,
+    },
     /// Anonymous usage stats: status (default), on, off.
     /// Also off with JUSTRUST_NO_TELEMETRY=1 or DO_NOT_TRACK=1.
     Telemetry {
@@ -657,10 +664,11 @@ pub fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if !matches!(
         cli.command,
-        Command::Login { .. } | Command::Logout | Command::Mcp
+        Command::Login { .. } | Command::Logout | Command::Mcp | Command::Feedback { .. }
     ) {
         account::poll_pending();
     }
+    let is_feedback = matches!(cli.command, Command::Feedback { .. });
     let name = command_name(&cli.command);
     let started = std::time::Instant::now();
     let result = dispatch(cli.command);
@@ -674,7 +682,9 @@ pub fn main() -> anyhow::Result<()> {
             }),
         );
     }
-    telemetry::maybe_spawn_background();
+    if !is_feedback {
+        telemetry::maybe_spawn_background();
+    }
     result
 }
 
@@ -688,6 +698,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
         | Command::Clippy(_)
         | Command::Run(_)
         | Command::Cargo(_)
+        | Command::Feedback { .. }
         | Command::Telemetry { .. } => return None,
         Command::Log { .. } => "log",
         Command::Runs { .. } => "runs",
@@ -864,6 +875,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             print!("{report}");
         }
         Command::Update { action, force } => update::command(&action, force)?,
+        Command::Feedback { message } => feedback::command(&message)?,
         Command::Telemetry { action } => telemetry::command(&action)?,
     }
     Ok(())

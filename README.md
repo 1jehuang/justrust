@@ -56,6 +56,15 @@ From source: `cargo install justrust --locked` (Rust 1.91 or newer).
 Prebuilt installs update automatically. Disable updates with
 `justrust update off`, and anonymous usage telemetry with `justrust telemetry off`.
 
+Send an explicit message with `justrust feedback "Your suggestion"` (maximum 4096 UTF-8 bytes).
+Only the message is attached, never logs, paths, account details, or install IDs.
+Do not include secrets, private source, or identifying information. Messages are
+stored durably for maintainer review, separately from anonymous telemetry.
+Feedback respects telemetry opt-out settings and environment variables. Delivery
+is synchronous: failures return an error, messages are not queued or retried.
+A network failure can leave receipt unconfirmed. The service rate-limits requests
+using a short-lived hash of the connecting IP, not stored with the message.
+
 ## Use
 
 ```sh
