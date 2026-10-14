@@ -166,7 +166,22 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
     ///
     /// [`ops::cargo_compile`]: crate::ops::cargo_compile
     #[tracing::instrument(skip_all)]
-    pub fn compile(mut self, exec: &Arc<dyn Executor>) -> CargoResult<Compilation<'gctx>> {
+    pub fn compile(self, exec: &Arc<dyn Executor>) -> CargoResult<Compilation<'gctx>> {
+        let mut owner = super::job_queue::jr_execution_graph::owner::Owner::from_env(self.bcx.gctx);
+        // Declaration is durable before child construction. Keep the owner outside
+        // the fallible body so every normal return, including errors, is sealed.
+        let queue = JobQueue::new(self.bcx, &owner);
+        let result = self.compile_owned(exec, queue, &mut owner);
+        owner.finish(result.is_ok());
+        result
+    }
+
+    fn compile_owned(
+        mut self,
+        exec: &Arc<dyn Executor>,
+        mut queue: JobQueue<'gctx>,
+        owner: &mut super::job_queue::jr_execution_graph::owner::Owner,
+    ) -> CargoResult<Compilation<'gctx>> {
         // A shared lock is held during the duration of the build since rustc
         // needs to read from the `src` cache, and we don't want other
         // commands modifying the `src` cache while it is running.
@@ -174,7 +189,6 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             .bcx
             .gctx
             .acquire_package_cache_lock(CacheLockMode::Shared)?;
-        let mut queue = JobQueue::new(self.bcx);
         self.lto = super::lto::generate(self.bcx)?;
         self.prepare_units()?;
         self.prepare()?;
@@ -205,7 +219,10 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         }
 
         // Now that we've figured out everything that we're going to do, do it!
-        queue.execute(&mut self)?;
+        owner.execute_enter();
+        let result = queue.execute(&mut self);
+        owner.execute_result(result.is_ok());
+        result?;
 
         // Add `OUT_DIR` to env vars if unit has a build script.
         let units_with_build_script = &self

@@ -1,5 +1,7 @@
 //! Opt-in observation of the actual Cargo scheduler, not a whole-pipeline graph.
 //! No command, source path, package identity or diagnostic is serialized.
+// Retain the existing scheduler module path while its owner has a separate file.
+#![allow(clippy::self_named_module_files)]
 use crate::util::data_structures::HashMap;
 use std::hash::Hash;
 use std::io::Write;
@@ -8,6 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+
+pub(crate) mod owner;
 
 const MAX_RECEIPT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_NODES: usize = 100_000;
@@ -24,6 +28,7 @@ struct Enabled<K: Eq + Hash> {
     started: Instant,
     ids: HashMap<K, usize>,
     fresh: HashMap<usize, bool>,
+    envelope: Option<owner::Envelope>,
     receipt: Receipt,
     sealed: bool,
     finalized: bool,
@@ -74,25 +79,22 @@ struct Event {
 }
 
 impl<K: Eq + Hash + Clone> Capture<K> {
-    pub(super) fn from_env(gctx: &crate::util::GlobalContext) -> Self {
-        Self::new(
-            gctx.get_env_os("JUSTRUST_EXECUTION_GRAPH_DIR")
-                .map(PathBuf::from),
-        )
+    pub(super) fn for_owner(owner: &owner::Owner) -> Self {
+        let Some((dir, envelope)) = owner.binding() else {
+            return Self::new(None);
+        };
+        let mut capture = Self::new(Some(dir));
+        if let Some(c) = capture.enabled.as_mut() {
+            c.receipt.capture_id = envelope.capture_id.clone();
+            c.envelope = Some(envelope);
+        }
+        capture
     }
 
     fn new(dir: Option<PathBuf>) -> Self {
         Self {
             enabled: dir.map(|dir| {
-                let epoch = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default();
-                let capture_id = format!(
-                    "cargo-{}-{}-{}",
-                    std::process::id(),
-                    epoch.as_nanos(),
-                    NEXT_CAPTURE.fetch_add(1, Ordering::Relaxed)
-                );
+                let capture_id = unique_id("cargo");
                 Enabled {
                     dir,
                     started: Instant::now(),
@@ -100,6 +102,7 @@ impl<K: Eq + Hash + Clone> Capture<K> {
                     fresh: HashMap::default(),
                     sealed: false,
                     finalized: false,
+                    envelope: None,
                     receipt: Receipt {
                         schema: 1,
                         producer: "cargo-scheduler",
@@ -345,34 +348,62 @@ impl<K: Eq + Hash> Enabled<K> {
     }
 
     fn write_with_budget(&self, budget: usize) -> std::io::Result<()> {
-        std::fs::create_dir_all(&self.dir)?;
-        let path = self.dir.join(format!("{}.json", self.receipt.capture_id));
-        let partial = self
-            .dir
-            .join(format!("{}.partial", self.receipt.capture_id));
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        if let Some(envelope) = &self.envelope {
+            // Separate identity transport never changes schema-1 receipt semantics.
+            let _ = publish_json(
+                &self.dir,
+                &format!("{}.envelope", self.receipt.capture_id),
+                envelope,
+                16 * 1024,
+            );
         }
-        let file = options.open(&partial)?;
-        // Only own cleanup after create-new succeeds. Never remove another
-        // capture's pre-existing partial on an open error.
-        let _cleanup = PartialReceipt(partial.clone());
-        let mut writer = CappedWriter {
-            inner: std::io::BufWriter::new(file),
-            remaining: budget,
-        };
-        serde_json::to_writer(&mut writer, &self.receipt)?;
-        writer.flush()?;
-        drop(writer);
-        // A hard link publishes the finished bytes atomically without replacing
-        // an existing receipt. Both names live in the same directory/filesystem.
-        std::fs::hard_link(&partial, path)?;
-        Ok(())
+        publish_json(&self.dir, &self.receipt.capture_id, &self.receipt, budget)
     }
+}
+
+fn unique_id(prefix: &str) -> String {
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!(
+        "{prefix}-{}-{}-{}",
+        std::process::id(),
+        epoch.as_nanos(),
+        NEXT_CAPTURE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn publish_json(
+    dir: &std::path::Path,
+    stem: &str,
+    value: &impl Serialize,
+    budget: usize,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(format!("{stem}.json"));
+    let partial = dir.join(format!("{stem}.partial"));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(&partial)?;
+    // Only own cleanup after create-new succeeds. Never remove another
+    // capture's pre-existing partial on an open error.
+    let _cleanup = PartialReceipt(partial.clone());
+    let mut writer = CappedWriter {
+        inner: std::io::BufWriter::new(file),
+        remaining: budget,
+    };
+    serde_json::to_writer(&mut writer, value)?;
+    writer.flush()?;
+    drop(writer);
+    // A hard link publishes the finished bytes atomically without replacing
+    // an existing receipt. Both names live in the same directory/filesystem.
+    std::fs::hard_link(&partial, path)?;
+    Ok(())
 }
 
 struct CappedWriter<W> {

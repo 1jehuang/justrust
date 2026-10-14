@@ -1,5 +1,20 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: native expected-owner coverage gate
+
+Run `20261014-083519591-872352` validated one independently declared native
+BuildRunner scheduler capture, containing 86 nodes and 126 edges, with no
+coverage issues. The library build took 33.741s under contention, with 11
+dependency-cache hits and 62 misses after changed configuration. Unrelated
+processes averaged about nine cores of use. This is correctness/coverage
+validation, not a performance baseline or speedup claim. Capture off/on/off
+fixture runs `20261014-083632675-893606`, `20261014-083633187-893812` and
+`20261014-083633383-893845` preserved binary hashes and reused all artifacts
+on both switches. Missing child receipts, missing declaration journals and
+contradictory execute lifecycles fail coverage validation. Other authorities
+are explicitly excluded, not silently covered. Full pipeline and child-result
+agreement remain unverified. Evidence: `docs/execution-graph-owner-acceptance-20261014.md`.
+
 ## 2026-10-14: end-to-end profiling diagnostic, rejected baseline
 
 All 40 synth seed-1 points were attempted. The final gate rejected mixed

@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "run_id": "20261014-083519591-872352",
+  "coverage": "buildrunner-scheduler-entry-coverage",
+  "profile": "buildrunner-scheduler-entry-v1",
+  "authority_root": "buildrunner-872418-1791992120057253611-0",
+  "excluded_authority_roots": [],
+  "scheduler_entry_complete": true,
+  "full_pipeline_complete": false,
+  "outcome_agreement_verified": false,
+  "expected_receipts": 1,
+  "accounted_receipts": 1,
+  "issues": [],
+  "receipt": {
+    "capture_id": "cargo-872418-1791992120057262701-2",
+    "structural_complete": true,
+    "nodes": 86,
+    "edges": 126,
+    "cpu_work_ns": null,
+    "execution_span_ns": null
+  },
+  "opaque_boundaries": [
+    "outer-cargo-launch", "command-setup-and-resolution", "compiler-queries",
+    "build-scripts", "proc-macros", "native-tools", "linking", "tests",
+    "fingerprints", "waits", "client-cache", "remote-service"
+  ]
+}

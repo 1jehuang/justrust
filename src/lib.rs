@@ -20,6 +20,7 @@ mod depcache_prebuilt;
 mod depcache_remote;
 mod early;
 mod execution_graph;
+mod execution_graph_manifest;
 mod export;
 mod findings;
 mod history;
@@ -197,6 +198,9 @@ enum Command {
     Graph {
         /// A receipt JSON file or directory written by jr-cargo.
         path: PathBuf,
+        /// An explicit native owner manifest defining expected scheduler captures.
+        #[arg(long)]
+        manifest: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -752,7 +756,11 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         Command::Build(p) => agent("build", p.args),
         Command::Clippy(p) => agent("clippy", p.args),
         Command::Run(p) => agent("run", p.args),
-        Command::Graph { path, json } => execution_graph::command(&path, json)?,
+        Command::Graph {
+            path,
+            manifest,
+            json,
+        } => execution_graph::command(&path, json, manifest.as_deref())?,
         Command::Cargo(p) => record::main(p.args),
         Command::Log { id, grep, tail } => runs::log(id.as_deref(), grep.as_deref(), tail)?,
         Command::Runs { limit, here, json } => runs::list(limit, here, json)?,

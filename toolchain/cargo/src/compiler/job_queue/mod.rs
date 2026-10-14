@@ -113,7 +113,7 @@
 mod job;
 mod job_state;
 mod jr_critical_path;
-mod jr_execution_graph;
+pub(crate) mod jr_execution_graph;
 
 use crate::util::data_structures::{HashMap, HashSet};
 use std::cell::RefCell;
@@ -398,13 +398,16 @@ enum Message {
 }
 
 impl<'gctx> JobQueue<'gctx> {
-    pub fn new(bcx: &BuildContext<'_, 'gctx>) -> JobQueue<'gctx> {
+    pub fn new(
+        bcx: &BuildContext<'_, 'gctx>,
+        owner: &jr_execution_graph::owner::Owner,
+    ) -> JobQueue<'gctx> {
         JobQueue {
             queue: DependencyQueue::new(),
             counts: HashMap::default(),
             timings: Timings::new(bcx),
             critical_path: jr_critical_path::Costs::from_env(bcx.gctx),
-            execution_graph: jr_execution_graph::Capture::from_env(bcx.gctx),
+            execution_graph: jr_execution_graph::Capture::for_owner(owner),
         }
     }
 

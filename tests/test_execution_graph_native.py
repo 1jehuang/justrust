@@ -69,7 +69,77 @@ class NativeGraphAcceptance(unittest.TestCase):
                 self.assertTrue(all(not r['full_pipeline_complete'] for r in receipts))
                 self.assertTrue(all(r['cpu_work_ns'] is None and r['execution_span_ns'] is None
                                     for r in receipts))
-                return [json.loads(p.read_text()) for p in capture.glob('*.json')]
+                raw = [json.loads(p.read_text()) for p in capture.glob('*.json')]
+                scheduler = [r for r in raw if r.get('producer') == 'cargo-scheduler']
+                manifests = list(capture.glob('*.manifest.json'))
+                self.assertTrue(manifests, 'updated native owner manifest is required')
+                for manifest_path in manifests:
+                    manifest = json.loads(manifest_path.read_text())
+                    envelopes = [(p, json.loads(p.read_text()))
+                                 for p in capture.glob('*.envelope.json')]
+                    selected = [(p, e) for p, e in envelopes
+                                if e['run_id'] == manifest['run_id']]
+                    self.assertTrue(selected)
+                    # Reconcile one explicitly scoped owner inventory, not all
+                    # unrelated native invocations sharing the capture sink.
+                    with tempfile.TemporaryDirectory(prefix='owner-reconcile-', dir=root) as subset:
+                        subset = Path(subset)
+                        copied_manifest = subset / manifest_path.name
+                        shutil.copyfile(manifest_path, copied_manifest)
+                        for journal_path in capture.glob('owner-' + manifest['authority_root'] + '.*.json'):
+                            shutil.copyfile(journal_path, subset / journal_path.name)
+                        for envelope_path, envelope in selected:
+                            shutil.copyfile(envelope_path, subset / envelope_path.name)
+                            receipt_path = capture / (envelope['capture_id'] + '.json')
+                            shutil.copyfile(receipt_path, subset / receipt_path.name)
+                        p, _ = command(['graph', str(subset), '--manifest', str(copied_manifest), '--json'])
+                        coverage = json.loads(p.stdout)
+                        self.assertTrue(coverage['scheduler_entry_complete'], p.stdout)
+                        self.assertFalse(coverage['full_pipeline_complete'])
+                        self.assertEqual(coverage['authority_root'], manifest['authority_root'])
+                        self.assertFalse(coverage['outcome_agreement_verified'])
+                        declaration = next(subset.glob('*.declaration.json'))
+                        saved_declaration = declaration.read_bytes()
+                        declaration.unlink()
+                        _, missing_journal_output = command(
+                            ['graph', str(subset), '--manifest', str(copied_manifest), '--json'],
+                            success=False)
+                        self.assertIn('missing independent initial owner declaration', missing_journal_output)
+                        declaration.write_bytes(saved_declaration)
+                        saved_manifest = copied_manifest.read_bytes()
+                        contradictory = json.loads(saved_manifest)
+                        contradictory['owners'][0]['outcome'] = 'failed'
+                        contradictory['owners'][0]['tickets'][0]['lifecycle'] = 'not_started'
+                        contradictory['owners'][0]['tickets'][0]['execute_entered'] = False
+                        copied_manifest.write_text(json.dumps(contradictory))
+                        _, conflict_output = command(
+                            ['graph', str(subset), '--manifest', str(copied_manifest), '--json'],
+                            success=False)
+                        self.assertIn('conflicts with final lifecycle', conflict_output)
+                        copied_manifest.write_bytes(saved_manifest)
+                        # A different declared authority is excluded explicitly,
+                        # never silently promoted to directory/run completeness.
+                        other = json.loads(saved_declaration)
+                        other['run_id'] = other['authority_root'] = 'other-pending-owner'
+                        other['owners'][0]['invocation_id'] = 'other-pending-owner'
+                        other_path = subset / 'other.declaration.json'
+                        other_path.write_text(json.dumps(other))
+                        p, _ = command(['graph', str(subset), '--manifest', str(copied_manifest), '--json'])
+                        scoped = json.loads(p.stdout)
+                        self.assertTrue(scoped['scheduler_entry_complete'])
+                        self.assertIn('other-pending-owner', scoped['excluded_authority_roots'])
+                        other_path.unlink()
+                        # Expected ticket remains present after deleting both
+                        # its envelope and receipt. Missing work is not success.
+                        envelope_path, envelope = selected[0]
+                        (subset / envelope_path.name).unlink()
+                        (subset / (envelope['capture_id'] + '.json')).unlink()
+                        p, _ = command(['graph', str(subset), '--manifest', str(copied_manifest), '--json'])
+                        missing = json.loads(p.stdout)
+                        self.assertFalse(missing['scheduler_entry_complete'], p.stdout)
+                        self.assertTrue(any('missing expected receipt' in issue
+                                            for issue in missing['issues']))
+                return scheduler
 
             _, output = command(['build', '--local'])
             binary = root / 'target/debug/graph-app'

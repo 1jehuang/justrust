@@ -281,7 +281,7 @@ fn assess(r: Receipt) -> Result<Assessment> {
     })
 }
 
-fn read_receipt(path: &Path) -> Result<Assessment> {
+fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     if !std::fs::symlink_metadata(path)?.is_file() {
         bail!("receipt must be a regular, non-symlink file");
     }
@@ -293,27 +293,229 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options.open(path)?;
-    if !file.metadata()?.is_file() || file.metadata()?.len() > MAX_BYTES {
+    if !file.metadata()?.is_file() || file.metadata()?.len() > max_bytes {
         bail!("receipt is not a regular file within the byte budget");
     }
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
+    file.take(max_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
         bail!("receipt exceeds byte budget");
     }
-    assess(serde_json::from_slice(&bytes).context("invalid execution graph receipt")?)
+    Ok(bytes)
 }
 
-pub fn command(path: &Path, json: bool) -> Result<()> {
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    serde_json::from_slice(&read_bytes(path, MAX_BYTES)?)
+        .context("invalid execution graph document")
+}
+
+fn read_receipt(path: &Path) -> Result<Assessment> {
+    assess(read_json(path)?)
+}
+
+fn is_owner_document(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|name| {
+            [
+                ".manifest.json",
+                ".declaration.json",
+                ".execute-entered.json",
+                ".execute-result.json",
+            ]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+        })
+}
+
+fn validate_owner_journal(
+    selected: &crate::execution_graph_manifest::Manifest,
+    journal: &crate::execution_graph_manifest::Manifest,
+    filename: &str,
+) -> Result<&'static str> {
+    use crate::execution_graph_manifest::{OwnerOutcome, TicketLifecycle};
+    if !filename.ends_with(".manifest.json")
+        && journal
+            .owners
+            .iter()
+            .any(|owner| owner.outcome != OwnerOutcome::Pending)
+    {
+        bail!("nonfinal owner journal has a terminal outcome");
+    }
+    if selected.owners.len() != 1 || journal.owners.len() != 1 {
+        bail!("native owner journal requires exactly one scoped owner");
+    }
+    let owner = &selected.owners[0];
+    let observed = &journal.owners[0];
+    if owner.tickets.len() != 1 || observed.tickets.len() != 1 {
+        bail!("native owner journal requires exactly one required ticket");
+    }
+    let ticket = &owner.tickets[0];
+    let event = &observed.tickets[0];
+    if selected.schema != journal.schema
+        || selected.profile != journal.profile
+        || selected.run_id != journal.run_id
+        || selected.authority_root != journal.authority_root
+        || owner.invocation_id != observed.invocation_id
+        || owner.parent_invocation_id != observed.parent_invocation_id
+        || owner.parent_task_id != observed.parent_task_id
+        || ticket.invocation_id != event.invocation_id
+        || ticket.parent_task_id != event.parent_task_id
+        || ticket.policy != event.policy
+        || ticket.capture_id != event.capture_id
+    {
+        bail!("owner journal conflicts with immutable expected producer identities");
+    }
+    if observed.lost_events != 0 {
+        bail!("owner journal records lost observations");
+    }
+    if filename.ends_with(".declaration.json") {
+        if observed.sealed
+            || observed.interrupted
+            || event.execute_entered
+            || event.lifecycle != TicketLifecycle::Declared
+        {
+            bail!("invalid initial owner declaration");
+        }
+        Ok("declaration")
+    } else if filename.ends_with(".execute-entered.json") {
+        if observed.sealed
+            || observed.interrupted
+            || !event.execute_entered
+            || event.lifecycle != TicketLifecycle::ExecuteEntered
+            || !ticket.execute_entered
+        {
+            bail!("owner execute-enter journal conflicts with final lifecycle");
+        }
+        Ok("execute-entered")
+    } else if filename.ends_with(".execute-result.json") {
+        if observed.sealed
+            || observed.interrupted
+            || !event.execute_entered
+            || !ticket.execute_entered
+            || event.lifecycle != ticket.lifecycle
+        {
+            bail!("owner execute-result journal conflicts with final lifecycle");
+        }
+        Ok("execute-result")
+    } else {
+        if serde_json::to_value(selected)? != serde_json::to_value(journal)? {
+            bail!("conflicting final or interrupted owner manifest");
+        }
+        Ok("manifest")
+    }
+}
+
+fn command_manifest(path: &Path, manifest_path: &Path, json: bool) -> Result<()> {
+    use crate::execution_graph_manifest::{
+        self as protocol, ReceiptEnvelope, ReceiptSummary, reconcile,
+    };
+    let manifest =
+        protocol::parse_manifest(&read_bytes(manifest_path, protocol::MAX_BYTES as u64)?)?;
+    if !std::fs::symlink_metadata(path)?.is_dir() {
+        bail!("manifest reconciliation requires a non-symlink capture directory");
+    }
+    let mut total_bytes = std::fs::symlink_metadata(manifest_path)?.len();
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        files.push(entry?.path());
+        if files.len() > MAX_FILES {
+            bail!("capture directory exceeds reconciliation file budget");
+        }
+    }
+    files.sort();
+    let mut envelopes: Vec<ReceiptEnvelope> = Vec::new();
+    let mut summaries = Vec::new();
+    let mut journal_kinds = BTreeSet::new();
+    let mut excluded_roots = BTreeSet::new();
+    for file in files {
+        if !file.extension().is_some_and(|s| s == "json") {
+            continue;
+        }
+        total_bytes = total_bytes.saturating_add(std::fs::symlink_metadata(&file)?.len());
+        if total_bytes > MAX_BYTES {
+            bail!("manifest reconciliation exceeds total byte budget");
+        }
+        if is_owner_document(&file) {
+            let journal =
+                protocol::parse_manifest(&read_bytes(&file, protocol::MAX_BYTES as u64)?)?;
+            if journal.authority_root != manifest.authority_root {
+                excluded_roots.insert(journal.authority_root);
+            } else {
+                let filename = file
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                let kind = validate_owner_journal(&manifest, &journal, filename)?;
+                if !journal_kinds.insert(kind) {
+                    bail!("duplicate selected-owner journal observation");
+                }
+            }
+            continue;
+        }
+        if file
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.ends_with(".envelope.json"))
+        {
+            envelopes.push(protocol::parse_envelope(&read_bytes(
+                &file,
+                protocol::MAX_BYTES as u64,
+            )?)?);
+        } else {
+            let receipt = read_receipt(&file)?;
+            summaries.push(ReceiptSummary {
+                schema: receipt.schema,
+                capture_id: receipt.capture_id,
+                structural_complete: receipt.structural_complete,
+                full_pipeline_complete: receipt.full_pipeline_complete,
+            });
+        }
+    }
+    if manifest.owners.len() != 1 || manifest.owners[0].tickets.len() != 1 {
+        bail!("CLI reconciliation currently supports one native BuildRunner authority");
+    }
+    if !journal_kinds.contains("declaration") {
+        bail!("missing independent initial owner declaration");
+    }
+    if manifest.owners[0].tickets[0].execute_entered
+        && (!journal_kinds.contains("execute-entered") || !journal_kinds.contains("execute-result"))
+    {
+        bail!("missing independent owner execution observations");
+    }
+    let mut assessment = reconcile(&manifest, &envelopes, &summaries)?;
+    assessment.excluded_authority_roots = excluded_roots.into_iter().collect();
+    if !json {
+        println!("Native owner expected-producer assessment, not full-pipeline coverage:");
+    }
+    println!("{}", serde_json::to_string_pretty(&assessment)?);
+    Ok(())
+}
+
+pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
+    if let Some(manifest) = manifest {
+        return command_manifest(path, manifest, json);
+    }
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         bail!("capture path must not be a symlink");
     }
     let mut files = if metadata.is_dir() {
         let mut files = Vec::new();
+        let mut entries = 0usize;
         for entry in std::fs::read_dir(path)? {
+            entries += 1;
+            if entries > MAX_FILES {
+                bail!("capture directory exceeds file budget");
+            }
             let path = entry?.path();
-            if path.extension().is_some_and(|s| s == "json") {
+            if path.extension().is_some_and(|s| s == "json")
+                && !is_owner_document(&path)
+                && !path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.ends_with(".envelope.json"))
+            {
                 files.push(path);
                 if files.len() > MAX_FILES {
                     bail!("capture directory exceeds receipt budget");
@@ -564,7 +766,7 @@ mod tests {
             .unwrap()
             .join(format!("graph-empty-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(command(&dir, true).is_err());
+        assert!(command(&dir, true, None).is_err());
         std::fs::remove_dir(&dir).unwrap();
     }
 }

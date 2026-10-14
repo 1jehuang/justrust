@@ -61,6 +61,41 @@ Invalid, unsupported, oversized or symlink receipts are rejected. Independent
 validation means validation of the recorded structure, not independent proof
 that the producer has instrumented all native execution paths.
 
+## Expected-owner reconciliation
+
+The next native gate wraps each `BuildRunner::compile` entry in an independent
+owner guard. It publishes an immutable expected scheduler ticket before queue
+construction, binds the ticket to a schema-1 receipt through a versioned envelope,
+and records execute-enter, execute-result and final owner snapshots. Preparation
+and post-execution failures are accounted separately. An interrupted owner is not
+sealed. `pending` is the explicit nonterminal snapshot outcome.
+
+```sh
+justrust graph /private/capture --manifest /private/capture/owner-ID.manifest.json --json
+```
+
+The consumer requires the selected owner's independent declaration and, if
+execution began, its execution snapshots. Immutable identities and observed
+lifecycle transitions must agree with the selected final manifest. Missing
+expected envelopes/receipts, loss, interruptions, unsupported schemas, identity
+conflicts and contradictory journals cannot support completeness. Journal
+snapshots are bounded and validated, not ignored solely by filename.
+
+`scheduler_entry_complete` refers only to the selected BuildRunner authority.
+The JSON includes `authority_root` and lists other observed journal authorities
+under `excluded_authority_roots`. It is **not directory, outer Cargo process, or
+whole build-command coverage**. Foreign envelopes and unbound receipts are
+rejected. Use a private directory per diagnostic authority, or reconcile an
+explicitly selected inventory without treating excluded invocations as covered.
+The native producer currently emits one owner per manifest. Child result
+agreement is not established by structural receipts, so
+`outcome_agreement_verified` remains false. `full_pipeline_complete` remains false.
+
+Native integration and schema details are described in
+`docs/execution-graph-manifest-schema.md`. The larger design remains in
+`docs/execution-graph-reconciliation-design.md`; its outer launch owner and native
+compiler/query producers are not shipped by this gate.
+
 ## Fail-open and external correctness
 
 The producer is observational. Capture errors must never change Cargo results,
