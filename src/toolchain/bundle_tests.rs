@@ -2,6 +2,111 @@ use super::*;
 
 #[cfg(unix)]
 #[test]
+fn declared_helpers_must_run_before_atomic_install() {
+    for (component, bins) in [
+        ("rustfmt-preview", &["rustfmt", "cargo-fmt"][..]),
+        ("clippy-preview", &["clippy-driver", "cargo-clippy"][..]),
+        ("rust-analyzer-preview", &["rust-analyzer"][..]),
+    ] {
+        for broken in 0..=bins.len() {
+            let f = Fixture::new();
+            let mut entries = valid_entries();
+            for (i, bin) in bins.iter().enumerate() {
+                let body = if i == broken {
+                    b"#!/bin/sh\nexit 127\n".to_vec()
+                } else {
+                    // Check the flag and loader environment in the real child.
+                    b"#!/bin/sh\n[ \"$1\" = --version ] && [ -z \"${LD_LIBRARY_PATH}${LD_PRELOAD}${DYLD_LIBRARY_PATH}${DYLD_FALLBACK_LIBRARY_PATH}${DYLD_INSERT_LIBRARIES}\" ]\n".to_vec()
+                };
+                entries.push((format!("bin/{bin}"), body, b'0'));
+            }
+            f.publish(&jr(), &entries, |m| m.components.push(component.into()));
+            let result = f.install(&jr());
+            if broken == bins.len() {
+                assert!(result.is_ok(), "{component}: {result:?}");
+            } else {
+                assert!(result.is_err(), "{component}/{}", bins[broken]);
+                assert!(
+                    super::super::installed_in(&jr(), &f.root())
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(
+                    !f.root()
+                        .join(format!(".staging-{}", std::process::id()))
+                        .exists()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mandatory_rustdoc_must_run_and_helper_timeout_is_bounded() {
+    let f = Fixture::new();
+    let mut entries = valid_entries();
+    entries[1].1 = b"#!/bin/sh\nexit 127\n".to_vec();
+    f.publish(&jr(), &entries, |_| {});
+    assert!(f.install(&jr()).is_err());
+    assert!(
+        super::super::installed_in(&jr(), &f.root())
+            .unwrap()
+            .is_none()
+    );
+
+    let prefix = f.0.join("probe");
+    std::fs::create_dir_all(prefix.join("bin")).unwrap();
+    let path = prefix.join("bin/rustfmt");
+    // No descendant process survives the timeout.
+    std::fs::write(&path, b"#!/bin/sh\nwhile :; do :; done\n").unwrap();
+    crate::sys::set_mode(&path, 0o700).unwrap();
+    let start = std::time::Instant::now();
+    let error =
+        helper_version(&prefix, "rustfmt", std::time::Duration::from_millis(50)).unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_with_missing_elf_loader_is_rejected_without_compiling() {
+    let original = std::fs::read("/bin/true").unwrap();
+    for missing_library in [false, true] {
+        let f = Fixture::new();
+        let mut elf = original.clone();
+        // Mutate a real executable without compiling. Cover both a missing
+        // PT_INTERP loader and a missing DT_NEEDED shared library (exit 127).
+        if missing_library {
+            let needed = elf.windows(10).position(|s| s == b"libc.so.6\0").unwrap();
+            elf[needed..needed + 9].copy_from_slice(b"jrxx.so.6");
+        } else {
+            let loader = elf.windows(4).position(|s| s == b"/lib").unwrap();
+            let end = loader + elf[loader..].iter().position(|b| *b == 0).unwrap();
+            elf[loader + 1..end].fill(b'x');
+        }
+        let mut entries = valid_entries();
+        entries.push(("bin/rustfmt".into(), elf, b'0'));
+        entries.push(("bin/cargo-fmt".into(), script("cargo-fmt"), b'0'));
+        f.publish(&jr(), &entries, |m| {
+            m.components.push("rustfmt-preview".into())
+        });
+        let error = f.install(&jr()).unwrap_err();
+        let text = format!("{error:#}");
+        assert!(text.contains("rustfmt --version"), "{text}");
+        if missing_library {
+            assert!(text.contains("127"), "{text}");
+        }
+        assert!(
+            super::super::installed_in(&jr(), &f.root())
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn downloaded_jr_install_lock_serializes_independent_processes() {
     let f = Fixture::new();
     f.publish(&jr(), &valid_entries(), |_| {});

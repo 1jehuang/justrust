@@ -254,6 +254,62 @@ fn version(prefix: &Path, bin: &str, flag: &str) -> Result<String> {
     Ok(String::from_utf8(out.stdout)?.trim().to_owned())
 }
 
+/// Validate the shipped runtime closure without ambient loader overrides.
+/// Null output avoids unbounded buffering and pipe-blocked version processes.
+fn helper_version(prefix: &Path, bin: &str, timeout: std::time::Duration) -> Result<()> {
+    let path = prefix.join("bin").join(crate::sys::exe_name(bin));
+    if !is_executable(&path) {
+        bail!("toolchain bundle missing executable {bin}");
+    }
+    let mut child = Command::new(path)
+        .arg("--version")
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("LD_PRELOAD")
+        .env_remove("DYLD_LIBRARY_PATH")
+        .env_remove("DYLD_FALLBACK_LIBRARY_PATH")
+        .env_remove("DYLD_INSERT_LIBRARIES")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("starting toolchain bundle {bin} --version"))?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => bail!("toolchain bundle {bin} --version does not run: {status}"),
+            Ok(None) if start.elapsed() < timeout => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                if let Err(error) = result {
+                    return Err(error).context(format!("waiting for toolchain bundle {bin}"));
+                }
+                bail!("toolchain bundle {bin} --version timed out after {timeout:?}");
+            }
+        }
+    }
+}
+
+/// Non-mutating validation also available to repeat-install callers.
+pub(super) fn verify_helpers(prefix: &Path, components: &[String]) -> Result<()> {
+    helper_version(prefix, "rustdoc", std::time::Duration::from_secs(10))?;
+    for (component, bins) in [
+        ("clippy-preview", &["clippy-driver", "cargo-clippy"][..]),
+        ("rustfmt-preview", &["rustfmt", "cargo-fmt"][..]),
+        ("rust-analyzer-preview", &["rust-analyzer"][..]),
+    ] {
+        if components.iter().any(|c| c == component) {
+            for bin in bins {
+                helper_version(prefix, bin, std::time::Duration::from_secs(10))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn verify_prefix(prefix: &Path, m: &BundleManifest) -> Result<()> {
     for bin in ["rustc", "rustdoc", "cargo"] {
         if !is_executable(&prefix.join("bin").join(crate::sys::exe_name(bin))) {
@@ -268,18 +324,7 @@ fn verify_prefix(prefix: &Path, m: &BundleManifest) -> Result<()> {
     }) {
         bail!("toolchain bundle missing target standard library");
     }
-    for (component, bins) in [
-        ("clippy-preview", &["clippy-driver", "cargo-clippy"][..]),
-        ("rustfmt-preview", &["rustfmt", "cargo-fmt"][..]),
-    ] {
-        if m.components.iter().any(|c| c == component) {
-            for bin in bins {
-                if !is_executable(&prefix.join("bin").join(crate::sys::exe_name(bin))) {
-                    bail!("toolchain bundle incomplete {component}");
-                }
-            }
-        }
-    }
+    verify_helpers(prefix, &m.components)?;
     if m.components.iter().any(|c| c == "rust-src")
         && !prefix
             .join("lib/rustlib/src/rust/library/core/src/lib.rs")
@@ -315,15 +360,6 @@ fn verify_prefix(prefix: &Path, m: &BundleManifest) -> Result<()> {
         {
             bail!("toolchain bundle incomplete {component}");
         }
-    }
-    if m.components.iter().any(|c| c == "rust-analyzer-preview")
-        && !is_executable(
-            &prefix
-                .join("bin")
-                .join(crate::sys::exe_name("rust-analyzer")),
-        )
-    {
-        bail!("toolchain bundle missing rust-analyzer");
     }
     let vv = version(prefix, "rustc", "-vV")?;
     if vv.lines().next() != Some(m.rustc_version.as_str())
