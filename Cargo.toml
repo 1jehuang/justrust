@@ -11,7 +11,7 @@ license = "MIT"
 repository = "https://github.com/1jehuang/justrust"
 # server/ is FSL-licensed and must never ship inside the MIT crate.
 # toolchain/ holds the compiler forks (submodules), built separately.
-exclude = ["server/", "toolchain/"]
+exclude = ["/server/", "/toolchain/", "/.wrangler/"]
 
 [dependencies]
 anyhow = "1"

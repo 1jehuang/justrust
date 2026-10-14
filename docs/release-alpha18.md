@@ -44,6 +44,34 @@ Both native macOS jobs and MSRV passed that run. The coordinator assigned
 minimal test-only fixes to a separate owner. Publication remains blocked until
 fresh candidate CI succeeds; no checks are waived.
 
+## Packaging follow-through, 11:23 UTC
+
+Exact source-marker candidate 3d1c20d, CI 38555286828, passed Linux full tests
+and smoke checks, but failed source-package verification because the unanchored
+`toolchain/` exclusion also removed `src/toolchain/bundle.rs`. The coordinator
+authorized a minimal manifest fix anchoring `/server/` and `/toolchain/`.
+A package-list audit also found the shared dirty checkout's untracked Wrangler
+runtime cache would be selected by `--allow-dirty`. `/.wrangler/` is now excluded,
+and no dirty-checkout package was uploaded or published.
+
+A clean archive of committed source at 522e6b2 plus only the manifest fix passed
+`cargo package --list --locked` and complete `cargo package --locked` verification.
+The package contains both Rust bundle modules and excludes root server, fork
+submodules, Wrangler runtime cache, private justrust state, target outputs and
+unrelated `a`/`b` scratch files. Packaging compiled and verified locally because
+Cargo packaging is not a supported hosted command. No artifact was published.
+
+Windows clippy now passes, but a Unix `/bin/echo` launcher test fails native
+Windows path validation. The separate test owner is fixing the native fixture.
+A Linux timeout fixture intermittently hit `Text file busy` under concurrent
+forking; the owner is validating causal isolation rather than suppressing errors.
+Both native Mac jobs remain queued. No publication gate has been waived.
+
+The source-marker follow-up adds the compile-time `release_build` boolean to
+structured run telemetry, distinguishing source builds from release binaries.
+The coordinator is also auditing installer token attribution and lifecycle
+visibility and explicitly holds publication pending that audit.
+
 ## Publication and rollout
 
 Pending exact-candidate native CI and release build, asset/checksum verification,
