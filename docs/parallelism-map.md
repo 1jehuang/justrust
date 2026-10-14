@@ -46,11 +46,41 @@ non-profiled matched `bench/suite.py` runs for performance conclusions.
 
 | Candidate | Dependency boundary to preserve | Required test/measurement |
 |---|---|---|
+| Weighted Cargo critical-chain scheduling | Only choose among already-ready units; preserve Metadata/All readiness, jobserver tokens, fingerprints and commands | Real cold CLI order, proc-macro/build-script/link success, failure/retry, cross-toggle artifact parity, inherited jobserver barriers, same-binary OFF/ON/OFF controls |
 | Parallel decode of upstream generic-symbol metadata | Decode independent crate queries, merge in original deterministic crate order; respect conditional dependencies | Same binary off/decode/prefetch, incremental verification, symbol/result parity, reference and upstream-edit workflows |
 | Earlier upstream-monomorphization prefetch | Must not steal more time from lints than it removes from mono collection | Measure full loop, not only the mono timer |
 | Resolve/HIR work partition | Expansion order, resolver mutable state, visibility and cross-module names | Cross-module/error diagnostics and actual query dependency instrumentation before rewriting |
 | Incremental persist overlap | Outputs, diagnostics and incremental-session publication must remain consistent | Existing fork path needs parallel frontend; back-to-back edits and linker-error recovery |
 | Macro batching/caching | Macros can read env/files and use process-global state, so purity cannot be assumed | Explicit side-effect and invalidation model, ordered diagnostics, changed env/file regressions |
+
+## Current permitted scheduling experiment
+
+The default-off Cargo prototype ranks an already-ready unit `v` by the estimated
+longest remaining consumer chain:
+
+```text
+rank(v) = estimated_cost(v) + max(rank(consumer(v)))
+```
+
+A leaf consumer has no suffix. The prototype changes only that priority, not the
+prerequisite graph or the number of jobserver tokens. Uniform costs are a depth
+heuristic, not measured compiler work. Optional bounded package-name hints are
+coarse estimates: build-script, library and test units of one package can have
+different costs. Metadata/All edges also allow pipelining, so this unit-level rank
+is not a complete causal span for the compiler's internal tasks.
+
+This can improve a multi-crate schedule only when choosing ready work affects
+which dependency chain finishes last. It does not make one remaining crate use
+more cores, remove dependency edges, or prove a hardware utilization ceiling.
+Independent builds across tenants are a separate scheduling dimension, with CPU,
+memory, billing and isolation constraints still intact.
+
+`bench/scheduler-sweep.py` exercises pinned suite workflows with one immutable
+candidate binary in OFF/ON/ON/OFF order. Real public Cargo integration tests are
+required before interpreting those performance numbers. The production default
+stays unchanged unless the correctness and full-loop performance gates pass.
+Compiler-query/codegen implementations remain subject to the compiler checkout's
+local review/policy gates, not bypassed by this experiment.
 
 The 96-core sweep already showed the current reference loop plateauing around
 4-8 allocated cores. That is a measurement of today's implementation, not an

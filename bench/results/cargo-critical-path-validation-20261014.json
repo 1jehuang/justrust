@@ -1,0 +1,577 @@
+{
+  "schema": 1,
+  "experiment": "default-off Cargo ready-unit critical-chain scheduler",
+  "source_commit": "a45c3546671925c24649e451a673aa71b1385d0d",
+  "base_commit": "11f22289de172db461915b27d6626c94a501a1f9",
+  "binary": {
+    "sha256": "c38c3d63e82c74fc4ba9e2978ad74ccad7f74aa21dec6d2bf978e0c4dcf1e13d",
+    "bytes": 48161072,
+    "advertised_upstream_commit": "f3865b2a4d1acc5276f6b3c67d0e057f4dab3928",
+    "version": "1.101.0-nightly",
+    "target": "x86_64-unknown-linux-gnu",
+    "local_hosted_binary_and_source_identical": true,
+    "dynamic_needed": [
+      "libz.so.1",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "both_local_and_hosted_loader_checks_pass": true,
+    "os_version_lines_differ": true
+  },
+  "source_sha256": {
+    "src/compiler/job_queue/mod.rs": "e48d0e0d05027466bc7f5dd62f70ee0e95c0bc524417ae8ba582f751dadf1605",
+    "src/compiler/job_queue/jr_critical_path.rs": "ebca59bbeab2573f3a769dc81c90a4721697d3b7cb9ccc1df637d940ddfac369",
+    "src/util/dependency_queue.rs": "ca6ab9601ee23809d7e2899f8ca065e7af61b3757452870f75534ae358b3aca1",
+    "tests/testsuite/main.rs": "502742e78b9bc5b071d785b7b9d8260bceb41ca9b71c7f6f6c1039e7f049eca5",
+    "tests/testsuite/jr_critical_path.rs": "9268b35a85e2a36dbabe7c42f7db9bab9f42dd571e5936e6b6b3cb79b86886fc"
+  },
+  "compiler": "nightly-2026-10-08",
+  "installed_or_promoted": false,
+  "speedup_verified": false,
+  "lint_parity": {
+    "baseline": "20261013-195856311-805183",
+    "candidate": "20261013-195952771-813946",
+    "exact_messages_locations_count_equal": true,
+    "count": 10,
+    "diagnostics": [
+      [
+        "use of `eprintln!`",
+        "src/jr_daemon.rs",
+        207,
+        13
+      ],
+      [
+        "use of `eprintln!`",
+        "src/jr_daemon.rs",
+        450,
+        9
+      ],
+      [
+        "use of `eprintln!`",
+        "src/jr_daemon.rs",
+        458,
+        9
+      ],
+      [
+        "use of `eprintln!`",
+        "src/jr_daemon.rs",
+        468,
+        13
+      ],
+      [
+        "use of `eprintln!`",
+        "src/jr_daemon.rs",
+        473,
+        5
+      ],
+      [
+        "use of `eprintln!`",
+        "src/jr_daemon.rs",
+        528,
+        5
+      ],
+      [
+        "use of `eprintln!`",
+        "src/jr_daemon.rs",
+        587,
+        9
+      ],
+      [
+        "use of a disallowed method `std::env::var_os`",
+        "src/compiler/fingerprint/jr_cutoff.rs",
+        289,
+        25
+      ],
+      [
+        "use of a disallowed method `std::env::var`",
+        "src/compiler/fingerprint/jr_cutoff.rs",
+        54,
+        9
+      ],
+      [
+        "use of a disallowed type `std::collections::HashSet`",
+        "src/compiler/fingerprint/mod.rs",
+        690,
+        20
+      ]
+    ],
+    "gate": "strict warning-free BLOCKED by pre-existing baseline",
+    "new_candidate_errors": 0
+  },
+  "manual_source_sync": {
+    "tracked_entries": 8,
+    "regular_files": 6,
+    "symlinks": 2,
+    "verified_type_size_sha": true,
+    "validates_new_client": false
+  },
+  "requirements": [
+    {
+      "requirement": "Queue rank, readiness, cycles and overflow",
+      "run": "20261013-200738296-853432",
+      "passed": 10
+    },
+    {
+      "requirement": "Bounded hint parser and filesystem rejection",
+      "run": "20261013-200803294-855336",
+      "passed": 5
+    },
+    {
+      "requirement": "Real public CLI cold j1/j2, artifact reuse, ordering, failure/retry and both jobservers",
+      "run": "20261013-201440875-906384",
+      "passed": 5,
+      "ignored": 0,
+      "filtered": 4422,
+      "gnu_make": "4.3"
+    },
+    {
+      "requirement": "Strict lint introduces no new errors",
+      "runs": [
+        "20261013-195856311-805183",
+        "20261013-195952771-813946"
+      ],
+      "observed": "same ten legacy diagnostics; warning-free gate blocked"
+    },
+    {
+      "requirement": "Portable exact committed release",
+      "run": "20261013-201658478-921138",
+      "exit": 0
+    },
+    {
+      "requirement": "Actual performance improvement",
+      "observed": "not measured yet; requires same-binary pinned suite OFF/ON comparison"
+    }
+  ],
+  "runs": [
+    {
+      "id": "20261013-195107430-771506",
+      "args": [
+        "check",
+        "-p",
+        "cargo",
+        "--lib",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE={value=\"1.101.0-nightly\",force=true}",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL={value=\"nightly\",force=true}"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 101,
+      "wall": 0.013536453247070312,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-195143767-773986",
+      "args": [
+        "check",
+        "-p",
+        "cargo",
+        "--lib",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 0,
+      "wall": 24.705409288406372,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-195247205-777304",
+      "args": [
+        "test",
+        "-p",
+        "cargo",
+        "--lib",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "util::dependency_queue::test"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 0,
+      "wall": 27.43653631210327,
+      "tests": {
+        "binaries": [],
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 192,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-195334348-780132",
+      "args": [
+        "test",
+        "-p",
+        "cargo",
+        "--lib",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "compiler::job_queue::jr_critical_path::tests"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 0,
+      "wall": 0.07486414909362793,
+      "tests": {
+        "binaries": [],
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 197,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-195416277-782663",
+      "args": [
+        "clippy",
+        "-p",
+        "cargo",
+        "--lib",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 101,
+      "wall": 8.197415828704834,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-195856311-805183",
+      "args": [
+        "clippy",
+        "-p",
+        "cargo",
+        "--lib",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 101,
+      "wall": 9.309322118759155,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-195952771-813946",
+      "args": [
+        "clippy",
+        "-p",
+        "cargo",
+        "--lib",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 101,
+      "wall": 7.730199813842773,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-200738296-853432",
+      "args": [
+        "test",
+        "-p",
+        "cargo",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "--lib",
+        "util::dependency_queue::test"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 0,
+      "wall": 2.5659403800964355,
+      "tests": {
+        "binaries": [],
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 192,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-200803294-855336",
+      "args": [
+        "test",
+        "-p",
+        "cargo",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "--lib",
+        "compiler::job_queue::jr_critical_path::tests"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 0,
+      "wall": 0.07700943946838379,
+      "tests": {
+        "binaries": [],
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 197,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-200817717-856162",
+      "args": [
+        "test",
+        "-p",
+        "cargo",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "--test",
+        "testsuite",
+        "jr_critical_path",
+        "--",
+        "--test-threads=1"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 101,
+      "wall": 31.446736097335815,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-201440875-906384",
+      "args": [
+        "test",
+        "-p",
+        "cargo",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true",
+        "--test",
+        "testsuite",
+        "jr_critical_path",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 0,
+      "wall": 22.05573892593384,
+      "tests": {
+        "binaries": [],
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 4422,
+        "libtest_secs": 2.5,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    },
+    {
+      "id": "20261013-201658478-921138",
+      "args": [
+        "build",
+        "-p",
+        "cargo",
+        "--release",
+        "--bin",
+        "cargo",
+        "--locked",
+        "--features",
+        "all-static",
+        "--config",
+        "env.CFG_RELEASE.value=\"1.101.0-nightly\"",
+        "--config",
+        "env.CFG_RELEASE.force=true",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.value=\"nightly\"",
+        "--config",
+        "env.CFG_RELEASE_CHANNEL.force=true"
+      ],
+      "toolchain": "nightly-2026-10-08",
+      "place": "hosted",
+      "exit": 0,
+      "wall": 53.67221283912659,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0,
+        "timed_secs": 0,
+        "timed": 0
+      }
+    }
+  ]
+}
