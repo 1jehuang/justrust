@@ -85,7 +85,16 @@ confirms this host costs $1.56/hour before disk and network usage, with the
 24-hour allocation constraint above. This is an activation blocker, not a
 reason to advertise native hosted builds as available.
 
-Global client reinstallation and additional hosted validation are deferred
-until a separately coordinated benchmark lease ends, to preserve other agents'
-measurements. The client and cloud protocol must be deployed in order: cloud
-first (accept explicit Linux), then client installation.
+The cloud compatibility API was deployed before the client installation. The
+exact committed client snapshot `cbeea7d74f122d31d8d40854d9c744bcde6edfc1`
+passed 395 local tests and warning-free all-target clippy. Installation started
+at 04:20:52 UTC and completed at 04:21:34 UTC after explicit release of the
+shared benchmark lease. Installed binary SHA256:
+`57d39f0bcc6bdac593942cbf835d03f3152e6a43d3dfad74f92010e8a0e8fcee`.
+
+After the separate release-packaging acceptance window ended, hosted check
+`20261013-212925535-1390657` and all 25 platform tests in
+`20261013-212930491-1390656` passed using that frozen client. The hosted slot
+was explicitly released at 04:29:40 UTC. These checks validate the Linux
+compatibility path, not Windows/macOS runtime support. Native activation
+still requires reviewed images, runner hardening, and real native acceptance.

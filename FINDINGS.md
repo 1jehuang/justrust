@@ -1,5 +1,23 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: native rollout uses a frozen installation source
+
+The native-platform client was validated from the exact committed main snapshot
+`cbeea7d74f122d31d8d40854d9c744bcde6edfc1`, rather than installing unrelated
+in-progress remote sync edits. Local run `20261013-211836511-1314515` passed
+395 tests (zero failed, three ignored, ten binaries) in 37.6 seconds. Its
+slowest test, `depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap`,
+accounted for 19.50 seconds. Warning-free all-target clippy passed in
+`20261013-211914198-1323534` in 19.3 seconds. These are validation durations,
+not a before/after speedup claim. The separate target directory intentionally
+isolates installation evidence from mutable peer work, not a routing default.
+
+The global CLI installation completed at October 14, 2026, 04:21:34 UTC,
+with binary SHA256 `57d39f0bcc6bdac593942cbf835d03f3152e6a43d3dfad74f92010e8a0e8fcee`.
+Native Windows/macOS acceptance is still separate from this Linux/client
+validation. Cloud negotiation is deployed, but native images and real target
+build/test/artifact round trips must pass before advertising native support.
+
 Data: `~/.jcode/sessions` on one developer machine (16-thread Core Ultra X9,
 62 GiB). Covers Jcode and Jcode Desktop work from late August to early October
 2026. Collected with `justrust history`. "Foreground" means the agent was
