@@ -1,10 +1,7 @@
 //! Focused benchmark of the actual query_reads module, with no substituted recorder.
 #![allow(dead_code)]
 #[cfg_attr(feature = "baseline", path = "baseline-query_reads.rs")]
-#[cfg_attr(
-    not(feature = "baseline"),
-    path = "../../toolchain/rustc/compiler/rustc_session/src/query_reads.rs"
-)]
+#[cfg_attr(not(feature = "baseline"), path = "candidate-query_reads.rs")]
 mod query_reads;
 
 use query_reads::{DepReadOutcome, QueryReadObserver, RequestMode, RequestOutcome};

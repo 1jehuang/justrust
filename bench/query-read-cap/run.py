@@ -17,7 +17,8 @@ CASES = [("read", 1, 30_000_000), ("mixed", 1, 30_000_000), ("mixed", 8, 30_000_
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
-    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parent / "candidate-query_reads.rs",
+                        help="module compiled into binary (default: immutable accepted candidate, use baseline-query_reads.rs for baseline)")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--compiler", required=True, type=Path)
     parser.add_argument("--build-run-id", required=True)

@@ -7,11 +7,25 @@ The native compiler acceptance requirement is separate from these unit tests.
 
 ## What is measured
 
-`harness.rs` compiles the owned `query_reads.rs` directly through `#[path]`, not a
-reimplementation. Feature `baseline` selects the byte-identical pre-edit snapshot
+`harness.rs` compiles immutable copies of the real owned `query_reads.rs` directly
+through `#[path]`, not a reimplementation or reconstructed recorder. The default
+selects `candidate-query_reads.rs`, copied byte-for-byte from the accepted owned
+source before further live edits, SHA256
+`38e52413ab64a050b76830c8d274556d39309e0f9dca84d2ddea6627a1302cde`.
+Feature `baseline` selects the byte-identical pre-edit snapshot
 `baseline-query_reads.rs` (SHA256 `6c8eebbc2796dff1f6a55a2f3f60867122283c8b43e65ddb62cd937d829efad7`).
 The original nine tests and initial baseline timings completed before any owned
 source edit. The snapshot retains the source's existing licensing.
+
+Both snapshots are historical inputs and must not be reformatted or updated when
+the live compiler evolves. `provenance.json` now points to the preserved candidate
+and retains `historical_source` as the original build location. The raw
+`after.json` source path, raw source/binary hashes, timings, build run records,
+and native summaries remain unchanged. `verify.py` checks their byte digests,
+both exact snapshot hashes, harness selection, compiler identity, all 72 timing
+samples, and original native artifact provenance without consulting live source.
+New builds use a different module path and need not reproduce historical binary
+bytes. Never replace historical binary hashes or timings with reproduction data.
 
 Both binaries used justrust's pinned `jr-ac20de5e7921` compiler,
 `rustc 1.101.0-nightly (ac20de5e7 2026-10-11)`, LLVM 23.1.3. The system `rustc
@@ -175,6 +189,10 @@ Run from the repository root. Local mode is intentional for a controlled benchma
 not a hosted fallback workaround. Preserve each binary before the next build.
 Use the same pinned compiler for both and supply its real path to `run.py`.
 The build emits the run id needed for each invocation's `--build-run-id`.
+`run.py` defaults `--source` to the immutable candidate. For baseline sweeps pass
+`--source bench/query-read-cap/baseline-query_reads.rs`. Write new measurements
+to scratch, not over the preserved JSON files. No live-source feature is provided:
+this diagnostic is intentionally tied to the accepted historical source.
 
 ```sh
 JUSTRUST_REMOTE=off justrust build --release --manifest-path bench/query-read-cap/Cargo.toml --features baseline

@@ -20,9 +20,18 @@
   "after": {
     "command": "JUSTRUST_REMOTE=off justrust build --release --manifest-path bench/query-read-cap/Cargo.toml",
     "run_id": "20261014-114353474-77168",
-    "source": "toolchain/rustc/compiler/rustc_session/src/query_reads.rs",
+    "source": "bench/query-read-cap/candidate-query_reads.rs",
+    "historical_source": "toolchain/rustc/compiler/rustc_session/src/query_reads.rs",
     "source_sha256": "38e52413ab64a050b76830c8d274556d39309e0f9dca84d2ddea6627a1302cde",
     "binary_sha256": "8321fa188d2a28d67bf06558322269a89df1cea2005ff9e9e468e103869d687a"
+  },
+  "preserved_evidence_sha256": {
+    "bench/query-read-cap/before.json": "184f73f1c48bffc66ceade537451a7dc7e87a21e962714cddfcd28e99de52a53",
+    "bench/query-read-cap/after.json": "6e49c35dbedafdf64b2693dfe40151ccdf052bebc8cc4a2a1196f2001cfe9cb5",
+    "bench/query-read-cap/paired.json": "e959fd4c427bdffa6bb1ffc44b1ce4eaa7192b117e39da94313b5bca87ad013e",
+    "bench/query-read-cap/build-runs.jsonl": "029f5afe2262d7a5696228b7d0ca90f177227d2d202e6bc3ba489cb6fdaf1283",
+    "data/runs/query-read-cap-20261014/native-baseline.json": "398f8134c83efd3bffee0dd78e38c53c97f2dbd2dfd73028e03bd0cfa7acd6b3",
+    "data/runs/query-read-cap-20261014/native-candidate.json": "d87c4bb11330a3cccc9554e9221b7bf61b5ca94198797eb4e81e0b8fbc9cf72f"
   },
   "validation": [
     {"command": "JUSTRUST_REMOTE=off justrust test --manifest-path bench/query-read-cap/Cargo.toml --features baseline", "run_id": "20261014-113828457-13347", "passed": 9},
