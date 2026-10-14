@@ -281,16 +281,36 @@ class NativeQueryWaitAcceptance(unittest.TestCase):
                      'cycle detected')]
         for name, source, diagnostic in fixtures:
             self.source.write_text(source)
-            _, baseline = self.compile(8, success=False)
-            directory, captured = self.compile(8, capture=True, success=False)
-            self.assertIn(diagnostic, baseline)
-            self.assertEqual(captured, baseline, 'capture changed compiler diagnostics')
-            counts, reasons = self.inspect(directory, successful=False)
-            # A semantic alias diagnostic does not prove a parallel wait cycle.
-            print(json.dumps({'fixture': name, 'actual_wait_counts': dict(counts),
-                              'observed_parallel_cycle_notifications': reasons['cycle'],
-                              'observed_poison_notifications': reasons['poisoned'],
-                              'diagnostics_preserved': True}), flush=True)
+            for threads in (1, 8):
+                _, baseline = self.compile(threads, success=False)
+                directory, captured = self.compile(threads, capture=True, success=False)
+                self.assertIn(diagnostic, baseline)
+                exact_bytes = threads == 1 or name != 'alias_cycle'
+                if exact_bytes:
+                    self.assertEqual(captured, baseline, 'capture changed deterministic compiler diagnostics')
+                else:
+                    # Repeated capture-OFF controls select either alias at eight
+                    # threads. Preserve raw diagnostics, do not normalize them
+                    # into an invented byte-stability guarantee. Both variants
+                    # must still explain the complete same invalid cycle.
+                    for output in (baseline, captured):
+                        self.assertEqual(output.count('error[E0391]:'), 1, output)
+                        self.assertIn('cycle detected when expanding type alias', output)
+                        self.assertIn('`First`', output)
+                        self.assertIn('`Second`', output)
+                        self.assertIn('completing the cycle', output)
+                        self.assertIn('type aliases cannot be recursive', output)
+                        self.assertIn('cycle used when checking that', output)
+                        self.assertIn('error: aborting due to 1 previous error', output)
+                counts, reasons = self.inspect(directory, successful=False)
+                # A semantic alias diagnostic does not prove a parallel wait cycle.
+                print(json.dumps({'fixture': name, 'threads': threads,
+                                  'actual_wait_counts': dict(counts),
+                                  'observed_parallel_cycle_notifications': reasons['cycle'],
+                                  'observed_poison_notifications': reasons['poisoned'],
+                                  'diagnostic_bytes_equal': captured == baseline,
+                                  'exact_bytes_required': exact_bytes,
+                                  'diagnostic_contract_preserved': True}), flush=True)
 
 
 if __name__ == '__main__':
