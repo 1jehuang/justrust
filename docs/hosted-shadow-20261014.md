@@ -102,3 +102,17 @@ host window, investigation of short-run CPU attribution/background activity,
 and matched workload/feature semantics. Do not combine the earlier 24-core
 compiler measurements, this qualified leaf observation and the hardware sweep
 into a fabricated aggregate speedup.
+
+## Post-resize current-host acceptance, 01:15 UTC
+
+The owner reports the approved downgrade to `m8azn.6xlarge` in us-west-2a with
+the same volume and matching instance-type metadata. Independent truly plain
+installed `justrust check` run `20261013-181508205-309064` confirms actual hosted
+execution on 24 cores, exit zero, zero compiled units and 56 fresh. This is
+current functional dogfooding, not a comparison against the 96-core timings.
+The owner could not install the console heartbeat into this existing host's
+`/opt/jcode-build/idle.sh`: the build user deliberately lacks general sudo.
+Existing idle-stop behavior therefore remains unchanged until the host is
+relaunched from the new bootstrap. No permissions or idle/lifetime safeguards
+were weakened. Longer remote-only work still needs the owner's existing
+keepalive or the future bootstrap rollout.
