@@ -581,19 +581,22 @@ impl Mirror {
         self.rsync_with(root, false)
     }
 
-    /// `rsync`, but with `checksum` set, files are compared by content
-    /// (size, then a full-file hash on both sides) instead of size+mtime.
-    /// Used for the first sync after `seed`: the seeded copy has the seed's
-    /// mtimes, so the quick check would delta-transfer every file. Content
-    /// equality is exact, so a same-size edit still transfers, and matching
-    /// files only get their mtime fixed, so later syncs take the quick path.
-    pub fn rsync_with(&self, root: &Path, checksum: bool) -> Result<usize> {
+    /// Mirror sources by content, keeping receiver mtimes for unchanged files
+    /// and using receiver write times for changed files. Preserving sender
+    /// mtimes can leave changed sources older than warm Cargo dep-info after
+    /// reconnect, incorrectly reusing metadata compiled from different bytes.
+    /// Checksums are required even without a seed: receiver mtimes deliberately
+    /// differ, and size alone cannot detect same-size edits. The legacy seed
+    /// checksum hint remains accepted for callers, but no longer opts out.
+    pub fn rsync_with(&self, root: &Path, _checksum: bool) -> Result<usize> {
         let src = format!("{}/", root.display());
         let remote = self.remote(root);
         let mut c = Command::new("rsync");
         c.args(target_source_filters(root));
         c.args([
             "-a",
+            "--no-times",
+            "--checksum",
             "--delete",
             "--out-format=%i",
             &format!("--max-size={MAX_FILE}"),
@@ -606,9 +609,6 @@ impl Mirror {
             "--include=Cargo.lock",
             "--filter=:- .gitignore",
         ]);
-        if checksum {
-            c.arg("--checksum");
-        }
         let dst = match &self.target {
             Some(t) => {
                 c.args(["-z", "-e", &t.rsync_shell()]);
@@ -647,6 +647,161 @@ mod tests {
             size: 1,
             mode: 0o644,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconnect_rsync_changed_content_is_newer_than_fingerprint() {
+        use std::fs::{File, FileTimes};
+        use std::time::{Duration, SystemTime};
+
+        let d = std::env::temp_dir().join(format!("jr-reconnect-rsync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let root = d.join("source");
+        std::fs::create_dir_all(&root).unwrap();
+        let mirror = || Mirror {
+            target: None,
+            prefix: d.join("machine").display().to_string(),
+        };
+        let dst = PathBuf::from(mirror().remote(&root));
+        let old = SystemTime::now() - Duration::from_secs(120);
+        let set_mtime = |path: &Path, time| {
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(time))
+                .unwrap();
+        };
+        let source = root.join("lib.rs");
+        std::fs::write(&source, "pub fn before() {}\n").unwrap();
+        set_mtime(&source, old);
+        mirror().prepare(&root).unwrap();
+        mirror().rsync(&root).unwrap();
+        let remote_source = dst.join("lib.rs");
+        let fingerprint = dst.join("target/dep-info");
+        std::fs::create_dir_all(fingerprint.parent().unwrap()).unwrap();
+        std::fs::write(&fingerprint, "warm Cargo fingerprint").unwrap();
+        let built = SystemTime::now() - Duration::from_secs(60);
+        set_mtime(&remote_source, old);
+        set_mtime(&fingerprint, built);
+
+        // Reconnect after a size-changing edit whose local mtime predates
+        // the remote build. Reconstruct Mirror to discard connection state.
+        std::fs::write(&source, "pub fn after_reconnect() {}\n").unwrap();
+        set_mtime(&source, old);
+        assert_eq!(mirror().rsync(&root).unwrap(), 1);
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            std::fs::read(&remote_source).unwrap()
+        );
+        let synced = std::fs::metadata(&remote_source)
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert!(
+            synced > built,
+            "changed source must invalidate Cargo dep-info"
+        );
+
+        // Equal-size content edits with identical sender and receiver mtimes
+        // must also transfer, rather than passing rsync's quick check.
+        std::fs::write(&source, "pub fn equal_size_edit() {}\n").unwrap();
+        set_mtime(&source, synced);
+        assert_eq!(mirror().rsync(&root).unwrap(), 1);
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            std::fs::read(&remote_source).unwrap()
+        );
+        let unchanged = std::fs::metadata(&remote_source)
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        // Seeded and unseeded resyncs of identical bytes must retain the
+        // receiver timestamp even when the local timestamp differs.
+        set_mtime(&source, old);
+        for checksum in [false, true] {
+            assert_eq!(mirror().rsync_with(&root, checksum).unwrap(), 0);
+            assert_eq!(
+                std::fs::metadata(&remote_source)
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                unchanged
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(&fingerprint).unwrap(),
+            "warm Cargo fingerprint"
+        );
+        assert_eq!(
+            std::fs::metadata(&fingerprint).unwrap().modified().unwrap(),
+            built
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconnect_rsync_rebuilds_warm_cargo_metadata() {
+        let d = std::env::temp_dir().join(format!("jr-reconnect-cargo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let root = d.join("source");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"reconnect-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        let source = root.join("src/lib.rs");
+        std::fs::write(&source, "pub fn value() -> u8 { 1 }\n").unwrap();
+        let mirror = || Mirror {
+            target: None,
+            prefix: d.join("machine").display().to_string(),
+        };
+        mirror().prepare(&root).unwrap();
+        mirror().rsync(&root).unwrap();
+        let dst = PathBuf::from(mirror().remote(&root));
+        // This nested, dependency-free Cargo fixture directly exercises Cargo
+        // freshness on the same machine as its local Mirror. It must not use
+        // another hosted sync or require an installed justrust executable.
+        let check = || {
+            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .args(["check", "--offline"])
+                .current_dir(&dst)
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("RUSTC_WRAPPER")
+                .env_remove("RUSTC_WORKSPACE_WRAPPER")
+                .env_remove("JUSTRUST_RUN_DIR")
+                .env_remove("JUSTRUST_RUN_ID")
+                .env_remove("JUSTRUST_RUN_ID_OVERRIDE")
+                .output()
+                .unwrap()
+        };
+        let warm = check();
+        assert!(warm.status.success(), "{warm:?}");
+        // Invalid new bytes have an older mtime than the successfully built
+        // metadata. A stale Fresh result would incorrectly report success.
+        std::fs::write(&source, "pub fn value() -> u8 { \"\" }\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000))
+            .unwrap();
+        mirror().rsync(&root).unwrap();
+        let changed = check();
+        assert!(
+            !changed.status.success(),
+            "Cargo reused stale metadata: {changed:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&changed.stderr).contains("E0308"),
+            "{changed:?}"
+        );
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
@@ -1110,7 +1265,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dst.join("lib.rs")).unwrap(), "seed");
 
         // Checksum sync after a seed: a same-size, same-mtime edit still
-        // transfers, and matching files take the client's mtime.
+        // transfers, and matching files retain the receiver's mtime.
         std::fs::create_dir_all(&wt).unwrap();
         std::fs::write(wt.join("lib.rs"), "SEED").unwrap();
         std::fs::write(wt.join("same.rs"), "same").unwrap();
@@ -1141,7 +1296,7 @@ mod tests {
                 .unwrap()
                 .modified()
                 .unwrap(),
-            mt
+            old
         );
         std::fs::remove_dir_all(&d).unwrap();
     }

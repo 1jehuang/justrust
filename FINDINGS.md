@@ -6187,3 +6187,50 @@ Full results, invocation/hash audit and actual comparison are committed in
 `docs/cargo-scheduler-abba-20261014.md`. The frozen recorder's live-tree CPU
 sum can drop on child exit and inflate derived other-core attribution. Repair
 that measurement defect in a new epoch, never rewrite these historical flags.
+
+## 2026-10-14: reconnect rsync preserved stale Cargo source timestamps
+
+Routing checks `20261013-205929605-1165789` and
+`20261013-210052658-1172116` failed with E0599 for the newly added
+`BedrockProvider::model_supports_tools`, taking 3.998 s and 3.332 s while
+373 units stayed Fresh. Raw unit data for the initial
+`20261013-205602266-1147451` shows `jcode_provider_bedrock` compiled as
+`depcache=local-miss`, not a shared dependency-cache hit. The prior read-only
+remote diagnostic found identical local/remote source SHA256 and the ungated
+method at line 849, but source mtime 03:56:22.914567037 UTC preceded
+dep-info/invoked/rmeta at 03:56:22.988778401 UTC. Source ctime/birth
+03:59:30.537 UTC matched the reconnect copy: rsync had replaced the bytes
+while preserving the older sender mtime. Cargo CheckDepInfo therefore reused
+metadata compiled from the previous content.
+
+The repair is confined to source mirroring in `src/remote_sync.rs`: rsync
+uses `--no-times --checksum`. Changed bytes get receiver write times, while
+identical bytes retain receiver mtimes even when the sender mtime differs.
+Mandatory content comparison also catches same-size/same-mtime edits and
+avoids resending unchanged files now that sender/receiver timestamps differ.
+The legacy seed checksum hint remains accepted, but cannot disable correctness.
+The incremental Write-frame path and all target protections remain unchanged.
+No billing, tenant isolation, shared-cache identity, or hosted-cache contents
+were modified. The concurrent remote_daemon seed toggle was left untouched.
+
+Red regression `20261013-211357060-1279403` reproduced changed source older
+than a warm fingerprint. A real dependency-free Cargo fixture in
+`20261013-211821139-1313406` also reproduced an incorrect successful Fresh
+check after replacing valid code with invalid bytes and preserving an old
+mtime, even with checksums enabled. Both regressions now pass. The Cargo
+fixture runs locally to its test Mirror, offline, without outer-run recording
+variables, so its intentionally failing rustc does not taint the test report.
+
+Final hosted check `20261013-211836530-1314540` passed in 0.899 s. Full
+`justrust test` run `20261013-211838055-1315229` passed 397 tests, three
+ignored, in 11.887 s. Strict clippy `20261013-211850749-1317741` passed
+in 1.269 s without warnings. `cargo fmt` and `cargo install --path . --locked`
+succeeded. Installed client SHA256 was
+`c63e17951fe267120c4bc0c0279f30c4586fcf2d5fc2d5c79b68ec94c44ce06e`
+before and after a real one-line src/runs.rs edit/test workload:
+`20261013-211954026-1326445`, 397 passed/three ignored, 11.715 s recorded
+wall, 15.4 s hosted round trip including 3.230 s sync. The edited file was
+restored byte-for-byte from its backup, not from git. No jcode rebuild or
+reload was performed. Nine cited slim, redacted exports are in
+`data/runs/hosted-freshness-repair/2026-10.jsonl`. This is a correctness fix,
+not a speedup claim. Full rsyncs now hash source contents on both sides.
