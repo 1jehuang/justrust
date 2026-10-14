@@ -913,6 +913,7 @@ def compiler_scenario(s: Scenario, threads: int | None, passes: bool,
 def optimization_env() -> dict:
     """Only public performance controls, never credential-bearing environment."""
     names = (
+        "JUSTRUST_SHADOW",
         "JUSTRUST_TEST_FILTER_COMPILE", "JUSTRUST_CACHE_PROC_MACROS",
         "JUSTRUST_CUTOFF", "JUSTRUST_CARGO_CUTOFF", "JUSTRUST_CARGO_FORK",
         "JUSTRUST_CARGO_DAEMON", "JUSTRUST_CARGO_DAEMON_TRACE",

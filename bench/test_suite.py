@@ -12,6 +12,12 @@ import suite
 
 
 class HostedMeasurements(unittest.TestCase):
+    def test_shadow_control_provenance_never_includes_internal_or_secret_environment(self):
+        with patch.dict(suite.os.environ, {"JUSTRUST_SHADOW": "1",
+                                          "JUSTRUST_SHADOW_CHILD": "1",
+                                          "CACHE_PUBLISH_TOKEN": "secret"}, clear=True):
+            self.assertEqual(suite.optimization_env(), {"JUSTRUST_SHADOW": "1"})
+
     PHASE_LINE = ("justrust trace: admission identity 54.0 ms | charge 225.0 ms | "
                   "identity_wait 0.0 ms | queue 67.0 ms | total 292.0 ms "
                   "(awaited paths, identity overlaps)")
