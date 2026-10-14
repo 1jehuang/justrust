@@ -5834,3 +5834,37 @@ jcode-desktop shapes. Store: 10513 manifests.
 - All18H/T plus8next-phase requirements now have individual observed outcomes or explicit blocking boundaries, not aggregate-only completion. Fresh actual public report/compare/audit,38Python cases,18interface12filter40stress,cloud78+11 and authoritative billing439+13targeted cases pass. The primary backend feature checkout372pass was excluded because it lacks hosted billing; peer workspace was not switched.
 - Actual prior plain hosted test `20261013-164409873-4115463` passed360/0/2 with0compiled56fresh. Named umask, immutable-agent, failed-write/RunSync and cancellation cases and16realDesktop security cases are recorded separately. Same fullUI baseline failure and14%reference gain remain dated24-core observations, NOT fresh96-core acceptance.
 - Owner now has96-core/staticCargo host exclusively until explicit release, expected01:45UTC. Own fresh hosted calls0. A45s stock-only quiet gate failed00:07:17-00:08:02, load10.6->10.8 with0foreignrustc; no stock compile or uncontended speed claim. Broader10x goal remains unfinished, continuation confirmed01:55UTC. See `docs/cumulative-requirement-recheck-20261013.md` and the31-row exact-observation artifact.
+
+## 2026-10-14: scaling curve on 96 cores: the warm loop stops at 8 cores, 1.42x
+
+Own hosted host resized to m8azn.metal-24xl (2x EPYC 9R05, 96 cores, no SMT,
+5.0 GHz, 377 GiB, performance governor). `bench/scaling.sh` (b2f6b14) run
+on the host itself: whole build pinned to cores 0..N-1 with taskset,
+CARGO_BUILD_JOBS=N, Desktop frontend threads min(N,16), nightly-2026-10-08,
+2 warmups + 5 samples per point. Results
+`bench/results/scaling-ip-172-31-32-241-20261014-001706-c*-remote-m8azn.metal-24xl.json`.
+
+| cores | reference loop | speedup | frontend | codegen | link | incr | CPU s |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 6.51 | 1.00x | 2.40 | 1.15 | 1.44 | 0.45 | 6.1 |
+| 2 | 5.27 | 1.23x | 2.30 | 0.93 | 0.76 | 0.47 | 5.9 |
+| 4 | 4.78 | 1.36x | 2.29 | 0.79 | 0.44 | 0.46 | 5.9 |
+| 8 | 4.58 | 1.42x | 2.30 | 0.72 | 0.29 | 0.46 | 5.6 |
+| 16 | 4.65 | 1.40x | 2.32 | 0.80 | 0.24 | 0.48 | 7.0 |
+| 32 | 4.65 | 1.40x | 2.30 | 0.82 | 0.22 | 0.49 | 8.0 |
+| 64 | 4.73 | 1.38x | 2.32 | 0.82 | 0.25 | 0.48 | 7.7 |
+| 96 | 5.08 | 1.28x | 2.35 | 1.01 | 0.34 | 0.51 | 14.9 |
+
+Body check: 1.45 -> 1.26 s at 2 cores, flat after (frontend 0.8 s flat).
+No-op test: 0.21 -> 0.17 s at 4 cores, flat after.
+
+Reading: the loop's CPU stays ~6 s for a ~4.6 s wall, so average parallelism
+is ~1.3 whatever we give it. Frontend 2.3 s does not move from 1 to 16
+threads at all: the Desktop crate's frontend is effectively serial even with
+the parallel frontend on. Only codegen (1.15 -> 0.72) and link
+(1.44 -> 0.22, wild/mold threads) scale, and both saturate by 8 cores.
+Incremental persist/load (0.46) is flat. 96 cores is slower than 8 (second
+socket, cross-NUMA). So today a per-user 8-16 core VM gets everything this
+toolchain can use; many-core shared boxes only pay off after the frontend
+and incr stages are made parallel. Next: critical-path profile of the 2.3 s
+frontend (self-profile at 16 threads) to find what serializes it.
