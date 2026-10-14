@@ -182,6 +182,30 @@ Scenarios (warm unless marked):
 | `desktop-cold-check` (cold) | fresh target dir, depcache on: a new agent checkout |
 | `desktop-cold-check-nocache` (cold) | fresh target dir, all justrust caches off |
 
+## Experimental Cargo scheduling
+
+`python3 bench/scheduler-sweep.py` runs the pinned suite in OFF/ON/ON/OFF
+order with a single experimental Cargo binary. Set an isolated `JUSTRUST_HOME`
+containing an already-installed compiler prefix and the candidate `bin/jr-cargo`.
+Never use the production `~/.justrust` prefix for this experiment. For example:
+
+```sh
+JUSTRUST_HOME="$HOME/bench-scheduler/home" JUSTRUST="$HOME/bench-bin/justrust" \
+  python3 bench/scheduler-sweep.py --toolchain nightly-2026-10-08 \
+  --out-dir bench/results/scheduler-abba --jobs 24 --samples 2 \
+  desktop-cold-check desktop-test-edit desktop-body-check desktop-noop-test
+```
+
+The initial experiment uses uniform costs, not unrecorded package hints. Each
+segment is an actual `suite.py run`; the final `off.json` and `on.json` are
+compared by `suite.py compare`. All samples and contamination flags are retained.
+The harness hashes justrust, rustc, Cargo and the installed toolchain marker,
+rejects changing identities, and preserves partial completed segments. It records
+`JUSTRUST_CARGO_CRITICAL_PATH`, not private hint paths or arbitrary environment.
+This is controlled host-local scheduling evidence, not hosted transport latency,
+a proof of a causal compiler DAG, or a reason to promote the default-off scheduler
+before real public-interface correctness and performance acceptance.
+
 ## Committed evidence correspondence
 
 `python3 bench/audit_hosted_evidence.py` audits the committed October 13 hosted

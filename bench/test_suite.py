@@ -45,6 +45,12 @@ class HostedMeasurements(unittest.TestCase):
                                           "CACHE_PUBLISH_TOKEN": "secret"}, clear=True):
             self.assertEqual(suite.optimization_env(), {"JUSTRUST_SHADOW": "1"})
 
+    def test_scheduler_control_provenance_omits_hint_paths_and_credentials(self):
+        with patch.dict(suite.os.environ, {"JUSTRUST_CARGO_CRITICAL_PATH": "1",
+                                          "JUSTRUST_CARGO_CRITICAL_PATH_COSTS": "/private/project/costs.json",
+                                          "CACHE_PUBLISH_TOKEN": "secret"}, clear=True):
+            self.assertEqual(suite.optimization_env(), {"JUSTRUST_CARGO_CRITICAL_PATH": "1"})
+
     PHASE_LINE = ("justrust trace: admission identity 54.0 ms | charge 225.0 ms | "
                   "identity_wait 0.0 ms | queue 67.0 ms | total 292.0 ms "
                   "(awaited paths, identity overlaps)")
