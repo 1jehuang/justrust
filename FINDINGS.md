@@ -1,5 +1,21 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: comprehensive README comparison completed, speed gate blocked
+
+The frozen-client seed-1 workload observed all 40 points across stock local,
+justrust local, and the remote stack. Receipt
+`bench/results/versus-synth1-20261014-040027-8e60305db025-dirty.json`
+retains every sample, including errors. All 40 local pairs were measured, but
+25 points contain hosted errors, only seven remote samples confirm hosted
+execution, and background load makes the samples noisy. Forced-local fallbacks
+are not hosted evidence. The gate also flags outcome provenance for point 37.
+No comprehensive speedup or default promotion is claimed. An earlier run was
+rejected because the installed client changed, so the completed attempt used
+a frozen executable. Detailed limitations and reproduction are in
+`docs/readme-synth-benchmark-20261014.md`, with 53 available recordings exported
+to `data/runs/xps14/readme-synth1-20261014.jsonl`. README factors instead use
+the separate successful three-round pinned uv comparison, not this blocked run.
+
 ## 2026-10-14: diagnostic telemetry covers pre-result failures
 
 Local recorder setup failures, required-toolchain refusals, and cargo exec
