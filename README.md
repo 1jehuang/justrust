@@ -27,6 +27,10 @@ the entire edit, check, and test loop faster. Its remote build service offloads
 compilation, test execution, and build artifact storage to our machines, so
 your agents can keep working without tying up yours.
 
+Each command also returns actionable build diagnostics, showing agents where
+time went, why crates rebuilt, and which bottlenecks to address, so they can
+proactively optimize builds within your codebase.
+
 On [uv](https://github.com/astral-sh/uv) (674 units, measured 2026-10-10,
 laptop under typical multi-agent load vs a 16 vCPU build machine):
 
