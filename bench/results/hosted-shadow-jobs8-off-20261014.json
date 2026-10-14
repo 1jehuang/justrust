@@ -1,0 +1,577 @@
+{
+  "started": "2026-10-13T18:00:58-0700",
+  "env": {
+    "host": "xps14",
+    "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+    "ncpu": 16,
+    "mem_gb": 62.3,
+    "kernel": "7.2.3-arch1-2",
+    "justrust": "justrust 0.1.0-alpha.16",
+    "justrust_rev": "ab55ea8",
+    "benchmark_repo_rev": "6232dd1c236c",
+    "justrust_binary_revision": "ab55ea8",
+    "justrust_revision_source": "declared JUSTRUST_BENCH_REV",
+    "justrust_binary_sha256": "93adb8f1a1e5fdd81b16d85cb6601d1fbc4424feac941fab3030434c1dff1dc9",
+    "justrust_dirty": true,
+    "rustc": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)",
+    "toolchain": "nightly-2026-10-08",
+    "optimization_env": {
+      "JUSTRUST_SHADOW": "0",
+      "JUSTRUST_TEST_FILTER_COMPILE": "0",
+      "JUSTRUST_CARGO_DAEMON": "0"
+    },
+    "rustc_threads": null,
+    "workspace_threads": null,
+    "pass_times": false,
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+    "governor": "powersave",
+    "on_ac": "0",
+    "snapshots": {
+      "desktop": {
+        "jcode-desktop": "7d38fb7",
+        "jcode": "abff94eeb"
+      },
+      "justrust": {
+        "justrust": "f97fcc2"
+      }
+    }
+  },
+  "runs_per_scenario": 7,
+  "scenarios": {
+    "desktop-test-edit": {
+      "what": "THE reference loop: one line inside a #[test] fn of the 118k-line UI crate, run its tests",
+      "cmd": [
+        "test",
+        "--config",
+        "build.jobs=8",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "samples": [
+        {
+          "id": "20261013-180111639-244709635",
+          "wall": 6.008,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 5.188,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 53.736817,
+            "client_wall": 6.003684914,
+            "host_wall": 5.188219308853149,
+            "toolchain": "nightly-2026-10-08",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "remote_trace": {
+            "client_elapsed_ms": {
+              "roots": 0.3,
+              "charged": 682.3,
+              "flushed": 736.8,
+              "first_output": 918.5,
+              "exit": 6003.2,
+              "recording": 6003.7
+            },
+            "admission_awaited_ms": {
+              "identity": 80.0,
+              "charge": 295.0,
+              "identity_wait": 0.0,
+              "queue": 89.0,
+              "total": 384.0
+            }
+          },
+          "cpu": 7.68,
+          "startup": 0.168,
+          "compile": 4.977,
+          "test_run": 0.0,
+          "units": 1,
+          "local_units": 1,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 1,
+            "fresh": 743,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "other_cores": 0.37,
+          "foreign_rustc_before": 0,
+          "load_before": 2.44,
+          "noisy": false,
+          "top_unit": "jcode_desktop_ui (test)",
+          "workspace_frontend_threads": 8
+        },
+        {
+          "id": "20261013-180117716-244709787",
+          "wall": 5.73,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 4.859,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 77.63582600000001,
+            "client_wall": 5.725974167,
+            "host_wall": 4.858990430831909,
+            "toolchain": "nightly-2026-10-08",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "remote_trace": {
+            "client_elapsed_ms": {
+              "roots": 0.1,
+              "charged": 705.6,
+              "flushed": 784.5,
+              "first_output": 961.0,
+              "exit": 5725.5,
+              "recording": 5726.0
+            },
+            "admission_awaited_ms": {
+              "identity": 72.0,
+              "charge": 291.0,
+              "identity_wait": 0.0,
+              "queue": 93.0,
+              "total": 384.0
+            }
+          },
+          "cpu": 7.81,
+          "startup": 0.165,
+          "compile": 4.652,
+          "test_run": 0.0,
+          "units": 1,
+          "local_units": 1,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 1,
+            "fresh": 743,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "other_cores": 0.21,
+          "foreign_rustc_before": 0,
+          "load_before": 2.33,
+          "noisy": false,
+          "top_unit": "jcode_desktop_ui (test)",
+          "workspace_frontend_threads": 8
+        },
+        {
+          "id": "20261013-180123471-244709262",
+          "wall": 6.0,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 5.088,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 52.325914,
+            "client_wall": 5.995151391,
+            "host_wall": 5.087507963180542,
+            "toolchain": "nightly-2026-10-08",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "remote_trace": {
+            "client_elapsed_ms": {
+              "roots": 0.1,
+              "charged": 681.0,
+              "flushed": 733.8,
+              "first_output": 908.8,
+              "exit": 5994.6,
+              "recording": 5995.1
+            },
+            "admission_awaited_ms": {
+              "identity": 79.0,
+              "charge": 294.0,
+              "identity_wait": 0.0,
+              "queue": 88.0,
+              "total": 382.0
+            }
+          },
+          "cpu": 8.2,
+          "startup": 0.169,
+          "compile": 4.874,
+          "test_run": 0.0,
+          "units": 1,
+          "local_units": 1,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 1,
+            "fresh": 743,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "other_cores": 0.2,
+          "foreign_rustc_before": 0,
+          "load_before": 2.86,
+          "noisy": false,
+          "top_unit": "jcode_desktop_ui (test)",
+          "workspace_frontend_threads": 8
+        },
+        {
+          "id": "20261013-180129525-244709267",
+          "wall": 6.106,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 5.106,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 172.44585800000002,
+            "client_wall": 6.10110156,
+            "host_wall": 5.106253385543823,
+            "toolchain": "nightly-2026-10-08",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "remote_trace": {
+            "client_elapsed_ms": {
+              "roots": 0.3,
+              "charged": 827.4,
+              "flushed": 1002.1,
+              "first_output": 1153.8,
+              "exit": 6098.2,
+              "recording": 6101.1
+            },
+            "admission_awaited_ms": {
+              "identity": 74.0,
+              "charge": 330.0,
+              "identity_wait": 0.0,
+              "queue": 100.0,
+              "total": 430.0
+            }
+          },
+          "cpu": 7.99,
+          "startup": 0.169,
+          "compile": 4.895,
+          "test_run": 0.0,
+          "units": 1,
+          "local_units": 1,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 1,
+            "fresh": 743,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "other_cores": 0.23,
+          "foreign_rustc_before": 0,
+          "load_before": 4.31,
+          "noisy": false,
+          "top_unit": "jcode_desktop_ui (test)",
+          "workspace_frontend_threads": 8
+        },
+        {
+          "id": "20261013-180135711-244709157",
+          "wall": 5.552,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 4.988,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 81.112434,
+            "client_wall": 5.546796881,
+            "host_wall": 4.987732410430908,
+            "toolchain": "nightly-2026-10-08",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "remote_trace": {
+            "client_elapsed_ms": {
+              "roots": 0.1,
+              "charged": 394.5,
+              "flushed": 477.1,
+              "first_output": 659.8,
+              "exit": 5546.1,
+              "recording": 5546.8
+            },
+            "admission_awaited_ms": {
+              "identity": 34.0,
+              "charge": 213.0,
+              "identity_wait": 0.0,
+              "queue": 43.0,
+              "total": 256.0
+            }
+          },
+          "cpu": 7.1,
+          "startup": 0.169,
+          "compile": 4.775,
+          "test_run": 0.0,
+          "units": 1,
+          "local_units": 1,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 1,
+            "fresh": 743,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "other_cores": 0.38,
+          "foreign_rustc_before": 0,
+          "load_before": 4.04,
+          "noisy": false,
+          "top_unit": "jcode_desktop_ui (test)",
+          "workspace_frontend_threads": 8
+        },
+        {
+          "id": "20261013-180141292-244709142",
+          "wall": 5.643,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 5.103,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 84.59297600000001,
+            "client_wall": 5.636267678,
+            "host_wall": 5.102550745010376,
+            "toolchain": "nightly-2026-10-08",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "remote_trace": {
+            "client_elapsed_ms": {
+              "roots": 0.3,
+              "charged": 365.6,
+              "flushed": 451.9,
+              "first_output": 635.0,
+              "exit": 5635.6,
+              "recording": 5636.2
+            },
+            "admission_awaited_ms": {
+              "identity": 25.0,
+              "charge": 248.0,
+              "identity_wait": 0.0,
+              "queue": 34.0,
+              "total": 282.0
+            }
+          },
+          "cpu": 7.9,
+          "startup": 0.168,
+          "compile": 4.891,
+          "test_run": 0.0,
+          "units": 1,
+          "local_units": 1,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 1,
+            "fresh": 743,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "other_cores": 0.22,
+          "foreign_rustc_before": 0,
+          "load_before": 3.71,
+          "noisy": false,
+          "top_unit": "jcode_desktop_ui (test)",
+          "workspace_frontend_threads": 8
+        },
+        {
+          "id": "20261013-180147022-244709668",
+          "wall": 6.026,
+          "first_error": null,
+          "first_fail": null,
+          "early": null,
+          "recorded_wall": 4.909,
+          "remote": {
+            "machine": "hosted",
+            "sync_ms": 82.469454,
+            "client_wall": 6.018298335,
+            "host_wall": 4.909307241439819,
+            "toolchain": "nightly-2026-10-08",
+            "target_state": "persistent remote target"
+          },
+          "admission_transport": "curl",
+          "remote_trace": {
+            "client_elapsed_ms": {
+              "roots": 0.3,
+              "charged": 953.7,
+              "flushed": 1037.3,
+              "first_output": 1208.4,
+              "exit": 6017.5,
+              "recording": 6018.3
+            },
+            "admission_awaited_ms": {
+              "identity": 73.0,
+              "charge": 377.0,
+              "identity_wait": 0.0,
+              "queue": 223.0,
+              "total": 600.0
+            }
+          },
+          "cpu": 7.71,
+          "startup": 0.161,
+          "compile": 4.706,
+          "test_run": 0.0,
+          "units": 1,
+          "local_units": 1,
+          "dep_units": 0,
+          "reuse": {
+            "compiled": 1,
+            "fresh": 743,
+            "depcache_hits": 0,
+            "depcache_misses": 0,
+            "depcache_saved_secs": 0.0,
+            "script_hits": 0,
+            "script_saved_secs": 0.0,
+            "slot_refreshed_units": 0,
+            "local_hits": 0,
+            "local_saved_secs": -0.0
+          },
+          "split": {
+            "frontend": 0.0,
+            "codegen": 0.0,
+            "link": 0.0,
+            "incremental": 0.0,
+            "other": 0.0
+          },
+          "link_secs": 0.0,
+          "hotpatch": null,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "other_cores": 0.24,
+          "foreign_rustc_before": 0,
+          "load_before": 3.42,
+          "noisy": false,
+          "top_unit": "jcode_desktop_ui (test)",
+          "workspace_frontend_threads": 8
+        }
+      ],
+      "stats": {
+        "first_fail": null,
+        "first_fail_min": null,
+        "first_fail_max": null,
+        "n": 7,
+        "first_error": null,
+        "first_error_min": null,
+        "first_error_max": null,
+        "median": 6.0,
+        "min": 5.552,
+        "max": 6.106,
+        "quiet_n": 7,
+        "quiet_median": 6.0,
+        "phases": {
+          "startup": 0.168,
+          "compile": 4.874,
+          "test_run": 0.0,
+          "cpu": 7.81,
+          "link_secs": 0.0
+        },
+        "split": {
+          "frontend": 0.0,
+          "codegen": 0.0,
+          "link": 0.0,
+          "incremental": 0.0,
+          "other": 0.0
+        },
+        "units": 1
+      }
+    }
+  },
+  "finished": "2026-10-13T18:01:53-0700"
+}

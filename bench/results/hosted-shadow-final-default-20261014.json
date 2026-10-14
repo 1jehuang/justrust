@@ -1,0 +1,98 @@
+{
+  "binary_sha256": "93adb8f1a1e5fdd81b16d85cb6601d1fbc4424feac941fab3030434c1dff1dc9",
+  "rows": [
+    {
+      "id": "20261013-180649536-269280",
+      "args": [
+        "check"
+      ],
+      "exit": 0,
+      "tests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "compiled": 0,
+      "fresh": 56,
+      "toolchain": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 105.874849,
+        "client_wall": 0.874247809
+      },
+      "ncpu": 96
+    },
+    {
+      "id": "20261013-180650413-269533",
+      "args": [
+        "test"
+      ],
+      "exit": 0,
+      "tests": {
+        "passed": 361,
+        "failed": 0,
+        "ignored": 2,
+        "filtered_out": 0
+      },
+      "compiled": 0,
+      "fresh": 56,
+      "toolchain": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 107.491707,
+        "client_wall": 3.035168385
+      },
+      "ncpu": 96
+    },
+    {
+      "id": "20261013-180653455-269696",
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "tests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "compiled": 0,
+      "fresh": 56,
+      "toolchain": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 94.952752,
+        "client_wall": 0.499862923
+      },
+      "ncpu": 96
+    },
+    {
+      "id": "20261013-180653959-269757",
+      "args": [
+        "check"
+      ],
+      "exit": 0,
+      "tests": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "compiled": 0,
+      "fresh": 56,
+      "toolchain": "nightly-2026-10-08",
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 93.313458,
+        "client_wall": 1.231648715
+      },
+      "ncpu": 96
+    }
+  ],
+  "scope": "installed plain default CLI, no forced routing or shadow"
+}

@@ -5902,3 +5902,10 @@ first; stock nightly here does not); (3) attribute the 0.57 s unattributed;
 (4) crate splitting (shadow leaf crates, 7.8 -> 1.8 s, FINDINGS 57), which
 turns one serial crate into parallel units and is the only lever already
 measured at more than 2x.
+
+## Hosted shadow forwarding and actual verdict acceptance (2026-10-14 UTC)
+
+- `ab55ea8` shipped/reinstalled public opt-in shadow forwarding, default off and internal child control excluded. Actual red-green hosted whitelist failure175137018 and8-run agent protocol regression175154135 observed, full361hosted tests/lint pass.
+- Same new frozen client/96core host normally billed off/on/off reference5.670/1.155/5.556s, but all7fastsamples noisy. No causal speed claim or10x acceptance. Cold first leaf20.38s/98compiled disclosed; extra `--config build.jobs=8` deliberately normal fallback, not shadow tuning. `1b188a7` now labels noisy public suite comparisons uncontrolled,40Python tests pass.
+- Actual pinned cases180405935/180407289/180409142/180411023 verify3leaftests,E0308/101,2pass1failure/101,parentnormal3pass;180426280 verifies16securityfixtures. Unfiltered180427353 retains1302pass/1existinghintchipfailure/10ignored/101. Saved source bytes restored. See `docs/hosted-shadow-20261014.md` for full requirement-to-run mapping.
+- Corrected genuinely plain installed check180649536/full361tests180650413/lint180653455/recheck180653959 allhosted0compiled56fresh. Accidental local180514589 caused by helper RUN_ID_OVERRIDE is retained/excluded, not a default outage. Current stockquietgate blocked, optimized rustc unchanged, host released01:07UTC for owner-approved resize.

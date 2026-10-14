@@ -1,0 +1,473 @@
+{
+  "actual_pinned_runtime_requirements_verified": 9,
+  "default_promotion": false,
+  "export_matches_observations": true,
+  "files": [
+    {
+      "file": "bench/results/hosted-shadow-acceptance-20261014.json",
+      "observations_verified": 9,
+      "sha256": "20843825a38286f2fe4c2a523d06ab29d9767d2e1d119e2fba78c63035ab17c5"
+    },
+    {
+      "file": "bench/results/hosted-shadow-before-20261014.json",
+      "observations_verified": 21,
+      "sha256": "ec0a6eaffe4ccabe50d67869f7086ccc2e00d8511c33d7626f711b39a626c166"
+    },
+    {
+      "file": "bench/results/hosted-shadow-final-default-20261014.json",
+      "observations_verified": 4,
+      "sha256": "776d1f9ae2a6679ad8dd0d5a3ad4e39df6f666d68d7f7a8022b049da6b89a74d"
+    },
+    {
+      "file": "bench/results/hosted-shadow-first-leaf-20261014.json",
+      "observations_verified": 1,
+      "sha256": "c8a6e4832ca0277ef45bfc7ad5cfc3922c277af0ca918c13c0ab49e254e38982"
+    },
+    {
+      "file": "bench/results/hosted-shadow-first-normal-20261014.json",
+      "observations_verified": 1,
+      "sha256": "e42b57b9e3ae65308be02c9408b523dbb04225ce5186ad9b75a9ddb979282bcd"
+    },
+    {
+      "file": "bench/results/hosted-shadow-jobs8-off-20261014.json",
+      "observations_verified": 7,
+      "sha256": "cd5669980b52146669b8176a150b2e381ff8c7994e7fd3d62889f7349538a79f"
+    },
+    {
+      "file": "bench/results/hosted-shadow-jobs8-off-recheck-20261014.json",
+      "observations_verified": 7,
+      "sha256": "170ad24d822649bc1d3faaad0abef3eb069b0a76677023c25f049cfd39162b32"
+    },
+    {
+      "file": "bench/results/hosted-shadow-jobs8-on-20261014.json",
+      "observations_verified": 7,
+      "sha256": "58f2e37927edfb1cc0bdd441822ea9bee106f313ed96abcb50684405e963e780"
+    },
+    {
+      "file": "bench/results/hosted-shadow-same-client-off-20261014.json",
+      "observations_verified": 21,
+      "sha256": "ecab559e760d8d25864fa290b344e21814576150a4d20cf438786d29ad59a78c"
+    },
+    {
+      "file": "bench/results/hosted-shadow-same-client-off-recheck-20261014.json",
+      "observations_verified": 7,
+      "sha256": "7dd3e2b26b176a3a3f34dd7da7805af0c635e1c21b75fee0cae21de6ec558df7"
+    },
+    {
+      "file": "bench/results/hosted-shadow-same-client-on-20261014.json",
+      "observations_verified": 21,
+      "sha256": "8fd41a17fcd793f9f585f1cc5d64b593de25674b544e12e271602f8e590a9538"
+    },
+    {
+      "complete_failure_output_preserved": true,
+      "file": "bench/results/hosted-shadow-leaf-compile-error-output-20261014.jsonl",
+      "observations_verified": 1,
+      "sha256": "9d64e8784639f81ee63759fc93be5e4aae2cc46616fec22e1cb9f5d0ba3f8c6e",
+      "source_id": "20261013-180407289-256367453"
+    },
+    {
+      "complete_failure_output_preserved": true,
+      "file": "bench/results/hosted-shadow-leaf-test-failure-output-20261014.jsonl",
+      "observations_verified": 1,
+      "sha256": "9636f6a792592a6d072d95f16cc54819d83863696b18834cd856c2cf87365e36",
+      "source_id": "20261013-180409142-256367543"
+    }
+  ],
+  "first_leaf_wall_seconds": 20.38,
+  "known_expected_regression_failure": "20261013-175137018-204165",
+  "known_harness_local_only_record": "20261013-180514589-262197",
+  "owned_record_ids": [
+    "20261013-174748186-186794",
+    "20261013-174752298-187072",
+    "20261013-174755387-187521",
+    "20261013-174954938-194866629",
+    "20261013-174955698-194866494",
+    "20261013-174956436-194866103",
+    "20261013-174957245-194866377",
+    "20261013-174957994-194866319",
+    "20261013-174958720-194866647",
+    "20261013-174959628-194866472",
+    "20261013-175012797-194866315",
+    "20261013-175014717-194866951",
+    "20261013-175016600-194866178",
+    "20261013-175018457-194866175",
+    "20261013-175020746-194866753",
+    "20261013-175022914-194866190",
+    "20261013-175024714-194866908",
+    "20261013-175038983-194866102",
+    "20261013-175044475-194866810",
+    "20261013-175050265-194866354",
+    "20261013-175056543-194866353",
+    "20261013-175105280-194866979",
+    "20261013-175110892-194866858",
+    "20261013-175116860-194866791",
+    "20261013-175132719-204190",
+    "20261013-175137018-204165",
+    "20261013-175150527-205442",
+    "20261013-175152064-205518",
+    "20261013-175154135-205259",
+    "20261013-175207660-206395",
+    "20261013-175210697-206549",
+    "20261013-175319888-212115",
+    "20261013-175429710-217028765",
+    "20261013-175430860-217028776",
+    "20261013-175431741-217028739",
+    "20261013-175432417-217028168",
+    "20261013-175433098-217028395",
+    "20261013-175434088-217028294",
+    "20261013-175434800-217028709",
+    "20261013-175440170-217028358",
+    "20261013-175441976-217028675",
+    "20261013-175444494-217028683",
+    "20261013-175446563-217028304",
+    "20261013-175448323-217028855",
+    "20261013-175450142-217028948",
+    "20261013-175452000-217028977",
+    "20261013-175505390-217028387",
+    "20261013-175511057-217028106",
+    "20261013-175516665-217028391",
+    "20261013-175522359-217028164",
+    "20261013-175528307-217028550",
+    "20261013-175534345-217028122",
+    "20261013-175540623-217028593",
+    "20261013-175546719-222738393",
+    "20261013-175552576-223016647",
+    "20261013-175615878-224214310",
+    "20261013-175616918-224214242",
+    "20261013-175617615-224214806",
+    "20261013-175618745-224214524",
+    "20261013-175619502-224214195",
+    "20261013-175620223-224214357",
+    "20261013-175620889-224214170",
+    "20261013-175625244-224214806",
+    "20261013-175627034-224214761",
+    "20261013-175629279-224214754",
+    "20261013-175631708-224214488",
+    "20261013-175633651-224214179",
+    "20261013-175635596-224214267",
+    "20261013-175637735-224214691",
+    "20261013-175641955-224214997",
+    "20261013-175643031-224214451",
+    "20261013-175644340-224214483",
+    "20261013-175645566-224214282",
+    "20261013-175646570-224214942",
+    "20261013-175648012-224214284",
+    "20261013-175648967-224214317",
+    "20261013-175701916-227218623",
+    "20261013-175707687-227218515",
+    "20261013-175713048-227218978",
+    "20261013-175718788-227218542",
+    "20261013-175724319-227218222",
+    "20261013-175729781-227218526",
+    "20261013-175735421-227218819",
+    "20261013-180111639-244709635",
+    "20261013-180117716-244709787",
+    "20261013-180123471-244709262",
+    "20261013-180129525-244709267",
+    "20261013-180135711-244709157",
+    "20261013-180141292-244709142",
+    "20261013-180147022-244709668",
+    "20261013-180205244-244709633",
+    "20261013-180211124-244709545",
+    "20261013-180217619-244709262",
+    "20261013-180223376-244709464",
+    "20261013-180229718-244709769",
+    "20261013-180236063-244709195",
+    "20261013-180242521-244709938",
+    "20261013-180300163-244709778",
+    "20261013-180306494-244709911",
+    "20261013-180313064-244709901",
+    "20261013-180319417-244709689",
+    "20261013-180325844-244709125",
+    "20261013-180331447-244709893",
+    "20261013-180337723-244709122",
+    "20261013-180351905-256367159",
+    "20261013-180359850-256367571",
+    "20261013-180405935-256367441",
+    "20261013-180407289-256367453",
+    "20261013-180409142-256367543",
+    "20261013-180411023-256367656",
+    "20261013-180418974-256367614",
+    "20261013-180426280-256367927",
+    "20261013-180427353-256367941",
+    "20261013-180514589-262197",
+    "20261013-180649536-269280",
+    "20261013-180650413-269533",
+    "20261013-180653455-269696",
+    "20261013-180653959-269757"
+  ],
+  "performance_verdict": "uncontrolled: all7fast reference samples noisy; no causal claim",
+  "redacted_leaf_attestations": [
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "41971a57e4a929284d1b39032211b28abaec66034bca8d16907233608d5ea587",
+      "export_classification": "private",
+      "id": "20261013-180405935-256367441",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "69fbbf1ab6e821f9a9e431cd198a3042813343dae6285ff57b01aac49c49b322",
+      "export_classification": "private",
+      "id": "20261013-180407289-256367453",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "2cb818dcc419c9fec19f23f931f0ad8264d3eed2d89369f836c1bc6b035be570",
+      "export_classification": "private",
+      "id": "20261013-180409142-256367543",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "e08692c5de017a27baaa50f08d19c6d0d5e4d99efff33cd19e2ef7e7733ac1d2",
+      "export_classification": "private",
+      "id": "20261013-175552576-223016647",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "ba81a049877ed1a313df2df64cd04e1111f584c0ce3e1a850778e4170ba941ed",
+      "export_classification": "private",
+      "id": "20261013-175615878-224214310",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "41fa85e4614e6d050a2cb816fe028df2c7fef7387cf982ea1470007c068000b0",
+      "export_classification": "private",
+      "id": "20261013-175616918-224214242",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "a5b35b8fecb939c16bb36efa3590d4cb8d3aa3a6329ee726ceadc068a5d701e8",
+      "export_classification": "private",
+      "id": "20261013-175617615-224214806",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "87eb0043ba1ac78a4fcf01e4def8fde1e834a2c69ec1217f15e04532fea20440",
+      "export_classification": "private",
+      "id": "20261013-175618745-224214524",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "4553264998924f6ba4c04284126a53f1fd84e7819bcd5b38ef0a6f625eddccef",
+      "export_classification": "private",
+      "id": "20261013-175619502-224214195",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "43c39696618773ee11f4235ca10773832fcc9fa7eb73c172ae1e4a53855c7e10",
+      "export_classification": "private",
+      "id": "20261013-175620223-224214357",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "f4b731eddf8b44dea5c08f607b745c4cb1df03a6fa87875663f7da2756121957",
+      "export_classification": "private",
+      "id": "20261013-175620889-224214170",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "fa28c03c6dd19d359fb5e83cbc70b4aaeb0039ad7c1e62d6a97920d75d33e4ea",
+      "export_classification": "private",
+      "id": "20261013-175641955-224214997",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "ddcb9e534b49e1a3c3afafeb141aa0548116e793aad57565ce2dadbbfa7e737d",
+      "export_classification": "private",
+      "id": "20261013-175643031-224214451",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "907acda94a4c717fdd2aaaf68612a11a79a9e8f565db539f7c6c1744fe6ce80d",
+      "export_classification": "private",
+      "id": "20261013-175644340-224214483",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "41da51da15d95708b45e907ada5aff42e9f2ca3af9a5c9848417e4a733d8f638",
+      "export_classification": "private",
+      "id": "20261013-175645566-224214282",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "b8a1956162c9abfe2aede5247aae7e37c43a16360f7d8b4dabf4201291e602e8",
+      "export_classification": "private",
+      "id": "20261013-175646570-224214942",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "7a10dc2eda8f45ede1c55d59d914c73f92523ca285c88122c3cc80ff282b478a",
+      "export_classification": "private",
+      "id": "20261013-175648012-224214284",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    },
+    {
+      "actual_args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "actual_remote": "hosted",
+      "actual_summary_sha256": "8710986753efe87e0b8a4af765cf669c8e0e256d445b52a0eb1d1d5804668f7d",
+      "export_classification": "private",
+      "id": "20261013-175648967-224214317",
+      "scope": "controlled public pinned FPS leaf, locally verified against full record"
+    }
+  ],
+  "scope": "exact October14 own96core hosted outputs, not a10x acceptance claim"
+}

@@ -1,0 +1,1349 @@
+{
+  "env": {
+    "host": "xps14",
+    "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+    "ncpu": 16,
+    "mem_gb": 62.3,
+    "kernel": "7.2.3-arch1-2",
+    "justrust": "justrust 0.1.0-alpha.16",
+    "justrust_rev": "ab55ea8",
+    "benchmark_repo_rev": "1b188a7fdef8",
+    "justrust_binary_revision": "ab55ea8",
+    "justrust_revision_source": "declared JUSTRUST_BENCH_REV",
+    "justrust_binary_sha256": "93adb8f1a1e5fdd81b16d85cb6601d1fbc4424feac941fab3030434c1dff1dc9",
+    "justrust_dirty": true,
+    "rustc": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)",
+    "toolchain": "nightly-2026-10-08",
+    "optimization_env": {
+      "JUSTRUST_SHADOW": "1",
+      "JUSTRUST_TEST_FILTER_COMPILE": "0",
+      "JUSTRUST_CARGO_DAEMON": "0"
+    },
+    "rustc_threads": null,
+    "workspace_threads": null,
+    "pass_times": false,
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+    "governor": "powersave",
+    "on_ac": "0",
+    "snapshots": {
+      "desktop": {
+        "jcode-desktop": "7d38fb7",
+        "jcode": "abff94eeb"
+      },
+      "justrust": {
+        "justrust": "f97fcc2"
+      }
+    }
+  },
+  "rows": [
+    {
+      "requirement": "normal-snapshot",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "exit": 0,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "start": 6.3372321128845215,
+            "wall": 0.005621910095214844,
+            "passed": 3,
+            "failed": 0,
+            "filtered_out": 1310
+          }
+        ],
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 1310,
+        "libtest_secs": 0.0,
+        "slowest": [
+          {
+            "name": "fps_counter::tests::fps_counter_rebaselines_after_profiler_reset",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_excludes_idle_time_and_limits_snapshot_work",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_retains_slow_frames_and_uses_only_new_samples",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          }
+        ],
+        "timed_secs": 0.003,
+        "timed": 3
+      },
+      "compiled": 1,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 78.501311,
+        "client_wall": 7.7379652960000005,
+        "host_wall": 6.343708276748657,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180351905-256367159",
+      "wall": 7.743,
+      "first_error": null,
+      "first_fail": null,
+      "early": null,
+      "recorded_wall": 6.344,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 1213.2,
+          "flushed": 1293.2,
+          "first_output": 1473.4,
+          "exit": 7737.1,
+          "recording": 7737.9
+        },
+        "admission_awaited_ms": {
+          "identity": 157.0,
+          "charge": 376.0,
+          "identity_wait": 0.0,
+          "queue": 232.0,
+          "total": 608.0
+        }
+      },
+      "cpu": 17.83,
+      "startup": 0.17,
+      "compile": 6.13,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 1,
+        "fresh": 743,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 1.25,
+      "foreign_rustc_before": 0,
+      "load_before": 2.9,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)",
+      "workspace_frontend_threads": 8
+    },
+    {
+      "requirement": "snapshot-enabled",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "exit": 0,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "start": 4.960585355758667,
+            "wall": 0.005544900894165039,
+            "passed": 3,
+            "failed": 0,
+            "filtered_out": 1310
+          }
+        ],
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 1310,
+        "libtest_secs": 0.0,
+        "slowest": [
+          {
+            "name": "fps_counter::tests::fps_counter_rebaselines_after_profiler_reset",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_excludes_idle_time_and_limits_snapshot_work",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_retains_slow_frames_and_uses_only_new_samples",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          }
+        ],
+        "timed_secs": 0.003,
+        "timed": 3
+      },
+      "compiled": 1,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 91.517678,
+        "client_wall": 5.895872204,
+        "host_wall": 4.966967344284058,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180359850-256367571",
+      "wall": 5.899,
+      "first_error": null,
+      "first_fail": null,
+      "early": null,
+      "recorded_wall": 4.967,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 714.5,
+          "flushed": 807.4,
+          "first_output": 861.6,
+          "exit": 5895.5,
+          "recording": 5895.9
+        },
+        "admission_awaited_ms": {
+          "identity": 79.0,
+          "charge": 305.0,
+          "identity_wait": 0.0,
+          "queue": 94.0,
+          "total": 399.0
+        }
+      },
+      "cpu": 11.56,
+      "startup": 0.163,
+      "compile": 4.761,
+      "test_run": 0.006,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 1,
+        "fresh": 743,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 2.05,
+      "foreign_rustc_before": 0,
+      "load_before": 2.74,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)",
+      "workspace_frontend_threads": 8
+    },
+    {
+      "requirement": "leaf-pass",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "exit": 0,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jr_shadow_fps_counter-f190e8468123ed27",
+            "start": 0.35667967796325684,
+            "wall": 0.0025780200958251953,
+            "passed": 3,
+            "failed": 0,
+            "filtered_out": 0
+          }
+        ],
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0.0,
+        "slowest": [
+          {
+            "name": "fps_counter::tests::fps_counter_retains_slow_frames_and_uses_only_new_samples",
+            "binary": "jr_shadow_fps_counter-f190e8468123ed27",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_rebaselines_after_profiler_reset",
+            "binary": "jr_shadow_fps_counter-f190e8468123ed27",
+            "secs": 0.0,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_excludes_idle_time_and_limits_snapshot_work",
+            "binary": "jr_shadow_fps_counter-f190e8468123ed27",
+            "secs": 0.0,
+            "passed": true
+          }
+        ],
+        "timed_secs": 0.001,
+        "timed": 3
+      },
+      "compiled": 1,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 54.153834,
+        "client_wall": 1.196058444,
+        "host_wall": 0.3641164302825928,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180405935-256367441",
+      "wall": 1.199,
+      "first_error": null,
+      "first_fail": null,
+      "early": null,
+      "recorded_wall": 0.364,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 657.5,
+          "flushed": 712.1,
+          "first_output": 767.2,
+          "exit": 1195.8,
+          "recording": 1196.1
+        },
+        "admission_awaited_ms": {
+          "identity": 78.0,
+          "charge": 281.0,
+          "identity_wait": 0.0,
+          "queue": 91.0,
+          "total": 372.0
+        }
+      },
+      "cpu": 0.54,
+      "startup": 0.151,
+      "compile": 0.184,
+      "test_run": 0.003,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 1,
+        "fresh": 743,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 8.41,
+      "foreign_rustc_before": 0,
+      "load_before": 3.27,
+      "noisy": true,
+      "top_unit": "jr_shadow_fps_counter (test)",
+      "workspace_frontend_threads": null
+    },
+    {
+      "requirement": "leaf-compile-error",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "exit": 101,
+      "tests": {
+        "binaries": [],
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0.0,
+        "timed_secs": 0.0,
+        "timed": 0
+      },
+      "compiled": 1,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 82.17994,
+        "client_wall": 1.626307741,
+        "host_wall": 0.3494870662689209,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180407289-256367453",
+      "wall": 1.632,
+      "first_error": 1.492,
+      "first_fail": null,
+      "early": null,
+      "recorded_wall": 0.349,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 1035.7,
+          "flushed": 1119.4,
+          "first_output": 1173.9,
+          "exit": 1625.6,
+          "recording": 1626.3
+        },
+        "admission_awaited_ms": {
+          "identity": 147.0,
+          "charge": 379.0,
+          "identity_wait": 0.0,
+          "queue": 174.0,
+          "total": 553.0
+        }
+      },
+      "cpu": 0.52,
+      "startup": 0.163,
+      "compile": 0.158,
+      "test_run": 0.0,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 1,
+        "fresh": 743,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "other_cores": 0.4,
+      "foreign_rustc_before": 0,
+      "load_before": 3.27,
+      "noisy": false,
+      "top_unit": "jr_shadow_fps_counter (test)",
+      "workspace_frontend_threads": null
+    },
+    {
+      "requirement": "leaf-test-failure",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jr-shadow-fps-counter",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "exit": 101,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jr_shadow_fps_counter-f190e8468123ed27",
+            "start": 0.3695912361145019,
+            "wall": 0.002734661102294922,
+            "passed": 2,
+            "failed": 1,
+            "filtered_out": 0
+          }
+        ],
+        "passed": 2,
+        "failed": 1,
+        "ignored": 0,
+        "filtered_out": 0,
+        "libtest_secs": 0.0,
+        "slowest": [
+          {
+            "name": "fps_counter::tests::fps_counter_retains_slow_frames_and_uses_only_new_samples",
+            "binary": "jr_shadow_fps_counter-f190e8468123ed27",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_excludes_idle_time_and_limits_snapshot_work",
+            "binary": "jr_shadow_fps_counter-f190e8468123ed27",
+            "secs": 0.0,
+            "passed": false
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_rebaselines_after_profiler_reset",
+            "binary": "jr_shadow_fps_counter-f190e8468123ed27",
+            "secs": 0.0,
+            "passed": true
+          }
+        ],
+        "timed_secs": 0.001,
+        "timed": 3
+      },
+      "compiled": 1,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 54.501617,
+        "client_wall": 1.6554855480000001,
+        "host_wall": 0.377352237701416,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180409142-256367543",
+      "wall": 1.662,
+      "first_error": 1.611,
+      "first_fail": 1.611,
+      "early": null,
+      "recorded_wall": 0.377,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 1106.6,
+          "flushed": 1161.8,
+          "first_output": 1214.2,
+          "exit": 1655.1,
+          "recording": 1655.5
+        },
+        "admission_awaited_ms": {
+          "identity": 158.0,
+          "charge": 366.0,
+          "identity_wait": 0.0,
+          "queue": 169.0,
+          "total": 535.0
+        }
+      },
+      "cpu": 0.56,
+      "startup": 0.158,
+      "compile": 0.189,
+      "test_run": 0.003,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 1,
+        "fresh": 743,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 2,
+      "tests_failed": 1,
+      "other_cores": 6.61,
+      "foreign_rustc_before": 0,
+      "load_before": 3.27,
+      "noisy": true,
+      "top_unit": "jr_shadow_fps_counter (test)",
+      "workspace_frontend_threads": null
+    },
+    {
+      "requirement": "outside-leaf-fallback",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "exit": 0,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "start": 6.408715724945068,
+            "wall": 0.005208730697631836,
+            "passed": 3,
+            "failed": 0,
+            "filtered_out": 1310
+          }
+        ],
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 1310,
+        "libtest_secs": 0.0,
+        "slowest": [
+          {
+            "name": "fps_counter::tests::fps_counter_excludes_idle_time_and_limits_snapshot_work",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_retains_slow_frames_and_uses_only_new_samples",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_rebaselines_after_profiler_reset",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.0,
+            "passed": true
+          }
+        ],
+        "timed_secs": 0.002,
+        "timed": 3
+      },
+      "compiled": 1,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 98.436819,
+        "client_wall": 7.730485574,
+        "host_wall": 6.414688587188721,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180411023-256367656",
+      "wall": 7.736,
+      "first_error": null,
+      "first_fail": null,
+      "early": null,
+      "recorded_wall": 6.415,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 1009.9,
+          "flushed": 1109.4,
+          "first_output": 1161.7,
+          "exit": 7729.8,
+          "recording": 7730.5
+        },
+        "admission_awaited_ms": {
+          "identity": 155.0,
+          "charge": 348.0,
+          "identity_wait": 0.0,
+          "queue": 170.0,
+          "total": 518.0
+        }
+      },
+      "cpu": 13.94,
+      "startup": 0.165,
+      "compile": 6.205,
+      "test_run": 0.005,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 1,
+        "fresh": 743,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 1.59,
+      "foreign_rustc_before": 0,
+      "load_before": 3.17,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)",
+      "workspace_frontend_threads": 8
+    },
+    {
+      "requirement": "restored-normal",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "exit": 0,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "start": 6.149224042892456,
+            "wall": 0.00548243522644043,
+            "passed": 3,
+            "failed": 0,
+            "filtered_out": 1310
+          }
+        ],
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 1310,
+        "libtest_secs": 0.0,
+        "slowest": [
+          {
+            "name": "fps_counter::tests::fps_counter_excludes_idle_time_and_limits_snapshot_work",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_retains_slow_frames_and_uses_only_new_samples",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "fps_counter::tests::fps_counter_rebaselines_after_profiler_reset",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.0,
+            "passed": true
+          }
+        ],
+        "timed_secs": 0.002,
+        "timed": 3
+      },
+      "compiled": 1,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 70.94468099999999,
+        "client_wall": 7.013854768,
+        "host_wall": 6.155515193939209,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180418974-256367614",
+      "wall": 7.019,
+      "first_error": null,
+      "first_fail": null,
+      "early": null,
+      "recorded_wall": 6.156,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 679.2,
+          "flushed": 750.8,
+          "first_output": 935.3,
+          "exit": 7013.2,
+          "recording": 7013.8
+        },
+        "admission_awaited_ms": {
+          "identity": 84.0,
+          "charge": 283.0,
+          "identity_wait": 0.0,
+          "queue": 93.0,
+          "total": 376.0
+        }
+      },
+      "cpu": 17.89,
+      "startup": 0.169,
+      "compile": 5.942,
+      "test_run": 0.005,
+      "units": 1,
+      "local_units": 1,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 1,
+        "fresh": 743,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "other_cores": 1.38,
+      "foreign_rustc_before": 0,
+      "load_before": 3.07,
+      "noisy": false,
+      "top_unit": "jcode_desktop_ui (test)",
+      "workspace_frontend_threads": 8
+    },
+    {
+      "requirement": "security-fallback",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "updates::linux_package::tests"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "updates::linux_package::tests"
+      ],
+      "exit": 0,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "start": 0.17462754249572754,
+            "wall": 0.2722208499908447,
+            "passed": 16,
+            "failed": 0,
+            "filtered_out": 1297
+          }
+        ],
+        "passed": 16,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 1297,
+        "libtest_secs": 0.27,
+        "slowest": [
+          {
+            "name": "updates::linux_package::tests::network_errors_timeouts_and_size_limits_are_bounded",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.267,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::extract_accepts_only_manifest_and_strips_dangerous_permissions",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.031,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::corrupt_gzip_is_rejected",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.028,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::extract_rejects_traversal_links_special_unknown_missing_and_duplicates",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.019,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::atomic_activation_preserves_old_version_and_does_not_relaunch",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.011,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::switch_failure_preserves_versions_and_explains_recovery",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.008,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::detects_relative_launcher_and_refuses_unmanaged",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.003,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::unmanaged_install_reports_installer_guidance_without_managed_directories",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.003,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::refuses_downgrade_same_version_and_existing_destination",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.003,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::refuses_foreign_launcher_and_writable_directories",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.003,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::refuses_launcher_changed_during_download_and_concurrent_updates",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.003,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::symlinked_managed_root_is_refused",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.003,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::checksums_are_exact_unique_and_support_historical_paths",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.001,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::release_names_match_linux_architecture",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.0,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::release_target_rejects_unsupported_architectures",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.0,
+            "passed": true
+          },
+          {
+            "name": "updates::linux_package::tests::semantic_versions_order_prereleases_numerically",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.0,
+            "passed": true
+          }
+        ],
+        "timed_secs": 0.383,
+        "timed": 16
+      },
+      "compiled": 0,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 74.135266,
+        "client_wall": 0.896372769,
+        "host_wall": 0.44873881340026855,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180426280-256367927",
+      "wall": 0.898,
+      "first_error": null,
+      "first_fail": null,
+      "early": null,
+      "recorded_wall": 0.449,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 290.8,
+          "flushed": 366.3,
+          "first_output": 385.3,
+          "exit": 896.1,
+          "recording": 896.4
+        },
+        "admission_awaited_ms": {
+          "identity": 22.0,
+          "charge": 177.0,
+          "identity_wait": 0.0,
+          "queue": 32.0,
+          "total": 209.0
+        }
+      },
+      "cpu": 0.41,
+      "startup": 0.175,
+      "compile": 0.0,
+      "test_run": 0.272,
+      "units": 0,
+      "local_units": 0,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 0,
+        "fresh": 744,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 16,
+      "tests_failed": 0,
+      "other_cores": 0.66,
+      "foreign_rustc_before": 0,
+      "load_before": 2.83,
+      "noisy": false,
+      "top_unit": null,
+      "workspace_frontend_threads": null
+    },
+    {
+      "requirement": "unfiltered-full-ui",
+      "requested_args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib"
+      ],
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib"
+      ],
+      "exit": 101,
+      "tests": {
+        "binaries": [
+          {
+            "name": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "start": 0.1688365936279297,
+            "wall": 4.211978912353516,
+            "passed": 1302,
+            "failed": 1,
+            "filtered_out": 0
+          }
+        ],
+        "passed": 1302,
+        "failed": 1,
+        "ignored": 10,
+        "filtered_out": 0,
+        "libtest_secs": 4.32,
+        "slowest": [
+          {
+            "name": "workspace::pending_tests::pending_editor_accepts_input_during_motion_and_settles_visible_from_full_width_and_overflow",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 3.934,
+            "passed": true
+          },
+          {
+            "name": "panel::startup_lifecycle_tests::startup_each_native_submission_paints_the_newest_row",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 2.973,
+            "passed": true
+          },
+          {
+            "name": "panel::tail_glide::tests::tool_cards_and_text_after_them_glide_instead_of_jumping",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 2.107,
+            "passed": true
+          },
+          {
+            "name": "panel::prompt::tests::native_scroll_paints_historical_prompt_cards",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 2.067,
+            "passed": true
+          },
+          {
+            "name": "workspace::remote_tests::machines_picker_connect_default_shortcuts_and_local_override",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 1.513,
+            "passed": true
+          },
+          {
+            "name": "panel::tail_glide::tests::fast_streams_follow_without_snapping",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 1.437,
+            "passed": true
+          },
+          {
+            "name": "panel::side_document::tests::pdf_document_renders_pages_navigates_by_keyboard_and_restores_scroll",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 1.416,
+            "passed": true
+          },
+          {
+            "name": "panel::tail_glide::tests::wrapped_streaming_lines_glide_into_view",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 1.205,
+            "passed": true
+          },
+          {
+            "name": "panel::stream_reveal::panel_tests::streamed_bursts_flow_in_and_settle",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 1.101,
+            "passed": true
+          },
+          {
+            "name": "workspace::remote_tests::machines_input_validates_and_connects_without_changing_default",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 1.005,
+            "passed": true
+          },
+          {
+            "name": "panel::startup_lifecycle_tests::startup_tall_preview_manual_down_scroll_detaches_without_jumping_to_tail",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.874,
+            "passed": true
+          },
+          {
+            "name": "workspace::tests::overview_navigation_keeps_root_focus_and_restores_composer",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.754,
+            "passed": true
+          },
+          {
+            "name": "workspace::live_tabs::tests::live_tabs_center_two_and_four_panel_groups_with_subtle_focus_motion",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.683,
+            "passed": true
+          },
+          {
+            "name": "workspace::remote_tests::remote_new_panel_exposes_progress_failure_retry_and_explicit_local_choice",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.611,
+            "passed": true
+          },
+          {
+            "name": "native_mermaid::tests::every_mmdr_diagram_family_tessellates_natively",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.5,
+            "passed": true
+          },
+          {
+            "name": "workspace::tests::every_taught_shortcut_is_reachable_by_its_advertised_keys",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.424,
+            "passed": true
+          },
+          {
+            "name": "panel::prompt::tests::newer_prompt_pushes_old_sticky_card_without_overlap",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.395,
+            "passed": true
+          },
+          {
+            "name": "workspace::tests::clicking_scrolled_history_rows_reliably_activates_the_displayed_session",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.394,
+            "passed": true
+          },
+          {
+            "name": "workspace::tests::overview_restore_and_new_panel_keep_mounted_focus",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.394,
+            "passed": true
+          },
+          {
+            "name": "workspace::live_tabs::tests::workspace_tab_groups_preserve_click_keyboard_and_empty_row_navigation",
+            "binary": "jcode_desktop_ui-a6c7e7bad5b69aca",
+            "secs": 0.389,
+            "passed": true
+          }
+        ],
+        "timed_secs": 59.87999999999997,
+        "timed": 1303
+      },
+      "compiled": 0,
+      "remote": {
+        "machine": "hosted",
+        "sync_ms": 58.068066,
+        "client_wall": 5.21187974,
+        "host_wall": 4.661712408065796,
+        "toolchain": "nightly-2026-10-08",
+        "target_state": "persistent remote target"
+      },
+      "toolchain": "nightly-2026-10-08",
+      "id": "20261013-180427353-256367941",
+      "wall": 5.223,
+      "first_error": 0.885,
+      "first_fail": 0.885,
+      "early": null,
+      "recorded_wall": 4.662,
+      "admission_transport": "curl",
+      "remote_trace": {
+        "client_elapsed_ms": {
+          "roots": 0.1,
+          "charged": 377.1,
+          "flushed": 436.0,
+          "first_output": 618.8,
+          "exit": 5205.9,
+          "recording": 5211.9
+        },
+        "admission_awaited_ms": {
+          "identity": 26.0,
+          "charge": 211.0,
+          "identity_wait": 0.0,
+          "queue": 45.0,
+          "total": 256.0
+        }
+      },
+      "cpu": 40.12,
+      "startup": 0.169,
+      "compile": 0.0,
+      "test_run": 4.212,
+      "units": 0,
+      "local_units": 0,
+      "dep_units": 0,
+      "reuse": {
+        "compiled": 0,
+        "fresh": 744,
+        "depcache_hits": 0,
+        "depcache_misses": 0,
+        "depcache_saved_secs": 0.0,
+        "script_hits": 0,
+        "script_saved_secs": 0.0,
+        "slot_refreshed_units": 0,
+        "local_hits": 0,
+        "local_saved_secs": -0.0
+      },
+      "split": {
+        "frontend": 0.0,
+        "codegen": 0.0,
+        "link": 0.0,
+        "incremental": 0.0,
+        "other": 0.0
+      },
+      "link_secs": 0.0,
+      "hotpatch": null,
+      "tests_passed": 1302,
+      "tests_failed": 1,
+      "other_cores": 0.61,
+      "foreign_rustc_before": 0,
+      "load_before": 2.83,
+      "noisy": false,
+      "top_unit": null,
+      "workspace_frontend_threads": null
+    }
+  ],
+  "backup_restoration_verified": true
+}
