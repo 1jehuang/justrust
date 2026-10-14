@@ -6,6 +6,10 @@ The user wants genuinely hosted dogfooding and a 10x improvement over stock loca
 
 This review re-exercises the cumulative result rather than assigning acceptance from source inspection. Fresh local checks below are not substitutes for hosted end-user acceptance. Fresh hosted checks ran in the owner's exclusive window23:12 to23:44 UTC. All18 requirements below now have an observed result or explicit limitation. No calls were made during reserved chip trials, and the host was released before the next owner's96-core trial. The fresh stock-local control was attempted but rejected because the shared laptop was contended.
 
+## Current-epoch boundary, October 14 UTC
+
+This is the dated24-core/officialCargo acceptance snapshot. The host owner has since installed staticJR-Cargo and resized to96cores. Do not treat these earlier rows as fresh acceptance of that changed epoch. `docs/cumulative-requirement-recheck-20261013.md` and its result artifact map all18 requirements plus8 next-phase requirements, fresh actual API/component/public-interface checks, named earlier runtime observations, the failed quiet preflight and the exclusive-host constraint. No newhost runtime success or10x gain is inferred.
+
 ## Requirements, public outputs and observations
 
 | ID | Requirement / changed output | Concrete check | Observation / limitation |

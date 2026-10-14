@@ -1,0 +1,1317 @@
+{
+  "checked_at": "2026-10-14T00:08:55.102487+00:00",
+  "source_head": "b9d108df3e39a20c85886341410c812bae732ebf",
+  "scope": "All18 prior H/T requirements and8next-phase requirements mapped separately. Fresh API/component/publicCLI checks do not replace blocked current96-core end-user acceptance.10x remains unmet.",
+  "installed_client_sha256": "e2bc92690d1e2f0c11f0d7be413fee97e70fb987df0bcfeadfea68e7a4e5f79e",
+  "api_context": {
+    "backend": "fff73dba44c81aadb2aae86eac7ef9063c7c1600",
+    "backend_branch": "feat/hosted-builds",
+    "cloud": "eb6acdee512e057cdbf26e60a7bbc5f95d19019e"
+  },
+  "host_coordination": {
+    "observed_via": "owner DM2026-10-14T00:01:11UTC,not own runtime probe",
+    "reported_type": "m8azn.metal-24xl",
+    "reported_cores": 96,
+    "reported_cargo": "staticjr-cargo125bdc8c1",
+    "exclusive_until": "explicit release, expected2026-10-14T01:45UTC",
+    "own_host_calls_during_sweep": 0,
+    "continuation": "sched_5ec3312d at2026-10-14T01:55UTC"
+  },
+  "stock_quiet_gate": {
+    "started_at": "2026-10-14T00:07:17.296350+00:00",
+    "checked_at": "2026-10-14T00:08:02.824177+00:00",
+    "timeout_seconds": 45,
+    "load_before": 10.6,
+    "load_after": 10.8,
+    "foreign_rustc_before": 0,
+    "foreign_rustc_after": 0,
+    "quiet": false,
+    "stock_benchmark_entered": false
+  },
+  "requirements": [
+    {
+      "check": "Actual `justrust check`, `justrust test`, `justrust clippy --all-targets -- -D warnings`, exact recorded machine/compiler/exit",
+      "id": "H1",
+      "prior_observation": "Last independent west acceptance: `20261013-160058612-3890266`, `20261013-160059348-3890346`, `20261013-160102069-3890192`, all hosted exit0, 360 pass/0 fail/2 ignored. Fresh installed default check `20261013-161234102-3964915`, full test `20261013-161238615-3965351` (360/0/2), strict lint `20261013-161241885-3965648` and restored check `20261013-161309205-3967609` all actually hosted exit0.",
+      "requirement": "Plain installed check/test/clippy use hosted, including routing before local prebuild shortcuts",
+      "run_refs": [
+        "20261013-160058612-3890266",
+        "20261013-160059348-3890346",
+        "20261013-160102069-3890192",
+        "20261013-161234102-3964915",
+        "20261013-161238615-3965351",
+        "20261013-161241885-3965648",
+        "20261013-161309205-3967609"
+      ],
+      "latest_check_state": "prior_actual_pass_current_host_recheck_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Compare compiled/fresh ledger across real repeated default builds, plus recorded/raw/recorded subprocess integration",
+      "id": "H2",
+      "prior_observation": "Fresh initial default series and restore check all 0 compiled/56 fresh. Later same-target compiler switches correctly rebuilt units, so those are not cache-reuse evidence. Full subprocess regressions cover recorded/raw/recorded and failed-write recovery.",
+      "requirement": "No recording-induced cache invalidation",
+      "run_refs": [],
+      "latest_check_state": "prior_actual_reuse_current_host_recheck_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Pinned Desktop one-line body/test edits through existing suite and actual `fps_counter` tests",
+      "id": "H3",
+      "prior_observation": "Fresh7 measured samples per scenario and2 warmups on each compiler passed actual3FPS tests after source edits. The suite edits the real pinned project and restores pristine saved source, not a replacement mock project. Exact IDs, compiled/fresh counts, admitted transport and remote markers are in `cumulative-nightly-before-20261013.json` and `cumulative-jr-after-20261013.json`.",
+      "requirement": "Source changes reach real test execution",
+      "run_refs": [
+        "20261013-163257711-4053815258",
+        "20261013-163323354-4053815507",
+        "20261013-163549082-4059895181",
+        "20261013-163614530-4059895906"
+      ],
+      "latest_check_state": "prior_actual_edit_pass_current_host_recheck_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Actual pinned type-error check, record final Cargo101/E0308 and error latency, retain complete saved log",
+      "id": "H4",
+      "prior_observation": "Actual3 measured type-error samples on each compiler retained Cargo101/E0308 and full saved logs: `cumulative-nightly-errors-20261013.json` and `cumulative-jr-errors-20261013.json`. First-error median1.54 versus1.50s is not a claimed speedup. Full UI also preserves the real failing assertion and exit101. Early analyzer remains opt-in, not an early successful verdict.",
+      "requirement": "Full errors and real verdict remain visible",
+      "run_refs": [
+        "20261013-163659667-4070699745",
+        "20261013-163716500-4071953373"
+      ],
+      "latest_check_state": "prior_actual_error_verdict_preserved_current_host_recheck_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Full unchanged Desktop package/security fixtures and original agent subprocess tests",
+      "id": "H5",
+      "prior_observation": "Fresh actual unchanged package/security fixtures pass16 on default `20261013-164308089-4110778674` and candidate `20261013-164318830-4110778899`. Real full justrust360 tests include caller-umask and concurrent-child regressions. Actual full UI remains1302pass/1sameworkspace hint-chip failure/10ignored on both compilers. Complete failure output is retained.",
+      "requirement": "Match caller filesystem permissions and isolate concurrent children",
+      "run_refs": [
+        "20261013-164308089-4110778674",
+        "20261013-164318830-4110778899"
+      ],
+      "latest_check_state": "prior_actual_permissions_pass_current_host_recheck_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Actual remote-agent subprocess integration and whole hosted test suite, then actual edited Desktop workload",
+      "id": "H6",
+      "prior_observation": "Fresh full hosted candidate `20261013-163158662-4050865` and restored default `20261013-163224269-4052730` each pass360/0/2, including all21 real agent subprocess tests, immutable replacement, cancellation and failed-write/cache-reuse checks.",
+      "requirement": "Immutable agent snapshots survive atomic replacement, RunSync refuses stale/failed writes, cancellation remains isolated",
+      "run_refs": [
+        "20261013-163158662-4050865",
+        "20261013-163224269-4052730"
+      ],
+      "latest_check_state": "prior_actual_agent_cases_pass_current_host_recheck_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Complete actual cloud-worker and backend public API integration suites, then normally admitted hosted builds",
+      "id": "H7",
+      "prior_observation": "Fresh cloud: 78 Node+11 Python pass. Fresh backend: 439 pass. These use fake upstream/SQLite boundaries. Real hosted positive admission is exercised separately. No deliberate live quota exhaustion or production outage injection.",
+      "requirement": "Admission authority, quotas and tenant scope stay intact",
+      "run_refs": [],
+      "latest_check_state": "fresh_api_checks_pass_live_negative_cases_not_injected",
+      "fresh_checks": [
+        "current actual cloud public API integration suite",
+        "actual deployed hosted-builds backend public API integration suite"
+      ],
+      "current_host_recheck_blocked": false,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Actual worker ordinary and compound AWS/D1 outage regressions plus regional tests, no copied-source substitute",
+      "id": "H8",
+      "prior_observation": "Actual source passed 11 cases before deployment, including both previously failing compound outages. Current full cloud78 pass includes counted reclaiming regressions. Owner deployed `b01662a` in worker `fe38bf38`. Live outage injection intentionally not attempted.",
+      "requirement": "Regional reclaim failure cannot release unconfirmed live capacity",
+      "run_refs": [],
+      "latest_check_state": "fresh_reclaim_api_cases_pass_live_outages_not_injected",
+      "fresh_checks": [
+        "current actual cloud public API integration suite"
+      ],
+      "current_host_recheck_blocked": false,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Fresh round-robin stock versus hosted benchmark on identical pinned sources, rotating order, warmups, >=7 samples",
+      "id": "H9",
+      "prior_observation": "Fresh round-robin control completed7 samples per workload and stack, but all42 rows are marked noisy. Peer confirmed a simultaneous local static Cargo build23:38:02 to23:39:53 UTC using769 CPU seconds. The raw printed2.05x reference ratio is rejected as causal evidence. Follow-up local load was8.20, so no uncontended replacement baseline is claimed. Historical matched reference1.32x remains historical only. 10x is NOT achieved. Raw control and rejection are preserved in `cumulative-comparison-controls-20261013.json`.",
+      "requirement": "10x over stock local, with source/client/cache/host provenance and no contention",
+      "run_refs": [],
+      "latest_check_state": "10x_unmet_uncontended_stock_control_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Offline audit of every committed October13 hosted document/result, exact IDs, sample test counts/compiled units/remote markers",
+      "id": "H10",
+      "prior_observation": "Final post-publication snapshot `693057b`:109 public outputs,1275 unique cited runs,1281 mapped observations, zero missing references or behavior mismatches. This includes all new real acceptance and measured/error rows. Per-file hashes and scope are in `cumulative-final-evidence-audit-20261013.json`. Earlier89-output snapshot remains historical. Both initially reported omissions were parser truncation of valid `-pre` IDs, corrected without altering original data.",
+      "requirement": "Changed reports and exported data faithfully represent actual builds",
+      "run_refs": [],
+      "latest_check_state": "fresh_current_public_audit_pass",
+      "fresh_checks": [
+        "current actual public hosted-evidence audit CLI",
+        "current actual public stock report CLI",
+        "current actual public stock comparison CLI"
+      ],
+      "current_host_recheck_blocked": false,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "`cargo fmt -- --check`, all bench Python tests, actual `bench/suite.py compare` on original before/after files",
+      "id": "H11",
+      "prior_observation": "Fresh formatting and32 bench tests pass, including8 negative evidence-audit regressions. Actual public `bench/suite.py compare` on the fresh before/after files reports reference5.32 to4.56s (-14% faster), body/no-op within noise. This is new matched end-user evidence, not recomputation of an older epoch.",
+      "requirement": "Benchmark provenance parser and comparison interfaces work",
+      "run_refs": [],
+      "latest_check_state": "fresh_current_public_compare_and_tests_pass",
+      "fresh_checks": [
+        "current bench Python public test command",
+        "current actual public suite comparison CLI",
+        "current source formatting check"
+      ],
+      "current_host_recheck_blocked": false,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Actual staged `rustc -vV`, loader resolution, matching compiler hashes after authenticated nondefault transfer",
+      "id": "T1",
+      "prior_observation": "Actual local and Ubuntu hosted rustc SHAefd82c516ba2b499e4a617cb97fbcbb65b8b1088e64b9c2654e98f7281d64e8a match, commit b7907f1fe8f7/LLVM23.1.3, loader resolves. Missing-stage fallback observations remain separate. Local jr-cargo failed Ubuntu libgit2 ABI and was quarantined before publication. Portable official candidate Cargo is byte-identical to hosted default Cargo.",
+      "requirement": "Candidate is the exact optimized compiler and can load required dependencies",
+      "run_refs": [],
+      "latest_check_state": "fresh_local_identity_pass_remote_identity_recheck_blocked",
+      "fresh_checks": [
+        "actual staged local compiler identity"
+      ],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Existing actual staged compiler interface test script, no fork edits",
+      "id": "T2",
+      "prior_observation": "Fresh 18 checks pass, including dependent link/run output19 1, signature rejection and no sidecar without flag. This fixture is component coverage, not whole Desktop acceptance.",
+      "requirement": "Interface hash changes only for appropriate semantic edits, dependent linking loads the new body and rejects changed interface",
+      "run_refs": [],
+      "latest_check_state": "fresh_actual_component_pass_not_end_user_substitute",
+      "fresh_checks": [
+        "actual staged interface semantics component checks"
+      ],
+      "current_host_recheck_blocked": false,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Actual staged compiler filtering script plus hosted selected/unfiltered tests",
+      "id": "T3",
+      "prior_observation": "Fresh12 component checks pass, including unselected E0308 and dep-info env recording. Actual hosted candidate compile-filter run `20261013-164335712-4110778849` compiles a3-test FPS harness,3pass/0filtered. Subsequent unfiltered run `20261013-164342509-4110778907` rebuilds for changed JUSTRUST_RUSTC_TEST_FILTER and restores all1313 tests:1302pass/1baselinefailure/10ignored.",
+      "requirement": "Test filtering preserves diagnostics, warnings, selected tests, env dependency and cache transitions",
+      "run_refs": [
+        "20261013-164335712-4110778849",
+        "20261013-164342509-4110778907"
+      ],
+      "latest_check_state": "fresh_actual_component_pass_prior_real_filter_transition_verified",
+      "fresh_checks": [
+        "actual staged test-filter component checks"
+      ],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Existing deterministic actual staged compiler stress script, 40 rounds",
+      "id": "T4",
+      "prior_observation": "Fresh 40 rounds pass. No newly proposed mono/partition semantic cache was implemented.",
+      "requirement": "Span/body changes do not destabilize interface cache keys",
+      "run_refs": [],
+      "latest_check_state": "fresh_actual_component_pass_not_end_user_substitute",
+      "fresh_checks": [
+        "actual staged deterministic span/body component checks"
+      ],
+      "current_host_recheck_blocked": false,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Transfer only to staged namespace with manifest installed_at0, inspect explicit-build recorded compiler then actual plain default builds",
+      "id": "T5",
+      "prior_observation": "Verified manifest installed_at0 in staged namespace. Actual JR check `20261013-163148836-4050014`, full test `20261013-163158662-4050865`, strict lint `20261013-163216447-4052239` all exit0 with JR recorded. Plain restore `20261013-163222035-4052401`/`20261013-163224269-4052730`/`20261013-163228877-4050007` all exit0 and nightly recorded. No activation or default edit.",
+      "requirement": "Stage-only install never becomes default, older agents cannot accidentally select candidate",
+      "run_refs": [
+        "20261013-163148836-4050014",
+        "20261013-163158662-4050865",
+        "20261013-163216447-4052239",
+        "20261013-163222035-4052401",
+        "20261013-163224269-4052730",
+        "20261013-163228877-4050007"
+      ],
+      "latest_check_state": "prior_actual_nondefault_selection_verified_current_host_recheck_blocked",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Actual admitted candidate check/full justrust tests/strict lint and unchanged full pinned Desktop UI tests, compared with default",
+      "id": "T6",
+      "prior_observation": "Fresh actual candidate check/full360tests/strict lint pass with exact selected compiler. Unchanged full UI default `20261013-164312927-4110778119` and candidate `20261013-164329733-4110778913` both1302pass/1same `workspace::tests::the_hint_chip_uses_only_spare_tab_space` failure/10ignored, exit101. This is observed parity, not a clean UI gate. Candidate remains nondefault.",
+      "requirement": "Optimized compiler preserves real project's observable behavior",
+      "run_refs": [
+        "20261013-164312927-4110778119",
+        "20261013-164329733-4110778913"
+      ],
+      "latest_check_state": "prior_actual_baseline_failure_parity_not_clean_promotion_gate",
+      "fresh_checks": [],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    },
+    {
+      "check": "Same frozen client/host/pins, separate warm targets, before/after suite compare",
+      "id": "T7",
+      "prior_observation": "Fresh same-client/host/source comparison: default reference5.32(5.22 to5.61)s, candidate4.56(4.47 to4.82)s, -0.76s/-14% faster. Body2.01 to2.00s and no-op0.80 to0.80s are within noise. Each scenario has7 measured samples,2warmups,0noisy rows. Both use byte-identical official Cargo. Different upstream rustc revisions and the optimized stack mean this is not isolated PGO/BOLT causality. No universal or10x claim.",
+      "requirement": "Optimized compiler makes the relevant loop better, not every workload",
+      "run_refs": [],
+      "latest_check_state": "prior_actual_14_percent_reference_gain_current_host_epoch_unmeasured",
+      "fresh_checks": [
+        "current actual public suite comparison CLI"
+      ],
+      "current_host_recheck_blocked": true,
+      "prior_epoch": "2026-10-13T23:12-23:44UTC,24-core host and official Cargo. Not current96-core/staticCargo acceptance."
+    }
+  ],
+  "next_requirements": [
+    {
+      "id": "N1",
+      "requirement": "Recover uncontended pinned stock-local/hosted baseline",
+      "check": "Actual public suite.wait_quiet(45) then require zero foreign rustc and load<2 before entering stock-only public versus run.",
+      "observation": "Gate failed00:07:17-00:08:02UTC, load10.6->10.8,0foreignrustc. No stock compile entered. No matched newhost baseline.",
+      "status": "blocked_actual_quiet_gate"
+    },
+    {
+      "id": "N2",
+      "requirement": "Review measured96-core scaling before concurrency changes",
+      "check": "Obtain owner actual bench/scaling.sh output after explicit lease release.",
+      "observation": "Owner00:01UTC confirmed96core/staticCargo host; sweep exclusive until explicit release, expected01:45UTC. No scaling results received or claimed.",
+      "status": "blocked_exclusive_host_lease"
+    },
+    {
+      "id": "N3",
+      "requirement": "Separate compiler versus nativeCargo/daemon/testpool contribution",
+      "check": "Same host/client/source controls, exact selected versions, daemon/filter disabled for compiler-only pair.",
+      "observation": "Completed24-core comparison used byte-identical officialCargo. New96core staticCargo is another variable. No fresh pair executed during lease.",
+      "status": "blocked_new_epoch_control"
+    },
+    {
+      "id": "N4",
+      "requirement": "Only remeasure testfilter if scaling/profile gives a new reason",
+      "check": "Review owner scaling, then before/after real FPS edit and full harness restoration.",
+      "observation": "Fresh12component checks pass. Prior actual3test compile harness and full1313 restoration observed, with unchanged baselineUI failure. No new runtime timing claim.",
+      "status": "future_experiment_not_started"
+    },
+    {
+      "id": "N5",
+      "requirement": "Preserve billing/activity visibility instead of deferring bookkeeping",
+      "check": "Actual project API success must wait authoritative queued batch, refused billing creates no run; reclaimed victim stays counted on AWS/D1 failure.",
+      "observation": "Fresh cloud named cases30,33,34,58,59,60 pass; correct deployed billing439 and targeted13 pass. No unsafe deferred bookkeeping or live negative injection.",
+      "status": "fresh_api_invariant_checks_pass"
+    },
+    {
+      "id": "N6",
+      "requirement": "Preserve existing compiler-fork implementation gates",
+      "check": "No new compiler optimization patch without mandatory gates.",
+      "observation": "No fork edits or speculative unbilled compile. Existing candidate tested only as opt-in. Unapproved implementation is not treated as a deliverable.",
+      "status": "gate_preserved_no_new_implementation"
+    },
+    {
+      "id": "N7",
+      "requirement": "Validate a new shipped runtime improvement through real hosted check/fulltests/lint/edit-loop",
+      "check": "Normally admitted real public commands after host lease, then artifact reuse/permissions/errors, reinstall if client behavior changes.",
+      "observation": "No new runtime improvement shipped in this phase. Fresh execution blocked by exclusive host sweep. Prior actual24-core360tests/security/FPS checks retain original dates.",
+      "status": "blocked_runtime_acceptance_not_completed"
+    },
+    {
+      "id": "N8",
+      "requirement": "Publish valid performance conclusions and exact unchanged raw observations",
+      "check": "Actual current public report/compare and whole-output audit, selective own commit/push.",
+      "observation": "38Python tests pass, real stock report/compare mark all noisy wall ratios contended and geomean not comparable. Raw input SHA unchanged. Historical14% compiler reference remains distinct from10x.",
+      "status": "fresh_public_interfaces_pass"
+    }
+  ],
+  "fresh_checks": [
+    {
+      "check": "current bench Python public test command",
+      "completed_at": "2026-10-14T00:06:30.165632+00:00",
+      "exit": 0,
+      "individual_passes": [
+        "test_dictionary_key_references_are_checked (test_audit_hosted_evidence.EvidenceAuditTests.test_dictionary_key_references_are_checked) ... ok",
+        "test_full_suffixed_reference_is_not_truncated (test_audit_hosted_evidence.EvidenceAuditTests.test_full_suffixed_reference_is_not_truncated) ... ok",
+        "test_mutated_test_count_exit_and_units_are_rejected (test_audit_hosted_evidence.EvidenceAuditTests.test_mutated_test_count_exit_and_units_are_rejected) ... ok",
+        "test_nested_counts_and_arguments_are_rejected (test_audit_hosted_evidence.EvidenceAuditTests.test_nested_counts_and_arguments_are_rejected) ... ok",
+        "test_nested_suite_and_round_robin_observations (test_audit_hosted_evidence.EvidenceAuditTests.test_nested_suite_and_round_robin_observations) ... ok",
+        "test_remote_fallback_and_wrong_compiler_are_rejected (test_audit_hosted_evidence.EvidenceAuditTests.test_remote_fallback_and_wrong_compiler_are_rejected) ... ok",
+        "test_stock_sample_without_record_id_is_not_fabricated (test_audit_hosted_evidence.EvidenceAuditTests.test_stock_sample_without_record_id_is_not_fabricated) ... ok",
+        "test_valid_flat_acceptance_matches (test_audit_hosted_evidence.EvidenceAuditTests.test_valid_flat_acceptance_matches) ... ok",
+        "test_atomic_binary_replacement_rejects_mixed_results (test_suite.HostedMeasurements.test_atomic_binary_replacement_rejects_mixed_results) ... ok",
+        "test_binary_revision_is_not_invented_from_repository_head (test_suite.HostedMeasurements.test_binary_revision_is_not_invented_from_repository_head) ... ok",
+        "test_changed_binary_never_writes_a_completed_suite_result (test_suite.HostedMeasurements.test_changed_binary_never_writes_a_completed_suite_result) ... ok",
+        "test_compiler_config_is_saved_before_runtime_filter_without_mutation (test_suite.HostedMeasurements.test_compiler_config_is_saved_before_runtime_filter_without_mutation) ... ok",
+        "test_different_source_pins_never_produce_speed_comparison (test_suite.HostedMeasurements.test_different_source_pins_never_produce_speed_comparison) ... ok",
+        "test_environment_finds_staged_compiler_and_prefers_activated (test_suite.HostedMeasurements.test_environment_finds_staged_compiler_and_prefers_activated) ... ok",
+        "test_explicit_binary_alias_is_absolute_and_never_ignored (test_suite.HostedMeasurements.test_explicit_binary_alias_is_absolute_and_never_ignored) ... ok",
+        "test_hosted_early_rejects_local_startup_and_ignored_flags_before_install (test_suite.HostedMeasurements.test_hosted_early_rejects_local_startup_and_ignored_flags_before_install) ... ok",
+        "test_hosted_early_requires_real_shown_confirmed_nonfinal_diagnostics (test_suite.HostedMeasurements.test_hosted_early_requires_real_shown_confirmed_nonfinal_diagnostics) ... ok",
+        "test_invalid_or_conflicting_binary_overrides_fail_before_install (test_suite.HostedMeasurements.test_invalid_or_conflicting_binary_overrides_fail_before_install) ... ok",
+        "test_local_target_reset_is_not_a_cold_hosted_build (test_suite.HostedMeasurements.test_local_target_reset_is_not_a_cold_hosted_build) ... ok",
+        "test_optimization_provenance_excludes_secrets (test_suite.HostedMeasurements.test_optimization_provenance_excludes_secrets) ... ok",
+        "test_remote_compiler_fallback_is_not_an_optimized_measurement (test_suite.HostedMeasurements.test_remote_compiler_fallback_is_not_an_optimized_measurement) ... ok",
+        "test_remote_sample_reports_transport_and_host_separately (test_suite.HostedMeasurements.test_remote_sample_reports_transport_and_host_separately) ... ok",
+        "test_remote_synthetic_mode_requires_the_existing_versus_harness (test_suite.HostedMeasurements.test_remote_synthetic_mode_requires_the_existing_versus_harness) ... ok",
+        "test_remote_trace_never_retains_arbitrary_text_or_invalid_numeric_fields (test_suite.HostedMeasurements.test_remote_trace_never_retains_arbitrary_text_or_invalid_numeric_fields) ... ok",
+        "test_remote_trace_omits_duplicate_or_nonmonotonic_measurements (test_suite.HostedMeasurements.test_remote_trace_omits_duplicate_or_nonmonotonic_measurements) ... ok",
+        "test_remote_trace_retains_actual_client_and_overlapping_admission_phases (test_suite.HostedMeasurements.test_remote_trace_retains_actual_client_and_overlapping_admission_phases) ... ok",
+        "test_requested_pool_fallback_is_not_a_pooled_measurement (test_suite.HostedMeasurements.test_requested_pool_fallback_is_not_a_pooled_measurement) ... ok",
+        "test_silent_local_fallback_is_never_a_remote_measurement (test_suite.HostedMeasurements.test_silent_local_fallback_is_never_a_remote_measurement) ... ok",
+        "test_thread_options_require_nightly_before_any_build_or_install (test_suite.HostedMeasurements.test_thread_options_require_nightly_before_any_build_or_install) ... ok",
+        "test_workspace_thread_options_reject_ignored_controls_before_install (test_suite.HostedMeasurements.test_workspace_thread_options_reject_ignored_controls_before_install) ... ok",
+        "test_workspace_thread_provenance_rejects_silent_wrapper_fallback (test_suite.HostedMeasurements.test_workspace_thread_provenance_rejects_silent_wrapper_fallback) ... ok",
+        "test_workspace_threads_force_existing_wrapper_only_before_runtime_filter (test_suite.HostedMeasurements.test_workspace_threads_force_existing_wrapper_only_before_runtime_filter) ... ok",
+        "test_actual_all_noisy_stock_artifact_does_not_claim_speed (test_versus.StockReportContentionTests.test_actual_all_noisy_stock_artifact_does_not_claim_speed) ... ok",
+        "test_clean_samples_keep_existing_speed_verdict (test_versus.StockReportContentionTests.test_clean_samples_keep_existing_speed_verdict) ... ok",
+        "test_compare_command_blocks_noisy_attribution (test_versus.StockReportContentionTests.test_compare_command_blocks_noisy_attribution) ... ok",
+        "test_geomean_does_not_silently_drop_contended_workload (test_versus.StockReportContentionTests.test_geomean_does_not_silently_drop_contended_workload) ... ok",
+        "test_missing_contention_provenance_does_not_claim_speed (test_versus.StockReportContentionTests.test_missing_contention_provenance_does_not_claim_speed) ... ok",
+        "test_one_noisy_sample_blocks_pair_and_geomean (test_versus.StockReportContentionTests.test_one_noisy_sample_blocks_pair_and_geomean) ... ok"
+      ],
+      "output_sha256": "5bcfa7e2a922e972ac1b70ee581a418116e92aa7dbe63d80def40c1ef9f4223e",
+      "started_at": "2026-10-14T00:06:30.087506+00:00",
+      "summary": [
+        "Ran 38 tests in 0.008s"
+      ]
+    },
+    {
+      "check": "current actual public hosted-evidence audit CLI",
+      "completed_at": "2026-10-14T00:06:31.097532+00:00",
+      "exit": 0,
+      "mapped_observations_checked": 1284,
+      "missing_references": [],
+      "output_sha256": "5325d4e3cd44b9427f712073e186810836743388989624a2d64400bd81b7764b",
+      "outputs_checked": 112,
+      "pass": true,
+      "sample_mismatches": [],
+      "source_head": "b9d108df3e39a20c85886341410c812bae732ebf",
+      "started_at": "2026-10-14T00:06:30.165891+00:00",
+      "unique_referenced_runs": 1275
+    },
+    {
+      "actual_output": "A bench/results/cumulative-nightly-before-20261013.json (justrust e6a1b5e-with-existing-seed-control)\nB bench/results/cumulative-jr-after-20261013.json (justrust e6a1b5e-with-existing-seed-control)\nscenario                       A med   B med   delta      %  verdict\ndesktop-noop-test               0.80    0.80   +0.01    +1%  within noise\ndesktop-body-check              2.01    2.00   -0.00    -0%  within noise\ndesktop-test-edit               5.32    4.56   -0.76   -14%  faster\nexit overhead (med/max)      0.645/1.099s -> 0.578/0.908s\n",
+      "check": "current actual public suite comparison CLI",
+      "completed_at": "2026-10-14T00:06:31.200853+00:00",
+      "exit": 0,
+      "output_sha256": "3416ed7a0d31de9affa21808f7ac6f7c32e5fd6202f1bbbd2fadb325bfe0917d",
+      "started_at": "2026-10-14T00:06:31.097760+00:00"
+    },
+    {
+      "check": "current actual public stock report CLI",
+      "completed_at": "2026-10-14T00:06:31.278818+00:00",
+      "exit": 0,
+      "output_sha256": "2606890bab09b52903674227f7f3eb8feaf0fb9240fb38592b5f92415bb2aad5",
+      "scoreboard": [
+        "`contended` suppresses wall-speed ratios when either stack has a noisy sample;",
+        "medians remain visible. A geomean is not comparable if any workload is excluded.",
+        "| reference-loop | 10.97s (7.7-16.3) | 5.34s (5.2-5.5) | contended | - |",
+        "| body-check | 2.48s (2.3-2.7) | 1.91s (1.8-2.1) | contended | - |",
+        "| noop-test | 0.60s (0.4-0.9) | 0.81s (0.8-1.1) | contended | - |",
+        "| **geomean** |  |  | not comparable |  |"
+      ],
+      "started_at": "2026-10-14T00:06:31.201245+00:00"
+    },
+    {
+      "actual_output": "A $REPO/bench/results/versus-20261013-164114-e6a1b5e-with-existing-seed-control-dirty.json (justrust e6a1b5e-with-existing-seed-control)\nB $REPO/bench/results/versus-20261013-164114-e6a1b5e-with-existing-seed-control-dirty.json (justrust e6a1b5e-with-existing-seed-control)\nworkload         stack               A        B      %  instr %  verdict\nreference-loop   stock           10.97    10.97      -    +0.0%  contended\nreference-loop   remote           5.34     5.34      -        -  contended\nbody-check       stock            2.48     2.48      -    +0.0%  contended\nbody-check       remote           1.91     1.91      -        -  contended\nnoop-test        stock            0.60     0.60      -    +0.0%  contended\nnoop-test        remote           0.81     0.81      -        -  contended\n",
+      "check": "current actual public stock comparison CLI",
+      "completed_at": "2026-10-14T00:06:31.363231+00:00",
+      "exit": 0,
+      "output_sha256": "a46a65bba9ed93d9a26cc9abc1bb21b4b510dcd81c7465524df93a4db426c355",
+      "raw_input_sha256_unchanged": "bd8040a8a5abc2ead6ee2d0894b7fa37bbd02408ed04cf75f507071497490b38",
+      "started_at": "2026-10-14T00:06:31.280502+00:00"
+    },
+    {
+      "check": "current source formatting check",
+      "completed_at": "2026-10-14T00:06:31.904530+00:00",
+      "exit": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "started_at": "2026-10-14T00:06:31.363338+00:00"
+    },
+    {
+      "actual_output": "rustc 1.101.0-nightly (b7907f1fe 2026-10-12)\nbinary: rustc\ncommit-hash: b7907f1fe8f7b788dbace9ca649ce4729408f943\ncommit-date: 2026-10-12\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "check": "actual staged local compiler identity",
+      "compiler_sha256": "efd82c516ba2b499e4a617cb97fbcbb65b8b1088e64b9c2654e98f7281d64e8a",
+      "completed_at": "2026-10-14T00:06:31.916785+00:00",
+      "exit": 0,
+      "output_sha256": "25d55e98c48a4f6aa2082495ada46a7da9d045210bc80a0c751ea7a58444ebd3",
+      "started_at": "2026-10-14T00:06:31.904594+00:00"
+    },
+    {
+      "check": "actual staged interface semantics component checks",
+      "completed_at": "2026-10-14T00:06:32.654591+00:00",
+      "exit": 0,
+      "individual_passes": [
+        "ok: sidecar format (69a43dea19f4bef7db2c0132a26eae9d)",
+        "ok: deterministic",
+        "ok: body keeps iface",
+        "ok: body-lines keeps iface",
+        "ok: comment-above keeps iface",
+        "ok: panic-msg keeps iface",
+        "ok: signature changes iface",
+        "ok: inline-body changes iface",
+        "ok: generic-body changes iface",
+        "ok: macro changes iface",
+        "ok: const changes iface",
+        "ok: new-item changes iface",
+        "ok: struct-field changes iface",
+        "ok: dependent built against old up links with new up",
+        "ok: runs new body (19 1)",
+        "ok: panic location from swapped up: up.rs:13:58:",
+        "ok: signature change rejected",
+        "ok: no sidecar without the flag"
+      ],
+      "output_sha256": "a3b314f2fecf75871c3c4f351f6e31fa2be8ca4b3556252ec4a812529b794cd8",
+      "started_at": "2026-10-14T00:06:31.921360+00:00"
+    },
+    {
+      "check": "actual staged test-filter component checks",
+      "completed_at": "2026-10-14T00:06:33.397716+00:00",
+      "exit": 0,
+      "individual_passes": [
+        "ok: no warnings without filter",
+        "ok: unfiltered lists all",
+        "ok: no warnings with filter (no dead_code from dropped tests)",
+        "ok: filter alpha: tests::alpha_one tests::alpha_two tests::ignored_alpha tests::nested::alpha_deep ",
+        "ok: runs filtered tests",
+        "ok: two filters",
+        "ok: exact",
+        "ok: no match: empty harness",
+        "ok: real dead code still warned",
+        "ok: type error in unselected test reported",
+        "ok: unselected tests not codegened (8 -> 0 symbols)",
+        "ok: env-dep recorded"
+      ],
+      "output_sha256": "04e71270fc04810a0b844adb0751ee0783cc7c14b702deeebb9f3fd7fffeb424",
+      "started_at": "2026-10-14T00:06:32.654666+00:00"
+    },
+    {
+      "actual_output": "ok (40 rounds)\n",
+      "check": "actual staged deterministic span/body component checks",
+      "completed_at": "2026-10-14T00:06:37.870709+00:00",
+      "exit": 0,
+      "output_sha256": "f9de658133bf7c24407208c1b5b3ddabb9da4052da6f06073c5b3f9227093eee",
+      "started_at": "2026-10-14T00:06:33.397918+00:00"
+    },
+    {
+      "boundaries": "Actual project API suite using fake upstream/SQLite. Not destructive production negative-case injection.",
+      "check": "current actual cloud public API integration suite",
+      "completed_at": "2026-10-14T00:06:38.624448+00:00",
+      "exit": 0,
+      "individual_pass_count": 78,
+      "individual_passes": [
+        "ok 1 - machine-cost transparency uses configured c8a.8xlarge without changing admission",
+        "ok 2 - machine-cost transparency uses configured m8azn.6xlarge without changing admission",
+        "ok 3 - machine-cost transparency uses configured unknown.8xlarge without changing admission",
+        "ok 5 - trial: a new account with 0 builds charged can connect",
+        "ok 6 - POST /v1/build/runs forwards to /internal/builds/charge and passes status, body and next_step through",
+        "ok 21 - cron: never calls the backend, keeps hosts with builds running, and stops entitlement loss with 0 charged",
+        "ok 29 - admission timing is opt-in, fixed numeric and secret-free with no extra charges",
+        "ok 30 - admission timing never releases success before the authoritative queued batch",
+        "ok 31 - admission timing preserves refusals, validation and fail-closed missing bindings",
+        "ok 32 - a charged run is recorded queued with its labels, then running, then done",
+        "ok 33 - charge and identity lookup overlap, but queued visibility still precedes the response",
+        "ok 34 - an overlapped lookup cannot record a run whose charge was refused",
+        "ok 35 - failed overlapped identity bookkeeping never changes successful billing",
+        "ok 36 - without a bookkeeping database, billing does not make an identity request",
+        "ok 38 - a refused charge records nothing; labels are bounded and printable",
+        "ok 46 - a charged run and its events count as activity",
+        "ok 50 - capacity: a vCPU quota error skips the remaining zones of that type",
+        "ok 51 - fleet cap: BUILD_MAX_HOSTS reclaims the longest-idle host of another account, never a busy one",
+        "ok 54 - region move: an existing host stays managed in its own region, new launches go to BUILD_REGION",
+        "ok 55 - region: an invalid recorded region fails closed",
+        "ok 56 - region move: a west newcomer at the fleet cap reclaims an idle EAST host through the east client",
+        "ok 57 - cost estimate is region scoped: east and west verified rates, unknown region null",
+        "ok 58 - reclaim: a failed stop of the victim keeps it counted, so the cap is never bypassed",
+        "ok 59 - reclaim: AWS stop and the D1 compensation both fail, the victim still counts (reclaiming)",
+        "ok 60 - reclaim: a confirmed stop moves the victim to stopping and frees exactly one slot"
+      ],
+      "output_sha256": "bc40bb4d55aeb647bdef3d2476e2f33e7c65abd620b315023ff39aba7f4d5306",
+      "started_at": "2026-10-14T00:06:37.870759+00:00",
+      "summary": [
+        "# tests 78",
+        "# pass 78",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0",
+        "Ran 11 tests in 0.006s"
+      ]
+    },
+    {
+      "boundaries": "Actual project API suite using fake upstream/SQLite. Not destructive production negative-case injection.",
+      "check": "actual deployed hosted-builds backend public API integration suite",
+      "completed_at": "2026-10-14T00:06:53.429731+00:00",
+      "exit": 0,
+      "individual_pass_count": 430,
+      "individual_passes": [
+        "ok 18 - checkout and portal derive Stripe identity only from the authenticated account and recover from failure",
+        "ok 27 - Resend configuration, quota, rejection, and transport failures never leave a usable login challenge",
+        "ok 73 - anthropic stream without a final usage frame retains input and charges full output allowance",
+        "ok 114 - real SQLite rate admission atomically grants one final parallel slot",
+        "ok 119 - configured usage billing appends one pending outbox event and never labels it charged",
+        "ok 121 - metering durably enqueues every crossed $20 doubling threshold exactly once",
+        "ok 141 - build status uses one scoped read without multiplying ledger rows or changing cap admission",
+        "ok 142 - new charge reads its admission result in the billing batch, repeats remain read-only",
+        "ok 144 - failure of batched readback rolls back overage reservation, charge and outbox",
+        "ok 177 - nonzero build exits preserve output, charge runtime and kill sandbox",
+        "ok 188 - actual server seconds rounded up, unused reservation refunded, failure still charged",
+        "ok 191 - expired reservation charges full, unlocks slot, rejects late refund and replay",
+        "ok 192 - automatic expiry on new admission and balance conservatively finalizes orphan",
+        "ok 198 - independent SQLite connections contend safely for grant, admission and settlement",
+        "ok 260 - google sign-in: a linked identity follows its account after the Google email changes",
+        "ok 285 - invalid attempts consume quota and limiter scope does not touch voice counters",
+        "ok 290 - bounded operator quotas support custom minute/day limits and reject unsafe configuration",
+        "ok 304 - daily quota exhaustion returns an upgrade prompt with the next tier",
+        "ok 310 - migration backfills legacy usage into attributed attempts and charged reservations",
+        "ok 364 - timingSafeEqualHex compares correctly",
+        "ok 401 - chat/completions rejects an unallowlisted Bedrock region before host construction",
+        "ok 420 - anthropic direct 403 meters zero usage instead of a conservative charge",
+        "ok 422 - openai direct 403 meters zero usage instead of a conservative charge"
+      ],
+      "output_sha256": "c3e6d90e4c2dc9331fb181853fc9f1b7cb2743e9481d24b567ba59809b816a8d",
+      "started_at": "2026-10-14T00:06:38.625130+00:00",
+      "summary": [
+        "# tests 439",
+        "# pass 439",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0"
+      ]
+    },
+    {
+      "check": "current runtime-source change scope",
+      "completed_at": "2026-10-14T00:06:53.441569+00:00",
+      "exit": 0,
+      "no_committed_runtime_source_changes_since_accepted_snapshot": true,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "started_at": "2026-10-14T00:06:53.437974+00:00"
+    }
+  ],
+  "runtime_observations": [
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-160058612-3890266",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-160059348-3890346",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-160102069-3890192",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161234102-3964915",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161238615-3965351",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161241885-3965648",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-161309205-3967609",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 68,
+      "exit": 0,
+      "fresh": 0,
+      "id": "20261013-163148836-4050014",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "jr-b7907f1fe8f7",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "compiled": 55,
+      "exit": 0,
+      "fresh": 8,
+      "id": "20261013-163158662-4050865",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      },
+      "toolchain": "jr-b7907f1fe8f7",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun",
+      "named_observations": [
+        "test jr_install_can_stage_without_switching_default_then_activate_explicitly ... ok <0.086s>",
+        "test installs_pins_and_builds_with_the_pinned_toolchain ... ok <0.092s>",
+        "test procfs::tests::caller_umask_is_read_without_changing_it ... ok <0.004s>",
+        "test procfs::tests::umask_parser_accepts_only_permission_bits ... ok <0.000s>",
+        "test remote_hosted::tests::admission_trace_is_scoped_to_existing_charge_only ... ok <0.000s>",
+        "test remote_hosted::tests::admission_trace_real_curl_preserves_refusal_and_optional_header ... ok <0.074s>",
+        "test failed_writes_fail_barriers_until_fixed ... ok <0.036s>",
+        "test invalid_caller_umask_rejects_run_before_execution ... ok <0.043s>",
+        "test immediate_pipeline_cancel_is_not_lost_before_pid_registration ... ok <0.053s>",
+        "test run_children_preserve_distinct_umasks_without_changing_agent_default ... ok <0.059s>",
+        "test replaced_agent_executable_still_checks_with_stable_recording_shims ... ok <0.215s>",
+        "test sync_run_rejects_failed_writes_then_checks_latest_source_and_reuses_artifacts ... ok <0.235s>",
+        "test cancel_interrupts_a_run_and_others_continue ... ok <0.345s>"
+      ]
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "compiled": 3,
+      "exit": 0,
+      "fresh": 55,
+      "id": "20261013-163216447-4052239",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "jr-b7907f1fe8f7",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 68,
+      "exit": 0,
+      "fresh": 0,
+      "id": "20261013-163222035-4052401",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "compiled": 55,
+      "exit": 0,
+      "fresh": 8,
+      "id": "20261013-163224269-4052730",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "compiled": 3,
+      "exit": 0,
+      "fresh": 55,
+      "id": "20261013-163228877-4050007",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "updates::linux_package::tests"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 744,
+      "id": "20261013-164308089-4110778674",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 1297,
+        "ignored": 0,
+        "passed": 16
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun",
+      "named_observations": [
+        "test updates::linux_package::tests::release_names_match_linux_architecture ... ok <0.000s>",
+        "test updates::linux_package::tests::release_target_rejects_unsupported_architectures ... ok <0.000s>",
+        "test updates::linux_package::tests::checksums_are_exact_unique_and_support_historical_paths ... ok <0.000s>",
+        "test updates::linux_package::tests::semantic_versions_order_prereleases_numerically ... ok <0.000s>",
+        "test updates::linux_package::tests::detects_relative_launcher_and_refuses_unmanaged ... ok <0.002s>",
+        "test updates::linux_package::tests::refuses_foreign_launcher_and_writable_directories ... ok <0.002s>",
+        "test updates::linux_package::tests::refuses_downgrade_same_version_and_existing_destination ... ok <0.002s>",
+        "test updates::linux_package::tests::refuses_launcher_changed_during_download_and_concurrent_updates ... ok <0.002s>",
+        "test updates::linux_package::tests::unmanaged_install_reports_installer_guidance_without_managed_directories ... ok <0.001s>",
+        "test updates::linux_package::tests::symlinked_managed_root_is_refused ... ok <0.001s>",
+        "test updates::linux_package::tests::switch_failure_preserves_versions_and_explains_recovery ... ok <0.004s>",
+        "test updates::linux_package::tests::atomic_activation_preserves_old_version_and_does_not_relaunch ... ok <0.005s>",
+        "test updates::linux_package::tests::extract_rejects_traversal_links_special_unknown_missing_and_duplicates ... ok <0.009s>",
+        "test updates::linux_package::tests::corrupt_gzip_is_rejected ... ok <0.016s>",
+        "test updates::linux_package::tests::extract_accepts_only_manifest_and_strips_dangerous_permissions ... ok <0.017s>",
+        "test updates::linux_package::tests::network_errors_timeouts_and_size_limits_are_bounded ... ok <0.267s>"
+      ]
+    },
+    {
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib"
+      ],
+      "compiled": 0,
+      "exit": 101,
+      "fresh": 744,
+      "id": "20261013-164312927-4110778119",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 1,
+        "filtered_out": 0,
+        "ignored": 10,
+        "passed": 1302
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "updates::linux_package::tests"
+      ],
+      "compiled": 887,
+      "exit": 0,
+      "fresh": 0,
+      "id": "20261013-164318830-4110778899",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 1297,
+        "ignored": 0,
+        "passed": 16
+      },
+      "toolchain": "jr-b7907f1fe8f7",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun",
+      "named_observations": [
+        "test updates::linux_package::tests::release_names_match_linux_architecture ... ok <0.000s>",
+        "test updates::linux_package::tests::checksums_are_exact_unique_and_support_historical_paths ... ok <0.000s>",
+        "test updates::linux_package::tests::release_target_rejects_unsupported_architectures ... ok <0.000s>",
+        "test updates::linux_package::tests::semantic_versions_order_prereleases_numerically ... ok <0.000s>",
+        "test updates::linux_package::tests::detects_relative_launcher_and_refuses_unmanaged ... ok <0.019s>",
+        "test updates::linux_package::tests::unmanaged_install_reports_installer_guidance_without_managed_directories ... ok <0.018s>",
+        "test updates::linux_package::tests::refuses_foreign_launcher_and_writable_directories ... ok <0.019s>",
+        "test updates::linux_package::tests::refuses_launcher_changed_during_download_and_concurrent_updates ... ok <0.019s>",
+        "test updates::linux_package::tests::refuses_downgrade_same_version_and_existing_destination ... ok <0.021s>",
+        "test updates::linux_package::tests::symlinked_managed_root_is_refused ... ok <0.021s>",
+        "test updates::linux_package::tests::atomic_activation_preserves_old_version_and_does_not_relaunch ... ok <0.025s>",
+        "test updates::linux_package::tests::switch_failure_preserves_versions_and_explains_recovery ... ok <0.027s>",
+        "test updates::linux_package::tests::extract_rejects_traversal_links_special_unknown_missing_and_duplicates ... ok <0.034s>",
+        "test updates::linux_package::tests::corrupt_gzip_is_rejected ... ok <0.045s>",
+        "test updates::linux_package::tests::extract_accepts_only_manifest_and_strips_dangerous_permissions ... ok <0.048s>",
+        "test updates::linux_package::tests::network_errors_timeouts_and_size_limits_are_bounded ... ok <0.266s>"
+      ]
+    },
+    {
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib"
+      ],
+      "compiled": 0,
+      "exit": 101,
+      "fresh": 744,
+      "id": "20261013-164329733-4110778913",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 1,
+        "filtered_out": 0,
+        "ignored": 10,
+        "passed": 1302
+      },
+      "toolchain": "jr-b7907f1fe8f7",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--",
+        "fps_counter"
+      ],
+      "compiled": 1,
+      "exit": 0,
+      "fresh": 743,
+      "id": "20261013-164335712-4110778849",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 3
+      },
+      "toolchain": "jr-b7907f1fe8f7",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun",
+      "named_observations": [
+        "test fps_counter::tests::fps_counter_rebaselines_after_profiler_reset ... ok <0.000s>",
+        "test fps_counter::tests::fps_counter_excludes_idle_time_and_limits_snapshot_work ... ok <0.000s>",
+        "test fps_counter::tests::fps_counter_retains_slow_frames_and_uses_only_new_samples ... ok <0.001s>"
+      ]
+    },
+    {
+      "args": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib"
+      ],
+      "compiled": 1,
+      "exit": 101,
+      "fresh": 743,
+      "id": "20261013-164342509-4110778907",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 1,
+        "filtered_out": 0,
+        "ignored": 10,
+        "passed": 1302
+      },
+      "toolchain": "jr-b7907f1fe8f7",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-164407681-4115213",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-164409873-4115463",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 2,
+        "passed": 360
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun",
+      "named_observations": [
+        "test jr_install_can_stage_without_switching_default_then_activate_explicitly ... ok <0.063s>",
+        "test installs_pins_and_builds_with_the_pinned_toolchain ... ok <0.096s>",
+        "test failed_writes_fail_barriers_until_fixed ... ok <0.036s>",
+        "test invalid_caller_umask_rejects_run_before_execution ... ok <0.039s>",
+        "test immediate_pipeline_cancel_is_not_lost_before_pid_registration ... ok <0.055s>",
+        "test run_children_preserve_distinct_umasks_without_changing_agent_default ... ok <0.056s>",
+        "test replaced_agent_executable_still_checks_with_stable_recording_shims ... ok <0.210s>",
+        "test sync_run_rejects_failed_writes_then_checks_latest_source_and_reuses_artifacts ... ok <0.234s>",
+        "test cancel_interrupts_a_run_and_others_continue ... ok <0.342s>",
+        "test procfs::tests::umask_parser_accepts_only_permission_bits ... ok <0.000s>",
+        "test remote_hosted::tests::admission_trace_is_scoped_to_existing_charge_only ... ok <0.000s>",
+        "test procfs::tests::caller_umask_is_read_without_changing_it ... ok <0.021s>",
+        "test remote_hosted::tests::admission_trace_real_curl_preserves_refusal_and_optional_header ... ok <0.062s>"
+      ]
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-164412791-4115540",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "compiled": 0,
+      "exit": 0,
+      "fresh": 56,
+      "id": "20261013-164413643-4115676",
+      "remote": {
+        "machine": "hosted"
+      },
+      "tests": {
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "passed": 0
+      },
+      "toolchain": "nightly-2026-10-08",
+      "observation_time_scope": "2026-10-13 actual hosted execution, not freshly rerun"
+    }
+  ],
+  "edit_error_observations": [
+    {
+      "artifact": "bench/results/cumulative-nightly-before-20261013.json",
+      "scenario": "desktop-noop-test",
+      "first_error": null,
+      "id": "20261013-163243422-4053815607",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 3,
+      "units": 0,
+      "wall": 0.973
+    },
+    {
+      "artifact": "bench/results/cumulative-nightly-before-20261013.json",
+      "scenario": "desktop-body-check",
+      "first_error": null,
+      "id": "20261013-163257711-4053815258",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 0,
+      "units": 1,
+      "wall": 1.884
+    },
+    {
+      "artifact": "bench/results/cumulative-nightly-before-20261013.json",
+      "scenario": "desktop-test-edit",
+      "first_error": null,
+      "id": "20261013-163323354-4053815507",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 3,
+      "units": 1,
+      "wall": 5.605
+    },
+    {
+      "artifact": "bench/results/cumulative-jr-after-20261013.json",
+      "scenario": "desktop-noop-test",
+      "first_error": null,
+      "id": "20261013-163509523-4059895571",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 3,
+      "units": 0,
+      "wall": 0.803
+    },
+    {
+      "artifact": "bench/results/cumulative-jr-after-20261013.json",
+      "scenario": "desktop-body-check",
+      "first_error": null,
+      "id": "20261013-163549082-4059895181",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 0,
+      "units": 1,
+      "wall": 2.002
+    },
+    {
+      "artifact": "bench/results/cumulative-jr-after-20261013.json",
+      "scenario": "desktop-test-edit",
+      "first_error": null,
+      "id": "20261013-163614530-4059895906",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 3,
+      "units": 1,
+      "wall": 4.489
+    },
+    {
+      "artifact": "bench/results/cumulative-nightly-errors-20261013.json",
+      "scenario": "desktop-type-error",
+      "first_error": 1.686,
+      "id": "20261013-163659667-4070699745",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 0,
+      "units": 1,
+      "wall": 1.753
+    },
+    {
+      "artifact": "bench/results/cumulative-jr-errors-20261013.json",
+      "scenario": "desktop-type-error",
+      "first_error": 1.501,
+      "id": "20261013-163716500-4071953373",
+      "noisy": false,
+      "tests_failed": 0,
+      "tests_passed": 0,
+      "units": 1,
+      "wall": 1.676
+    }
+  ],
+  "named_billing_boundary_check": {
+    "check": "Actual deployed billing public API quota/identity suite",
+    "completed_at": "2026-10-14T00:08:55.102487+00:00",
+    "exit": 0,
+    "named_passes": [
+      "ok 1 - build status uses one scoped read without multiplying ledger rows or changing cap admission",
+      "ok 2 - new charge reads its admission result in the billing batch, repeats remain read-only",
+      "ok 3 - empty batch readback rejects an exhausted account without creating billing rows",
+      "ok 4 - failure of batched readback rolls back overage reservation, charge and outbox",
+      "ok 5 - internal API is invisible without the shared token, and the token alone authorizes nothing",
+      "ok 6 - no card, no remote builds: a new account gets 0 builds and next_step start_trial, a former subscriber gets subscribe",
+      "ok 7 - subscribers use the trial, then 2,500 builds per $10 of plan, then $0.10 metered builds up to the usage limit",
+      "ok 8 - without usage billing a subscriber stops at the bundle (no unbilled overage)",
+      "ok 9 - the $10 plan includes no remote builds: trial only, then upgrade_plan, never metered",
+      "ok 10 - justrust-cli may start the device login flow; unknown clients may not",
+      "ok 11 - a complimentary tier survives billing writes (Stripe renewal, cancellation, plan change)",
+      "ok 12 - card-first trial: a trialing plan gets the larger trial allowance, then end_trial",
+      "ok 13 - /v1/me plan and subscribe 409 tell clients to change plans, or that the plan is managed"
+    ],
+    "scope": "Real project Node API tests with SQLite/fake upstream, not live destructive quota refusal injection.",
+    "started_at": "2026-10-14T00:08:40.068138+00:00",
+    "summary": [
+      "# tests 13",
+      "# pass 13",
+      "# fail 0"
+    ]
+  },
+  "scope_correction": {
+    "unrelated_feature_checkout": "feat/browser-code-subscribe",
+    "unrelated_api_suite": "372pass excludes hosted billing, not used as H7 proof",
+    "correct_actual_worktree": "solosystems-backend-buildhosts, feat/hosted-builds,fff73db",
+    "correct_actual_suite": "439pass plus13targeted SQLite/identity/quota cases",
+    "workspace_branch_changed": false
+  },
+  "limitations": [
+    "Current96-core hosted public acceptance and performance have not been re-exercised by this session during the peer lease.",
+    "Actual fullDesktopUI gate failed identically on both tested compilers:1302pass1fail10ignored. No clean promotion claim.",
+    "No live destructive quota/outage injection. API negative cases are real project tests using fake upstream/SQLite.",
+    "No new compile speed improvement in this verification/reporting phase. Existing matched24-core reference14% gain is historical for this host epoch."
+  ]
+}
