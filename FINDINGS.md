@@ -6162,3 +6162,28 @@ per-step client digest and hosted/compiler-pin metadata guards passed. Receipt
 future attribution, not the historical mutable-client epoch. Initial check
 `20261013-211242111-1273414` had 68 account dependency-cache hits/five misses,
 not public-store hits or the 73 hits of an older packaging run. No speed claim.
+
+## 2026-10-14: uniform-cost Cargo scheduler has no demonstrated 24-job benefit
+
+Same immutable client ec42e0f/SHA2153a809, candidate Cargo a45c354/SHA c38c3d63,
+and nightly-2026-10-08 ran pinned Desktop OFF/ON/ON/OFF on west m8azn.6xlarge
+in a private copied prefix. All 40 measured runs and 16 warmups exited zero;
+actual metadata selected the candidate/compiler/local route/24 jobs throughout.
+Reference/no-op tests passed three each, edit workflows rebuilt one unit and
+no-op rebuilt zero. Representative IDs `20261014-034808753-288986334` and
+`20261014-040339460-542771790` are among the 56 exact exported records in
+`data/runs/hosted-west-cargo-scheduler/2026-10.jsonl`.
+
+`bench/suite.py compare` reports cached cold 9.45 -> 9.36 s, uncached cold
+27.77 -> 28.01 s, reference 4.98 -> 4.96 s, body check 1.32 -> 1.29 s and
+no-op 0.18 -> 0.18 s. Four original verdicts are uncontrolled; body check is
+within noise. Independent concurrent release work through 03:58:45 UTC means
+the earlier body samples also cannot establish a causal gain. All original
+flags and eighteen conservative known-confound annotations are retained.
+Default-off stays off; no speedup, hardware ceiling or promotion is claimed.
+
+Full results, invocation/hash audit and actual comparison are committed in
+`bench/results/scheduler-a45-j24-20261014/`; requirement mapping is in
+`docs/cargo-scheduler-abba-20261014.md`. The frozen recorder's live-tree CPU
+sum can drop on child exit and inflate derived other-core attribution. Repair
+that measurement defect in a new epoch, never rewrite these historical flags.

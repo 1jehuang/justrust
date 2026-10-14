@@ -1,0 +1,9 @@
+A bench/results/scheduler-a45-j24-20261014/off.json (justrust ec42e0f2e92eb429ac5a020419f03e9a1288a15c)
+B bench/results/scheduler-a45-j24-20261014/on.json (justrust ec42e0f2e92eb429ac5a020419f03e9a1288a15c)
+scenario                       A med   B med   delta      %  verdict
+desktop-cold-check              9.45    9.36   -0.08    -1%  uncontrolled (noisy or unknown samples)
+desktop-cold-check-nocache     27.77   28.01   +0.24    +1%  uncontrolled (noisy or unknown samples)
+desktop-test-edit               4.98    4.96   -0.03    -1%  uncontrolled (noisy or unknown samples)
+desktop-body-check              1.32    1.29   -0.02    -2%  within noise
+desktop-noop-test               0.18    0.18   -0.01    -4%  uncontrolled (noisy or unknown samples)
+exit overhead (med/max)      0.024/0.036s -> 0.024/0.036s
