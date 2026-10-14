@@ -6556,3 +6556,35 @@ under `bench/results/synthetic-report-guard-20261014/`. Positive fixtures are
 report controls, not benchmarks. No compiler, account-host, install, storage or
 security operation was entered. The complete OFF/ON performance comparison,
 CPU work/span and hardware ceiling remain blocked or unknown.
+
+## 2026-10-14: replace the README's mislabeled uv comparison with matched measurements
+
+The October 10 table labeled local justrust timings as the standard toolchain
+and compared a 5/574-hit local dependency cache with a 574/574-hit remote cache.
+Replaced it with 27 successful measurements on pinned uv `44b2e5877ef7`, three
+rotating rounds of stock local, justrust local, and actual hosted execution.
+
+Median agent-visible seconds, stock / local justrust / hosted:
+
+- Fresh workspace check: **81.16 / 34.54 / 14.33**.
+- Independent fresh resolver test build (`--no-run`): **85.85 / 33.30 / 15.24**.
+- Warm executable body-edit resolver check: **0.956 / 0.849 / 0.891**.
+
+Shared caches persist, with first-round fills retained, not an empty-cache
+comparison. Hosted timing includes upload/admission/report delivery. Laptop
+load was 11.3 to 26.7, hosted hardware is 24-core AMD EPYC, and toolchains differ
+(stock 1.98.1, local jr-ac20de5e7921, hosted 1.99.0). Edit ranges overlap, so no
+stable hundredth-second winner or general synthetic-workload speedup is claimed.
+A tool-imposed timeout interrupted one stock test build. Successful observations
+were preserved, and the interrupted attempt was retried in a new empty target.
+All edited sources were restored and compiler identities checked for stability.
+
+Examples of recorded measurements: local check
+`readme-uv-1ada85de5f1b4f37908e9f0fee8586d9`, hosted check
+`readme-uv-1c34340dc5364e3ea514975db9fb4ac0`.
+All 24 justrust recordings, including excluded prewarms, are exported in
+`data/runs/xps14/readme-uv-20261014.jsonl`. Full timings, ranges, cache caveats,
+source/client identities and retry provenance are in
+`bench/results/readme-uv-20261014.json` and
+`docs/readme-uv-benchmark-20261014.md`. All 214 benchmark tests, formatting and
+diff checks passed. The README Install section was also condensed.

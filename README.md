@@ -21,15 +21,19 @@ justrust vertically integrates and optimizes the Rust build toolchain to make
 the entire edit, check, and test loop faster. Use it locally or with our remote
 build service.
 
-On [uv](https://github.com/astral-sh/uv) (674 units, measured 2026-10-10,
-laptop under typical multi-agent load vs a 16 vCPU build machine):
+On [uv](https://github.com/astral-sh/uv) (`44b2e58`, measured 2026-10-14),
+median end-to-end wall times from three interleaved rounds:
 
-| Operation | Standard toolchain (local) | justrust (local) | justrust (remote) |
+| Operation | Stock Cargo (local) | justrust (local) | justrust (remote) |
 |---|---:|---:|---:|
-| Fresh checkout, shared cache | 77.7 s | Not measured | **22.9 s** |
-| `test -p uv-resolver --no-run` | 73.6 s | Not measured | **38.5 s** |
-| Cold `check --workspace` | 70.3 s | Not measured | **52.2 s** |
-| One-line edit, `check -p uv-resolver` | Not measured | Not measured | **1.0 s** |
+| Fresh checkout, `check --workspace` | 81.2 s | 34.5 s | 14.3 s |
+| Fresh checkout, `test -p uv-resolver --no-run` | 85.8 s | 33.3 s | 15.2 s |
+| Warm one-line body edit, `check -p uv-resolver` | 0.96 s | 0.85 s | 0.89 s |
+
+Local: XPS 14 laptop under multi-agent load. Remote: 24-core AMD EPYC host.
+Shared caches persist across fresh checkouts, so these are not cold-cache builds;
+remote times include source upload. Toolchains differ between stacks.
+[Methodology, ranges, and raw results](docs/readme-uv-benchmark-20261014.md).
 
 Your coding agents spend valuable time waiting for Rust checks, builds, and
 tests. Running those operations locally can slow down your machine, drive up

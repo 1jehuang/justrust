@@ -1,0 +1,37 @@
+{
+  "captured_utc": "2026-10-14T09:59:46Z",
+  "post_run_hash_recheck_utc": "2026-10-14T10:15:30Z",
+  "post_run_rustc_and_cargo_hashes_unchanged": true,
+  "scope": "Read-only hosted identity observations between the first round's workspace check and test-build completion. These are not per-sample compiler attestations.",
+  "hosted": {
+    "instance_type": "m8azn.6xlarge",
+    "region": "us-west-2",
+    "cpu": "AMD EPYC 9R05",
+    "vcpus": 24,
+    "threads_per_core": 1,
+    "memory_gib_status": 92.5,
+    "rustc": {
+      "version": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "commit_hash": "b940084d7eb6a299eb4bfeb8e34901bc051e7ac4",
+      "llvm": "23.1.1",
+      "resolved_path": "/home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f"
+    },
+    "cargo": {
+      "version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+      "commit_hash": "5f94df4789f005f9a352888e8355ffc645b7ed0e",
+      "resolved_path": "/home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14"
+    },
+    "filesystem_bytes": 518933680128,
+    "filesystem_available_bytes": 309757571072,
+    "loadavg": [0.50, 0.71, 0.34]
+  },
+  "local": {
+    "machine": "Dell XPS 14 DA14260",
+    "cpu": "Intel Core Ultra X9 388H",
+    "memory_gib": 62.3,
+    "os": "Arch Linux",
+    "note": "Exact local executable versions and hashes are recorded in the main result and each justrust local sample."
+  }
+}
