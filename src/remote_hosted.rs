@@ -673,14 +673,22 @@ pub fn report_run_event(run_id: &str, event: &str, exit_code: Option<i32>, wall_
     let Ok(c) = creds() else {
         return;
     };
+    let body = run_event_body(event, exit_code, wall_s);
+    post_detached(&c, &format!("build/runs/{run_id}/event"), &body);
+}
+
+fn run_event_body(event: &str, exit_code: Option<i32>, wall_s: Option<f64>) -> Value {
     let mut body = json!({ "event": event });
+    if event == "running" {
+        body["note"] = json!("heartbeat-v1");
+    }
     if let Some(e) = exit_code {
         body["exit_code"] = json!(e);
     }
     if let Some(w) = wall_s {
         body["wall_s"] = json!((w * 100.0).round() / 100.0);
     }
-    post_detached(&c, &format!("build/runs/{run_id}/event"), &body);
+    body
 }
 
 /// Body of `POST {build}/build/local`: why a signed-in client kept a build
@@ -1288,6 +1296,21 @@ pub fn check_use() -> Result<Me> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn run_event_heartbeat_marker_only_on_running() {
+        let running = super::run_event_body("running", None, Some(60.123));
+        assert_eq!(running["note"], "heartbeat-v1");
+        assert_eq!(running["wall_s"], 60.12);
+        assert!(running.get("exit_code").is_none());
+        let done = super::run_event_body("done", Some(101), Some(61.0));
+        assert_eq!(done["exit_code"], 101);
+        assert!(done.get("note").is_none());
+        assert!(
+            super::run_event_body("abandoned", None, None)
+                .get("note")
+                .is_none()
+        );
+    }
     use super::*;
     use std::io::{BufRead, BufReader, Read};
     use std::net::TcpListener;

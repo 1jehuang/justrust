@@ -17,6 +17,8 @@ use std::collections::BTreeSet;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::remote_backend::{self, Target};
@@ -556,6 +558,99 @@ fn fallback_safe(flushed: bool, submitted: bool) -> bool {
     !flushed && !submitted
 }
 
+type RunReporter = Arc<dyn Fn(&str, Option<i32>) + Send + Sync>;
+
+/// Owns hosted admission through completion, including early `?` returns.
+/// Reporting only dispatches detached requests. Joining wakes the worker, not
+/// a network request, and prevents new dispatches after the terminal event.
+struct HostedRun {
+    report: Option<RunReporter>,
+    heartbeat: Option<(mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
+    finished: bool,
+    running: bool,
+}
+
+fn heartbeat_loop(mut wait: impl FnMut() -> bool, report: impl Fn()) {
+    while wait() {
+        report();
+    }
+}
+
+impl HostedRun {
+    fn new(hosted: bool, run_id: &str, started: Instant) -> Self {
+        let run_id = run_id.to_owned();
+        Self::with_reporter(hosted.then(|| {
+            Arc::new(move |event: &str, code| {
+                crate::remote_hosted::report_run_event(
+                    &run_id,
+                    event,
+                    code,
+                    Some(started.elapsed().as_secs_f64()),
+                );
+            }) as RunReporter
+        }))
+    }
+
+    fn with_reporter(report: Option<RunReporter>) -> Self {
+        Self {
+            report,
+            heartbeat: None,
+            finished: false,
+            running: false,
+        }
+    }
+
+    fn running(&mut self) {
+        if self.running || self.finished {
+            return;
+        }
+        self.running = true;
+        let Some(report) = &self.report else { return };
+        report("running", None);
+        let report = Arc::clone(report);
+        let (stop, rx) = mpsc::channel();
+        // Failure to create telemetry machinery must not change the verdict.
+        if let Ok(worker) = std::thread::Builder::new()
+            .name("hosted-run-heartbeat".into())
+            .spawn(move || {
+                heartbeat_loop(
+                    || {
+                        matches!(
+                            rx.recv_timeout(Duration::from_secs(60)),
+                            Err(mpsc::RecvTimeoutError::Timeout)
+                        )
+                    },
+                    || report("running", None),
+                );
+            })
+        {
+            self.heartbeat = Some((stop, worker));
+        }
+    }
+
+    fn finish(&mut self, event: &str, code: Option<i32>) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        if let Some((stop, worker)) = self.heartbeat.take() {
+            let _ = stop.send(());
+            let _ = worker.join();
+        }
+        if let Some(report) = &self.report {
+            report(event, code);
+        }
+        // Already dispatched requests can arrive out of order. The server
+        // treats terminal states as absorbing, including late heartbeats.
+    }
+}
+
+impl Drop for HostedRun {
+    fn drop(&mut self) {
+        self.finish("abandoned", None);
+    }
+}
+
 /// Run `justrust <sub> <args>` remotely. `Ok(Err(Infra))` means nothing was
 /// built and the caller may build locally instead. Output is streamed to
 /// our stdout/stderr as it arrives.
@@ -654,24 +749,10 @@ fn run_remote_inner(
         Ok(h) => h,
         Err(m) => return infra(m),
     };
+    let mut hosted_run = HostedRun::new(hosted, run_id, total);
     mark("charged");
     // Visible to `justrust status` (and the status bar) while it runs.
     let mut live = LiveRun::start(run_id, &cwd, &label, started_at);
-    // Lifecycle events for the hosted operator dashboard (fire and forget).
-    let report = |event: &str, code: Option<i32>| {
-        if hosted {
-            crate::remote_hosted::report_run_event(
-                run_id,
-                event,
-                code,
-                Some(total.elapsed().as_secs_f64()),
-            );
-        }
-    };
-    let infra = |m: String| {
-        report("abandoned", None);
-        Ok(Err(Infra(m)))
-    };
     diagnostic.stage = "remote_transport";
     let sock = match crate::remote_daemon::connect() {
         Ok(s) => s,
@@ -733,7 +814,6 @@ fn run_remote_inner(
                 return infra("sync daemon closed the connection".into());
             }
             Ok(None) | Err(_) => {
-                report("abandoned", None);
                 // Output already started: a local rerun would duplicate it.
                 bail!("lost the remote build mid-run (see ~/.justrust/remote/daemon.log)");
             }
@@ -748,6 +828,7 @@ fn run_remote_inner(
                 submitted = may_have_started;
                 if may_have_started {
                     lifecycle.running();
+                    hosted_run.running();
                 }
                 diagnostic.may_have_started |= may_have_started;
             }
@@ -767,7 +848,7 @@ fn run_remote_inner(
                 mark("flushed");
                 if sync.is_none() {
                     lifecycle.running();
-                    report("running", None);
+                    hosted_run.running();
                     live.phase("building", &machine);
                 }
                 sync = Some((files, ms, machine));
@@ -795,7 +876,7 @@ fn run_remote_inner(
                 diagnostic.exit = Some(code);
                 diagnostic.may_have_started = true;
                 mark("exit");
-                report("done", Some(code));
+                hosted_run.finish("done", Some(code));
                 // A build is only done once its outputs are here. Counted in
                 // the client wall the router compares against local.
                 if code == 0 && sub == "build" {
@@ -838,7 +919,6 @@ fn run_remote_inner(
                 return infra(msg);
             }
             (Msg::Error { msg, .. }, _) => {
-                report("abandoned", None);
                 bail!("remote build failed mid-run: {msg}")
             }
             _ => {}
@@ -994,6 +1074,67 @@ pub fn run(sub: &str, args: Vec<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hosted_heartbeat_timeout_ticks_are_deterministic() {
+        let mut ticks = [true, true, true, false].into_iter();
+        let reports = std::cell::Cell::new(0);
+        super::heartbeat_loop(|| ticks.next().unwrap(), || reports.set(reports.get() + 1));
+        assert_eq!(reports.get(), 3);
+    }
+
+    #[test]
+    fn hosted_heartbeat_terminal_states_stop_worker_and_preserve_verdict() {
+        for code in [0, 101] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut run =
+                super::HostedRun::with_reporter(Some(std::sync::Arc::new(move |event, code| {
+                    tx.send((event.to_owned(), code)).unwrap();
+                })));
+            run.running();
+            run.running();
+            assert!(run.heartbeat.is_some());
+            run.finish("done", Some(code));
+            assert!(run.heartbeat.is_none());
+            run.running();
+            run.finish("abandoned", None);
+            drop(run);
+            assert_eq!(
+                rx.into_iter().collect::<Vec<_>>(),
+                vec![("running".into(), None), ("done".into(), Some(code)),]
+            );
+        }
+    }
+
+    #[test]
+    fn hosted_heartbeat_drop_abandons_even_before_running() {
+        for running in [false, true] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let result: anyhow::Result<()> = (|| {
+                let mut run = super::HostedRun::with_reporter(Some(std::sync::Arc::new(
+                    move |event, code| {
+                        tx.send((event.to_owned(), code)).unwrap();
+                    },
+                )));
+                if running {
+                    run.running();
+                }
+                anyhow::bail!("unhandled transport error")
+            })();
+            assert!(result.is_err());
+            let events = rx.into_iter().collect::<Vec<_>>();
+            assert_eq!(events.last(), Some(&("abandoned".into(), None)));
+            assert_eq!(events.len(), if running { 2 } else { 1 });
+        }
+    }
+
+    #[test]
+    fn hosted_heartbeat_non_hosted_never_spawns() {
+        let mut run = super::HostedRun::with_reporter(None);
+        run.running();
+        assert!(run.heartbeat.is_none());
+        run.finish("done", Some(101));
+    }
+
     #[test]
     fn remote_failure_diagnostics_preserve_known_outcome_without_private_text() {
         let d = RemoteDiagnostic {
