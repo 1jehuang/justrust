@@ -5957,3 +5957,20 @@ What this says, quantitatively:
    parallel at all today. Third: incr persist (0.5 s), removable.
 4. Crate splitting attacks all rows at once (the edited code compiles in a
    small crate), which is why it is the only measured >2x win.
+
+### Correction: the 16-thread self-profile overstates contention
+
+The t=16 profile records ~3.7M events (incremental encode spans included)
+and 6.2 s of query-blocked time; the profiler perturbs the parallel run.
+The low-overhead `-Ztime-passes` sweep on the same host (threads table
+above) shows the mono collector going 0.58 -> 0.43 s and type check
+0.17 -> 0.14 s from 1 to 16 threads, i.e. slightly faster, not slower.
+So: use the t=1 self-profile for the shares of the serial path (it cannot
+contend), and `-Ztime-passes` for how a pass scales. The two "gets slower
+with threads" notes in the table above are profiler artifacts. What holds:
+at most ~1.3x overlap anywhere, and the serial share is ~93% of the work.
+Inside the t=16 walk, real parallelism exists (16 threads busy for 1.5 s on
+items_of_instance / resolve_instance / codegen_select_candidate), so the
+collector is parallel already; its cost is upstream decoding at the start
+(upstream_drop_glue_for ~0.18 s, every thread waiting on one
+upstream_monomorphizations) and per-item trait selection.
