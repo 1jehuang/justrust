@@ -665,6 +665,19 @@ fn install_at(
     std::fs::create_dir_all(root)?;
     let _lock = lock_exclusive(&root.join(".install.lock"))?;
     if let Some(tc) = installed_in(spec, root)? {
+        if let Some(info) = tc.info()
+            && info.components.iter().any(|c| c == "rustc")
+        {
+            // Explicit install/reinstall verifies declared tools, including older
+            // shared prefixes. Do not put these subprocess probes on the build
+            // selection hot path or mutate a broken immutable prefix in place.
+            bundle::verify_helpers(&tc.dir, &info.components).with_context(|| {
+                format!(
+                    "installed toolchain {} has unloadable declared tools; select a repaired immutable toolchain ID instead",
+                    spec.id()
+                )
+            })?;
+        }
         return Ok(tc);
     }
     // Every installer owns the same lock, so these can only be abandoned.
@@ -1319,6 +1332,53 @@ pub fn write_pin(path: &Path, channel: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_shared_install_rechecks_helpers_without_mutating_prefix() {
+        let root = std::env::temp_dir().join(format!("jr-existing-helpers-{}", std::process::id()));
+        let spec = Spec::parse("jr-123456789abc").unwrap();
+        let prefix = root.join("staged").join(spec.id());
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        for name in ["rustc", "cargo", "rustdoc", "cargo-fmt"] {
+            let path = prefix.join("bin").join(name);
+            std::fs::write(&path, "#!/bin/sh\necho fixture\n").unwrap();
+            crate::sys::set_mode(&path, 0o755).unwrap();
+        }
+        let helper = prefix.join("bin/rustfmt");
+        std::fs::write(&helper, "#!/bin/sh\nexit 127\n").unwrap();
+        crate::sys::set_mode(&helper, 0o755).unwrap();
+        let info = Installed {
+            id: spec.id(),
+            manifest_date: String::new(),
+            manifest_sha256: "a".repeat(64),
+            rustc_version: "fixture".into(),
+            components: vec!["rustc".into(), "rustfmt-preview".into()],
+            installed_at: 0.0,
+            install_secs: 0.0,
+        };
+        let marker = prefix.join(MARKER);
+        let bytes = serde_json::to_vec(&info).unwrap();
+        std::fs::write(&marker, &bytes).unwrap();
+        let before = std::fs::metadata(&marker).unwrap().modified().unwrap();
+        let error = install_at(&spec, &[], &mut Vec::new(), &root, None).unwrap_err();
+        assert!(format!("{error:#}").contains("unloadable declared tools"));
+        assert_eq!(std::fs::read(&marker).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(&marker).unwrap().modified().unwrap(),
+            before
+        );
+        assert!(helper.is_file());
+        std::fs::write(&helper, "#!/bin/sh\necho 'rustfmt fixture'\n").unwrap();
+        let installed = install_at(&spec, &[], &mut Vec::new(), &root, None).unwrap();
+        assert_eq!(installed.dir, prefix);
+        assert_eq!(std::fs::read(&marker).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(&marker).unwrap().modified().unwrap(),
+            before
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn parses_cargo_commit() {
