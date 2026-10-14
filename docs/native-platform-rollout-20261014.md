@@ -101,3 +101,26 @@ After the separate release-packaging acceptance window ended, hosted check
 was explicitly released at 04:29:40 UTC. These checks validate the Linux
 compatibility path, not Windows/macOS runtime support. Native activation
 still requires reviewed images, runner hardening, and real native acceptance.
+
+## Native acquisition checkpoint, 08:31 UTC
+
+The first actual owner-exclusive Windows SDK acquisition did not produce an
+image. Image Builder failed its initial SSM verification because the recipe
+selected a directory that did not exist before components ran. The renderer now
+uses an existing Windows temporary directory, with a regression assertion. The
+full cloud test suite passed and the correction was pushed as `9483600` in the
+cloud repository. This correction has not yet passed a fresh native acquisition.
+
+Live post-failure checks confirmed the captured worker terminated, its root
+volume absent, and zero live instances for that exact acquisition run after its
+cleanup deadline. No manual termination or broad data deletion was needed.
+An earlier isolated Linux canary independently demonstrated actual scheduled
+termination. Neither observation establishes Windows compiler or Mac runtime
+acceptance.
+
+Pinned native input acquisition, strict recorded compiler log recovery, and
+offline Mac lifecycle tests are implemented. The Mac lifecycle remains a disabled
+contract without a reviewed live allocation adapter. No Mac host was allocated.
+Interrupted Image Builder observation also needs resumable bounded monitoring
+before a new reviewed run. Windows/macOS customer routing remains disabled until
+real native Jcode executable and project-test acceptance succeeds.
