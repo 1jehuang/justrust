@@ -304,6 +304,12 @@ fn shape(args: &[String]) -> Option<Shape> {
 /// incremental dir is only read and written by rustc, never an output the
 /// cache restores).
 pub(crate) fn shape_with(args: &[String], allow_incremental: bool) -> Option<Shape> {
+    // rustc expands every top-level @file (including @shell:...) before
+    // option parsing. Its unkeyed contents can hide host-dependent codegen.
+    // Do not expand or rewrite it here: let the real compiler handle it.
+    if args.iter().any(|a| a.starts_with('@')) {
+        return None;
+    }
     let mut s = Shape::default();
     let mut emit: Option<String> = None;
     let mut i = 0;
@@ -311,6 +317,13 @@ pub(crate) fn shape_with(args: &[String], allow_incremental: bool) -> Option<Sha
         let a = args[i].as_str();
         let next = args.get(i + 1).map(String::as_str);
         let mut codegen = |v: &str| -> Option<()> {
+            // rustc resolves `native` to the host's CPU AND detected features,
+            // but our portable key only hashes the literal argument. Neither
+            // dependency nor local plans may reuse it, even if overridden
+            // later. rustc accepts underscores as well as hyphens in -C names.
+            if matches!(v, "target-cpu=native" | "target_cpu=native") {
+                return None;
+            }
             if let Some(e) = v.strip_prefix("extra-filename=") {
                 s.extra = e.to_owned();
             }
@@ -339,7 +352,7 @@ pub(crate) fn shape_with(args: &[String], allow_incremental: bool) -> Option<Sha
                 emit = Some(next?.to_owned());
                 i += 1;
             }
-            "-C" => {
+            "-C" | "--codegen" => {
                 codegen(next?)?;
                 i += 1;
             }
@@ -355,6 +368,8 @@ pub(crate) fn shape_with(args: &[String], allow_incremental: bool) -> Option<Sha
                 } else if a.starts_with("--print") || a.starts_with("-o") && a.len() > 2 {
                     return None;
                 } else if let Some(v) = a.strip_prefix("-C") {
+                    codegen(v)?;
+                } else if let Some(v) = a.strip_prefix("--codegen=") {
                     codegen(v)?;
                 }
             }
@@ -2162,6 +2177,214 @@ mod tests {
         assert!(bs("/t/debug/build/serde/c95beadfc4874447/out").is_some());
         assert!(bs("/t/debug/deps").is_none());
         assert!(bs("/t/debug/build/serde-c95beadfc4874447").is_none());
+    }
+
+    fn cpu_flag_plan(extra: &[&str], local: bool) -> Option<Plan> {
+        let dir = std::env::temp_dir().join("jr-depcache-cpu-plan");
+        let mut args: Vec<OsString> = s(&[
+            "--crate-name",
+            "x",
+            "src/lib.rs",
+            "--crate-type=lib",
+            "--emit=dep-info,metadata,link",
+            "-Cextra-filename=-abcd",
+            "--out-dir",
+            dir.join("target/debug/deps").to_str().unwrap(),
+        ])
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        args.extend(extra.iter().map(OsString::from));
+        let original = args.clone();
+        let key = local.then(|| LocalKey {
+            root: dir.join("localcache"),
+            salt: Vec::new(),
+            cwd: None,
+        });
+        let plan = plan_with(Path::new("rustc"), &args, &[], key);
+        assert_eq!(
+            args, original,
+            "planning must not rewrite cargo's arguments"
+        );
+        plan
+    }
+
+    #[test]
+    fn native_cpu_bypasses_dependency_and_local_plans() {
+        // rustc supports both option-name spellings and all four flag forms.
+        // Any occurrence bypasses, even if a later setting overrides it.
+        let cases: &[&[&str]] = &[
+            &["-C", "target-cpu=native"],
+            &["-Ctarget-cpu=native"],
+            &["--codegen", "target-cpu=native"],
+            &["--codegen=target-cpu=native"],
+            &["-C", "target_cpu=native"],
+            &["-Ctarget_cpu=native"],
+            &["--codegen", "target_cpu=native"],
+            &["--codegen=target_cpu=native"],
+            &["-Ctarget-cpu=native", "-Ctarget-cpu=x86-64"],
+            &["-Ctarget-cpu=x86-64", "--codegen=target_cpu=native"],
+            &["-Ctarget-cpu=native", "-Ctarget-feature=+sse2"],
+            &["-Ctarget-cpu=native", "-Cincremental=/unused/incremental"],
+        ];
+        let mut cacheable = Vec::new();
+        for local in [false, true] {
+            assert!(cpu_flag_plan(&[], local).is_some());
+            for case in cases {
+                if cpu_flag_plan(case, local).is_some() {
+                    cacheable.push((local, *case));
+                }
+            }
+        }
+        assert!(
+            cacheable.is_empty(),
+            "native CPU plans accepted: {cacheable:?}"
+        );
+    }
+
+    #[test]
+    fn response_files_bypass_dependency_and_local_plans() {
+        let file = std::env::temp_dir().join(format!("jr-native-args-{}", std::process::id()));
+        std::fs::write(&file, "-C\ntarget-cpu=native\n").unwrap();
+        let arg = format!("@{}", file.display());
+        // Real rustc expands the hidden native flag before parsing options.
+        let out = std::process::Command::new("rustc")
+            .args([&arg, "--print", "cfg"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut cacheable = Vec::new();
+        for local in [false, true] {
+            assert!(cpu_flag_plan(&[], local).is_some());
+            for extra in [
+                vec![arg.as_str()],
+                vec!["@missing-args"],
+                vec!["-C", "@missing-args"],
+                vec!["-Zshell-argfiles", "@shell:args"],
+            ] {
+                if cpu_flag_plan(&extra, local).is_some() {
+                    cacheable.push((local, extra));
+                }
+            }
+        }
+        std::fs::remove_file(&file).unwrap();
+        assert!(
+            cacheable.is_empty(),
+            "opaque response-file plans accepted: {cacheable:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_cpu_and_inert_native_text_remain_cacheable() {
+        let cases: &[&[&str]] = &[
+            &[],
+            &["-C", "target-cpu=x86-64"],
+            &["-Ctarget_cpu=x86-64"],
+            &["--codegen", "target-cpu=x86-64"],
+            &["--codegen=target_cpu=x86-64"],
+            &["-Ctarget-feature=+sse2"],
+            &["--cfg=cpu=\"native\""],
+            &["-Clink-arg=target-cpu=native"],
+            &["--cfg=arg=\"@not-an-argfile\""],
+            &["--remap-path-prefix=/native=/portable"],
+        ];
+        for local in [false, true] {
+            for case in cases {
+                assert!(
+                    cpu_flag_plan(case, local).is_some(),
+                    "local={local}: {case:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nonnative_long_codegen_flags_remain_keyed() {
+        for local in [false, true] {
+            for name in ["target-cpu", "target_cpu"] {
+                let generic = format!("{name}=x86-64");
+                let tuned = format!("{name}=x86-64-v2");
+                let generic_eq = format!("--codegen={generic}");
+                let tuned_eq = format!("--codegen={tuned}");
+                for (a, b) in [
+                    (
+                        vec!["--codegen", generic.as_str()],
+                        vec!["--codegen", tuned.as_str()],
+                    ),
+                    (vec![generic_eq.as_str()], vec![tuned_eq.as_str()]),
+                ] {
+                    let a = cpu_flag_plan(&a, local).unwrap();
+                    let b = cpu_flag_plan(&b, local).unwrap();
+                    assert_ne!(a.base, b.base, "local={local}: {name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_and_response_file_bypasses_compile_with_original_args() {
+        let dir = std::env::temp_dir().join(format!("jr-native-compile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("lib.rs");
+        std::fs::write(&source, "pub fn answer() -> u32 { 42 }\n").unwrap();
+        let file = dir.join("args");
+        std::fs::write(&file, "--codegen=target_cpu=native\n").unwrap();
+        let response = format!("@{}", file.display());
+        for (name, flag) in [
+            ("native", "-Ctarget-cpu=native"),
+            ("response", response.as_str()),
+        ] {
+            let out_dir = dir.join(name).join("target/debug/deps");
+            std::fs::create_dir_all(&out_dir).unwrap();
+            let args: Vec<OsString> = s(&[
+                "--crate-name",
+                "x",
+                source.to_str().unwrap(),
+                "--crate-type=lib",
+                "--emit=dep-info,metadata,link",
+                "-Cextra-filename=-abcd",
+                "--out-dir",
+                out_dir.to_str().unwrap(),
+                flag,
+            ])
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+            let original = args.clone();
+            for local in [false, true] {
+                let key = || {
+                    local.then(|| LocalKey {
+                        root: dir.join("localcache"),
+                        salt: Vec::new(),
+                        cwd: None,
+                    })
+                };
+                assert!(
+                    plan_with(Path::new("rustc"), &args[..args.len() - 1], &[], key()).is_some()
+                );
+                assert!(plan_with(Path::new("rustc"), &args, &[], key()).is_none());
+                assert_eq!(args, original);
+            }
+            // The bypass must still let the compiler succeed with exactly the
+            // argv cargo supplied, with no cache remaps or CPU substitutions.
+            let out = std::process::Command::new("rustc")
+                .args(&args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            for output in ["libx-abcd.rlib", "libx-abcd.rmeta", "x-abcd.d"] {
+                assert!(out_dir.join(output).is_file(), "{name}: {output}");
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
