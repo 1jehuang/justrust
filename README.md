@@ -7,10 +7,9 @@
 
 # justrust
 
-**Rust compile as a service for coding agents.**
+**Rust compile as a service.**
 
-An integrated Rust build-and-test system for coding agents,
-optimizing the entire path from source to test result.
+A faster, vertically integrated Rust build toolchain optimized for agents.
 
 [Website](https://jcode.sh/rust) · [Install](#install) · [Remote builds](#remote-builds) · [How it is faster](#how-it-is-faster) · [Findings](FINDINGS.md) · [Changelog](CHANGELOG.md)
 
