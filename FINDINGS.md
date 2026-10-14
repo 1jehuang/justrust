@@ -6368,3 +6368,31 @@ map: docs/final-parallelism-acceptance-20261014.md; exact18new records appended
 to hosted-west-measurement (39total). Prior21summary hashes and56scheduler
 records/foursegment hashes verified,86offline guards pass. No speedclaim,
 no scheduler promotion, no inferred96-core ceiling. Sharedhost released05:02:02UTC.
+
+## 2026-10-14: optimized BUILD dependency mapping preserves unknown CPU/span
+
+Genuine billed hosted optimized library build `20261013-232242825-2161355`
+completed in 77.277 s recorded / 89.474 s client time and downloaded its
+22.9 MB artifact. Immutable native-safe 0a19 client and pinned nightly compiler
+were unchanged. UI rustc used four frontend threads, 15.909 s wall and
+129.698 aggregate CPU seconds. Fresh target, warm shared cache: 887 compiled,
+zero Fresh, 726 dependency hits / 107 misses. One foreign rustc was observed,
+so this is not uncontended or causal speed evidence.
+
+Public graph/profile/mapping CLIs joined 2,695,071 actual provider intervals to
+2,809,610 saved nodes and 20,496,477 edges. All 6,851,280 raw records validate;
+114,539 nodes remain untimed. The 177 QueryBlocked records include 68 absent
+read edges and two missing caller contexts. Blocked elapsed includes post-wake
+lookup, not pure idle. CPU work and execution span remain null: incremental
+read dependencies omit continuations, token/OS scheduling and subprocess
+causality. No 16/24/96-core recommendation or speedup follows from graph depth.
+
+`8652f30` adds explicit bounded large-capture count limits without raising the
+256 MiB input cap or default limits. Actual large default CLIs reject exit 2;
+opt-in graph/profile/mapping pass, all 169 bench tests pass, and independent
+raw-hash/receipt/output invariants pass. Full requirement mapping, redacted
+output hashes and both exact run exports are in
+`docs/compiler-query-build-graph-20261014.md` and its result/run namespace.
+Failed precompile local harness `20261013-231920710-2139396` is retained, not
+misclassified as a hosted failure. No compiler implementation/default/security
+changes were made. Account host explicitly released 06:41:46 UTC.

@@ -1,0 +1,26 @@
+{
+  "format_version": 9,
+  "label_coverage": {
+    "resolved_records": 6851280,
+    "unresolved_records": 0,
+    "unresolved_unique_event_ids": 0
+  },
+  "limitations": [
+    "Raw recording counts and metadata only. No DAG span, CPU-work or causal interpretation.",
+    "Virtual numeric IDs are invocation-local. Unresolved event labels, if explicitly allowed, are not inferred."
+  ],
+  "metadata": {
+    "command_sha256": "40569547b55ff93372c1626ed9d231b54d141ff832f09adda16f094916f4864f",
+    "process_id": 811370,
+    "start_time": 1791959026468745748
+  },
+  "profile_bytes": 263258619,
+  "profile_sha256": "a54af304b4ea2b0e075d0826936b89a698e51edcfba5024643e8f552ba788b6b",
+  "record_types": {
+    "instant": 0,
+    "integer": 0,
+    "interval": 6851280
+  },
+  "records": 6851280,
+  "schema": 1
+}

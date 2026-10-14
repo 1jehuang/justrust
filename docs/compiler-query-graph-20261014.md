@@ -8,6 +8,11 @@ improvement over occupancy: individual dependencies, observed providers, waited
 producers, and missing coverage are inspectable. It is **not** a complete
 execution DAG, a measured CPU-work/span model, or a demonstrated speedup.
 
+A subsequent genuine optimized **BUILD**, including 2.81 million graph nodes and
+20.50 million edges, is reported separately in
+[the BUILD follow-through](compiler-query-build-graph-20261014.md). The observations
+below remain the original CHECK epoch, not a BUILD performance baseline.
+
 The ordinary hosted service, compiler selection, billing, tenant isolation,
 permissions and cache defaults were not changed for this capture. Graph/profile
 flags and incremental directories were isolated. The account host was explicitly
@@ -97,8 +102,10 @@ The mapped exclusive provider elapsed total is 10.759626971 seconds, summed
 across threads after subtracting immediate nested query/wait intervals. It still
 contains unreported locks and OS descheduling, so it is **not CPU work W**.
 The observed blocked total is 129.890026 ms across 151 records; the largest is
-32.758394 ms. These are aggregate thread waits, not all compiler waiting or a
-serial fraction. In 55 blocked records, the observed caller-to-producer read edge
+32.758394 ms. QueryBlocked includes latch waiting plus post-wake cache lookup,
+not pure idle time. These are aggregate blocked elapsed intervals, not all
+compiler waiting or a serial fraction. In 55 blocked records, the observed
+caller-to-producer read edge
 is absent from the saved graph. This is direct evidence that the saved read graph
 alone does not capture all observed synchronization.
 
@@ -129,11 +136,13 @@ published mapping. Unknown timings stay unknown. There is no 16/24/96-core
 recommendation, serial fraction, 10x claim, or default promotion derived from this
 capture.
 
-The next measurement milestone is a continuation-level execution trace with
-explicit task scheduling and synchronization edges, per-thread CPU accounting,
-and separately attributed subprocesses, followed by cold/build/test/edit-loop
-coverage. Compiler-semantic changes require the repository's review gate. This
-session made no rustc query-semantic, cache, or codegen changes.
+The measurement gap is a continuation-level execution trace with explicit task
+scheduling and synchronization edges, per-thread CPU accounting, and separately
+attributed subprocesses. Existing profiler thread IDs are Rust thread IDs, not
+proven OS TIDs. Existing instruction counters are not CPU nanoseconds. The
+repository policy prohibits soundness-sensitive query/codegen implementation
+changes by this session; a named reviewer is not an exemption. No rustc query,
+cache, or codegen implementation was edited.
 
 ## Public interfaces and format pins
 

@@ -1,0 +1,92 @@
+{
+  "checks": [
+    {
+      "exit": 0,
+      "expected_exit": 0,
+      "name": "offline-tests",
+      "stderr_sha256": "2f957566043475be565d8799f18e9818f4b61fb651d88fce9199b6d43008b065",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "exit": 2,
+      "expected_exit": 2,
+      "name": "large-graph-default-rejection",
+      "stderr_sha256": "56216c3881fbee074d58de199986d489c2b67fdc29fbbf00c9fe6b70adc4f10d",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "exit": 2,
+      "expected_exit": 2,
+      "name": "large-profile-default-rejection",
+      "stderr_sha256": "52fd30bad18a1cba477dc19b83d93486bc8482a25ae339c80c3f04008074e038",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "exit": 0,
+      "expected_exit": 0,
+      "name": "large-graph",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "0d4442a1e2ead026fff1f6ff54c1002180a18294eea85724273c5aab0d8ce66b"
+    },
+    {
+      "exit": 0,
+      "expected_exit": 0,
+      "name": "large-profile-summary",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "8d38e4dfb3ac2151c44d41014a2f99722a334d4a65225779a21d92f105a45781"
+    }
+  ],
+  "default_limits": {
+    "bytes_per_input": 268435456,
+    "graph_edges": 20000000,
+    "graph_index_space": 4000000,
+    "graph_nodes": 2000000,
+    "profile_events": 4000000,
+    "profile_string_mappings": 2000000
+  },
+  "explicit_large_limits": {
+    "bytes_per_input": 268435456,
+    "graph_edges": 32000000,
+    "graph_index_space": 4000000,
+    "graph_nodes": 4000000,
+    "profile_events": 8000000,
+    "profile_string_mappings": 4000000
+  },
+  "independent_review": {
+    "actual_large_capture_hashes_and_output_consistency": "PASS ant 2026-10-14T06:54 UTC",
+    "no_second_large_parse": "independent reviewer checked original raw file hashes and compact invariants, not an independent second mapping",
+    "small_actual_default_vs_opt_in_output_parity": "byte-identical, ant 2026-10-14T06:48 UTC"
+  },
+  "large_mapping_public_cli": {
+    "background_task": "450155qpqb",
+    "completed_utc": "2026-10-14T06:49:21Z",
+    "exit": 0,
+    "source_output_sha256": "1204b7f2bae245ae059afea7351fe5c3041ea957565f95bf972b8c896a475907",
+    "validation_log_encoding": "JSON output field preserves original bytes",
+    "validation_log_file": "mapping-validation.json",
+    "validation_log_sha256": "55044f43c207e3f94efaad41c7002765577b513ac206addb034f4b95b12f2ba0"
+  },
+  "limitations": [
+    "Actual public mapping validates bounded dependency and elapsed coverage, not an execution DAG or speedup.",
+    "Mapping streams raw events but retains graph and query intervals; memory use is not constant.",
+    "Raw captures and full private command receipts remain unpublished.",
+    "No host calls, installs, cache/default/security changes during offline acceptance."
+  ],
+  "mapped_output_hashes": {
+    "build-observation.json": "f00bdb3f68f91de92c4c32f979fae3bc801a41e573d2a20daf79bd8a8439397e",
+    "desktop-release-t4-mapping.json": "1204b7f2bae245ae059afea7351fe5c3041ea957565f95bf972b8c896a475907",
+    "desktop-release-t4-profile-summary.json": "c39b5179e68bfde430905537abd0d6689b106184644c4a587c459096f022b09b"
+  },
+  "query_tests_passed": 61,
+  "schema": 1,
+  "source_hashes": {
+    "bench/query_graph.py": "2e1fe93a5e5b6de2a8045af004296a85ce7c9dadd788ffe424bfd0d7e76afe42",
+    "bench/query_mapping.py": "d3e5bb1f5d2fdff9ed024149c5fb6a549c38f6616b968b16b3095ec69afa074d",
+    "bench/query_profile.py": "4915e3d44fb585cdd73ec38a0fe92ff5c5464738071d4444d27227470e8ce4e1",
+    "bench/test_query_graph.py": "c69fb70194d69b4476b47f2bc2d769c66625018ddb43c738e49025c2da0764e7",
+    "bench/test_query_mapping.py": "279c4bfc834dff130c99b645e289e88346f5e50cf9dfeee4f51f5cd6cddd266c",
+    "bench/test_query_profile.py": "d6fec14b06aeafe56e97afb98124d01faf8f5845b6d41689be38994c15687324"
+  },
+  "tools_commit": "8652f305786c4d5f0d0d880f9f7a97db4767269d",
+  "whole_offline_tests_passed": 169
+}

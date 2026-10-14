@@ -1,0 +1,5 @@
+{
+  "output": "[stderr] .........................................................................................................................................bench: desktop-noop-test (1/1)\n[stderr] ................................\n[stderr] ----------------------------------------------------------------------\n[stderr] Ran 169 tests in 1.211s\n[stderr] \n[stderr] OK\nVerified capture receipt 20261013-232242825-2161355 811370 UIwall 15.908533573150635 CPU 129.697791\n{\"format_version\": 9, \"records\": 6851280, \"unresolved_event_labels\": 0}\n{\"graph_counts\": {\"node_count\": 2809610, \"edge_count\": 20496477, \"index_space\": 2809930, \"holes\": 320}, \"provider_records\": 2695071, \"observed_node_count\": 2695071, \"unobserved_node_count\": 114539, \"provider_records_without_graph_node\": 0, \"exclusive_query_elapsed_ns\": 21568632374, \"known_query_blocked_elapsed_ns\": 228328355, \"blocked_records\": 177, \"execution_span_ns\": null, \"cpu_work_ns\": null}\n\n--- Command finished with exit code: 0 ---\n",
+  "encoding": "original combined task output, losslessly JSON encoded",
+  "exit": 0
+}

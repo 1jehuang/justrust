@@ -1,0 +1,94 @@
+{
+  "all_units": 887,
+  "artifact_delivery": "one 22.9 MB artifact downloaded successfully; no executable link or launch acceptance claimed for this --lib build",
+  "build_cpu_seconds": 880.737922,
+  "cache_epoch": "isolated fresh workspace/target with warm shared dependency cache and cache misses; not a cold-registry or warm-edit baseline",
+  "capture_wrapper_sha256": "ef65beab925efdb3f31b8822d8eb88ce3b353ef81cf148eda52013aba6eaf75a",
+  "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+  "client_wall_seconds": 89.474384324,
+  "command_class": "optimized hosted build --release -p jcode-desktop-ui --lib",
+  "compiler_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+  "contention": "one foreign rustc observed; timings are not uncontended causal performance evidence",
+  "exit": 0,
+  "host_wall_seconds": 77.27686023712158,
+  "limitations": [
+    "Numeric invocation IDs are valid only inside a verified same-session capture pair.",
+    "Missing provider timings remain unknown, not zero CPU-cost work.",
+    "Exclusive elapsed subtracts nested query and known blocked intervals, but still contains unreported locks and OS descheduling.",
+    "QueryBlocked identifies the waited producer. Caller is observed enclosing query context, not the blocked event ID.",
+    "QueryBlocked includes latch waiting plus post-wake cache lookup, not pure idle time. Profiler thread IDs are Rust thread IDs, not proven OS TIDs.",
+    "Dependency edges omit eval-always/ignored reads and ordered continuations. No complete execution DAG or W/S ceiling is claimed."
+  ],
+  "phases": {
+    "build_gaps": 0.7232112884521484,
+    "compile": 76.26246356964111,
+    "lock_wait": 0.0,
+    "startup": 0.25667309761047363,
+    "tail": 0.03451228141784668,
+    "test_run": 0.0
+  },
+  "physical_cores": 24,
+  "profile_flags": [
+    "-Zthreads=4",
+    "-Zquery-dep-graph",
+    "-Zself-profile-events=generic-activity,query-provider,query-blocked,incr-cache-load",
+    "isolated -Zself-profile and -Cincremental paths for UI only"
+  ],
+  "resources": {
+    "avg_build_cores": 11.397175290216031,
+    "avg_other_cores": 0.7518546236499828,
+    "max_foreign_rustc": 1,
+    "min_mem_available_mb": 88523,
+    "peak_build_cores": 23.94115978455171,
+    "peak_build_rss_mb": 5183.23046875,
+    "peak_unit_rss_mb": 4391.55859375,
+    "psi_cpu_secs": 0.7677079999999995,
+    "psi_io_secs": 0.23361,
+    "psi_mem_secs": 0.053117
+  },
+  "run_id": "20261013-232242825-2161355",
+  "schema": 1,
+  "sync_ms": 1973.208191,
+  "ui_cpu_seconds": 129.697791,
+  "ui_unit": {
+    "crate_name": "jcode_desktop_ui",
+    "crate_types": [
+      "rlib",
+      "cdylib"
+    ],
+    "emit": "dep-info,metadata,link",
+    "exit": 0,
+    "frontend_threads": 4,
+    "max_rss_mb": 4391.55859375,
+    "opt_level": "3",
+    "rmeta_secs": 7.924637794494629,
+    "sys": 4.245193,
+    "test": false,
+    "user": 125.452598,
+    "wall": 15.908533573150635
+  },
+  "unit_counts": {
+    "build_scripts": 76,
+    "compiled": 887,
+    "depcache_hits": 726,
+    "depcache_miss_secs": 172.09799480438232,
+    "depcache_misses": 107,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "depcache_remote_hits": 0,
+    "depcache_saved_secs": 996.6848299503326,
+    "dependencies": 759,
+    "fresh": 0,
+    "local": 52,
+    "localcache_hits": 0,
+    "localcache_misses": 53,
+    "localcache_saved_secs": -0.0,
+    "rustc_cpu_secs": 808.31,
+    "rustc_wall_sum": 277.9602029323578,
+    "with_pass_timings": 0
+  },
+  "workload_snapshots": {
+    "jcode": "abff94eeb",
+    "jcode-desktop": "7d38fb7"
+  }
+}
