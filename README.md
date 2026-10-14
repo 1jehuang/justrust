@@ -31,9 +31,6 @@ laptop under typical multi-agent load vs a 16 vCPU build machine):
 | Cold `check --workspace` | 70.3 s | Not measured | **52.2 s** |
 | One-line edit, `check -p uv-resolver` | Not measured | Not measured | **1.0 s** |
 
-Lower is better. Missing measurements are not estimates. These results compare
-a laptop under load with a hosted build machine, not toolchain-only performance.
-
 Your coding agents spend valuable time waiting for Rust checks, builds, and
 tests. Running those operations locally can slow down your machine, drive up
 CPU usage, temperature, and RAM consumption, and fill your disk with build
