@@ -21,6 +21,7 @@ mod depcache_remote;
 mod early;
 mod execution_graph;
 mod execution_graph_manifest;
+mod execution_graph_query;
 mod export;
 mod findings;
 mod history;

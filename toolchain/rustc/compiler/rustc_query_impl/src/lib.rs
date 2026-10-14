@@ -6,7 +6,7 @@
 #![feature(try_blocks)]
 // tidy-alphabetical-end
 
-use rustc_data_structures::sync::{AtomicU64, Lock};
+use rustc_data_structures::sync::Lock;
 use rustc_middle::arena::Arena;
 use rustc_middle::queries::{ExternProviders, Providers};
 use rustc_middle::query::QuerySystem;
@@ -32,7 +32,9 @@ pub fn query_system<'tcx>(
     extern_providers: ExternProviders,
     on_disk_cache: Option<OnDiskCache>,
     incremental: bool,
+    observer: Option<&rustc_session::query_admission::QueryAdmissionObserver>,
 ) -> QuerySystem<'tcx> {
+    let jobs = rustc_session::query_admission::QueryJobAllocator::new(observer);
     QuerySystem {
         arenas: Default::default(),
         dep_kind_vtables: dep_kind_vtables::make_dep_kind_vtables(arena),
@@ -42,7 +44,7 @@ pub fn query_system<'tcx>(
         on_disk_cache,
         local_providers,
         extern_providers,
-        jobs: AtomicU64::new(1),
+        jobs,
         cycle_handler_nesting: Lock::new(0),
     }
 }

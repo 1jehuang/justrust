@@ -405,7 +405,8 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
     let hash_kind = config.opts.unstable_opts.src_hash_algorithm(&target);
     let checksum_hash_kind = config.opts.unstable_opts.checksum_hash_algorithm();
 
-    util::run_in_thread_pool_with_globals(
+    let mut query_admission_root = None;
+    let result = util::run_in_thread_pool_with_globals(
         &early_dcx,
         config.opts.edition,
         jobs,
@@ -531,12 +532,19 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
                 Err(err) => std::panic::resume_unwind(err),
             };
 
+            query_admission_root = compiler.sess.query_admission.clone();
             let prof = compiler.sess.prof.clone();
             prof.generic_activity("drop_compiler").run(move || drop(compiler));
 
             res
         },
-    )
+    );
+    // Neither callback return nor tcx/Session Drop seals capture. Diagnostics, compiler
+    // teardown and the interface thread-pool teardown must all have returned normally.
+    if let Some(observer) = query_admission_root {
+        observer.finalize_interface_returned();
+    }
+    result
 }
 
 pub fn try_print_query_stack(limit_frames: Option<usize>, file: Option<std::fs::File>) {

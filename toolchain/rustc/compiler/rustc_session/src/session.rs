@@ -452,6 +452,7 @@ pub struct CodegenBackendInit {
 /// Represents the data associated with a compilation
 /// session for a single crate.
 pub struct Session {
+    pub query_admission: Option<crate::query_admission::QueryAdmissionObserver>,
     /// The `EarlySession` is embedded so it can be passed to functions that need it.
     /// `Session::deref{_,mut}` exist so the fields within can be accessed as if they were direct
     /// fields of `Session`.
@@ -1556,7 +1557,14 @@ pub fn build_session(
         thin_lto_supported,
     } = codegen_backend_init;
 
+    let query_admission = early_sess
+        .opts
+        .unstable_opts
+        .jr_query_graph
+        .as_deref()
+        .and_then(crate::query_admission::QueryAdmissionObserver::new);
     let sess = Session {
+        query_admission,
         early_sess,
         wasm_proc_macro_tuple,
         wasm_proc_macro_target,

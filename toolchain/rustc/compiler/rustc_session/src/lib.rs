@@ -20,6 +20,7 @@ pub use session::*;
 pub mod code_stats;
 pub mod diagnostics;
 pub mod parse;
+pub mod query_admission;
 pub mod utils;
 #[macro_use]
 pub mod config;

@@ -304,13 +304,35 @@ fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    serde_json::from_slice(&read_bytes(path, MAX_BYTES)?)
-        .context("invalid execution graph document")
-}
-
 fn read_receipt(path: &Path) -> Result<Assessment> {
-    assess(read_json(path)?)
+    let bytes = read_bytes(path, MAX_BYTES)?;
+    #[derive(Deserialize)]
+    struct ProducerTag {
+        producer: String,
+    }
+    let document: ProducerTag =
+        serde_json::from_slice(&bytes).context("invalid execution graph document")?;
+    match document.producer.as_str() {
+        "cargo-scheduler" => assess(serde_json::from_slice(&bytes)?),
+        "rustc-query-admission" => {
+            let query = crate::execution_graph_query::assess_bytes(&bytes)?;
+            Ok(Assessment {
+                schema: query.schema,
+                producer: query.producer,
+                scope: query.scope,
+                capture_id: query.capture_id,
+                structural_complete: query.structural_complete,
+                full_pipeline_complete: query.full_pipeline_complete,
+                nodes: query.nodes,
+                edges: query.edges,
+                issues: query.issues,
+                opaque_boundaries: query.opaque_boundaries,
+                cpu_work_ns: query.cpu_work_ns,
+                execution_span_ns: query.execution_span_ns,
+            })
+        }
+        _ => bail!("unsupported execution graph producer"),
+    }
 }
 
 fn is_owner_document(path: &Path) -> bool {

@@ -2,7 +2,7 @@ use std::fmt;
 
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxIndexMap};
-use rustc_data_structures::sync::{AtomicU64, Lock, WorkerLocal};
+use rustc_data_structures::sync::{Lock, WorkerLocal};
 use rustc_errors::Diag;
 use rustc_span::{Span, Symbol};
 
@@ -127,7 +127,7 @@ pub struct QuerySystem<'tcx> {
     pub local_providers: Providers,
     pub extern_providers: ExternProviders,
 
-    pub jobs: AtomicU64,
+    pub jobs: rustc_session::query_admission::QueryJobAllocator,
 
     pub cycle_handler_nesting: Lock<u8>,
 }

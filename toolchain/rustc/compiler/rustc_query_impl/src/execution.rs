@@ -96,6 +96,7 @@ where
     state: &'tcx QueryState<'tcx, K>,
     key: K,
     key_hash: u64,
+    admission: Option<rustc_session::query_admission::QueryAdmissionJob>,
 }
 
 impl<'tcx, K> ActiveJobGuard<'tcx, K>
@@ -112,10 +113,15 @@ where
         // so no other thread can re-execute this query.
         cache.complete(self.key, value, dep_node_index);
 
+        // Keep the resource-owning token outside ManuallyDrop even if latch signaling panics.
         let mut this = ManuallyDrop::new(self);
+        let admission = this.admission.take();
 
         // Drop everything without poisoning the query.
         this.drop_and_maybe_poison(/* poison */ false);
+        if let Some(admission) = admission {
+            admission.complete();
+        }
     }
 
     fn drop_and_maybe_poison(&mut self, poison: bool) {
@@ -155,6 +161,7 @@ where
     fn drop(&mut self) {
         // Poison the query so jobs waiting on it panic.
         self.drop_and_maybe_poison(/* poison */ true);
+        // Fields drop normally here, publishing the poisoned terminal outside all locks.
     }
 }
 
@@ -308,13 +315,39 @@ fn try_execute_query<'tcx, C: QueryCache, const INCR: bool>(
             let id = next_job_id(tcx);
             let job = QueryJob::new(id, span, current_job_id);
             entry.insert((key, ActiveKeyStatus::Started(job)));
+            let admitted_at = tcx.query_system.jobs.observer().map(|_| std::time::Instant::now());
+            // Scheduling still uses current_job_id unchanged. Diagnostic IDs have an
+            // independent per-tcx namespace, which must match the inherited TLS context.
+            // This comparison is lock-free: only capture the mismatch under the shard.
+            let diagnostic_parent_matches =
+                tcx.query_system.jobs.observer().is_none_or(|observer| {
+                    current_job_id.is_none()
+                        || tls::with_context(|icx| {
+                            icx.tcx
+                                .query_system
+                                .jobs
+                                .observer()
+                                .is_some_and(|parent| observer.same_context(parent))
+                        })
+                });
 
             // Drop the lock before we start executing the query.
             drop(state_lock);
 
             // Set up a guard object that will automatically poison the query if a
             // panic occurs while executing the query (or any intermediate plumbing).
-            let job_guard = ActiveJobGuard { state: &query.state, key, key_hash };
+            let mut job_guard =
+                ActiveJobGuard { state: &query.state, key, key_hash, admission: None };
+            if let (Some(observer), Some(at)) = (tcx.query_system.jobs.observer(), admitted_at) {
+                let parent = if diagnostic_parent_matches {
+                    current_job_id.map(|id| id.0.get())
+                } else {
+                    // Never fabricate a receiver-context parent from a foreign TLS job ID.
+                    observer.mark_loss();
+                    None
+                };
+                job_guard.admission = Some(observer.admit(id.0.get(), parent, at));
+            }
 
             // Delegate to another function to actually execute the query job.
             let (value, dep_node_index) = if INCR {
