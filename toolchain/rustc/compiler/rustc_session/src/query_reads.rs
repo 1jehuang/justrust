@@ -2,7 +2,7 @@
 //! Request IDs are explicit, never inferred from OS TLS or admission nesting.
 use std::fmt::Write as _;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const MAX_EVENTS: usize = 100_000;
 
@@ -82,6 +82,9 @@ pub struct QueryReadObserver {
     reads: AtomicU64,
     results: AtomicU64,
     lost: AtomicU64,
+    lost_overflowed: AtomicBool,
+    // Monotonic: set only once MAX_EVENTS have actually been accepted under the mutex.
+    capped: AtomicBool,
     events: Mutex<Vec<Event>>,
 }
 impl Default for QueryReadObserver {
@@ -91,23 +94,48 @@ impl Default for QueryReadObserver {
             reads: AtomicU64::new(1),
             results: AtomicU64::new(1),
             lost: AtomicU64::new(0),
+            lost_overflowed: AtomicBool::new(false),
+            capped: AtomicBool::new(false),
             events: Mutex::new(Vec::new()),
         }
     }
 }
 impl QueryReadObserver {
+    fn loss(&self, amount: u64) {
+        // Keep the common path to one fetch_add, not a contended CAS retry loop.
+        // Counts are exact while representable; wrapping must never restore completeness.
+        if self.lost.fetch_add(amount, Ordering::Relaxed) > u64::MAX - amount {
+            self.lost_overflowed.store(true, Ordering::Relaxed);
+        }
+    }
     fn event(&self, event: Event) {
+        // IDs are allocated by the callers even when recording is capped. Relaxed is
+        // enough: this bit publishes no vector data, and a stale false still takes
+        // the mutex and checks its length. Accepted events retain their mutex order.
+        if self.capped.load(Ordering::Relaxed) {
+            // Preserve the existing loss accounting: one per rejected event, plus
+            // one per poisoned-lock observation. is_poisoned does not take the lock.
+            // Publication adds its own poison marker, so poison always fails incomplete.
+            // A concurrent panic can race this observation; unlike locking, it cannot
+            // wait for the holder's poison flag. Each rejection is still counted once.
+            self.loss(1 + u64::from(self.events.is_poisoned()));
+            return;
+        }
         let mut events = match self.events.lock() {
             Ok(events) => events,
             Err(error) => {
-                self.lost.fetch_add(1, Ordering::Relaxed);
+                self.loss(1);
                 error.into_inner()
             }
         };
         if events.len() < MAX_EVENTS && events.try_reserve(1).is_ok() {
             events.push(event);
+            if events.len() == MAX_EVENTS {
+                self.capped.store(true, Ordering::Relaxed);
+            }
         } else {
-            self.lost.fetch_add(1, Ordering::Relaxed);
+            // A reservation failure is not a permanent cap: later calls still retry.
+            self.loss(1);
         }
     }
     pub fn begin(
@@ -179,8 +207,9 @@ impl QueryReadObserver {
         let poisoned = events.is_err();
         let events = events.unwrap_or_else(|error| error.into_inner());
         let lost = self.lost.load(Ordering::Relaxed).saturating_add(u64::from(poisoned));
-        let complete =
-            lost == 0 && inventory_matches(&events, high_requests, high_reads, high_results);
+        let complete = lost == 0
+            && !self.lost_overflowed.load(Ordering::Relaxed)
+            && inventory_matches(&events, high_requests, high_reads, high_results);
         let _ = write!(
             out,
             ",\"query_reads\":{{\"schema\":1,\"records_complete\":{complete},\"semantic_complete\":false,\"full_pipeline_complete\":false,\"dep_node_namespace\":\"current-context\",\"request_high_water\":{high_requests},\"read_high_water\":{high_reads},\"result_high_water\":{high_results},\"expected_results\":{},\"expected_requests\":{},\"expected_reads\":{},\"lost_events\":{lost},\"opaque_boundaries\":[\"execution-request-read-binding\",\"previous-session-promotion\",\"feed-producer-provenance\",\"missing-consumer-context\",\"no-implicit-context-reads\",\"nonquery\"],\"events\":[",
@@ -363,6 +392,195 @@ mod tests {
         assert!(out.contains("\"lost_events\":1"));
         assert!(out.contains("\"expected_results\":100001"));
     }
+    #[test]
+    fn exact_cap_is_complete_and_preserves_accepted_order() {
+        let observer = QueryReadObserver::default();
+        for index in 0..MAX_EVENTS - 1 {
+            observer.result_produced(1, 2, index as u32);
+        }
+        assert!(!observer.capped.load(Ordering::Relaxed));
+        observer.result_produced(1, 2, (MAX_EVENTS - 1) as u32);
+        assert!(observer.capped.load(Ordering::Relaxed));
+        assert_eq!(observer.lost.load(Ordering::Relaxed), 0);
+        let events = observer.events.lock().unwrap();
+        assert_eq!(events.len(), MAX_EVENTS);
+        for (index, event) in events.iter().enumerate() {
+            assert_eq!(event.kind, "result_produced");
+            assert_eq!(event.result, Some(index as u64 + 1));
+            assert_eq!(event.index, Some(index as u32));
+        }
+        drop(events);
+        assert!(json(&observer).contains("\"records_complete\":true"));
+    }
+    #[test]
+    fn capped_events_do_not_lock_and_still_allocate_independent_ids() {
+        let observer = QueryReadObserver::default();
+        for _ in 0..MAX_EVENTS {
+            observer.result_produced(1, 1, 42);
+        }
+        let events = observer.events.lock().unwrap();
+        let capacity = events.capacity();
+        std::thread::scope(|scope| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let observer = &observer;
+            let handle = scope.spawn(move || {
+                let request = observer.begin(Some(1), Some(2), RequestMode::Get);
+                assert_eq!(request.id(), 1);
+                request.cache_hit(42);
+                observer.read(Some(1), Some(2), Some(request.id()), 42, DepReadOutcome::TrackedNew);
+                observer.result_produced(1, 2, 42);
+                request.finish(RequestOutcome::Value);
+                let interrupted = observer.begin(None, None, RequestMode::EnsureOk);
+                assert_eq!(interrupted.id(), 2);
+                drop(interrupted);
+                sender.send(()).unwrap();
+            });
+            let bypassed = receiver.recv_timeout(std::time::Duration::from_secs(5));
+            // Release even on failure so a regression cannot deadlock the test suite.
+            drop(events);
+            handle.join().unwrap();
+            assert!(bypassed.is_ok(), "capped calls blocked on the event mutex");
+        });
+        let events = observer.events.lock().unwrap();
+        assert_eq!(events.len(), MAX_EVENTS);
+        assert_eq!(events.capacity(), capacity);
+        drop(events);
+        assert_eq!(observer.requests.load(Ordering::Relaxed), 3);
+        assert_eq!(observer.reads.load(Ordering::Relaxed), 2);
+        assert_eq!(observer.results.load(Ordering::Relaxed), MAX_EVENTS as u64 + 2);
+        assert_eq!(observer.lost.load(Ordering::Relaxed), 7);
+        let out = json(&observer);
+        assert!(out.contains("\"records_complete\":false"));
+        assert!(out.contains("\"lost_events\":7"));
+    }
+    #[test]
+    fn racing_cap_retains_prefix_and_counts_each_rejected_event_once() {
+        let observer = QueryReadObserver::default();
+        let prefix = MAX_EVENTS - 17;
+        for index in 0..prefix {
+            observer.result_produced(1, 1, index as u32);
+        }
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    for iteration in 0..2000 {
+                        let request = observer.begin(Some(1), Some(2), RequestMode::Get);
+                        request.cache_hit(42);
+                        observer.read(
+                            Some(1),
+                            Some(2),
+                            Some(request.id()),
+                            42,
+                            DepReadOutcome::TrackedDuplicate,
+                        );
+                        observer.result_produced(1, 2, 42);
+                        if iteration % 2 == 0 {
+                            request.finish(RequestOutcome::Value);
+                        } else {
+                            drop(request);
+                        }
+                    }
+                });
+            }
+        });
+        assert!(observer.capped.load(Ordering::Relaxed));
+        assert_eq!(observer.requests.load(Ordering::Relaxed), 16_001);
+        assert_eq!(observer.reads.load(Ordering::Relaxed), 16_001);
+        assert_eq!(observer.results.load(Ordering::Relaxed), prefix as u64 + 16_001);
+        assert_eq!(observer.lost.load(Ordering::Relaxed), 80_000 - 17);
+        let events = observer.events.lock().unwrap();
+        assert_eq!(events.len(), MAX_EVENTS);
+        for (index, event) in events[..prefix].iter().enumerate() {
+            assert_eq!(event.kind, "result_produced");
+            assert_eq!(event.result, Some(index as u64 + 1));
+            assert_eq!(event.index, Some(index as u32));
+        }
+        drop(events);
+        let out = json(&observer);
+        assert!(out.contains("\"lost_events\":79983"));
+        assert!(out.contains("\"records_complete\":false"));
+    }
+    #[test]
+    fn poison_after_cap_preserves_rejection_and_poison_loss_counts() {
+        let observer = QueryReadObserver::default();
+        for _ in 0..MAX_EVENTS {
+            observer.result_produced(1, 1, 42);
+        }
+        let _ = std::panic::catch_unwind(|| {
+            let _lock = observer.events.lock().unwrap();
+            panic!("poison capped observer only");
+        });
+        let request = observer.begin(None, None, RequestMode::Get);
+        request.cache_hit(42);
+        observer.read(None, None, None, 42, DepReadOutcome::Disabled);
+        observer.result_produced(1, 1, 42);
+        drop(request);
+        // Five rejections plus five poison observations, then the publication marker.
+        assert_eq!(observer.lost.load(Ordering::Relaxed), 10);
+        assert_eq!(observer.requests.load(Ordering::Relaxed), 2);
+        assert_eq!(observer.reads.load(Ordering::Relaxed), 2);
+        assert_eq!(observer.results.load(Ordering::Relaxed), MAX_EVENTS as u64 + 2);
+        let out = json(&observer);
+        assert!(out.contains("\"lost_events\":11"));
+        assert!(out.contains("\"records_complete\":false"));
+        assert_eq!(out.matches("{\"kind\":").count(), MAX_EVENTS);
+        assert_eq!(json(&observer), out);
+    }
+    #[test]
+    fn identifier_wrap_is_independent_and_fails_inventory() {
+        let observer = QueryReadObserver::default();
+        observer.requests.store(u64::MAX, Ordering::Relaxed);
+        observer.reads.store(u64::MAX, Ordering::Relaxed);
+        observer.results.store(u64::MAX, Ordering::Relaxed);
+        let request = observer.begin(None, None, RequestMode::Get);
+        assert_eq!(request.id(), u64::MAX);
+        request.finish(RequestOutcome::Value);
+        observer.read(None, None, None, 42, DepReadOutcome::Disabled);
+        observer.result_produced(1, 1, 42);
+        assert_eq!(observer.requests.load(Ordering::Relaxed), 0);
+        assert_eq!(observer.reads.load(Ordering::Relaxed), 0);
+        assert_eq!(observer.results.load(Ordering::Relaxed), 0);
+        assert!(json(&observer).contains("\"records_complete\":false"));
+        let request = observer.begin(None, None, RequestMode::Get);
+        assert_eq!(request.id(), 0);
+        drop(request);
+        observer.read(None, None, None, 42, DepReadOutcome::Disabled);
+        observer.result_produced(1, 1, 42);
+        assert_eq!(observer.requests.load(Ordering::Relaxed), 1);
+        assert_eq!(observer.reads.load(Ordering::Relaxed), 1);
+        assert_eq!(observer.results.load(Ordering::Relaxed), 1);
+        assert_eq!(observer.lost.load(Ordering::Relaxed), 0);
+        assert!(json(&observer).contains("\"records_complete\":false"));
+    }
+    #[test]
+    fn loss_counter_wrap_cannot_restore_complete_retained_inventory() {
+        let observer = QueryReadObserver::default();
+        for _ in 0..MAX_EVENTS {
+            observer.result_produced(1, 1, 42);
+        }
+        let event = {
+            let events = observer.events.lock().unwrap();
+            assert!(inventory_matches(&events, 1, 1, MAX_EVENTS as u64 + 1));
+            events[0]
+        };
+        observer.lost.store(u64::MAX, Ordering::Relaxed);
+        assert!(!observer.lost_overflowed.load(Ordering::Relaxed));
+        // Reject an event without changing IDs, so the retained inventory still matches.
+        observer.event(event);
+        assert_eq!(observer.lost.load(Ordering::Relaxed), 0);
+        assert!(observer.lost_overflowed.load(Ordering::Relaxed));
+        let out = json(&observer);
+        assert!(out.contains("\"lost_events\":0"));
+        assert!(out.contains("\"records_complete\":false"));
+        // The latch is permanent, including the two-count poisoned-rejection increment.
+        observer.loss(u64::MAX);
+        observer.loss(2);
+        assert_eq!(observer.lost.load(Ordering::Relaxed), 1);
+        assert!(observer.lost_overflowed.load(Ordering::Relaxed));
+        assert!(json(&observer).contains("\"records_complete\":false"));
+    }
     fn json(observer: &QueryReadObserver) -> String {
         let mut out = String::new();
         observer.append_json(&mut out);
@@ -414,6 +632,9 @@ mod tests {
         });
         drop(observer.begin(None, None, RequestMode::Get));
         observer.read(None, None, None, 0, DepReadOutcome::Disabled);
+        assert!(!observer.capped.load(Ordering::Relaxed));
+        assert!(observer.events.is_poisoned());
+        assert_eq!(observer.events.lock().unwrap_or_else(|error| error.into_inner()).len(), 3);
         let out = json(&observer);
         assert!(out.contains("\"lost_events\":4"));
         assert!(out.contains("\"expected_requests\":1"));

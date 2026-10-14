@@ -1,0 +1,144 @@
+{
+  "all_four_tests_passed": true,
+  "compiler_driver_sha256": "b9a17b8f106072eb240189957630c634fa061dae3a6d42e9b26ab2949bc750af",
+  "compiler_launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+  "recorder_source_sha256": "6c8eebbc2796dff1f6a55a2f3f60867122283c8b43e65ddb62cd937d829efad7",
+  "samples": [
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 5.98233283997979,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "contention",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 21241,
+        "green_ensures": 0,
+        "lost_events": 30157293,
+        "observed_reads": 22530,
+        "observed_requests": 26686,
+        "observed_results": 2859,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": false,
+        "resolved_job_edges": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_reads": 22530
+      },
+      "source_sha256": "39db984699b804a4e87fc412bf3ca7e1eec6b0e76a4d9bbb6f078c3d89d277d9",
+      "threads": 1,
+      "wait_structural_complete": true,
+      "waits": 0
+    },
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 4.844369065016508,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "contention",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 21240,
+        "green_ensures": 0,
+        "lost_events": 30218538,
+        "observed_reads": 22529,
+        "observed_requests": 26687,
+        "observed_results": 2860,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": false,
+        "resolved_job_edges": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_reads": 22529
+      },
+      "source_sha256": "39db984699b804a4e87fc412bf3ca7e1eec6b0e76a4d9bbb6f078c3d89d277d9",
+      "threads": 4,
+      "wait_structural_complete": true,
+      "waits": 467
+    },
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 6.239897484018002,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "contention",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 21240,
+        "green_ensures": 0,
+        "lost_events": 30268009,
+        "observed_reads": 22529,
+        "observed_requests": 26687,
+        "observed_results": 2860,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": false,
+        "resolved_job_edges": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_reads": 22529
+      },
+      "source_sha256": "39db984699b804a4e87fc412bf3ca7e1eec6b0e76a4d9bbb6f078c3d89d277d9",
+      "threads": 8,
+      "wait_structural_complete": true,
+      "waits": 1468
+    },
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 0.084816360991681,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "small_incremental",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 11004,
+        "green_ensures": 0,
+        "lost_events": 0,
+        "observed_reads": 13575,
+        "observed_requests": 13465,
+        "observed_results": 2426,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": true,
+        "resolved_job_edges": 5869,
+        "semantic_complete": false,
+        "tracked_reads": 12342,
+        "unbound_reads": 3873
+      },
+      "source_sha256": "cd6cf2b016cb9eda8f3c0334b319a79fbb4d8fedb60ce914be7142e889243131",
+      "threads": 4,
+      "wait_structural_complete": true,
+      "waits": 7
+    }
+  ],
+  "schema": 1,
+  "scope": "real native capped-read baseline acceptance observations",
+  "speed_claim_eligible": false,
+  "task": "983388158z"
+}

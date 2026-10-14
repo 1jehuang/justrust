@@ -1,0 +1,146 @@
+{
+  "all_seven_native_tests_passed": true,
+  "compiler_driver_sha256": "270af337d3643eda83e3f14660bd7e6ea35fc6bd170c088a70aeb9121758f90e",
+  "compiler_launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+  "pool_observer_source_sha256": "f3d8baabfc1eecc2e3452942b73512ecfff0e1adc495d896af202e2ea1ae19e7",
+  "pool_registry_source_sha256": "f9410f4093b7d8525617bc0dc0ad81dab52f213563d7e71cd7e42c67fd6ed8af",
+  "recorder_source_sha256": "38e52413ab64a050b76830c8d274556d39309e0f9dca84d2ddea6627a1302cde",
+  "samples": [
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 4.307909831986763,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "contention",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 21241,
+        "green_ensures": 0,
+        "lost_events": 30157293,
+        "observed_reads": 22530,
+        "observed_requests": 26686,
+        "observed_results": 2859,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": false,
+        "resolved_job_edges": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_reads": 22530
+      },
+      "source_sha256": "39db984699b804a4e87fc412bf3ca7e1eec6b0e76a4d9bbb6f078c3d89d277d9",
+      "threads": 1,
+      "wait_structural_complete": true,
+      "waits": 0
+    },
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 2.8034622039995156,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "contention",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 21240,
+        "green_ensures": 0,
+        "lost_events": 30205928,
+        "observed_reads": 22529,
+        "observed_requests": 26687,
+        "observed_results": 2860,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": false,
+        "resolved_job_edges": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_reads": 22529
+      },
+      "source_sha256": "39db984699b804a4e87fc412bf3ca7e1eec6b0e76a4d9bbb6f078c3d89d277d9",
+      "threads": 4,
+      "wait_structural_complete": true,
+      "waits": 347
+    },
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 4.232492017996265,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "contention",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 21240,
+        "green_ensures": 0,
+        "lost_events": 30342869,
+        "observed_reads": 22529,
+        "observed_requests": 26687,
+        "observed_results": 2860,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": false,
+        "resolved_job_edges": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_reads": 22529
+      },
+      "source_sha256": "39db984699b804a4e87fc412bf3ca7e1eec6b0e76a4d9bbb6f078c3d89d277d9",
+      "threads": 8,
+      "wait_structural_complete": true,
+      "waits": 1125
+    },
+    {
+      "cpu_work_ns": null,
+      "elapsed_s": 0.10866631899261847,
+      "execution_span_ns": null,
+      "exit_code": 0,
+      "fixture": "small_incremental",
+      "full_pipeline_complete": false,
+      "reads": {
+        "cache_hits": 11007,
+        "green_ensures": 0,
+        "lost_events": 0,
+        "observed_reads": 13575,
+        "observed_requests": 13465,
+        "observed_results": 2426,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": true,
+        "resolved_job_edges": 5870,
+        "semantic_complete": false,
+        "tracked_reads": 12342,
+        "unbound_reads": 3872
+      },
+      "source_sha256": "cd6cf2b016cb9eda8f3c0334b319a79fbb4d8fedb60ce914be7142e889243131",
+      "threads": 4,
+      "wait_structural_complete": true,
+      "waits": 5
+    }
+  ],
+  "schema": 1,
+  "scope": "real rebuilt native capped-read and dispatch-isolation candidate acceptance",
+  "speed_claim_eligible": false,
+  "task": "773938x4fq"
+}

@@ -1,5 +1,36 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: capped semantic-read recording no longer waits for its event mutex
+
+The real large native fixture attempts over 30 million events after retaining
+its bounded 100,000-event prefix. Previously every rejected event still took
+the event mutex. A monotonic cap flag now skips that lock without skipping
+independent ID allocation or loss accounting. Accepted append ordering and
+reservation retry behavior remain under the original mutex. A separate loss
+wrap latch prevents a wrapped u64 loss count from restoring completeness.
+Fifteen real-module tests pass, including a lock-held bypass witness, racing
+cap transitions, interruption, poison accounting and forced loss/ID wrap.
+
+The initial separate sweep showed a one-thread mixed regression
+0.699351s -> 0.925979s, which was retained. A 48-sample explicit ABBA follow-up
+with fixed CPU affinity observed mixed one-thread medians 0.687678s/0.389319s
+and eight-thread medians 5.117650s/2.100425s for baseline/candidate. Accepted
+100k-event controls overlapped (0.004890s/0.004872s). No quiet-system guarantee
+or comprehensive suite comparison exists, so these are focused diagnostics,
+not a general/native speedup or default-promotion claim. Source/binary/build
+provenance, all raw samples, regressions and reproduction are retained in
+`bench/query-read-cap`.
+
+Actual frozen compiler/std/proc_macro build and all seven native gates passed
+in task `773938x4fq`. Source-matched baseline/candidate observations are in
+`data/runs/query-read-cap-20261014/native-{baseline,candidate}.json`. The native
+candidate still reports large read loss and incomplete read mapping; its small
+incremental fixture has zero loss, 5870 resolved job edges and executed output
+42. Native single-sample timings include both dispatch and read-recorder
+changes and do not establish attribution. CPU/span and full-pipeline claims
+remain disabled. Future explicit query-to-task point binding is design only
+in `docs/native-query-task-binding-plan.md`.
+
 ## 2026-10-14: helper dispatch must not inherit logical task ownership
 
 Real one-thread pool controls exposed existing false lineage: unrelated opaque
