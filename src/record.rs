@@ -354,7 +354,7 @@ pub fn apply_toolchain_env(cmd: &mut Command, tc: &crate::toolchain::Toolchain) 
 
 /// Explicit cross targets must have libraries in the selected compiler's own
 /// sysroot. Never borrow a system libcore for a different compiler version.
-fn requested_targets(args: &[OsString], env_target: Option<OsString>) -> Vec<OsString> {
+pub(crate) fn requested_targets(args: &[OsString], env_target: Option<OsString>) -> Vec<OsString> {
     let mut targets = Vec::new();
     let mut args = args.iter().take_while(|a| *a != "--");
     while let Some(arg) = args.next() {

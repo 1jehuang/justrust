@@ -1,5 +1,33 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: hosted target preflight for direct WASM checks
+
+Direct default `justrust check --target wasm32-unknown-unknown` also reached
+hosted nightly without libcore, failing E0463 in 8.23s in run
+`20261014-094525777-2376582`. Hosted routing now preflights explicit CLI or
+environment targets: unsupported non-native targets automatically stay local
+with recording and a clear explanation, before submitting a tenant build.
+Forced remote requests fail clearly instead of silently changing location.
+Native/no-target requests retain hosted routing. No billing or isolation
+rules are changed, and no blanket local-mode setting is required.
+
+Follow-up check `20261014-094741293-2416052` passed, library tests
+`20261014-094754162-2420895` passed 443 with 3 ignored, and all-target clippy
+with warnings denied `20261014-094851654-2433211` passed. Hosted connection
+timed out during this validation, causing the existing automatic local
+fallback. The check took 12.1s, tests 56.9s including 29.43s compilation,
+and clippy 29.1s under heavy CPU contention. Reinstalled successfully with
+`cargo install --path . --locked --offline`. These are correctness checks,
+not performance comparisons.
+
+The coordinating agent verified installed default direct WASM check
+`20261014-095101889-2462467`, exit 0 in 0.6s, with the unsupported-hosted
+local recorded route explicitly recorded. Forced `--remote` WASM check
+exited 1 with the clear preflight diagnostic before submission. Direct
+release WASM build `20261014-094610003-2391409` also passed (4.5s client
+wall). Follow-up evidence is in
+`data/runs/wasm-target-compatibility-20261014/hosted-preflight.jsonl`.
+
 ## 2026-10-14: target-compatible recorded WebAssembly builds
 
 The cargo proxy selected nightly-2026-10-08 without wasm32-unknown-unknown

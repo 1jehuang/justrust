@@ -99,6 +99,15 @@ fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
 }
 
+/// Hosted sysroots currently ship only the native GNU target. Keep unsupported
+/// cross targets local before submission, rather than failing E0463 remotely.
+fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) -> bool {
+    let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+    crate::record::requested_targets(args, env_target)
+        .iter()
+        .any(|target| target != native.as_str())
+}
+
 /// A `build` whose outputs come back cheaply enough to be worth building
 /// remotely (FINDINGS 45): an optimized profile for the host, so the
 /// binary is small and a delta of it comes back in under a second. Debug
@@ -509,6 +518,19 @@ pub fn maybe_remote(full: &[OsString]) {
         }
         return say_local("no remote machine configured");
     };
+    if backend == Backend::Hosted
+        && unsupported_hosted_target(full, std::env::var_os("CARGO_BUILD_TARGET"))
+    {
+        if m == Mode::Force {
+            eprintln!(
+                "justrust: forced remote target is not supported by the hosted sysroot; install hosted target support or omit --remote for a recorded local build"
+            );
+            std::process::exit(1);
+        }
+        let reason = "target is not supported by the hosted sysroot; using a target-compatible local compiler with recording";
+        eprintln!("justrust: {reason}");
+        return say_local(reason);
+    }
     let now = crate::paths::now();
     // Optimized builds always go through the router: whether bringing
     // the binary back pays off depends on the project.
@@ -616,6 +638,34 @@ pub fn maybe_remote(full: &[OsString]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hosted_cross_targets_are_preflighted_before_submission() {
+        let native = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+        assert!(!unsupported_hosted_target(&["check".into()], None));
+        assert!(!unsupported_hosted_target(
+            &["check".into(), "--target".into(), native.into()],
+            None
+        ));
+        for sub in ["check", "clippy", "test", "build"] {
+            assert!(unsupported_hosted_target(
+                &[sub.into(), "--target=wasm32-unknown-unknown".into()],
+                None
+            ));
+        }
+        assert!(unsupported_hosted_target(
+            &["check".into()],
+            Some("wasm32-unknown-unknown".into())
+        ));
+        assert!(!unsupported_hosted_target(
+            &[
+                "test".into(),
+                "--".into(),
+                "--target=wasm32-unknown-unknown".into()
+            ],
+            None
+        ));
+    }
 
     #[test]
     fn required_remote_forces_routing_but_preserves_explicit_local_conflict() {
