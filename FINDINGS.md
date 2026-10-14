@@ -5910,67 +5910,53 @@ measured at more than 2x.
 - Actual pinned cases180405935/180407289/180409142/180411023 verify3leaftests,E0308/101,2pass1failure/101,parentnormal3pass;180426280 verifies16securityfixtures. Unfiltered180427353 retains1302pass/1existinghintchipfailure/10ignored/101. Saved source bytes restored. See `docs/hosted-shadow-20261014.md` for full requirement-to-run mapping.
 - Corrected genuinely plain installed check180649536/full361tests180650413/lint180653455/recheck180653959 allhosted0compiled56fresh. Accidental local180514589 caused by helper RUN_ID_OVERRIDE is retained/excluded, not a default outage. Current stockquietgate blocked, optimized rustc unchanged, host released01:07UTC for owner-approved resize.
 
-## 2026-10-14: critical-path map of the reference loop's rustc unit
+## 2026-10-14: instrumented occupancy map, not a causal critical path
 
-Tool: `bench/critpath.py` (b146327) reads `-Zself-profile` (via crox), takes
-exclusive time per event (W = total work), wall span S, and the timeline of
-how many threads are busy; time with exactly one busy thread is the
-critical path, attributed to the innermost label and then to a phase.
-Capture: `bench/critpath-capture.sh` on the hosted m8azn.6xlarge, the
-jcode_desktop_ui unit of desktop-test-edit after a one-line body edit,
-frontend threads 1 and 16. Profiler bookkeeping excluded; the profiler
-itself adds ~2.4 s of idle at the end (string table) and slows the unit
-(7.3 vs 4.4 s unprofiled), so absolute numbers are inflated but shares hold.
-Summaries: `bench/results/critpath/desktop-test-edit-*-20261014.json`.
+The original `bench/critpath.py` (b146327) incorrectly labeled exclusive
+elapsed-event occupancy as CPU work W, the observed event envelope as
+mathematical dependency span S, and single-thread occupancy as a proven
+critical path. These interpretations are withdrawn. Schema 2 reports only
+observed elapsed occupancy and explicitly leaves CPU work, causal span and
+speedup ceiling unknown. It also fixes query waits: a `QueryBlocked` interval
+now suppresses its enclosing thread, rather than leaving its parent busy.
+See `docs/parallelism-map.md` for the mathematical model and acceptance map.
 
-jr-rustc b7907f1 (attribute proc-macro cache on), serial seconds by phase:
+Capture: `bench/critpath-capture.sh` on hosted m8azn.6xlarge,
+jcode_desktop_ui after a one-line reference-loop edit, frontend threads 1
+and 16, stock nightly-2026-10-08 and staged jr-b7907f1fe8f7. All four raw
+captures were reprocessed with `--min-us 50`; checked-in schema-2 summaries
+record filtering, missing dependency edges and microsecond endpoint clipping.
+Raw captures remain on the host and locally. The profiler materially perturbs
+these runs, so neither absolute time nor phase shares are performance proof.
 
-| phase | t=1 | t=16 | class | lever |
-|---|---:|---:|---|---|
-| mono collect + partition | 1.17 | 1.18 | impl | graph walk gets slower with threads (0.47 -> 0.96 s, contention); par-upstream-mono branch; partition per item |
-| resolve + HIR lowering | 0.98 | 0.99 | impl | late_resolve 0.29, hir_crate_items 0.22, lower_to_hir 0.21: per-module, parallelizable in principle |
-| incr persist | 0.49 | 0.51 | offpath | encode_query_results 0.23 + cache promotion 0.20: move off the critical path (overlap-persist covers only part) |
-| macro expansion | 0.48 | 0.49 | impl | already cut 1.30 -> 0.48 by the attr cache; rest is the expansion loop itself |
-| typeck + borrowck | 0.36 | 1.15 | impl | **gets slower with threads**: query-blocked waits; ~0.3 s of real work |
-| lints + dead code | 0.23 | 0.08 | impl | parallelizes already |
-| incr load | 0.22 | 0.17 | offpath | prefetch before parse |
-| link | 0.17 | 0.17 | data | |
-| codegen main thread | 0.07 | 0.07 | impl | |
-| total serial | 4.34 | 5.04 | | of W 4.68 / 8.72 s |
+JR b7907f1fe8f7, observed single-nonblocked-thread occupancy in seconds:
 
-Stock nightly-2026-10-08 is the same except macro expansion is 1.30 s
-(724 `#[gpui::test]` expansions, 0.83 s, ~1 ms each; the attr cache
-removes them).
+| phase | t=1 | t=16 | investigation hypothesis |
+|---|---:|---:|---|
+| mono collect + partition | 1.171 | 1.363 | independent upstream metadata decode, deterministic merge |
+| resolve + HIR lowering | 0.983 | 0.988 | map shared resolver state before choosing module boundaries |
+| incr persist | 0.489 | 0.505 | existing overlap path requires a parallel frontend |
+| macro expansion | 0.483 | 0.494 | ordered effects and invalidation must be respected |
+| typeck + borrowck | 0.358 | 1.172 | profile perturbation prevents scaling attribution |
+| lints + dead code | 0.225 | 0.078 | already contains parallel queries |
+| incr load | 0.222 | 0.175 | investigate safe prefetch |
+| link | 0.173 | 0.165 | dependency on codegen, potential overlap with persistence |
+| codegen | 0.065 | 0.065 | labels do not cover every external worker's CPU time |
+| total one reported thread | 4.339 | 5.245 | not an inherent serial lower bound |
+| total elapsed thread occupancy | 4.682 | 8.715 | not CPU work |
+| reported query wait thread-seconds | 0 | 6.153 | not elapsed wall savings available to recover |
 
-What this says, quantitatively:
-1. At 1 thread W = 4.68 s and the serial path is 4.34 s: 93% of the work
-   runs alone. At 16 threads W grows to 8.7 s (more CPU) while serial time
-   rises to 5.0 s: today's parallel frontend adds contention, not overlap.
-   Achieved parallelism W/S is ~1 at both counts.
-2. Nothing in the path is a hard data dependency except link (0.17) and
-   parse. Everything else is "serial by implementation" (3.4 s) or can leave
-   the path (incr persist + load, 0.7 s). So the theoretical floor for this
-   unit is far below today's, but every lever is a rustc change.
-3. Biggest single row: the mono collector walk (0.5-1.0 s), which the
-   existing par-upstream-mono branch targets; the 16-thread number shows
-   lock contention inside it. Second: resolve + HIR lowering (1.0 s), not
-   parallel at all today. Third: incr persist (0.5 s), removable.
-4. Crate splitting attacks all rows at once (the edited code compiles in a
-   small crate), which is why it is the only measured >2x win.
+Stock t=1 macro-expansion occupancy is 1.300 s versus JR 0.483 s.
+This localizes the known attribute-cache effect but is not a new speed claim.
+The low-overhead `-Ztime-passes` sweep above shows mono collection 0.58 ->
+0.43 s and type checking 0.17 -> 0.14 s from 1 to 16 frontend threads.
+The heavily instrumented profiles therefore do not establish a production
+contention regression, and cannot establish a 93% inherently serial fraction
+or a theoretical floor. The observed core-scaling plateau remains evidence
+about today's implementation, not a bound on future compiler changes.
 
-### Correction: the 16-thread self-profile overstates contention
-
-The t=16 profile records ~3.7M events (incremental encode spans included)
-and 6.2 s of query-blocked time; the profiler perturbs the parallel run.
-The low-overhead `-Ztime-passes` sweep on the same host (threads table
-above) shows the mono collector going 0.58 -> 0.43 s and type check
-0.17 -> 0.14 s from 1 to 16 threads, i.e. slightly faster, not slower.
-So: use the t=1 self-profile for the shares of the serial path (it cannot
-contend), and `-Ztime-passes` for how a pass scales. The two "gets slower
-with threads" notes in the table above are profiler artifacts. What holds:
-at most ~1.3x overlap anywhere, and the serial share is ~93% of the work.
-Inside the t=16 walk, real parallelism exists (16 threads busy for 1.5 s on
-items_of_instance / resolve_instance / codegen_select_candidate), so the
-collector is parallel already; its cost is upstream decoding at the start
-(upstream_drop_glue_for ~0.18 s, every thread waiting on one
-upstream_monomorphizations) and per-item trait selection.
+Validation: 15 interval-accounting/schema/CLI/crox regressions passed, and
+all four actual captures were successfully reprocessed. End-of-event rounding
+corrections were counted explicitly (26-32 clipped endpoints per capture).
+No compiler flags, default selection or normal benchmark targets changed
+while correcting this analyzer.

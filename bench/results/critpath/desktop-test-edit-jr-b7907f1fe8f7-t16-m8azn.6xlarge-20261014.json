@@ -1,34 +1,39 @@
 {
- "W": 8.714592,
- "S": 9.364599,
- "parallelism": 0.930588912563154,
- "serial_s": 5.03833,
- "idle_s": 2.527888,
+ "schema_version": 2,
+ "measurement": "instrumented elapsed-event occupancy, not CPU work or a causal DAG",
+ "observed_event_span_s": 9.364599,
+ "reported_nonblocked_thread_s": 8.714565,
+ "average_reported_nonblocked_threads": 0.930586029364418,
+ "single_reported_thread_s": 5.244549,
+ "no_reported_nonblocked_thread_s": 2.529253,
+ "reported_blocked_thread_s": 6.152977,
  "threads": 39,
- "concurrency_s": {
-  "0": 2.527888,
-  "1": 5.03833,
-  "2": 1.460024,
-  "3": 0.236608,
-  "4": 0.073161,
+ "rounded_endpoints_clipped": 28,
+ "rounded_endpoint_clipping_us": 28.0,
+ "occupancy_histogram_s": {
+  "0": 2.529253,
+  "1": 5.244549,
+  "2": 1.435296,
+  "3": 0.06386,
+  "4": 0.063053,
   "5": 0.016523,
   "6": 0.011574,
   "7": 0.000358,
   "8": 0.00013,
   "9": 3e-06
  },
- "serial_by_phase": [
+ "single_thread_by_phase": [
   [
    "mono collect + partition",
-   1.18405
+   1.362504
   ],
   [
    "typeck + borrowck",
-   1.147392
+   1.172372
   ],
   [
    "resolve + HIR lowering",
-   0.988347
+   0.988348
   ],
   [
    "incr persist",
@@ -36,15 +41,15 @@
   ],
   [
    "macro expansion",
-   0.494269
+   0.49427
   ],
   [
    "other",
-   0.206417
+   0.208177
   ],
   [
    "incr load",
-   0.174416
+   0.17544
   ],
   [
    "link",
@@ -55,19 +60,19 @@
    0.077755
   ],
   [
-   "codegen main thread",
+   "codegen",
    0.065422
   ],
   [
    "metadata",
-   0.029486
+   0.029485
   ],
   [
    "parse",
    0.000596
   ]
  ],
- "work_top": [
+ "exclusive_elapsed_by_label": [
   [
    "monomorphization_collector_graph_walk",
    1.640272
@@ -102,7 +107,7 @@
   ],
   [
    "lower_to_hir",
-   0.259169
+   0.259168
   ],
   [
    "encode_query_results_for",
@@ -126,7 +131,7 @@
   ],
   [
    "source_span",
-   0.193658
+   0.193656
   ],
   [
    "run_linker",
@@ -198,7 +203,7 @@
   ],
   [
    "layout_of",
-   0.037384
+   0.037382
   ],
   [
    "effective_visibilities",
@@ -222,21 +227,21 @@
   ],
   [
    "metadata_decode_entry_exported_generic_symbols",
-   0.029279
+   0.029265
   ],
   [
    "upstream_monomorphizations_for",
    0.028251
   ]
  ],
- "serial_by_pass": [
+ "single_thread_by_pass": [
   [
    "analysis",
-   1.934337
+   1.934339
   ],
   [
    "codegen_crate",
-   1.266484
+   1.289591
   ],
   [
    "resolver_for_lowering_raw",
@@ -245,6 +250,10 @@
   [
    "serialize_dep_graph",
    0.524801
+  ],
+  [
+   "upstream_drop_glue_for",
+   0.181713
   ],
   [
    "link",
@@ -275,12 +284,20 @@
    0.001589
   ],
   [
+   "incr_comp_load_dep_graph_reverse_index",
+   0.000786
+  ],
+  [
    "incr_comp_encode_dep_graph_finish",
    0.000716
   ],
   [
    "parse_crate",
    0.000596
+  ],
+  [
+   "typeck_root",
+   0.000569
   ],
   [
    "drop_compiler",
@@ -297,20 +314,24 @@
   [
    "incr_comp_prepare_session_directory",
    8.4e-05
+  ],
+  [
+   "resolve_instance_raw",
+   4.2e-05
   ]
  ],
- "serial_by_label": [
+ "single_thread_by_label": [
   [
    "monomorphization_collector_graph_walk",
-   0.959292
+   0.957941
   ],
   [
    "expand_crate",
-   0.486188
+   0.486189
   ],
   [
    "type_check_crate",
-   0.373384
+   0.373385
   ],
   [
    "MIR_borrow_checking",
@@ -325,16 +346,16 @@
    0.244722
   ],
   [
-   "hir_crate_items",
-   0.228148
+   "trait_impls_of",
+   0.24217
   ],
   [
-   "trait_impls_of",
-   0.223088
+   "hir_crate_items",
+   0.22815
   ],
   [
    "lower_to_hir",
-   0.216311
+   0.21631
   ],
   [
    "incr_comp_query_cache_promotion",
@@ -354,15 +375,19 @@
   ],
   [
    "implementations_of_trait",
-   0.081889
+   0.087754
+  ],
+  [
+   "exported_generic_symbols",
+   0.066293
+  ],
+  [
+   "incr_comp_load_dep_graph_reverse_index",
+   0.066096
   ],
   [
    "early_lint_checks",
    0.065344
-  ],
-  [
-   "incr_comp_load_dep_graph_reverse_index",
-   0.065072
   ],
   [
    "coherence_checking",
@@ -371,6 +396,10 @@
   [
    "find_cgu_reuse",
    0.063446
+  ],
+  [
+   "upstream_monomorphizations",
+   0.055996
   ],
   [
    "<unknown>",
@@ -395,6 +424,14 @@
   [
    "effective_visibilities",
    0.029676
+  ],
+  [
+   "metadata_decode_entry_exported_generic_symbols",
+   0.029265
+  ],
+  [
+   "upstream_monomorphizations_for",
+   0.028251
   ],
   [
    "monomorphization_collector",
@@ -510,7 +547,7 @@
   ],
   [
    "drop_ast",
-   0.004439
+   0.004438
   ],
   [
    "adt_dtorck_constraint",
@@ -523,22 +560,18 @@
   [
    "link_binary",
    0.003998
-  ],
-  [
-   "pre_AST_expansion_lint_checks",
-   0.003815
-  ],
-  [
-   "module_children",
-   0.003656
-  ],
-  [
-   "derive_macro_expansion",
-   0.003377
-  ],
-  [
-   "incr_comp_persist_result_cache",
-   0.002547
   ]
- ]
+ ],
+ "causal_dependency_span_s": null,
+ "cpu_work_s": null,
+ "theoretical_speedup_ceiling": null,
+ "limitations": [
+  "No scheduling dependency edges or CPU samples are present.",
+  "Open events may include descheduling, external work and unreported waits.",
+  "Single-thread occupancy is not proof that work is inherently serial.",
+  "Profiling and event filtering can materially distort timing and omit waits.",
+  "Phase labels and optimization notes are investigation hypotheses only.",
+  "Nested end overshoots of at most one microsecond are clipped for crox quantization."
+ ],
+ "minimum_event_duration_us": 50
 }
