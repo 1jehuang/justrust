@@ -47,7 +47,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const SCHEME: &str = "justrust-buildscript-1";
+const SCHEME: &str = "justrust-buildscript-2";
 const REAL_PREFIX: &str = ".jr-real-";
 const WRAPPER_MARK: &str = "# justrust build-script wrapper";
 
@@ -208,8 +208,9 @@ struct Meta {
     stderr: Vec<String>,
     wall: f64,
     package: String,
-    /// Keyed by the C toolchain instead of the host package database
-    /// (`HERMETIC`): portable, so the prebuilt store may carry it.
+    /// Eligible for the public prebuilt store. Historical entries set this
+    /// based on a partial native tool stamp, so consumers must also apply
+    /// `shareable` rather than trusting the bit alone.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     hermetic: bool,
 }
@@ -362,13 +363,15 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     for a in args {
         field("arg", &norm.norm(a.to_str()?));
     }
-    // What the host can change about the run: for packages that build
-    // vendored C and probe nothing, only the C toolchain; for the rest,
-    // any system package change.
-    match hermetic_stamp(&package) {
+    // Retain native compiler/archive identities for local replay alongside
+    // host package state. They are not a complete cross-host native identity.
+    match native_stamp(&package) {
         Some(s) => {
-            hermetic_run = true;
-            field("c-toolchain", &s)
+            hermetic_run = hermetic(&package);
+            field("c-toolchain", &s);
+            if !hermetic_run {
+                field("system", &system_stamp());
+            }
         }
         None => field("system", &system_stamp()),
     }
@@ -403,18 +406,16 @@ fn plan(real: &Path, args: &[OsString]) -> Option<Plan> {
     })
 }
 
-/// Packages whose build script compiles vendored C sources and, in the
-/// configuration justrust sees, takes nothing from the system but the C
-/// compiler and libc headers. Their runs are keyed by the C toolchain
-/// (`hermetic_stamp`) instead of the package database, so they can be
-/// shared across machines and published to the prebuilt store. Each entry
-/// names the pkg-config modules the script probes before falling back to
-/// its vendored copy: their presence is part of the key, so a host where
-/// the probe would succeed never reuses a vendored run (and the reverse).
+/// Historically public native scripts. Vendored sources still use host
+/// libc/compiler headers and may discover helper tools or system libraries.
+/// Keep their compiler/archive determinants for local replay, but do not
+/// authorize public sharing until a managed native sysroot and every helper
+/// dependency are pinned and isolated. The module names below are only
+/// presence probes, not identities of the headers/libraries they resolve.
 ///
 /// Measured on Jcode Desktop (FINDINGS 30): aws-lc-sys 12.8 s, libsqlite3-sys
 /// 7.6 s, ring 4.8 s, onig_sys 2.3 s on the critical path of a cold build.
-const HERMETIC: &[(&str, &[&str])] = &[
+const NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     ("ring", &[]),
     // `bundled` feature: compiles sqlite3.c, pkg-config only on request.
     ("libsqlite3-sys", &["sqlite3"]),
@@ -425,22 +426,30 @@ const HERMETIC: &[(&str, &[&str])] = &[
     ),
 ];
 
-fn hermetic(package: &str) -> bool {
-    !matches!(
-        std::env::var("JUSTRUST_HERMETIC_SCRIPTS").as_deref(),
-        Ok("0") | Ok("off")
-    ) && HERMETIC.iter().any(|(p, _)| *p == package)
+fn hermetic(_package: &str) -> bool {
+    // No managed native sysroot exists yet. Vendored C sources are not
+    // hermetic: libc and compiler resource headers, helper executables,
+    // compiler subprograms and probed system libraries are host inputs.
+    // Compiler/archive bytes and a pkg-config presence bit cannot pin them.
+    // Do not accept an environment-provided identity as proof of isolation.
+    // A future identity must come from a verified immutable native bundle:
+    // compiler subprograms/resources, target libc headers/libraries, helper
+    // tools and their runtime libraries, with discovery confined to that
+    // closure. Hash once at trusted installation, not every script run.
+    // A distro name/version or package database mtime is not that identity.
+    false
 }
 
-/// The C toolchain a hermetic script compiles with: the resolved `cc`
+/// Partial native tool identity for local replay: the resolved `cc`
 /// (or `$CC`) and `ar` by content, the compiler's `--version`, and which of
-/// the package's fallback pkg-config modules this host has. `None` when the
-/// package is not hermetic or the toolchain cannot be identified.
-fn hermetic_stamp(package: &str) -> Option<String> {
-    if !hermetic(package) {
+/// the package's fallback pkg-config modules this host has. This is not a
+/// public-sharing identity: it omits sysroot contents and discovered helpers.
+/// `None` when the package is not recognized or tools cannot be identified.
+fn native_stamp(package: &str) -> Option<String> {
+    if !NATIVE_PACKAGES.iter().any(|(p, _)| *p == package) {
         return None;
     }
-    let modules = HERMETIC.iter().find(|(p, _)| *p == package)?.1;
+    let modules = NATIVE_PACKAGES.iter().find(|(p, _)| *p == package)?.1;
     let target = std::env::var("TARGET").unwrap_or_default();
     let tool = |names: &[&str], default: &str| -> Option<PathBuf> {
         let v = names
@@ -784,9 +793,20 @@ fn safe_rel(p: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// Reject historical native entries too: their `hermetic` bit was written
+/// before the missing native sysroot determinants were discovered. A scheme
+/// bump alone prevents lookup, but would still let `cache --publish` export
+/// those old entries under their old keys.
+fn shareable(meta: &Meta) -> bool {
+    meta.hermetic
+        && !NATIVE_PACKAGES
+            .iter()
+            .any(|(package, _)| *package == meta.package)
+}
+
 pub(crate) fn pack_entry(dir: &Path, dst: &Path) -> Option<()> {
     let meta: Meta = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
-    if !meta.hermetic {
+    if !shareable(&meta) {
         return None;
     }
     let f = std::fs::File::create(dst).ok()?;
@@ -851,7 +871,7 @@ pub(crate) fn unpack_entry(src: &Path, dst: &Path) -> Option<()> {
         return None;
     }
     let meta: Meta = serde_json::from_slice(&body).ok()?;
-    if !meta.hermetic || meta.files.len() > BUNDLE_MAX_FILES {
+    if !shareable(&meta) || meta.files.len() > BUNDLE_MAX_FILES {
         return None;
     }
     let mut want: std::collections::HashSet<String> = meta
@@ -885,7 +905,7 @@ pub(crate) fn publish_entry(root: &Path, line: &str, v1: &Path) -> Option<u64> {
     let e: Entry = serde_json::from_str(line).ok()?;
     let dir = root.join("o").join(&e.out);
     let meta: Meta = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
-    if !meta.hermetic {
+    if !shareable(&meta) {
         return None;
     }
     let o = v1.join("s/o");
@@ -908,6 +928,9 @@ impl Plan {
     /// After a local miss: fetch a hermetic run from the prebuilt store
     /// into the local cache, then restore it locally.
     fn fetch_prebuilt(&self) -> Option<Meta> {
+        if !self.hermetic {
+            return None;
+        }
         use crate::depcache_prebuilt as pb;
         let base = pb::base()?;
         let root = &self.root;
@@ -1400,7 +1423,9 @@ mod tests {
             stdout: vec!["cargo:rustc-link-lib=static=crypto".into()],
             stderr: vec![],
             wall: 12.5,
-            package: "aws-lc-sys".into(),
+            // Synthetic non-native entry tests the wire format independently
+            // of production eligibility, which currently always fails closed.
+            package: "test-pure-script".into(),
             hermetic,
         };
         std::fs::write(e.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
@@ -1430,6 +1455,100 @@ mod tests {
     }
 
     #[test]
+    fn historical_native_entries_are_not_public_even_with_hermetic_bit() {
+        let dir = std::env::temp_dir().join(format!("jr-bs-native-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (package, _) in NATIVE_PACKAGES {
+            assert!(!hermetic(package), "{package}");
+            let root = dir.join(package);
+            let e = script_entry(&root, true);
+            let meta_path = e.join("meta.json");
+            let mut meta: Meta =
+                serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+            meta.package = (*package).into();
+            let body = serde_json::to_vec(&meta).unwrap();
+            std::fs::write(&meta_path, &body).unwrap();
+            assert!(!shareable(&meta));
+            assert!(pack_entry(&e, &root.join("packed.gz")).is_none());
+            assert!(!root.join("packed.gz").exists());
+            let line = serde_json::to_string(&Entry {
+                inputs: vec![],
+                env: vec![],
+                out: "e".into(),
+            })
+            .unwrap();
+            // Existing destination bundles must not bypass eligibility either.
+            let published = root.join("published/s/o");
+            std::fs::create_dir_all(&published).unwrap();
+            std::fs::write(published.join("e.jrbs"), b"old bundle").unwrap();
+            assert!(publish_entry(&root, &line, &root.join("published")).is_none());
+
+            // An old public bundle is rejected before any OUT_DIR is created.
+            let bundle = root.join("legacy.gz");
+            let mut gz = flate2::write::GzEncoder::new(
+                std::fs::File::create(&bundle).unwrap(),
+                flate2::Compression::fast(),
+            );
+            gz.write_all(BUNDLE_MAGIC).unwrap();
+            gz.write_all(&("meta.json".len() as u32).to_le_bytes())
+                .unwrap();
+            gz.write_all(b"meta.json").unwrap();
+            gz.write_all(&(body.len() as u64).to_le_bytes()).unwrap();
+            gz.write_all(&body).unwrap();
+            gz.finish().unwrap();
+            assert!(unpack_entry(&bundle, &root.join("restored")).is_none());
+            assert!(!root.join("restored").exists());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Same compiler bytes/version and flags do not imply the same object.
+    /// This isolated native probe changes only a header, the missing determinant
+    /// that prevents claiming compatibility between unmanaged host sysroots.
+    #[cfg(unix)]
+    #[test]
+    fn native_header_change_changes_object_with_identical_compiler() {
+        let cc = paths::find_on_path("cc", Path::new("/nonexistent"))
+            .expect("native sharing audit needs a C compiler");
+        let dir = std::env::temp_dir().join(format!("jr-bs-header-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = dir.join("host.h");
+        let source = dir.join("probe.c");
+        let object = dir.join("probe.o");
+        std::fs::write(
+            &source,
+            "#include \"host.h\"\nint host_value(void) { return HOST_VALUE; }\n",
+        )
+        .unwrap();
+        let compiler = depcache::file_hash(&cc, false).unwrap();
+        let partial_stamp = native_stamp("ring").expect("native tool identity");
+        let compile = || {
+            let output = Command::new(&cc)
+                .arg("-c")
+                .arg(&source)
+                .arg("-o")
+                .arg(&object)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::read(&object).unwrap()
+        };
+        std::fs::write(&header, "#define HOST_VALUE 1\n").unwrap();
+        let first = compile();
+        assert_eq!(first, compile(), "identical inputs remain compatible");
+        std::fs::write(&header, "#define HOST_VALUE 2\n").unwrap();
+        assert_ne!(first, compile(), "unkeyed headers change native output");
+        assert_eq!(compiler, depcache::file_hash(&cc, false).unwrap());
+        assert_eq!(partial_stamp, native_stamp("ring").unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn script_bundle_rejects_hostile_input() {
         let dir = std::env::temp_dir().join(format!("jr-bs-hostile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1446,7 +1565,7 @@ mod tests {
                 stdout: vec![],
                 stderr: vec![],
                 wall: 1.0,
-                package: "ring".into(),
+                package: "test-pure-script".into(),
                 hermetic: true,
             })
             .unwrap()
@@ -1487,13 +1606,13 @@ mod tests {
     }
 
     #[test]
-    fn hermetic_list_is_vendored_c_only() {
+    fn native_list_is_vendored_c_only() {
         for p in ["ring", "aws-lc-sys", "libsqlite3-sys", "onig_sys"] {
-            assert!(HERMETIC.iter().any(|(n, _)| *n == p), "{p}");
+            assert!(NATIVE_PACKAGES.iter().any(|(n, _)| *n == p), "{p}");
         }
         // System probes stay keyed by the package database.
         for p in ["alsa-sys", "freetype-sys", "wayland-sys", "openssl-sys"] {
-            assert!(!HERMETIC.iter().any(|(n, _)| *n == p), "{p}");
+            assert!(!NATIVE_PACKAGES.iter().any(|(n, _)| *n == p), "{p}");
         }
     }
 }
