@@ -94,11 +94,23 @@ fn assess_directory(directory: &Path, manifest_path: &Path) -> Result<serde_json
         selected_files.push(file);
         documents.push(bytes);
     }
+    let selected_queries: BTreeSet<String> =
+        expected_queries.iter().map(|id| (*id).to_owned()).collect();
+    // Original bytes are reconciled before query summaries are flattened. The
+    // selected launch manifest is the only source of eligible query identities.
+    // Resource endorsements can link descendants, never authorize a launch.
+    let resource_attachments = crate::execution_graph_resource_attachment::collect_documents(
+        &documents,
+        Some(&selected_queries),
+    )?;
     let pools = crate::execution_graph::collect_pool_inventories(&documents)?;
     let mut selected_pools = BTreeSet::new();
     // Query declarations, not filenames or reused numeric task IDs, select the
     // pool authorities eligible to contribute to this compiler root.
     for bytes in &documents {
+        if crate::execution_graph::resource_producer(bytes)?.is_some() {
+            continue;
+        }
         let header: Header = serde_json::from_slice(bytes).context("invalid capture header")?;
         if header.producer.as_deref() == Some("rustc-query-admission")
             && header
@@ -117,6 +129,13 @@ fn assess_directory(directory: &Path, manifest_path: &Path) -> Result<serde_json
             .file_name()
             .and_then(|value| value.to_str())
             .context("capture filename is not UTF-8")?;
+        if crate::execution_graph::resource_producer(bytes)?.is_some() {
+            // Content determines new resource routing even when an arbitrary
+            // filename resembles an owner journal. All three roles and exact
+            // selected query authority are checked by the original-byte pass.
+            continue;
+        }
+        let header: Header = serde_json::from_slice(bytes).context("invalid capture header")?;
         if let Some(sequence) = name
             .strip_prefix(&format!("{prefix}.event-"))
             .and_then(|suffix| suffix.strip_suffix(".json"))
@@ -132,7 +151,6 @@ fn assess_directory(directory: &Path, manifest_path: &Path) -> Result<serde_json
             journals.push(journal);
             continue;
         }
-        let header: Header = serde_json::from_slice(bytes).context("invalid capture header")?;
         if header.profile.as_deref() == Some(protocol::PROFILE) {
             if name.contains(".event-") {
                 let journal = protocol::parse_journal(bytes)?;
@@ -254,8 +272,214 @@ fn assess_directory(directory: &Path, manifest_path: &Path) -> Result<serde_json
     output["excluded_authority_roots"] = serde_json::to_value(excluded)?;
     output["unreconciled_receipt_files"] = serde_json::to_value(unreconciled)?;
     output["selection"] = serde_json::json!("explicit-compiler-authority");
+    output["resource_attachments"] = serde_json::to_value(resource_attachments)?;
     if !task_bindings.is_empty() {
         output["task_bindings"] = serde_json::to_value(task_bindings)?;
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn write(directory: &Path, name: &str, value: &Value) {
+        std::fs::write(directory.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
+    fn empty_authority(directory: &Path) -> std::path::PathBuf {
+        let parent = json!({
+            "schema":1,"profile":"buildrunner-scheduler-entry-v1","run_id":"run",
+            "authority_root":"parent","owners":[{
+                "invocation_id":"parent","parent_invocation_id":null,"parent_task_id":null,
+                "sealed":true,"interrupted":false,"lost_events":0,"outcome":"success",
+                "tickets":[{"invocation_id":"scheduler-invocation","parent_task_id":"scheduler-task",
+                    "policy":"required","lifecycle":"succeeded","execute_entered":true,"capture_id":"scheduler"}]
+            }]
+        });
+        write(directory, "owner-parent.manifest.json", &parent);
+        for suffix in ["declaration", "execute-entered", "execute-result"] {
+            let mut journal = parent.clone();
+            journal["owners"][0]["sealed"] = json!(false);
+            journal["owners"][0]["outcome"] = json!("pending");
+            journal["owners"][0]["tickets"][0]["lifecycle"] = json!(match suffix {
+                "declaration" => "declared",
+                "execute-entered" => "execute_entered",
+                _ => "succeeded",
+            });
+            journal["owners"][0]["tickets"][0]["execute_entered"] = json!(suffix != "declaration");
+            write(directory, &format!("owner-parent.{suffix}.json"), &journal);
+        }
+        write(
+            directory,
+            "scheduler.envelope.json",
+            &json!({
+                "schema":1,"run_id":"run","invocation_id":"scheduler-invocation",
+                "parent_invocation_id":"parent","parent_task_id":"scheduler-task",
+                "capture_id":"scheduler","receipt_schema":1
+            }),
+        );
+        write(
+            directory,
+            "scheduler.json",
+            &json!({
+                "schema":1,"producer":"cargo-scheduler","scope":"cargo-unit-scheduler",
+                "capture_id":"scheduler","structural_complete":true,"full_pipeline_complete":false,
+                "issues":[],"declared_nodes":0,"declared_edges":0,"events":[],"nodes":[],"edges":[],
+                "opaque_boundaries":["compiler-internals"]
+            }),
+        );
+        let mut root = json!({
+            "schema":1,"profile":"buildrunner-compiler-launch-v1","run_id":"run",
+            "authority_root":"compiler","parent_authority_root":"parent","scheduler_capture_id":"scheduler",
+            "expected_units":0,"expected_launches":0,"expected_journals":0,
+            "sealed":false,"interrupted":false,"lost_events":0,"outcome":"pending","units":[],"launches":[]
+        });
+        write(directory, "compiler-owner-compiler.declaration.json", &root);
+        root["sealed"] = json!(true);
+        root["outcome"] = json!("success");
+        let name = "compiler-owner-compiler.manifest.json";
+        write(directory, name, &root);
+        directory.join(name)
+    }
+
+    #[test]
+    fn public_compiler_resource_documents_do_not_create_launch_authority() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::paths::home().unwrap());
+        let directory = root.join(format!(
+            "compiler-resource-files-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let manifest = empty_authority(&directory);
+        let baseline = assess_directory(&directory, &manifest).unwrap();
+        assert_eq!(baseline["structural_complete"], true, "{baseline}");
+        assert_eq!(baseline["resource_attachments"]["state"], "unknown");
+        for (name, producer) in [
+            (
+                "compiler-owner-compiler.event-999.json",
+                "rustc-frontend-allowance",
+            ),
+            (
+                "foreign.manifest.json",
+                "rustc-frontend-admission-attachment",
+            ),
+        ] {
+            write(
+                &directory,
+                name,
+                &json!({"schema":1,"producer":producer,"capture_id":name,"profile":42}),
+            );
+        }
+        let candidate = assess_directory(&directory, &manifest).unwrap();
+        for key in [
+            "structural_complete",
+            "expected_launches",
+            "accounted_launches",
+            "issues",
+        ] {
+            assert_eq!(
+                candidate[key], baseline[key],
+                "optional malformed resources changed {key}"
+            );
+        }
+        assert_eq!(candidate["full_pipeline_complete"], false);
+        command(&directory, &manifest, true).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn public_compiler_resource_selection_is_exact_query_scoped_not_filename_scoped() {
+        let directory = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::paths::home().unwrap())
+            .join(format!("compiler-resource-selected-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let manifest = empty_authority(&directory);
+        let mut root: Value =
+            serde_json::from_slice(&read_bytes(&manifest, MAX_TOTAL_BYTES).unwrap()).unwrap();
+        let documents = crate::execution_graph_resource_attachment::tests::documents();
+        let query_id = documents[0]["capture_id"].as_str().unwrap();
+        root["expected_units"] = json!(1);
+        root["expected_launches"] = json!(1);
+        // Deliberately omit an independently expected journal. Resources must
+        // never repair incomplete compiler-launch authority.
+        root["expected_journals"] = json!(1);
+        root["units"] = json!([{"unit_id":0,"kind":"rustc","disposition":"required","outcome":"success","terminal":true}]);
+        root["launches"] = json!([{
+            "invocation_id":"invocation","launch_ordinal":0,"unit_id":0,"parent_task_id":"cargo-unit-0",
+            "entry_capture_id":"entry","capture_id":query_id,"spawn_attempts":1,"spawned":true,
+            "terminal":true,"outcome":"success","wait_status":0
+        }]);
+        write(&directory, "compiler-owner-compiler.manifest.json", &root);
+        write(&directory, &format!("{query_id}.json"), &documents[0]);
+        write(&directory, "pool.json", &documents[1]);
+        let baseline = assess_directory(&directory, &manifest).unwrap();
+        assert_eq!(baseline["structural_complete"], false);
+        for (index, document) in documents.iter().enumerate().skip(2) {
+            write(
+                &directory,
+                &format!("compiler-owner-compiler.event-{}.json", index + 10),
+                document,
+            );
+        }
+        let mut foreign = documents.clone();
+        foreign[0]["capture_id"] = json!("foreign-query");
+        foreign[0]["task_bindings"]["pool"]["capture_id"] = json!("foreign-pool");
+        foreign[1]["capture_id"] = json!("foreign-pool");
+        foreign[1]["query_capture_id"] = json!("foreign-query");
+        foreign[2]["capture_id"] = json!("foreign-resource");
+        foreign[2]["attachment_capture_id"] = json!("foreign-attachment");
+        for document in &mut foreign[3..] {
+            document["capture_id"] =
+                json!(format!("foreign-{}", document["role"].as_str().unwrap()));
+            document["attachment"]["attachment_capture_id"] = json!("foreign-attachment");
+            document["attachment"]["resource_capture_id"] = json!("foreign-resource");
+            document["attachment"]["query_capture_id"] = json!("foreign-query");
+            document["attachment"]["pool_capture_id"] = json!("foreign-pool");
+        }
+        for (index, document) in foreign.iter().enumerate() {
+            write(&directory, &format!("foreign-{index}.json"), document);
+        }
+        let candidate = assess_directory(&directory, &manifest).unwrap();
+        assert_eq!(
+            candidate["resource_attachments"]["state"], "validated",
+            "{candidate}"
+        );
+        let resources = candidate["resource_attachments"]["resources"]
+            .as_array()
+            .unwrap();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0]["capture_id"], documents[2]["capture_id"]);
+        for diagnostic in candidate["resource_attachments"]["documents"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(
+                !diagnostic["capture_id"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("foreign-")
+            );
+        }
+        for key in [
+            "structural_complete",
+            "expected_launches",
+            "accounted_launches",
+            "issues",
+        ] {
+            assert_eq!(
+                candidate[key], baseline[key],
+                "resource authority repaired compiler {key}"
+            );
+        }
+        command(&directory, &manifest, true).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

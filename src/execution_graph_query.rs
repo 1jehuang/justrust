@@ -140,6 +140,45 @@ struct ReceiptV4 {
 pub struct CollectedQuery {
     pub assessment: QueryAssessment,
     pub bindings: Option<crate::execution_graph_task_bindings::ValidatedBindingCapture>,
+    pub(crate) wait_inventory: Option<ValidatedQueryWaitInventory>,
+}
+
+/// Schema4-only facts retained from the original strict receipt. No clock crosses producers.
+pub(crate) struct ValidatedQueryWaitInventory {
+    capture_id: String,
+    complete: bool,
+    waits: BTreeMap<u64, WaitLifecycle>,
+}
+
+impl ValidatedQueryWaitInventory {
+    pub(crate) fn contains_resumed(&self, capture_id: &str, wait_id: u64) -> bool {
+        self.complete
+            && self.capture_id == capture_id
+            && self.waits.get(&wait_id).is_some_and(|w| {
+                !w.invalid && w.endpoints.is_some() && w.stages.iter().all(Option::is_some)
+            })
+    }
+}
+
+fn retain_wait_inventory(r: &ReceiptV4) -> ValidatedQueryWaitInventory {
+    let mut waits: BTreeMap<u64, WaitLifecycle> = BTreeMap::new();
+    for (index, event) in r.wait_events.iter().enumerate() {
+        let (id, endpoints, ns, stage, reason) = event.parts();
+        let wait = waits.entry(id).or_default();
+        if wait.endpoints.is_some_and(|old| old != endpoints) || wait.stages[stage].is_some() {
+            wait.invalid = true;
+        }
+        wait.endpoints = Some(endpoints);
+        wait.stages[stage] = Some((index, ns));
+        if reason.is_some() {
+            wait.reason = reason;
+        }
+    }
+    ValidatedQueryWaitInventory {
+        capture_id: r.capture_id.clone(),
+        complete: false,
+        waits,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -349,6 +388,7 @@ pub fn collect_bytes(bytes: &[u8]) -> Result<CollectedQuery> {
     Ok(CollectedQuery {
         assessment,
         bindings: None,
+        wait_inventory: None,
     })
 }
 
@@ -483,6 +523,7 @@ fn collect_bindings(bytes: &[u8]) -> Result<CollectedQuery> {
     }
     // Assess admission, wait and read contracts independently. Binding partiality
     // must not downgrade any of these existing completeness assessments.
+    let wait_inventory = retain_wait_inventory(&r);
     let mut assessment = assess_reads_policy(
         ReceiptV3 {
             schema: 3,
@@ -511,9 +552,14 @@ fn collect_bindings(bytes: &[u8]) -> Result<CollectedQuery> {
     let bindings = crate::execution_graph_task_bindings::assess(r.task_bindings, inventory)?;
     assessment.schema = 4;
     assessment.task_bindings = Some(bindings.assessment.clone());
+    let assessment_wait_complete = assessment.wait_structural_complete == Some(true);
     Ok(CollectedQuery {
         assessment,
         bindings: Some(bindings),
+        wait_inventory: Some(ValidatedQueryWaitInventory {
+            complete: assessment_wait_complete,
+            ..wait_inventory
+        }),
     })
 }
 

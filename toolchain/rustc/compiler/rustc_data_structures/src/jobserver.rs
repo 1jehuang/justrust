@@ -1,6 +1,13 @@
 #[path = "jobserver_ticketed.rs"]
 pub mod ticketed;
 pub use ticketed::TicketedProxy;
+#[path = "jobserver_resource.rs"]
+pub mod resource;
+pub use resource::{
+    AcquireCompletion, BindFailure, CaptureCutReason, ControllerId, FixedCheckpoint,
+    PreallocatedResourceExportBuffer, PrefixFacts, ResourceAttachmentDescriptor,
+    ResourceCaptureConfig, ResourceCaptureControl, ResourceEndorsementToken,
+};
 #[path = "frontend_admission.rs"]
 mod frontend_admission;
 pub use frontend_admission::FrontendAdmission;

@@ -420,7 +420,7 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
         &config.extra_symbols,
         SourceMapInputs { file_loader, path_mapping, hash_kind, checksum_hash_kind },
         config.make_frontend_admission,
-        |current_gcx, admission_attachment| {
+        |current_gcx, admission_attachment, resource_capture| {
             // The previous `early_dcx` can't be reused here because it doesn't
             // impl `Send`. Creating a new one is fine.
             let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
@@ -461,10 +461,15 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
             if config.query_admission.is_some() {
                 sess.query_admission = config.query_admission;
             }
-            if sess.opts.jobs.frontend.is_some() {
-                if let Some(observer) = &sess.query_admission {
+            if let Some(observer) = &sess.query_admission {
+                if sess.opts.jobs.frontend.is_some() {
                     observer.attach_current_pool();
                     observer.bind_admission_attachment(admission_attachment);
+                }
+                // Local resource-prefix publication does not require a valid
+                // query/pool/resource endorsement triple, only a real sink.
+                if let Some(capture) = &resource_capture {
+                    attach_resource_capture(observer, admission_attachment, capture);
                 }
             }
 
@@ -562,6 +567,74 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
         observer.finalize_interface_returned();
     }
     result
+}
+
+/// Prepare and register independent participant authorities during Session
+/// setup, never while a query/latch/Sleep/native State lock is held.
+fn attach_resource_capture(
+    observer: &rustc_session::query_admission::QueryAdmissionObserver,
+    attachment: Option<rustc_thread_pool::admission::AdmissionAttachmentId>,
+    capture: &util::FrontendResourceCapture,
+) {
+    use std::num::NonZeroU64;
+
+    use rustc_thread_pool::admission_resource::PreparedDescriptor;
+
+    let Ok(directory) = observer.resource_sink() else { return };
+    let control = capture.control();
+    let resource_name = format!("resource-{}", control.capture_id());
+    let resource_role_name = format!("resource-attachment-{}", control.capture_id());
+
+    let authorities = (|| {
+        let pool = observer.resource_pool()?;
+        let descriptor = PreparedDescriptor::new(
+            Arc::from(control.attachment_capture_id()),
+            attachment?,
+            Arc::from(control.controller_id().as_str()),
+            Arc::from(control.capture_id()),
+            Arc::from(observer.capture_id()?),
+            observer.query_root_namespace()?,
+            Arc::from(pool.capture_id()),
+            NonZeroU64::new(pool.observer_id())?,
+        )
+        .ok()?;
+
+        // Each owner validates and stores its own immutable participant tuple.
+        // Partial registration remains diagnostic-only, never changes policy,
+        // and cannot be repaired by inventing a missing owner's endorsement.
+        let _ = observer.register_resource_attachment(descriptor.clone());
+        let pool_token = pool.register_resource_attachment(descriptor.clone()).ok();
+        let resource_token = control.bind(descriptor).ok();
+        Some((pool_token, resource_token))
+    })();
+
+    // No QueryAdmissionObserver or native Proxy is retained in this closure.
+    // The util-owned guard invokes it only after the full frontend worker scope
+    // has cleaned up. All variable-size serialization and FD IO happen here.
+    capture.set_publisher(move |facts| {
+        let bytes = facts.to_json();
+        let _ =
+            rustc_session::query_admission::publish(&directory, &resource_name, bytes.as_bytes());
+        if let Some((pool_token, resource_token)) = &authorities {
+            if let Some(token) = pool_token {
+                let mut bytes = Vec::new();
+                if token.write_json(&mut bytes).is_ok() {
+                    let name = format!("pool-attachment-{}", token.capture_id());
+                    let _ = rustc_session::query_admission::publish(&directory, &name, &bytes);
+                }
+            }
+            if let Some(token) = resource_token {
+                let mut bytes = Vec::new();
+                if token.write_json(&mut bytes).is_ok() {
+                    let _ = rustc_session::query_admission::publish(
+                        &directory,
+                        &resource_role_name,
+                        &bytes,
+                    );
+                }
+            }
+        }
+    });
 }
 
 pub fn try_print_query_stack(limit_frames: Option<usize>, file: Option<std::fs::File>) {

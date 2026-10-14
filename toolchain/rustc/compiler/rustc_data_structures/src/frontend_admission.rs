@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rustc_thread_pool::ThreadPoolBuilder;
 use rustc_thread_pool::admission::{AdmissionAttachmentId, AdmissionContext};
 
-use super::TicketedProxy;
+use super::{ResourceCaptureControl, TicketedProxy};
 
 type UnitHandler = Box<dyn Fn() + Send + Sync>;
 type WaitHandler = Box<dyn Fn(AdmissionContext) + Send + Sync>;
@@ -23,6 +23,7 @@ pub struct FrontendAdmission {
     acquire: UnitHandler,
     release: UnitHandler,
     waits: Option<WaitHandlers>,
+    resource: Option<ResourceCaptureControl>,
 }
 
 impl FrontendAdmission {
@@ -31,9 +32,35 @@ impl FrontendAdmission {
         Self::with_attachment(proxy, AdmissionAttachmentId::mint())
     }
 
+    /// Attach optional recording to the same explicitly selected proxy.
+    /// Recording never chooses admission policy or disables native admission.
+    pub fn from_ticketed_with_resource(
+        proxy: Arc<TicketedProxy>,
+        control: ResourceCaptureControl,
+    ) -> Self {
+        let attachment = AdmissionAttachmentId::mint();
+        let resource = if control.belongs_to(&proxy) {
+            // Failed diagnostic identity stays incomplete without changing policy.
+            let _ = control.expect_attachment(attachment);
+            Some(control)
+        } else {
+            // Never associate facts from a different native controller.
+            None
+        };
+        Self::with_attachment_and_resource(proxy, attachment, resource)
+    }
+
     fn with_attachment(
         proxy: Arc<TicketedProxy>,
         attachment: Option<AdmissionAttachmentId>,
+    ) -> Self {
+        Self::with_attachment_and_resource(proxy, attachment, None)
+    }
+
+    fn with_attachment_and_resource(
+        proxy: Arc<TicketedProxy>,
+        attachment: Option<AdmissionAttachmentId>,
+        resource: Option<ResourceCaptureControl>,
     ) -> Self {
         let acquire_proxy = Arc::clone(&proxy);
         let release_proxy = Arc::clone(&proxy);
@@ -42,14 +69,21 @@ impl FrontendAdmission {
             let release_proxy = Arc::clone(&proxy);
             WaitHandlers {
                 attachment,
-                acquire: Box::new(move |_| acquire_proxy.acquire_thread()),
-                release: Box::new(move |_| release_proxy.release_thread()),
+                acquire: Box::new(move |context| {
+                    let completion = acquire_proxy.acquire_frontend(Some(context));
+                    acquire_proxy.record_acquire_returned(completion);
+                }),
+                release: Box::new(move |context| release_proxy.release_frontend(Some(context))),
             }
         });
         Self {
-            acquire: Box::new(move || acquire_proxy.acquire_thread()),
-            release: Box::new(move || release_proxy.release_thread()),
+            acquire: Box::new(move || {
+                let completion = acquire_proxy.acquire_frontend(None);
+                acquire_proxy.record_acquire_returned(completion);
+            }),
+            release: Box::new(move || release_proxy.release_frontend(None)),
             waits,
+            resource,
         }
     }
 
@@ -57,15 +91,22 @@ impl FrontendAdmission {
         self.waits.as_ref().map(|waits| waits.attachment)
     }
 
+    /// Controller-only recording handle, copied before callbacks are installed.
+    pub fn resource_capture(&self) -> Option<ResourceCaptureControl> {
+        self.resource.clone()
+    }
+
     /// Observe the existing administrative pair without selecting or replacing
     /// admission. Like contextual observers, these callbacks must be nonblocking
     /// and nonpanicking and must not allocate or affect admission decisions.
+    /// Release may still hold query/latch or scheduler Sleep locks. Observers
+    /// must not take locks, perform IO, publish receipts, or wait for test gates.
     pub fn with_unit_observer<A, R>(self, before_acquire: A, after_release: R) -> Self
     where
         A: Fn() + Send + Sync + 'static,
         R: Fn() + Send + Sync + 'static,
     {
-        let Self { acquire, release, waits } = self;
+        let Self { acquire, release, waits, resource } = self;
         Self {
             acquire: Box::new(move || {
                 before_acquire();
@@ -76,12 +117,15 @@ impl FrontendAdmission {
                 after_release();
             }),
             waits,
+            resource,
         }
     }
 
     /// Observe only contextual waits, leaving administrative paths untouched.
     /// Observers run outside native proxy locks. They must not panic, block,
-    /// allocate, or participate in admission decisions.
+    /// allocate, or participate in admission decisions. Release may still hold
+    /// query/latch or scheduler Sleep locks: no lock-taking, publication, IO,
+    /// or waiting test gates are allowed, even outside the proxy lock.
     pub fn with_wait_observer<A, R>(mut self, before_acquire: A, after_release: R) -> Self
     where
         A: Fn(AdmissionContext) + Send + Sync + 'static,
@@ -125,6 +169,105 @@ mod tests {
     use rustc_thread_pool::admission::{AdmissionPhase, QualifiedWaitId, QueryRootNamespace};
 
     use super::*;
+
+    #[test]
+    fn resource_adapters_record_actual_returns_without_selecting_admission() {
+        use super::super::resource::Fact;
+        use super::super::{
+            CaptureCutReason, PreallocatedResourceExportBuffer, ResourceCaptureConfig,
+        };
+
+        super::super::initialize(1, |_| {});
+        for capacity in [0, 16] {
+            let proxy = TicketedProxy::new_with_event_capacity(0);
+            let control =
+                proxy.prepare_resource_capture(ResourceCaptureConfig::new(capacity)).unwrap();
+            let admission =
+                FrontendAdmission::from_ticketed_with_resource(Arc::clone(&proxy), control.clone());
+            assert!(admission.resource_capture().is_some());
+            (admission.release)();
+            (admission.acquire)();
+            let checkpoint = control.checkpoint();
+            assert_eq!(checkpoint.counters.requests, 1);
+            assert_eq!(checkpoint.counters.acks, 1);
+            assert_eq!(checkpoint.counters.acquire_returns, 1);
+            assert_eq!(checkpoint.counters.unqualified_requests, 1);
+
+            let attachment_id = admission.attachment_id().unwrap();
+            let context = AdmissionContext {
+                attachment_id,
+                qualified_wait_id: QualifiedWaitId {
+                    query_root: QueryRootNamespace::mint().unwrap(),
+                    wait_id: NonZeroU64::new(1).unwrap(),
+                },
+                phase: AdmissionPhase::QueryWaitRelease,
+            };
+            let waits = admission.waits.as_ref().unwrap();
+            (waits.release)(context);
+            (waits.acquire)(AdmissionContext {
+                phase: AdmissionPhase::QueryWaitReacquire,
+                ..context
+            });
+            let checkpoint = control.checkpoint();
+            assert_eq!(checkpoint.counters.requests, 2);
+            assert_eq!(checkpoint.counters.acks, 2);
+            assert_eq!(checkpoint.counters.acquire_returns, 2);
+            assert_eq!(checkpoint.counters.unqualified_requests, 1);
+            assert_eq!(proxy.debug_snapshot().used, 1);
+            assert!(control.seal_prefix(CaptureCutReason::ControllerCheckpoint));
+            assert!(!control.seal_prefix(CaptureCutReason::FrontendScopeReturned));
+            (admission.release)();
+            assert_eq!(proxy.debug_snapshot().used, 0);
+            let mut buffer = PreallocatedResourceExportBuffer::new(capacity);
+            let prefix = control.take_sealed_prefix(&mut buffer).unwrap();
+            if capacity == 0 {
+                assert!(prefix.transactions.is_empty());
+            } else {
+                let facts: Vec<_> = prefix
+                    .transactions
+                    .iter()
+                    .flat_map(|transaction| {
+                        transaction.events.iter().flatten().map(|event| event.fact)
+                    })
+                    .collect();
+                let reacquire =
+                    AdmissionContext { phase: AdmissionPhase::QueryWaitReacquire, ..context };
+                assert!(facts.iter().any(|fact| matches!(
+                    fact,
+                    Fact::Request { context: Some(observed), .. } if *observed == reacquire
+                )));
+                assert!(facts.iter().any(|fact| matches!(
+                    fact,
+                    Fact::ReleaseDecision { context: Some(observed), .. } if *observed == context
+                )));
+                assert_eq!(
+                    facts
+                        .iter()
+                        .filter(|fact| matches!(fact, Fact::AcquireReturned { .. }))
+                        .count(),
+                    2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn foreign_resource_controller_never_attaches_or_changes_selected_proxy() {
+        use super::super::ResourceCaptureConfig;
+
+        super::super::initialize(1, |_| {});
+        let selected = TicketedProxy::new_with_event_capacity(0);
+        let unrelated = TicketedProxy::new_with_event_capacity(0);
+        let control = unrelated.prepare_resource_capture(ResourceCaptureConfig::new(8)).unwrap();
+        let admission =
+            FrontendAdmission::from_ticketed_with_resource(Arc::clone(&selected), control);
+        assert!(admission.resource_capture().is_none());
+        (admission.release)();
+        (admission.acquire)();
+        (admission.release)();
+        assert_eq!(selected.debug_snapshot().used, 0);
+        assert_eq!(unrelated.debug_snapshot().used, 1);
+    }
 
     #[test]
     fn capture_and_attachment_do_not_select_or_disable_ticketed_admission() {

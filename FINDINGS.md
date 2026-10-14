@@ -7211,3 +7211,44 @@ explicit parent-manifest reconciliation. Wait-ID exhaustion is covered by real
 module and representative extracted-latch tests, not an actual compiler forced
 exhaustion run. Resource grants, helper IO-error provenance, callback-in-flight
 teardown and full semantic/resource mapping remain separate work.
+
+## 2026-10-14: bounded native allowance prefixes reach validated query waits
+
+Resource schema 1 now records selected TicketedProxy grant decisions as bounded,
+immutable prefixes. Three independently owned query/pool/resource endorsements
+bind exact namespaces without changing query schema 4 or pool schema 2. A closed
+source-to-grant-to-Ack-to-actual-acquire-return chain can authorize a query wait
+resume, without inferring physical holders, leases or helper demand provenance.
+
+Actual rebuilt compiler task `4999534dv4` and resource acceptance
+`690279pgup` passed all six helper/local pregrant/postresume and capacity cases.
+Postresume helper and local captures each expose one validated cross-wait edge;
+pregrant captures expose none. Capacity 0/1 preserves native progress while
+reporting incomplete records and no resource edges. The actual-copy mutation
+matrix rejects missing/conflicting endorsements, omitted categories, wrong
+sources/references/namespaces, lost inventory and impossible transaction state.
+A valid explicit-unbound optional task point preserves the independent resource
+chain. Selected six plus legacy nine gates passed task `6544221ke4`; actual
+native crate tests `7811838tkb` passed data-structures 159, session 76 and pool
+111 tests, plus integration/doctests. Hosted client test run
+`20261014-154624496-2726352` passed 587 tests, with check
+`20261014-154621239-2725646` and strict all-target lint
+`20261014-154639610-2725471` also passing.
+
+Real acceptance caught a publication bug that module checks missed: three
+interface callers supplied `.json` to a basename-only writer that appends its
+own suffix. Only those three literals were corrected; path safety was not
+weakened. Earlier failed compiler warnings and the malformed optional-point
+mutation are retained separately from final passing evidence.
+
+Task `84781816zu` retained 64 default-path fixed-fixture ABBA controls against
+the frozen prior compiler. Before/after median milliseconds were 143.906/140.511
+at one thread and 86.439/89.699 at four threads with capture off, and
+224.813/223.176 and 224.152/221.126 with capture on. The four-thread off median
+is higher, not averaged away. Quiet provenance is unknown. These controls do
+not measure active resource-ledger overhead or establish zero overhead, a
+session-wide speedup or default promotion. Resource fixture off/on prepares the
+same ledger and checks publication neutrality only. Full lifecycle/resource/
+pipeline completeness remains false, CPU/span remain null, and actual rare IO
+fault injection and helper-quiescent teardown remain unproven. Detailed checks
+and public output are in `docs/native-resource-prefix-results-20261014.md`.

@@ -15,7 +15,10 @@ use rustc_codegen_ssa::target_features::internal_target_features;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo, TargetConfig};
 use rustc_data_structures::base_n::{CASE_INSENSITIVE, ToBaseN};
-use rustc_data_structures::jobserver::{FrontendAdmission, Proxy};
+use rustc_data_structures::jobserver::{
+    CaptureCutReason, FrontendAdmission, PreallocatedResourceExportBuffer, PrefixFacts, Proxy,
+    ResourceCaptureControl,
+};
 use rustc_data_structures::sync;
 use rustc_metadata::{DylibError, EncodedMetadata, load_symbol_from_dylib};
 use rustc_middle::dep_graph::WorkProductMap;
@@ -212,8 +215,52 @@ fn run_in_thread_with_globals<F: FnOnce(CurrentGcx) -> R + Send, R: Send>(
     })
 }
 
+type ResourcePublisher = Box<dyn Fn(PrefixFacts) + Send + Sync>;
+
+/// Explicit controller transport, never a policy selector or a query owner.
+#[derive(Clone)]
+pub(crate) struct FrontendResourceCapture {
+    control: ResourceCaptureControl,
+    publisher: Arc<OnceLock<ResourcePublisher>>,
+}
+
+impl FrontendResourceCapture {
+    pub(crate) fn control(&self) -> &ResourceCaptureControl {
+        &self.control
+    }
+
+    /// Called once during Session setup, outside native/query/scheduler locks.
+    pub(crate) fn set_publisher(&self, publisher: impl Fn(PrefixFacts) + Send + Sync + 'static) {
+        let _ = self.publisher.set(Box::new(publisher));
+    }
+}
+
+/// Lives outside build_scoped: its destructor cannot run before scoped worker
+/// cleanup, including exit handlers and their final native release callbacks.
+struct FrontendResourceScope {
+    capture: FrontendResourceCapture,
+    buffer: PreallocatedResourceExportBuffer,
+}
+
+impl Drop for FrontendResourceScope {
+    fn drop(&mut self) {
+        let reason = if thread::panicking() {
+            CaptureCutReason::FrontendScopeUnwound
+        } else {
+            CaptureCutReason::FrontendScopeReturned
+        };
+        // An early controller cut is immutable. A false result means no recut.
+        self.capture.control.seal_prefix(reason);
+        if let Some(facts) = self.capture.control.take_sealed_prefix(&mut self.buffer) {
+            if let Some(publish) = self.capture.publisher.get() {
+                publish(facts);
+            }
+        }
+    }
+}
+
 pub(crate) fn run_in_thread_pool_with_globals<
-    F: FnOnce(CurrentGcx, Option<AdmissionAttachmentId>) -> R + Send,
+    F: FnOnce(CurrentGcx, Option<AdmissionAttachmentId>, Option<FrontendResourceCapture>) -> R + Send,
     R: Send,
 >(
     thread_builder_diag: &EarlyDiagCtxt,
@@ -246,7 +293,7 @@ pub(crate) fn run_in_thread_pool_with_globals<
                 // Register the thread for use with the `WorkerLocal` type.
                 registry.register();
 
-                f(current_gcx, None)
+                f(current_gcx, None, None)
             },
         );
     };
@@ -256,16 +303,21 @@ pub(crate) fn run_in_thread_pool_with_globals<
 
     // Explicit factory selection happens at the legacy proxy boundary, after
     // native client initialization and before any worker can be started.
-    let (builder, admission_attachment) = match make_frontend_admission {
+    let (builder, admission_attachment, resource_capture) = match make_frontend_admission {
         Some(make) => {
             let admission = make();
             let attachment = admission.attachment_id();
+            let resource = admission.resource_capture().map(|control| FrontendResourceCapture {
+                control,
+                publisher: Arc::new(OnceLock::new()),
+            });
             (
                 admission.apply_to(
                     rustc_thread_pool::ThreadPoolBuilder::new()
                         .thread_name(|_| "rustc".to_string()),
                 ),
                 attachment,
+                resource,
             )
         }
         None => {
@@ -275,9 +327,16 @@ pub(crate) fn run_in_thread_pool_with_globals<
                 .thread_name(|_| "rustc".to_string())
                 .acquire_thread_handler(move || proxy.acquire_thread())
                 .release_thread_handler(move || proxy_.release_thread());
-            (builder, None)
+            (builder, None, None)
         }
     };
+
+    // Allocate replacement storage before workers exist. This guard is outside
+    // the scoped pool and remains alive through all of its unwind cleanup.
+    let _resource_scope = resource_capture.as_ref().map(|capture| FrontendResourceScope {
+        buffer: PreallocatedResourceExportBuffer::new(capture.control.transaction_capacity()),
+        capture: capture.clone(),
+    });
 
     let builder = builder
         .num_threads(jobs_frontend.get())
@@ -355,7 +414,9 @@ internal compiler error: query cycle handler thread panicked, aborting process";
                     },
                     // Run `f` on the first thread in the thread pool.
                     move |pool: &rustc_thread_pool::ThreadPool| {
-                        pool.install(|| f(current_gcx.into_inner(), admission_attachment))
+                        pool.install(|| {
+                            f(current_gcx.into_inner(), admission_attachment, resource_capture)
+                        })
                     },
                 )
                 .unwrap_or_else(|err| {

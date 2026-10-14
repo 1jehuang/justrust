@@ -74,6 +74,7 @@ use std::{env, fmt, io, thread};
 mod private;
 
 pub mod admission;
+pub mod admission_resource;
 pub use admission::{
     AdmissionAttachmentId, AdmissionBinding, AdmissionContext, AdmissionPhase, QualifiedWaitId,
     QueryRootNamespace,

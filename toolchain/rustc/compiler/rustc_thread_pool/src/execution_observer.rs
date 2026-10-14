@@ -6,12 +6,18 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::admission_resource::{
+    AttachmentEndorsement, BindFailure, EndorsementGate, EndorsementRole, PoolEndorsementToken,
+    PreparedDescriptor, RegistrationSnapshot,
+};
 
 const MAX_RECORDS: usize = 100_000;
 
 static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
+static NEXT_ENDORSEMENT: AtomicU64 = AtomicU64::new(1);
 
 fn allocate_id(counter: &AtomicU64, limit: u64) -> Option<u64> {
     let mut id = counter.load(Ordering::Relaxed);
@@ -111,6 +117,8 @@ pub struct ExecutionObserver {
     epoch: Instant,
     capture_id: String,
     query_capture_id: Option<String>,
+    resource_attachment: OnceLock<PoolEndorsementToken>,
+    resource_registration: EndorsementGate,
 }
 
 impl ExecutionObserver {
@@ -150,6 +158,8 @@ impl ExecutionObserver {
             epoch: Instant::now(),
             capture_id,
             query_capture_id: query_capture_id.map(str::to_owned),
+            resource_attachment: OnceLock::new(),
+            resource_registration: EndorsementGate::default(),
             buffer: Mutex::new(Buffer {
                 events,
                 timestamps,
@@ -166,6 +176,72 @@ impl ExecutionObserver {
 
     pub fn observer_id(&self) -> u64 {
         self.id
+    }
+
+    /// Register one independently validated pool endorsement. Call only from
+    /// owner preparation outside native/query locks. Receipt bytes and native
+    /// scheduling remain unaffected by failure, including repeated calls.
+    pub fn register_resource_attachment(
+        &self,
+        descriptor: PreparedDescriptor,
+    ) -> Result<PoolEndorsementToken, BindFailure> {
+        self.resource_registration.begin_attempt()?;
+        let result = self.register_resource_attachment_once(descriptor);
+        if result.is_ok() {
+            self.resource_registration.succeeded();
+        } else {
+            self.resource_registration.failed();
+        }
+        result
+    }
+
+    fn register_resource_attachment_once(
+        &self,
+        descriptor: PreparedDescriptor,
+    ) -> Result<PoolEndorsementToken, BindFailure> {
+        if descriptor.pool_capture_id().as_ref() != self.capture_id {
+            return Err(BindFailure::CaptureMismatch);
+        }
+        if descriptor.pool_observer().get() != self.id {
+            return Err(BindFailure::ObserverMismatch);
+        }
+        if self.query_capture_id.as_deref() != Some(descriptor.query_capture_id().as_ref()) {
+            return Err(BindFailure::QueryCaptureMismatch);
+        }
+        if self.resource_attachment.get().is_some() {
+            return Err(BindFailure::Conflict);
+        }
+        let id = allocate_id(&NEXT_ENDORSEMENT, u64::MAX).ok_or(BindFailure::IdentityExhausted)?;
+        // Distinct purpose prefix plus process-local checked allocator. Neither
+        // filenames nor pool capture strings are parsed to discover identity.
+        let capture_id = Arc::from(format!(
+            "pool-endorsement-{}-{}-{id}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+        ));
+        let token = PoolEndorsementToken {
+            endorsement: AttachmentEndorsement::new(EndorsementRole::Pool, capture_id, descriptor)?,
+            gate: self.resource_registration.clone(),
+        };
+        self.resource_attachment.set(token.clone()).map_err(|_| BindFailure::Conflict)?;
+        Ok(token)
+    }
+
+    pub fn resource_attachment_registration(&self) -> RegistrationSnapshot {
+        self.resource_registration.snapshot()
+    }
+
+    /// Serialize only this owner's immutable validated snapshot, if present.
+    pub fn write_resource_attachment_json(
+        &self,
+        out: &mut impl std::io::Write,
+    ) -> std::io::Result<bool> {
+        if !self.resource_registration.is_complete() {
+            return Ok(false);
+        }
+        let Some(token) = self.resource_attachment.get() else { return Ok(false) };
+        token.write_json(out)?;
+        Ok(true)
     }
 
     /// Borrow the worker's active slot without cloning contexts or locking receipts.
@@ -521,6 +597,125 @@ impl Fork {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn descriptor_for(
+        _observer: &ExecutionObserver,
+        query: &str,
+        pool: &str,
+        observer_id: u64,
+    ) -> PreparedDescriptor {
+        PreparedDescriptor::new(
+            Arc::from("attachment-test"),
+            crate::admission::AdmissionAttachmentId::mint().unwrap(),
+            Arc::from("controller-test"),
+            Arc::from("resource-test"),
+            Arc::from(query),
+            crate::admission::QueryRootNamespace::mint().unwrap(),
+            Arc::from(pool),
+            std::num::NonZeroU64::new(observer_id).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn resource_attachment_validates_own_exact_identity_and_preserves_pool_bytes() {
+        let observer = ExecutionObserver::new_for_query(20, "query-test").unwrap();
+        let mut before = Vec::new();
+        observer.write_json(&mut before).unwrap();
+        let mut absent = Vec::new();
+        assert!(!observer.write_resource_attachment_json(&mut absent).unwrap());
+        assert!(absent.is_empty());
+        for (query, pool, id, failure) in [
+            ("query-test", "wrong-pool", observer.id, BindFailure::CaptureMismatch),
+            ("query-test", observer.capture_id(), observer.id + 1, BindFailure::ObserverMismatch),
+            ("wrong-query", observer.capture_id(), observer.id, BindFailure::QueryCaptureMismatch),
+        ] {
+            let invalid = ExecutionObserver::new_for_query(0, "query-test").unwrap();
+            let own_pool = if pool == observer.capture_id() { invalid.capture_id() } else { pool };
+            let own_id =
+                if failure == BindFailure::ObserverMismatch { invalid.id + 1 } else { invalid.id };
+            let descriptor = descriptor_for(&invalid, query, own_pool, own_id);
+            assert_eq!(invalid.register_resource_attachment(descriptor).unwrap_err(), failure);
+            assert_eq!(invalid.resource_attachment_registration().failures, 1);
+            let _ = id;
+        }
+        let descriptor =
+            descriptor_for(&observer, "query-test", observer.capture_id(), observer.id);
+        let token = observer.register_resource_attachment(descriptor.clone()).unwrap();
+        assert_eq!(token.descriptor(), &descriptor);
+        assert!(Arc::ptr_eq(token.descriptor().controller_id(), descriptor.controller_id()));
+        let mut output = Vec::new();
+        assert!(observer.write_resource_attachment_json(&mut output).unwrap());
+        let expected = format!(
+            "{{\"schema\":1,\"producer\":\"rustc-frontend-admission-attachment\",\"scope\":\"selected-resource-query-pool-attachment\",\"capture_id\":\"{}\",\"role\":\"pool\",\"sealed\":true,\"expected_endorsements\":1,\"endorsement_allocator_baseline\":0,\"endorsement_allocator_high_water\":1,\"lost_events\":0,\"loss_overflowed\":false,\"attachment\":{{\"attachment_capture_id\":\"attachment-test\",\"attachment_id\":{},\"controller_id\":\"controller-test\",\"resource_capture_id\":\"resource-test\",\"query_capture_id\":\"query-test\",\"query_root_namespace\":{},\"pool_capture_id\":\"{}\",\"pool_observer\":{}}}}}\n",
+            token.capture_id(),
+            descriptor.attachment_id().wire_value(),
+            descriptor.query_root_namespace().wire_value(),
+            observer.capture_id(),
+            observer.id,
+        );
+        assert_eq!(String::from_utf8(output).unwrap(), expected);
+        let mut after = Vec::new();
+        observer.write_json(&mut after).unwrap();
+        assert_eq!(before, after);
+        assert_eq!(
+            observer.register_resource_attachment(descriptor.clone()).unwrap_err(),
+            BindFailure::Conflict
+        );
+        let mut rejected = Vec::new();
+        assert!(token.write_json(&mut rejected).is_err());
+        assert!(!observer.write_resource_attachment_json(&mut rejected).unwrap());
+        assert!(rejected.is_empty());
+        assert_eq!(observer.resource_attachment_registration().attempts, 2);
+        assert_eq!(observer.resource_attachment_registration().successes, 1);
+        assert_eq!(observer.resource_attachment_registration().conflicts, 1);
+        // A diagnostic failure cannot prevent real pool task execution.
+        let root = observer.root().unwrap();
+        drop(root.enter().unwrap());
+        assert!(
+            observer
+                .snapshot()
+                .events
+                .contains(&Event::Finish { task: root.id(), outcome: Outcome::Normal })
+        );
+    }
+
+    #[test]
+    fn concurrent_resource_attachment_has_exactly_one_owner_snapshot() {
+        let observer = ExecutionObserver::new_for_query(0, "query-test").unwrap();
+        let descriptor =
+            descriptor_for(&observer, "query-test", observer.capture_id(), observer.id);
+        let winners = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let descriptor = descriptor.clone();
+                    let observer = &observer;
+                    scope.spawn(move || observer.register_resource_attachment(descriptor))
+                })
+                .collect();
+            handles.into_iter().map(|handle| handle.join().unwrap()).filter(Result::is_ok).count()
+        });
+        assert_eq!(winners, 1);
+        assert_eq!(observer.resource_attachment.get().unwrap().descriptor(), &descriptor);
+        assert_eq!(observer.resource_attachment_registration().attempts, 8);
+        assert_eq!(observer.resource_attachment_registration().successes, 1);
+        assert_eq!(observer.resource_attachment_registration().conflicts, 7);
+        let mut output = Vec::new();
+        assert!(observer.resource_attachment.get().unwrap().write_json(&mut output).is_err());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn legacy_pool_cannot_endorse_an_unobserved_query_capture() {
+        let observer = ExecutionObserver::new(0).unwrap();
+        let descriptor =
+            descriptor_for(&observer, "query-test", observer.capture_id(), observer.id);
+        assert_eq!(
+            observer.register_resource_attachment(descriptor).unwrap_err(),
+            BindFailure::QueryCaptureMismatch
+        );
+        assert!(observer.resource_attachment.get().is_none());
+    }
 
     #[test]
     fn poisoned_buffer_permanently_reports_loss() {

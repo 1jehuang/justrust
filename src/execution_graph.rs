@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::Path;
 
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_FILES: usize = 256;
+const MAX_FILES: usize = 20_000;
 const MAX_NODES: usize = 100_000;
 const MAX_EDGES: usize = 1_000_000;
 
@@ -81,6 +81,12 @@ struct Assessment {
     query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
+    /// Strict native prefix/endorsement assessment, never compiler-launch authority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<serde_json::Value>,
+    /// Original-byte directory reconciliation is emitted once to bound output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_attachments: Option<crate::execution_graph_resource_attachment::AttachmentAssessment>,
     issues: Vec<String>,
     opaque_boundaries: Vec<String>,
     /// No CPU or execution-span estimate is inferred from elapsed lifetimes.
@@ -292,6 +298,8 @@ fn assess(r: Receipt) -> Result<Assessment> {
         waits: None,
         query_reads: None,
         task_bindings: None,
+        resource: None,
+        resource_attachments: None,
         issues,
         opaque_boundaries: r.opaque_boundaries,
         cpu_work_ns: None,
@@ -379,6 +387,9 @@ fn assess_receipt_bytes(
     bytes: &[u8],
     pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
 ) -> Result<Assessment> {
+    if let Some(producer) = resource_producer(bytes)? {
+        return assess_resource_document(bytes, &producer);
+    }
     #[derive(Deserialize)]
     struct ProducerTag {
         producer: String,
@@ -404,6 +415,8 @@ fn assess_receipt_bytes(
                 waits: None,
                 query_reads: None,
                 task_bindings: None,
+                resource: None,
+                resource_attachments: None,
                 issues: vec!["requires explicit --compiler-manifest reconciliation".into()],
                 opaque_boundaries: vec!["compiler-launch-authority".into()],
                 cpu_work_ns: None,
@@ -427,6 +440,8 @@ fn assess_receipt_bytes(
                 waits: query.waits,
                 query_reads: query.query_reads,
                 task_bindings: query.task_bindings,
+                resource: None,
+                resource_attachments: None,
                 issues: query.issues,
                 opaque_boundaries: query.opaque_boundaries,
                 cpu_work_ns: query.cpu_work_ns,
@@ -450,14 +465,102 @@ fn assess_receipt_bytes(
                 waits: None,
                 query_reads: None,
                 task_bindings: None,
+                resource: None,
+                resource_attachments: None,
                 issues: join.issues,
                 opaque_boundaries: join.opaque_boundaries,
                 cpu_work_ns: join.cpu_work_ns,
                 execution_span_ns: join.execution_span_ns,
             })
         }
+        "rustc-frontend-allowance" | "rustc-frontend-admission-attachment" => {
+            assess_resource_document(bytes, &document.producer)
+        }
         _ => bail!("unsupported execution graph producer"),
     }
+}
+
+/// Classification is not authority. Every matching document is reparsed from
+/// its original bytes by the strict resource parser, including duplicate keys.
+pub(crate) fn resource_producer(bytes: &[u8]) -> Result<Option<String>> {
+    let header: serde_json::Value = serde_json::from_slice(bytes)?;
+    Ok(header["producer"]
+        .as_str()
+        .filter(|producer| {
+            matches!(
+                *producer,
+                "rustc-frontend-allowance" | "rustc-frontend-admission-attachment"
+            )
+        })
+        .map(str::to_owned))
+}
+
+/// A malformed optional resource document must not erase independent query or
+/// pool assessments. Its strict-parser failure remains visible on its own row.
+fn assess_resource_document(bytes: &[u8], producer: &str) -> Result<Assessment> {
+    let header: serde_json::Value = serde_json::from_slice(bytes)?;
+    let parsed = if producer == "rustc-frontend-allowance" {
+        crate::execution_graph_resource::assess_bytes(bytes)
+            .and_then(|assessment| serde_json::to_value(assessment).map_err(Into::into))
+    } else {
+        crate::execution_graph_resource_attachment::assess_bytes(bytes)
+            .and_then(|assessment| serde_json::to_value(assessment).map_err(Into::into))
+    };
+    let (resource, issues, structural_complete) = match parsed {
+        Ok(resource) => {
+            let valid = if producer == "rustc-frontend-allowance" {
+                resource["prefix_protocol_valid"] == true
+                    && resource["prefix_records_complete"] == true
+            } else {
+                resource["valid"] == true
+            };
+            let issues = resource["issues"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|issue| issue.as_str().map(str::to_owned))
+                .collect();
+            (resource, issues, valid)
+        }
+        Err(error) => {
+            let message = format!("invalid resource authority: {error:#}");
+            (
+                serde_json::json!({"valid":false,"error":message}),
+                vec![message],
+                false,
+            )
+        }
+    };
+    Ok(Assessment {
+        schema: header["schema"]
+            .as_u64()
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or(0),
+        producer: producer.to_owned(),
+        scope: header["scope"]
+            .as_str()
+            .unwrap_or("unknown-resource-scope")
+            .to_owned(),
+        // This header value is a display label only. Reconciliation uses strict
+        // original-byte parsing, never this potentially malformed identity.
+        capture_id: header["capture_id"].as_str().unwrap_or("").to_owned(),
+        structural_complete,
+        full_pipeline_complete: false,
+        nodes: 0,
+        edges: 0,
+        descriptive_parent_edges: None,
+        control_causal_edges: None,
+        wait_structural_complete: None,
+        waits: None,
+        query_reads: None,
+        task_bindings: None,
+        resource: Some(resource),
+        resource_attachments: None,
+        issues,
+        opaque_boundaries: vec!["bounded-resource-prefix-not-full-lifecycle".into()],
+        cpu_work_ns: None,
+        execution_span_ns: None,
+    })
 }
 
 fn is_owner_document(path: &Path) -> bool {
@@ -803,13 +906,7 @@ fn collect_path(path: &Path) -> Result<Vec<Assessment>> {
                 bail!("capture directory exceeds file budget");
             }
             let path = entry?.path();
-            if path.extension().is_some_and(|s| s == "json")
-                && !is_owner_document(&path)
-                && !path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|s| s.ends_with(".envelope.json"))
-            {
+            if path.extension().is_some_and(|s| s == "json") {
                 files.push(path);
                 if files.len() > MAX_FILES {
                     bail!("capture directory exceeds receipt budget");
@@ -829,27 +926,66 @@ fn collect_path(path: &Path) -> Result<Vec<Assessment>> {
     let mut total_bytes = 0u64;
     let mut documents = Vec::new();
     for file in files {
-        total_bytes = total_bytes.saturating_add(std::fs::symlink_metadata(&file)?.len());
+        let bytes = read_bytes(&file, MAX_BYTES)?;
+        total_bytes = total_bytes.saturating_add(bytes.len() as u64);
         if total_bytes > MAX_BYTES {
             bail!("capture directory exceeds total receipt byte budget");
         }
-        documents.push(read_bytes(&file, MAX_BYTES)?);
+        let resource = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .is_some_and(|header| {
+                matches!(
+                    header["producer"].as_str(),
+                    Some("rustc-frontend-allowance" | "rustc-frontend-admission-attachment")
+                )
+            });
+        if !resource
+            && (is_owner_document(&file)
+                || file
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.ends_with(".envelope.json")))
+        {
+            continue;
+        }
+        documents.push(bytes);
     }
+    if documents.is_empty() {
+        bail!("no receipts: capture completeness is unknown, not complete");
+    }
+    // Collect exact authorities from original bytes before flattening any row.
+    let resource_attachments =
+        crate::execution_graph_resource_attachment::collect_documents(&documents, None)?;
     let pools = collect_pool_inventories(&documents)?;
     for bytes in &documents {
         let mut assessment = assess_receipt_bytes(bytes, &pools)?;
         if let Some(&previous) = identities.get(&assessment.capture_id) {
             let previous: &mut Assessment = &mut assessments[previous];
-            previous.structural_complete = false;
-            previous.issues.push("duplicate capture identity".into());
-            assessment.structural_complete = false;
-            assessment.issues.push("duplicate capture identity".into());
+            poison_duplicate_capture(previous);
+            poison_duplicate_capture(&mut assessment);
         } else {
             identities.insert(assessment.capture_id.clone(), assessments.len());
         }
         assessments.push(assessment);
     }
+    if let Some(first) = assessments.first_mut() {
+        first.resource_attachments = Some(resource_attachments);
+    }
     Ok(assessments)
+}
+
+fn poison_duplicate_capture(assessment: &mut Assessment) {
+    assessment.structural_complete = false;
+    assessment.issues.push("duplicate capture identity".into());
+    if let Some(resource) = &mut assessment.resource {
+        resource["capture_authority_valid"] = serde_json::json!(false);
+        if assessment.producer == "rustc-frontend-allowance" {
+            resource["prefix_records_complete"] = serde_json::json!(false);
+            resource["local_resource_edges"] = serde_json::json!([]);
+        } else {
+            resource["valid"] = serde_json::json!(false);
+        }
+    }
 }
 
 fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
@@ -907,6 +1043,15 @@ fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
                     println!("  task binding: {issue}");
                 }
             }
+            if let Some(resource) = &a.resource {
+                println!("  resource authority: {}", serde_json::to_string(resource)?);
+            }
+            if let Some(attachments) = &a.resource_attachments {
+                println!(
+                    "  resource attachments (directory-wide): {}",
+                    serde_json::to_string(attachments)?
+                );
+            }
             for issue in a.issues {
                 println!("  issue: {issue}");
             }
@@ -923,6 +1068,431 @@ fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn resource_test_directory(label: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::paths::home().unwrap());
+        let directory = root.join(format!(
+            "graph-resource-{label}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn write_json(directory: &Path, name: &str, value: &serde_json::Value) {
+        std::fs::write(directory.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
+    fn resource_summary(assessments: &[Assessment]) -> serde_json::Value {
+        serde_json::to_value(assessments[0].resource_attachments.as_ref().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn public_resource_absence_is_unknown_and_malformed_authority_is_independent() {
+        let directory = resource_test_directory("independent");
+        let query = crate::execution_graph_query::tests::task_binding_fixture();
+        write_json(&directory, "a.json", &query);
+        let assessments = collect_path(&directory).unwrap();
+        assert_eq!(resource_summary(&assessments)["state"], "unknown");
+        assert!(assessments[0].structural_complete);
+        for (name, document) in [
+            (
+                "resource.manifest.json",
+                json!({
+                    "schema":1,"producer":"rustc-frontend-allowance",
+                    "capture_id":"invalid-resource","scope":"selected-ticketed-grant-decisions",
+                    "profile":42
+                }),
+            ),
+            (
+                "endorsement.envelope.json",
+                json!({
+                    "schema":1,"producer":"rustc-frontend-admission-attachment",
+                    "capture_id":"invalid-endorsement","scope":"selected-resource-query-pool-attachment"
+                }),
+            ),
+        ] {
+            write_json(&directory, name, &document);
+        }
+        let assessments = collect_path(&directory).unwrap();
+        assert_eq!(
+            assessments.len(),
+            3,
+            "content, not owner-like filenames, routes resources"
+        );
+        let query = assessments
+            .iter()
+            .find(|a| a.producer == "rustc-query-admission")
+            .unwrap();
+        assert!(query.structural_complete);
+        assert_eq!(query.wait_structural_complete, Some(true));
+        assert!(query.query_reads.as_ref().unwrap().records_complete);
+        assert!(
+            assessments
+                .iter()
+                .filter(|a| a.resource.is_some())
+                .all(|a| !a.structural_complete)
+        );
+        assert_ne!(resource_summary(&assessments)["state"], "validated");
+        command(&directory, true, None).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn write_resource_documents(directory: &Path, documents: &[serde_json::Value]) {
+        for (index, document) in documents.iter().enumerate() {
+            // No participant's authority comes from its path or ordering.
+            let name = if document["producer"] == "rustc-frontend-allowance" {
+                "resource.manifest.json".to_owned()
+            } else {
+                format!("copy-{index}.json")
+            };
+            write_json(directory, &name, document);
+        }
+    }
+
+    #[test]
+    fn public_resource_file_copies_missing_duplicate_foreign_tuple_and_endpoint_matrix() {
+        let root = resource_test_directory("mutation-matrix");
+        let original = crate::execution_graph_resource_attachment::tests::documents();
+        let mut cases = vec![("valid".to_owned(), original.clone(), true)];
+        for role in 3..6 {
+            let mut documents = original.clone();
+            documents.remove(role);
+            cases.push((format!("missing-role-{role}"), documents, false));
+        }
+        let mut missing_all = original.clone();
+        missing_all.truncate(3);
+        cases.push(("missing-all-roles".into(), missing_all, false));
+        for index in 1..6 {
+            let mut documents = original.clone();
+            documents.push(documents[index].clone());
+            cases.push((format!("duplicate-{index}"), documents, false));
+        }
+        for field in [
+            "attachment_capture_id",
+            "attachment_id",
+            "controller_id",
+            "resource_capture_id",
+            "query_capture_id",
+            "query_root_namespace",
+            "pool_capture_id",
+            "pool_observer",
+        ] {
+            let mut documents = original.clone();
+            documents[4]["attachment"][field] = if documents[4]["attachment"][field].is_string() {
+                json!("foreign-authority")
+            } else {
+                json!(2)
+            };
+            cases.push((format!("foreign-{field}"), documents, false));
+        }
+        for (transaction, event, label) in [
+            (1, 0, "request"),
+            (1, 1, "grant"),
+            (1, 2, "ack"),
+            (2, 0, "returned"),
+        ] {
+            let mut documents = original.clone();
+            documents[2]["transactions"][transaction]["events"]
+                .as_array_mut()
+                .unwrap()
+                .remove(event);
+            cases.push((format!("missing-{label}"), documents, false));
+        }
+        for kind in ["release", "helper"] {
+            let mut documents = original.clone();
+            documents[2]["transactions"][1]["events"][1]["source"] = if kind == "release" {
+                json!({"kind":"release","release_id":99})
+            } else {
+                json!({"kind":"helper","callback_id":99})
+            };
+            cases.push((format!("foreign-source-{kind}"), documents, false));
+        }
+        for (field, value) in [
+            ("wait_id", json!(2)),
+            ("phase", json!("query_wait_release")),
+            ("query_root_namespace", json!(2)),
+        ] {
+            let mut documents = original.clone();
+            documents[2]["transactions"][1]["events"][0]["context"][field] = value;
+            cases.push((format!("foreign-context-{field}"), documents, false));
+        }
+        for field in [
+            "identity_exhausted",
+            "counter_overflowed",
+            "loss_overflowed",
+        ] {
+            let mut documents = original.clone();
+            documents[2][field] = json!(true);
+            documents[2]["records_complete"] = json!(false);
+            cases.push((format!("capped-{field}"), documents, false));
+        }
+        for (label, documents, valid) in cases {
+            let directory = root.join(&label);
+            std::fs::create_dir(&directory).unwrap();
+            write_resource_documents(&directory, &documents);
+            // A duplicate prefix must be a second real file, not overwritten by
+            // the fixture writer's descriptive resource filename.
+            if label == "duplicate-2" {
+                write_json(&directory, "second-prefix-copy.json", &documents[2]);
+            }
+            let assessments = collect_path(&directory).unwrap();
+            let summary = resource_summary(&assessments);
+            if label == "duplicate-2" {
+                for assessment in assessments
+                    .iter()
+                    .filter(|a| a.producer == "rustc-frontend-allowance")
+                {
+                    let resource = assessment.resource.as_ref().unwrap();
+                    assert_eq!(resource["prefix_records_complete"], false);
+                    assert!(
+                        resource["local_resource_edges"]
+                            .as_array()
+                            .unwrap()
+                            .is_empty()
+                    );
+                }
+                assert!(
+                    summary["resources"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|resource| resource["local_resource_edges"]
+                            .as_array()
+                            .unwrap()
+                            .is_empty())
+                );
+            }
+            let links = summary["attachments"].as_array().unwrap();
+            let cross: usize = links
+                .iter()
+                .map(|a| a["cross_wait_edges"].as_array().unwrap().len())
+                .sum();
+            assert_eq!(cross, usize::from(valid), "{label}: {summary}");
+            if valid {
+                assert_eq!(summary["state"], "validated", "{label}: {summary}");
+            } else {
+                assert!(
+                    links.iter().all(|a| a["context_links_complete"] == false),
+                    "{label}: {summary}"
+                );
+            }
+            let query = assessments
+                .iter()
+                .find(|a| a.producer == "rustc-query-admission")
+                .unwrap();
+            assert!(
+                query.structural_complete,
+                "{label}: independent query validity changed"
+            );
+            assert_eq!(query.wait_structural_complete, Some(true), "{label}");
+            assert!(
+                query.query_reads.as_ref().unwrap().records_complete,
+                "{label}"
+            );
+            assert_eq!(summary["full_pipeline_complete"], false);
+            assert_eq!(summary["resource_full_complete"], false);
+            assert!(summary["cpu_work_ns"].is_null() && summary["execution_span_ns"].is_null());
+            command(&directory, true, None).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn public_resource_query_read_partial_retains_validated_wait_link() {
+        let directory = resource_test_directory("read-partial");
+        let mut documents = crate::execution_graph_resource_attachment::tests::documents();
+        documents[0]["query_reads"]["records_complete"] = json!(false);
+        documents[0]["query_reads"]["lost_events"] = json!(1);
+        write_resource_documents(&directory, &documents);
+        let assessments = collect_path(&directory).unwrap();
+        let query = assessments
+            .iter()
+            .find(|a| a.producer == "rustc-query-admission")
+            .unwrap();
+        assert!(!query.structural_complete);
+        assert_eq!(query.wait_structural_complete, Some(true));
+        assert!(!query.query_reads.as_ref().unwrap().records_complete);
+        let summary = resource_summary(&assessments);
+        assert_eq!(
+            summary["attachments"][0]["cross_wait_edges"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "{summary}"
+        );
+        command(&directory, true, None).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn public_resource_same_controller_distinct_prefixes_are_not_merged() {
+        let directory = resource_test_directory("controller-prefixes");
+        let documents = crate::execution_graph_resource_attachment::tests::documents();
+        write_resource_documents(&directory, &documents);
+        let mut later = documents[2].clone();
+        later["capture_id"] = json!("later-prefix");
+        later["attachment_capture_id"] = json!("later-attachment");
+        write_json(&directory, "later-prefix.json", &later);
+        let assessments = collect_path(&directory).unwrap();
+        let summary = resource_summary(&assessments);
+        let resources = summary["resources"].as_array().unwrap();
+        assert_eq!(resources.len(), 2);
+        assert!(
+            resources
+                .iter()
+                .all(|r| r["prefix_records_complete"] == true)
+        );
+        assert!(
+            resources
+                .iter()
+                .all(|r| r["controller_id"] == "controller-1")
+        );
+        let links = summary["attachments"].as_array().unwrap();
+        assert_eq!(
+            links
+                .iter()
+                .flat_map(|a| a["cross_wait_edges"].as_array().unwrap())
+                .count(),
+            1
+        );
+        let later = links
+            .iter()
+            .find(|a| a["attachment_capture_id"] == "later-attachment")
+            .unwrap();
+        assert_eq!(later["state"], "incomplete");
+        assert!(later["cross_wait_edges"].as_array().unwrap().is_empty());
+        command(&directory, true, None).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn public_resource_lossfree_unreturned_tail_is_not_complete_context_mapping() {
+        let directory = resource_test_directory("unreturned-tail");
+        let mut documents = crate::execution_graph_resource_attachment::tests::documents();
+        let prefix = &mut documents[2];
+        prefix["transactions"].as_array_mut().unwrap().remove(2);
+        prefix["transactions"][2]["transaction_id"] = json!(2);
+        prefix["transactions"][2]["first_seq"] = json!(4);
+        prefix["transactions"][2]["next_seq"] = json!(5);
+        prefix["transactions"][2]["events"][0]["seq"] = json!(4);
+        prefix["end"]["counters"]["acquire_returns"] = json!(0);
+        prefix["end"]["counters"]["transactions_attempted"] = json!(3);
+        prefix["end"]["counters"]["events_attempted"] = json!(5);
+        prefix["end"]["allocators"]["acquire_return"]["high_water"] = json!(0);
+        prefix["end"]["allocators"]["transaction"]["high_water"] = json!(3);
+        prefix["end"]["allocators"]["event"]["high_water"] = json!(5);
+        prefix["end"]["registered_inflight"]["acquire_cores_not_returned"] = json!(1);
+        write_resource_documents(&directory, &documents);
+        let assessments = collect_path(&directory).unwrap();
+        let summary = resource_summary(&assessments);
+        assert_eq!(
+            summary["resources"][0]["prefix_records_complete"], true,
+            "{summary}"
+        );
+        assert_eq!(summary["resources"][0]["closed_lifecycle"], false);
+        assert_eq!(
+            summary["attachments"][0]["context_links_complete"], false,
+            "{summary}"
+        );
+        assert!(
+            summary["attachments"][0]["cross_wait_edges"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        command(&directory, true, None).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn public_resource_original_bytes_duplicates_caps_and_symlink_safety() {
+        let root = resource_test_directory("strict-bytes");
+        let original = crate::execution_graph_resource_attachment::tests::documents();
+        for (index, label) in [
+            (2, "resource-duplicate-field"),
+            (3, "endorsement-duplicate-field"),
+            (2, "fact-cap"),
+            (2, "byte-cap"),
+        ] {
+            let directory = root.join(label);
+            std::fs::create_dir(&directory).unwrap();
+            write_resource_documents(&directory, &original);
+            let file = if index == 2 {
+                directory.join("resource.manifest.json")
+            } else {
+                directory.join("copy-3.json")
+            };
+            let bytes = if label == "fact-cap" {
+                let mut document = original[index].clone();
+                let event = document["transactions"][0]["events"][0].clone();
+                document["transactions"][0]["events"] =
+                    serde_json::Value::Array(vec![event; 100_001]);
+                serde_json::to_vec(&document).unwrap()
+            } else if label == "byte-cap" {
+                let mut bytes = serde_json::to_vec(&original[index]).unwrap();
+                bytes.resize(32 * 1024 * 1024 + 1, b' ');
+                bytes
+            } else {
+                serde_json::to_string(&original[index])
+                    .unwrap()
+                    .replacen("\"schema\":1", "\"schema\":1,\"schema\":1", 1)
+                    .into_bytes()
+            };
+            std::fs::write(file, bytes).unwrap();
+            let assessments = collect_path(&directory).unwrap();
+            let summary = resource_summary(&assessments);
+            assert_ne!(summary["state"], "validated", "{label}: {summary}");
+            assert!(
+                summary["attachments"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|a| a["cross_wait_edges"].as_array().unwrap().is_empty())
+            );
+            let query = assessments
+                .iter()
+                .find(|a| a.producer == "rustc-query-admission")
+                .unwrap();
+            assert!(query.structural_complete, "{label}");
+            assert_eq!(query.wait_structural_complete, Some(true), "{label}");
+            command(&directory, true, None).unwrap();
+        }
+        let aggregate = root.join("aggregate-cap");
+        std::fs::create_dir(&aggregate).unwrap();
+        for name in ["a.json", "b.json"] {
+            let file = std::fs::File::create(aggregate.join(name)).unwrap();
+            file.set_len(33 * 1024 * 1024).unwrap();
+        }
+        assert!(
+            collect_path(&aggregate)
+                .unwrap_err()
+                .to_string()
+                .contains("total receipt byte budget")
+        );
+        #[cfg(unix)]
+        {
+            let directory = root.join("symlink");
+            std::fs::create_dir(&directory).unwrap();
+            write_resource_documents(&directory, &original);
+            std::os::unix::fs::symlink(
+                directory.join("resource.manifest.json"),
+                directory.join("copy.json"),
+            )
+            .unwrap();
+            assert!(collect_path(&directory).is_err());
+            let link = root.join("directory-link");
+            std::os::unix::fs::symlink(&directory, &link).unwrap();
+            assert!(collect_path(&link).is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn receipt() -> Receipt {
         serde_json::from_value(serde_json::json!({
@@ -1351,6 +1921,7 @@ mod tests {
             )
             .unwrap();
             let assessments = collect_path(&case_dir).unwrap();
+            assert_eq!(resource_summary(&assessments)["state"], "unknown");
             let result = assessments
                 .iter()
                 .find(|a| a.producer == "rustc-query-admission")

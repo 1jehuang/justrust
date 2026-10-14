@@ -7,6 +7,9 @@ use rustc_thread_pool::admission::{
     AdmissionAttachmentId, AdmissionBinding, AdmissionContext, AdmissionPhase, QualifiedWaitId,
     QueryRootNamespace,
 };
+use rustc_thread_pool::admission_resource::{
+    AttachmentEndorsement, BindFailure, EndorsementGate, EndorsementRole, PreparedDescriptor,
+};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::Write as _;
@@ -27,6 +30,59 @@ use rustc_thread_pool::execution_observer::{ExecutionObserver, InterfaceOutcome}
 const MAX_EVENTS: usize = 100_000;
 const MAX_CONTEXTS: usize = 1024;
 static FILE_ID: AtomicU64 = AtomicU64::new(1);
+static RESOURCE_ENDORSEMENT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Immutable query-owner authority, not an admission capability or observer handle.
+#[derive(Clone)]
+pub struct QueryEndorsementToken {
+    endorsement: AttachmentEndorsement,
+    gate: EndorsementGate,
+}
+impl QueryEndorsementToken {
+    pub fn capture_id(&self) -> &Arc<str> {
+        self.endorsement.capture_id()
+    }
+    pub fn descriptor(&self) -> &PreparedDescriptor {
+        self.endorsement.descriptor()
+    }
+    pub fn write_json(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        if !self.gate.is_complete() {
+            return Err(std::io::Error::other("incomplete query attachment registration"));
+        }
+        self.endorsement.write_json(out)
+    }
+}
+
+/// Separate registration diagnostics. These never amend the query4 receipt.
+#[derive(Clone, Copy)]
+pub struct QueryResourceAttachmentStatus {
+    pub expected_endorsements: Option<u64>,
+    pub attempts: u64,
+    /// Historical acceptance, not completeness after a later conflict.
+    pub accepted: bool,
+    pub failures: u64,
+    pub conflicts: u64,
+    pub counter_overflowed: bool,
+}
+
+#[derive(Default)]
+struct ResourceRegistration {
+    token: OnceLock<QueryEndorsementToken>,
+    gate: EndorsementGate,
+}
+impl ResourceRegistration {
+    fn status(&self) -> QueryResourceAttachmentStatus {
+        let snapshot = self.gate.snapshot();
+        QueryResourceAttachmentStatus {
+            expected_endorsements: (snapshot.attempts != 0).then_some(1),
+            attempts: snapshot.attempts,
+            accepted: snapshot.successes == 1,
+            failures: snapshot.failures,
+            conflicts: snapshot.conflicts,
+            counter_overflowed: snapshot.overflowed,
+        }
+    }
+}
 fn mint_capture_id() -> String {
     let id = FILE_ID.fetch_add(1, Ordering::Relaxed);
     let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
@@ -71,6 +127,7 @@ struct Inner {
     capture_id: Option<String>,
     query_root: Option<QueryRootNamespace>,
     admission: OnceLock<AdmissionBinding>,
+    resource_registration: ResourceRegistration,
     epoch: Instant,
     next_context: AtomicU64,
     next_wait: AtomicU64,
@@ -261,6 +318,106 @@ impl QueryAdmissionObserver {
         (*actual == binding).then_some(*actual)
     }
 
+    /// Exact owner authority, sampled outside compiler and native locks.
+    pub fn capture_id(&self) -> Option<&str> {
+        self.0.capture_id.as_deref()
+    }
+
+    pub fn query_root_namespace(&self) -> Option<QueryRootNamespace> {
+        self.0.query_root
+    }
+
+    /// Clone the validated private directory FD, never reconstruct its path.
+    pub fn resource_sink(&self) -> std::io::Result<File> {
+        self.0._directory_handle.try_clone()
+    }
+
+    #[cfg(not(test))]
+    pub fn resource_pool(&self) -> Option<Arc<ExecutionObserver>> {
+        self.0.pool.0.get().cloned()
+    }
+
+    pub fn resource_attachment_status(&self) -> QueryResourceAttachmentStatus {
+        self.0.resource_registration.status()
+    }
+
+    /// Register only at the explicit integration boundary, outside all compiler locks.
+    /// Failures retain expected1 and never replace authority or choose native policy.
+    pub fn register_resource_attachment(
+        &self,
+        descriptor: PreparedDescriptor,
+    ) -> Result<QueryEndorsementToken, BindFailure> {
+        #[cfg(not(test))]
+        let pool = self.0.pool.0.get().map(|p| (p.capture_id(), p.observer_id()));
+        #[cfg(test)]
+        let pool = None;
+        self.register_resource_attachment_with_pool(descriptor, pool)
+    }
+
+    fn register_resource_attachment_with_pool(
+        &self,
+        descriptor: PreparedDescriptor,
+        pool: Option<(&str, u64)>,
+    ) -> Result<QueryEndorsementToken, BindFailure> {
+        let registration = &self.0.resource_registration;
+        registration.gate.begin_attempt()?;
+        let result = (|| {
+            if self.capture_id() != Some(descriptor.query_capture_id().as_ref()) {
+                return Err(BindFailure::QueryCaptureMismatch);
+            }
+            if self.query_root_namespace() != Some(descriptor.query_root_namespace()) {
+                return Err(BindFailure::ObserverMismatch);
+            }
+            let expected = AdmissionBinding {
+                attachment_id: descriptor.attachment_id(),
+                query_root: descriptor.query_root_namespace(),
+            };
+            if self.admission_binding() != Some(expected) {
+                return Err(BindFailure::Conflict);
+            }
+            let Some((capture_id, observer)) = pool else {
+                return Err(BindFailure::ObserverMismatch);
+            };
+            if capture_id != descriptor.pool_capture_id().as_ref() {
+                return Err(BindFailure::CaptureMismatch);
+            }
+            if observer != descriptor.pool_observer().get() {
+                return Err(BindFailure::ObserverMismatch);
+            }
+            let mut id = RESOURCE_ENDORSEMENT_ID.load(Ordering::Relaxed);
+            let id = loop {
+                let next = id.checked_add(1).ok_or(BindFailure::IdentityExhausted)?;
+                match RESOURCE_ENDORSEMENT_ID.compare_exchange_weak(
+                    id,
+                    next,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break id,
+                    Err(actual) => id = actual,
+                }
+            };
+            let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+            let capture: Arc<str> =
+                format!("query-endorsement-{epoch}-{}-{id}", std::process::id()).into();
+            let token = QueryEndorsementToken {
+                endorsement: AttachmentEndorsement::new(
+                    EndorsementRole::Query,
+                    capture,
+                    descriptor,
+                )?,
+                gate: registration.gate.clone(),
+            };
+            registration.token.set(token.clone()).map_err(|_| BindFailure::Conflict)?;
+            registration.gate.succeeded();
+            Ok(token)
+        })();
+        if result.is_err() {
+            registration.gate.failed();
+        }
+        result
+    }
+
     pub fn admission_binding(&self) -> Option<AdmissionBinding> {
         self.0.admission.get().copied()
     }
@@ -330,6 +487,7 @@ impl QueryAdmissionObserver {
                 capture_id,
                 query_root: QueryRootNamespace::mint(),
                 admission: OnceLock::new(),
+                resource_registration: ResourceRegistration::default(),
                 epoch: Instant::now(),
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
@@ -375,6 +533,7 @@ impl QueryAdmissionObserver {
                 capture_id: Some(capture_id),
                 query_root: QueryRootNamespace::mint(),
                 admission: OnceLock::new(),
+                resource_registration: ResourceRegistration::default(),
                 epoch: Instant::now(),
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
@@ -761,6 +920,20 @@ impl Drop for Inner {
         let _ = publish(&self._directory_handle, &name, json.as_bytes());
         #[cfg(not(target_os = "linux"))]
         let _ = json;
+        // Independent query-role publication, after the last query owner drops.
+        // A failed/conflicting registration stays expected1, never a complete claim.
+        #[cfg(target_os = "linux")]
+        {
+            let status = self.resource_registration.status();
+            if status.failures == 0 && !status.counter_overflowed {
+                if let Some(token) = self.resource_registration.token.get() {
+                    let mut receipt = Vec::new();
+                    if token.write_json(&mut receipt).is_ok() {
+                        let _ = publish(&self._directory_handle, token.capture_id(), &receipt);
+                    }
+                }
+            }
+        }
         // Final root drop follows frontend return and pool teardown. Keep the pool
         // protocol separate: its clock and task IDs are not query bindings.
         #[cfg(all(not(test), target_os = "linux"))]
@@ -778,11 +951,24 @@ impl Drop for Inner {
     }
 }
 
+/// Fail-open FD-relative atomic no-replace publication, outside compiler locks.
+#[cfg(not(target_os = "linux"))]
+pub fn publish(_directory: &File, _name: &str, _bytes: &[u8]) -> bool {
+    false
+}
+
 #[cfg(target_os = "linux")]
-pub(crate) fn publish(directory: &File, name: &str, bytes: &[u8]) -> bool {
+pub fn publish(directory: &File, name: &str, bytes: &[u8]) -> bool {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::fs::PermissionsExt;
+    // Public integration callers cannot escape the held directory through a name.
+    if name.is_empty()
+        || name.len() > 250
+        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    {
+        return false;
+    }
     // Refuse publication if the directory was made public while capture ran.
     if !directory.metadata().is_ok_and(|m| m.permissions().mode() & 0o077 == 0) {
         return false;
@@ -828,6 +1014,243 @@ pub(crate) fn publish(directory: &File, name: &str, bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    fn resource_descriptor(observer: &QueryAdmissionObserver) -> PreparedDescriptor {
+        let binding = observer.bind_admission_attachment(AdmissionAttachmentId::mint()).unwrap();
+        PreparedDescriptor::new(
+            Arc::from("bridge"),
+            binding.attachment_id,
+            Arc::from("controller"),
+            Arc::from("resource-prefix"),
+            Arc::from(observer.capture_id().unwrap()),
+            binding.query_root,
+            Arc::from("pool-capture"),
+            NonZeroU64::new(7).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resource_owner_registration_is_immutable_and_query_owned() {
+        let path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        assert_eq!(observer.resource_attachment_status().expected_endorsements, None);
+        let descriptor = resource_descriptor(&observer);
+        let query_id = observer.capture_id().unwrap().to_owned();
+        let token = observer
+            .register_resource_attachment_with_pool(descriptor.clone(), Some(("pool-capture", 7)))
+            .unwrap();
+        let repeated = token.clone();
+        assert_eq!(token.capture_id(), repeated.capture_id());
+        assert_eq!(token.descriptor(), &descriptor);
+        assert_ne!(token.capture_id().as_ref(), query_id);
+        assert_ne!(token.capture_id(), descriptor.attachment_capture_id());
+        let status = observer.resource_attachment_status();
+        assert_eq!(status.expected_endorsements, Some(1));
+        assert_eq!(status.attempts, 1);
+        assert!(status.accepted);
+        assert_eq!(status.failures, 0);
+        let mut expected = Vec::new();
+        token.write_json(&mut expected).unwrap();
+        let endorsement_name = token.capture_id().to_string();
+        assert!(!path.join(format!("{endorsement_name}.json")).exists());
+        observer.finalize_interface_returned();
+        // Retained neutral tokens do not keep the query owner alive.
+        drop(observer);
+        assert_eq!(fs::read(path.join(format!("{endorsement_name}.json"))).unwrap(), expected);
+        let text = String::from_utf8(expected).unwrap();
+        assert!(text.contains("\"role\":\"query\""));
+        assert!(text.contains("\"expected_endorsements\":1"));
+        assert!(text.contains("\"query_root_namespace\":"));
+        assert!(path.join(format!("{query_id}.json")).exists());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resource_owner_rejects_foreign_native_authority_and_retains_expectation() {
+        for case in 0..6 {
+            let path = private_directory();
+            let observer = QueryAdmissionObserver::new(&path).unwrap();
+            let descriptor = resource_descriptor(&observer);
+            let candidate = PreparedDescriptor::new(
+                descriptor.attachment_capture_id().clone(),
+                if case == 2 {
+                    AdmissionAttachmentId::mint().unwrap()
+                } else {
+                    descriptor.attachment_id()
+                },
+                descriptor.controller_id().clone(),
+                descriptor.resource_capture_id().clone(),
+                if case == 0 {
+                    Arc::from("foreign-query")
+                } else {
+                    descriptor.query_capture_id().clone()
+                },
+                if case == 1 {
+                    QueryRootNamespace::mint().unwrap()
+                } else {
+                    descriptor.query_root_namespace()
+                },
+                descriptor.pool_capture_id().clone(),
+                descriptor.pool_observer(),
+            )
+            .unwrap();
+            let authority = match case {
+                3 => Some(("wrong-pool", 7)),
+                4 => Some(("pool-capture", 8)),
+                5 => None,
+                _ => Some(("pool-capture", 7)),
+            };
+            let error = match case {
+                0 => BindFailure::QueryCaptureMismatch,
+                2 => BindFailure::Conflict,
+                3 => BindFailure::CaptureMismatch,
+                _ => BindFailure::ObserverMismatch,
+            };
+            assert!(
+                matches!(observer.register_resource_attachment_with_pool(candidate, authority),
+                Err(actual) if actual == error)
+            );
+            let status = observer.resource_attachment_status();
+            assert_eq!(status.expected_endorsements, Some(1));
+            assert_eq!(status.attempts, 1);
+            assert_eq!(status.failures, 1);
+            assert!(!status.accepted);
+            drop(observer);
+            assert!(!receipt(&path).contains("rustc-frontend-admission-attachment"));
+            fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resource_conflict_does_not_replace_token_or_emit_complete_endorsement() {
+        let path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        let descriptor = resource_descriptor(&observer);
+        let token = observer
+            .register_resource_attachment_with_pool(descriptor.clone(), Some(("pool-capture", 7)))
+            .unwrap();
+        let conflict = PreparedDescriptor::new(
+            Arc::from("other-bridge"),
+            descriptor.attachment_id(),
+            descriptor.controller_id().clone(),
+            Arc::from("other-prefix"),
+            descriptor.query_capture_id().clone(),
+            descriptor.query_root_namespace(),
+            descriptor.pool_capture_id().clone(),
+            descriptor.pool_observer(),
+        )
+        .unwrap();
+        assert!(matches!(
+            observer.register_resource_attachment_with_pool(conflict, Some(("pool-capture", 7))),
+            Err(BindFailure::Conflict)
+        ));
+        assert_eq!(observer.0.resource_registration.token.get().unwrap().descriptor(), &descriptor);
+        assert_eq!(observer.resource_attachment_status().expected_endorsements, Some(1));
+        let mut withheld = Vec::new();
+        assert!(token.write_json(&mut withheld).is_err());
+        assert!(withheld.is_empty());
+        drop(observer);
+        assert!(!path.join(format!("{}.json", token.capture_id())).exists());
+        assert!(receipt(&path).contains("\"schema\":4"));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resource_identical_repeat_invalidates_all_retained_tokens_without_rewriting_bytes() {
+        let path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        let descriptor = resource_descriptor(&observer);
+        let token = observer
+            .register_resource_attachment_with_pool(descriptor.clone(), Some(("pool-capture", 7)))
+            .unwrap();
+        let cloned_token = token.clone();
+        let mut frozen = Vec::new();
+        token.write_json(&mut frozen).unwrap();
+        let original = frozen.clone();
+        assert!(matches!(
+            observer.register_resource_attachment_with_pool(descriptor, Some(("pool-capture", 7))),
+            Err(BindFailure::Conflict)
+        ));
+        let status = observer.resource_attachment_status();
+        assert_eq!(status.attempts, 2);
+        assert_eq!(status.conflicts, 1);
+        assert_eq!(status.expected_endorsements, Some(1));
+        assert!(status.accepted);
+        for retained in [token, cloned_token] {
+            let mut bytes = Vec::new();
+            assert!(retained.write_json(&mut bytes).is_err());
+            assert!(bytes.is_empty());
+        }
+        assert_eq!(frozen, original);
+        drop(observer);
+        assert!(receipt(&path).contains("\"schema\":4"));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resource_endorsement_preserves_exact_query4_bytes() {
+        let path = private_directory();
+        let baseline_path = private_directory();
+        let prepared = QueryAdmissionObserver::new(&path).unwrap();
+        let baseline_prepared = QueryAdmissionObserver::new(&baseline_path).unwrap();
+        let observer = QueryAdmissionObserver::new_from_directory(
+            prepared.resource_sink().unwrap(),
+            "same-query-capture".into(),
+        )
+        .unwrap();
+        let baseline = QueryAdmissionObserver::new_from_directory(
+            baseline_prepared.resource_sink().unwrap(),
+            "same-query-capture".into(),
+        )
+        .unwrap();
+        let descriptor = resource_descriptor(&observer);
+        observer
+            .register_resource_attachment_with_pool(descriptor, Some(("pool-capture", 7)))
+            .unwrap();
+        observer.finalize_interface_returned();
+        baseline.finalize_interface_returned();
+        drop((observer, baseline));
+        assert_eq!(
+            fs::read(path.join("same-query-capture.json")).unwrap(),
+            fs::read(baseline_path.join("same-query-capture.json")).unwrap()
+        );
+        drop((prepared, baseline_prepared));
+        fs::remove_dir_all(path).unwrap();
+        fs::remove_dir_all(baseline_path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resource_publication_rejects_path_names() {
+        let path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        let sink = observer.resource_sink().unwrap();
+        for name in ["../escape", "nested/file", "", ".", "bad.name", "bad\0name"] {
+            assert!(!publish(&sink, name, b"must-not-publish"));
+        }
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        drop(observer);
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resource_publisher_preserves_maximum_query_capture_pool_suffix() {
+        let path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        let sink = observer.resource_sink().unwrap();
+        let name = format!("{}-pool", "q".repeat(128));
+        assert!(publish(&sink, &name, b"existing-pool-receipt"));
+        assert_eq!(fs::read(path.join(format!("{name}.json"))).unwrap(), b"existing-pool-receipt");
+        assert!(!publish(&sink, &name, b"replacement"));
+        drop(observer);
+        fs::remove_dir_all(path).unwrap();
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn admission_binding_is_immutable_and_namespaces_are_not_capture_text() {

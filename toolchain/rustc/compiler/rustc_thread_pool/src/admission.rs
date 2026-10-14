@@ -28,6 +28,11 @@ fn mint(counter: &AtomicU64) -> Option<NonZeroU64> {
 pub struct AdmissionAttachmentId(NonZeroU64);
 
 impl AdmissionAttachmentId {
+    /// Read-only wire identity. No reconstruction from arbitrary integers.
+    pub fn wire_value(self) -> u64 {
+        self.0.get()
+    }
+
     /// Mint a never-reused identity, or return `None` after exhaustion.
     pub fn mint() -> Option<Self> {
         mint(&NEXT_ATTACHMENT).map(Self)
@@ -39,6 +44,11 @@ impl AdmissionAttachmentId {
 pub struct QueryRootNamespace(NonZeroU64);
 
 impl QueryRootNamespace {
+    /// Read-only wire namespace. No reconstruction from arbitrary integers.
+    pub fn wire_value(self) -> u64 {
+        self.0.get()
+    }
+
     /// Mint a never-reused namespace, or return `None` after exhaustion.
     pub fn mint() -> Option<Self> {
         mint(&NEXT_QUERY_ROOT).map(Self)
