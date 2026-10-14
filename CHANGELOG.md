@@ -5,6 +5,25 @@ All notable changes. Versions follow [semver](https://semver.org); while in
 
 ## Unreleased
 
+## 0.1.0-alpha.18
+
+- **Account-linked diagnostic telemetry** uses service-authenticated account
+  attribution and the credential scope captured when each event is queued.
+  Account changes do not reassign old events, custom endpoints receive no hosted
+  credentials, and notices now disclose account linkage when signed in.
+- **Structured diagnostics (schema 2)** include run and event IDs, failure and
+  routing categories, phase and test timing, cache costs, pinned toolchain IDs,
+  and sampling quality. Missing observations remain unknown rather than zero.
+- **Early failures** record fixed diagnostic categories for initialization,
+  remote setup, execution, and result recording without collecting raw logs,
+  source, paths, crate/test names, argument values, or credentials.
+- **Best-effort delivery** deduplicates scoped retries and exposes queue and
+  authentication outcomes through `justrust telemetry status`. Existing opt-out
+  controls remain supported. Collection is not lossless, and old anonymous
+  events are not retroactively linked to accounts.
+- Windows sampling bounds process traversal against reused-PID cycles.
+  No compile-speedup claim is made for this release.
+
 ## 0.1.0-alpha.16
 
 - **macOS clients can install the Linux hosted agent.** Release clients
