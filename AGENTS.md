@@ -36,24 +36,34 @@ Small, safe wins still ship, but
 never stop at "good enough" when a deeper change (a fork, a server, a new
 component) would be measurably faster.
 
-## Own the boundaries, not upstream's architecture
+## Vertically integrate end to end. External correctness is the contract.
 
-justrust is an integrated source-to-binary system, not a collection of
-permanently upstream-compatible replacements. Where we own both sides of
-a boundary, internal compatibility with stock tools is not a requirement.
-Change compiler/Cargo protocols, metadata and artifact formats, scheduling,
-cache interfaces, or linking internals together when measurements justify it.
-Do not reject a design merely because it cannot be upstreamed or mixed with
-stock components. Version the integrated toolchain and its cache keys so
-incompatible artifacts cannot be reused.
+justrust is one vertically integrated source-to-test-result system. We own
+the entire toolchain end to end, not a collection of upstream-compatible
+replacements. Our forks are independent development lines, not patch sets
+whose purpose is to stay close to upstream. Completely different internals,
+large rewrites, replacement components, and merging formerly separate tools
+into one system are all valid. Optimize for measured agent wait, not familiar
+component boundaries.
+
+Internal compatibility with upstream is not a goal. Neither are upstreamability,
+small diffs, easy rebases, or retaining upstream's architecture. Do not use any
+of those as a reason to reject a faster correct design. Redesign compiler/Cargo
+protocols, query and dependency graphs, IR and artifact formats, scheduling,
+cache interfaces, codegen, linking, and test execution together as needed.
+Version the integrated toolchain and its cache keys so incompatible artifacts
+cannot be reused. Divergence is not itself a problem to solve.
 
 Preserve the external contract: supported Rust language semantics, existing
 project manifests, build-script and proc-macro behavior, native-library and
 platform ABIs, build correctness, and useful diagnostics. Stock fallback is
 a separate compatibility path, not a restriction on our native architecture;
-never feed private formats to stock tools. Upstream is a source of fixes and
-improvements, not an architectural veto. Track and integrate relevant fixes
-without treating minimal divergence or a fixed rebase cadence as the goal.
+never feed private formats to stock tools. External correctness is the
+compatibility requirement, not internal resemblance to stock tools. Upstream
+is an optional source of useful fixes and ideas, not our architectural authority
+or release schedule. Evaluate relevant correctness and security fixes and
+adapt them to our design. Cherry-pick, reimplement, or rebase only when useful,
+never to minimize divergence for its own sake.
 
 ## Native toolchain integration, not permanent shims
 
@@ -68,7 +78,7 @@ copying cache implementations into multiple repositories.
 Shims are transitional compatibility and fail-open mechanisms, not the
 end-state architecture. Keep them where stock-toolchain support or a measured
 advantage requires them. Do not remove a working shim until its native
-replacement preserves diagnostics, exit status, Cargo pipelining, cache
+replacement preserves diagnostics, exit status, effective build pipelining, cache
 correctness, and fallback behavior. Measure representative builds before
 and after, including cold and incremental debug/release builds. Removing a
 process boundary is not itself evidence of a speedup. Prioritize build

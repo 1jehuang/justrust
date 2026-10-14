@@ -4,6 +4,30 @@ Decision (2026-10-08): justrust owns the entire Rust toolchain it builds with.
 Maintenance cost and infrastructure are acceptable. The only goal is the
 fastest possible edit -> check -> test loop for agents.
 
+## Architecture mandate: independent, vertically integrated toolchain
+
+We own the whole path from source and manifests through compilation, native
+dependencies, artifacts, linking, and test results. The end state is one
+integrated system, not a set of interchangeable stock-tool replacements.
+Our forks are independent development lines. They may end up with completely
+different internals, or be replaced or merged into new components entirely.
+The phases and component names below describe current starting points, not
+permanent boundaries or a requirement to keep upstream's design.
+
+External correctness is the compatibility contract: supported Rust semantics,
+existing manifests, build-script and proc-macro behavior, native-library and
+platform ABIs, correct builds and test results, and useful diagnostics.
+Within that contract, redesign protocols, query graphs, IRs, artifact formats,
+cache interfaces, scheduling, codegen, linking, and execution together.
+Choose designs by measured end-to-end agent wait and correctness, not by
+upstream compatibility, upstreamability, patch size, or ease of rebasing.
+
+Version our integrated toolchain and cache identities whenever private
+contracts change. Stock fallback uses its own compatible execution path and
+artifacts, never private formats. Evaluate upstream correctness and security
+fixes as inputs to our design, adapting or reimplementing them where useful.
+There is no goal of minimal divergence or mandatory upstream rebase cadence.
+
 ## Target
 
 The primary target is expected agent wait across the session-weighted
@@ -106,7 +130,8 @@ win on the historical reference loop (`bench/edit-loop.sh` and Desktop).
    frontend + persist are under a second and the link is the largest fixed
    cost left (then 30-50% of the loop). Remaining work: cache the base
    symbol index (patch step 150 ms -> ~30 ms), integrate it into the shim
-   and runner behind `JUSTRUST_HOTPATCH=1`, rebase on a schedule.
+   and runner behind `JUSTRUST_HOTPATCH=1`. Adapt useful upstream fixes as
+   needed, without a mandatory rebase schedule.
 
 ## Architecture tracks (started 2026-10-12)
 

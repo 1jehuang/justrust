@@ -10,21 +10,30 @@ edits is impossible from a wrapper.
 Companion to `docs/toolchain.md` (what we own, phases). This file is the
 list of optimizations that only exist once we own both sides of a boundary.
 
-## Compatibility boundary
+## External correctness, independent internals
 
-We build one versioned source-to-binary system. Internal interfaces are ours
-to change together: Cargo/compiler coordination, dependency metadata,
-artifact formats, cache protocols, scheduling, and linker integration need
-not remain compatible with stock components. Rebuild dependencies and
-version cache keys when those contracts change. Preserving upstream's
-component boundaries or making every change upstreamable is not a goal.
+We vertically integrate the entire toolchain into one versioned
+source-to-test-result system. Our forks are independent development lines,
+not permanently upstream-shaped patch sets. Fully different internals are
+welcome: replace query graphs, IRs, dependency metadata, artifact formats,
+cache protocols, scheduling, codegen, linking, or test execution, and combine
+components when that produces a faster correct system. Existing component
+boundaries are starting points, not requirements.
+
+Do not optimize for upstream compatibility, upstreamability, small diffs,
+easy rebases, or architectural resemblance. None is an acceptance criterion
+for our native path. Internal interfaces are ours to change together.
+Rebuild dependencies and version toolchain identities and cache keys when
+those contracts change. Never mix incompatible artifacts.
 
 The external contract remains supported Rust semantics, project manifests,
 build-script and proc-macro behavior, native-library and platform ABIs,
 correct build results, and useful diagnostics. Stock fallback must use a
 compatible execution path and artifacts, not constrain private interfaces.
-We take useful upstream fixes and improvements, with divergence managed for
-correctness and measured performance rather than minimized for its own sake.
+External correctness is the compatibility contract. Upstream is a source
+of useful fixes and ideas, not an architectural authority. Evaluate relevant
+correctness and security fixes, then cherry-pick or reimplement them for our
+design. Rebase only when useful, not to satisfy a cadence or reduce divergence.
 
 ## Historical reference-loop diagnostic
 
@@ -98,6 +107,7 @@ rustc was never designed for, so expect leaks to fix.
 - Same test results as stock stable on the Jcode and Desktop suites.
 - Fail open to the stock toolchain through a compatible path; never reuse
   private-format artifacts there.
-- Accept the maintenance cost of forks and coordinated internal changes.
-  Integrate relevant upstream fixes and improvements; rebase cadence is an
-  operational choice, not a compatibility requirement.
+- Accept the maintenance cost of independent forks, replacement components,
+  and coordinated internal rewrites. Preserve external correctness, not
+  upstream internals. Adapt relevant correctness and security fixes without
+  treating upstream merges or minimal divergence as goals.

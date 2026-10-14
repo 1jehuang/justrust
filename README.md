@@ -104,11 +104,14 @@ updating test binaries without a full relink.
 The goal is for agents to spend their time editing and reasoning, not waiting
 for builds. We will fork tools and run infrastructure wherever that makes the
 loop faster, while preserving build correctness and useful diagnostics.
-We own both sides of the internal toolchain boundaries, so we can redesign
-them together rather than preserve upstream's architecture. Compatibility
-is required at the project and platform boundaries, not between our private
-compiler, Cargo, cache, and linker interfaces. Upstream remains a source of
-fixes and improvements, not a limit on the designs we can measure and ship.
+We vertically integrate the entire toolchain end to end. Our forks are
+independent development lines that can have completely different internals,
+replace components, or merge them into one system. External correctness is
+the compatibility contract: Rust semantics, existing projects, build scripts,
+proc macros, platform ABIs, and trustworthy build and test results. Internal
+upstream compatibility, upstreamability, small patches, and easy rebases are
+not goals. Upstream is a source of useful fixes and ideas, not a limit on the
+designs we can measure and ship.
 See the [toolchain plan](docs/toolchain.md) for the roadmap.
 
 ## Contributing and license
