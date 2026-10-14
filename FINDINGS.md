@@ -20,9 +20,12 @@ Scoped sequential overhead medians for the same frozen fixture were
 on at four threads. Quiet provenance is unknown and the baseline showed
 an on/off inversion, so these are recorder-cost diagnostics, not speedup
 or comprehensive promotion evidence. Capture overhead needs optimization.
-Cargo/compiler binding publication remains held for actual proc-macro
-recording-neutrality verification. Existing language behavior and cache keys
-must not be changed by recording.
+The real proc-macro probe caught a private-argv recording-neutrality bug.
+Descriptor-only transport and an explicit unsafe native process-entry ownership
+boundary fixed it. After a coherent frozen rebuild, exact macro-visible argv,
+program output and executable SHA256 off/on matched, and genuine binder plus
+admission gates passed. The accepted source cohort is pushed as `d3a5319b9`.
+Full pipeline coverage and a theoretical parallelism ceiling remain unproven.
 
 ## 2026-10-14: toolchain cleanup completed, default promotion blocked
 

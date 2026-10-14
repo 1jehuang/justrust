@@ -1,6 +1,7 @@
 # Native causal mapping acceptance, 2026-10-14
 
-Status: validated native wait/read/join slice, not a full source-to-test graph.
+Status: validated native wait/read/join and compiler-binding slice, not a full source-to-test graph.
+Source cohort committed and pushed as `d3a5319b9`.
 
 The actual owned stage1 compiler and standard library rebuilt successfully with
 `python3 x.py build --stage 1 -j 2 compiler/rustc library/std`.
@@ -46,12 +47,39 @@ The installed client also decoded real standalone schema3 producer bytes with
 one complete wait and one resolved read edge. This is a protocol check, not a
 replacement for the native compiler tests above.
 
-## Remaining limits and publication hold
+## Correctness regression fixed, remaining limits
 
-Cargo/compiler binding acceptance is a separate gate. Publication is held while
-its transport is checked for proc-macro observability and recording neutrality.
-An untracked compiler argument must not change macro output without a cache-key
-change. The binding cohort cannot be published merely because client tests pass.
+Cargo/compiler binding acceptance is a separate gate. Its basic native harness
+passed, but a real proc-macro probe then confirmed a recording-neutrality bug:
+the private `-Zjr-query-binding-fd` argument was visible through `std::env::args`,
+changing the generated program from `binding_visible=false` to `true` while
+Cargo's metadata cache key was unchanged. Baseline failure task 85389090rs is
+retained in compiler-argv-native-results-20261014 session scratch evidence.
+The transport was replaced with a collision-checked reserved inherited descriptor
+and no private argv or environment variable. Borrowed discovery duplicates only;
+consuming descriptor admission is restricted to an explicit unsafe native process
+entrypoint, before compiler threads. Safe embedded compiler entry does not probe.
+After the final source freeze, the actual compiler/std/proc_macro rebuild passed
+in 116.13 seconds. The repaired actual macro regression passed in 1.430 seconds,
+requiring genuine compiler binding, identical complete proc-macro-visible argv,
+identical generated program output, and identical executable SHA256 off/on.
+The genuine native binding harness also passed in 7.678 seconds, including fresh
+zero-launch inventories, missing entry/query/journal fail-closed controls, failed
+compilation, and private/unwritable sink fail-open behavior. Admission acceptance
+passed again in 0.847 seconds. The final wait/read/pool suite passed all four tests
+in 31.672 seconds before a reload interrupted the following admission invocation;
+only that interrupted remainder was restarted. No mixed-source build is evidence.
+
+Final hosted client checks passed again:
+
+- check: 20261014-111448439-3898857
+- 540 tests, 3 ignored: 20261014-111451220-3899815
+- strict all-target lint: 20261014-111503226-3897736
+- owned pool API: 85 passed, 26 ignored: 20261014-110446989-3751543
+
+Exact exported summaries are in data/runs/causal-map-20261014/final-acceptance.jsonl
+and pool-acceptance.jsonl. The pool tests include permanent cap/u64-saturation
+regressions for the bounded atomic allocator.
 
 Scope/scheduler/resource-grant coverage, pre-attachment work, query-to-task
 binding, nonquery codegen/link/subprocess causality, and previous-session/feed
