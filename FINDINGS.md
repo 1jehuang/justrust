@@ -1,5 +1,27 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: actual scheduled sharing fleet runtime accepted
+
+The naturally scheduled 09:00 UTC producer selected the accepted native-safe
+0a19 client and corrected full JR/nightly compiler pins. Actual log sections
+exercised all four default/debug0 seed cells and both public-workspace compiler
+passes. Its terminal receipt reports complete/succeeded at 10:14:49 UTC with
+zero optional failures. Publication reported 81 new bundle files, zero public
+build-script runs and a final index of 19,994 sorted unique artifact keys.
+The instance powered off and was observed terminated before its three-hour
+deadline. This closes the runtime observation gate, not just a config check.
+
+Private cloud ca2e957 records the version-pinned status/log/index, scheduler
+join and 12-file archive manifest. Independent review and final lossless hash,
+matrix, terminal-pin and credential-exclusion checks passed. Raw CloudTrail
+session credentials were not archived. Public acceptance and limitations:
+`docs/sharing-fleet-runtime-20261014.md`. No normal CLI run ID is invented for
+this external provider observation, and no performance ratio is claimed.
+
+Public native script sharing and genuine first-new-tenant bootstrap remain
+separate unpassed gates. Registry eager seeding stays off. This does not claim
+all 81 bundles individually restored or a complete parallelism speedup.
+
 ## 2026-10-14: comprehensive README comparison completed, speed gate blocked
 
 The frozen-client seed-1 workload observed all 40 points across stock local,
