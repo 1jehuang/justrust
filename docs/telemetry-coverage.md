@@ -31,7 +31,29 @@ and custom telemetry endpoints must never receive hosted credentials.
 - Surface queued delivery, retryable failures, and rejected telemetry explicitly.
 - Preserve anonymous telemetry and all existing opt-out controls.
 
+## Structured schema
+
+Schema version 2 adds validated run IDs, stable per-event UUIDs, explicit failure
+and routing categories, pinned toolchain IDs, phase totals and build gaps,
+compiler-pass coverage, CPU-accounting quality, test timing/filter counts, cache
+miss/savings costs, and PSI availability. Recorder summaries also retain optional
+sample/process counts, sampled time span and largest observation gap. Older
+summaries omit observation coverage rather than pretending it was zero.
+
+Client-only queue authentication markers are stripped before posting. The server
+accepts only documented metrics and fixed labels. Stable event IDs deduplicate
+retries within an install/account scope. Accepted prefixes are checkpointed, and
+retry/authentication outcomes are visible through `justrust telemetry status`.
+The nonblocking queue lock intentionally favors build latency over recording an
+event during lock contention, so collection is not lossless.
+
 ## Limits that must remain explicit
+
+An exact **system** compiler fingerprint is not currently in the run summary.
+Pinned toolchain identity is available, but must not be represented as proof of
+an unpinned executable's contents. Events rejected or interrupted before queue
+append, abrupt termination, and internal shim panics can still leave gaps.
+Deduplication is account-scoped, not global across a later account switch.
 
 Structured summaries cannot reproduce a failing private test or reconstruct a
 compiler diagnostic. Exact root cause can still require a user-provided log or a

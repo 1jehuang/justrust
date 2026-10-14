@@ -386,6 +386,15 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
     put("wall_s", json!(r2(s.wall)));
     put("cpu_s", json!(r2(s.cpu_secs)));
     put("ncpu", json!(s.ncpu));
+    if let Some(coverage) = &s.measurement_coverage {
+        put("measurement_samples", json!(coverage.samples));
+        put("measurement_processes", json!(coverage.processes));
+        put("measurement_span_s", json!(r2(coverage.sample_span_secs)));
+        put(
+            "measurement_max_gap_s",
+            json!(r2(coverage.max_sample_gap_secs)),
+        );
+    }
     put("build_gaps_s", json!(r2(p.build_gaps)));
     put(
         "phase_total_s",
@@ -910,6 +919,23 @@ pub fn command(action: &str) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn observation_quality_is_numeric_and_absence_is_not_zero() {
+        let mut s = crate::summary::Summary::default();
+        assert!(run_data(&s, false).get("measurement_samples").is_none());
+        s.measurement_coverage = Some(crate::summary::MeasurementCoverage {
+            samples: 8,
+            processes: 5,
+            sample_span_secs: 1.401,
+            max_sample_gap_secs: 0.407,
+        });
+        let data = run_data(&s, false);
+        assert_eq!(data["measurement_samples"], 8);
+        assert_eq!(data["measurement_processes"], 5);
+        assert_eq!(data["measurement_span_s"], 1.4);
+        assert_eq!(data["measurement_max_gap_s"], 0.41);
+        assert!(data.as_object().unwrap().len() <= 80);
+    }
     use super::*;
 
     #[test]

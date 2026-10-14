@@ -21,6 +21,9 @@ pub struct Summary {
     /// A disclosed lower bound when detached workers escape wait4 accounting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_secs_note: Option<String>,
+    /// Recorder observation coverage. Absent for older summaries, not zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_coverage: Option<MeasurementCoverage>,
     pub ncpu: usize,
     pub phases: Phases,
     pub units: UnitStats,
@@ -60,6 +63,29 @@ pub struct Summary {
     /// Early diagnostics from the resident rust-analyzer (`early`), opt-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub early: Option<crate::early::EarlyInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MeasurementCoverage {
+    pub samples: usize,
+    pub processes: usize,
+    pub sample_span_secs: f64,
+    pub max_sample_gap_secs: f64,
+}
+
+fn measurement_coverage(samples: &[Sample], procs: &[ProcRecord]) -> MeasurementCoverage {
+    MeasurementCoverage {
+        samples: samples.len(),
+        processes: procs.len(),
+        sample_span_secs: samples
+            .first()
+            .zip(samples.last())
+            .map_or(0.0, |(first, last)| (last.t - first.t).max(0.0)),
+        max_sample_gap_secs: samples
+            .windows(2)
+            .map(|pair| (pair[1].t - pair[0].t).max(0.0))
+            .fold(0.0, f64::max),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -971,6 +997,7 @@ pub fn build(
         exit,
         cpu_secs,
         cpu_secs_note,
+        measurement_coverage: Some(measurement_coverage(samples, procs)),
         ncpu: meta.ncpu,
         phases,
         units: stats,
@@ -1402,6 +1429,34 @@ fn trunc(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn measurement_coverage_reports_sample_gaps_and_preserves_old_unknowns() {
+        let sample = |t| Sample {
+            t,
+            sys_cores: 0.0,
+            build_cores: 0.0,
+            build_rss_mb: 0.0,
+            mem_available_mb: 0,
+            rustc_procs: 0,
+            foreign_rustc_procs: 0,
+            psi_cpu_ms: 0.0,
+            psi_mem_ms: 0.0,
+            psi_io_ms: 0.0,
+            psi_unavailable: true,
+        };
+        let coverage = measurement_coverage(&[sample(1.0), sample(1.2), sample(2.5)], &[]);
+        assert_eq!(coverage.samples, 3);
+        assert_eq!(coverage.processes, 0);
+        assert_eq!(coverage.sample_span_secs, 1.5);
+        assert!((coverage.max_sample_gap_secs - 1.3).abs() < 1e-9);
+        let empty = measurement_coverage(&[], &[]);
+        assert_eq!(empty.samples, 0);
+        assert_eq!(empty.sample_span_secs, 0.0);
+        let old = serde_json::to_value(Summary::default()).unwrap();
+        assert!(old.get("measurement_coverage").is_none());
+        let old: Summary = serde_json::from_value(old).unwrap();
+        assert!(old.measurement_coverage.is_none());
+    }
     use super::*;
 
     #[test]
