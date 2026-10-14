@@ -6396,3 +6396,32 @@ output hashes and both exact run exports are in
 Failed precompile local harness `20261013-231920710-2139396` is retained, not
 misclassified as a hosted failure. No compiler implementation/default/security
 changes were made. Account host explicitly released 06:41:46 UTC.
+
+## 2026-10-14: partition existing BUILD activities without inventing CPU work
+
+Offline follow-through on the same optimized BUILD
+`20261013-232242825-2161355` now accounts for all 6,851,280 recorded intervals,
+including LLVM, LTO, metadata and coordinator activities rather than treating
+all query elapsed as frontend work. `2be8d4c` adds a bounded all-kind analyzer:
+584 kind/label groups and 517 Rust thread IDs, no crossing/equal intervals.
+Group-exclusive elapsed equals per-thread covered unions at 148.396651246
+thread-elapsed seconds within a 15.826062441-second observed timestamp window.
+This is NOT CPU work: the unit's separately recorded process CPU is 129.698 s.
+Waits and descheduling can remain inside exclusive scopes.
+
+Actual public CLI reanalysis reproduces the compact output hash exactly.
+All 177 offline tests, eight activity tests and an independent exhaustive
+250-forest time-cell reference pass. Default large-input rejection, small
+default success, strict/explicit unmapped labels, malformed input, symlinks
+and exclusive output preservation are exercised through the real CLI. Six
+pinned compiler source hashes and 17 label locations are verified. Inclusive
+inventory and independent compact-output review agree. No new compiler build,
+host call, installation, default change or speed comparison was made.
+
+The 70.424 s inclusive LTO-wrapper total partitions to 1.441 s exclusive after
+recorded children, whereas LLVM optimization and object-emission leaf totals
+remain elapsed, not pure CPU. Metadata and ongoing-codegen join are not proven
+serial CPU bottlenecks. Query-only and all-kind exclusive definitions remain
+separate. CPU work, execution span and the 16/24/96-core ceiling remain unknown.
+See `docs/compiler-phase-activities-20261014.md` and its exact output/log/hash
+acceptance under `bench/results/compiler-phase-activities-20261014/`.

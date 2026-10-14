@@ -1,0 +1,94 @@
+{
+  "compiler_commit": "1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6",
+  "files": [
+    {
+      "label_string_lines": {
+        "MIR_borrow_checking": [
+          1156
+        ],
+        "codegen_crate": [
+          1329
+        ],
+        "macro_expand_crate": [
+          165
+        ],
+        "parse_crate": [
+          56
+        ]
+      },
+      "path": "compiler/rustc_interface/src/passes.rs",
+      "sha256": "fd790dc51166927c5a676587bd492215b60227fc57b0118be572b59fa2d3af99"
+    },
+    {
+      "label_string_lines": {
+        "finish_ongoing_codegen": [
+          55
+        ],
+        "link_crate": [
+          167
+        ]
+      },
+      "path": "compiler/rustc_interface/src/queries.rs",
+      "sha256": "09e271d907e783053cc30cf8476a1ebf8eb9c238db7939517654d46ecb6b8a22"
+    },
+    {
+      "label_string_lines": {
+        "LLVM_fatlto": [
+          970
+        ],
+        "LLVM_passes": [
+          1857
+        ],
+        "LLVM_thinlto": [
+          998
+        ],
+        "codegen_copy_artifacts_from_incr_cache": [
+          883
+        ],
+        "codegen_module_optimize": [
+          825
+        ],
+        "codegen_module_perform_lto": [
+          1916
+        ]
+      },
+      "path": "compiler/rustc_codegen_ssa/src/back/write.rs",
+      "sha256": "035a419264c5837c8df11bbf236f33e61c6b867729db13a03b3f767350bd5249"
+    },
+    {
+      "label_string_lines": {
+        "LLVM_module_codegen": [
+          952
+        ],
+        "LLVM_module_optimize": [
+          864
+        ]
+      },
+      "path": "compiler/rustc_codegen_llvm/src/back/write.rs",
+      "sha256": "38b8d7e5746dae83f7852621ce50f661a32beb746a4ac21b2e0f4e9ecf088312"
+    },
+    {
+      "label_string_lines": {
+        "LLVM_lto_optimize": [
+          595
+        ],
+        "LLVM_thin_lto_import": [
+          770
+        ]
+      },
+      "path": "compiler/rustc_codegen_llvm/src/back/lto.rs",
+      "sha256": "96fb5dcfc83970f2670cbcc0d9781021799d709e5b65ebb2a450a037f094709b"
+    },
+    {
+      "label_string_lines": {
+        "run_linker": [
+          1298
+        ]
+      },
+      "path": "compiler/rustc_codegen_ssa/src/back/link.rs",
+      "sha256": "00872889d3ad59888d35b090c830ae4130409c6bd070ad7f284848914bfab349"
+    }
+  ],
+  "schema": 1,
+  "scope": "read-only pinned source label locations; not event causality or CPU attribution"
+}

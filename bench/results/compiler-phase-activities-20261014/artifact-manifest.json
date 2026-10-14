@@ -1,0 +1,124 @@
+{
+  "files": {
+    "acceptance.json": {
+      "bytes": 11228,
+      "sha256": "7ad3cb0038e7a0364792c80320b17753f368d833e1c6d9c58d23577bcbd3e513"
+    },
+    "desktop-release-activities.json": {
+      "bytes": 251552,
+      "sha256": "23d71f4e533a0c733522e7310a11c24aad6370f133cf366ef8cea2511a99689b"
+    },
+    "existing-output-preserved.stderr.txt": {
+      "bytes": 47,
+      "sha256": "f486374138b01670952facfba7f101325dc745718b1d23f25268af64d3822e45"
+    },
+    "existing-output-preserved.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "focused-tests.stderr.txt": {
+      "bytes": 994,
+      "sha256": "42e3e43021861151298c51d2e6ef088f6a064255a73eedbe1b7a0b4ede461d38"
+    },
+    "focused-tests.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "independent-reference.stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "independent-reference.stdout.txt": {
+      "bytes": 140,
+      "sha256": "c7a4ab5eba88c75b860492c3d244a0f760aea85fb4c11bc99495f1001ecdfb77"
+    },
+    "input-symlink-rejection.stderr.txt": {
+      "bytes": 58,
+      "sha256": "3f804a4c1ab356bb3546b51d25a2012ac8556cec3f58f270398714553e838175"
+    },
+    "input-symlink-rejection.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "inventory.json": {
+      "bytes": 14448,
+      "sha256": "11cf99f23bb8f2749bfb81b64eb92e5e033f6c185e60c32de461ba939bc6c7f1"
+    },
+    "large-actual-cli.stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "large-actual-cli.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "large-default-rejection.stderr.txt": {
+      "bytes": 55,
+      "sha256": "cd125273cdddc6156cf52e472dfb4cb0bb25b422711e6d50d69ee3e70a1f721d"
+    },
+    "large-default-rejection.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "malformed-input-rejection.stderr.txt": {
+      "bytes": 53,
+      "sha256": "d2848248d42072e07cdc796a493727a4a09442aaaaefd894889b18376924326a"
+    },
+    "malformed-input-rejection.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "offline-tests.stderr.txt": {
+      "bytes": 308,
+      "sha256": "ffb00dca704d1acfc967daeb1df8abc6a0228b7da17ba920b00c215abd4d256b"
+    },
+    "offline-tests.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "output-symlink-rejection.stderr.txt": {
+      "bytes": 47,
+      "sha256": "f486374138b01670952facfba7f101325dc745718b1d23f25268af64d3822e45"
+    },
+    "output-symlink-rejection.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "reference-check.py": {
+      "bytes": 2012,
+      "sha256": "972d1b14d77567fb56d5eb5388de92082bc73ca6347d79e387e84be6b99d85bb"
+    },
+    "small-default-cli.stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "small-default-cli.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "source-labels.json": {
+      "bytes": 2324,
+      "sha256": "133a5d334e6b5490192ffc6b3db471ff5eb446749ea03f0fb304683bca6ca4ed"
+    },
+    "unmapped-explicit-cli.stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "unmapped-explicit-cli.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "unmapped-strict-rejection.stderr.txt": {
+      "bytes": 45,
+      "sha256": "cbad667006894ff3c7fe0eb492dbf3c2906a47199c3e58e22c78bd7ef463d396"
+    },
+    "unmapped-strict-rejection.stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "implementation_commit": "2be8d4c0a6f0cf4865eb76f9da5392ba7b1b4423",
+  "run_id": "20261013-232242825-2161355",
+  "schema": 1,
+  "scope": "Compact elapsed-analysis evidence. Hashes identify bytes, not compiler execution-DAG completeness or independent attestation."
+}

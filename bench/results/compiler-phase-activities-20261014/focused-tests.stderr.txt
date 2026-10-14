@@ -1,0 +1,13 @@
+test_crossing_rejected_for_every_kind (test_query_activities.ActivityTests.test_crossing_rejected_for_every_kind) ... ok
+test_empty_and_noninterval (test_query_activities.ActivityTests.test_empty_and_noninterval) ... ok
+test_equal_and_zero_stable_raw_order (test_query_activities.ActivityTests.test_equal_and_zero_stable_raw_order) ... ok
+test_limits_and_consumption (test_query_activities.ActivityTests.test_limits_and_consumption) ... ok
+test_nested_cross_thread_adjacent_and_gaps (test_query_activities.ActivityTests.test_nested_cross_thread_adjacent_and_gaps) ... ok
+test_validation (test_query_activities.ActivityTests.test_validation) ... ok
+test_cli_privacy_forwarding_preservation_and_bounds (test_query_activities.CLITests.test_cli_privacy_forwarding_preservation_and_bounds) ... ok
+test_symlinks_and_invalid_input (test_query_activities.CLITests.test_symlinks_and_invalid_input) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.011s
+
+OK

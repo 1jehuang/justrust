@@ -1,0 +1,350 @@
+{
+  "checks": [
+    {
+      "analysis_wall_seconds": 0.7636991789913736,
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_*.py"
+      ],
+      "exit": 0,
+      "logs": {
+        "stderr": {
+          "bytes": 308,
+          "file": "offline-tests.stderr.txt",
+          "sha256": "ffb00dca704d1acfc967daeb1df8abc6a0228b7da17ba920b00c215abd4d256b"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "offline-tests.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "offline-tests"
+    },
+    {
+      "analysis_wall_seconds": 0.25779055900056846,
+      "argv": [
+        "python3",
+        "bench/results/compiler-phase-activities-20261014/reference-check.py"
+      ],
+      "exit": 0,
+      "logs": {
+        "stderr": {
+          "bytes": 0,
+          "file": "independent-reference.stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": {
+          "bytes": 140,
+          "file": "independent-reference.stdout.txt",
+          "sha256": "c7a4ab5eba88c75b860492c3d244a0f760aea85fb4c11bc99495f1001ecdfb77"
+        }
+      },
+      "name": "independent-reference"
+    },
+    {
+      "analysis_wall_seconds": 0.15696641500107944,
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "bench",
+        "-p",
+        "test_query_activities.py",
+        "-v"
+      ],
+      "exit": 0,
+      "logs": {
+        "stderr": {
+          "bytes": 994,
+          "file": "focused-tests.stderr.txt",
+          "sha256": "42e3e43021861151298c51d2e6ef088f6a064255a73eedbe1b7a0b4ede461d38"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "focused-tests.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "focused-tests"
+    },
+    {
+      "analysis_wall_seconds": 0.4380429860029835,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>"
+      ],
+      "exit": 2,
+      "logs": {
+        "stderr": {
+          "bytes": 55,
+          "file": "large-default-rejection.stderr.txt",
+          "sha256": "cd125273cdddc6156cf52e472dfb4cb0bb25b422711e6d50d69ee3e70a1f721d"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "large-default-rejection.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "large-default-rejection"
+    },
+    {
+      "analysis_wall_seconds": 32.70651230000658,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>",
+        "--large-capture"
+      ],
+      "exit": 0,
+      "logs": {
+        "stderr": {
+          "bytes": 0,
+          "file": "large-actual-cli.stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "large-actual-cli.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "large-actual-cli"
+    },
+    {
+      "analysis_wall_seconds": 0.06464164101635106,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>"
+      ],
+      "exit": 0,
+      "logs": {
+        "stderr": {
+          "bytes": 0,
+          "file": "small-default-cli.stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "small-default-cli.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "small-default-cli"
+    },
+    {
+      "analysis_wall_seconds": 0.06126933198538609,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>"
+      ],
+      "exit": 2,
+      "logs": {
+        "stderr": {
+          "bytes": 47,
+          "file": "existing-output-preserved.stderr.txt",
+          "sha256": "f486374138b01670952facfba7f101325dc745718b1d23f25268af64d3822e45"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "existing-output-preserved.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "existing-output-preserved"
+    },
+    {
+      "analysis_wall_seconds": 0.0626363719929941,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>"
+      ],
+      "exit": 2,
+      "logs": {
+        "stderr": {
+          "bytes": 45,
+          "file": "unmapped-strict-rejection.stderr.txt",
+          "sha256": "cbad667006894ff3c7fe0eb492dbf3c2906a47199c3e58e22c78bd7ef463d396"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "unmapped-strict-rejection.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "unmapped-strict-rejection"
+    },
+    {
+      "analysis_wall_seconds": 0.061449775006622076,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>",
+        "--allow-unmapped-event-labels"
+      ],
+      "exit": 0,
+      "logs": {
+        "stderr": {
+          "bytes": 0,
+          "file": "unmapped-explicit-cli.stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "unmapped-explicit-cli.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "unmapped-explicit-cli"
+    },
+    {
+      "analysis_wall_seconds": 0.06659141799900681,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>"
+      ],
+      "exit": 2,
+      "logs": {
+        "stderr": {
+          "bytes": 58,
+          "file": "input-symlink-rejection.stderr.txt",
+          "sha256": "3f804a4c1ab356bb3546b51d25a2012ac8556cec3f58f270398714553e838175"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "input-symlink-rejection.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "input-symlink-rejection"
+    },
+    {
+      "analysis_wall_seconds": 0.05497974099125713,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>"
+      ],
+      "exit": 2,
+      "logs": {
+        "stderr": {
+          "bytes": 47,
+          "file": "output-symlink-rejection.stderr.txt",
+          "sha256": "f486374138b01670952facfba7f101325dc745718b1d23f25268af64d3822e45"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "output-symlink-rejection.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "output-symlink-rejection"
+    },
+    {
+      "analysis_wall_seconds": 0.05987429301603697,
+      "argv": [
+        "python3",
+        "bench/query_activities.py",
+        "--profile",
+        "<verified capture or synthetic fixture>",
+        "--output",
+        "<fresh output>"
+      ],
+      "exit": 2,
+      "logs": {
+        "stderr": {
+          "bytes": 53,
+          "file": "malformed-input-rejection.stderr.txt",
+          "sha256": "d2848248d42072e07cdc796a493727a4a09442aaaaefd894889b18376924326a"
+        },
+        "stdout": {
+          "bytes": 0,
+          "file": "malformed-input-rejection.stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "name": "malformed-input-rejection"
+    }
+  ],
+  "identity_check": "Profile SHA256, process ID, start time and command SHA match the committed original graph mapping. Consistency, not attestation.",
+  "implementation_commit": "2be8d4c0a6f0cf4865eb76f9da5392ba7b1b4423",
+  "independent_review": "Ant read-only review 2026-10-14 07:19 UTC: 8 tests, actual compact output hash/identity, count/invariant and inclusive inventory parity PASS. No second giant parse or compiler run.",
+  "limitations": [
+    "Elapsed intervals are not CPU work or a complete execution span. Rust thread IDs are not proven OS TIDs.",
+    "Equal intervals use stable raw order with arbitrary exclusive attribution; equal_interval_records counts duplicates beyond the first per thread and endpoint pair.",
+    "All recorded kinds are retained without classification. Query is not synonymous with frontend.",
+    "Exclusive elapsed subtracts direct nested intervals of ALL kinds, unlike query-only attribution; waits, subprocesses and descheduling may remain.",
+    "Observation window covers interval and instant timestamps only; thread gaps cover first/last interval endpoints and are not proven idle time.",
+    "Memory is not constant: all interval tuples are retained per Rust thread."
+  ],
+  "output": {
+    "bytes": 251552,
+    "covered_elapsed_ns": 148396651246,
+    "cpu_work_ns": null,
+    "exclusive_elapsed_ns": 148396651246,
+    "execution_span_ns": null,
+    "file": "desktop-release-activities.json",
+    "groups": 584,
+    "observation_window_ns": 15826062441,
+    "records": 6851280,
+    "rust_thread_ids": 517,
+    "sha256": "23d71f4e533a0c733522e7310a11c24aad6370f133cf366ef8cea2511a99689b"
+  },
+  "run_id": "20261013-232242825-2161355",
+  "schema": 1,
+  "scope": "Offline existing BUILD profile elapsed coverage only. No host calls, new compiler build, default changes, CPU/span estimate or speed claim.",
+  "source_labels": {
+    "check": "All six git-object hashes and each exact literal line verified again.",
+    "compiler_commit": "1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6",
+    "exact_labels": 17,
+    "files": 6
+  },
+  "source_sha256": {
+    "bench/query_activities.py": "c33b7c7a7d2b8a4dcbb2d0b0797cc6309195d5dc6bcd81f7e7241362f49aae1f",
+    "bench/query_profile.py": "4915e3d44fb585cdd73ec38a0fe92ff5c5464738071d4444d27227470e8ce4e1",
+    "bench/test_query_activities.py": "e376ff42e7e13044fe24c5aea671b84b9256a77769ee74a75130c2b75fc1bc84"
+  },
+  "tests": {
+    "focused": 8,
+    "independent_discrete_time_forests": 250,
+    "whole_offline": 177
+  }
+}

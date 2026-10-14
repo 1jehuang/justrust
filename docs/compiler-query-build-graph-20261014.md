@@ -174,3 +174,12 @@ then failed before any compiler unit ran. The initial environment variable was
 misnamed. The successful retry used `JUSTRUST_REMOTE_REQUIRED=1` and a new pinned
 workspace without overriding target-dir. This was a harness correction, not a
 routing defect, an AWS failure, or permission to bypass billing.
+
+## Existing phase follow-through
+
+[All-kind activity accounting](compiler-phase-activities-20261014.md) analyzes
+the same captured BUILD's GenericActivity, Query and QueryBlocked intervals.
+It adds bounded per-thread exclusive elapsed coverage across LLVM/LTO,
+metadata and coordinator scopes without labeling it CPU work or execution span.
+The original query-only metric above remains unchanged and has a different
+nesting definition. No new host build or performance comparison was made.
