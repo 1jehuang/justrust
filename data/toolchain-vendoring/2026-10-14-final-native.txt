@@ -1,0 +1,199 @@
+Final native verification, October 14, 2026
+Frozen source commit: 6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d
+No compiler/bootstrap source or smoke-fixture edits made for this verification.
+
+Requirement mapping and observed results:
+N1 Native bootstrap Rust suite: ./x test src/bootstrap -> 289 passed, 0 failed, 195.96s.
+N2 Python bootstrap suite: cd src/bootstrap; BOOTSTRAP_TEST_CARGO_BIN=<system cargo> BOOTSTRAP_TEST_RUSTC_BIN=<system rustc> python3 -m unittest bootstrap_test -> 23 passed, 0.208s. Checksum rejection output is an intentional negative test.
+N3 Actual compiler/backends/optimized std: ./build-jr.sh dev -> passed, 6s warm incremental verification. Both LLVM and Cranelift enabled, profiler and optimized compiler builtins unchanged. Not a cold-build speed claim.
+N4 Actual rebuilt compiler metadata-only library check: rustc --edition=2024 --crate-type=lib --emit=metadata tests/fixtures/toolchain_smoke.rs -> passed.
+N5 Actual runtime/std/thread tests: rustc --edition=2024 --test tests/fixtures/toolchain_smoke.rs -> 3 passed with LLVM; same command with -Zcodegen-backend=cranelift -> 3 passed. Saved dev compiler identity matches stage1 compiler.
+N6 Fresh committed HEAD Git archive vs actual selected source inputs: passed. Actual and archive digest 910e39a6c3ef8b6fe54663a4f513213687b9bf4b matches rebuilt compiler. Compared 6666 entries: 5591 files/symlinks, 1075 directories, exact contents/type/link targets. Zero differing entries, included untracked files or empty directories. Generated src/bootstrap/__pycache__ excluded. Archive exported directly from frozen HEAD, not dirty index. Hash audit reproduced native version tag, selected input order, sorted relative names, entry types, little-endian lengths and source bytes.
+N7 Frozen-source/no-materialized-LLVM postchecks: passed separately after correcting an overly strict directory assertion. HEAD unchanged and no tracked compiler or smoke fixture changes. src/llvm-project exists only as an empty ignored directory with zero descendants, not a source checkout.
+
+Harness accounting:
+Task 673966lxj5 ran 2026-10-14T14:37:53Z through 14:41:20Z. N1-N5 commands all passed. Wrapper exit 1 occurred only after those checks, because test ! -d src/llvm-project incorrectly rejected the preexisting empty directory. No compiler/build/test failure. Corrected N7 command at 14:42:08Z exited 0: assert HEAD frozen, git diff --exit-code -- toolchain/rustc tests/fixtures/toolchain_smoke.rs, assert find src/llvm-project -mindepth 1 returns no entries, inspect both compiler identities. Source was not changed to address this harness assertion.
+N6 fresh archive audit executed 14:39:16Z through 14:39:21Z, exit 0.
+Full Rust language/Cargo suites and stage2 build are outside this assigned native check. No default or production compiler activation.
+
+=== Redacted fresh native stdout/stderr (original wrapper status retained) ===
+Frozen source commit: 6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d
+
+=== N1 native bootstrap suite ===
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 0.04s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+[stderr]     Finished `test` profile [unoptimized] target(s) in 0.08s
+
+running 289 tests
+.......................test core::builder::tests::test_test_coverage has been running for a long time
+..
+
+test result: ok. 289 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 195.96s
+
+	finished in 196.062 seconds
+[stderr] Build completed successfully in 0:03:18
+
+=== N2 bootstrap Python suite ===
+[stderr] .....................invalid checksum:
+[stderr]     found:    334d016f755cd6dc58c53a86e183882f8ec14f52fb05345887c8a5edd42c87b7
+[stderr]     expected: 64ec88ca00b268e5ba1a35678a1b5316d212f4f366b2477232534a8aeca37f3c
+[stderr] ..
+configure: build.configure-args := ['--set', 'build.cargo=<home>/.local/bin ...
+[stderr] ----------------------------------------------------------------------
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=false', '--set', ...
+configure: rust.deny-warnings   := False
+[stderr] Ran 23 tests in 0.208s
+[stderr]
+[stderr] OK
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=false', '--set', ...
+configure: rust.deny-warnings   := False
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=true', '--set',  ...
+configure: rust.deny-warnings   := True
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.deny-warnings=true', '--set',  ...
+configure: rust.deny-warnings   := True
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'build.cargo=<home>/.local/bin ...
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'build.cargo=<home>/.local/bin ...
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: build.cargo          := <home>/.local/bin/cargo
+configure: build.rustc          := /usr/bin/rustc
+configure: profile              := dist
+configure: build.configure-args := []
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.codegen-backends=cranelift']
+configure: rust.codegen-backends := cranelift
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'rust.codegen-backends=cranelift,llv ...
+configure: rust.codegen-backends := cranelift,llvm
+configure: profile              := dist
+configure: build.configure-args := ['--enable-full-tools']
+configure: rust.codegen-backends := ['llvm']
+configure: rust.lld             := True
+configure: rust.llvm-tools      := True
+configure: rust.llvm-bitcode-linker := True
+configure: build.extended       := True
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'llvm.download-ci-llvm']
+configure: llvm.download-ci-llvm := True
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'target.x86_64-unknown-linux-gnu.cc= ...
+configure: target.x86_64-unknown-linux-gnu.cc := gcc
+configure: profile              := dist
+configure: build.configure-args := ['--set', 'profile=compiler']
+configure: profile              := compiler
+configure: build.configure-args := ['--enable-full-tools']
+configure: rust.codegen-backends := ['llvm']
+configure: rust.lld             := True
+configure: rust.llvm-tools      := True
+configure: rust.llvm-bitcode-linker := True
+configure: build.extended       := True
+configure: build.configure-args := ['--disable-full-tools']
+configure: rust.codegen-backends := ['llvm']
+configure: rust.lld             := True
+configure: rust.llvm-tools      := True
+configure: rust.llvm-bitcode-linker := True
+configure: build.extended       := True
+configure: build.configure-args := ['--target=x86_64-unknown-linux-gnu']
+configure: build.target         := ['x86_64-unknown-linux-gnu']
+configure: build.configure-args := ['--target', 'x86_64-unknown-linux-gnu']
+configure: build.target         := ['x86_64-unknown-linux-gnu']
+configure: build.configure-args := ['--target']
+configure: profile              := dist
+configure: build.configure-args := ['--target']
+configure: profile              := dist
+configure: build.configure-args := ['--enable-option-checking', '--target']
+configure: profile              := dist
+configure: build.configure-args := ['--disable-option-checking', '--target']
+configure: profile              := dist
+configure: build.configure-args := ['enable-full-tools']
+configure: profile              := dist
+configure: build.configure-args := ['--some-random-flag']
+configure: profile              := dist
+
+=== N3 actual dev compiler and optimized std build ===
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 0.06s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+[stderr] <repo>/toolchain/rustc/build/x86_64-unknown-linux-gnu/ci-llvm/bin/llvm-strip does not exist; skipping copy
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.35s
+Creating a sysroot for stage1 compiler (use `rustup toolchain link 'name' build/host/stage1`)
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.11s
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.18s
+[stderr]     Finished `dist` profile [optimized + debuginfo] target(s) in 0.11s
+[stderr] Build completed successfully in 0:00:06
+build-jr: dev -> build/jr/dev/bin/rustc
+
+=== N4 metadata check and N5 LLVM/Cranelift runtime smoke ===
+rustc 1.101.0-nightly (910e39a6c 2026-10-14)
+binary: rustc
+commit-hash: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b
+commit-date: 2026-10-14
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+
+running 3 tests
+test tests::optimized_runtime_integer_arithmetic ... ok
+test tests::std_allocation_strings_and_iterators ... ok
+test tests::std_threads_and_synchronization ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test tests::optimized_runtime_integer_arithmetic ... ok
+test tests::std_allocation_strings_and_iterators ... ok
+test tests::std_threads_and_synchronization ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+rustc 1.101.0-nightly (910e39a6c 2026-10-14)
+binary: rustc
+commit-hash: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b
+commit-date: 2026-10-14
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+
+--- Command finished with exit code: 1 ---
+
+=== Corrected frozen-source and no-materialized-LLVM postchecks (exit 0) ===
+Frozen commit: 6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d
+Tracked compiler and smoke fixture changes: none
+Optional LLVM path: empty ignored directory, zero descendants
+Stage1 and saved dev compiler identity: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b
+Corrected postchecks: PASS
+
+=== Fresh committed HEAD archive audit (exit 0) ===
+source_commit: 6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d
+actual_identity: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b
+head_archive_identity: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b
+matched_entries: 6666
+files_and_symlinks: 5591
+directories: 1075
+differing_entries: []
+included_untracked_files: []
+actual_empty_directories: []
+archive_empty_directories: []
+excluded_generated_entries: [src/bootstrap/__pycache__]

@@ -1,0 +1,180 @@
+Final root acceptance, October 14, 2026
+Frozen source commit:6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d
+R1 Source/materializer suite:10 passed on Git working tree, task644232apfg.
+R2 Final archived client: cargo fmt --check, hosted check,439 tests(3ignored), strict all-target clippy passed, task246011zqwl. Actual root crates recompiled in archive, independent of concurrent lib.rs/execution-graph work.
+R3 Installed public CLI: justrust toolchain jr-install --help displays ~/justrust/toolchain/rustc/build/host/stage2. Root tests check default and explicit override. No installation or compiler activation performed.
+Frozen archive runs: check20261014-074729328-178399,test20261014-074954275-215740,clippy20261014-075034482-177397.
+Harness caveats:644232apfg completed all root gates but exited2 because verifier invoked nonexistent top-level jr-install; corrected nested help passed. 9441171zb2 passed fmt but Git-index-specific Python tests errored in intentionally no-Git archive. Structure tests already passed10/10 on real Git tree, committed fidelity audited separately. Final246011zqwl excludes these Git-only checks and passes all build gates.
+First archive hosted sync137.4s vs compile4.1s was an observed cost, not a speedup. No performance promotion or claim. Full root stdout/stderr preserved below.
+
+=== Phase 644232apfg ===
+[stderr] From $HOME/.jcode/scratch/tmpmuhwodae/upstream
+[stderr]  * branch            d39a2832c91fead6d9b6a4f4a1cdde064cda773a -> FETCH_HEAD
+[stderr] ..........
+[stderr] ----------------------------------------------------------------------
+[stderr] Ran 10 tests in 4.546s
+[stderr]
+[stderr] OK
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/justrust/data/runs/xps14/2026-10.jsonl (40.0 MB), $HOME/justrust/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok in 0.1s
+[stderr]   time    startup 0.06s | compile 0.00s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   memory  peak 0 MB build, 0 MB largest rustc, 90.9 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261014-073729571-60099` full output, `justrust show 20261014-073729571-60099` full profile
+[stderr] justrust remote: ok on hosted in 1.5s (sync 995 ms, 0 files at build time)
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/justrust/data/runs/xps14/2026-10.jsonl (40.0 MB), $HOME/justrust/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok: 439 tests passed in 9.9s
+[stderr]   time    startup 0.02s | compile 0.00s | tests 9.91s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   tests   439 passed, 0 failed, 3 ignored, 0 filtered out, 11 binaries in 9.91s
+[stderr]           slowest tests (439 timed, 23.2s summed; a suite cannot finish before its slowest test):
+[stderr]               9.91s  depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap
+[stderr]               2.12s  telemetry_is_sent_in_the_background_and_stops_when_off
+[stderr]               1.56s  host_native_and_response_file_flags_compile_without_cache_reuse
+[stderr]   memory  peak 940 MB build, 0 MB largest rustc, 90.4 GB free; stalls cpu 0.09s mem 0.00s io 0.39s
+[stderr]   waste   1 issue (estimated cost each; they can overlap):
+[stderr]           ~  9.9s  tests in justrust-864784662218f375 took 9.9s to run; the slowest test alone took 9.9s (depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap). Speed it up or split it, or filter to the tests you changed
+[stderr]   more    `justrust log 20261014-073731108-60552` full output, `justrust show 20261014-073731108-60552` full profile
+[stderr] justrust remote: ok on hosted in 11.6s (sync 1305 ms, 0 files at build time)
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/justrust/data/runs/xps14/2026-10.jsonl (40.0 MB), $HOME/justrust/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok in 0.0s
+[stderr]   time    startup 0.04s | compile 0.00s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   memory  peak 0 MB build, 0 MB largest rustc, 90.6 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261014-073742738-62610` full output, `justrust show 20261014-073742738-62610` full profile
+[stderr] justrust remote: ok on hosted in 1.9s (sync 1363 ms, 0 files at build time)
+[stderr] error: unrecognized subcommand 'jr-install'
+[stderr]
+[stderr]   tip: some similar subcommands exist: 'uninstall', 'install'
+[stderr]
+[stderr] Usage: justrust <COMMAND>
+[stderr]
+[stderr] For more information, try '--help'.
+
+--- Command finished with exit code: 2 ---
+
+
+=== Phase 9441171zb2 ===
+Frozen archive directory: $HOME/.jcode/scratch/vendoring-final-root-51500x
+[stderr] From $HOME/.jcode/scratch/tmpdyhw4dwd/upstream
+[stderr]  * branch            78bad9368465d62ebb1e1b64c9c69c6be6af8c57 -> FETCH_HEAD
+[stderr] .......fatal: not a git repository (or any parent up to mount point /)
+[stderr] Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+[stderr] E.fatal: not a git repository (or any parent up to mount point /)
+[stderr] Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+[stderr] E
+[stderr] ======================================================================
+[stderr] ERROR: test_no_nested_agent_policy_or_owned_gitlinks (test_toolchain_sources.OwnedToolchainTests.test_no_nested_agent_policy_or_owned_gitlinks)
+[stderr] ----------------------------------------------------------------------
+[stderr] Traceback (most recent call last):
+[stderr]   File "$HOME/.jcode/scratch/vendoring-final-root-51500x/tests/test_toolchain_sources.py", line 38, in test_no_nested_agent_policy_or_owned_gitlinks
+[stderr]     listing = subprocess.check_output(["git", "ls-files", "--stage", "toolchain"], cwd=ROOT, text=True)
+[stderr]   File "/usr/lib/python3.14/subprocess.py", line 473, in check_output
+[stderr]     return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+[stderr]            ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]                **kwargs).stdout
+[stderr]                ^^^^^^^^^
+[stderr]   File "/usr/lib/python3.14/subprocess.py", line 578, in run
+[stderr]     raise CalledProcessError(retcode, process.args,
+[stderr]                              output=stdout, stderr=stderr)
+[stderr] subprocess.CalledProcessError: Command '['git', 'ls-files', '--stage', 'toolchain']' returned non-zero exit status 128.
+[stderr]
+[stderr] ======================================================================
+[stderr] ERROR: test_technical_doc_and_test_fixtures_preserved (test_toolchain_sources.OwnedToolchainTests.test_technical_doc_and_test_fixtures_preserved)
+[stderr] ----------------------------------------------------------------------
+[stderr] Traceback (most recent call last):
+[stderr]   File "$HOME/.jcode/scratch/vendoring-final-root-51500x/tests/test_toolchain_sources.py", line 65, in test_technical_doc_and_test_fixtures_preserved
+[stderr]     self.assertEqual(subprocess.check_output(["git", "show", ":" + fixture], cwd=ROOT), raw)
+[stderr]                      ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "/usr/lib/python3.14/subprocess.py", line 473, in check_output
+[stderr]     return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+[stderr]            ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[stderr]                **kwargs).stdout
+[stderr]                ^^^^^^^^^
+[stderr]   File "/usr/lib/python3.14/subprocess.py", line 578, in run
+[stderr]     raise CalledProcessError(retcode, process.args,
+[stderr]                              output=stdout, stderr=stderr)
+[stderr] subprocess.CalledProcessError: Command '['git', 'show', ':toolchain/rustc/src/tools/rustfmt/tests/writemode/target/stdin.xml']' returned non-zero exit status 128.
+[stderr]
+[stderr] ----------------------------------------------------------------------
+[stderr] Ran 10 tests in 1.821s
+[stderr]
+[stderr] FAILED (errors=2)
+
+--- Command finished with exit code: 1 ---
+
+
+=== Phase 246011zqwl ===
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/vendoring-final-root-51500x/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB), $HOME/.jcode/scratch/vendoring-final-root-51500x/data/runs/xps14/2026-10.jsonl (36.6 MB)
+[stderr]
+[stderr] justrust: ok in 4.1s
+[stderr]   time    startup 0.08s | compile 3.98s | gaps 0.05s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   75 compiled (2 local, 61 deps, 12 build scripts), 0 fresh, depcache 73 hit/0 miss (saved ~28.6s of rustc), localcache 0 hit/2 miss
+[stderr]           justrust                           3.61s  cpu   3.6s    672 MB
+[stderr]   memory  peak 787 MB build, 672 MB largest rustc, 88.2 GB free; stalls cpu 0.01s mem 0.00s io 0.14s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261014-074729328-178399` full output, `justrust show 20261014-074729328-178399` full profile
+[stderr] justrust remote: ok on hosted in 144.9s (sync 137385 ms, 0 files at build time)
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/vendoring-final-root-51500x/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB), $HOME/.jcode/scratch/vendoring-final-root-51500x/data/runs/xps14/2026-10.jsonl (36.6 MB)
+[stderr]
+[stderr] justrust: ok: 439 tests passed in 19.3s
+[stderr]   time    startup 0.03s | compile 9.32s | gaps 0.02s | tests 9.91s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   65 compiled (12 local, 53 deps, 0 build scripts), 8 fresh, depcache 53 hit/0 miss (saved ~40.9s of rustc), localcache 0 hit/12 miss
+[stderr]           justrust (test)                    4.38s  cpu  13.3s   1208 MB
+[stderr]           justrust                           4.03s  cpu  13.0s   1173 MB
+[stderr]           remote_agent (test)                0.36s  cpu   1.4s    324 MB
+[stderr]   tests   439 passed, 0 failed, 3 ignored, 0 filtered out, 11 binaries in 9.91s
+[stderr]           slowest tests (439 timed, 22.9s summed; a suite cannot finish before its slowest test):
+[stderr]               9.90s  depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap
+[stderr]               2.11s  telemetry_is_sent_in_the_background_and_stops_when_off
+[stderr]               1.54s  host_native_and_response_file_flags_compile_without_cache_reuse
+[stderr]   memory  peak 2551 MB build, 1208 MB largest rustc, 88.0 GB free; stalls cpu 0.15s mem 0.00s io 0.70s
+[stderr]   waste   2 issues (estimated cost each; they can overlap):
+[stderr]           ~  9.9s  tests in justrust-864784662218f375 took 9.9s to run; the slowest test alone took 9.9s (depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap). Speed it up or split it, or filter to the tests you changed
+[stderr]           ~  5.2s  8.4s went to recompiling oversized crates: justrust (52k lines, 8.4s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]   more    `justrust log 20261014-074954275-215740` full output, `justrust show 20261014-074954275-215740` full profile
+[stderr] justrust remote: ok on hosted in 40.2s (sync 20070 ms, 0 files at build time)
+[stderr] justrust: remote (default for hosted builds; --local or JUSTRUST_REMOTE=auto to change)
+[stderr] justrust remote: not mirrored (over 8 MB): $HOME/.jcode/scratch/vendoring-final-root-51500x/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB), $HOME/.jcode/scratch/vendoring-final-root-51500x/data/runs/xps14/2026-10.jsonl (36.6 MB)
+[stderr]
+[stderr] justrust: ok in 4.9s
+[stderr]   time    startup 0.20s | compile 4.63s | gaps 0.07s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   3 compiled (3 local, 0 deps, 0 build scripts), 61 fresh
+[stderr]           justrust (test)                    2.82s  cpu   4.8s    796 MB
+[stderr]           justrust                           1.81s  cpu   3.8s    685 MB
+[stderr]   memory  peak 1531 MB build, 796 MB largest rustc, 89.2 GB free; stalls cpu 0.00s mem 0.00s io 0.01s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261014-075034482-177397` full output, `justrust show 20261014-075034482-177397` full profile
+[stderr] justrust remote: ok on hosted in 20.0s (sync 14302 ms, 0 files at build time)
+
+--- Command finished with exit code: 0 ---
+
+
+=== Installed CLI ===
+Install a jr-rustc build (justrust's rustc fork) as toolchain `jr-<commit>`. With no pin, builds then use the newest installed jr toolchain and its proc-macro cache (`JUSTRUST_TOOLCHAIN=system` or `JUSTRUST_CACHE_PROC_MACROS=0` to opt out)
+
+Usage: justrust toolchain jr-install [OPTIONS] [SYSROOT]
+
+Arguments:
+  [SYSROOT]  Sysroot with bin/{rustc,rustdoc,clippy-driver,cargo-clippy} [default: ~/justrust/toolchain/rustc/build/host/stage2]
+
+Options:
+      --cargo-from <CARGO_FROM>  Installed official toolchain to take cargo and rustfmt from [default: nightly-2026-10-08]
+      --no-default               Stage for explicit pins only, without changing the default compiler
+  -h, --help                     Print help

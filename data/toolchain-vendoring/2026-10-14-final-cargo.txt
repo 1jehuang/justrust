@@ -1,0 +1,242 @@
+Frozen Cargo acceptance receipt, 2026-10-14
+Requested source: 6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d
+Worker: session_dog_1791984196124_c382ca33251215c9
+No source edits, resets, fixture moves, commits, or activation performed.
+Paths are redacted. <archive-root> is an isolated full git archive in scratch.
+<repo-root> is the live justrust repository. <repo-root>/toolchain/cargo/target
+was reused ONLY as Cargo's generated-artifact cache via CARGO_TARGET_DIR.
+
+Snapshot integrity and caveat
+- Initial live-worktree verification task738293osdg passed actual build,
+  hosted4 identity, and hosted31 version tests, but concurrent execution-graph
+  source edits were detected. HEAD alone was insufficient frozen provenance.
+- Dirty initial binary suffix018d973783d07e9f8b7b5065969da231ceff5d2f does NOT
+  match frozen expected identity. Initial passing checks are not frozen acceptance.
+- Frozen source extracted with:
+  archive=$(mktemp -d "$JCODE_SCRATCH_DIR/final-cargo-6d898a9ea.XXXXXX")
+  git archive 6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d | tar -x -C "$archive"
+- Full archive preserves monorepo sources.json, rustc monorepo marker, policies,
+  config/manifests, and test fixtures. No nested .git exists.
+- Read-only verification after build matched ALL3084 Cargo blob hashes against
+  git ls-tree -rz6d898a9ea toolchain/cargo, including archived target fixtures.
+- tests/testsuite/cargo_add/target/mod.rs locally exists (1171 bytes).
+- tests/testsuite/cargo_remove/target/mod.rs locally exists (1595 bytes).
+
+Exact build/test commands (cwd<archive-root>/toolchain/cargo)
+CARGO_TARGET_DIR=<repo-root>/toolchain/cargo/target justrust build --bin cargo --locked --config 'env.CFG_RELEASE="1.101.0-nightly"' --config 'env.CFG_RELEASE_CHANNEL="nightly"'
+<repo-root>/toolchain/cargo/target/debug/cargo -vV
+CARGO_TARGET_DIR=<repo-root>/toolchain/cargo/target justrust test --remote --test jr_build_identity --locked --config 'env.CFG_RELEASE="1.101.0-nightly"' --config 'env.CFG_RELEASE_CHANNEL="nightly"'
+CARGO_TARGET_DIR=<repo-root>/toolchain/cargo/target justrust test --remote --test testsuite version:: --locked --config 'env.CFG_RELEASE="1.101.0-nightly"' --config 'env.CFG_RELEASE_CHANNEL="nightly"'
+CARGO_TARGET_DIR=<repo-root>/toolchain/cargo/target justrust test --local --test testsuite version:: --locked --config 'env.CFG_RELEASE="1.101.0-nightly"' --config 'env.CFG_RELEASE_CHANNEL="nightly"'
+
+Requirement-to-observation mapping
+1. Actual binary from frozen owned Cargo source: PASS local debug-artifact route,
+   run20261014-074317981-128533. Not a remote build with missing local artifact.
+   Default local compiler: jr-ac20de5e7921. Build wall126.8s under contention.
+2. Compatibility release/channel/base: PASS actual binary -vV reports
+   1.101.0-nightly and f3865b2a4d1acc5276f6b3c67d0e057f4dab3928,
+   date2026-09-29. Native fork suffix matches frozen expected exactly:
+   3f0793ee26b30ba57130f5662c6936756e27c95d.
+3. Native source identity tests: PASS HOSTED4/4,
+   run20261014-074524962-151355 (task997786ixkz).
+   dirty_source_edits_change_identity_without_git_metadata
+   generated_targets_and_git_metadata_do_not_change_identity
+   new_sources_and_workspace_manifest_edits_change_identity
+   credential_helpers_and_native_manifest_change_identity
+   These cover dirty bytes, restoring identity, noGit, generated-target exclusion,
+   new source files, workspace manifests, credential helpers, and native manifest.
+4. Frozen version:: acceptance HOSTED: BLOCKED, run20261014-074614928-128514.
+   noGit hosted mirror dropped target fixture directories. Compile E0583 names
+   cargo_add/target and cargo_remove/target. Actual local source fixtures are
+   present and match frozen commit. Task997786ixkz exit101 reflects this failure,
+   not failed identity tests or failed actual binary build.
+5. Frozen version:: acceptance LOCAL: PASS31/31, 0 failed, 0 ignored,
+   4396 filtered out. Run20261014-074731859-178866, task251672s01r exit0.
+   Completed2026-10-14T14:58:18Z (independently observed by coordinator).
+   Explicit local exception authorized by palmtree for unsupported noGit hosted
+   fixture mirror. This is not a claim of hosted31 acceptance.
+6. Concurrent work preservation: source changes left untouched, no broad force-add.
+7. Scope: focused4 identity +31 version tests only, not full Cargo suite,
+   not release artifact portability validation, not a compiler/std acceptance test.
+   Reported build timings and unedited tool waste recommendations are observations,
+   not a measured speedup claim from this task.
+
+Hosted coordination
+Palmtree granted exclusive sequential identity/version window. Frozen hosted
+window was released14:47:19Z after mirror failure. Local exception runs without
+using hosted window. Later root archive checks are independent.
+
+Frozen archive exact captured compact output (stdout/stderr tags retained)
+[stderr]
+[stderr] justrust: ok in 126.8s
+[stderr]   time    startup 0.93s | compile 124.20s | gaps 1.60s | after 0.05s
+[stderr]   rustc   pinned toolchain jr-ac20de5e7921
+[stderr]   units   11 compiled (10 local, 0 deps, 1 build scripts), 302 fresh, localcache 0 hit/11 miss. Rebuilt because: cargo-credential changed (cargo-credential-libsecret); cargo-util changed (cargo-util-terminal); edited build.rs (cargo)
+[stderr]           cargo                            112.44s  cpu  99.7s   2374 MB
+[stderr]           cargo                              7.47s  cpu   8.1s    460 MB
+[stderr]           cargo_util_schemas                 2.23s  cpu   3.1s    287 MB
+[stderr]           cargo_util                         0.58s  cpu   1.9s    224 MB
+[stderr]   memory  peak 2488 MB build, 2374 MB largest rustc, 3.9 GB free; stalls cpu 74.68s mem 0.69s io 1.33s
+[stderr]   waste   4 issues (estimated cost each; they can overlap):
+[stderr]           ~ 98.1s  119.9s went to recompiling oversized crates: cargo (109k lines, 119.9s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]           ~  1.6s  1.6s inside the build with no compiler running (build scripts or scheduling)
+[stderr]           ~  0.7s  tasks stalled 0.7s on memory (lowest available 3.9 GB, build peak 2.4 GB)
+[stderr]   more    `justrust log 20261014-074317981-128533` full output, `justrust show 20261014-074317981-128533` full profile
+cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 3f0793ee26b30ba57130f5662c6936756e27c95d)
+release: 1.101.0-nightly
+commit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928
+commit-date: 2026-09-29
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.7 (sys:0.21.0 system)
+libcurl: 8.22.0 (sys:0.4.90+curl-8.21.0 system ssl:OpenSSL/3.6.4)
+os: Arch Linux Rolling Release [64-bit]
+[stderr] justrust: remote (JUSTRUST_REMOTE=force)
+[stderr]
+[stderr] justrust: ok: 4 tests passed in 33.5s
+[stderr]   time    startup 0.16s | compile 32.65s | gaps 0.63s | after 0.03s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   373 compiled (13 local, 320 deps, 40 build scripts), 0 fresh, depcache 0 hit/358 miss, localcache 0 hit/15 miss
+[stderr]           cargo                             21.43s  cpu  36.5s   2425 MB
+[stderr]           gix                                1.73s  cpu   4.9s    647 MB
+[stderr]           cargo                              1.60s  cpu   2.5s    464 MB
+[stderr]           cargo_util_schemas                 0.63s  cpu   1.1s    280 MB
+[stderr]   tests   4 passed, 0 failed, 0 ignored, 0 filtered out, binary timing unavailable
+[stderr]   memory  peak 4133 MB build, 2425 MB largest rustc, 85.1 GB free; stalls cpu 0.76s mem 0.00s io 0.29s
+[stderr]   waste   4 issues (estimated cost each; they can overlap):
+[stderr]           ~ 17.5s  21.4s went to recompiling oversized crates: cargo (109k lines, 21.4s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]           ~  3.6s  358 dependency units missed the shared dependency cache and compiled (86.3s of rustc); they are cached now, so other target dirs, slots, and checkouts reuse them
+[stderr]           ~  3.3s  rebuilt 320 registry dependencies and 40 build scripts (3.3s)
+[stderr]   more    `justrust log 20261014-074524962-151355` full output, `justrust show 20261014-074524962-151355` full profile
+[stderr] justrust remote: ok on hosted in 50.0s (sync 8298 ms, 0 files at build time)
+[stderr] justrust: remote (JUSTRUST_REMOTE=force)
+[stderr] error[E0583]: file not found for module `target`
+[stderr]    --> tests/testsuite/cargo_add/mod.rs:160:1
+[stderr]     |
+[stderr] 160 | mod target;
+[stderr]     | ^^^^^^^^^^^
+[stderr]     |
+[stderr]     = help: to create the module `target`, create file "tests/testsuite/cargo_add/target.rs" or "tests/testsuite/cargo_add/target/mod.rs"
+[stderr]     = note: if there is a `mod target` elsewhere in the crate already, import it with `use crate::...` instead
+[stderr]
+[stderr] error[E0583]: file not found for module `target`
+[stderr]   --> tests/testsuite/cargo_remove/mod.rs:32:1
+[stderr]    |
+[stderr] 32 | mod target;
+[stderr]    | ^^^^^^^^^^^
+[stderr]    |
+[stderr]    = help: to create the module `target`, create file "tests/testsuite/cargo_remove/target.rs" or "tests/testsuite/cargo_remove/target/mod.rs"
+[stderr]    = note: if there is a `mod target` elsewhere in the crate already, import it with `use crate::...` instead
+[stderr]
+[stderr] For more information about this error, try `rustc --explain E0583`.
+[stderr] error: could not compile `cargo` (test "testsuite") due to 2 previous errors
+[stderr]
+[stderr]
+[stderr] justrust: FAILED to compile (2 errors) in 11.1s
+[stderr]   time    startup 0.07s | compile 10.97s | after 0.02s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   1 compiled (1 local, 0 deps, 0 build scripts), 324 fresh, localcache 0 hit/1 miss
+[stderr]           testsuite (test)                  10.97s  cpu  11.0s   1438 MB
+[stderr]   memory  peak 1588 MB build, 1438 MB largest rustc, 87.0 GB free; stalls cpu 0.03s mem 0.00s io 2.93s
+[stderr]   waste   2 issues (estimated cost each; they can overlap):
+[stderr]           ~  9.0s  11.0s went to recompiling oversized crates: testsuite (109k lines, 11.0s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]   more    `justrust log 20261014-074614928-128514` full output, `justrust show 20261014-074614928-128514` full profile
+[stderr] justrust remote: failed on hosted in 20.4s (sync 8878 ms, 0 files at build time)
+
+--- Command finished with exit code: 101 ---
+
+
+Initial live-worktree attempt, retained for provenance caveat ONLY
+Exact commands were the same release/channel configs from<repo-root>/toolchain/cargo,
+without CARGO_TARGET_DIR override, with --remote for both test commands.
+Task738293osdg exit0.
+Build run20261014-073858532-77852.
+Hosted identity run20261014-073947837-86896,4/4.
+Hosted version run20261014-074017388-77835,31/31.
+These do not certify the frozen source due to observed concurrent dirty edits.
+[stderr]
+[stderr] justrust: ok in 48.9s
+[stderr]   time    startup 4.53s | compile 37.02s | gaps 7.34s | after 0.02s
+[stderr]   rustc   pinned toolchain jr-ac20de5e7921
+[stderr]   units   2 compiled (2 local, 0 deps, 0 build scripts), 310 fresh, localcache 0 hit/2 miss. Rebuilt because: edited src (cargo)
+[stderr]           cargo                             30.55s  cpu   8.7s   1341 MB
+[stderr]           cargo                              6.46s  cpu   1.0s    439 MB
+[stderr]   memory  peak 2042 MB build, 1341 MB largest rustc, 18.1 GB free; stalls cpu 39.91s mem 0.00s io 0.44s
+[stderr]   waste   4 issues (estimated cost each; they can overlap):
+[stderr]           ~ 30.3s  37.0s went to recompiling oversized crates: cargo (109k lines, 37.0s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]           ~  7.3s  7.3s inside the build with no compiler running (build scripts or scheduling)
+[stderr]           ~  4.0s  cargo took 4.5s before compiling anything (resolving, fingerprinting, lock file, registry)
+[stderr]   more    `justrust log 20261014-073858532-77852` full output, `justrust show 20261014-073858532-77852` full profile
+cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 018d973783d07e9f8b7b5065969da231ceff5d2f)
+release: 1.101.0-nightly
+commit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928
+[stderr] justrust: remote (JUSTRUST_REMOTE=force)
+commit-date: 2026-09-29
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.7 (sys:0.21.0 system)
+libcurl: 8.22.0 (sys:0.4.90+curl-8.21.0 system ssl:OpenSSL/3.6.4)
+os: Arch Linux Rolling Release [64-bit]
+[stderr] justrust remote: not mirrored (over 8 MB): <repo-root>/data/runs/xps14/2026-10.jsonl (40.0 MB), <repo-root>/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok: 4 tests passed in 12.3s
+[stderr]   time    startup 0.17s | compile 11.79s | gaps 0.34s | after 0.02s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   3 compiled (3 local, 0 deps, 0 build scripts), 324 fresh, localcache 0 hit/3 miss. Rebuilt because: edited src (cargo)
+[stderr]           cargo                             10.53s  cpu  17.9s   2064 MB
+[stderr]           cargo                              1.24s  cpu   1.9s    453 MB
+[stderr]   tests   4 passed, 0 failed, 0 ignored, 0 filtered out, binary timing unavailable
+[stderr]   memory  peak 2125 MB build, 2064 MB largest rustc, 88.5 GB free; stalls cpu 0.03s mem 0.00s io 0.10s
+[stderr]   waste   2 issues (estimated cost each; they can overlap):
+[stderr]           ~  8.6s  10.5s went to recompiling oversized crates: cargo (109k lines, 10.5s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]   more    `justrust log 20261014-073947837-86896` full output, `justrust show 20261014-073947837-86896` full profile
+[stderr] justrust remote: ok on hosted in 29.5s (sync 16716 ms, 1 file at build time)
+[stderr] justrust: remote (JUSTRUST_REMOTE=force)
+[stderr] justrust remote: not mirrored (over 8 MB): <repo-root>/data/runs/xps14/2026-10.jsonl (40.0 MB), <repo-root>/toolchain/rustc/src/doc/rustc-dev-guide/src/queries/example-0.html (9.6 MB)
+[stderr]
+[stderr] justrust: ok: 31 tests passed in 8.9s
+[stderr]   time    startup 0.07s | compile 8.38s | gaps 0.01s | after 0.42s
+[stderr]   rustc   pinned toolchain nightly-2026-10-08
+[stderr]   units   1 compiled (1 local, 0 deps, 0 build scripts), 324 fresh, localcache 0 hit/1 miss. Rebuilt because: cargo changed (cargo)
+[stderr]           testsuite (test)                   8.38s  cpu  15.1s   2239 MB
+[stderr]   tests   31 passed, 0 failed, 0 ignored, 4396 filtered out, binary timing unavailable
+[stderr]   memory  peak 2306 MB build, 2239 MB largest rustc, 87.4 GB free; stalls cpu 0.02s mem 0.00s io 0.09s
+[stderr]   waste   3 issues (estimated cost each; they can overlap):
+[stderr]           ~  6.9s  8.4s went to recompiling oversized crates: testsuite (109k lines, 8.4s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]           ~  4.2s  compiled a test binary with 4427 tests (8.4s) to run 31. Tests in a smaller crate or `justrust check` first would be faster
+[stderr]   more    `justrust log 20261014-074017388-77835` full output, `justrust show 20261014-074017388-77835` full profile
+[stderr] justrust remote: ok on hosted in 15.5s (sync 6126 ms, 1 file at build time)
+
+--- Command finished with exit code: 0 ---
+
+
+Final LOCAL frozen version acceptance captured output
+-rw-r--r-- 1 <user> <user> 1171 Oct 14 07:35 tests/testsuite/cargo_add/target/mod.rs
+-rw-r--r-- 1 <user> <user> 1595 Oct 14 07:35 tests/testsuite/cargo_remove/target/mod.rs
+[stderr]
+[stderr] justrust: ok: 31 tests passed in 646.3s
+[stderr]   time    startup 1.93s | compile 626.49s | gaps 4.52s | after 13.31s
+[stderr]   rustc   pinned toolchain jr-ac20de5e7921
+[stderr]   units   373 compiled (13 local, 320 deps, 40 build scripts), 0 fresh, depcache 0 hit/358 miss, localcache 3 hit/12 miss (saved ~4.5s of rustc). Rebuilt because: the toolchain changed (294 crates)
+[stderr]           cargo                            290.74s  cpu 130.5s   2269 MB
+[stderr]           testsuite (test)                 175.59s  cpu 109.2s   2475 MB
+[stderr]           gix                               42.74s  cpu  18.2s    752 MB
+[stderr]           cargo_test_support                10.42s  cpu   5.0s    343 MB
+[stderr]   tests   31 passed, 0 failed, 0 ignored, 4396 filtered out, binary timing unavailable
+[stderr]   memory  peak 3292 MB build, 2475 MB largest rustc, 3.8 GB free; stalls cpu 613.93s mem 10.37s io 25.51s
+[stderr]   waste   8 issues (estimated cost each; they can overlap):
+[stderr]           ~388.5s  475.1s went to recompiling oversized crates: cargo (109k lines, 299.5s), testsuite (109k lines, 175.6s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]           ~ 87.8s  compiled a test binary with 4427 tests (175.6s) to run 31. Tests in a smaller crate or `justrust check` first would be faster
+[stderr]           ~ 69.7s  358 dependency units missed the shared dependency cache and compiled (1115.8s of rustc); they are cached now, so other target dirs, slots, and checkouts reuse them
+[stderr]           ~ 62.5s  rebuilt 320 registry dependencies and 40 build scripts (62.5s): the toolchain changed (x293)
+[stderr]           ~ 10.4s  tasks stalled 10.4s on memory (lowest available 3.8 GB, build peak 3.2 GB)
+[stderr]           ... 2 more in `justrust show`
+[stderr]   more    `justrust log 20261014-074731859-178866` full output, `justrust show 20261014-074731859-178866` full profile
+
+--- Command finished with exit code: 0 ---
+
+Observed contention, not a canceled harness
+At14:55:01Z own PID178866 had ACTIVE testsuite compiler children271077->271424
+and cargo binary compiler271076->271425. At14:57:53Z testsuite rustc271424
+had accumulated1m42s CPU. Following coordinator instructions, active compilation
+was left running. No waiting task was canceled or other process interrupted.
+Final run recorded646.3s wall,373 compiled units and toolchain-change rebuilds,
+613.93s machine-wide CPU pressure stalls. These are not speed comparisons.

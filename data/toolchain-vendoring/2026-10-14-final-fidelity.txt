@@ -1,0 +1,130 @@
+Final source-vendoring fidelity audit, October 14, 2026
+Audited frozen commit: 6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d
+Verification-only worker. No source edits, staging, commits, original-repository
+changes, compiler activation, or dependency materialization during this audit.
+
+COMMANDS AND METHOD
+- git rev-parse HEAD
+- git ls-tree -rz 6d898a9ea
+- git -C <original-repository> ls-tree -rz HEAD
+- git -C <original-repository> rev-parse HEAD
+- git -C <original-repository> status --porcelain=v1 --untracked-files=no
+- git -C <original-repository> ls-files --eol -z
+- git hash-object --no-filters toolchain/<component>/<CRLF-path>
+- find toolchain -name .git -print
+- git show 6d898a9ea:<policy-or-attributes-path>
+Python parsed NUL-delimited ls-tree entries into path -> (mode, type, blob SHA).
+Each original entry was compared against its corresponding frozen vendored path.
+License/attribution candidates used basename prefixes license/licence/copyright/
+notice, including license symlinks. CRLF candidates were every original index
+entry marked i/crlf or i/mixed, not just filenames mentioning CRLF. For these,
+raw working-file hashes were also compared to original Git blob hashes.
+Frozen Git objects, rather than the concurrently edited main worktree/index,
+were used for source-fidelity and policy comparisons.
+
+OWNED SOURCE REPRESENTATION: PASS
+66,660 tracked toolchain entries: 66,359 mode100644, 175 mode100755,
+126 mode120000. Entire frozen repository has zero mode160000 gitlinks.
+Physical find of toolchain returned zero nested .git files/directories.
+Shared Cargo is mode120000, blob194524751acdb19f427b03c8bdef69a3b15267bc:
+  toolchain/rustc/src/tools/cargo -> ../../../cargo
+Backtrace is 102 ordinary tracked entries, not a gitlink.
+Optional source revisions are provenance in toolchain/sources.json, not gitlinks.
+The sole remaining .gitmodules is library/stdarch/.gitmodules, an unchanged
+empty technical file, not Git metadata or an active submodule declaration.
+
+ROOT POLICY AUTHORITY: PASS
+Frozen root AGENTS.md lines90-103 explicitly establishes owned sources and
+root authority across toolchain; separate-fork and inherited agent/contribution
+policies are not development gates. No nested AGENTS.md, CLAUDE.md, JUSTRUST.md,
+CODE_OF_CONDUCT.md, AI_POLICY.md, or pull-request policy templates remain.
+Rustc removed 23 inherited policy files plus root .gitmodules. Cargo removed
+four policy files. Surviving contribution/LLM documentation landing pages were
+read from frozen blobs: they point to root AGENTS.md/CONTRIBUTING.md and retain
+technical architecture/testing/navigation or offload-IR recipes, not inherited
+approval, reviewer, branch, rebase, or AI-use gates. Attribution such as Clippy's
+relicense/contributors.txt is retained, not classified as contribution policy.
+
+ORIGINAL REPOSITORIES: PASS
+Original HEADs at both beginning and end of audit, matching import provenance:
+  jr-rustc: d907fba494adcabfdd642a18a7918b0c9847d35b
+  jr-cargo: a45c3546671925c24649e451a673aa71b1385d0d
+  jr-rustc/library/backtrace: d902726a1dcdc1e1c66f73d1162181b5423c645b
+Tracked status output was empty for all three. Originals were read-only inputs.
+No historical pre-import untracked-state claim is made by this audit.
+
+COMPLETE ORIGINAL-TO-FROZEN COMPARISON
+Component  Original  Exact mode/type/blob  Removed  Changed  Added
+rustc      63,505    63,445                35       25       105
+cargo       3,086     3,072                 4       10         2
+backtrace     102       102                 0        0         0
+Rustc removals: 11 replaced/optional gitlinks and 24 policy/Git configuration
+entries. Cargo removals: four policies. No unexplained technical-file removals.
+The only changed mode is rustc src/tools/cargo:160000 ->120000, intentionally.
+All other retained entry modes match originals, including executable scripts
+and license symlinks. No unexplained blob differences were found.
+
+EXPECTED RUSTC DIFFERENCES (paths relative to toolchain/rustc)
+Native/build integration, 12 files:
+  justrust.bootstrap.toml; pgo-train.sh; src/bootstrap/bootstrap.py;
+  src/bootstrap/src/core/build_steps/{compile,llvm}.rs;
+  src/bootstrap/src/core/builder/mod.rs; src/bootstrap/src/core/config/config.rs;
+  src/bootstrap/src/core/session.rs; src/bootstrap/src/utils/build_stamp.rs;
+  src/bootstrap/src/utils/build_stamp/tests.rs;
+  src/bootstrap/src/utils/channel.rs; src/build_helper/src/util.rs.
+Git attribute adaptations, three files:
+  .gitattributes; src/tools/{rust-analyzer,rustfmt}/.gitattributes.
+Root-authority documentation replacements, nine files:
+  src/doc/rustc-dev-guide/src/{contributing-to-guide,contributing,llm-guidance}.md;
+  src/doc/rustc-dev-guide/src/llm-guidance/{reviewing,writing}.md;
+  src/doc/rustc-dev-guide/src/offload/contributing.md;
+  src/doc/rustc/src/contributing.md;
+  src/tools/clippy/book/src/development/llm_usage.md;
+  src/tools/rust-analyzer/docs/book/src/contributing/README.md.
+Shared Cargo gitlink replacement: src/tools/cargo.
+Additions:102 exact backtrace source entries, git-commit-info,
+  justrust-monorepo-root, src/bootstrap/ci-llvm/git-commit-info.
+
+EXPECTED CARGO DIFFERENCES (paths relative to toolchain/cargo)
+Native identity/build integration: Cargo.toml, build.rs, build-jr.sh.
+Root-authority documentation: doc/contrib/src/index.md, issues.md, team.md,
+  process/{index,llm-usage,rfc,working-on-cargo}.md.
+Additions: git-commit-info, tests/jr_build_identity.rs.
+
+LICENSE/ATTRIBUTION FIDELITY: PASS
+All 47 rustc, 31 Cargo, and two backtrace license/attribution candidates retain
+exact original mode/type/blob, including all original MIT/Apache licenses.
+Representative original = frozen hashes, mode100644:
+  rustc/LICENSE-APACHE 1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d
+  rustc/LICENSE-MIT    a2070c4be7acd5316f8d0357ca3c12419a2f3c62
+  cargo/LICENSE-APACHE c98d27d4f32d56e56f13de73a08ab44b2947ccf5
+  cargo/LICENSE-MIT    31aa79387f27e730e33d871925e152e35e428031
+  backtrace/LICENSE-APACHE 16fe87b06e802f094b3fbb0894b137bca2b16ef1
+  backtrace/LICENSE-MIT    39e0ed6602151f235148e6c08413aa7eda5b9038
+
+CRLF AND FIXTURE FIDELITY: PASS
+All 18 rustc and one Cargo i/crlf/i/mixed entries retain exact original Git blob
+and mode100644. Their actual working-file bytes also hash identically without
+Git filters. Backtrace has no such entries. This includes rust-analyzer's mixed
+technical inputs, rustfmt source/target/writemode fixtures, rustdoc warning-crlf,
+compiler asm/frontmatter/include-macros/JSON/lexer fixtures, and Cargo script
+frontmatter-crlf. All other imported original fixtures are covered by the full
+mode/type/blob comparison, including ignored fixture directories.
+Examples, original = frozen = raw working bytes:
+  rustc/tests/ui/lexer/crlf-in-byte-string-literal.rs
+    88295018076222663fe588988b07f1d15b36bed6
+  rustc/src/tools/rustfmt/tests/writemode/target/stdin.xml
+    a7301bbc553c39a606824d7759d25f7e7cb60635
+  cargo/tests/testsuite/script/rustc_fixtures/frontmatter-crlf.rs
+    b46cc9ddbb0e0913a6d5a0c36f635c4b3d2bd041
+Scoped Git attributes now preserve intentional CRLF; root attribute-macro
+placement is adapted for monorepo Git rather than imposing nested definitions.
+
+BOUNDARIES
+Audit ran14:39-14:43 UTC. HEAD stayed at the frozen revision. Concurrent later
+work was already visible in src/lib.rs, toolchain/cargo/src/compiler/job_queue/
+mod.rs and new execution-graph files, plus preexisting run/scratch changes.
+Those working-tree changes are outside this frozen-commit audit and untouched.
+This receipt checks source fidelity and policy/layout, not a fresh compiler build.
+Native/compiler acceptance is recorded separately in 2026-10-14-native.txt.
+Only this requested evidence artifact was written. No blockers found.

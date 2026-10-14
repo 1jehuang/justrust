@@ -1,5 +1,31 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: final owned-source archive acceptance
+
+Fresh verification of frozen migration commit `6d898a9ea` is mapped in
+`docs/toolchain-vendoring-verification.md`, with separate fidelity, native,
+root and Cargo evidence under `data/toolchain-vendoring/`. Root archive
+check `20261014-074729328-178399` passed with 4.1s recorded work but
+137.4s initial hosted sync. Tests `20261014-074954275-215740` passed all
+439 tests (3 ignored), and strict clippy `20261014-075034482-177397` passed.
+The native compiler/std build, 289 bootstrap tests, 23 Python tests, and
+six backend runtime tests passed. A clean HEAD archive reproduced the
+built compiler identity across all 5,591 selected files/symlinks and
+1,075 directories. Eighty license/attribution files and all 19 original
+CRLF/mixed entries retained their exact original blobs and modes.
+
+Frozen Cargo binary build `20261014-074317981-128533` and hosted identity
+acceptance `20261014-074524962-151355` passed. Hosted archive version run
+`20261014-074614928-128514` failed before tests: no-Git source mirroring
+excluded the tracked test fixture directories `cargo_add/target` and
+`cargo_remove/target`. Those source blobs are intact in the actual archive.
+The final version acceptance uses a documented local exception for that
+unsupported archive mirror, with the failed hosted receipt retained.
+Upload batching and archive fixture discovery are concrete integration
+opportunities, not speedups demonstrated by this source migration.
+Concurrent execution-graph edits were isolated from the frozen acceptance
+and were neither reverted nor included in this evidence-only change.
+
 ## 2026-10-14: compiler and Cargo become owned source
 
 Both forks are ordinary monorepo source, with shared bootstrap Cargo and
