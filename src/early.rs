@@ -1749,30 +1749,51 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jr-launcher-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join("launcher.json");
-        let exe = Path::new("/bin/justrust");
+        let executable = std::env::current_exe().unwrap();
+        let exe = executable.as_path();
         assert!(daemon_command(exe, &config, true).is_err());
         assert_eq!(
             daemon_command(exe, &config, false).unwrap().get_program(),
             exe
         );
-        for invalid in [
-            "[]",
-            "null",
-            "[\"relative\"]",
-            "[\"/bin/echo\",\"\\u0000\"]",
-            "bad json",
-        ] {
+        let nul_argument = serde_json::to_string(&json!([exe, "\u{0}"])).unwrap();
+        for invalid in ["[]", "null", "[\"relative\"]", &nul_argument, "bad json"] {
             std::fs::write(&config, invalid).unwrap();
             assert!(daemon_command(exe, &config, true).is_err());
             assert!(daemon_command(exe, &config, false).is_err());
         }
-        std::fs::write(&config, "[\"/bin/echo\",\"literal prefix\"]").unwrap();
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&json!([exe, "literal prefix"])).unwrap(),
+        )
+        .unwrap();
         let mut command = daemon_command(exe, &config, true).unwrap();
         command.arg(DAEMON_ARG).arg("/workspace with spaces");
+        assert_eq!(command.get_program(), exe);
         assert_eq!(
-            String::from_utf8(command.output().unwrap().stdout).unwrap(),
-            "literal prefix /bin/justrust __early-daemon /workspace with spaces\n"
+            command.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new("literal prefix"),
+                exe.as_os_str(),
+                std::ffi::OsStr::new(DAEMON_ARG),
+                std::ffi::OsStr::new("/workspace with spaces"),
+            ]
         );
+        #[cfg(unix)]
+        {
+            std::fs::write(&config, "[\"/bin/echo\",\"literal prefix\"]").unwrap();
+            let mut command = daemon_command(exe, &config, true).unwrap();
+            command.arg(DAEMON_ARG).arg("/workspace with spaces");
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!(
+                    "literal prefix {} __early-daemon /workspace with spaces\n",
+                    exe.display()
+                )
+            );
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
