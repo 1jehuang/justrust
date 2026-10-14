@@ -32,7 +32,7 @@ All notable changes. Versions follow [semver](https://semver.org); while in
   preserving Cargo's exit status.
 - **Bounded lifecycle delivery** captures authentication scope when events are
   queued and retries in a detached sender, with at most four attempts and a
-  one-second timeout per attempt. Telemetry status includes local HTTP/curl
+  one-second delay between retries. Telemetry status includes local HTTP/curl
   health diagnostics. Delivery remains best-effort.
 - **Build provenance** distinguishes source and release builds with a compile-time
   `release_build` marker in structured run metrics.
