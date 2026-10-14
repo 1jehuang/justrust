@@ -23,6 +23,7 @@ fn serve_command(binary: &Path, root: &Path) -> Command {
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .env_remove("RUSTC")
+        .env("CARGO_TERM_COLOR", "never")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -100,6 +101,30 @@ fn artifact_metadata_preserves_cargo_failure_diagnostics() {
     assert!(stderr.contains("Cargo metadata for"), "{stderr}");
     assert!(stderr.contains("Cargo.toml"), "{stderr}");
     assert!(stderr.contains("error:"), "{stderr}");
-    assert!(stderr.contains("[package"), "{stderr}");
+    // Use Cargo itself as the diagnostic oracle: TOML parser wording and
+    // source excerpts change between toolchains, but the causal error must
+    // survive unchanged in the artifact server's contextual failure.
+    let cargo = Command::new("cargo")
+        .current_dir(&root)
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--offline",
+        ])
+        .env_remove("JUSTRUST_REAL_CARGO")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTC")
+        .env("CARGO_TERM_COLOR", "never")
+        .output()
+        .unwrap();
+    assert!(!cargo.status.success(), "{cargo:?}");
+    let cargo_stderr = String::from_utf8(cargo.stderr).unwrap();
+    assert!(cargo_stderr.contains("Cargo.toml"), "{cargo_stderr}");
+    assert!(cargo_stderr.contains("error:"), "{cargo_stderr}");
+    assert!(cargo_stderr.contains("expected `]`"), "{cargo_stderr}");
+    assert!(stderr.contains(cargo_stderr.trim()), "{stderr}");
     std::fs::remove_dir_all(root).unwrap();
 }

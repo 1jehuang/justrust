@@ -291,15 +291,18 @@ impl Fixture {
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
     }
+    #[cfg(unix)]
     fn base(&self) -> String {
         format!("file://{}", self.0.join("store").display())
     }
+    #[cfg(unix)]
     fn root(&self) -> PathBuf {
         self.0.join("installed")
     }
     fn stage(&self) -> PathBuf {
         self.0.join("stage")
     }
+    #[cfg(unix)]
     fn publish(
         &self,
         spec: &Spec,
@@ -329,6 +332,7 @@ impl Fixture {
         std::fs::write(path, serde_json::to_vec(&m).unwrap()).unwrap();
         m
     }
+    #[cfg(unix)]
     fn install(&self, spec: &Spec) -> Result<Toolchain> {
         super::super::install_at(
             spec,
@@ -368,9 +372,11 @@ fn manifest(spec: &Spec) -> BundleManifest {
         official_manifest_sha256: None,
     }
 }
+#[cfg(unix)]
 fn script(text: &str) -> Vec<u8> {
     format!("#!/bin/sh\nprintf '%s\\n' '{text}'\n").into_bytes()
 }
+#[cfg(unix)]
 fn valid_entries() -> Vec<(String, Vec<u8>, u8)> {
     let m = manifest(&jr());
     vec![
