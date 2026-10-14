@@ -1,0 +1,26 @@
+{
+  "schema": "benchmark-stdin-artifacts-v1",
+  "files": [
+    {
+      "path": "acceptance.json",
+      "bytes": 2974,
+      "sha256": "4bcd648d73b57866b0aaad7f5b3a021da814999d21ef5768cb000e16032b7dba"
+    },
+    {
+      "path": "baseline-red.log",
+      "bytes": 5682,
+      "sha256": "e29f2de4b29d9313a8692be898b0aa178899ed31e8c13d003afbb5656d8fd53d"
+    },
+    {
+      "path": "focused-green.log",
+      "bytes": 856,
+      "sha256": "3d9a4660a0eebfe614404c12f435170700ed73b6de36e45b31f33b3016fd253c"
+    },
+    {
+      "path": "whole-green.log",
+      "bytes": 420,
+      "sha256": "5064994a05d61b81a4889abeb2a89258e76659bc4abcb147e02a58c87f37a782"
+    }
+  ],
+  "log_preservation": "lossless_except_explicit_operator_path_redaction"
+}

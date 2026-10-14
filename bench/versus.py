@@ -162,6 +162,16 @@ def run_counted(argv: list[str], cwd: Path, env: dict[str, str], log: Path) -> d
             fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
             os.dup2(fd, 1)
             os.dup2(fd, 2)
+            # Benchmarks are noninteractive, even under an interactive launcher.
+            stdin_fd = os.open(os.devnull, os.O_RDONLY)
+            try:
+                if stdin_fd == 0:
+                    os.set_inheritable(0, True)
+                else:
+                    os.dup2(stdin_fd, 0)
+            finally:
+                if stdin_fd != 0:
+                    os.close(stdin_fd)
             os.chdir(cwd)
             os.execvpe(argv[0], argv, env)
         finally:

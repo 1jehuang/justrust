@@ -1,0 +1,99 @@
+test_null_open_returning_zero_keeps_stdin_open (test_run_counted.RunCountedTests.test_null_open_returning_zero_keeps_stdin_open) ... FAIL
+test_open_pipe_becomes_empty_non_tty_stdin (test_run_counted.RunCountedTests.test_open_pipe_becomes_empty_non_tty_stdin) ... FAIL
+test_pty_becomes_empty_non_tty_stdin (test_run_counted.RunCountedTests.test_pty_becomes_empty_non_tty_stdin) ... FAIL
+test_real_exec_failure_status_and_output_are_preserved (test_run_counted.RunCountedTests.test_real_exec_failure_status_and_output_are_preserved) ... ok
+test_signal_exit_is_preserved (test_run_counted.RunCountedTests.test_signal_exit_is_preserved) ... ok
+test_temporary_null_descriptor_is_closed (test_run_counted.RunCountedTests.test_temporary_null_descriptor_is_closed) ... FAIL
+
+======================================================================
+FAIL: test_null_open_returning_zero_keeps_stdin_open (test_run_counted.RunCountedTests.test_null_open_returning_zero_keeps_stdin_open)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 164, in test_null_open_returning_zero_keeps_stdin_open
+    _, text = self.run_helper(zero=True)
+              ~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 121, in run_helper
+    self.assertEqual(process.returncode, 0, stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<string>", line 41, in <module>
+    result = versus.run_counted(
+        [sys.executable, '-c', sys.argv[2]], Path.cwd(), env, Path(sys.argv[1]))
+  File "<isolated-original-runner>/bench/versus.py", line 173, in run_counted
+    _, status, ru = os.wait4(pid, 0)
+                    ~~~~~~~~^^^^^^^^
+  File "<string>", line 34, in expired
+    raise TimeoutError('run_counted exceeded 3 seconds')
+TimeoutError: run_counted exceeded 3 seconds
+
+
+======================================================================
+FAIL: test_open_pipe_becomes_empty_non_tty_stdin (test_run_counted.RunCountedTests.test_open_pipe_becomes_empty_non_tty_stdin)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 144, in test_open_pipe_becomes_empty_non_tty_stdin
+    result, text = self.run_helper()
+                   ~~~~~~~~~~~~~~~^^
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 121, in run_helper
+    self.assertEqual(process.returncode, 0, stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<string>", line 41, in <module>
+    result = versus.run_counted(
+        [sys.executable, '-c', sys.argv[2]], Path.cwd(), env, Path(sys.argv[1]))
+  File "<isolated-original-runner>/bench/versus.py", line 173, in run_counted
+    _, status, ru = os.wait4(pid, 0)
+                    ~~~~~~~~^^^^^^^^
+  File "<string>", line 34, in expired
+    raise TimeoutError('run_counted exceeded 3 seconds')
+TimeoutError: run_counted exceeded 3 seconds
+
+
+======================================================================
+FAIL: test_pty_becomes_empty_non_tty_stdin (test_run_counted.RunCountedTests.test_pty_becomes_empty_non_tty_stdin)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 153, in test_pty_becomes_empty_non_tty_stdin
+    result, text = self.run_helper(terminal=True)
+                   ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 121, in run_helper
+    self.assertEqual(process.returncode, 0, stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<string>", line 41, in <module>
+    result = versus.run_counted(
+        [sys.executable, '-c', sys.argv[2]], Path.cwd(), env, Path(sys.argv[1]))
+  File "<isolated-original-runner>/bench/versus.py", line 173, in run_counted
+    _, status, ru = os.wait4(pid, 0)
+                    ~~~~~~~~^^^^^^^^
+  File "<string>", line 34, in expired
+    raise TimeoutError('run_counted exceeded 3 seconds')
+TimeoutError: run_counted exceeded 3 seconds
+
+
+======================================================================
+FAIL: test_temporary_null_descriptor_is_closed (test_run_counted.RunCountedTests.test_temporary_null_descriptor_is_closed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 158, in test_temporary_null_descriptor_is_closed
+    _, text = self.run_helper()
+              ~~~~~~~~~~~~~~~^^
+  File "<isolated-original-runner>/bench/test_run_counted.py", line 121, in run_helper
+    self.assertEqual(process.returncode, 0, stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<string>", line 41, in <module>
+    result = versus.run_counted(
+        [sys.executable, '-c', sys.argv[2]], Path.cwd(), env, Path(sys.argv[1]))
+  File "<isolated-original-runner>/bench/versus.py", line 173, in run_counted
+    _, status, ru = os.wait4(pid, 0)
+                    ~~~~~~~~^^^^^^^^
+  File "<string>", line 34, in expired
+    raise TimeoutError('run_counted exceeded 3 seconds')
+TimeoutError: run_counted exceeded 3 seconds
+
+
+----------------------------------------------------------------------
+Ran 6 tests in 13.182s
+
+FAILED (failures=4)
