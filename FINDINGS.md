@@ -1,5 +1,30 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: target-compatible recorded WebAssembly builds
+
+The cargo proxy selected nightly-2026-10-08 without wasm32-unknown-unknown
+libcore, producing E0463 even though system rustc 1.98.1 had the target
+installed. Explicit `--target` (including repeated/equal forms) and
+`CARGO_BUILD_TARGET` now probe the selected compiler's own target libraries.
+When a compatible system compiler exists, justrust selects the system
+Cargo/compiler path together and keeps recording. Required toolchain pins
+instead fail with an actionable diagnostic. Custom JSON targets and explicit
+build-std retain their original compiler. Config-file-only build.target
+selection remains a follow-up, not covered by this scoped fix.
+
+Hosted check `20261014-094008294-2277685` passed, recorder regression run
+`20261014-094131170-2303748` passed 16 tests, all-target clippy with warnings
+denied `20261014-094136594-2304919` passed, and library test run
+`20261014-094256324-2322841` passed 442 tests with 3 ignored. Reinstalled with
+`cargo install --path . --locked`. The coordinating website agent verified
+normal `trunk build --release` through the cargo proxy, exit 0 in 38.62s.
+Recorded WASM build runs `20261014-094322090-2328173` and
+`20261014-094322090-2328174` both exited 0, retaining recording and selecting
+the target-compatible system toolchain. The second concurrent build waited
+35.633s on Cargo locks. No website files were changed by this fix. This is a
+correctness recovery, not a benchmark speedup claim. Redacted summaries are
+in `data/runs/wasm-target-compatibility-20261014/2026-10.jsonl`.
+
 ## 2026-10-14: native expected-owner coverage gate
 
 Run `20261014-083519591-872352` validated one independently declared native

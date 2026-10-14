@@ -198,6 +198,13 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         .ok()
         .and_then(|d| crate::toolchain::resolve(&d).ok().flatten())
         .and_then(|p| crate::toolchain::installed(&p.spec).ok().flatten());
+    let pinned = match compatible_toolchain(pinned, args) {
+        Ok(tc) => tc,
+        Err(e) => {
+            eprintln!("justrust: {e:#}");
+            std::process::exit(1);
+        }
+    };
     if matches!(
         std::env::var("JUSTRUST_TOOLCHAIN_REQUIRED").as_deref(),
         Ok("1" | "true" | "yes")
@@ -345,6 +352,109 @@ pub fn apply_toolchain_env(cmd: &mut Command, tc: &crate::toolchain::Toolchain) 
     cmd.env_remove("RUSTUP_TOOLCHAIN");
 }
 
+/// Explicit cross targets must have libraries in the selected compiler's own
+/// sysroot. Never borrow a system libcore for a different compiler version.
+fn requested_targets(args: &[OsString], env_target: Option<OsString>) -> Vec<OsString> {
+    let mut targets = Vec::new();
+    let mut args = args.iter().take_while(|a| *a != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--target" {
+            if let Some(target) = args.next() {
+                targets.push(target.clone());
+            }
+        } else if let Some(target) = arg.to_str().and_then(|s| s.strip_prefix("--target=")) {
+            targets.push(target.into());
+        }
+    }
+    if targets.is_empty()
+        && let Some(target) = env_target
+    {
+        targets.push(target);
+    }
+    targets
+}
+
+fn target_has_core(rustc: &Path, target: &OsString) -> bool {
+    let Ok(output) = Command::new(rustc)
+        .args(["--print", "target-libdir", "--target"])
+        .arg(target)
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let dir = String::from_utf8_lossy(&output.stdout);
+    std::fs::read_dir(dir.trim()).is_ok_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("libcore-") && (name.ends_with(".rlib") || name.ends_with(".rmeta"))
+        })
+    })
+}
+
+fn compatible_toolchain(
+    pinned: Option<crate::toolchain::Toolchain>,
+    args: &[OsString],
+) -> Result<Option<crate::toolchain::Toolchain>> {
+    let Some(tc) = pinned else { return Ok(None) };
+    // build-std deliberately builds missing sysroot libraries with nightly.
+    if args.iter().take_while(|a| *a != "--").any(|arg| {
+        arg.to_str().is_some_and(|s| {
+            s == "build-std"
+                || s.starts_with("build-std=")
+                || s == "-Zbuild-std"
+                || s.starts_with("-Zbuild-std=")
+        })
+    }) {
+        return Ok(Some(tc));
+    }
+    let targets = requested_targets(args, std::env::var_os("CARGO_BUILD_TARGET"));
+    // Custom JSON targets may use build-std. Leave their policy to Cargo.
+    let missing: Vec<_> = targets
+        .iter()
+        .filter(|t| !t.to_string_lossy().ends_with(".json"))
+        .filter(|t| !target_has_core(&tc.bin("rustc"), t))
+        .collect();
+    if missing.is_empty() {
+        return Ok(Some(tc));
+    }
+    let names = missing
+        .iter()
+        .map(|t| t.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if matches!(
+        std::env::var("JUSTRUST_TOOLCHAIN_REQUIRED").as_deref(),
+        Ok("1" | "true" | "yes")
+    ) {
+        return Err(ToolchainRequired(format!("toolchain {} has no core library for {names}; install the target for this exact compiler or select a target-compatible JUSTRUST_TOOLCHAIN", tc.id)).into());
+    }
+    let me = std::env::current_exe()?.canonicalize()?;
+    let system = std::env::var_os("RUSTC")
+        .map(PathBuf::from)
+        .filter(|p| p.canonicalize().ok().as_deref() != Some(me.as_path()))
+        .or_else(|| paths::find_on_path("rustc", &me));
+    if system.as_ref().is_some_and(|rustc| {
+        targets
+            .iter()
+            .filter(|t| !t.to_string_lossy().ends_with(".json"))
+            .all(|t| target_has_core(rustc, t))
+    }) {
+        eprintln!(
+            "justrust: toolchain {} lacks target libraries for {names}; recording with the target-compatible system toolchain",
+            tc.id
+        );
+        Ok(None)
+    } else {
+        // Preserve the compiler's original diagnostics when no compatible
+        // fallback exists, rather than guessing or mixing sysroots.
+        Ok(Some(tc))
+    }
+}
+
 fn record(
     args: &[OsString],
     opts: Options,
@@ -366,7 +476,7 @@ fn record(
     } else {
         None
     };
-    let pinned = crate::toolchain::for_build();
+    let pinned = compatible_toolchain(crate::toolchain::for_build(), args)?;
     require_selected_toolchain(
         requested.as_deref(),
         pinned.as_ref().map(|tc| tc.id.as_str()),
@@ -1355,6 +1465,54 @@ fn unify_features(cmd: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cross_target_arguments_override_environment_and_stop_at_separator() {
+        let args = [
+            "build",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--target=aarch64-unknown-linux-gnu",
+            "--",
+            "--target=ignored",
+        ]
+        .map(OsString::from);
+        assert_eq!(
+            super::requested_targets(&args, Some("ignored-env".into())),
+            vec![
+                OsString::from("wasm32-unknown-unknown"),
+                OsString::from("aarch64-unknown-linux-gnu")
+            ]
+        );
+        assert_eq!(
+            super::requested_targets(&["build".into()], Some("wasm32-unknown-unknown".into())),
+            vec![OsString::from("wasm32-unknown-unknown")]
+        );
+        assert!(super::requested_targets(&["build".into()], None).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_core_probe_requires_existing_library_not_just_printed_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp =
+            std::env::temp_dir().join(format!("justrust-target-probe-{}", super::new_run_id()));
+        let lib = temp.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        let rustc = temp.join("rustc");
+        std::fs::write(
+            &rustc,
+            format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", lib.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let target = OsString::from("wasm32-unknown-unknown");
+        assert!(!super::target_has_core(&rustc, &target));
+        std::fs::write(lib.join("libcore-abc.rmeta"), b"").unwrap();
+        assert!(super::target_has_core(&rustc, &target));
+        std::fs::write(&rustc, "#!/bin/sh\nexit 1\n").unwrap();
+        assert!(!super::target_has_core(&rustc, &target));
+        std::fs::remove_dir_all(temp).unwrap();
+    }
     #[test]
     fn build_failure_telemetry_excludes_private_arguments() {
         let args = [
