@@ -170,7 +170,18 @@ fn jr_install_can_stage_without_switching_default_then_activate_explicitly() {
     let official = home.join("toolchains").join(format!("nightly-{DATE}"));
     write_exe(&official.join("bin/cargo"), &files_of("cargo")[0].1);
     write_exe(&official.join("bin/rustfmt"), "#!/bin/sh\nexit 0\n");
-    std::fs::write(official.join("justrust-toolchain.json"), "{}").unwrap();
+    write_exe(&official.join("bin/rustc"), &files_of("rustc")[0].1);
+    std::fs::write(
+        official.join("justrust-toolchain.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "id": format!("nightly-{DATE}"), "manifest_date": DATE,
+            "manifest_sha256": "", "rustc_version": "fixture",
+            "components": ["rustc", "cargo"], "installed_at": 1.0,
+            "install_secs": 0.0
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let sysroot = dir.join("candidate");
     let id = "jr-123456789abc";
     for tool in ["rustc", "rustdoc", "clippy-driver", "cargo-clippy"] {

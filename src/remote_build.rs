@@ -34,6 +34,8 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_DEPCACHE",
     "JUSTRUST_PEER_CACHE",
     "JUSTRUST_TOOLCHAIN",
+    "JUSTRUST_TOOLCHAIN_DIST",
+    "JUSTRUST_TOOLCHAIN_AUTO_INSTALL",
     "JUSTRUST_PREBUILT",
     "JUSTRUST_SHADOW",
     "JUSTRUST_TEST_FILTER_COMPILE",
@@ -924,6 +926,8 @@ mod tests {
     #[test]
     fn hosted_forwards_explicit_optimization_controls_not_secrets_or_local_paths() {
         for var in [
+            "JUSTRUST_TOOLCHAIN_DIST",
+            "JUSTRUST_TOOLCHAIN_AUTO_INSTALL",
             "JUSTRUST_SHADOW",
             "JUSTRUST_TEST_FILTER_COMPILE",
             "JUSTRUST_CACHE_PROC_MACROS",

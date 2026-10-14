@@ -28,6 +28,10 @@
 //! (`static.rust-lang.org`, override with `JUSTRUST_DIST_SERVER`): the channel
 //! manifest is checked against its published sha256, each component tarball
 //! against the hash in the manifest. No rustup involved.
+//! A configured `JUSTRUST_TOOLCHAIN_DIST` trusted HTTPS store may instead supply
+//! a verified immutable prefix, including compatible shared jr-cargo. Official
+//! IDs retain verified official-dist fallback. Downloaded `jr-<commit>` prefixes
+//! stay in the staged namespace with a zero activation timestamp, never default.
 //!
 //! Fail open: when a pinned toolchain cannot be installed, the build runs
 //! with the system toolchain and says so.
@@ -36,6 +40,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+mod bundle;
 
 /// The host triple pinned toolchains are downloaded for.
 pub const TARGET: &str = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
@@ -84,10 +90,13 @@ pub struct Spec {
 impl Spec {
     pub fn parse(s: &str) -> Result<Spec> {
         let s = s.trim();
+        if s.len() > 128 {
+            bail!("toolchain id is too long");
+        }
         // justrust's own rustc build: `jr-<commit>` (installed from a local
         // jr-rustc build with `justrust toolchain jr-install`).
         if let Some(commit) = s.strip_prefix("jr-") {
-            if commit.len() < 7 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if !(7..=40).contains(&commit.len()) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
                 bail!("`{s}`: expected jr-<rustc commit hash>");
             }
             return Ok(Spec {
@@ -135,8 +144,8 @@ impl Spec {
         self.channel == "nightly" || self.is_jr()
     }
 
-    /// justrust's rustc fork (`jr-<commit>`): never downloaded from the
-    /// dist server, enables the fork's caches.
+    /// justrust's rustc fork (`jr-<commit>`): downloaded only from an explicitly
+    /// configured trusted prefix store, never the official Rust dist server.
     pub fn is_jr(&self) -> bool {
         self.channel == "jr"
     }
@@ -360,9 +369,21 @@ pub fn cargo_fork_command(binary: &Path, spec: Option<String>) -> Result<()> {
 
 pub fn installed(spec: &Spec) -> Result<Option<Toolchain>> {
     let root = root()?;
+    installed_in(spec, &root)
+}
+
+fn installed_in(spec: &Spec, root: &Path) -> Result<Option<Toolchain>> {
     let dir = [root.join(spec.id()), root.join("staged").join(spec.id())]
         .into_iter()
-        .find(|dir| dir.join(MARKER).is_file());
+        .find(|dir| {
+            std::fs::read(dir.join(MARKER))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Installed>(&bytes).ok())
+                .is_some_and(|info| info.id == spec.id())
+                && ["rustc", "cargo"]
+                    .iter()
+                    .all(|bin| is_executable(&dir.join("bin").join(crate::sys::exe_name(bin))))
+        });
     Ok(dir.map(|dir| Toolchain {
         id: spec.id(),
         dir,
@@ -390,15 +411,6 @@ pub fn for_build() -> Option<Toolchain> {
     };
     if let Ok(Some(tc)) = installed(&pin.spec) {
         return Some(tc);
-    }
-    if pin.spec.is_jr() {
-        eprintln!(
-            "justrust: toolchain {} (from {}) is not installed and cannot be downloaded \
-             (`justrust toolchain jr-install`), using the system toolchain",
-            pin.spec.id(),
-            pin.source
-        );
-        return None;
     }
     if matches!(
         std::env::var("JUSTRUST_TOOLCHAIN_AUTO_INSTALL").as_deref(),
@@ -628,23 +640,93 @@ pub fn install(
     log: &mut dyn std::io::Write,
 ) -> Result<Toolchain> {
     let root = root()?;
-    std::fs::create_dir_all(&root)?;
+    let base = match bundle::base() {
+        Ok(base) => base,
+        Err(e) if !spec.is_jr() => {
+            let _ = writeln!(log, "justrust: ignoring shared toolchain store: {e:#}");
+            None
+        }
+        Err(e) => return Err(e),
+    };
+    install_at(spec, components, log, &root, base.as_deref())
+}
+
+fn install_at(
+    spec: &Spec,
+    components: &[&str],
+    log: &mut dyn std::io::Write,
+    root: &Path,
+    base: Option<&str>,
+) -> Result<Toolchain> {
+    // Spec fields are public, so validate even callers that bypass parse().
+    if Spec::parse(&spec.id())? != *spec {
+        bail!("invalid toolchain spec");
+    }
+    std::fs::create_dir_all(root)?;
     let _lock = lock_exclusive(&root.join(".install.lock"))?;
-    if let Some(tc) = installed(spec)? {
+    if let Some(tc) = installed_in(spec, root)? {
         return Ok(tc);
+    }
+    // Every installer owns the same lock, so these can only be abandoned.
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(".staging-")
+            && entry.file_type()?.is_dir()
+        {
+            std::fs::remove_dir_all(entry.path())?;
+        }
     }
     let start = crate::paths::now();
     let staging = root.join(format!(".staging-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    let result = install_into(spec, components, &staging, log, start);
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(staging.clone());
+    std::fs::create_dir(&staging)?;
+    crate::sys::set_mode(&staging, 0o700)?;
+    let result = (|| {
+        if let Some(base) = base {
+            match bundle::install_into(spec, components, &staging, base, start) {
+                Ok(info) => return Ok(info),
+                Err(e) if spec.is_jr() => return Err(e),
+                Err(e) => {
+                    let _ = writeln!(
+                        log,
+                        "justrust: shared toolchain unavailable: {e:#}; using official dist"
+                    );
+                    std::fs::remove_dir_all(&staging)?;
+                    std::fs::create_dir(&staging)?;
+                    crate::sys::set_mode(&staging, 0o700)?;
+                }
+            }
+        } else if spec.is_jr() {
+            bail!(
+                "JR toolchain download requires JUSTRUST_TOOLCHAIN_DIST set to a trusted HTTPS store; or use `justrust toolchain jr-install`"
+            );
+        }
+        install_into(spec, components, &staging, log, start)
+    })();
     match result {
         Ok(info) => {
-            let dest = root.join(spec.id());
+            let parent = if spec.is_jr() {
+                root.join("staged")
+            } else {
+                root.to_path_buf()
+            };
+            std::fs::create_dir_all(&parent)?;
+            let dest = parent.join(spec.id());
             let prefix = staging.join("prefix");
             std::fs::write(prefix.join(MARKER), serde_json::to_vec_pretty(&info)?)?;
             if dest.exists() {
                 // Left over from an interrupted install (no marker): replace.
                 let trash = root.join(format!(".trash-{}", std::process::id()));
+                if trash.exists() {
+                    std::fs::remove_dir_all(&trash)?;
+                }
                 std::fs::rename(&dest, &trash)?;
                 let _ = std::fs::remove_dir_all(&trash);
             }

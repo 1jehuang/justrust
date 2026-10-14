@@ -6,6 +6,32 @@ Data: `~/.jcode/sessions` on one developer machine (16-thread Core Ultra X9,
 blocked waiting on the tool call. Calls over 30 minutes (hung processes) are
 excluded.
 
+## 2026-10-13: verified shared toolchain prefixes, inactive JR downloads
+
+Maintainer-published HTTPS prefixes now support explicit JR installation/pins
+and official nightly prefixes with a compatible shared static jr-cargo. A
+bounded immutable-ID manifest anchors the archive SHA-256 and exact rustc/cargo
+identities. Extraction rejects links, extensions, traversal, duplicate paths,
+and publisher-supplied markers. Downloads are serialized and atomically renamed,
+and JR always remains staged with `installed_at: 0`, never a new default.
+
+Real fresh scratch-home downloads verified JR `jr-b7907f1fe8f7` (457865116
+compressed bytes, 41.3s observed install) and stock `nightly-2026-10-08`
+(618894666 bytes, 58.6s). Both shipped static jr-cargo `125bdc8c1` on upstream
+`f3865b2a4`. Both passed a real check, three tests, clippy, and an expected compile
+failure, with unchanged marker inode on repeat install and no unpinned default
+promotion. Test runs `20261013-194432826-732012` and
+`20261013-194913404-764117` plus six other acceptance summaries are committed in
+`data/runs/xps14-toolchain-download/`. Full local correctness validation
+`20261013-194746505-749789` passed 380 tests, including cross-process installation
+locking. Details, all IDs, protocol, and limitations are in
+`docs/toolchain-distribution.md`.
+
+The real nightly archive caught a missing `libexec` root for rust-analyzer's
+proc-macro server. Verified official fallback worked, and the legitimate root
+was added with a regression fixture. These are functionality/security findings,
+not a measured build-speed gain. No current host or default compiler was changed.
+
 ## 2026-10-13: Claude stale-provider-failure regression validation
 
 Hosted check `20261013-073407319-605237` ran remotely and took 10.33s,
@@ -5960,3 +5986,27 @@ all four actual captures were successfully reprocessed. End-of-event rounding
 corrections were counted explicitly (26-32 clipped endpoints per capture).
 No compiler flags, default selection or normal benchmark targets changed
 while correcting this analyzer.
+
+## 2026-10-14: reduced-category profiles still need unprofiled controls
+
+`docs/parallelism-light-captures-20261014.md` maps every profiling requirement
+to an observation. Fifteen actual pinned runs (nine reference test runs, six
+check runs) passed; five profile summaries, raw SHA-256 provenance and fifteen
+exact privacy-redacted run exports are retained. Categories were reduced to
+`generic-activity,query-blocked`, but clean check controls still observed
+1.467 s unprofiled versus 2.238 s profiled at sixteen frontend threads. The
+reference controls retain noisy flags. This is not an optimization speed claim.
+
+The first run in each scenario populated a separate target (54 compiles,
+833 depcache hits); later runs rebuilt one UI unit with 743 fresh units.
+The test workflow reported three passing tests per run. The check workflow
+has a different phase mix, with no linking bottleneck. No default compiler,
+host type, fleet configuration or permissions changed.
+
+Two harness defects are fixed in 3f87786: source sync now protects nested host
+results, including raw profiles, instead of protecting only JSON; and the
+launcher's source HEAD is no longer presented as an executable revision.
+Actual CLI SHA remains recorded, binary revision is unknown. The provenance
+collector explicitly marks the old source label unverified without altering
+raw capture records. Fifty-nine Python regressions passed, including actual
+rsync retention, collector CLI and source/binary provenance boundaries.
