@@ -5868,3 +5868,37 @@ socket, cross-NUMA). So today a per-user 8-16 core VM gets everything this
 toolchain can use; many-core shared boxes only pay off after the frontend
 and incr stages are made parallel. Next: critical-path profile of the 2.3 s
 frontend (self-profile at 16 threads) to find what serializes it.
+
+### Per-pass breakdown on the same host (threads 1/4/8/16)
+
+`bench/threads_sweep.py --toolchain nightly-2026-10-08 --threads 1,4,8,16`
+on the metal host (pinned to 32 cores), jcode_desktop_ui unit, n=5,
+`bench/results/threads-20261014-004215-remote-m8azn.metal-24xl.json`:
+
+| pass | t=1 | t=16 | scales? |
+|---|---:|---:|---|
+| macro expansion | 1.27 | 1.30 | no |
+| other rustc (unattributed) | 0.57 | 0.57 | no |
+| mono collector | 0.58 | 0.43 | a little |
+| incr persist | 0.43 | 0.45 | no (jr-rustc overlaps it, stock does not) |
+| name resolution | 0.36 | 0.35 | no |
+| partition symbols | 0.34 | 0.24 | a little |
+| lints (misc_checking_3) | 0.20 | 0.22 | no |
+| linker | 0.17 | 0.17 | no |
+| type check | 0.17 | 0.14 | barely |
+| drop AST | 0.10 | 0.10 | no |
+| borrow check | 0.11 | 0.04 | yes |
+| unit wall | 4.73 | 4.45 | 1.06x |
+
+About 3 s of the 4.45 s unit is passes that do not use a second thread:
+macro expansion alone is 1.3 s, then unattributed 0.57, persist 0.44,
+resolution 0.36. The passes the parallel frontend does parallelize (type
+check, borrow check) are only ~0.3 s here. So parallelism has to come from
+restructuring, in order of size: (1) macro expansion: split proc-macro
+execution from rustc's expansion loop and run/cache proc-macro calls in
+parallel (attr-macro cache is the existing start); (2) take persist and
+drop-AST off the critical path (jr-rustc overlap-persist already does the
+first; stock nightly here does not); (3) attribute the 0.57 s unattributed;
+(4) crate splitting (shadow leaf crates, 7.8 -> 1.8 s, FINDINGS 57), which
+turns one serial crate into parallel units and is the only lever already
+measured at more than 2x.
