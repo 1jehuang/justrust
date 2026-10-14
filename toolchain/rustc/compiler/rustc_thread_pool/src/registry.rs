@@ -919,7 +919,7 @@ impl WorkerThread {
                     // The job might have injected local work, so go back to the outer loop.
                     continue 'outer;
                 } else {
-                    self.registry.sleep.no_work_found(&mut idle_state, latch, &self, true)
+                    self.registry.sleep.no_work_found(&mut idle_state, latch, self, true)
                 }
             }
 
@@ -943,7 +943,7 @@ impl WorkerThread {
 
         let mut idle_state = self.registry.sleep.start_looking(self.index);
         while !latch.probe() {
-            self.registry.sleep.no_work_found(&mut idle_state, latch, &self, false);
+            self.registry.sleep.no_work_found(&mut idle_state, latch, self, false);
         }
 
         // If we were sleepy, we are not anymore. We "found work" --
@@ -999,6 +999,13 @@ impl WorkerThread {
 
     #[inline]
     pub(super) unsafe fn execute(&self, job: JobRef) {
+        // A helper may run unrelated scope/spawn work while its own segment is
+        // active. Dequeue is not parentage. Only enabled registries touch the
+        // observer TLS, and instrumented job closures install their own child.
+        let _dispatch_guard = self
+            .registry
+            .execution_observer()
+            .map(|_| crate::execution_observer::suspend_for_dispatch());
         unsafe { job.execute() };
     }
 

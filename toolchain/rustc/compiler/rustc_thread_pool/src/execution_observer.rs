@@ -280,6 +280,27 @@ pub fn current_context() -> Option<TaskContext> {
     CURRENT.with(|current| current.borrow().as_ref().and_then(|active| active.borrow().clone()))
 }
 
+/// Generic dispatch is not a lineage edge. Hide the helping invocation's exact
+/// active slot until the dispatched job returns. Instrumented closures enter
+/// their own contexts, while opaque work stays unbound. Never finish or replace
+/// the suspended slot's contents, including an in-progress fork's None state.
+pub(crate) fn suspend_for_dispatch() -> DispatchGuard {
+    let previous = CURRENT.with(|current| current.replace(None));
+    DispatchGuard { previous, _not_send: PhantomData }
+}
+
+/// Worker-local restoration, including when a dispatched closure unwinds.
+pub(crate) struct DispatchGuard {
+    previous: Option<Active>,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for DispatchGuard {
+    fn drop(&mut self) {
+        CURRENT.with(|current| current.replace(self.previous.take()));
+    }
+}
+
 impl TaskContext {
     pub fn id(&self) -> TaskId {
         self.id
@@ -498,7 +519,7 @@ mod tests {
     fn native_inline_join_and_disabled_semantics() {
         let pool = crate::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
         pool.install(|| {
-            assert_eq!(crate::join(|| current_task(), || current_task()), (None, None));
+            assert_eq!(crate::join(current_task, current_task), (None, None));
         });
         let observer = ExecutionObserver::new(100).unwrap();
         pool.install(|| {
@@ -625,7 +646,7 @@ mod tests {
         b.install(|| {
             assert!(!crate::Registry::current().attach_execution_observer(Arc::clone(&observer)))
         });
-        b.install(|| assert_eq!(crate::join(|| current_task(), || current_task()), (None, None)));
+        b.install(|| assert_eq!(crate::join(current_task, current_task), (None, None)));
     }
 
     #[test]

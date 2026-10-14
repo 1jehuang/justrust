@@ -75,6 +75,9 @@ mod private;
 
 pub mod execution_observer;
 
+#[cfg(test)]
+mod execution_observer_dispatch_tests;
+
 mod broadcast;
 mod job;
 mod join;

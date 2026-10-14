@@ -1,5 +1,24 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: helper dispatch must not inherit logical task ownership
+
+Real one-thread pool controls exposed existing false lineage: unrelated opaque
+scope work inherited a helping root/child, and its nested join forked and
+mutated the helping root. Baseline `20261014-114100301-42923` failed all three
+controls. Capture-enabled worker dispatch now temporarily hides/restores the
+exact task slot with a non-Send RAII guard, without inventing dispatch edges.
+Ten new regressions cover scope/nested/panic/FIFO/CountLatch/broadcast/stolen/
+inline/cross-pool paths. Final pool run `20261014-114616930-102856` passed 95
+with 26 ignored; strict lint `20261014-114616920-102851` passed. All cited slim
+summaries, including the failure, are in `data/runs/query-read-cap-20261014`.
+The actual rebuilt compiler plus std/proc_macro and seven native admission,
+wait/read/pool, binding and macro neutrality tests passed in task `773938x4fq`.
+This native gate used the combined dispatch and capped-read candidate, not an
+isolated performance experiment. Manual raw contexts on unobserved registries
+and recorder-failure inline ownership remain explicit limits. Full mapping,
+CPU/span and performance promotion remain unproven. See
+`docs/native-pool-dispatch-isolation-20261014.md`.
+
 ## 2026-10-14: native causal mapping passes scoped acceptance, full graph still partial
 
 Actual rebuilt stage1 wait/read/pool acceptance passed: serial zero waits,
