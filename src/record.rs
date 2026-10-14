@@ -110,6 +110,11 @@ pub struct OutputLine {
     pub l: String,
 }
 
+struct OutputCapture {
+    lines: Vec<OutputLine>,
+    journal: crate::log_journal::Journal,
+}
+
 static CHILD_PID: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(unix)]
@@ -433,7 +438,7 @@ fn record(
 
     let git = std::thread::spawn(git_info);
     // Before cargo starts, so it and everything it runs share the scope.
-    let scope = crate::sched::enter(&id);
+    let scope = crate::sched::enter(id);
 
     // The progress bar feeds `live.json` (`justrust status`). When the user
     // would not have seen it, ask for it with `--config` (unlike the env var,
@@ -449,7 +454,10 @@ fn record(
     // any fingerprint, so artifacts stay shared with unrecorded builds.
     // In agent mode the runner hands binaries to a pool that runs them in
     // parallel (`test_pool`); the pool prints through the same tee.
-    let lines: Arc<Mutex<Vec<OutputLine>>> = Arc::default();
+    let lines = Arc::new(Mutex::new(OutputCapture {
+        lines: Vec::new(),
+        journal: crate::log_journal::Journal::new(&run_dir.join("output.jsonl")),
+    }));
     let is_test = matches!(meta.subcommand.as_str(), "test" | "t" | "bench" | "nextest");
     let filter = |stdout: bool| {
         opts.agent.then(|| {
@@ -511,7 +519,7 @@ fn record(
         .env("RUSTC", &shim)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)
         .env("JUSTRUST_RUN_DIR", &run_dir)
-        .env("JUSTRUST_RUN_ID", &id)
+        .env("JUSTRUST_RUN_ID", id)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     unify_features(&mut cmd);
@@ -579,7 +587,9 @@ fn record(
     let sampler = {
         let done = done.clone();
         let daemon_pid = run_dir.join(DAEMON_PID_FILE);
-        std::thread::spawn(move || sample_loop(pid, &daemon_pid, &done))
+        let lines = lines.clone();
+        let log_availability = lifecycle.log_availability();
+        std::thread::spawn(move || sample_loop(pid, &daemon_pid, &done, &lines, &log_availability))
     };
 
     let (mut code, mut cpu_user, cpu_sys) = wait_child(&mut child, job.as_ref());
@@ -608,7 +618,12 @@ fn record(
     let (samples, procs) = sampler.join().unwrap_or_default();
     let git = git.join().unwrap_or_default();
 
-    let lines = std::mem::take(&mut *lines.lock().unwrap());
+    let (lines, journal_complete) = {
+        let mut capture = lines.lock().unwrap();
+        let complete = capture.journal.flush();
+        (std::mem::take(&mut capture.lines), complete)
+    };
+    let logs_complete = persist_output(&run_dir, &lines, journal_complete);
     let mut hidden = agent_output::Hidden::default();
     for f in [&f_out, &f_err] {
         if let Some(f) = f.as_ref() {
@@ -633,10 +648,7 @@ fn record(
     ) {
         eprintln!("justrust: failed to write run summary: {e:#}");
     }
-    lifecycle.done(
-        code,
-        std::fs::File::open(run_dir.join("output.jsonl")).is_ok(),
-    );
+    lifecycle.done(code, logs_complete);
     // Early diagnostics, auto mode: warm a daemon for busy workspaces,
     // in the background, after the build.
     if opts.agent {
@@ -691,7 +703,6 @@ fn finish(
     samples: &[Sample],
     procs: &[ProcRecord],
 ) -> Result<()> {
-    write_jsonl(&run_dir.join("output.jsonl"), lines)?;
     write_jsonl(&run_dir.join("samples.jsonl"), samples)?;
     std::fs::write(
         run_dir.join("processes.json"),
@@ -730,6 +741,66 @@ fn finish(
     Ok(())
 }
 
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+
+    #[test]
+    fn failed_journal_keeps_capture_and_atomic_repair_preserves_prefix() {
+        let dir = std::env::temp_dir().join(format!(
+            "jr-journal-{}-{}",
+            std::process::id(),
+            paths::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let capture = Mutex::new(OutputCapture {
+            lines: Vec::new(),
+            journal: crate::log_journal::Journal::new(&dir),
+        });
+        push_line(&capture, 1.25, "o", b"\x1b[32mexact marker\x1b[0m");
+        let mut capture = capture.into_inner().unwrap();
+        assert!(!capture.journal.flush());
+        assert_eq!(capture.lines[0].l, "exact marker");
+        std::fs::write(dir.join("output.jsonl"), b"prefix\n").unwrap();
+        std::fs::create_dir(dir.join("output.complete.jsonl")).unwrap();
+        assert!(!persist_output(&dir, &capture.lines, false));
+        assert_eq!(
+            std::fs::read(dir.join("output.jsonl")).unwrap(),
+            b"prefix\n"
+        );
+        std::fs::remove_dir(dir.join("output.complete.jsonl")).unwrap();
+        assert!(persist_output(&dir, &capture.lines, false));
+        let saved = std::fs::read_to_string(dir.join("output.jsonl")).unwrap();
+        assert_eq!(saved.lines().count(), 1);
+        assert_eq!(
+            serde_json::from_str::<OutputLine>(saved.trim()).unwrap().l,
+            "exact marker"
+        );
+        assert!(persist_output(&dir, &[], true));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("output.jsonl")).unwrap(),
+            saved
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+fn persist_output(run_dir: &Path, lines: &[OutputLine], journal_complete: bool) -> bool {
+    if journal_complete {
+        return true;
+    }
+    // Publish repair only after a complete write, preserving the prefix on failure.
+    let staging = run_dir.join("output.complete.jsonl");
+    let result = write_jsonl(&staging, lines)
+        .and_then(|()| Ok(std::fs::rename(&staging, run_dir.join("output.jsonl"))?));
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(staging);
+        eprintln!("justrust: failed to write output journal: {error:#}");
+        return false;
+    }
+    true
+}
+
 fn write_jsonl<T: Serialize>(path: &Path, items: &[T]) -> Result<()> {
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
     for item in items {
@@ -757,7 +828,7 @@ fn spawn_tee<R: Read + Send + 'static, W: Write + Send + 'static>(
     mut src: R,
     mut dst: W,
     stream: &'static str,
-    lines: Arc<Mutex<Vec<OutputLine>>>,
+    lines: Arc<Mutex<OutputCapture>>,
     filter: Arc<Option<Mutex<agent_output::Filter>>>,
     out_lock: Arc<Mutex<()>>,
 ) -> std::thread::JoinHandle<()> {
@@ -798,7 +869,7 @@ fn tee_filtered<R: Read, W: Write>(
     src: R,
     mut dst: W,
     stream: &str,
-    lines: &Mutex<Vec<OutputLine>>,
+    lines: &Mutex<OutputCapture>,
     filter: &Mutex<agent_output::Filter>,
     out_lock: &Mutex<()>,
 ) {
@@ -829,7 +900,7 @@ fn tee_filtered<R: Read, W: Write>(
 /// Where the test pool prints: the same filters, saved output, and terminal
 /// as cargo's own output, one binary's block at a time.
 struct PoolSink {
-    lines: Arc<Mutex<Vec<OutputLine>>>,
+    lines: Arc<Mutex<OutputCapture>>,
     f_out: Arc<Option<Mutex<agent_output::Filter>>>,
     f_err: Arc<Option<Mutex<agent_output::Filter>>>,
     out_lock: Arc<Mutex<()>>,
@@ -863,7 +934,7 @@ impl crate::test_pool::Sink for PoolSink {
     }
 }
 
-fn push_line(lines: &Mutex<Vec<OutputLine>>, t: f64, stream: &str, raw: &[u8]) {
+fn push_line(lines: &Mutex<OutputCapture>, t: f64, stream: &str, raw: &[u8]) {
     // Progress bars rewrite the line with '\r'. Keep only the final segment.
     let raw = raw
         .rsplit(|&b| b == b'\r')
@@ -873,11 +944,14 @@ fn push_line(lines: &Mutex<Vec<OutputLine>>, t: f64, stream: &str, raw: &[u8]) {
     if text.trim().is_empty() {
         return;
     }
-    lines.lock().unwrap().push(OutputLine {
+    let line = OutputLine {
         t,
         s: stream.to_owned(),
         l: text,
-    });
+    };
+    let mut capture = lines.lock().unwrap();
+    capture.journal.append(&line);
+    capture.lines.push(line);
 }
 
 pub fn strip_ansi(s: &str) -> String {
@@ -981,7 +1055,10 @@ fn sample_loop(
     root: i32,
     daemon_pid: &Path,
     done: &(Mutex<bool>, std::sync::Condvar),
+    lines: &Mutex<OutputCapture>,
+    log_availability: &std::sync::atomic::AtomicBool,
 ) -> (Vec<Sample>, Vec<ProcRecord>) {
+    let mut last_log_flush = std::time::Instant::now();
     let mut daemon: Option<i32> = None;
     let hz = procfs::clk_tck();
     let page_mb = procfs::page_size() as f64 / 1_048_576.0;
@@ -993,6 +1070,11 @@ fn sample_loop(
     let mut prev_t = paths::now();
     loop {
         let stop = *done.0.lock().unwrap();
+        if stop || last_log_flush.elapsed() >= Duration::from_secs(1) {
+            let persisted = lines.lock().unwrap().journal.flush();
+            log_availability.store(persisted, Ordering::Relaxed);
+            last_log_flush = std::time::Instant::now();
+        }
         let t = paths::now();
         let all: Vec<procfs::ProcStat> = procfs::all_pids()
             .into_iter()

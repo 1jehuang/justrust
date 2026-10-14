@@ -1,5 +1,48 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: incremental local output survives interrupted builds
+
+The local recorder now streams existing OutputLine JSONL into a 64 KiB
+buffered journal, flushing on nominal one-second sampler ticks and at
+completion. It adds no network/raw-log telemetry path and does not change
+cargo's environment, fingerprint, or exit status. Successful completion no
+longer truncates and rewrites output.jsonl. A failed journal is repaired from
+the existing summary capture through staging and atomic rename. Failed repair
+preserves the persisted prefix and reports no complete logs. The pre-existing
+summary Vec remains, but the journal adds only a bounded buffer rather than a
+second unbounded output copy.
+
+Installed binary acceptance on isolated scratch Rust fixtures:
+
+- SIGKILL run `20261014-044013076-2711739`: the actual test printed its marker,
+  the sampler persisted it, then the process group was killed. Exact-run-id
+  `justrust log` recovered the marker without a summary or index entry.
+- Successful output-heavy run `20261014-044014241-2711809` saved exactly 3,000
+  unique diagnostic lines and one final marker, without duplication.
+- A 64 KiB RLIMIT_FSIZE with SIGXFSZ ignored and the resident daemon disabled
+  caused real journal and staging writes to fail. The test still returned
+  cargo exit 0 and printed its final marker. Recording failure was visible.
+- Five regression tests cover exact JSONL, batching/bounded buffer with large
+  lines, disabled-on-failure/no retry, unavailable paths, and atomic repair
+  preserving an existing prefix. Hosted check/full test/clippy passed on the
+  integrated snapshot, coordinated with the lifecycle owner.
+
+Focused overhead only, not a compile speedup claim or a comprehensive gate:
+10 warm local synthetic_pass commands, one discarded warmup, telemetry and
+resident daemon disabled identically. Before median **82.62 ms**, mean 85.54
+ms; after median **90.99 ms**, mean 91.92 ms. Observed median increase **8.37
+ms** in this short sequential noisy sample. Samples and run IDs are in
+`bench/results/journal-overhead-{before,after}-20261014.json`.
+The broad session-weighted suite was not run for this visibility-only change.
+
+Limitations: hard kill may lose buffered output since the last tick, with
+scheduling/sampler and I/O delays extending the nominal one-second window.
+An unterminated line held by the tee, or output held by a test-pool block,
+may not have reached the journal. Flush means readable local bytes, not fsync
+or power-loss durability. Running heartbeat availability means a persisted
+local prefix; terminal availability requires complete successful persistence.
+No public alpha release is authorized by these checks alone.
+
 ## 2026-10-14: actual scheduled sharing fleet runtime accepted
 
 The naturally scheduled 09:00 UTC producer selected the accepted native-safe

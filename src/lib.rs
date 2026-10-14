@@ -46,6 +46,7 @@ mod install;
 mod linker;
 mod live;
 mod localcache;
+mod log_journal;
 mod mcp;
 mod paths;
 mod peercache;
