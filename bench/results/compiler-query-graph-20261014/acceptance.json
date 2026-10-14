@@ -1,0 +1,83 @@
+{
+  "checks": [
+    {
+      "exit": 0,
+      "name": "t1",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "841e76a3fb57732851a68f9b6f8ac11ac5d9dbf734d7743365ccbf95e3bece8f"
+    },
+    {
+      "exit": 0,
+      "name": "t4",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "814ead9a02c0b056d475743be4b1198642358f2376746b6a4efe0c0e40863bc5"
+    },
+    {
+      "exit": 0,
+      "name": "desktop-t4",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "30aa34a7277423b5143efab049025cde3fc1dee1ef7397d6ff76b43a1652696f"
+    },
+    {
+      "exit": 0,
+      "name": "desktop-graph",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "770ea6f22d3bc3fd0abd6c0264f140c57eca63d94521da166c15338c84aedc46"
+    },
+    {
+      "exit": 0,
+      "name": "desktop-profile-summary",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "7191d4abecd17ecd26714e2e65edbbf329c4fa184e6b112edc62a01b29fb9e02"
+    },
+    {
+      "exit": 2,
+      "name": "tiny-strict-label-failure",
+      "stderr_sha256": "3d1f2df7ece93cf366af76300825aa6d553554263843e350f24cc0e6c6d3f716",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "exit": 0,
+      "name": "tiny-explicit-missing-label",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "d422551eed209d38e30c2f76cc5b7975c3b77cde40281dd7777dc7a5734a0005"
+    },
+    {
+      "exit": 2,
+      "name": "tampered-pair-failure",
+      "stderr_sha256": "871814292f11e763c4ced1201ce37239d4c8de07dba6138c050ad019e52b9e1d",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "limitations": [
+    "Public CLI acceptance and elapsed mapping, not performance comparison or complete execution DAG.",
+    "Raw profiles and private full commands/receipts are not published.",
+    "Missing timings stay unknown. CPU work/span remain null."
+  ],
+  "mapped_output_hashes": {
+    "desktop-t4-mapping.json": "b19d309719426d94c548690ea8f8651087d6a891fd6d1362ac03a07a9f704402",
+    "pinned-query-kinds.json": "4d100441807c49560ca7b215dc8c036d25df0585b7d7df986430d23340677f1b",
+    "t1-mapping.json": "b51052fb295228a2506bb984ba65fd44fc723c4e36fd0f040a3db81c4c736db1",
+    "t4-mapping.json": "9e1ad937f243bfbbdab09b317ef96b566922a5d26eb4ac77cb290a048e9d6fe5"
+  },
+  "offline_tests": {
+    "output_hashes": {
+      "stderr": "88dd0bbcf1985006e02481547a3097305777e45ab52d232f177ff9ef45301be0",
+      "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "query_graph": 14,
+    "query_mapping": 15,
+    "query_profile": 27,
+    "whole_package_passed": 164
+  },
+  "schema": 1,
+  "source_hashes": {
+    "bench/query_graph.py": "762d0c14badc42392df7c2dbbdf0e900e1a94a834e0e87d64f9c9bdfebf77a3e",
+    "bench/query_mapping.py": "40b69f7bfc44159409ef4dae20c44438178087b6f714dbc7d763990f3bc98e89",
+    "bench/query_profile.py": "6475988adf2b9de51daf5504d802c0576d48a2966e81304bf83096afc4888f61",
+    "bench/test_query_graph.py": "811ea36b458f085dd4712d920cb3fcded0e11b46d044f3e52744cb507485fec8",
+    "bench/test_query_mapping.py": "5b6e7fd470fecda7a4ed6a3af1dd381b382be0fc84f1801eecab696daae035f4",
+    "bench/test_query_profile.py": "653218d115361e2d1294fcd1bbe840c5bfc94dbb819f6206a0c7f1d9e7d05846"
+  },
+  "tools_commit": "4b7e8bd9c5a51a85fea1b3482ef8695309f77a3e"
+}

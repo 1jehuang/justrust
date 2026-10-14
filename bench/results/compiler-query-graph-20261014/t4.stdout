@@ -1,0 +1,1 @@
+{"graph_counts": {"node_count": 3379, "edge_count": 8215, "index_space": 3745, "holes": 366}, "provider_records": 3336, "observed_node_count": 3336, "unobserved_node_count": 43, "provider_records_without_graph_node": 0, "exclusive_query_elapsed_ns": 27489536, "known_query_blocked_elapsed_ns": 2328941, "blocked_records": 23, "execution_span_ns": null, "cpu_work_ns": null}

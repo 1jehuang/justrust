@@ -1,5 +1,34 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: actual compiler invocation IDs join query providers and waits
+
+The new offline graph/profile/mapping tools, committed as `4b7e8bd`, pass all
+164 benchmark-package tests and eight final actual public CLI checks. The
+same-session Desktop capture `20261013-224631463-1915834` has 1,052,237 saved
+nodes, 6,496,600 dependency edges, and 973,105 observed query-provider records
+that all join their numeric saved IDs. 79,132 nodes remain untimed. Its 151
+QueryBlocked records total 129.890026 ms of thread waits, and 55 observed
+caller-to-producer pairs lack a saved read edge. CPU work and execution span
+remain null, not inferred from occupancy, read-graph depth or frontiers.
+
+This was a cold-target, warm-shared-cache hosted **check**, not a build or test:
+19.987 seconds recorded / 20.632 seconds client, UI unit 3.607524395 seconds
+and 10.048405 reported CPU seconds. The resolver-for-lowering provider took
+396.254078 ms of exclusive elapsed time, making it an investigation target,
+not an established serial fraction or safe parallelization. The earlier
+all-event check `20261013-224426718-1907396` had different cache misses and a
+1.12 GB profile beyond our decoder cap, so their ratio is not a speedup.
+Tiny one/four-thread captures `20261013-223840760-1863795` and
+`20261013-223842465-1863794` preserve sparse IDs and explicitly unresolved
+virtual labels. The failed first local debug-build harness invocation
+`20261013-223745790-1859236` is retained separately, not a hosted failure.
+
+See `docs/compiler-query-graph-20261014.md` and its compact result/acceptance
+files for exact pins, format boundaries, independent actual-pair acceptance,
+per-requirement observations, and missing causal/CPU instrumentation. No
+compiler/default/permissions/tenant changes or performance promotion were made.
+
+
 ## 2026-10-14: native rollout uses a frozen installation source
 
 The native-platform client was validated from the exact committed main snapshot
