@@ -892,6 +892,13 @@ fn safe_user(s: &str) -> bool {
 }
 
 fn parse_ready(b: &Value) -> Result<Ready> {
+    // The current transport executes Linux commands. Missing platform denotes
+    // the legacy Linux API, not permission to accept an incompatible worker.
+    if b.get("platform")
+        .is_some_and(|platform| platform.as_str() != Some("linux"))
+    {
+        bail!("the hosted build API returned an unsupported worker platform, refusing to connect");
+    }
     let address = b["address"].as_str().unwrap_or("").to_string();
     let user = b["user"].as_str().unwrap_or("ubuntu").to_string();
     let port = b["port"].as_u64().unwrap_or(22);
@@ -936,7 +943,7 @@ pub fn connect_with(
     mut progress: impl FnMut(&str),
 ) -> Result<Ready> {
     let start = Instant::now();
-    let body = json!({ "public_key": public_key.trim() });
+    let body = json!({ "public_key": public_key.trim(), "platform": "linux" });
     let mut last = String::new();
     loop {
         let r = request(c, "POST", "build/host/connect", Some(&body))?;
@@ -1930,6 +1937,25 @@ mod tests {
                 parse_ready(&serde_json::from_str(bad).unwrap()).is_err(),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn worker_platform_is_checked_before_connecting() {
+        let mut ready: Value = serde_json::from_str(READY).unwrap();
+        assert!(parse_ready(&ready).is_ok());
+        ready["platform"] = json!("linux");
+        assert!(parse_ready(&ready).is_ok());
+        for platform in [
+            json!("windows"),
+            json!("macos"),
+            json!(""),
+            json!(null),
+            json!(42),
+        ] {
+            ready["platform"] = platform;
+            let err = parse_ready(&ready).unwrap_err();
+            assert!(err.to_string().contains("unsupported worker platform"));
         }
     }
 
