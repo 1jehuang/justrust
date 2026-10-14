@@ -56,10 +56,15 @@ under `data/runs/xps14-telemetry-acceptance/`. Local routing was intentional for
 this artifact-sharing and opt-out acceptance, not a hosted-build substitute.
 
 The focused recorder privacy test and ten remote tests passed, as did check and
-warning-free all-target clippy. Plain hosted validation encountered a live
-backend 404 for `POST /internal/builds/charge` and correctly fell back locally.
-Hosted acceptance must not be claimed until that service route is restored.
-This is correctness/coverage work, not a compile-speedup claim.
+warning-free all-target clippy. Plain hosted validation initially encountered a live backend 404 for
+`POST /internal/builds/charge` and correctly fell back locally. After restoring
+the prior backend route implementation, charged hosted check
+`20261014-040706043-2400213` passed. Actual installed client run
+`20261014-040753300-2405164` was verified in production D1 with a trusted account
+link, stable event ID and sampling metrics. Final full tests passed 427 tests
+(3 ignored), with warning-free clippy. `docs/telemetry-acceptance-20261014.md`
+records the complete evidence and remaining limits. This is correctness/coverage
+work, not a compile-speedup claim.
 
 
 ## 2026-10-14: Jcode custom search configuration rebuild cascade
