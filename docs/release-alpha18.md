@@ -72,6 +72,27 @@ structured run telemetry, distinguishing source builds from release binaries.
 The coordinator is also auditing installer token attribution and lifecycle
 visibility and explicitly holds publication pending that audit.
 
+## Native CI and expanded acceptance hold, 11:55 UTC
+
+Combined portability/package candidate 264d7bc, CI 38556244057, passed Linux,
+Windows and MSRV, including actual tests and smoke checks. Both native Mac jobs
+remain queued after more than 30 minutes. These passes do not authorize a later
+source commit or waive native macOS execution.
+
+The coordinator expanded the acceptance gate to installer token attribution,
+asynchronous build lifecycle and bounded client-local interrupted logs. Installed
+lifecycle source 41b787c produced trusted queued/running/summary/done events for
+actual run 20261014-043509383-2672389, documented by its owner in
+`docs/install-observability-acceptance.md`. This is accepted lifecycle evidence,
+not proof of centralized log access or final public release acceptance.
+
+Journal candidate c9961bf has passed native Linux and MSRV in CI 38558559636.
+Intermediate commit 8c17751, CI 38559000957, fails warning-as-error checks because
+its persistence diagnostics have no callers in that committed snapshot; the
+caller owner still has pending changes. Final publication remains explicitly
+held for the coordinator's complete source and installer audit. No alpha.18 tag
+or release has been pushed, and the previous latest release remains alpha.17.
+
 ## Publication and rollout
 
 Pending exact-candidate native CI and release build, asset/checksum verification,

@@ -21,6 +21,11 @@ All notable changes. Versions follow [semver](https://semver.org); while in
   authentication outcomes through `justrust telemetry status`. Existing opt-out
   controls remain supported. Collection is not lossless, and old anonymous
   events are not retroactively linked to accounts.
+- **Build lifecycle visibility** asynchronously reports authenticated queued,
+  running, heartbeat, and terminal states correlated by run ID. Log availability
+  describes client-local persistence, not centrally uploaded raw logs.
+- **Build provenance** distinguishes source and release builds with a compile-time
+  `release_build` marker in structured run metrics.
 - Windows sampling bounds process traversal against reused-PID cycles.
   No compile-speedup claim is made for this release.
 
