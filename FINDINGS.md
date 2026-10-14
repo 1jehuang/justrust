@@ -22,6 +22,10 @@ Installed binary acceptance on isolated scratch Rust fixtures:
 - A 64 KiB RLIMIT_FSIZE with SIGXFSZ ignored and the resident daemon disabled
   caused real journal and staging writes to fail. The test still returned
   cargo exit 0 and printed its final marker. Recording failure was visible.
+  Log and summary persistence failures also emit one bounded diagnostic per
+  failed category through the lifecycle owner's API: fixed recording_persist
+  stage, log/summary detail, actual exit, and validated run ID only. No error
+  chain or path is accepted by that API.
 - Five regression tests cover exact JSONL, batching/bounded buffer with large
   lines, disabled-on-failure/no retry, unavailable paths, and atomic repair
   preserving an existing prefix. Hosted check/full test/clippy passed on the

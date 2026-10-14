@@ -624,6 +624,13 @@ fn record(
         (std::mem::take(&mut capture.lines), complete)
     };
     let logs_complete = persist_output(&run_dir, &lines, journal_complete);
+    if !logs_complete {
+        crate::telemetry::record_persistence_failure(
+            id,
+            crate::telemetry::PersistenceFailure::Log,
+            code,
+        );
+    }
     let mut hidden = agent_output::Hidden::default();
     for f in [&f_out, &f_err] {
         if let Some(f) = f.as_ref() {
@@ -647,6 +654,11 @@ fn record(
         &procs,
     ) {
         eprintln!("justrust: failed to write run summary: {e:#}");
+        crate::telemetry::record_persistence_failure(
+            id,
+            crate::telemetry::PersistenceFailure::Summary,
+            code,
+        );
     }
     lifecycle.done(code, logs_complete);
     // Early diagnostics, auto mode: warm a daemon for busy workspaces,
