@@ -1,0 +1,562 @@
+{
+  "benchmark_guard_tests_passed": 86,
+  "candidate_commit": "a45c3546671925c24649e451a673aa71b1385d0d",
+  "candidate_sha256": "c38c3d63e82c74fc4ba9e2978ad74ccad7f74aa21dec6d2bf978e0c4dcf1e13d",
+  "checks": [
+    {
+      "observed": "named test passed",
+      "requirement": "sampled_cpu_preserves_survivor_work_when_other_child_exits",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "named test passed",
+      "requirement": "sampled_cpu_missing_snapshot_does_not_count_lifetime_again",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "named test passed",
+      "requirement": "sampled_cpu_distinguishes_pid_reuse_and_overlapping_roots",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "named test passed",
+      "requirement": "sampled_cpu_counter_regression_does_not_create_later_spike",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "named test passed",
+      "requirement": "successful_test_run_ignores_nested_compile_failure",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "named test passed",
+      "requirement": "unsuccessful_build_keeps_unit_and_output_compile_failure_verdicts",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "named test passed",
+      "requirement": "runtime_test_failure_is_not_a_compile_failure",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "named test passed",
+      "requirement": "rsync_keeps_target_sources_without_uploading_ignored_files_or_build_caches",
+      "run": "20261013-215956564-1615106"
+    },
+    {
+      "observed": "10 passed",
+      "requirement": "Cargo queue prerequisites and ranking",
+      "run": "20261013-215921598-1612465"
+    },
+    {
+      "observed": "5 passed",
+      "requirement": "Cargo config fallback and filesystem safety",
+      "run": "20261013-215929493-1613079"
+    },
+    {
+      "observed": "5 actual public CLI tests passed",
+      "requirement": "public artifacts, -j1/-j2, GNU make token barriers, keep-going and retry",
+      "run": "20261013-215931783-1613267"
+    },
+    {
+      "observed": "same 2 passing tests and retained E0308: old false compile failure, new correct success",
+      "requirement": "real reporting improvement",
+      "runs": [
+        "20261013-215604181-1595675",
+        "20261013-215604352-1595740"
+      ]
+    },
+    {
+      "observed": "full E0308, exit101, compile_failed true",
+      "requirement": "genuine outer compile failure",
+      "run": "20261013-220037908-1618025"
+    },
+    {
+      "observed": "three Fresh checks, unchanged recursive rmeta hashes",
+      "requirement": "recording/unrecorded artifact parity",
+      "runs": [
+        "20261013-220052327-1619206",
+        "20261013-220052488-1619235"
+      ]
+    },
+    {
+      "observed": "3 tests each, one edited unit, zero on repeat, exact backup restoration",
+      "requirement": "real Desktop edit/reuse/restore",
+      "runs": {
+        "edit": "20261013-220132579-1625514",
+        "repeat": "20261013-220143371-1630401",
+        "restored": "20261013-220151800-1631350",
+        "warm": "20261013-220127489-1621943"
+      }
+    }
+  ],
+  "client_sha256": "08d0601aa8bfa33decdcdbeb986a2d9558ba0873d5f1b5d3659117c034660abe",
+  "desktop_restored_sha256": "24de30f7556c2e126bb52f685377f656c6352dfdf83e1bc9f9d03f037d877e8d",
+  "fixture_log_sha256": {
+    "after-verdict.log": "0d41f4ca4f16e99eebf94dd4daf99ddd18d5909b30569bf68c265b5c5fc90182",
+    "before-verdict.log": "1779ff6d746c7472391459e223c2289ca0d9db3332b94247b1708afa21da7fc6",
+    "final-after.sha256": "8ec410d58a680253750afd2c883eccc1c5f2d04a3ea6cf2f3bb5cd716ba40704",
+    "final-before.sha256": "8ec410d58a680253750afd2c883eccc1c5f2d04a3ea6cf2f3bb5cd716ba40704",
+    "final-failure.log": "a868c69df75f9fc2afa7ee726e4a75fadcce794bf611fe8bd21e1f45ebef6c02",
+    "final-recorded-confirmed.log": "c69d08001614d2b84f3a8e21267a20d8b45a16fe723b1306a9f4a26a40ece3f8",
+    "final-repeat.log": "cc37224dab4a2eb3fd681287b150aa2156da1c0641e6462bf103965d15703a4b",
+    "final-success.log": "b0f31fadda77b6d15828485116280f0f2f6af564a4c7dc836965fd48139ac267",
+    "final-unrecorded.log": "6ef1a6fa95832bd7ade695bbe7e921b32f85d8b5d52a999df207b5ddb350f990"
+  },
+  "frozen_acceptance": {
+    "client_sha256": "08d0601aa8bfa33decdcdbeb986a2d9558ba0873d5f1b5d3659117c034660abe",
+    "complete": true,
+    "finished": 1791954022.3430316,
+    "schema_version": 1,
+    "scope": "hosted functionality and executable identity, not speed",
+    "started": 1791953991.553471,
+    "steps": [
+      {
+        "args": [
+          "check"
+        ],
+        "exit": 0,
+        "finished": 1791953996.4981275,
+        "name": "check",
+        "output_sha256": "9675d8d8e5b6f218efc9949dc25bfedc2163bb49b2281d530f045d3a4f233c75",
+        "run": {
+          "agent_session": "session_duckling_1791929298128_69bbad056db8b6b3",
+          "args": [
+            "check"
+          ],
+          "id": "20261013-215951672-1614703",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791953991.5867062
+      },
+      {
+        "args": [
+          "test"
+        ],
+        "exit": 0,
+        "finished": 1791954016.299956,
+        "name": "test",
+        "output_sha256": "c29f9e6140a19b47c6251572cc33787dd8af05d09484860a940acd604d8b4d6b",
+        "run": {
+          "agent_session": "session_duckling_1791929298128_69bbad056db8b6b3",
+          "args": [
+            "test"
+          ],
+          "id": "20261013-215956564-1615106",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791953996.5637147
+      },
+      {
+        "args": [
+          "clippy",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit": 0,
+        "finished": 1791954021.6727517,
+        "name": "clippy",
+        "output_sha256": "6ea1987c6fd187fa4974dfd3ace53b13ce429c849484000371ed50943bf6a3c9",
+        "run": {
+          "agent_session": "session_duckling_1791929298128_69bbad056db8b6b3",
+          "args": [
+            "clippy",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "id": "20261013-220016394-1616485",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791954016.3934987
+      },
+      {
+        "args": [
+          "check"
+        ],
+        "exit": 0,
+        "finished": 1791954022.287301,
+        "name": "recheck",
+        "output_sha256": "449d5d374df9284cc78fbf42459a4d66be6cb5fd4126cc2f26b161559efe9f0a",
+        "run": {
+          "agent_session": "session_duckling_1791929298128_69bbad056db8b6b3",
+          "args": [
+            "check"
+          ],
+          "id": "20261013-220021787-1617016",
+          "ncpu": 24,
+          "place": "hosted",
+          "toolchain": "nightly-2026-10-08"
+        },
+        "started": 1791954021.786565
+      }
+    ],
+    "toolchain": "nightly-2026-10-08"
+  },
+  "limits": [
+    "old ABBA noise flags retained",
+    "Cargo strict lint still has 10 pre-existing errors, not a clean gate",
+    "minimal parity preparation rebuilt after intentional earlier source edit; fixed-layout hash collector then verified three unchanged Fresh checks",
+    "CPU sampling misses unsampled exits and does not measure true DAG span",
+    "experimental compiler semantic changes require the repository review gate"
+  ],
+  "named_cargo_parser_tests": [
+    "test compiler::job_queue::jr_critical_path::tests::package_hints_and_missing_package_fallback ... ok",
+    "test compiler::job_queue::jr_critical_path::tests::invalid_tables_fail_open ... ok",
+    "test compiler::job_queue::jr_critical_path::tests::symlinks_and_sockets_are_not_hint_files ... ok",
+    "test compiler::job_queue::jr_critical_path::tests::only_bounded_regular_files_are_read ... ok",
+    "test compiler::job_queue::jr_critical_path::tests::table_size_and_package_count_are_bounded ... ok"
+  ],
+  "named_cargo_public_tests": [
+    {
+      "name": "jr_critical_path::cold_cli_order_and_invalid_or_missing_cost_fallback",
+      "passed": true
+    },
+    {
+      "name": "jr_critical_path::inherited_make_jobserver_obeys_two_real_tokens",
+      "passed": true
+    },
+    {
+      "name": "jr_critical_path::internal_jobserver_obeys_two_real_tokens",
+      "passed": true
+    },
+    {
+      "name": "jr_critical_path::keep_going_failed_branch_fix_and_retry",
+      "passed": true
+    },
+    {
+      "name": "jr_critical_path::multi_output_build_check_and_switch_are_artifact_transparent",
+      "passed": true
+    }
+  ],
+  "named_cargo_queue_tests": [
+    "test util::dependency_queue::test::critical_path_accepts_empty_graph_and_zero_cost_bridge ... ok",
+    "test util::dependency_queue::test::critical_path_saturates_overflow ... ok",
+    "test util::dependency_queue::test::critical_path_prefers_chain_over_fanout ... ok",
+    "test util::dependency_queue::test::critical_path_preserves_multi_output_readiness ... ok",
+    "test util::dependency_queue::test::critical_path_shared_descendant_counts_only_longest_branch ... ok",
+    "test util::dependency_queue::test::critical_path_rejects_cycles - should panic ... ok",
+    "test util::dependency_queue::test::critical_path_rejects_zero_cost_self_cycle - should panic ... ok",
+    "test util::dependency_queue::test::critical_path_uses_weights_not_total_descendant_cost ... ok",
+    "test util::dependency_queue::test::sort_by_highest_cost ... ok",
+    "test util::dependency_queue::test::deep_first_equal_cost ... ok"
+  ],
+  "named_cpu_verdict_sync_tests": [
+    "test record::tests::sampled_cpu_distinguishes_pid_reuse_and_overlapping_roots ... ok <0.000s>",
+    "test record::tests::sampled_cpu_missing_snapshot_does_not_count_lifetime_again ... ok <0.000s>",
+    "test record::tests::sampled_cpu_counter_regression_does_not_create_later_spike ... ok <0.000s>",
+    "test record::tests::sampled_cpu_preserves_survivor_work_when_other_child_exits ... ok <0.000s>",
+    "test summary::tests::runtime_test_failure_is_not_a_compile_failure ... ok <0.000s>",
+    "test summary::tests::successful_test_run_ignores_nested_compile_failure ... ok <0.000s>",
+    "test summary::tests::unsuccessful_build_keeps_unit_and_output_compile_failure_verdicts ... ok <0.000s>",
+    "test remote_sync::tests::rsync_keeps_target_sources_without_uploading_ignored_files_or_build_caches ... ok <0.268s>"
+  ],
+  "observations": [
+    {
+      "compile_errors": 1,
+      "compile_failed": true,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 1,
+      "id": "20261013-215604181-1595675",
+      "ignored": 0,
+      "ncpu": 16,
+      "output_sha256": "efd62f793e9e01984047c040a389957ac845e581d6c973ba8645e2ac561eda25",
+      "passed": 2,
+      "place": "local",
+      "summary_sha256": "f69b53e7f2c1b968555ec09c4196c0ef0b3c30817ed36d5e33db46c313d7351c",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 1,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 1,
+      "id": "20261013-215604352-1595740",
+      "ignored": 0,
+      "ncpu": 16,
+      "output_sha256": "7144f80a2b675d508cc7df878de84b788ec6d4b246e61bb1562c88da06cdb476",
+      "passed": 2,
+      "place": "local",
+      "summary_sha256": "156ec4e1a7aa40077e36d972a3e226042babc340aff3dfa53c540d9356264b17",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 330,
+      "id": "20261013-215921598-1612465",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "525dc1d640583daf0fc237fddbea6467d137728be41799c209d7de01b0c197cd",
+      "passed": 10,
+      "place": "hosted",
+      "summary_sha256": "83b1ef97ad448bff8e0b700af86d9c6c4fff55f12d1140292773959344c99160",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 330,
+      "id": "20261013-215929493-1613079",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "0d9fe7627eb6f282feb649fb1be8e92874dac141c0aee24d9794aaec48307232",
+      "passed": 5,
+      "place": "hosted",
+      "summary_sha256": "c2901462e705306c11243e0655b5eeff02df465dcd5d17d99e96e7ef14ae0307",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 330,
+      "id": "20261013-215931783-1613267",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "78b93d40048fec1a6ce3619c98fc5a2e1402bae406f7916b9d617a6c8712ec44",
+      "passed": 5,
+      "place": "hosted",
+      "summary_sha256": "18c9ed6bfeb297d4a7b39cf60f23f8d4c291c15372601b30bbfc08f67ed2aa64",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 75,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 0,
+      "id": "20261013-215951672-1614703",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "9e9e8e3832484b8854c2d4c49e86fc5e33eae9cea73fffce5d5f043a0f487be2",
+      "passed": 0,
+      "place": "hosted",
+      "summary_sha256": "a5cadd9a833144f3af8b8b26aaac794e1e365c9252a7c8f222197c2727c74753",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 64,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 8,
+      "id": "20261013-215956564-1615106",
+      "ignored": 3,
+      "ncpu": 24,
+      "output_sha256": "a6abb3a8e988e3d8d54bb7e2a320cac8ac2bdc470708a6ac2a27405865da22b3",
+      "passed": 404,
+      "place": "hosted",
+      "summary_sha256": "ad305f6c3a4f31aa1eb0d168bfd601581930db4bb171e5e080d08dbb2cf618f6",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 3,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 61,
+      "id": "20261013-220016394-1616485",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "99ffb71370e682a5a01a51aaaabc1419044618235c4615c034da40fb071fe1df",
+      "passed": 0,
+      "place": "hosted",
+      "summary_sha256": "f5f9d990242c9dd8fa9863bebe87d5923a4941d88d835524f08558d97307b1af",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 62,
+      "id": "20261013-220021787-1617016",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "f8183f72c732cde0bdc100a05883ad2768f0048e6aa479b672374fe5d6bfcc0f",
+      "passed": 0,
+      "place": "hosted",
+      "summary_sha256": "dcf1f57faad4930a96a085c7dc423c43c5758d4d80a1403a603022ad8ee85217",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 1,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 1,
+      "id": "20261013-220037792-1617967",
+      "ignored": 0,
+      "ncpu": 16,
+      "output_sha256": "8fad244102a50bdfdebed10c81514df460639ca9182b3b4d578a541e246521e0",
+      "passed": 2,
+      "place": "local",
+      "summary_sha256": "8b4cfab1d31884cfeb232d7952f38e3bae952b44e8c0bab03f054f63ff018689",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 1,
+      "compile_failed": true,
+      "compiled": 1,
+      "exit": 101,
+      "failed": 0,
+      "fresh": 0,
+      "id": "20261013-220037908-1618025",
+      "ignored": 0,
+      "ncpu": 16,
+      "output_sha256": "cafa208975337d81de2e3818ea035ed240e0926dac543ef6db019114cd726306",
+      "passed": 0,
+      "place": "local",
+      "summary_sha256": "310b8100e91dd42cf00c456f259bcb53162f9adc813ae2dbb2ed553fa95ecd65",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 1,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 0,
+      "id": "20261013-220037997-1618068",
+      "ignored": 0,
+      "ncpu": 16,
+      "output_sha256": "f6fc0fc0074a0e34dfa9aefd2638dbcf270b514b25784a1943ead39c7bef9de5",
+      "passed": 0,
+      "place": "local",
+      "summary_sha256": "27887e08885e7a0f92b391aa888af927ba0f0622011a643c8958333e8e89e1bf",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 1,
+      "id": "20261013-220052327-1619206",
+      "ignored": 0,
+      "ncpu": 16,
+      "output_sha256": "029df1ef9aac0c8ae2673c0c742671dfb55dee46e78fb997c612e76a8a39c097",
+      "passed": 0,
+      "place": "local",
+      "summary_sha256": "7891b8b11dcc71c3ea9308569ddd0696dac3881576f5797fb93a36d445ac8585",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 1,
+      "id": "20261013-220052488-1619235",
+      "ignored": 0,
+      "ncpu": 16,
+      "output_sha256": "601433fa93690d64d6043244156b31347f958a6c69d3c11f9e60198604710c71",
+      "passed": 0,
+      "place": "local",
+      "summary_sha256": "e90f3bd2142943226140a9c6694968d307ad3e85e8b088e5c2cf5016f3548197",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 746,
+      "id": "20261013-220127489-1621943",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "e8068e90a93cc76c8f452180c22c9f8daf9c00111fb6db888ff0b7348504d36e",
+      "passed": 3,
+      "place": "hosted",
+      "summary_sha256": "593bd8d004004b0b7cf826f23d7ee6d702e7fd53c281cacfde703f2767395e80",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 1,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 745,
+      "id": "20261013-220132579-1625514",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "c6a77950a399340a25cec6cb55adb0cf1436f37f79b450fdd89971c178e02449",
+      "passed": 3,
+      "place": "hosted",
+      "summary_sha256": "73bd65a0942649fedf029ff1e1194c2937487c4176ca9bd0b9ca3a5a062b8fc6",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 0,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 746,
+      "id": "20261013-220143371-1630401",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "8282a30975d023170004d376ab0fc70e79f6f0d07add037a840a6f8cf249e24f",
+      "passed": 3,
+      "place": "hosted",
+      "summary_sha256": "205a577ee8bc4d0c23b197bf0b05db366847099d7dc7bc7656e028f4874e6b6d",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "compile_errors": 0,
+      "compile_failed": false,
+      "compiled": 1,
+      "exit": 0,
+      "failed": 0,
+      "fresh": 745,
+      "id": "20261013-220151800-1631350",
+      "ignored": 0,
+      "ncpu": 24,
+      "output_sha256": "5fdd90132aa24a0edba523cc05de9882a7fb51b232eff62400a06b5ff5a3f6fe",
+      "passed": 3,
+      "place": "hosted",
+      "summary_sha256": "4849e4f3050c776b4e7f3cc4b921f65fae160adca803f39614ec7275204f2531",
+      "toolchain": "nightly-2026-10-08"
+    }
+  ],
+  "old_client_sha256": "2153a809b3f91826f4baa9acd81ad5ccc4fb7102f17aacb029469853f38b5a53",
+  "parallelism_result": "No demonstrated scheduler benefit. Candidate remains default-off. Maximum compiler parallelism and hardware ceiling are unresolved.",
+  "prior_measurement_summaries_verified": 21,
+  "scheduler_records_verified": 56,
+  "scheduler_segment_hashes_verified": 4,
+  "schema": 1,
+  "scope": "final whole-result functional and evidence audit, not a speed comparison",
+  "source_commit": "e629a004068923360bc2cb8880ca160020c758f7",
+  "verified_source_blobs": 69
+}

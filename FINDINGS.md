@@ -6308,3 +6308,16 @@ hash receipt are in `docs/measurement-acceptance-20261014.md` and its result
 JSON. Sampling still misses unsampled exit work and cannot establish query
 dependencies or a theoretical parallelism ceiling. No historical timing/noise
 flags were rewritten and no speedup or scheduler promotion is claimed.
+
+## Final frozen parallelism/measurement requirement rerun (2026-10-14)
+
+Same unchanged two-test fixture: old client2153 run20261013-215604181-1595675
+incorrectly reported compile failure despite exit0; corrected08d client
+20261013-215604352-1595740 correctly reported success, retaining fullE0308.
+Final immutablee629 hosted suite20261013-215956564-1615106 passed404+3ignored,
+strictalltargetlint passed, repeatedcheck0compiled62fresh. Actual Cargo20tests
+and Desktopedit/repeat/backup-restoration passed. Final receipt/requirement
+map: docs/final-parallelism-acceptance-20261014.md; exact18new records appended
+to hosted-west-measurement (39total). Prior21summary hashes and56scheduler
+records/foursegment hashes verified,86offline guards pass. No speedclaim,
+no scheduler promotion, no inferred96-core ceiling. Sharedhost released05:02:02UTC.
