@@ -29,8 +29,10 @@ What we own, or are working toward owning (plan: `docs/toolchain.md`):
   regenerations, big test suites), and local otherwise. The decision is made
   per build from measured cost.
 
-When choosing work, prefer what moves the reference loop
-(`docs/toolchain.md`, Target) the most. Small, safe wins still ship, but
+When choosing work, prefer what reduces expected agent wait across the
+session-weighted synthetic workload (`bench/synth/README.md`) the most.
+The Desktop one-line test edit is a diagnostic, not the overall benchmark.
+Small, safe wins still ship, but
 never stop at "good enough" when a deeper change (a fork, a server, a new
 component) would be measurably faster.
 
@@ -86,6 +88,20 @@ billing, private caches) and never weaken the security invariants in
   `bench/suite.py` (pinned snapshots, see `bench/README.md`): run it before
   and after, commit both result files, and quote `bench/suite.py compare`.
   `justrust show` explains a single run.
+- For general speed claims and default promotion, use the comprehensive
+  session-weighted workload: `bench/suite.py run --synth 1 -n 1` before and
+  after, then `bench/suite.py compare`. Keep seed, point count, generator,
+  weights, snapshots, and execution mode identical. Inspect command/change
+  breakdowns for regressions, not just the aggregate mean.
+- Use `bench/versus.py run --synth 1 -n 1` for stock-versus-justrust claims.
+  Named suite scenarios and `bench/factors.py` are focused diagnostics and
+  component attribution, not substitutes for the comprehensive gate. A
+  targeted win can ship with an explicitly scoped claim, but a default
+  promotion needs the broader comparison and relevant regression checks.
+- Supplement the synthetic workload with cold-build, contention, hosted,
+  and correctness checks relevant to the change. Its coverage is not universal
+  (see `bench/synth/README.md`, Known gaps). If the broad gate is blocked,
+  report it as blocked rather than substituting `desktop-test-edit`.
 - Record notable observations in `FINDINGS.md` with the run id.
 - Run `justrust export` from the repo root and commit `data/runs/` so every
   cited run id exists in the repository (slim, path-redacted summaries, see

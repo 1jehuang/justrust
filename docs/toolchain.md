@@ -6,7 +6,13 @@ fastest possible edit -> check -> test loop for agents.
 
 ## Target
 
-The reference loop is a one-line body edit in `jcode-desktop-ui` followed by
+The primary target is expected agent wait across the session-weighted
+synthetic workload, not one selected compile. Follow the measurement policy
+in `bench/README.md`: matched `bench/suite.py run --synth 1 -n 1` before/after
+comparisons, with command/change breakdowns and relevant regression checks.
+Use `bench/versus.py run --synth 1 -n 1` for comparisons against stock.
+
+The historical reference loop is a diagnostic: a one-line body edit in `jcode-desktop-ui` followed by
 `justrust test -p jcode-desktop-ui --lib -- <filter>`. It is measured by
 `bench/suite.py run desktop-test-edit` on pinned sources; the latest is
 7.59s median (`bench/results/20261010-010147-c219b496046c.json`: startup
@@ -52,8 +58,11 @@ from a cache.
 The optimizations that owning both sides of a layer boundary enables, ranked,
 are in `docs/integrations.md`.
 
-Each phase ships only after a measured win on the reference loop
-(`bench/edit-loop.sh` and the Desktop benches), recorded in FINDINGS.md.
+Each phase needs before/after measurements recorded in FINDINGS.md.
+Focused scenarios and factors establish component-specific wins. General
+speed claims and default promotion require the comprehensive synthetic
+comparison plus relevant regression and correctness checks, not merely a
+win on the historical reference loop (`bench/edit-loop.sh` and Desktop).
 
 1. **Pinned toolchain, managed by justrust.** *Shipped 2026-10-10*
    (`justrust toolchain`, README "Pinned toolchain"; FINDINGS 2026-10-10:

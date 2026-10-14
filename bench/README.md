@@ -17,6 +17,35 @@ snapshots. Its headline is the expected wait per agent call. Prefer it for
 any claim about agents in general; the named scenarios stay for targeted
 questions and for comparing with older results.
 
+## Measurement policy: comprehensive first, focused when diagnosing
+
+The primary score is **mean agent-visible wait across the session-weighted
+synthetic workload**, not `desktop-test-edit` or any other single scenario.
+For general speed claims and default promotion:
+
+```sh
+bench/suite.py run --synth 1 -n 1       # baseline and candidate, separately
+bench/suite.py compare A.json B.json   # matched synthetic results
+bench/versus.py run --synth 1 -n 1      # stock vs caches-off vs default
+```
+
+Keep the seed, point count, generator/weights fingerprint, snapshots, and
+execution mode fixed. Inspect command/change breakdowns for regressions as
+well as the aggregate. Do not refresh weights between baseline and candidate.
+Repeat measurements when noise or sampling makes a conclusion uncertain.
+
+Focus experiments with a named suite scenario (`bench/suite.py list`), a
+component factor (`bench/factors.py list`), or an additional candidate
+`--stack NAME:K=V,...` in versus. Such results support scoped claims only,
+not a claim that justrust as a whole got faster. The historically named
+`reference-loop` / `desktop-test-edit` is one warm filtered-test diagnostic.
+
+The synthetic workload is broad, not universal: supplement it with relevant
+cold-build, contention, hosted-mode, and correctness checks. See
+`bench/synth/README.md` for coverage gaps. If the comprehensive comparison is
+blocked, say so explicitly rather than substituting one convenient loop.
+Real-usage trends remain the reality check, not a controlled attribution test.
+
 ## System 1: rolling log, `bench/trend.py`
 
 Mines Jcode session history (`justrust history --dump`) for every foreground
@@ -169,7 +198,7 @@ Scenarios (warm unless marked):
 
 | scenario | what it measures |
 |---|---|
-| `desktop-test-edit` | **the reference loop**: one line in a `#[test]` fn in `jcode-desktop-ui` (118k lines), `test --lib -- fps_counter` |
+| `desktop-test-edit` | historical reference-loop diagnostic: one line in a `#[test]` fn in `jcode-desktop-ui` (118k lines), `test --lib -- fps_counter`, not the overall score |
 | `desktop-body-test` | one line in non-test code of the same crate, same test command |
 | `desktop-body-check` | same edit, `check` only |
 | `desktop-type-error` | edit that adds a type error, `check`: time until the agent sees the error |

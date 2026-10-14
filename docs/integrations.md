@@ -10,7 +10,13 @@ edits is impossible from a wrapper.
 Companion to `docs/toolchain.md` (what we own, phases). This file is the
 list of optimizations that only exist once we own both sides of a boundary.
 
-## The reference loop today
+## Historical reference-loop diagnostic
+
+This breakdown diagnoses one warm filtered-test workload, not overall agent
+performance. The rankings below are hypotheses informed by that workload.
+Prioritize and validate them against the comprehensive session-weighted
+benchmark and relevant regression checks (`bench/README.md`, measurement
+policy). Historical measurements below retain their original scope.
 
 Desktop, one-line edit, `justrust test -p jcode-desktop-ui --lib --
 fps_counter`, 7.6 s (FINDINGS 20, `bench/suite.py`):
@@ -70,6 +76,9 @@ rustc was never designed for, so expect leaks to fix.
 - Every integration ships only with before/after numbers from
   `bench/suite.py` or `bench/factors.py`, and gets an off switch so it can
   be a factor.
+- General speed claims and default promotion require matched synthetic
+  suite comparisons and relevant regression checks. A reference-loop or
+  factor win alone supports only a workload-specific claim.
 - Same test results as stock stable on the Jcode and Desktop suites.
 - Fail open to the stock toolchain.
 - Cost accepted: weekly rebases onto nightly for each fork
