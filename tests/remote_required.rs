@@ -19,6 +19,9 @@ fn strict_remote_rejects_local_and_unsupported_builds_before_cargo() {
             .args(&args)
             .current_dir(&root)
             .env("JUSTRUST_HOME", root.join("home"))
+            // These fixtures test routing guards, not detached background work.
+            .env("JUSTRUST_NO_TELEMETRY", "1")
+            .env("JUSTRUST_NO_UPDATE", "1")
             .env("JUSTRUST_REMOTE_REQUIRED", "1")
             .env_remove("JUSTRUST_ON_REMOTE_AGENT")
             .env_remove("JUSTRUST_RUN_ID_OVERRIDE")
@@ -52,6 +55,9 @@ fn strict_toolchain_rejects_system_and_uninstalled_pins_before_cargo() {
             .args(["build", "--local", "--release"])
             .current_dir(&root)
             .env("JUSTRUST_HOME", root.join("home"))
+            // These fixtures test routing guards, not detached background work.
+            .env("JUSTRUST_NO_TELEMETRY", "1")
+            .env("JUSTRUST_NO_UPDATE", "1")
             .env("JUSTRUST_TOOLCHAIN", pin)
             .env("JUSTRUST_TOOLCHAIN_REQUIRED", "1")
             .env("JUSTRUST_TOOLCHAIN_AUTO_INSTALL", "0")
