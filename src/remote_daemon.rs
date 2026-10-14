@@ -836,7 +836,11 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
     let mut known = known_roots(dest);
     known.extend(st.roots.keys().cloned());
     let mut seeded = false;
-    if let Some(from) = remote_sync::pick_seed(root, known.iter())
+    // `JUSTRUST_REMOTE_SEED=0` (in the daemon's environment) turns off both
+    // seeds, for measuring and as an escape hatch: a full rsync instead.
+    let seeding = std::env::var("JUSTRUST_REMOTE_SEED").as_deref() != Ok("0");
+    if seeding
+        && let Some(from) = remote_sync::pick_seed(root, known.iter())
         && link.mirror.seed(root, &from)
     {
         seeded = true;
@@ -846,7 +850,8 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
             from.display(),
             t.elapsed().as_secs_f64()
         ));
-    } else if std::env::var("JUSTRUST_REMOTE_GIT_SEED").as_deref() != Ok("0")
+    } else if seeding
+        && std::env::var("JUSTRUST_REMOTE_GIT_SEED").as_deref() != Ok("0")
         && link.mirror.seed_from_origin(root)
     {
         seeded = true;

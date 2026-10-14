@@ -1,5 +1,18 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: Jcode custom search configuration rebuild cascade
+
+Hosted run `20261013-235133714-2340696` spent 24.8s in compilation/testing
+(30.7s client wall) running two default-config unit tests after changing
+`jcode-config-types`. `jcode_base` took 9.25s and its test unit 12.78s.
+The report attributed approximately 22.3s to downstream rebuilds and 9.8s
+to building unnecessary non-lib targets. Subsequent focused `--lib` run
+`20261013-235346425-2355583` ran one custom-search TOML test in 7.0s build
+wall (13.8s client), with the base test unit taking 6.53s. These are different
+edits/cache states, not a controlled speedup comparison. Use `--lib` for these
+unit filters. Splitting frequently edited config types/base tests is a project
+architecture opportunity, not part of the scoped search-provider change.
+
 ## 2026-10-14: actual compiler invocation IDs join query providers and waits
 
 The new offline graph/profile/mapping tools, committed as `4b7e8bd`, pass all
@@ -27,7 +40,6 @@ See `docs/compiler-query-graph-20261014.md` and its compact result/acceptance
 files for exact pins, format boundaries, independent actual-pair acceptance,
 per-requirement observations, and missing causal/CPU instrumentation. No
 compiler/default/permissions/tenant changes or performance promotion were made.
-
 
 ## 2026-10-14: native rollout uses a frozen installation source
 
@@ -6170,6 +6182,23 @@ only expected names. Native libraries, toolchain availability and end-user glibc
 compatibility still need application validation. No cloud deployment, public
 release, API-secret provisioning or billing change was made.
 
+A subsequent real CLI package trial exposed an atomic-reinstall race: the
+client's running executable had been unlinked by a concurrent `cargo install`.
+`real_cargo()` tried to canonicalize that deleted inode, and optional slot
+metadata swallowed the failure before artifact fetching. Cargo discovery now
+falls back to the executable path while retaining proxy-name filtering. Artifact
+metadata now preserves its causal Cargo stderr instead of using the slot's
+fail-open `Option` API. The Linux subprocess regression replaces the running
+artifact-server binary before sending its request and uses real Cargo metadata.
+Both replacement and diagnostic regressions passed in local run
+`20261013-210654240-1225864`; strict release regressions passed in
+`20261013-210654403-1226028`; all-target lint with `-D warnings` passed in
+`20261013-210654694-1226251`. These checks ran locally with routing, peer cache,
+depcache and prebuilt traffic disabled because another agent holds the hosted
+benchmark lease until 04:15 UTC. Global reinstall and full application download
+retry are deferred to the coordinator's post-lease acceptance gate. No speedup
+or completed post-fix hosted application retry is claimed.
+
 ## 2026-10-14: final sharing and native real-interface feedback loop
 
 Whole-result follow-through on immutable059674/0a19 now maps18explicitrequirements in docs/sharing-final-whole-20261014.{md,json}. Actual05:36fresh public compiler/profile/check/test matrix again yields8publichits0misses/four2-test passes. Actual05:39–05:40 ordinaryCargo20test workflows cover8native forms plus@file twice:18bypass, genericdep miss/hit,40runtime test results. Real nativeE0308/10120261013-224400547-1905506 followed repaired2tests20261013-224401789-1906049, both cache bypass. Two actual existing-prefix CLI reuse calls and12runtimehelper probes pass, inactiveJRmarker unchanged.
@@ -6256,30 +6285,18 @@ client pin is held for a newly identified native-CPU/opaque-response-file cache
 eligibility guard. New-tenant bootstrap and universal native closure remain
 unobserved/unauthorized respectively. No speed claim.
 
-## 2026-10-14: uniform-cost Cargo scheduler has no demonstrated 24-job benefit
+## 2026-10-14: native-citation integration test rebuild overhead in jcode
 
-Same immutable client ec42e0f/SHA2153a809, candidate Cargo a45c354/SHA c38c3d63,
-and nightly-2026-10-08 ran pinned Desktop OFF/ON/ON/OFF on west m8azn.6xlarge
-in a private copied prefix. All 40 measured runs and 16 warmups exited zero;
-actual metadata selected the candidate/compiler/local route/24 jobs throughout.
-Reference/no-op tests passed three each, edit workflows rebuilt one unit and
-no-op rebuilt zero. Representative IDs `20261014-034808753-288986334` and
-`20261014-040339460-542771790` are among the 56 exact exported records in
-`data/runs/hosted-west-cargo-scheduler/2026-10.jsonl`.
-
-`bench/suite.py compare` reports cached cold 9.45 -> 9.36 s, uncached cold
-27.77 -> 28.01 s, reference 4.98 -> 4.96 s, body check 1.32 -> 1.29 s and
-no-op 0.18 -> 0.18 s. Four original verdicts are uncontrolled; body check is
-within noise. Independent concurrent release work through 03:58:45 UTC means
-the earlier body samples also cannot establish a causal gain. All original
-flags and eighteen conservative known-confound annotations are retained.
-Default-off stays off; no speedup, hardware ceiling or promotion is claimed.
-
-Full results, invocation/hash audit and actual comparison are committed in
-`bench/results/scheduler-a45-j24-20261014/`; requirement mapping is in
-`docs/cargo-scheduler-abba-20261014.md`. The frozen recorder's live-tree CPU
-sum can drop on child exit and inflate derived other-core attribution. Repair
-that measurement defect in a new epoch, never rewrite these historical flags.
+Hosted run `20261013-210006749-1169057` tested two new native-citation agent
+regressions in 18.07 s, with 17.69 s compilation and 0.11 s tests. The large
+`jcode_app_core` test crate took 14.10 s and peaked at 4281 MB. Hosted TUI run
+`20261013-210027105-1170331` tested two matching UI regressions in 20.12 s,
+with 19.76 s compilation and 0.04 s tests. Its `jcode_tui` test crate took
+9.85 s, while the normal `jcode_app_core` dependency took 9.36 s. The report
+also identifies `docs` as a build-script input forcing app-core rebuilds.
+These are project crate-boundary and embedding opportunities, not a verified
+hosted scheduling defect. The source-aware citation task was completed first,
+with no unrequested crate split or claimed speedup.
 
 ## 2026-10-14: reconnect rsync preserved stale Cargo source timestamps
 
@@ -6328,6 +6345,31 @@ reload was performed. Nine cited slim, redacted exports are in
 `data/runs/hosted-freshness-repair/2026-10.jsonl`. This is a correctness fix,
 not a speedup claim. Full rsyncs now hash source contents on both sides.
 
+## 2026-10-14: uniform-cost Cargo scheduler has no demonstrated 24-job benefit
+
+Same immutable client ec42e0f/SHA2153a809, candidate Cargo a45c354/SHA c38c3d63,
+and nightly-2026-10-08 ran pinned Desktop OFF/ON/ON/OFF on west m8azn.6xlarge
+in a private copied prefix. All 40 measured runs and 16 warmups exited zero;
+actual metadata selected the candidate/compiler/local route/24 jobs throughout.
+Reference/no-op tests passed three each, edit workflows rebuilt one unit and
+no-op rebuilt zero. Representative IDs `20261014-034808753-288986334` and
+`20261014-040339460-542771790` are among the 56 exact exported records in
+`data/runs/hosted-west-cargo-scheduler/2026-10.jsonl`.
+
+`bench/suite.py compare` reports cached cold 9.45 -> 9.36 s, uncached cold
+27.77 -> 28.01 s, reference 4.98 -> 4.96 s, body check 1.32 -> 1.29 s and
+no-op 0.18 -> 0.18 s. Four original verdicts are uncontrolled; body check is
+within noise. Independent concurrent release work through 03:58:45 UTC means
+the earlier body samples also cannot establish a causal gain. All original
+flags and eighteen conservative known-confound annotations are retained.
+Default-off stays off; no speedup, hardware ceiling or promotion is claimed.
+
+Full results, invocation/hash audit and actual comparison are committed in
+`bench/results/scheduler-a45-j24-20261014/`; requirement mapping is in
+`docs/cargo-scheduler-abba-20261014.md`. The frozen recorder's live-tree CPU
+sum can drop on child exit and inflate derived other-core attribution. Repair
+that measurement defect in a new epoch, never rewrite these historical flags.
+
 ## 2026-10-14: CPU identity accounting and outer-command verdict repaired
 
 `4809f23` tracks sampled CPU deltas per `(pid, start_ticks)` instead of
@@ -6368,6 +6410,18 @@ map: docs/final-parallelism-acceptance-20261014.md; exact18new records appended
 to hosted-west-measurement (39total). Prior21summary hashes and56scheduler
 records/foursegment hashes verified,86offline guards pass. No speedclaim,
 no scheduler promotion, no inferred96-core ceiling. Sharedhost released05:02:02UTC.
+
+## Jcode pinned-todo prompt visibility validation (2026-10-14)
+
+Hosted run `20261013-225238779-1953993` spent 8.14s compiling the
+227k-line `jcode_tui` test crate to execute six pinned-todo tests (15.2s
+reported build/test wall, 17.8s hosted end-to-end). The report estimated
+7.4s oversized-crate waste and 4.1s filtered-test compilation waste. Warm
+preparation-only run `20261013-225626778-1975498` passed seven tests with
+zero compiled units in 0.1s reported wall (2.6s hosted end-to-end).
+This supports keeping focused transcript/viewport test code in smaller leaf
+crates as a future project-level improvement, not a compiler or scheduling
+speedup claim. No restructuring was performed during the UI bug fix.
 
 ## 2026-10-14: optimized BUILD dependency mapping preserves unknown CPU/span
 
@@ -6425,3 +6479,26 @@ serial CPU bottlenecks. Query-only and all-kind exclusive definitions remain
 separate. CPU work, execution span and the 16/24/96-core ceiling remain unknown.
 See `docs/compiler-phase-activities-20261014.md` and its exact output/log/hash
 acceptance under `bench/results/compiler-phase-activities-20261014/`.
+
+## Synthetic execution controls were recorded but discarded (2026-10-14)
+
+The comprehensive single-stack suite recorded public optimization settings but
+its versus child scrubbed them and the selected private `JUSTRUST_HOME`.
+Commit `2172a45` preserves the selected home for justrust stacks and explicitly
+forwards only the single-stack suite's allowlisted controls. Stock and ordinary
+versus baselines still scrub ambient experimental settings. Hint provenance is
+a digest, not its private path; caller routing/run IDs remain runner-owned.
+
+Four of eight tests failed before the fix, including actual Python exec losing
+the home. All nine context tests and all 186 benchmark tests pass afterward.
+Actual local-only private-prefix check/test/recheck passed with the immutable
+0a19 client, c38 Cargo and pinned nightly. Exact run IDs are
+`20261014-005414405-3093505455`, `20261014-005414445-3093505147`, and
+`20261014-005414740-3093505330`. An earlier check
+`20261014-005234369-3084814456` succeeded, then its helper incorrectly expected
+an arbitrary JUSTRUST flag in filtered metadata. Retain that harness error,
+do not claim metadata supplied it. All four summaries are exported under
+`data/runs/synthetic-context-20261014/`. Foreign laptop compilers were present,
+so these are functional checks, not timing evidence or queue-reordering proof.
+See `docs/synthetic-context-20261014.md`. The separate comprehensive scheduler
+trial must establish its own complete matched result before any speed claim.

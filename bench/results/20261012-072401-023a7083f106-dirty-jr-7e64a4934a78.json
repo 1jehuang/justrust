@@ -1,0 +1,159 @@
+{
+ "started": "2026-10-12T07:18:48-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.10",
+  "justrust_rev": "023a7083f106",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (7e64a4934 2026-10-12)",
+  "toolchain": "jr-7e64a4934a78",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  }
+ },
+ "runs_per_scenario": 2,
+ "scenarios": {
+  "desktop-upstream-body": {
+   "what": "body edit in jcode-desktop-ui-core, a dependency of the UI crate, run UI tests",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "samples": [
+    {
+     "id": "20261012-072350013-931754523",
+     "wall": 5.835,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 5.806,
+     "cpu": 7.73,
+     "startup": 0.263,
+     "compile": 5.452,
+     "test_run": 0.0,
+     "units": 4,
+     "local_units": 4,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 4,
+      "fresh": 740,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 3.428,
+      "codegen": 0.936,
+      "link": 0.265,
+      "incremental": 0.497,
+      "other": 0.709
+     },
+     "link_secs": 0.265,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 4.1,
+     "foreign_rustc_before": 2,
+     "load_before": 26.64,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui (test)"
+    },
+    {
+     "id": "20261012-072355867-931754265",
+     "wall": 5.617,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 5.593,
+     "cpu": 7.31,
+     "startup": 0.246,
+     "compile": 5.274,
+     "test_run": 0.0,
+     "units": 4,
+     "local_units": 4,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 4,
+      "fresh": 740,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 3.01,
+      "codegen": 1.053,
+      "link": 0.261,
+      "incremental": 0.597,
+      "other": 0.54
+     },
+     "link_secs": 0.261,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 2.02,
+     "foreign_rustc_before": 2,
+     "load_before": 23.0,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui (test)"
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 2,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 5.726,
+    "min": 5.617,
+    "max": 5.835,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.255,
+     "compile": 5.363,
+     "test_run": 0.0,
+     "cpu": 7.52,
+     "link_secs": 0.263
+    },
+    "split": {
+     "frontend": 3.219,
+     "codegen": 0.994,
+     "link": 0.263,
+     "incremental": 0.547,
+     "other": 0.625
+    },
+    "units": 4.0
+   }
+  }
+ },
+ "finished": "2026-10-12T07:24:01-0700"
+}
