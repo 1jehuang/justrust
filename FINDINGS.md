@@ -6192,6 +6192,23 @@ unchanged. Cloud232b53a adds future-only opt-in sanitized stage receipts;
 Full cloud suite's unrelated native-budget failure is retained and assigned.
 See `docs/public-sharing-consumer-20261014.md` for source snapshots and limits.
 
+Later actual fleet publication at 04:35:59 UTC added 9,193 bundles (5.62 GB),
+zero public script runs, and expanded the index to 19,917 entries. The machine
+was observed terminated at 04:38:55. Four independently empty matched memchr
+2.8.3 cells (nightly/JR × default/debug=0) yielded eight public hits and zero
+registry misses across check/test; every cell passed two runtime tests. Four JR
+keys were absent before this producer and present afterward. All eight exact
+IDs, fixture/index/log hashes and outcomes are mapped in
+`docs/sharing-public-matrix-20261014.json` and its Markdown companion; selected
+evidence now totals 51 rows. The outer matrix shell failed only its final guard
+filename (`installed.json` rather than `justrust-toolchain.json`); corrected
+non-mutating marker read proved installed_at=0, retained without hiding failure.
+The later full cloud suite passed174 Node+11 funnel+17 dashboard tests. Future
+fleet status/full-JR contract7e66628 is source/schema validated but live safe
+client pin is held for a newly identified native-CPU/opaque-response-file cache
+eligibility guard. New-tenant bootstrap and universal native closure remain
+unobserved/unauthorized respectively. No speed claim.
+
 ## 2026-10-14: uniform-cost Cargo scheduler has no demonstrated 24-job benefit
 
 Same immutable client ec42e0f/SHA2153a809, candidate Cargo a45c354/SHA c38c3d63,

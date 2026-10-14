@@ -48,7 +48,17 @@ record. The slim export drops `--locked`, so the table does not infer argv from 
 slim row alone. Recorded background load was nonzero; these are correctness
 observations only, not uncontended timings.
 
-## Independent producer remains pending
+## Positive follow-up
+
+The observations below retain their original 04:33 UTC boundary. At 04:35:59 UTC
+the independent producer subsequently published 9,193 new bundles. Separate
+matched memchr 2.8.3 fixtures then observed eight public hits across nightly/JR,
+default/debug=0 and check/test, with four two-test runtime passes. Four JR keys
+were new in that producer index. See `sharing-public-matrix-20261014.md` and its
+path-free JSON receipt. This does not relabel the original 2.7.6 misses. The full
+cloud suite later passed 174 Node, 11 funnel/early-launch and 17 dashboard tests.
+
+## Independent producer remained pending at 04:33 UTC
 
 At 04:33:07-04:33:09 UTC, the separate fleet instance
 `i-0e641b79dc37fb3a3` was still running (`c7i.8xlarge`, launched 03:21:05 UTC).

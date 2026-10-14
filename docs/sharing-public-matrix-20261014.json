@@ -1,0 +1,217 @@
+{
+  "cells": [
+    {
+      "compiler": "nightly-2026-10-08",
+      "fixture_sha256": {
+        "Cargo.lock": "6e63796b57ecf999345772a8355ae8e0b5e3f38071ddba114d228ee09d908157",
+        "Cargo.toml": "0cb14942d713889b0d558c3697993a01bec4024d33b858ddbe266e685acaef4d",
+        "src/lib.rs": "2274147535a1bf68fe5034d429f7ce7849717b86b3bf45be6c8444b0a16816d2"
+      },
+      "profile": "default",
+      "runs": [
+        {
+          "argv": [
+            "check"
+          ],
+          "base_key": "5ccd8b6b458c3a7f9d4f7398c4d4e5ba",
+          "exit": 0,
+          "id": "20261013-214103061-1444770",
+          "key_inputs_sha256": "ba287e9c0c71ab4ae2b3512e973f2e80c55e63a879e77a41791d561945ac90d2",
+          "output_key": "b0c824496c600fdfb36149930ea745d5",
+          "present_after_fleet": true,
+          "present_before_fleet": true,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 0,
+          "unit_record_sha256": "1eeb0641d3c89a7a0cc3ea2981e4e3ce878704a6f7de1706bc8f51b3de191a0c"
+        },
+        {
+          "argv": [
+            "test",
+            "--locked"
+          ],
+          "base_key": "49508e87ae530d94d5ab49e6d54c992a",
+          "exit": 0,
+          "id": "20261013-214104300-1444974",
+          "key_inputs_sha256": "ed6f65b922ee0ebd1619755bd427c6791ff069c97c4ec470896a313d1b0ee86f",
+          "output_key": "2f3a82b50b07a6a092080ad2e843e440",
+          "present_after_fleet": true,
+          "present_before_fleet": true,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 2,
+          "unit_record_sha256": "80e4676dab736c5c8b569c85a86e4d602286e9fb552980c104f28f67dadc1277"
+        }
+      ]
+    },
+    {
+      "compiler": "nightly-2026-10-08",
+      "fixture_sha256": {
+        "Cargo.lock": "6e63796b57ecf999345772a8355ae8e0b5e3f38071ddba114d228ee09d908157",
+        "Cargo.toml": "dc96922f9b609164d2dbee2d5444d7b623fab6e10b51a326b4f0540875e28b36",
+        "src/lib.rs": "2274147535a1bf68fe5034d429f7ce7849717b86b3bf45be6c8444b0a16816d2"
+      },
+      "profile": "debug0",
+      "runs": [
+        {
+          "argv": [
+            "check",
+            "--locked"
+          ],
+          "base_key": "b69fd5384227fd33ceb72643358c1807",
+          "exit": 0,
+          "id": "20261013-214456522-1484966",
+          "key_inputs_sha256": "308024a53198db47ff77d81f31c3ed5f0d674228093c2f85e5fdd8ef49e2da7c",
+          "output_key": "88a426b6a4bf308b4cb7ba5dfaa26725",
+          "present_after_fleet": true,
+          "present_before_fleet": true,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 0,
+          "unit_record_sha256": "5d529741fedeecd5b8a5d83dd2fd7e1bfff8e9ac664e9626e79ebb52480dc546"
+        },
+        {
+          "argv": [
+            "test",
+            "--locked"
+          ],
+          "base_key": "2c4309933057a927eb6250e8061f991a",
+          "exit": 0,
+          "id": "20261013-214457788-1485566",
+          "key_inputs_sha256": "ec5496923e4747d809b5fd9303994c6870ccd9bee61dd488f6fed12e9d5137f4",
+          "output_key": "98ac64c53c2b7467bead0638a596d03e",
+          "present_after_fleet": true,
+          "present_before_fleet": true,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 2,
+          "unit_record_sha256": "09bbdf4d8089bd990e764dc8658a27fe9aa3dafa8dc00a65292814d3b9e61b77"
+        }
+      ]
+    },
+    {
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "fixture_sha256": {
+        "Cargo.lock": "6e63796b57ecf999345772a8355ae8e0b5e3f38071ddba114d228ee09d908157",
+        "Cargo.toml": "0cb14942d713889b0d558c3697993a01bec4024d33b858ddbe266e685acaef4d",
+        "src/lib.rs": "2274147535a1bf68fe5034d429f7ce7849717b86b3bf45be6c8444b0a16816d2"
+      },
+      "profile": "default",
+      "runs": [
+        {
+          "argv": [
+            "check",
+            "--locked"
+          ],
+          "base_key": "75eec57d7faf4639ca6aae8b71cfe7d5",
+          "exit": 0,
+          "id": "20261013-214458922-1486135",
+          "key_inputs_sha256": "ba287e9c0c71ab4ae2b3512e973f2e80c55e63a879e77a41791d561945ac90d2",
+          "output_key": "6649a43af9df0ecdc3872215e37eed7b",
+          "present_after_fleet": true,
+          "present_before_fleet": false,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 0,
+          "unit_record_sha256": "7080c8c72996db3dd76262f33814e3f7947f1baab3905340824ea3339bf1c412"
+        },
+        {
+          "argv": [
+            "test",
+            "--locked"
+          ],
+          "base_key": "75df6b8ea81cc49beebd7db1d0264c4e",
+          "exit": 0,
+          "id": "20261013-214500157-1486737",
+          "key_inputs_sha256": "ed6f65b922ee0ebd1619755bd427c6791ff069c97c4ec470896a313d1b0ee86f",
+          "output_key": "a1809098f59b0fac969e817e8baaba72",
+          "present_after_fleet": true,
+          "present_before_fleet": false,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 2,
+          "unit_record_sha256": "95abcc266b985c1f1dfd822f45e9c293d1687115437a8038e7a2b3ef347c0114"
+        }
+      ]
+    },
+    {
+      "compiler": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943",
+      "fixture_sha256": {
+        "Cargo.lock": "6e63796b57ecf999345772a8355ae8e0b5e3f38071ddba114d228ee09d908157",
+        "Cargo.toml": "dc96922f9b609164d2dbee2d5444d7b623fab6e10b51a326b4f0540875e28b36",
+        "src/lib.rs": "2274147535a1bf68fe5034d429f7ce7849717b86b3bf45be6c8444b0a16816d2"
+      },
+      "profile": "debug0",
+      "runs": [
+        {
+          "argv": [
+            "check",
+            "--locked"
+          ],
+          "base_key": "602c3f93dd9cd0bf709d46e0468d9227",
+          "exit": 0,
+          "id": "20261013-214501534-1487602",
+          "key_inputs_sha256": "308024a53198db47ff77d81f31c3ed5f0d674228093c2f85e5fdd8ef49e2da7c",
+          "output_key": "3f11145de9d327fad658046dd584d9fd",
+          "present_after_fleet": true,
+          "present_before_fleet": false,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 0,
+          "unit_record_sha256": "6c26fd63a09ef864e7c90e7c1fad3cb94502d59695e603dde258066ec5114faf"
+        },
+        {
+          "argv": [
+            "test",
+            "--locked"
+          ],
+          "base_key": "d29a0c3d72194e60b8a5b4c398fc18bb",
+          "exit": 0,
+          "id": "20261013-214503018-1488205",
+          "key_inputs_sha256": "ec5496923e4747d809b5fd9303994c6870ccd9bee61dd488f6fed12e9d5137f4",
+          "output_key": "9b105d651247890e22139eaa08a0f0da",
+          "present_after_fleet": true,
+          "present_before_fleet": false,
+          "public_hits": 1,
+          "registry_misses": 0,
+          "tests_passed": 2,
+          "unit_record_sha256": "efed1a2789707649857974b2efe40e4ddc0c239247e80a2e099667a7fdbc1735"
+        }
+      ]
+    }
+  ],
+  "client_sha256": "2153a809b3f91826f4baa9acd81ad5ccc4fb7102f17aacb029469853f38b5a53",
+  "client_source": "ec42e0f2e92eb429ac5a020419f03e9a1288a15c",
+  "corrected_jr_inactive": true,
+  "forced_public_fetch": true,
+  "outer_harness_error_retained": "Matrix builds all passed; final guard first looked for nonexistent installed.json and exited1. Corrected nonmutating guard read justrust-toolchain.json and verified installed_at0.",
+  "performance_claim": false,
+  "producer": {
+    "baseline_index_sha256": "559daedf8b9201b6648fc401a28fbe2196a39ca28e1f12bb4b2c1ea80538fdee",
+    "client_sha256": "04662c0de99f0da0d7b18c49efcbcbf9ff74a37ee169a8e4d887bcdaf4cf56fe",
+    "client_source": "fe472c6",
+    "final_log_bytes": 363297,
+    "final_log_sha256": "14f8d8ec635b0b092e8280a3d4fb75b84e00ff3ae27120f24811bab916e0cf64",
+    "index_entries": 19917,
+    "index_modified_utc": "2026-10-14T04:35:59Z",
+    "index_sha256": "5a51d4b6e9f7bb9799a8c23cae80d953565f2eeed1d6df3a51e326dd347e57ec",
+    "index_version": "zmxT_4Qmghz19YzdAkWJXr7.evph3112",
+    "instance": "i-0e641b79dc37fb3a3",
+    "instance_type": "c7i.8xlarge",
+    "new_bundles": 9193,
+    "observed_state": "terminated",
+    "profiles": [
+      "default",
+      "debug0"
+    ],
+    "public_buildscript_runs": 0,
+    "reported_bundle_GB": 5.62,
+    "toolchains": [
+      "nightly-2026-10-08",
+      "jr-b7907f1fe8f7"
+    ]
+  },
+  "schema": 1,
+  "scope": "Actual CDN restoration to empty per-cell Cargo/target/depcache directories on Linux x86_64. Not new-tenant bootstrap, automatic cost-policy acceptance, general proc-macro/native closure proof, or speed measurement.",
+  "unpinned_status": "system"
+}
