@@ -9,8 +9,8 @@
 
 **Rust compile as a service for coding agents.**
 
-Faster `check` and `test` on your laptop or on our build machines,
-with output an agent can act on.
+An integrated Rust build-and-test system for coding agents,
+optimizing the entire path from source to test result.
 
 [Website](https://jcode.sh/rust) · [Install](#install) · [Remote builds](#remote-builds) · [How it is faster](#how-it-is-faster) · [Findings](FINDINGS.md) · [Changelog](CHANGELOG.md)
 
