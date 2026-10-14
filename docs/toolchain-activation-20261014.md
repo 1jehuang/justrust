@@ -97,6 +97,7 @@ runs are not hosted validation or performance comparisons.
 | Root `justrust check` | `20261014-083822449-926488` | Passed |
 | Root `justrust test` | `20261014-083922439-944518` | Passed, 457 tests, 3 ignored |
 | Root `justrust clippy -- -D warnings` | `20261014-084032468-970131` | Passed |
+| Desktop `justrust test -p jcode-desktop-ui --lib -- fps_counter`, after reversible one-line test edit | `20261014-084033333-970370` | Passed, 3 tests, 1,351 filtered out |
 
 The negative Cranelift result is retained, not hidden by the narrower smoke.
 The unchanged backend's `compiler/rustc_codegen_cranelift/Cargo.toml` defines
@@ -106,17 +107,55 @@ when that feature is disabled. The exact same smoke fails on the preserved
 previous default. Thus basic Cranelift acceptance does not establish panic
 unwinding correctness. LLVM passes the full panic-catching contract. Enabling
 and validating Cranelift unwinding is separate native-toolchain work, not an
-incidental source change in this receipt-only workflow.
+incidental source change in this receipt-only workflow. The backend smoke uses
+`RUSTFLAGS=-Zcodegen-backend=llvm` or `RUSTFLAGS=-Zcodegen-backend=cranelift`
+with separate target directories. The distinguishing assertion is
+`assert!(std::panic::catch_unwind(|| panic!("expected smoke panic")).is_err())`.
+
+## Final provenance and preservation checks
+
+At 15:46 UTC the native compiler identity and all 3,084 Cargo archive blob
+identities still matched. Matching clippy/rustdoc sources and the release build
+helper were also unchanged. The ignored generated `bootstrap.toml` had been
+rewritten at 15:40:13 UTC to dev settings by a subsequent workflow, after this
+release build completed and its candidate was independently copied. Its current
+combined tools/config digest was therefore
+`36d192f0106df87af2514479a72bb37572621dcaeb6bfed7311e206693539c24`, not the
+release digest. Reconstructing the exact release config read-only from the
+unchanged tracked base and helper settings restored the original combined digest
+`833d47eb34a8cb45cce12fe0363d59ad44b31165baccc610899291072ad9add8`.
+The concurrent generated dev config was not overwritten. Source stability and
+installed artifact identity do not depend on subsequent bootstrap configuration.
+
+The installed compiler driver and Cranelift backend byte-for-byte match the
+completed release archive. Their SHA-256 values are respectively
+`16617750423a7a56a1bcc335ccd9f12d6f52d82cdb78a4646b2bb59e2e0a8dd8` and
+`d25ee39db84a6c941179c092aadcdc8902b8f71cded77f02a79590da8c70cea5`.
+The candidate's installed clean Cargo SHA-256 also matches its preserved artifact
+above. The installed candidate contains no symlinks. Its `installed_at` marker
+remains zero, so it cannot become the default accidentally. Previous/default and
+official fallback marker checksums still match their pre-workflow values, and
+both preserved compilers execute their version commands successfully.
 
 ## Activation decision
 
-Desktop task `43324080uz` is still validating the real one-line `fps_counter`
-test-edit workload, with an exit trap restoring the original source from a
-backup copy. No global activation has occurred. The default remains
-`jr-ac20de5e7921`. Previous and official fallback marker checksums still match
-those captured before the workflow.
+Desktop task `43324080uz` completed exit 0 at 15:44:55 UTC. The edit changed
+`[8_333_333; 3]` to `[8_333_333; 4]` in its existing test. The exit trap restored
+the original source byte-for-byte from backup, and a separate `cmp` and clean
+file-scoped Git diff verified restoration. The before/after restored-file SHA-256
+was `24de30f7556c2e126bb52f685377f656c6352dfdf83e1bc9f9d03f037d877e8d`.
+This was a real correctness workload, with a cold compiler transition, not an
+incremental speed comparison. Existing Desktop warnings were displayed and not
+modified by this workflow.
+
+All build and correctness tasks owned by this receipt are terminal. The
+completed result is an independently installed, explicit-pin-only candidate,
+not global activation. The default remains `jr-ac20de5e7921`, with the official
+`nightly-2026-10-08` fallback preserved.
 
 Correctness acceptance alone is not a general speed claim or a default-promotion
-gate. The coordinator owns the matched session-weighted baseline/candidate
-benchmark comparison and final promotion decision. Until that gate is adequate,
-the candidate remains explicit-pin-only in the staged namespace.
+gate. The coordinator explicitly took ownership of the matched session-weighted
+40-point baseline/candidate comparison, task `706392rm53`, and the final promotion
+decision. That separate gate was still running at this correctness handoff.
+Until it is adequate, the candidate remains in the staged namespace. No speed
+claim or default-promotion success is made by this receipt.
