@@ -239,7 +239,10 @@ pub(crate) fn hash_source_tree(root: &Path, dir: &Path, hasher: &mut sha2::Sha25
                         || name == ".pytest_cache"
                 }))
             || path.extension().is_some_and(|extension| extension == "pyc" || extension == "pyo")
-            || path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".snap.new"))
+            || path.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy();
+                name.ends_with(".snap.new") || name.ends_with(".pending-snap")
+            })
         {
             continue;
         }

@@ -17,6 +17,16 @@ Metadata checking and all three arithmetic/std/thread smoke tests passed on
 both LLVM and Cranelift. Durable redacted native stdout/stderr is retained in
 `data/toolchain-vendoring/2026-10-14-native.txt`.
 
+A post-migration source audit found our failed inline snapshot run's generated
+`.pending-snap` journal was still an identity input. Exclude that generated
+suffix alongside `.snap.new` and test both, without changing actual compiler
+flags or expected snapshots. The clean rerun passed nine identity tests,
+all 289 bootstrap tests, the real dev compiler/optimized std build, and the
+three smoke tests on each backend. Final source identity is
+`910e39a6c3ef8b6fe54663a4f513213687b9bf4b`. A staged-tree Git archive matched
+all 5,591 selected files/symlinks and 1,075 directory entries and produced the
+same identity. There were no included untracked files or empty directories.
+
 Hosted Cargo identity acceptance `20261014-065210842-3760408` passed all four
 tests, including credential helper and Windows manifest changes. The actual
 Cargo binary build `20261014-063157746-3596184` passed locally in 95.73s using

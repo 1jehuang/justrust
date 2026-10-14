@@ -404,6 +404,14 @@ mod tests {
             fs::write(dir.join("generated"), "generated output\n").unwrap();
         }
         assert_eq!(initial.sha(), info(&sources).sha());
+        for relative in [
+            "src/bootstrap/output.snap.new",
+            "src/bootstrap/.tests.rs.pending-snap",
+            "src/bootstrap/output.pyc",
+        ] {
+            fs::write(sources.join(relative), "generated output\n").unwrap();
+            assert_eq!(initial.sha(), info(&sources).sha());
+        }
     }
 
     #[test]

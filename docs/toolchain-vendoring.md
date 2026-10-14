@@ -171,7 +171,8 @@ Import provenance is distinct from the identity of current owned source.
   channel, and bootstrap-configuration inputs. The short identity is nine
   characters. Dirty owned-source edits change the identity before committing.
   Identical source in a no-Git monorepo archive retains the same identity.
-  Generated output directories do not supply the identity. This is neither
+  Generated output directories and snapshot journals (`*.snap.new` and
+  `*.pending-snap`) do not supply the identity. This is neither
   managed nested Git nor the upstream release-tarball default path.
 - Cargo retains the upstream compatibility base from `JUSTRUST_BASE` in its
   public commit fields. Its separate `jr-cargo` fork suffix is the first 40
@@ -229,10 +230,20 @@ reported its separate `jr-cargo` content-derived suffix.
 
 The first full dev build compiled the stage-1 compiler and Cranelift but exposed
 the optimized-builtins resolver gap. After the native fix and final bootstrap
-tests, `./build-jr.sh dev` completed successfully in 149.04s, building the
-compiler, both codegen backends, and optimized std. This was an incremental
-validation rerun, not a cold-build performance result. The resulting compiler
-reported source identity `47ab1d17fd84ef646af7c065f1c77c84e04ded4e`.
+tests, `./build-jr.sh dev` completed successfully in 149.04s. A final follow-up
+excluded generated inline snapshot journals from the source digest, then reran
+all nine identity tests, all 289 bootstrap tests (151.39s), and the actual
+compiler, both codegen backends, and optimized std build (1m30s). These were
+incremental validation reruns, not cold-build performance results. The final
+compiler reported source identity `910e39a6c3ef8b6fe54663a4f513213687b9bf4b`.
+
+A direct comparison of the selected source inputs against a clean staged-tree
+Git archive matched all 5,591 files/symlinks and 1,075 directory entries,
+including contents and link targets. Both produced the final compiler identity.
+Neither tree had included empty directories, the working tree had no included
+untracked files, and generated Python caches were excluded. This verifies that
+the final built identity comes from reproducible owned source rather than
+leftovers from local validation.
 
 A metadata-only check and actual test execution passed on the rebuilt compiler.
 The committed fixture exercises u128 division/remainders, std allocation/string
