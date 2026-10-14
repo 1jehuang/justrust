@@ -1,0 +1,702 @@
+{
+  "schema": 1,
+  "date": "2026-10-14",
+  "status": "passed_scoped_native_acceptance",
+  "accepted": true,
+  "head_at_inspection": "545557a6077be358c25ea005e01e6049d6d46d47",
+  "baseline_driver_sha256": "925c7892da0e7f00706326c9a77a3a20d887cf57706529b19f58e54575274bf9",
+  "rebuilt_compiler_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+  "gate_script_sha256": "f54fcaae42770aeccda36b1f0316bda23360272d0d2511c59fba9eb9bfdbff47",
+  "selected_harness_sha256": "0a3704b0093cfe32a9c782ac3bc556b9e7a7bdb0c954be163827cfc38671b3ed",
+  "requirements": [
+    {
+      "id": "explicit-selection",
+      "requirement": "Config factory is selected programmatically before frontend workers start, default remains legacy, serial does not invoke factory",
+      "check": "interface.rs/util.rs and smoke default/serial fixtures",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "same-controller",
+      "requirement": "Unit and contextual pairs retain the same Arc<TicketedProxy>; no diagnostic carrier selects a policy",
+      "check": "frontend_admission.rs inspection and native rustc_data_structures tests",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "qualified-pair",
+      "requirement": "Release/reacquire use identical qualified wait identity and expected attachment, wrong/missing context falls back to unit pair",
+      "check": "registry.rs/admission_dispatch_tests.rs, observer binding tests, actual selected fixture",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "actual-pending",
+      "requirement": "Actual duplicate typeck query releases allowance; completed producer parks outside locks; reacquire becomes real TicketedProxy Pending; no return before native supply; grants/acks advance after supply",
+      "check": "test_selected_actual_pending_and_macro_process_neutrality controller facts",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "carrier-not-policy",
+      "requirement": "Recording ON observes qualified context; OFF observes unit facts; both explicitly select TicketedProxy eventcap0",
+      "check": "recording-off/on controller evidence; intentionally different diagnostic facts",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "neutral-artifact-process",
+      "requirement": "Identical command/environment, executable bytes and proc-macro argv/environment output, no private mode arg",
+      "check": "comparison.json and execute-off/on records",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "diagnostics",
+      "requirement": "Selected-policy type error has matching nonzero exit and diagnostics after stripping controller facts",
+      "check": "test_type_error_preserves_diagnostics_with_selected_policy",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "foreign-fd",
+      "requirement": "Foreign reserved fd fails open and remains intact",
+      "check": "test_foreign_reserved_descriptor_fails_open",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "callback-unwind",
+      "requirement": "Callback panic remains nonzero and capture incomplete, not blocked-query panic coverage",
+      "check": "test_smoke_callback_panic_unwinds",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "unchanged-wire",
+      "requirement": "Existing reserved-fd-v2 transport, query schema4 and pool schema2 correlate; no resource receipt, full_pipeline_complete false",
+      "check": "inspect_receipts and smoke receipts",
+      "status": "passed_scoped",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "exhaustion-boundary",
+      "requirement": "Checked namespace/wait exhaustion falls back without ID reuse; representative extracted latch is not actual native compiler exhaustion",
+      "check": "native session unit tests plus reported 51 representative extracted latch tests",
+      "status": "passed_unit_and_representative_only_not_actual_compiler_exhaustion",
+      "final_evidence": "final selected six, source inspection and actual native crate tests"
+    },
+    {
+      "id": "legacy-regression",
+      "requirement": "Query/wait/task-binding/compiler/compiler-argv gates remain passing",
+      "check": "query.log, wait.log, task_binding.log, compiler.log, compiler_argv.log",
+      "status": "passed_scoped",
+      "final_evidence": "final logs 9 PASS"
+    },
+    {
+      "id": "frozen-native-crates",
+      "requirement": "Native data structures/thread pool/session crate tests pass against same source cohort",
+      "check": "main script x.py test and final source sha256 check",
+      "status": "passed_scoped",
+      "final_evidence": "final actual crates and unchanged source SHA checks"
+    }
+  ],
+  "claims": {
+    "full_mapping": false,
+    "resource_wire": false,
+    "default_promotion": false,
+    "speedup": false,
+    "actual_native_compiler_exhaustion": false,
+    "blocked_query_panic": false
+  },
+  "blockers": [],
+  "reported_supporting_results": {
+    "root": {
+      "passed_tests": 559,
+      "run_ids": [
+        "20261014-144019067-2003317",
+        "20261014-144020738-2003637",
+        "20261014-144032083-2003146"
+      ],
+      "provenance": "coordinator report, not independently rerun"
+    },
+    "pool": {
+      "hosted_tests": 106,
+      "ignored": 26,
+      "provenance": "coordinator report",
+      "run_ids": [
+        "20261014-143806667-1979505",
+        "20261014-143810229-1980586"
+      ],
+      "focused_run_id": "20261014-143805089-1979412"
+    },
+    "query": {
+      "actual_module": 53,
+      "representative_extracted_latch": 51,
+      "standins": [
+        "Span",
+        "QueryCycle"
+      ],
+      "provenance": "coordinator report, not actual native compiler exhaustion",
+      "representative_run_id": "20261014-143808614-1980060"
+    },
+    "tiger": {
+      "tests": 21,
+      "run_ids": [
+        "20261014-144112437-2012317",
+        "20261014-144113346-2012316"
+      ],
+      "provenance": "hare report, not independently rerun"
+    }
+  },
+  "review": {
+    "status": "reported_no_ordinary_blocker",
+    "provenance": "hare report 2026-10-14T21:43:24.792Z",
+    "hook_boundary": "outside ProxyState only, may hold query latch or Sleep",
+    "forbidden_hook_operations": [
+      "allocation",
+      "publication",
+      "IO",
+      "lock-taking",
+      "try_lock"
+    ],
+    "fixture_operations": "preallocated TLS Cell and atomics only"
+  },
+  "rebuilt_driver_sha256": "f31f9744df6448383327439ad6875bc09531d3b4030cf5b8e934bb80dc1d56c6",
+  "initial_native_attempt": {
+    "status": "failed_selected_gate",
+    "accepted": false,
+    "source_hashes_verified": 12,
+    "reported_build_seconds": 431,
+    "reported_pipeline_seconds": 496.6,
+    "selected_suite_seconds": 64.856,
+    "tests": 6,
+    "passed": 3,
+    "failed": 3,
+    "skipped": 0,
+    "passed_tests": [
+      "test_smoke_default",
+      "test_smoke_serial_factory_not_called",
+      "test_smoke_callback_panic_unwinds"
+    ],
+    "failed_tests": [
+      "test_selected_actual_pending_and_macro_process_neutrality",
+      "test_foreign_reserved_descriptor_fails_open",
+      "test_type_error_preserves_diagnostics_with_selected_policy"
+    ],
+    "failure": "Controller available() assertion left 14 versus expected 0 before producer query completion, followed by insufficientexercise",
+    "reported_native_client_capacity": 16,
+    "diagnosis_boundary": "Fixture assumed capacity 2. This is not established as a native protocol defect. Actual Pending/reacquire acceptance not reached.",
+    "selected_log": "scratch/selected-admission-native-20261014/selected.log",
+    "selected_log_sha256": "64a49d5142a738aebaefa3860142615961f3d7b1189bbd7d3cd5ce3f69157368",
+    "correction_owner": "parrot",
+    "correction_scope": "Fixture-only, retain actual native Acquired surplus tokens before workers, no fake capacity"
+  },
+  "corrected_selected_attempt": {
+    "status": "reported_6_pass_controller_facts_inspected",
+    "tests": 6,
+    "passed": 6,
+    "failed": 0,
+    "reported_seconds": 4.851,
+    "evidence_root": "scratch/native-selected-retry-final-20261014",
+    "fixture_sha256": "b837c4f0f92cf341ffe1978dedc374de2a377243b896bbf64977601d1fb5db81",
+    "harness_sha256": "fc87b68e39318996869876762eec3c2bf3f6d1b21dc403067baa4a705662c684",
+    "driver_sha256": "2c049aed60aa1edda713cf79c19d679a8496e957d698aa0811b9d4405231e6db",
+    "comparison": {
+      "off": {
+        "actual_query_release": true,
+        "producer_completed": true,
+        "producer_parked_outside_locks": true,
+        "query_ready_reacquire": true,
+        "proxy_pending": true,
+        "returned_before_supply": false,
+        "returned_after_supply": true,
+        "event_capacity": 0,
+        "reserved_real_surplus": 14,
+        "qualified_context_observed": false,
+        "pending_requests": 4,
+        "pending_grants": 3,
+        "pending_acks": 3,
+        "resumed_grants": 4,
+        "resumed_acks": 4
+      },
+      "on": {
+        "actual_query_release": true,
+        "producer_completed": true,
+        "producer_parked_outside_locks": true,
+        "query_ready_reacquire": true,
+        "proxy_pending": true,
+        "returned_before_supply": false,
+        "returned_after_supply": true,
+        "event_capacity": 0,
+        "reserved_real_surplus": 14,
+        "qualified_context_observed": true,
+        "pending_requests": 4,
+        "pending_grants": 3,
+        "pending_acks": 3,
+        "resumed_grants": 4,
+        "resumed_acks": 4
+      },
+      "identical_command": [
+        "$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/native-selected-callback",
+        "--sysroot",
+        "$REPO/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage1",
+        "-Zthreads=2",
+        "--edition=2024",
+        "--crate-name=selected_input",
+        "--extern",
+        "observer=$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/libobserver.so",
+        "$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/input.rs",
+        "-o",
+        "$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/input-bin"
+      ],
+      "identical_environment": true,
+      "artifact_sha256": "9019ae0368157341e3bcc8a05d3f2f13b4ddd2d916c0bbc3d68bde5ac1404f61",
+      "macro_output": "value=42; private_mode_arg=false\nargv=[\"$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/native-selected-callback\", \"--sysroot\", \"$REPO/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage1\", \"-Zthreads=2\", \"--edition=2024\", \"--crate-name=selected_input\", \"--extern\", \"observer=$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/libobserver.so\", \"$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/input.rs\", \"-o\", \"$SCRATCH/native-selected-retry-final-20261014/native-selected-admission-bmltbej_/input-bin\"]\nenv_fingerprint=16370641955145024675\n",
+      "receipt_sha256": {
+        "selected-entry.json": "a32e21b4789a845e2f20db2539db2d23052052ef7b7aff3643c6c749d726751a",
+        "selected-query.json": "f91b211b77c8cf6aefccca56c5e03a42adbf261d965e7471dd57d74de703ccb3",
+        "selected-query-pool.json": "2b28b2cfe0e1913e9e25464f02c295dccf9a12515cf4c3fb45c80aa1da105b47"
+      },
+      "full_mapping_claim": false,
+      "default_promotion": false
+    },
+    "case_suffixes": {
+      "foreign": "eydt3euy",
+      "selected": "bmltbej_",
+      "panic": "kf_k4vpq",
+      "default": "vvets0tv",
+      "serial": "kd1jfllj",
+      "typeerror": "7l_mpp2a"
+    }
+  },
+  "intermediate_attempt": {
+    "status": "reported_failed_foreign_payload_length_assertion",
+    "reason": "pread 26 versus 27-byte payload; corrected to len(payload)",
+    "raw_evidence_location": "$SCRATCH/native-selected-retry-full-20261014/native-selected-admission-zh56hx5b",
+    "provenance": "Parrot exact-path report plus independently inspected foreign-fd.json and retained assertion",
+    "native_foreign_fixture_exit_code": 0,
+    "native_foreign_result_sha256": "dabe8e748b784658da79ca5e4c2342eddf91526b024af46c7b99af9c2f32ab97",
+    "failure_boundary": "Subsequent Python parent assertion harness-source.py line299 pread26 versus27-byte payload, not native foreign-fd failure",
+    "suite_failure_transcript": "retained foreground tool output, no separate suite stderr file"
+  },
+  "legacy_native_gates": {
+    "status": "passed_logs_inspected",
+    "tests": 9,
+    "task": "638142k8uo",
+    "reported_seconds": 49.58,
+    "logs": {
+      "query": "1b2cea765bfb4cb6fa5a71a851cd33e102adde7c9b6d5245d008fd5495f00ff1",
+      "wait": "49b55cbfd89a055333dfb0ce7dae55069ead60c5d61c24b35c30e448288a0c55",
+      "task_binding": "b30563813671f6b4e21e6df17edea72ffca8343ff1d71352330fd807e1e80bf4",
+      "compiler": "c7ce699dc11bbd4c1289800244eb3058dc39e75b410f47a5e6e639771414f484",
+      "compiler_argv": "ac10306d4eb90d9cef2d145e2165d87c3d2511897b43450aab82fc833680a126"
+    }
+  },
+  "native_crate_attempts": [
+    {
+      "task": "738655l84x",
+      "status": "reported_failed",
+      "reason": "rustc::default_hash_types internal lint rejected test-only HashSet in pool admission.rs",
+      "provenance": "hare report, raw transcript pending"
+    },
+    {
+      "task": "822511an4g",
+      "status": "reported_pass",
+      "seconds": 26.26,
+      "data_structures_tests": 139,
+      "pool_tests": 106,
+      "pool_ignored": 26,
+      "session_tests": null,
+      "integration_and_doctests": "reported_pass",
+      "provenance": "Historical hare report; exact final source-aligned counts independently verified separately"
+    }
+  ],
+  "test_only_source_revision": {
+    "file": "toolchain/rustc/compiler/rustc_thread_pool/src/admission.rs",
+    "initial_sha256": "1f9a50f8b010ec16c250053e19ee024f78ed0a624571a17aff7572ae7bb16e52",
+    "final_sha256": "1ac5e63ea13e51f1439a2954741546f31e8ee810b8621a4730b0b1948a144855",
+    "change": "cfg(test) uniqueness uses Vec clone/sort_unstable/dedup instead of HashSet",
+    "production_change": false,
+    "provenance": "current revised test inspected, correction reported by hare"
+  },
+  "final_source_aligned_pipeline": {
+    "task": "853801iecj",
+    "status": "passed",
+    "reported_seconds": 158.8,
+    "evidence_root": "$SCRATCH/selected-admission-native-final-20261014",
+    "selected_tests": 6,
+    "selected_seconds": 4.199,
+    "legacy_tests": 9,
+    "logs": {
+      "compiler": {
+        "sha256": "1abb7f86c81e4d705d3fc7fc8ea57ff9a996c83d01bfff2b3692b7bbdce3c9ab",
+        "verdict": [
+          "Ran 2 tests in 14.213s",
+          "OK"
+        ]
+      },
+      "compiler_argv": {
+        "sha256": "e83f909b91e93951f386c90926bb954f7023e3ddff7da5c5e4ac31e3b5f7ea64",
+        "verdict": [
+          "Ran 1 test in 1.444s",
+          "OK"
+        ]
+      },
+      "query": {
+        "sha256": "203697649cc952f2fd2861ee739007d57d0ca70799ea070ca4053348c0e8f7f7",
+        "verdict": [
+          "Ran 1 test in 1.683s",
+          "OK"
+        ]
+      },
+      "selected": {
+        "sha256": "1c208051939c8420815ade8bf928933e4ece89bd8c7ddafc295c1e6ec177ae92",
+        "verdict": [
+          "Ran 6 tests in 4.199s",
+          "OK"
+        ]
+      },
+      "task_binding": {
+        "sha256": "853bddac4c623185aafbb20a421355f8d2344c3f6eeb1543d9c394701d3e486e",
+        "verdict": [
+          "Ran 1 test in 4.173s",
+          "OK"
+        ]
+      },
+      "wait": {
+        "sha256": "e9dba925b6e4c8684128e46566fef5d9c0839318eb3e382e9ea23237b26acd5e",
+        "verdict": [
+          "Ran 4 tests in 29.026s",
+          "OK"
+        ]
+      }
+    },
+    "source_sha256": {
+      "toolchain/rustc/compiler/rustc_data_structures/src/frontend_admission.rs": "b7f6f374cff0ff0dbf6e1cea8dce1f7080133cad306fbfb741f5a6c96b87510a",
+      "toolchain/rustc/compiler/rustc_data_structures/src/jobserver.rs": "f1e0541f6875226c258f4041ee3d4935fe4abc5b4019741b84e6e586996aebe6",
+      "toolchain/rustc/compiler/rustc_data_structures/src/jobserver_ticketed.rs": "f3849e80b7a1f72ee9472592d66a57a83477900d52354a772ac345c77f07def8",
+      "toolchain/rustc/compiler/rustc_driver_impl/src/lib.rs": "61542b53e47531be4600f156b3a9c670ac3a0db0d2bf5bcb84092df7576c0489",
+      "toolchain/rustc/compiler/rustc_interface/src/interface.rs": "4861677858cf2603fb06fea75fbd755ddd244e7317a90740ebe4d5dee7210617",
+      "toolchain/rustc/compiler/rustc_interface/src/util.rs": "cc07809ed6a0ef9d63f0324e8e187c0872cb47bfcd04322a8f070f6d4b8899eb",
+      "toolchain/rustc/compiler/rustc_query_impl/src/execution.rs": "e8ee13fbcdf12030a1a0b61cef7679b9d79a0a4625533ebbe91362455fd94081",
+      "toolchain/rustc/compiler/rustc_session/src/query_admission.rs": "87cf4d4adfa7cdbaf9586d79ec0385ca99c3c4f6f154e97ecd958b06b1c331e9",
+      "toolchain/rustc/compiler/rustc_thread_pool/src/admission.rs": "1ac5e63ea13e51f1439a2954741546f31e8ee810b8621a4730b0b1948a144855",
+      "toolchain/rustc/compiler/rustc_thread_pool/src/admission_dispatch_tests.rs": "014f5e9793e943227c1edc841efd57c2bd5f1df616b6e3c61ac2d36ab989f22b",
+      "toolchain/rustc/compiler/rustc_thread_pool/src/lib.rs": "a0097e5e7f4fd6ff933e778564082b1574c4c445d2d7a6a247046a19dfeb9fa3",
+      "toolchain/rustc/compiler/rustc_thread_pool/src/registry.rs": "d463edd0c618aef5aadd1baba39ead0dc877ccd70fc076cf2479932b5b29addb"
+    },
+    "comparison": {
+      "artifact_sha256": "bcbad7a28882a9133b62e3ad75d0e145927f6c7620685071f39af22aba4ca3cf",
+      "default_promotion": false,
+      "full_mapping_claim": false,
+      "identical_command": [
+        "$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/native-selected-callback",
+        "--sysroot",
+        "$REPO/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage1",
+        "-Zthreads=2",
+        "--edition=2024",
+        "--crate-name=selected_input",
+        "--extern",
+        "observer=$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/libobserver.so",
+        "$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/input.rs",
+        "-o",
+        "$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/input-bin"
+      ],
+      "identical_environment": true,
+      "macro_output": "value=42; private_mode_arg=false\nargv=[\"$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/native-selected-callback\", \"--sysroot\", \"$REPO/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage1\", \"-Zthreads=2\", \"--edition=2024\", \"--crate-name=selected_input\", \"--extern\", \"observer=$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/libobserver.so\", \"$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/input.rs\", \"-o\", \"$SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/input-bin\"]\nenv_fingerprint=3142703727849373915\n",
+      "off": {
+        "actual_query_release": true,
+        "event_capacity": 0,
+        "pending_acks": 3,
+        "pending_grants": 3,
+        "pending_requests": 4,
+        "producer_completed": true,
+        "producer_parked_outside_locks": true,
+        "proxy_pending": true,
+        "qualified_context_observed": false,
+        "query_ready_reacquire": true,
+        "reserved_real_surplus": 14,
+        "resumed_acks": 4,
+        "resumed_grants": 4,
+        "returned_after_supply": true,
+        "returned_before_supply": false
+      },
+      "on": {
+        "actual_query_release": true,
+        "event_capacity": 0,
+        "pending_acks": 3,
+        "pending_grants": 3,
+        "pending_requests": 4,
+        "producer_completed": true,
+        "producer_parked_outside_locks": true,
+        "proxy_pending": true,
+        "qualified_context_observed": true,
+        "query_ready_reacquire": true,
+        "reserved_real_surplus": 14,
+        "resumed_acks": 4,
+        "resumed_grants": 4,
+        "returned_after_supply": true,
+        "returned_before_supply": false
+      },
+      "receipt_sha256": {
+        "selected-entry.json": "a32e21b4789a845e2f20db2539db2d23052052ef7b7aff3643c6c749d726751a",
+        "selected-query-pool.json": "bbe70d4b8b639dbf936720418b3584f4b80273e693de5a6824e746870f44057e",
+        "selected-query.json": "b72db9593f4790bb2db832d1523ed41229a977592a6d526c6062250e23d23d4e"
+      }
+    },
+    "native_crates": {
+      "data_structures": {
+        "passed": 139,
+        "ignored": 0
+      },
+      "session": {
+        "passed": 69,
+        "ignored": 0,
+        "nested_protocol_subprocess_invocations": 2
+      },
+      "thread_pool": {
+        "passed": 106,
+        "ignored": 26
+      },
+      "integration_suite_pass_counts": [
+        1,
+        1,
+        1,
+        3,
+        1
+      ],
+      "doctest_suite_results": [
+        {
+          "passed": 1,
+          "ignored": 2
+        },
+        {
+          "passed": 5,
+          "ignored": 1
+        },
+        {
+          "passed": 1,
+          "ignored": 0
+        },
+        {
+          "passed": 27,
+          "ignored": 0
+        }
+      ],
+      "failures": 0
+    }
+  },
+  "acceptance_scope": "Explicit selected TicketedProxy query wait admission correctness, not complete graph authority or performance/default promotion",
+  "default_abba_control": {
+    "all_bindings_incomplete": true,
+    "artifact_stability": "within each compiler/thread across OFF/ON",
+    "capture_admission_loss": [
+      0
+    ],
+    "capture_binding_loss": [
+      495861,
+      501505,
+      502500,
+      502700,
+      502760,
+      503034,
+      503042,
+      503105,
+      503152,
+      503154,
+      503253,
+      503433,
+      503448,
+      503460,
+      503855,
+      504015,
+      504029
+    ],
+    "capture_read_loss": [
+      1003213,
+      1013843,
+      1015163,
+      1015540,
+      1015685,
+      1016033,
+      1016049,
+      1016508,
+      1016622,
+      1016671,
+      1017024,
+      1017076,
+      1017326,
+      1017349,
+      1017813,
+      1017845,
+      1018059
+    ],
+    "default_promotion_eligible": false,
+    "medians": [
+      {
+        "after_median_ms": 126.13195150333922,
+        "before_median_ms": 129.6802869910607,
+        "capture": false,
+        "threads": 1
+      },
+      {
+        "after_median_ms": 219.55306999734603,
+        "before_median_ms": 250.79148900113069,
+        "capture": true,
+        "threads": 1
+      },
+      {
+        "after_median_ms": 93.36116100894287,
+        "before_median_ms": 93.8720319973072,
+        "capture": false,
+        "threads": 4
+      },
+      {
+        "after_median_ms": 198.41173350869212,
+        "before_median_ms": 211.3506279856665,
+        "capture": true,
+        "threads": 4
+      }
+    ],
+    "output": "shared-query-bytes=512; independent-sum=32768\n",
+    "path": "bench/results/native-selected-admission-20261014/paired.json",
+    "quiet_provenance": "unknown",
+    "rounds": 4,
+    "samples": 64,
+    "samples_per_cell": 8,
+    "scope": "native-fixed-small-fixture-only",
+    "sha256": "5566cbf60adba4d03249d911d121c5e2436bbe9c79b8cbdb7b8768c0e54d6869",
+    "speed_claim_eligible": false,
+    "task": "023050nddl",
+    "reported_seconds": 19.7,
+    "limits": [
+      "quiet provenance unknown",
+      "eight samples per compiler/thread/capture cell",
+      "captured read and task-binding inventories saturate and are incomplete",
+      "no broad workload, rustdoc or clippy benchmark",
+      "default path control, not selected-policy performance"
+    ]
+  },
+  "public_consumer": {
+    "command": "justrust graph --json $SCRATCH/selected-admission-native-final-20261014/selected/native-selected-admission-fbslf3n1/capture",
+    "exit_code": 0,
+    "output": [
+      {
+        "capture_id": "selected-entry",
+        "cpu_work_ns": null,
+        "edges": 0,
+        "execution_span_ns": null,
+        "full_pipeline_complete": false,
+        "issues": [
+          "requires explicit --compiler-manifest reconciliation"
+        ],
+        "nodes": 0,
+        "opaque_boundaries": [
+          "compiler-launch-authority"
+        ],
+        "producer": "rustc-query-admission-entry",
+        "schema": 1,
+        "scope": "compiler-entry-to-query-capture-binding",
+        "structural_complete": false
+      },
+      {
+        "capture_id": "2196782-1792014941084201957-1",
+        "cpu_work_ns": null,
+        "edges": 12,
+        "execution_span_ns": null,
+        "full_pipeline_complete": false,
+        "issues": [],
+        "nodes": 12,
+        "opaque_boundaries": [
+          "scope-tasks",
+          "scheduler-and-resource-grants",
+          "pre-attach-work",
+          "query-to-task-binding",
+          "cross-capture-clock-binding",
+          "cargo-and-process-binding"
+        ],
+        "producer": "rustc-thread-pool-join",
+        "schema": 2,
+        "scope": "native-join-continuations",
+        "structural_complete": true
+      },
+      {
+        "capture_id": "selected-query",
+        "control_causal_edges": 1,
+        "cpu_work_ns": null,
+        "descriptive_parent_edges": 2034,
+        "edges": 2034,
+        "execution_span_ns": null,
+        "full_pipeline_complete": false,
+        "issues": [],
+        "nodes": 2253,
+        "opaque_boundaries": [
+          "fast-cache-hits",
+          "race-cache-hits",
+          "green-ensure-no-job",
+          "feeds",
+          "direct-paths",
+          "nonquery",
+          "resource-internals",
+          "driver-and-process-outcome",
+          "cargo-parent-binding",
+          "cache-read-dependencies",
+          "wait-and-resource-dependencies"
+        ],
+        "producer": "rustc-query-admission",
+        "query_reads": {
+          "cache_hits": 11559,
+          "endpoints_complete": true,
+          "green_ensures": 0,
+          "lost_events": 0,
+          "observed_reads": 11660,
+          "observed_requests": 13833,
+          "observed_results": 2253,
+          "opaque_boundaries": [
+            "execution-request-read-binding",
+            "previous-session-promotion",
+            "feed-producer-provenance",
+            "missing-consumer-context",
+            "no-implicit-context-reads",
+            "nonquery"
+          ],
+          "records_complete": true,
+          "resolved_job_edges": 0,
+          "semantic_complete": false,
+          "tracked_reads": 0,
+          "unbound_reads": 11660
+        },
+        "schema": 4,
+        "scope": "query-job-admission-lifecycle",
+        "structural_complete": true,
+        "task_bindings": {
+          "all_targets_bound": false,
+          "bound_points": 2422,
+          "expected_points": 30001,
+          "graph_binding_complete": false,
+          "graph_binding_valid": true,
+          "issues": [
+            "task-binding targets declared incomplete"
+          ],
+          "loss_overflowed": false,
+          "lost_events": 0,
+          "records_complete": true,
+          "source_endpoints_complete": true,
+          "unbound_points": 27579
+        },
+        "wait_structural_complete": true,
+        "waits": 1
+      }
+    ],
+    "private_context_serialized": false
+  },
+  "setup_failure": {
+    "run_id": "20261014-143523131-1953212",
+    "exit_code": 101,
+    "tests_passed": 0,
+    "description": "adapter manifest setup failure, not a tested semantic failure",
+    "export": "data/runs/selected-admission-20261014/2026-10.jsonl"
+  },
+  "audit_followups": []
+}

@@ -199,14 +199,16 @@ fn latch_wait_on<'tcx>(
         Option<QueryJobId>,
     )>,
 ) -> Result<(), QueryCycle<'tcx>> {
+    // Copy authority before acquiring any latch or pool State lock.
+    let binding = diagnostic.and_then(|(context, _, _)| context.admission_binding());
     let mut waiters_guard = latch.waiters.lock();
     let Some(waiters) = &mut *waiters_guard else {
         return Ok(()); // already complete
     };
 
     let waiter = Arc::new(QueryWaiter {
-        diagnostic_wait: diagnostic.map(|(context, waitee, consumer)| {
-            context.register_wait(waitee.0.get(), consumer.map(|id| id.0.get()))
+        diagnostic_wait: diagnostic.and_then(|(context, waitee, consumer)| {
+            context.register_wait(waitee.0.get(), consumer.map(|id| id.0.get()), binding)
         }),
         parent: query,
         span,
@@ -223,14 +225,29 @@ fn latch_wait_on<'tcx>(
     // and the deadlock handler wants to resume this thread we have to be in the `wait` call. This
     // is ensured by the deadlock handler getting the waiters lock.
     let mut condvar_returned = 0;
-    rustc_thread_pool::mark_blocked_and_wait(|| {
+    let wait = || {
         waiter.condvar.wait(&mut waiters_guard);
         if let Some(token) = &waiter.diagnostic_wait {
             condvar_returned = token.now();
         }
         // Release the lock before we potentially block when acquiring jobserver token.
         drop(waiters_guard);
+    };
+    let admission = waiter.diagnostic_wait.as_ref().and_then(|token| {
+        token.admission_context(rustc_thread_pool::admission::AdmissionPhase::QueryWaitRelease)
     });
+    if let Some(context) = admission {
+        rustc_thread_pool::mark_blocked_and_wait_with_context(
+            rustc_thread_pool::admission::AdmissionBinding {
+                attachment_id: context.attachment_id,
+                query_root: context.qualified_wait_id.query_root,
+            },
+            context.qualified_wait_id.wait_id,
+            wait,
+        );
+    } else {
+        rustc_thread_pool::mark_blocked_and_wait(wait);
+    }
     if let Some(token) = &waiter.diagnostic_wait {
         token.resumed(condvar_returned);
     }

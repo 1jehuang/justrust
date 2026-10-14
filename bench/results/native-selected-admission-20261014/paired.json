@@ -1,0 +1,1743 @@
+{
+  "schema": 1,
+  "scope": "native-fixed-small-fixture-only",
+  "source": "#![allow(dead_code)]\nconst _: () = assert!(option_env!(\"JUSTRUST_EXECUTION_GRAPH_DIR\").is_none());\nstruct Seed;\ntrait Step0 { type Out; }\nimpl Step0 for Seed { type Out = u64; }\ntrait Step1 { type Out; }\nimpl Step1 for Seed { type Out = <Seed as Step0>::Out; }\ntrait Step2 { type Out; }\nimpl Step2 for Seed { type Out = <Seed as Step1>::Out; }\ntrait Step3 { type Out; }\nimpl Step3 for Seed { type Out = <Seed as Step2>::Out; }\ntrait Step4 { type Out; }\nimpl Step4 for Seed { type Out = <Seed as Step3>::Out; }\ntrait Step5 { type Out; }\nimpl Step5 for Seed { type Out = <Seed as Step4>::Out; }\ntrait Step6 { type Out; }\nimpl Step6 for Seed { type Out = <Seed as Step5>::Out; }\ntrait Step7 { type Out; }\nimpl Step7 for Seed { type Out = <Seed as Step6>::Out; }\ntrait Step8 { type Out; }\nimpl Step8 for Seed { type Out = <Seed as Step7>::Out; }\ntrait Step9 { type Out; }\nimpl Step9 for Seed { type Out = <Seed as Step8>::Out; }\ntrait Step10 { type Out; }\nimpl Step10 for Seed { type Out = <Seed as Step9>::Out; }\ntrait Step11 { type Out; }\nimpl Step11 for Seed { type Out = <Seed as Step10>::Out; }\ntrait Step12 { type Out; }\nimpl Step12 for Seed { type Out = <Seed as Step11>::Out; }\ntrait Step13 { type Out; }\nimpl Step13 for Seed { type Out = <Seed as Step12>::Out; }\ntrait Step14 { type Out; }\nimpl Step14 for Seed { type Out = <Seed as Step13>::Out; }\ntrait Step15 { type Out; }\nimpl Step15 for Seed { type Out = <Seed as Step14>::Out; }\ntrait Step16 { type Out; }\nimpl Step16 for Seed { type Out = <Seed as Step15>::Out; }\ntrait Step17 { type Out; }\nimpl Step17 for Seed { type Out = <Seed as Step16>::Out; }\ntrait Step18 { type Out; }\nimpl Step18 for Seed { type Out = <Seed as Step17>::Out; }\ntrait Step19 { type Out; }\nimpl Step19 for Seed { type Out = <Seed as Step18>::Out; }\ntrait Step20 { type Out; }\nimpl Step20 for Seed { type Out = <Seed as Step19>::Out; }\ntrait Step21 { type Out; }\nimpl Step21 for Seed { type Out = <Seed as Step20>::Out; }\ntrait Step22 { type Out; }\nimpl Step22 for Seed { type Out = <Seed as Step21>::Out; }\ntrait Step23 { type Out; }\nimpl Step23 for Seed { type Out = <Seed as Step22>::Out; }\ntrait Step24 { type Out; }\nimpl Step24 for Seed { type Out = <Seed as Step23>::Out; }\ntrait Step25 { type Out; }\nimpl Step25 for Seed { type Out = <Seed as Step24>::Out; }\ntrait Step26 { type Out; }\nimpl Step26 for Seed { type Out = <Seed as Step25>::Out; }\ntrait Step27 { type Out; }\nimpl Step27 for Seed { type Out = <Seed as Step26>::Out; }\ntrait Step28 { type Out; }\nimpl Step28 for Seed { type Out = <Seed as Step27>::Out; }\ntrait Step29 { type Out; }\nimpl Step29 for Seed { type Out = <Seed as Step28>::Out; }\ntrait Step30 { type Out; }\nimpl Step30 for Seed { type Out = <Seed as Step29>::Out; }\ntrait Step31 { type Out; }\nimpl Step31 for Seed { type Out = <Seed as Step30>::Out; }\ntype Shared = (<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,<Seed as Step31>::Out,);\nfn independent_0(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.0; std::mem::size_of::<Shared>() }\nfn independent_1(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.1; std::mem::size_of::<Shared>() }\nfn independent_2(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.2; std::mem::size_of::<Shared>() }\nfn independent_3(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.3; std::mem::size_of::<Shared>() }\nfn independent_4(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.4; std::mem::size_of::<Shared>() }\nfn independent_5(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.5; std::mem::size_of::<Shared>() }\nfn independent_6(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.6; std::mem::size_of::<Shared>() }\nfn independent_7(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.7; std::mem::size_of::<Shared>() }\nfn independent_8(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.8; std::mem::size_of::<Shared>() }\nfn independent_9(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.9; std::mem::size_of::<Shared>() }\nfn independent_10(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.10; std::mem::size_of::<Shared>() }\nfn independent_11(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.11; std::mem::size_of::<Shared>() }\nfn independent_12(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.12; std::mem::size_of::<Shared>() }\nfn independent_13(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.13; std::mem::size_of::<Shared>() }\nfn independent_14(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.14; std::mem::size_of::<Shared>() }\nfn independent_15(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.15; std::mem::size_of::<Shared>() }\nfn independent_16(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.16; std::mem::size_of::<Shared>() }\nfn independent_17(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.17; std::mem::size_of::<Shared>() }\nfn independent_18(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.18; std::mem::size_of::<Shared>() }\nfn independent_19(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.19; std::mem::size_of::<Shared>() }\nfn independent_20(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.20; std::mem::size_of::<Shared>() }\nfn independent_21(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.21; std::mem::size_of::<Shared>() }\nfn independent_22(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.22; std::mem::size_of::<Shared>() }\nfn independent_23(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.23; std::mem::size_of::<Shared>() }\nfn independent_24(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.24; std::mem::size_of::<Shared>() }\nfn independent_25(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.25; std::mem::size_of::<Shared>() }\nfn independent_26(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.26; std::mem::size_of::<Shared>() }\nfn independent_27(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.27; std::mem::size_of::<Shared>() }\nfn independent_28(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.28; std::mem::size_of::<Shared>() }\nfn independent_29(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.29; std::mem::size_of::<Shared>() }\nfn independent_30(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.30; std::mem::size_of::<Shared>() }\nfn independent_31(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.31; std::mem::size_of::<Shared>() }\nfn independent_32(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.32; std::mem::size_of::<Shared>() }\nfn independent_33(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.33; std::mem::size_of::<Shared>() }\nfn independent_34(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.34; std::mem::size_of::<Shared>() }\nfn independent_35(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.35; std::mem::size_of::<Shared>() }\nfn independent_36(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.36; std::mem::size_of::<Shared>() }\nfn independent_37(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.37; std::mem::size_of::<Shared>() }\nfn independent_38(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.38; std::mem::size_of::<Shared>() }\nfn independent_39(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.39; std::mem::size_of::<Shared>() }\nfn independent_40(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.40; std::mem::size_of::<Shared>() }\nfn independent_41(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.41; std::mem::size_of::<Shared>() }\nfn independent_42(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.42; std::mem::size_of::<Shared>() }\nfn independent_43(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.43; std::mem::size_of::<Shared>() }\nfn independent_44(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.44; std::mem::size_of::<Shared>() }\nfn independent_45(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.45; std::mem::size_of::<Shared>() }\nfn independent_46(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.46; std::mem::size_of::<Shared>() }\nfn independent_47(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.47; std::mem::size_of::<Shared>() }\nfn independent_48(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.48; std::mem::size_of::<Shared>() }\nfn independent_49(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.49; std::mem::size_of::<Shared>() }\nfn independent_50(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.50; std::mem::size_of::<Shared>() }\nfn independent_51(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.51; std::mem::size_of::<Shared>() }\nfn independent_52(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.52; std::mem::size_of::<Shared>() }\nfn independent_53(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.53; std::mem::size_of::<Shared>() }\nfn independent_54(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.54; std::mem::size_of::<Shared>() }\nfn independent_55(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.55; std::mem::size_of::<Shared>() }\nfn independent_56(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.56; std::mem::size_of::<Shared>() }\nfn independent_57(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.57; std::mem::size_of::<Shared>() }\nfn independent_58(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.58; std::mem::size_of::<Shared>() }\nfn independent_59(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.59; std::mem::size_of::<Shared>() }\nfn independent_60(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.60; std::mem::size_of::<Shared>() }\nfn independent_61(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.61; std::mem::size_of::<Shared>() }\nfn independent_62(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.62; std::mem::size_of::<Shared>() }\nfn independent_63(value: &Shared) -> usize { let _: &<Seed as Step31>::Out = &value.63; std::mem::size_of::<Shared>() }\nfn main() { let value: Shared = (0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,0u64,);\nlet functions: &[fn(&Shared) -> usize] = &[independent_0,independent_1,independent_2,independent_3,independent_4,independent_5,independent_6,independent_7,independent_8,independent_9,independent_10,independent_11,independent_12,independent_13,independent_14,independent_15,independent_16,independent_17,independent_18,independent_19,independent_20,independent_21,independent_22,independent_23,independent_24,independent_25,independent_26,independent_27,independent_28,independent_29,independent_30,independent_31,independent_32,independent_33,independent_34,independent_35,independent_36,independent_37,independent_38,independent_39,independent_40,independent_41,independent_42,independent_43,independent_44,independent_45,independent_46,independent_47,independent_48,independent_49,independent_50,independent_51,independent_52,independent_53,independent_54,independent_55,independent_56,independent_57,independent_58,independent_59,independent_60,independent_61,independent_62,independent_63];\nlet sum: usize = functions.iter().map(|f| f(&value)).sum();\nprintln!(\"shared-query-bytes={}; independent-sum={}\", std::mem::size_of::<Shared>(), sum); }\n",
+  "source_sha256": "b3c73cbfc55f6150bb8e2386e97dde708a7bae6b3742e162047a91246842000a",
+  "compilers": {
+    "before": {
+      "launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+      "driver_sha256": "925c7892da0e7f00706326c9a77a3a20d887cf57706529b19f58e54575274bf9",
+      "version": "rustc 1.101.0-nightly (6a7f5d75e 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 6a7f5d75eb4a69da1e8b8489f5ff474722facce1\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n"
+    },
+    "after": {
+      "launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+      "driver_sha256": "f31f9744df6448383327439ad6875bc09531d3b4030cf5b8e934bb80dc1d56c6",
+      "version": "rustc 1.101.0-nightly (33e7bc2b0 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 33e7bc2b02accfec8b922fa0e75f6efd8f1e1ed1\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n"
+    }
+  },
+  "order_per_round": [
+    "before",
+    "after",
+    "after",
+    "before"
+  ],
+  "quiet_provenance": "unknown",
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "speed_claim_eligible": false,
+  "default_promotion_eligible": false,
+  "samples": [
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 0,
+      "abba_position": 0,
+      "wall_seconds": 0.18211303401039913,
+      "child_cpu_seconds": 0.17191599999999999,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 0,
+      "abba_position": 1,
+      "wall_seconds": 0.12507421901682392,
+      "child_cpu_seconds": 0.132709,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 0,
+      "abba_position": 2,
+      "wall_seconds": 0.15528086898848414,
+      "child_cpu_seconds": 0.16925600000000007,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 0,
+      "abba_position": 3,
+      "wall_seconds": 0.1514155810000375,
+      "child_cpu_seconds": 0.1701809999999999,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 1,
+      "abba_position": 0,
+      "wall_seconds": 0.09690857498208061,
+      "child_cpu_seconds": 0.11202900000000005,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 1,
+      "abba_position": 1,
+      "wall_seconds": 0.09918758599087596,
+      "child_cpu_seconds": 0.12003,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 1,
+      "abba_position": 2,
+      "wall_seconds": 0.13757783599430695,
+      "child_cpu_seconds": 0.15667500000000012,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 1,
+      "abba_position": 3,
+      "wall_seconds": 0.1331509240262676,
+      "child_cpu_seconds": 0.14678299999999994,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 2,
+      "abba_position": 0,
+      "wall_seconds": 0.1318970900028944,
+      "child_cpu_seconds": 0.1440309999999999,
+      "load_average": [
+        3.39794921875,
+        3.837890625,
+        3.8154296875
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 2,
+      "abba_position": 1,
+      "wall_seconds": 0.12718968398985453,
+      "child_cpu_seconds": 0.13914999999999994,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 2,
+      "abba_position": 2,
+      "wall_seconds": 0.12752139099757187,
+      "child_cpu_seconds": 0.1440410000000002,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 2,
+      "abba_position": 3,
+      "wall_seconds": 0.1271039209968876,
+      "child_cpu_seconds": 0.1389720000000001,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 3,
+      "abba_position": 0,
+      "wall_seconds": 0.12746348397922702,
+      "child_cpu_seconds": 0.13996399999999987,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 3,
+      "abba_position": 1,
+      "wall_seconds": 0.1240015120129101,
+      "child_cpu_seconds": 0.1415140000000002,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": false,
+      "round": 3,
+      "abba_position": 2,
+      "wall_seconds": 0.1154180669982452,
+      "child_cpu_seconds": 0.12417799999999968,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": false,
+      "round": 3,
+      "abba_position": 3,
+      "wall_seconds": 0.10383951201220043,
+      "child_cpu_seconds": 0.11851199999999995,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 0,
+      "abba_position": 0,
+      "wall_seconds": 0.23091456000111066,
+      "child_cpu_seconds": 0.24342400000000008,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 0,
+      "abba_position": 1,
+      "wall_seconds": 0.21774299099342898,
+      "child_cpu_seconds": 0.1735220000000003,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 0,
+      "abba_position": 2,
+      "wall_seconds": 0.19960317498771474,
+      "child_cpu_seconds": 0.20366700000000004,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 0,
+      "abba_position": 3,
+      "wall_seconds": 0.2510228480095975,
+      "child_cpu_seconds": 0.257602,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 1,
+      "abba_position": 0,
+      "wall_seconds": 0.27634719002526253,
+      "child_cpu_seconds": 0.2945709999999996,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 1,
+      "abba_position": 1,
+      "wall_seconds": 0.2835608950117603,
+      "child_cpu_seconds": 0.29457800000000045,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 1,
+      "abba_position": 2,
+      "wall_seconds": 0.2729853949858807,
+      "child_cpu_seconds": 0.2853500000000003,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 1,
+      "abba_position": 3,
+      "wall_seconds": 0.26327131598372944,
+      "child_cpu_seconds": 0.2730199999999996,
+      "load_average": [
+        3.36572265625,
+        3.82373046875,
+        3.81103515625
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 2,
+      "abba_position": 0,
+      "wall_seconds": 0.24005612000473775,
+      "child_cpu_seconds": 0.24289700000000014,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 2,
+      "abba_position": 1,
+      "wall_seconds": 0.21890084398910403,
+      "child_cpu_seconds": 0.22405399999999975,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 2,
+      "abba_position": 2,
+      "wall_seconds": 0.17923659799271263,
+      "child_cpu_seconds": 0.18691599999999986,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 2,
+      "abba_position": 3,
+      "wall_seconds": 0.25056012999266386,
+      "child_cpu_seconds": 0.2598670000000005,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 3,
+      "abba_position": 0,
+      "wall_seconds": 0.25155469702440314,
+      "child_cpu_seconds": 0.2597729999999996,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 3,
+      "abba_position": 1,
+      "wall_seconds": 0.22020529600558802,
+      "child_cpu_seconds": 0.23372600000000032,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 1,
+      "capture": true,
+      "round": 3,
+      "abba_position": 2,
+      "wall_seconds": 0.26493780699092895,
+      "child_cpu_seconds": 0.2740140000000002,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 1,
+      "capture": true,
+      "round": 3,
+      "abba_position": 3,
+      "wall_seconds": 0.24515358501230367,
+      "child_cpu_seconds": 0.25318100000000054,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1003213
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 595861,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 495861
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 0,
+      "abba_position": 0,
+      "wall_seconds": 0.096197620005114,
+      "child_cpu_seconds": 0.19541699999999995,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 0,
+      "abba_position": 1,
+      "wall_seconds": 0.09918579598888755,
+      "child_cpu_seconds": 0.1981550000000012,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 0,
+      "abba_position": 2,
+      "wall_seconds": 0.09734555802424438,
+      "child_cpu_seconds": 0.20150900000000016,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 0,
+      "abba_position": 3,
+      "wall_seconds": 0.09459537899238057,
+      "child_cpu_seconds": 0.19076899999999908,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 1,
+      "abba_position": 0,
+      "wall_seconds": 0.0960021410137415,
+      "child_cpu_seconds": 0.19381800000000027,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 1,
+      "abba_position": 1,
+      "wall_seconds": 0.0904698450176511,
+      "child_cpu_seconds": 0.18008199999999963,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 1,
+      "abba_position": 2,
+      "wall_seconds": 0.09037696698214859,
+      "child_cpu_seconds": 0.18361799999999961,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 1,
+      "abba_position": 3,
+      "wall_seconds": 0.09992051401059143,
+      "child_cpu_seconds": 0.21139600000000014,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 2,
+      "abba_position": 0,
+      "wall_seconds": 0.09314868500223383,
+      "child_cpu_seconds": 0.19791300000000023,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 2,
+      "abba_position": 1,
+      "wall_seconds": 0.09713185401051305,
+      "child_cpu_seconds": 0.20246300000000206,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 2,
+      "abba_position": 2,
+      "wall_seconds": 0.09388738899724558,
+      "child_cpu_seconds": 0.20226899999999848,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 2,
+      "abba_position": 3,
+      "wall_seconds": 0.09284393099369481,
+      "child_cpu_seconds": 0.1918700000000002,
+      "load_average": [
+        3.6572265625,
+        3.87646484375,
+        3.82861328125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 3,
+      "abba_position": 0,
+      "wall_seconds": 0.09164089601836167,
+      "child_cpu_seconds": 0.19238399999999967,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 3,
+      "abba_position": 1,
+      "wall_seconds": 0.08630659600021318,
+      "child_cpu_seconds": 0.17584200000000028,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": false,
+      "round": 3,
+      "abba_position": 2,
+      "wall_seconds": 0.09283493302064016,
+      "child_cpu_seconds": 0.20105399999999918,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": false,
+      "round": 3,
+      "abba_position": 3,
+      "wall_seconds": 0.08998929598601535,
+      "child_cpu_seconds": 0.17860099999999912,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [],
+      "admission_lost": [],
+      "read_lost": [],
+      "binding_inventory": []
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 0,
+      "abba_position": 0,
+      "wall_seconds": 0.1855960179818794,
+      "child_cpu_seconds": 0.3503159999999994,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1016049
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603034,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503034
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 0,
+      "abba_position": 1,
+      "wall_seconds": 0.19785211700946093,
+      "child_cpu_seconds": 0.38925599999999916,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1016033
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603042,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503042
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 0,
+      "abba_position": 2,
+      "wall_seconds": 0.18581162998452783,
+      "child_cpu_seconds": 0.3457570000000003,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1017024
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603433,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503433
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 0,
+      "abba_position": 3,
+      "wall_seconds": 0.20505163798225112,
+      "child_cpu_seconds": 0.4271780000000005,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1015685
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 602760,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 502760
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 1,
+      "abba_position": 0,
+      "wall_seconds": 0.18937334502697922,
+      "child_cpu_seconds": 0.36118899999999954,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1017845
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 604015,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 504015
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 1,
+      "abba_position": 1,
+      "wall_seconds": 0.19897135000792332,
+      "child_cpu_seconds": 0.3681869999999998,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1017813
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 604029,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 504029
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 1,
+      "abba_position": 2,
+      "wall_seconds": 0.19703332902281545,
+      "child_cpu_seconds": 0.41623699999999975,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1017349
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603448,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503448
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 1,
+      "abba_position": 3,
+      "wall_seconds": 0.23434158600866795,
+      "child_cpu_seconds": 0.46764300000000025,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1016508
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603152,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503152
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 2,
+      "abba_position": 0,
+      "wall_seconds": 0.21891310100909323,
+      "child_cpu_seconds": 0.438866,
+      "load_average": [
+        3.84521484375,
+        3.912109375,
+        3.84033203125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1017326
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603105,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503105
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 2,
+      "abba_position": 1,
+      "wall_seconds": 0.2382783759967424,
+      "child_cpu_seconds": 0.47189899999999874,
+      "load_average": [
+        3.697265625,
+        3.8798828125,
+        3.830078125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1015540
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 602700,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 502700
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 2,
+      "abba_position": 2,
+      "wall_seconds": 0.21753739000996575,
+      "child_cpu_seconds": 0.39816899999999933,
+      "load_average": [
+        3.697265625,
+        3.8798828125,
+        3.830078125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1018059
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603855,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503855
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 2,
+      "abba_position": 3,
+      "wall_seconds": 0.2250716770067811,
+      "child_cpu_seconds": 0.44517900000000044,
+      "load_average": [
+        3.697265625,
+        3.8798828125,
+        3.830078125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1015163
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 602500,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 502500
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 3,
+      "abba_position": 0,
+      "wall_seconds": 0.2176496179890819,
+      "child_cpu_seconds": 0.4275359999999999,
+      "load_average": [
+        3.697265625,
+        3.8798828125,
+        3.830078125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1013843
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 601505,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 501505
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 3,
+      "abba_position": 1,
+      "wall_seconds": 0.16900425401399843,
+      "child_cpu_seconds": 0.3421310000000011,
+      "load_average": [
+        3.697265625,
+        3.8798828125,
+        3.830078125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1016622
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603154,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503154
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "threads": 4,
+      "capture": true,
+      "round": 3,
+      "abba_position": 2,
+      "wall_seconds": 0.2192171460192185,
+      "child_cpu_seconds": 0.4491300000000016,
+      "load_average": [
+        3.697265625,
+        3.8798828125,
+        3.830078125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "2593940135488b1fa81306a406a8e217d13f2cc8740405bbe372dc0939b02d71",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1016671
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603253,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503253
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "threads": 4,
+      "capture": true,
+      "round": 3,
+      "abba_position": 3,
+      "wall_seconds": 0.20014033999177627,
+      "child_cpu_seconds": 0.41153400000000007,
+      "load_average": [
+        3.697265625,
+        3.8798828125,
+        3.830078125
+      ],
+      "output": "shared-query-bytes=512; independent-sum=32768\n",
+      "artifact_sha256": "17135aec628568db6c7b4ee62a4ecf34129cf306997dce5e611ae65a9c7e1594",
+      "query_schemas": [
+        4
+      ],
+      "admission_lost": [
+        0
+      ],
+      "read_lost": [
+        1017076
+      ],
+      "binding_inventory": [
+        {
+          "expected_points": 603460,
+          "records_complete": false,
+          "all_targets_bound": false,
+          "lost_events": 503460
+        }
+      ]
+    }
+  ]
+}

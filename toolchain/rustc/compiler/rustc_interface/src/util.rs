@@ -15,7 +15,7 @@ use rustc_codegen_ssa::target_features::internal_target_features;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo, TargetConfig};
 use rustc_data_structures::base_n::{CASE_INSENSITIVE, ToBaseN};
-use rustc_data_structures::jobserver::Proxy;
+use rustc_data_structures::jobserver::{FrontendAdmission, Proxy};
 use rustc_data_structures::sync;
 use rustc_metadata::{DylibError, EncodedMetadata, load_symbol_from_dylib};
 use rustc_middle::dep_graph::WorkProductMap;
@@ -31,6 +31,7 @@ use rustc_span::source_map::SourceMapInputs;
 use rustc_span::{SessionGlobals, Symbol, sym};
 use rustc_structures::CrateType;
 use rustc_target::spec::{Arch, Target};
+use rustc_thread_pool::admission::AdmissionAttachmentId;
 use tracing::info;
 
 use crate::diagnostics;
@@ -211,12 +212,16 @@ fn run_in_thread_with_globals<F: FnOnce(CurrentGcx) -> R + Send, R: Send>(
     })
 }
 
-pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce(CurrentGcx) -> R + Send, R: Send>(
+pub(crate) fn run_in_thread_pool_with_globals<
+    F: FnOnce(CurrentGcx, Option<AdmissionAttachmentId>) -> R + Send,
+    R: Send,
+>(
     thread_builder_diag: &EarlyDiagCtxt,
     edition: Edition,
     jobs: Jobs,
     extra_symbols: &[&'static str],
     sm_inputs: SourceMapInputs,
+    make_frontend_admission: Option<Box<dyn FnOnce() -> FrontendAdmission + Send>>,
     f: F,
 ) -> R {
     use std::process;
@@ -241,7 +246,7 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce(CurrentGcx) -> R + Send,
                 // Register the thread for use with the `WorkerLocal` type.
                 registry.register();
 
-                f(current_gcx)
+                f(current_gcx, None)
             },
         );
     };
@@ -249,13 +254,32 @@ pub(crate) fn run_in_thread_pool_with_globals<F: FnOnce(CurrentGcx) -> R + Send,
     let current_gcx = proof.derive(CurrentGcx::new());
     let current_gcx2 = current_gcx.clone();
 
-    let proxy = Proxy::new();
-    let proxy_ = Arc::clone(&proxy);
+    // Explicit factory selection happens at the legacy proxy boundary, after
+    // native client initialization and before any worker can be started.
+    let (builder, admission_attachment) = match make_frontend_admission {
+        Some(make) => {
+            let admission = make();
+            let attachment = admission.attachment_id();
+            (
+                admission.apply_to(
+                    rustc_thread_pool::ThreadPoolBuilder::new()
+                        .thread_name(|_| "rustc".to_string()),
+                ),
+                attachment,
+            )
+        }
+        None => {
+            let proxy = Proxy::new();
+            let proxy_ = Arc::clone(&proxy);
+            let builder = rustc_thread_pool::ThreadPoolBuilder::new()
+                .thread_name(|_| "rustc".to_string())
+                .acquire_thread_handler(move || proxy.acquire_thread())
+                .release_thread_handler(move || proxy_.release_thread());
+            (builder, None)
+        }
+    };
 
-    let builder = rustc_thread_pool::ThreadPoolBuilder::new()
-        .thread_name(|_| "rustc".to_string())
-        .acquire_thread_handler(move || proxy.acquire_thread())
-        .release_thread_handler(move || proxy_.release_thread())
+    let builder = builder
         .num_threads(jobs_frontend.get())
         .deadlock_handler(move || {
             // On deadlock, creates a new thread and forwards information in thread
@@ -331,7 +355,7 @@ internal compiler error: query cycle handler thread panicked, aborting process";
                     },
                     // Run `f` on the first thread in the thread pool.
                     move |pool: &rustc_thread_pool::ThreadPool| {
-                        pool.install(|| f(current_gcx.into_inner()))
+                        pool.install(|| f(current_gcx.into_inner(), admission_attachment))
                     },
                 )
                 .unwrap_or_else(|err| {

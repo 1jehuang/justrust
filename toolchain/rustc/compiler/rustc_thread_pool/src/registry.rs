@@ -8,6 +8,9 @@ use std::{fmt, io, mem, ptr, thread};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use smallvec::SmallVec;
 
+use crate::admission::{
+    AdmissionBinding, AdmissionContext, AdmissionHandlers, AdmissionPhase, QualifiedWaitId,
+};
 use crate::job::{JobFifo, JobRef, StackJob};
 use crate::latch::{AsCoreLatch, CoreLatch, Latch, LatchRef, LockLatch, OnceLatch, SpinLatch};
 use crate::sleep::Sleep;
@@ -137,6 +140,7 @@ pub struct Registry {
     exit_handler: Option<Box<ExitHandler>>,
     pub(crate) acquire_thread_handler: Option<Box<AcquireThreadHandler>>,
     pub(crate) release_thread_handler: Option<Box<ReleaseThreadHandler>>,
+    admission_handlers: Option<AdmissionHandlers>,
 
     // When this latch reaches 0, it means that all work on this
     // registry must be complete. This is ensured in the following ways:
@@ -296,6 +300,7 @@ impl Registry {
             exit_handler: builder.take_exit_handler(),
             acquire_thread_handler: builder.take_acquire_thread_handler(),
             release_thread_handler: builder.take_release_thread_handler(),
+            admission_handlers: builder.admission_handlers.take(),
         });
 
         // If we return early or panic, make sure to terminate existing threads.
@@ -627,6 +632,32 @@ impl Registry {
         }
     }
 
+    /// Reacquire allowance using a valid contextual pair, otherwise the unit adapter.
+    pub fn acquire_thread_with_context(&self, context: AdmissionContext) {
+        if let Some(handlers) = &self.admission_handlers {
+            if context.attachment_id == handlers.expected_attachment
+                && context.phase == AdmissionPhase::QueryWaitReacquire
+            {
+                (handlers.acquire)(context);
+                return;
+            }
+        }
+        self.acquire_thread();
+    }
+
+    /// Release allowance using a valid contextual pair, otherwise the unit adapter.
+    pub fn release_thread_with_context(&self, context: AdmissionContext) {
+        if let Some(handlers) = &self.admission_handlers {
+            if context.attachment_id == handlers.expected_attachment
+                && context.phase == AdmissionPhase::QueryWaitRelease
+            {
+                (handlers.release)(context);
+                return;
+            }
+        }
+        self.release_thread();
+    }
+
     /// Notify the worker that the latch they are sleeping on has been "set".
     pub(super) fn notify_worker_latch_is_set(&self, target_worker_index: usize) {
         self.sleep.notify_worker_latch_is_set(target_worker_index);
@@ -645,6 +676,41 @@ pub fn mark_blocked_and_wait(wait: impl FnOnce()) {
         registry.release_thread();
         wait();
         registry.acquire_thread();
+    }
+}
+
+/// Mark a worker blocked with query-wait context, then reacquire its allowance.
+/// The wait closure and its guards are dropped before reacquisition, including
+/// during unwinding. A normal return occurs only after allowance is reacquired.
+#[inline]
+pub fn mark_blocked_and_wait_with_context(
+    binding: AdmissionBinding,
+    wait_id: std::num::NonZeroU64,
+    wait: impl FnOnce(),
+) {
+    let worker_thread = WorkerThread::current();
+    assert!(!worker_thread.is_null());
+    unsafe {
+        let registry = &(*worker_thread).registry;
+        registry.sleep.mark_blocked(&registry.deadlock_handler);
+        let context = AdmissionContext {
+            attachment_id: binding.attachment_id,
+            qualified_wait_id: QualifiedWaitId { query_root: binding.query_root, wait_id },
+            phase: AdmissionPhase::QueryWaitRelease,
+        };
+        registry.release_thread_with_context(context);
+        struct Reacquire<'a>(&'a Registry, AdmissionContext);
+        impl Drop for Reacquire<'_> {
+            fn drop(&mut self) {
+                self.0.acquire_thread_with_context(self.1);
+            }
+        }
+        let reacquire = Reacquire(
+            registry,
+            AdmissionContext { phase: AdmissionPhase::QueryWaitReacquire, ..context },
+        );
+        wait();
+        drop(reacquire);
     }
 }
 

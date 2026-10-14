@@ -3,12 +3,17 @@
 use crate::query_task_bindings::{Sample, Source, TaskBindings};
 #[cfg(not(test))]
 use crate::query_task_bindings::{Sampler, Unbound};
+use rustc_thread_pool::admission::{
+    AdmissionAttachmentId, AdmissionBinding, AdmissionContext, AdmissionPhase, QualifiedWaitId,
+    QueryRootNamespace,
+};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::Write as _;
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(not(test))]
@@ -18,8 +23,6 @@ use std::sync::atomic::AtomicU64 as JobAtomicU64;
 
 #[cfg(not(test))]
 use rustc_thread_pool::execution_observer::{ExecutionObserver, InterfaceOutcome};
-#[cfg(not(test))]
-use std::sync::OnceLock;
 
 const MAX_EVENTS: usize = 100_000;
 const MAX_CONTEXTS: usize = 1024;
@@ -66,9 +69,14 @@ struct Inner {
     // FD-relative publication stays private if the original path is replaced.
     _directory_handle: File,
     capture_id: Option<String>,
+    query_root: Option<QueryRootNamespace>,
+    admission: OnceLock<AdmissionBinding>,
     epoch: Instant,
     next_context: AtomicU64,
     next_wait: AtomicU64,
+    wait_ids_exhausted: AtomicBool,
+    #[cfg(test)]
+    wait_id_ceiling: u64,
     reads: crate::query_reads::QueryReadObserver,
     returned: AtomicBool,
     bindings: Arc<TaskBindings>,
@@ -99,6 +107,7 @@ pub struct QueryWaitToken(Arc<WaitFacts>);
 struct WaitFacts {
     context: QueryAdmissionContext,
     id: u64,
+    admission: Option<AdmissionBinding>,
     waitee: u64,
     consumer: Option<u64>,
     registered: u64,
@@ -112,6 +121,17 @@ impl std::fmt::Debug for QueryWaitToken {
     }
 }
 impl QueryWaitToken {
+    pub fn admission_context(&self, phase: AdmissionPhase) -> Option<AdmissionContext> {
+        let binding = self.0.admission?;
+        Some(AdmissionContext {
+            attachment_id: binding.attachment_id,
+            qualified_wait_id: QualifiedWaitId {
+                query_root: binding.query_root,
+                wait_id: NonZeroU64::new(self.0.id)?,
+            },
+            phase,
+        })
+    }
     /// Called immediately before notification under the existing synchronization.
     pub fn notify(&self, reason: &'static str) {
         self.0.notified.store(self.0.context.now(), Ordering::Relaxed);
@@ -225,6 +245,25 @@ impl Inner {
 }
 
 impl QueryAdmissionObserver {
+    #[cfg(test)]
+    pub(crate) fn set_wait_id_ceiling_for_test(&mut self, ceiling: u64) {
+        assert!(ceiling < u64::MAX);
+        Arc::get_mut(&mut self.0).unwrap().wait_id_ceiling = ceiling;
+    }
+    /// Sample outside query, latch, and pool State locks. A conflict never replaces authority.
+    pub fn bind_admission_attachment(
+        &self,
+        attachment: Option<AdmissionAttachmentId>,
+    ) -> Option<AdmissionBinding> {
+        let binding =
+            AdmissionBinding { attachment_id: attachment?, query_root: self.0.query_root? };
+        let actual = self.0.admission.get_or_init(|| binding);
+        (*actual == binding).then_some(*actual)
+    }
+
+    pub fn admission_binding(&self) -> Option<AdmissionBinding> {
+        self.0.admission.get().copied()
+    }
     /// Called only from inside the actual frontend pool, never from session setup.
     /// Failure disables pool capture without changing compilation or query capture.
     pub fn attach_current_pool(&self) {
@@ -289,9 +328,14 @@ impl QueryAdmissionObserver {
             Some(Self(Arc::new(Inner {
                 _directory_handle: handle,
                 capture_id,
+                query_root: QueryRootNamespace::mint(),
+                admission: OnceLock::new(),
                 epoch: Instant::now(),
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
+                wait_ids_exhausted: AtomicBool::new(false),
+                #[cfg(test)]
+                wait_id_ceiling: u64::MAX - 1,
                 reads: crate::query_reads::QueryReadObserver::with_bindings(Arc::clone(&bindings)),
                 bindings,
                 returned: AtomicBool::new(false),
@@ -329,9 +373,14 @@ impl QueryAdmissionObserver {
             Some(Self(Arc::new(Inner {
                 _directory_handle: directory,
                 capture_id: Some(capture_id),
+                query_root: QueryRootNamespace::mint(),
+                admission: OnceLock::new(),
                 epoch: Instant::now(),
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
+                wait_ids_exhausted: AtomicBool::new(false),
+                #[cfg(test)]
+                wait_id_ceiling: u64::MAX - 1,
                 reads: crate::query_reads::QueryReadObserver::with_bindings(Arc::clone(&bindings)),
                 bindings,
                 returned: AtomicBool::new(false),
@@ -361,6 +410,9 @@ impl QueryAdmissionObserver {
     }
 }
 impl QueryAdmissionContext {
+    pub fn admission_binding(&self) -> Option<AdmissionBinding> {
+        self.observer.admission_binding()
+    }
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -368,19 +420,46 @@ impl QueryAdmissionContext {
         u64::try_from(self.observer.0.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
     }
     /// Lock-free observer facts allocation, called only for an actual registration.
-    pub fn register_wait(&self, waitee: u64, consumer: Option<u64>) -> QueryWaitToken {
-        let id = self.observer.0.next_wait.fetch_add(1, Ordering::Relaxed);
+    pub fn register_wait(
+        &self,
+        waitee: u64,
+        consumer: Option<u64>,
+        binding: Option<AdmissionBinding>,
+    ) -> Option<QueryWaitToken> {
+        let inner = &self.observer.0;
+        #[cfg(test)]
+        let ceiling = inner.wait_id_ceiling;
+        #[cfg(not(test))]
+        let ceiling = u64::MAX - 1;
+        let mut id = inner.next_wait.load(Ordering::Relaxed);
+        loop {
+            if id == 0 || id > ceiling {
+                inner.wait_ids_exhausted.store(true, Ordering::Relaxed);
+                return None;
+            }
+            match inner.next_wait.compare_exchange_weak(
+                id,
+                id + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => id = actual,
+            }
+        }
         self.observer.0.bindings.allocator_id(id);
-        QueryWaitToken(Arc::new(WaitFacts {
+        Some(QueryWaitToken(Arc::new(WaitFacts {
             context: self.clone(),
             id,
+            admission: binding
+                .filter(|binding| Some(*binding) == self.observer.admission_binding()),
             waitee,
             consumer,
             registered_point: self.observer.0.bindings.sample(),
             registered: self.now(),
             notified: AtomicU64::new(0),
             reason: AtomicU64::new(0),
-        }))
+        })))
     }
     /// Lock-free identity check. Numeric context IDs alone are not unique across roots.
     pub fn same_context(&self, other: &Self) -> bool {
@@ -652,6 +731,9 @@ impl Drop for Inner {
             }
         };
         let name = self.capture_id.clone().unwrap();
+        if self.wait_ids_exhausted.load(Ordering::Relaxed) {
+            data.lost = data.lost.saturating_add(1);
+        }
         // All context/job handles own this root Arc. Its final Drop observes a stable
         // independent allocator highwater, including contexts whose receipts were lost.
         let expected_contexts = self.next_context.load(Ordering::Relaxed).saturating_sub(1);
@@ -746,6 +828,113 @@ pub(crate) fn publish(directory: &File, name: &str, bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn admission_binding_is_immutable_and_namespaces_are_not_capture_text() {
+        let path = private_directory();
+        let other_path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        fs::create_dir(&other_path).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&other_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let other = QueryAdmissionObserver::new_from_directory(
+            File::open(&other_path).unwrap(),
+            observer.0.capture_id.clone().unwrap(),
+        )
+        .unwrap();
+        assert_ne!(observer.0.query_root, other.0.query_root);
+        assert_eq!(observer.admission_binding(), None);
+        assert_eq!(observer.bind_admission_attachment(None), None);
+        let attachment = AdmissionAttachmentId::mint().unwrap();
+        let binding = observer.bind_admission_attachment(Some(attachment)).unwrap();
+        assert_eq!(observer.clone().bind_admission_attachment(Some(attachment)), Some(binding));
+        assert_eq!(
+            observer.bind_admission_attachment(Some(AdmissionAttachmentId::mint().unwrap())),
+            None
+        );
+        assert_eq!(observer.bind_admission_attachment(None), None);
+        assert_eq!(observer.admission_binding(), Some(binding));
+        let other_binding = other.bind_admission_attachment(Some(attachment)).unwrap();
+        let first = observer.context().register_wait(1, None, Some(binding)).unwrap();
+        let second = other.context().register_wait(1, None, Some(other_binding)).unwrap();
+        let phase = AdmissionPhase::QueryWaitRelease;
+        let a = first.admission_context(phase).unwrap();
+        let b = second.admission_context(phase).unwrap();
+        assert_eq!(a.qualified_wait_id.wait_id, b.qualified_wait_id.wait_id);
+        assert_ne!(a.qualified_wait_id, b.qualified_wait_id);
+        assert_eq!(
+            first.admission_context(AdmissionPhase::QueryWaitReacquire).unwrap().qualified_wait_id,
+            a.qualified_wait_id
+        );
+        let false_binding = observer.context().register_wait(1, None, Some(other_binding)).unwrap();
+        assert_eq!(false_binding.admission_context(phase), None);
+        let absent = observer.context().register_wait(1, None, None).unwrap();
+        assert_eq!(absent.admission_context(phase), None);
+        let false_attachment = observer
+            .context()
+            .register_wait(
+                1,
+                None,
+                Some(AdmissionBinding {
+                    query_root: binding.query_root,
+                    attachment_id: AdmissionAttachmentId::mint().unwrap(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(false_attachment.admission_context(phase), None);
+        drop(false_attachment);
+        drop((first, second, false_binding, absent, observer, other));
+        fs::remove_dir_all(path).unwrap();
+        fs::remove_dir_all(other_path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn injected_wait_ceiling_fails_open_without_locking_or_reusing_ids() {
+        let path = private_directory();
+        let mut observer = QueryAdmissionObserver::new(&path).unwrap();
+        observer.set_wait_id_ceiling_for_test(1);
+        let context = observer.context();
+        let binding = observer.bind_admission_attachment(AdmissionAttachmentId::mint()).unwrap();
+        let data = observer.0.data.lock().unwrap();
+        let first = context.register_wait(1, None, Some(binding)).unwrap();
+        assert_eq!(first.0.id, 1);
+        for _ in 0..3 {
+            assert!(context.register_wait(1, None, Some(binding)).is_none());
+        }
+        assert_eq!(observer.0.next_wait.load(Ordering::Relaxed), 2);
+        assert!(observer.0.wait_ids_exhausted.load(Ordering::Relaxed));
+        assert!(data.waits.is_empty());
+        drop(data);
+        drop(first);
+        context.snapshot(1);
+        observer.finalize_interface_returned();
+        drop((context, observer));
+        let text = receipt(&path);
+        assert!(text.contains("\"capture_complete\":false"));
+        assert!(text.contains("\"wait_capture_complete\":false"));
+        assert!(text.contains("\"wait_allocator_high_water\":2"));
+        assert!(!text.contains("query_root"));
+        assert!(!text.contains("attachment_id"));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exhausted_namespace_leaves_diagnostic_waits_unqualified() {
+        let path = private_directory();
+        let mut observer = QueryAdmissionObserver::new(&path).unwrap();
+        // Inject only into this root, never mutate the process-wide mint.
+        Arc::get_mut(&mut observer.0).unwrap().query_root = None;
+        assert_eq!(observer.bind_admission_attachment(AdmissionAttachmentId::mint()), None);
+        assert_eq!(observer.admission_binding(), None);
+        let context = observer.context();
+        let wait = context.register_wait(1, None, None).unwrap();
+        assert_eq!(wait.admission_context(AdmissionPhase::QueryWaitRelease), None);
+        assert_eq!(wait.0.id, 1);
+        drop((wait, context, observer));
+        fs::remove_dir_all(path).unwrap();
+    }
     #[cfg(target_os = "linux")]
     fn private_directory() -> std::path::PathBuf {
         let id = FILE_ID.fetch_add(1, Ordering::Relaxed);
@@ -1125,7 +1314,7 @@ mod tests {
     fn wait_registration_under_latch_does_not_lock_or_publish_records() {
         let text = wait_receipt(|context| {
             let data = context.observer.0.data.lock().unwrap();
-            let wait = context.register_wait(1, Some(2));
+            let wait = context.register_wait(1, Some(2), None).unwrap();
             assert!(data.waits.is_empty());
             drop(wait);
             assert!(data.waits.is_empty());
@@ -1141,7 +1330,7 @@ mod tests {
     #[test]
     fn registered_wait_resume_before_terminal_is_valid() {
         let text = wait_receipt(|context| {
-            let wait = context.register_wait(1, Some(2));
+            let wait = context.register_wait(1, Some(2), None).unwrap();
             wait.notify("completed");
             wait.resumed(wait.now());
         });
@@ -1163,7 +1352,7 @@ mod tests {
     #[test]
     fn registered_wait_abandonment_duplicate_and_foreign_endpoint_are_incomplete() {
         let text = wait_receipt(|context| {
-            let _wait = context.register_wait(1, Some(2));
+            let _wait = context.register_wait(1, Some(2), None).unwrap();
         });
         assert!(text.contains("\"expected_waits\":1"));
         let bindings = text.split("\"task_bindings\":").nth(1).unwrap();
@@ -1174,7 +1363,7 @@ mod tests {
         assert!(text.contains("\"wait_capture_complete\":false"));
         assert!(text.contains("\"lost_events\":1"));
         let text = wait_receipt(|context| {
-            let wait = context.register_wait(1, Some(2));
+            let wait = context.register_wait(1, Some(2), None).unwrap();
             wait.notify("completed");
             let returned = wait.now();
             wait.resumed(returned);
@@ -1182,7 +1371,7 @@ mod tests {
         });
         assert!(text.contains("\"wait_capture_complete\":false"));
         let text = wait_receipt(|context| {
-            let wait = context.register_wait(3, Some(2));
+            let wait = context.register_wait(3, Some(2), None).unwrap();
             wait.notify("completed");
             wait.resumed(wait.now());
         });
@@ -1193,14 +1382,14 @@ mod tests {
     #[test]
     fn registered_wait_cycle_and_wrong_terminal_reason() {
         let text = wait_receipt(|context| {
-            let wait = context.register_wait(1, Some(2));
+            let wait = context.register_wait(1, Some(2), None).unwrap();
             wait.notify("cycle");
             wait.resumed(wait.now());
         });
         assert!(text.contains("\"wait_capture_complete\":true"));
         assert!(text.contains("\"reason\":\"cycle\""));
         let text = wait_receipt(|context| {
-            let wait = context.register_wait(1, Some(2));
+            let wait = context.register_wait(1, Some(2), None).unwrap();
             wait.notify("poisoned");
             wait.resumed(wait.now());
         });
@@ -1212,7 +1401,7 @@ mod tests {
     fn registered_wait_bound_marks_loss() {
         let text = wait_receipt(|context| {
             for _ in 0..25_001 {
-                let wait = context.register_wait(1, Some(2));
+                let wait = context.register_wait(1, Some(2), None).unwrap();
                 wait.notify("completed");
                 wait.resumed(wait.now());
             }

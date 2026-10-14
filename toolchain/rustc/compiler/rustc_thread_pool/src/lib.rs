@@ -73,6 +73,15 @@ use std::{env, fmt, io, thread};
 #[macro_use]
 mod private;
 
+pub mod admission;
+pub use admission::{
+    AdmissionAttachmentId, AdmissionBinding, AdmissionContext, AdmissionPhase, QualifiedWaitId,
+    QueryRootNamespace,
+};
+
+#[cfg(test)]
+mod admission_dispatch_tests;
+
 pub mod execution_observer;
 
 #[cfg(test)]
@@ -100,7 +109,10 @@ pub use worker_local::WorkerLocal;
 pub use self::broadcast::{BroadcastContext, broadcast, spawn_broadcast};
 pub use self::join::{join, join_context};
 use self::registry::{CustomSpawn, DefaultSpawn, ThreadSpawn};
-pub use self::registry::{Registry, ThreadBuilder, mark_blocked_and_wait, mark_unblocked};
+pub use self::registry::{
+    Registry, ThreadBuilder, mark_blocked_and_wait, mark_blocked_and_wait_with_context,
+    mark_unblocked,
+};
 pub use self::scope::{Scope, ScopeFifo, in_place_scope, in_place_scope_fifo, scope, scope_fifo};
 pub use self::spawn::{spawn, spawn_fifo};
 pub use self::thread_pool::{
@@ -205,6 +217,8 @@ pub struct ThreadPoolBuilder<S = DefaultSpawn> {
     /// Closure invoked when blocking in a thread.
     release_thread_handler: Option<Box<ReleaseThreadHandler>>,
 
+    admission_handlers: Option<admission::AdmissionHandlers>,
+
     /// If false, worker threads will execute spawned jobs in a
     /// "depth-first" fashion. If true, they will do a "breadth-first"
     /// fashion. Depth-first is the default.
@@ -250,6 +264,7 @@ impl Default for ThreadPoolBuilder {
             deadlock_handler: None,
             acquire_thread_handler: None,
             release_thread_handler: None,
+            admission_handlers: None,
             spawn_handler: DefaultSpawn,
             breadth_first: false,
         }
@@ -476,6 +491,7 @@ impl<S> ThreadPoolBuilder<S> {
             deadlock_handler: self.deadlock_handler,
             acquire_thread_handler: self.acquire_thread_handler,
             release_thread_handler: self.release_thread_handler,
+            admission_handlers: self.admission_handlers,
             breadth_first: self.breadth_first,
         }
     }
@@ -657,6 +673,26 @@ impl<S> ThreadPoolBuilder<S> {
         self
     }
 
+    /// Set a paired contextual admission adapter for one controller attachment.
+    /// Invalid context falls back to the original unit callbacks.
+    pub fn admission_handlers<A, R>(
+        mut self,
+        expected_attachment: AdmissionAttachmentId,
+        acquire: A,
+        release: R,
+    ) -> Self
+    where
+        A: Fn(AdmissionContext) + Send + Sync + 'static,
+        R: Fn(AdmissionContext) + Send + Sync + 'static,
+    {
+        self.admission_handlers = Some(admission::AdmissionHandlers {
+            expected_attachment,
+            acquire: Box::new(acquire),
+            release: Box::new(release),
+        });
+        self
+    }
+
     /// Takes the current deadlock callback, leaving `None`.
     fn take_deadlock_handler(&mut self) -> Option<Box<DeadlockHandler>> {
         self.deadlock_handler.take()
@@ -831,6 +867,7 @@ impl<S> fmt::Debug for ThreadPoolBuilder<S> {
             ref exit_handler,
             ref acquire_thread_handler,
             ref release_thread_handler,
+            admission_handlers: _,
             spawn_handler: _,
             ref breadth_first,
         } = *self;

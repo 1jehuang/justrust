@@ -1,6 +1,9 @@
 #[path = "jobserver_ticketed.rs"]
 pub mod ticketed;
 pub use ticketed::TicketedProxy;
+#[path = "frontend_admission.rs"]
+mod frontend_admission;
+pub use frontend_admission::FrontendAdmission;
 
 use std::sync::{Arc, OnceLock};
 

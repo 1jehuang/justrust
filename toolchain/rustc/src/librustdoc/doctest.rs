@@ -199,6 +199,7 @@ pub(crate) fn run(dcx: DiagCtxtHandle<'_>, input: Input, options: RustdocOptions
         override_queries: None,
         extra_symbols: Vec::new(),
         make_codegen_backend: None,
+        make_frontend_admission: None,
         ice_file: None,
         using_internal_features: &rustc_driver::USING_INTERNAL_FEATURES,
     };

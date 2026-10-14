@@ -77,6 +77,7 @@ fn main() {
         register_lints: None,
         override_queries: None,
         make_codegen_backend: None,
+        make_frontend_admission: None,
         expanded_args: Vec::new(),
         ice_file: None,
         track_state: None,

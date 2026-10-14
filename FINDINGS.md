@@ -7172,3 +7172,42 @@ retry of an existing parallel ETXTBSY bundle test. A separate deliberate rerun
 also passed. This supports only a targeted idle-path improvement in the unwired
 prototype. Legacy default, full resource mapping and general compile-speed
 promotion remain unchanged or unsupported.
+
+## 2026-10-14: explicit selected frontend waits for native allowance after query readiness
+
+The programmatic frontend factory now selects the experimental TicketedProxy
+independently of recording. The default factory is absent and retains the legacy
+Proxy and original administrative callbacks. Qualified query waits carry checked,
+non-reused root/attachment identities only in memory, with phase/attachment
+validation and exactly one contextual-or-unit dispatch. No resource wire format,
+query schema 4 or pool schema 2 change is introduced.
+
+Final source-aligned task `853801iecj` passed the rebuilt compiler/std/proc_macro,
+six selected-driver cases, nine legacy cases, three native compiler crates and
+their integration/doctests. The selected actual query fixture positively observed
+a ready result while its duplicate consumer remained Pending with return=false.
+Only returning a held real jobserver token allowed the helper grant and native
+reacquire to complete. Recording off/on preserved full proc-macro-visible argv
+and environment fingerprints, executable bytes and output. Default and serial
+factory smoke, selected type diagnostics, callback unwind and foreign descriptor
+fail-open cases also passed. The initial fixture wrongly assumed two native
+tokens rather than sixteen; the corrected fixture holds fourteen real Acquired
+tokens rather than fabricating capacity. A native internal test lint was fixed
+without changing production code before the final complete rerun.
+
+Hosted whole-client run `20261014-144020738-2003637` passed 559 tests, with check
+`20261014-144019067-2003317` and strict lint `20261014-144032083-2003146` passing.
+The fixed-fixture ABBA diagnostic retained 64 controls: default-path off medians
+were 129.680/126.132 ms at one thread and 93.872/93.361 ms at four threads for
+before/after. Capture-on medians were 250.791/219.553 and 211.351/198.412 ms.
+The capture fixture saturates read and binding budgets and reports incomplete
+coverage honestly. These noisy, narrow controls do not establish zero overhead,
+a general speedup, selected-policy performance or a default promotion.
+
+Public graph consumption of the actual selected capture reports one complete
+wait lifecycle and valid point authority, but 27,579 of 30,001 points unbound,
+full_pipeline_complete=false and CPU/span null. The compiler entry still needs
+explicit parent-manifest reconciliation. Wait-ID exhaustion is covered by real
+module and representative extracted-latch tests, not an actual compiler forced
+exhaustion run. Resource grants, helper IO-error provenance, callback-in-flight
+teardown and full semantic/resource mapping remain separate work.

@@ -72,6 +72,7 @@ fn compile(code: String, output: PathBuf, sysroot: Sysroot, linker: Option<&Path
         override_queries: None,
         extra_symbols: Vec::new(),
         make_codegen_backend: None,
+        make_frontend_admission: None,
         using_internal_features: &rustc_driver::USING_INTERNAL_FEATURES,
     };
 

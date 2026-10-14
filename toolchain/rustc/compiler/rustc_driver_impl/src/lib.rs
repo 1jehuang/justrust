@@ -118,7 +118,9 @@ pub const DEFAULT_BUG_REPORT_URL: &str = "https://github.com/rust-lang/rust/issu
     ?labels=C-bug%2C+I-ICE%2C+T-compiler&template=ice.md";
 
 pub trait Callbacks {
-    /// Called before creating the compiler instance
+    /// Called before creating the compiler instance. Drivers may explicitly set
+    /// `Config::make_frontend_admission` here. Observer installation alone never
+    /// selects an admission controller.
     fn config(&mut self, _config: &mut interface::Config) {}
     /// Called after parsing the crate root. Submodules are not yet parsed when
     /// this callback is called. Return value instructs the compiler whether to
@@ -240,6 +242,7 @@ fn compiler_entrypoint_with_binding(
         override_queries: None,
         extra_symbols: Vec::new(),
         make_codegen_backend: None,
+        make_frontend_admission: None,
         using_internal_features: &USING_INTERNAL_FEATURES,
     };
 

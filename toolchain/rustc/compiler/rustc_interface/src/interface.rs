@@ -370,6 +370,11 @@ pub struct Config {
     pub make_codegen_backend:
         Option<Box<dyn FnOnce(&EarlySession) -> Box<dyn CodegenBackend> + Send>>,
 
+    /// Explicit programmatic frontend admission selection. `None` preserves the
+    /// legacy proxy. The factory is never called by the serial compiler and is
+    /// independent of observer capture, command-line options, and cache keys.
+    pub make_frontend_admission: Option<Box<dyn FnOnce() -> jobserver::FrontendAdmission + Send>>,
+
     /// The inner atomic value is set to true when a feature marked as `internal` is
     /// enabled. Makes it so that "please report a bug" is hidden, as ICEs with
     /// internal features are wontfix, and they are usually the cause of the ICEs.
@@ -414,7 +419,8 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
         jobs,
         &config.extra_symbols,
         SourceMapInputs { file_loader, path_mapping, hash_kind, checksum_hash_kind },
-        |current_gcx| {
+        config.make_frontend_admission,
+        |current_gcx, admission_attachment| {
             // The previous `early_dcx` can't be reused here because it doesn't
             // impl `Send`. Creating a new one is fine.
             let early_dcx = EarlyDiagCtxt::new(config.opts.error_format);
@@ -458,6 +464,7 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
             if sess.opts.jobs.frontend.is_some() {
                 if let Some(observer) = &sess.query_admission {
                     observer.attach_current_pool();
+                    observer.bind_admission_attachment(admission_attachment);
                 }
             }
 
