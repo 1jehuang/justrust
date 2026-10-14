@@ -127,6 +127,16 @@ unchanged tracked base and helper settings restored the original combined digest
 The concurrent generated dev config was not overwritten. Source stability and
 installed artifact identity do not depend on subsequent bootstrap configuration.
 
+A separate tracked-source check at 15:56 UTC used `git diff --exit-code` against
+`6d898a9ea8ab2f2bfb3cac67736b33baf89dce3d` for clippy, rustdoc, `build-jr.sh`
+and the tracked base configuration. It passed with no differences. The SHA-256
+of the null-delimited `git ls-tree -r -z` manifest for only
+`toolchain/rustc/src/tools/clippy` and `toolchain/rustc/src/tools/rustdoc` is
+`7ea34eb6af564847c794653f5adcd4a6773d6deb69be84af0903978d613efb01`.
+This matching-tool source identity excludes both generated bootstrap settings
+and build artifacts, and is independent of the combined tools/config digest.
+No dev rebuild or configuration overwrite was performed.
+
 The installed compiler driver and Cranelift backend byte-for-byte match the
 completed release archive. Their SHA-256 values are respectively
 `16617750423a7a56a1bcc335ccd9f12d6f52d82cdb78a4646b2bb59e2e0a8dd8` and
