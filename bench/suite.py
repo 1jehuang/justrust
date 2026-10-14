@@ -934,18 +934,33 @@ def load_scheduler_hints(path: Path) -> tuple[bytes, dict]:
         raise ValueError("cannot read a valid bounded cost hint table") from error
 
 
+OPTIMIZATION_CONTROLS = (
+    "JUSTRUST_SHADOW",
+    "JUSTRUST_TEST_FILTER_COMPILE", "JUSTRUST_CACHE_PROC_MACROS",
+    "JUSTRUST_CUTOFF", "JUSTRUST_CARGO_CUTOFF", "JUSTRUST_CARGO_FORK",
+    "JUSTRUST_CARGO_DAEMON", "JUSTRUST_CARGO_DAEMON_TRACE",
+    "JUSTRUST_CARGO_CRITICAL_PATH",
+    "JUSTRUST_UNIFY_FEATURES",
+    "JUSTRUST_HOSTED_HTTP_POOL",
+    "CARGO_BUILD_JOBS",
+)
+
+
+def synthetic_stack_controls() -> dict[str, str]:
+    """Explicit single-stack suite controls, not implicit versus baselines.
+
+    Paths belong only in the private child environment. Published provenance
+    uses optimization_env(), which replaces the optional hint path with a hash.
+    Routing and run IDs remain owned by the runner, not the caller environment.
+    """
+    names = (*OPTIMIZATION_CONTROLS, "JUSTRUST_CARGO_CRITICAL_PATH_COSTS",
+             "JUSTRUST_NO_UPDATE", "JUSTRUST_TOOLCHAIN_AUTO_INSTALL")
+    return {name: os.environ[name] for name in names if name in os.environ}
+
+
 def optimization_env() -> dict:
     """Only public performance controls, never credential-bearing environment."""
-    names = (
-        "JUSTRUST_SHADOW",
-        "JUSTRUST_TEST_FILTER_COMPILE", "JUSTRUST_CACHE_PROC_MACROS",
-        "JUSTRUST_CUTOFF", "JUSTRUST_CARGO_CUTOFF", "JUSTRUST_CARGO_FORK",
-        "JUSTRUST_CARGO_DAEMON", "JUSTRUST_CARGO_DAEMON_TRACE",
-        "JUSTRUST_CARGO_CRITICAL_PATH",
-        "JUSTRUST_UNIFY_FEATURES",
-        "JUSTRUST_HOSTED_HTTP_POOL",
-    )
-    controls = {name: os.environ[name] for name in names if name in os.environ}
+    controls = {name: os.environ[name] for name in OPTIMIZATION_CONTROLS if name in os.environ}
     hint_path = os.environ.get("JUSTRUST_CARGO_CRITICAL_PATH_COSTS")
     if hint_path:
         try:
@@ -1120,8 +1135,11 @@ def cmd_run_synth(args) -> None:
     agents run it: one stack, for comparing justrust commits."""
     synth_run, versus = _synth()
     # Its own target dir per toolchain, kept warm across runs and commits.
+    controls = synthetic_stack_controls()
+    if TOOLCHAIN != "system":
+        controls["JUSTRUST_TOOLCHAIN"] = TOOLCHAIN
     st = versus.Stack("suite" if TOOLCHAIN == "system" else f"suite-{TOOLCHAIN}", "justrust defaults", True,
-                      {} if TOOLCHAIN == "system" else {"JUSTRUST_TOOLCHAIN": TOOLCHAIN}, private_cache=True)
+                      controls, private_cache=True)
     info = env_info()
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
               "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume)}

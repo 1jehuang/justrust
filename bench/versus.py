@@ -194,6 +194,9 @@ def stack_env(st: Stack, s: suite.Scenario, target: Path, rid: str) -> dict[str,
         env.update(s.env)
         env.update(st.env)
         return env
+    # The runner reads records and installs toolchains in this same home.
+    # Keep optimization settings scrubbed unless a stack explicitly selects them.
+    env["JUSTRUST_HOME"] = str(suite.JR_HOME)
     env.setdefault("JUSTRUST_BUILDD", "0")  # no prebuilds between samples
     env.update({"JUSTRUST_RUN_ID_OVERRIDE": rid, "JUSTRUST_REMOTE": "0", "JUSTRUST_QUIET": "1",
                 # Public store (on by default for users) off unless a stack
