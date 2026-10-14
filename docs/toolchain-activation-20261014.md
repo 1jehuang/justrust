@@ -66,10 +66,57 @@ is `6f16da371952f86c0874ed57a37a1ae4d35f5c747e4c93fceee9b5ce6bf88ee7`.
 The version report confirms vendored libgit2, curl and OpenSSL. These are
 provenance and acceptance observations, not a speed comparison.
 
-## Acceptance and activation
+## Staged compiler and correctness acceptance
 
-Compiler task `413023ndsi` is still in progress. Its stage 1 compiler finished
-successfully, but stage 2, backend and matching-tool acceptance remain pending.
-No candidate has been installed or activated yet. The default remains the
-initial compiler. Final identities, validation results, installed/default
-status and any blockers will be recorded before completion.
+Compiler task `413023ndsi` completed exit 0 at 15:37:20 UTC after 1,827.3
+seconds. The full stage 2 release compiler, LLVM and Cranelift backends, std,
+rustdoc and clippy were built together. Bootstrap reported successful completion
+in `0:30:26` and copied the sysroot to `build/jr/release-stage2`.
+
+Post-build compiler and matching-tool source identities exactly matched the
+pre-build values above. The installed compiler reports
+`rustc 1.101.0-nightly (910e39a6c 2026-10-14)`, LLVM `23.1.3`.
+`justrust toolchain jr-install toolchain/rustc/build/jr/release-stage2 --no-default`
+staged `jr-910e39a6c3ef`, and the preserved clean Cargo binary was installed only
+into that candidate. Its independent prefix is
+`~/.justrust/toolchains/staged/jr-910e39a6c3ef`.
+
+Acceptance commands explicitly select `JUSTRUST_TOOLCHAIN=jr-910e39a6c3ef`
+and `JUSTRUST_REMOTE=off`. This is the local unpublished-candidate exception:
+the hosted fleet cannot execute this as-yet-unpublished compiler. These local
+runs are not hosted validation or performance comparisons.
+
+| Gate | Recorded run | Outcome |
+| --- | --- | --- |
+| LLVM smoke, build script, proc macro, std, thread, panic catch and doctest | `20261014-083809859-922284` | Passed, 2 tests |
+| Cranelift same full smoke | `20261014-083812519-923332` | Failed at panic catching, exit 101 |
+| Previous default, identical full Cranelift smoke | `20261014-083916746-942812` | Same panic-catching failure, exit 101 |
+| Scoped Cranelift build script/proc macro/std/thread smoke | `20261014-084002198-956622` | Passed, 1 test, unwind test explicitly filtered out |
+| LLVM separated basic and panic-catching tests plus doctest | `20261014-084002402-956807` | Passed, 3 tests |
+| Smoke matching clippy, all targets, `-D warnings` | `20261014-084002883-957106` | Passed |
+| Root `justrust check` | `20261014-083822449-926488` | Passed |
+| Root `justrust test` | `20261014-083922439-944518` | Passed, 457 tests, 3 ignored |
+| Root `justrust clippy -- -D warnings` | `20261014-084032468-970131` | Passed |
+
+The negative Cranelift result is retained, not hidden by the narrower smoke.
+The unchanged backend's `compiler/rustc_codegen_cranelift/Cargo.toml` defines
+`unwinding` as an opt-in feature, excluded by default. In `src/abi/mod.rs`,
+`codegen_call_with_unwind_action` replaces unwind actions with `Unreachable`
+when that feature is disabled. The exact same smoke fails on the preserved
+previous default. Thus basic Cranelift acceptance does not establish panic
+unwinding correctness. LLVM passes the full panic-catching contract. Enabling
+and validating Cranelift unwinding is separate native-toolchain work, not an
+incidental source change in this receipt-only workflow.
+
+## Activation decision
+
+Desktop task `43324080uz` is still validating the real one-line `fps_counter`
+test-edit workload, with an exit trap restoring the original source from a
+backup copy. No global activation has occurred. The default remains
+`jr-ac20de5e7921`. Previous and official fallback marker checksums still match
+those captured before the workflow.
+
+Correctness acceptance alone is not a general speed claim or a default-promotion
+gate. The coordinator owns the matched session-weighted baseline/candidate
+benchmark comparison and final promotion decision. Until that gate is adequate,
+the candidate remains explicit-pin-only in the staged namespace.
