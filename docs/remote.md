@@ -266,17 +266,21 @@ hits separately (`depcache 66 hit (66 peer)/310 miss`).
 inputs differ, not worth it with the numbers, no relay).
 `JUSTRUST_PEER_CACHE=0` turns it off per build.
 
-What makes entries portable between machines (depcache scheme 5):
+What makes entries portable between machines (current depcache scheme 8):
 
 - the cargo home and target dir are placeholders in keys and manifest
   lines. Remote runs send `JUSTRUST_CLIENT_CARGO_HOME`, and the agent
   builds with `CARGO_HOME` at the laptop's path (a directory whose
   `registry` and `git` link to the machine's own), because registry
   source paths are compiled into crate metadata and every dependent's SVH;
-- `--extern` artifacts are keyed by their crate metadata only (`.rmeta`,
-  the `lib.rmeta` member of an rlib, the `.rustc` section of a proc
-  macro), so object code and C runtime differences between hosts do not
-  cascade through keys, while any metadata difference still does;
+- metadata-only `.rmeta` inputs are keyed by their Rust metadata, but code-bearing
+  `--extern` artifacts (`.rlib`, `.so`, `.dylib`, `.dll`) are keyed by complete
+  content. Bundled native objects or executed proc-macro helpers can change
+  behavior without changing `lib.rmeta` or `.rustc`; a real metadata-only
+  cache collision returned stale native code. Memo namespace
+  `user.justrust.m3` invalidates the old metadata-only artifact identities.
+  Full artifact identity may cost more or reduce cross-host hits, so do not
+  claim metadata-only portability as a sound optimization;
 - dependency units compile with `--remap-path-prefix=<target>=/justrust-target`,
   so crates that `include!` generated `OUT_DIR` files (serde, toml, ring,
   aws-lc) produce the same metadata in every target dir;

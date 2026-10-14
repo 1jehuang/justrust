@@ -6069,3 +6069,33 @@ lint `20261013-202325996-955156` passed without warnings. These four exact
 path-redacted exports are under `data/runs/hosted-west-syncfix/`. This is compiled
 source correctness evidence, not proof of a newly installed client or a speedup.
 Installation and new-root end-user acceptance are a separate rollout gate.
+
+## 2026-10-14: native archive identity and actual toolchain helper closure
+
+A real bundled C helper changed behavior from 1 to 2 with byte-identical Rust
+metadata. The old metadata-only cache restored output 1. Full code-bearing
+extern hashes and memo namespace m3 now produce miss/output 1, miss/output 2,
+then unchanged hit/output 2 through the actual shim. Integration run
+`20261013-201333279-898502` and strict lint `20261013-201334316-898680`
+are exported under `data/runs/sharing-20261014/`. This repairs an observed
+collision, not all native build-script closure determinants.
+
+A fresh Ubuntu CDN install at 03:31 exposed an omitted official rustfmt driver
+in the short JR ID despite successful core compiler/Cargo loads. Old immutable
+bytes were preserved. A corrected full-commit JR ID and bounded publisher/client
+helper probes now pass actual glibc 2.39 loader acceptance. Explicit reuse of the
+old prefix fails without changing its marker. Exact source ec42e0f and stable
+binary SHA2153a809b3f91826f4baa9acd81ad5ccc4fb7102f17aacb029469853f38b5a53
+were verified by the actual installer at 03:42:24. Final plain hosted full run
+`20261013-204245695-1067158` passed 390 with three ignored. Check/lint/recheck also
+passed. Concurrent replacement of the mutable global CLI means the full
+sequence cannot be attributed to one frozen digest. The direct installer and
+separate stable artifact are verified. No current-global digest is asserted.
+
+Worker 6b86ccf2 enabled fixed-origin future bootstrap sharing without changing
+bindings, quotas or defaults. Pinned independent fleet launched at 03:21 but final
+publication/fresh reuse and a new tenant bootstrap remain unobserved. Native
+rootfs sharing remains unauthorized. Registry archive seeding stays opt-in
+because measured full-network median 1.697 s lost to direct cold 1.057 s. No
+performance speedup is claimed. Full observations and 37 exact redacted records
+are mapped in `docs/sharing-rollout-20261014.md`.
