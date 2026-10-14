@@ -48,22 +48,13 @@ curl -fsSL https://jcode.sh/rust.sh | sh
 justrust agents
 ```
 
-Prebuilt for Linux and macOS (x86_64, aarch64). The installer places
-justrust in `~/.local/bin` and starts sign-in. `justrust agents` adds usage
-instructions to your coding agents, or copy the [AGENTS snippet](docs/AGENTS-snippet.md).
+Linux and macOS, x86_64 and aarch64. Installs to `~/.local/bin` and starts
+sign-in. `justrust agents` configures your coding agents ([manual setup](docs/AGENTS-snippet.md)).
+From source: `cargo install justrust --locked` (Rust 1.91+).
 
-From source: `cargo install justrust --locked` (Rust 1.91 or newer).
-Prebuilt installs update automatically. Disable updates with
-`justrust update off`, and anonymous usage telemetry with `justrust telemetry off`.
-
-Send an explicit message with `justrust feedback "Your suggestion"` (maximum 4096 UTF-8 bytes).
-Only the message is attached, never logs, paths, account details, or install IDs.
-Do not include secrets, private source, or identifying information. Messages are
-stored durably for maintainer review, separately from anonymous telemetry.
-Feedback respects telemetry opt-out settings and environment variables. Delivery
-is synchronous: failures return an error, messages are not queued or retried.
-A network failure can leave receipt unconfirmed. The service rate-limits requests
-using a short-lived hash of the connecting IP, not stored with the message.
+Prebuilt installs update automatically. Opt out with `justrust update off`;
+disable anonymous telemetry with `justrust telemetry off`.
+[Send feedback](docs/feedback.md) with `justrust feedback "Your suggestion"`.
 
 ## Use
 
