@@ -5909,3 +5909,51 @@ measured at more than 2x.
 - Same new frozen client/96core host normally billed off/on/off reference5.670/1.155/5.556s, but all7fastsamples noisy. No causal speed claim or10x acceptance. Cold first leaf20.38s/98compiled disclosed; extra `--config build.jobs=8` deliberately normal fallback, not shadow tuning. `1b188a7` now labels noisy public suite comparisons uncontrolled,40Python tests pass.
 - Actual pinned cases180405935/180407289/180409142/180411023 verify3leaftests,E0308/101,2pass1failure/101,parentnormal3pass;180426280 verifies16securityfixtures. Unfiltered180427353 retains1302pass/1existinghintchipfailure/10ignored/101. Saved source bytes restored. See `docs/hosted-shadow-20261014.md` for full requirement-to-run mapping.
 - Corrected genuinely plain installed check180649536/full361tests180650413/lint180653455/recheck180653959 allhosted0compiled56fresh. Accidental local180514589 caused by helper RUN_ID_OVERRIDE is retained/excluded, not a default outage. Current stockquietgate blocked, optimized rustc unchanged, host released01:07UTC for owner-approved resize.
+
+## 2026-10-14: critical-path map of the reference loop's rustc unit
+
+Tool: `bench/critpath.py` (b146327) reads `-Zself-profile` (via crox), takes
+exclusive time per event (W = total work), wall span S, and the timeline of
+how many threads are busy; time with exactly one busy thread is the
+critical path, attributed to the innermost label and then to a phase.
+Capture: `bench/critpath-capture.sh` on the hosted m8azn.6xlarge, the
+jcode_desktop_ui unit of desktop-test-edit after a one-line body edit,
+frontend threads 1 and 16. Profiler bookkeeping excluded; the profiler
+itself adds ~2.4 s of idle at the end (string table) and slows the unit
+(7.3 vs 4.4 s unprofiled), so absolute numbers are inflated but shares hold.
+Summaries: `bench/results/critpath/desktop-test-edit-*-20261014.json`.
+
+jr-rustc b7907f1 (attribute proc-macro cache on), serial seconds by phase:
+
+| phase | t=1 | t=16 | class | lever |
+|---|---:|---:|---|---|
+| mono collect + partition | 1.17 | 1.18 | impl | graph walk gets slower with threads (0.47 -> 0.96 s, contention); par-upstream-mono branch; partition per item |
+| resolve + HIR lowering | 0.98 | 0.99 | impl | late_resolve 0.29, hir_crate_items 0.22, lower_to_hir 0.21: per-module, parallelizable in principle |
+| incr persist | 0.49 | 0.51 | offpath | encode_query_results 0.23 + cache promotion 0.20: move off the critical path (overlap-persist covers only part) |
+| macro expansion | 0.48 | 0.49 | impl | already cut 1.30 -> 0.48 by the attr cache; rest is the expansion loop itself |
+| typeck + borrowck | 0.36 | 1.15 | impl | **gets slower with threads**: query-blocked waits; ~0.3 s of real work |
+| lints + dead code | 0.23 | 0.08 | impl | parallelizes already |
+| incr load | 0.22 | 0.17 | offpath | prefetch before parse |
+| link | 0.17 | 0.17 | data | |
+| codegen main thread | 0.07 | 0.07 | impl | |
+| total serial | 4.34 | 5.04 | | of W 4.68 / 8.72 s |
+
+Stock nightly-2026-10-08 is the same except macro expansion is 1.30 s
+(724 `#[gpui::test]` expansions, 0.83 s, ~1 ms each; the attr cache
+removes them).
+
+What this says, quantitatively:
+1. At 1 thread W = 4.68 s and the serial path is 4.34 s: 93% of the work
+   runs alone. At 16 threads W grows to 8.7 s (more CPU) while serial time
+   rises to 5.0 s: today's parallel frontend adds contention, not overlap.
+   Achieved parallelism W/S is ~1 at both counts.
+2. Nothing in the path is a hard data dependency except link (0.17) and
+   parse. Everything else is "serial by implementation" (3.4 s) or can leave
+   the path (incr persist + load, 0.7 s). So the theoretical floor for this
+   unit is far below today's, but every lever is a rustc change.
+3. Biggest single row: the mono collector walk (0.5-1.0 s), which the
+   existing par-upstream-mono branch targets; the 16-thread number shows
+   lock contention inside it. Second: resolve + HIR lowering (1.0 s), not
+   parallel at all today. Third: incr persist (0.5 s), removable.
+4. Crate splitting attacks all rows at once (the edited code compiles in a
+   small crate), which is why it is the only measured >2x win.

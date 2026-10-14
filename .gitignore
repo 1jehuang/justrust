@@ -2,3 +2,4 @@
 __pycache__/
 # In-progress synthetic runs (bench/synth/run.py), rewritten after every point
 bench/results/partial/
+bench/results/critpath/*/
