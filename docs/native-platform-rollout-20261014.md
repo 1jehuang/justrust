@@ -79,11 +79,14 @@ client tests passed locally in `20261013-204753721-1095315`.
 ## Activation status
 
 On October 14, 2026 at 03:52 UTC, AWS reported zero quota for Mac Dedicated
-Hosts in us-west-2. A request for one `mac2-m2pro` host was submitted and is
-pending AWS approval. No Mac host was allocated. The live AWS Price List
-confirms this host costs $1.56/hour before disk and network usage, with the
-24-hour allocation constraint above. This is an activation blocker, not a
-reason to advertise native hosted builds as available.
+Hosts in us-west-2 and a request for one `mac2-m2pro` host was submitted. At
+05:24 and 05:26 UTC, the applied account-level quota returned **one**, even
+though the request still reported `CASE_OPENED`. No Dedicated Host was allocated.
+Quota capacity is therefore no longer the identified blocker, but reviewed
+native images, runner acceptance, owner isolation, and lifecycle controls remain
+required. The live AWS Price List confirms $1.56/hour before disk and network
+usage, with the 24-hour allocation constraint above. Available quota alone is
+not native hosted support.
 
 The cloud compatibility API was deployed before the client installation. The
 exact committed client snapshot `cbeea7d74f122d31d8d40854d9c744bcde6edfc1`
