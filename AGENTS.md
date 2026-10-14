@@ -36,6 +36,25 @@ Small, safe wins still ship, but
 never stop at "good enough" when a deeper change (a fork, a server, a new
 component) would be measurably faster.
 
+## Native toolchain integration, not permanent shims
+
+We own the toolchain: embed functionality in the component that owns the
+operation instead of building permanent interception layers around it.
+Prefer compiler phase telemetry inside jr-rustc, build-script caching and
+artifact-cache orchestration inside jr-cargo, and native linker selection
+and fallback inside jr-rustc over shell wrappers, stderr parsing, or linker
+dispatcher shims. Shared libraries are fine; embedding does not require
+copying cache implementations into multiple repositories.
+
+Shims are transitional compatibility and fail-open mechanisms, not the
+end-state architecture. Keep them where stock-toolchain support or a measured
+advantage requires them. Do not remove a working shim until its native
+replacement preserves diagnostics, exit status, Cargo pipelining, cache
+correctness, and fallback behavior. Measure representative builds before
+and after, including cold and incremental debug/release builds. Removing a
+process boundary is not itself evidence of a speedup. Prioritize build
+performance; checks and tests remain correctness and regression gates.
+
 ## Related repositories (where things live)
 
 | Piece | Repo |
