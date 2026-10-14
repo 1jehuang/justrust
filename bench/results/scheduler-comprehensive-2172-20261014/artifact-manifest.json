@@ -1,0 +1,70 @@
+{
+  "schema": "artifact-manifest-v1",
+  "files": [
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/partial-off.json",
+      "bytes": 1706,
+      "sha256": "b8fffd46969c3e445b254d04181a8c8826a9c7f6c3938051cfc836fc406ac0ff"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/execution-off.jsonl",
+      "bytes": 2919,
+      "sha256": "0490203af8120195edac792565e501390163870ef04603a75bf7a0f3fe27808e"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/probe-model-hashes.txt",
+      "bytes": 19315,
+      "sha256": "082d0c4e07091933d3472c46534a6f87d7cdf2d12460029e660fc23e3042c05f"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/initial-identity.txt",
+      "bytes": 944,
+      "sha256": "39880e786a8fddf66b8f56e57dddd64dffa6c192beec24e95d2102d6138fbbab"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/storage-stop-before-measurement.log",
+      "bytes": 14278,
+      "sha256": "3f6ffcd69acc46eba8431318e5139d5e83b5cdba551ab2f24522232676e8a084"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/measured-off-storage-stop.log",
+      "bytes": 2005,
+      "sha256": "222a63df70601f5f42d9673c925e0b1b2b820767d21d05253c6e10f57d4a0382"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/costs-offline-v2.json",
+      "bytes": 14006,
+      "sha256": "29bb6618b1ca614cfed13c3bd77777954f2380f757aeeb2fd799abe2040e44d8"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/costs-offline-v2-receipt.json",
+      "bytes": 19072,
+      "sha256": "c9e773efd5012a9debb5a6aa81cbe30f3674172f3f0a77b5b340b6b9efabaf8f"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/observe-comprehensive.py.txt",
+      "bytes": 4035,
+      "sha256": "6e5ba86f5ccc6b3f62b247bfebc0b31eb3a9c39c112588e9bcf5cace49d03c8a"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/run-host-comprehensive.sh.txt",
+      "bytes": 2968,
+      "sha256": "30122d4b3b2762f373945379b6f49ece6071c0ed79a881897fa8867aca8e20fd"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/resume-host-comprehensive.sh.txt",
+      "bytes": 2050,
+      "sha256": "132b0a1bcd2828a45a0dbb1ccd706887ad86e4ffdc7956be767d76af180f58b5"
+    },
+    {
+      "path": "data/runs/broad-scheduler-2172/2026-10.jsonl",
+      "bytes": 7653,
+      "sha256": "074ed9d30aee96ae5793f133a7947c02618265b0ef6b23e465935c25e4c853a9"
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/acceptance.json",
+      "bytes": 4702,
+      "sha256": "8705487760cff935a4537233b42ec9eae8d06e4a31a94b9c8514c2837131d028"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trial="$HOME/bench-scheduler-comprehensive-2172-20261014"
+[[ -d "$trial/home/toolchains/nightly-2026-10-08" && ! -e "$trial/results/0-exec.jsonl" ]]
+umask 077
+chmod 700 "$trial" "$trial/home" "$trial/results"
+cp "$HOME/bench-comprehensive-observer.py" "$trial/observer.py"
+export JUSTRUST_HOME="$trial/home" JUSTRUST="$trial/bin/justrust"
+export JUSTRUST_BENCH_WORK="$trial/home/bench/work" JUSTRUST_VERSUS_WORK="$trial/home/bench/versus"
+export JUSTRUST_SYNTH_WORK="$trial/home/bench/synth" JUSTRUST_BENCH_SRC="$HOME/bench-src"
+export JUSTRUST_BENCH_REV=059674bf76fa218ba7e475279a86b4b6caf32aac JUSTRUST_BENCH_DIRTY=0
+export JUSTRUST_BENCH_REPO_REV=2172a450bfeffb04b217d56f83ec4fdab70a9958
+export JUSTRUST_REMOTE=0 JUSTRUST_NO_UPDATE=1 JUSTRUST_TOOLCHAIN_AUTO_INSTALL=0
+export JUSTRUST_CARGO_FORK=1 JUSTRUST_CARGO_DAEMON=0 JUSTRUST_SHADOW=0 CARGO_BUILD_JOBS=24
+export JUSTRUST_CARGO_CRITICAL_PATH_COSTS="$trial/costs.json" EXPERIMENT_RESULTS="$trial/results"
+export PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+unset RUSTFLAGS RUSTC RUSTC_WRAPPER JUSTRUST_RUN_ID_OVERRIDE JUSTRUST_DISABLE
+cd "$trial/harness"
+python3 -m unittest discover -s bench -p 'test*.py'
+for mode in 0 1; do
+  export JUSTRUST_CARGO_CRITICAL_PATH=$mode
+  printf 'JCODE_CHECKPOINT {"message":"Begin unchanged seed1/40-point synthetic epoch mode=%s"}\n' "$mode"
+  remaining=$((1791968400 - $(date +%s) - 90))
+  [[ $remaining -gt 30 ]] || { echo 'Deadline gate, retain partial outputs'; exit 124; }
+  timeout --signal=TERM --kill-after=15s "$remaining" python3 "$trial/observer.py" 2>&1 | tee "$trial/results/$mode-output.log"
+done
+python3 bench/suite.py compare "$trial/results/0-suite.json" "$trial/results/1-suite.json" | tee "$trial/results/compare.txt"
+sha256sum "$JUSTRUST" "$JUSTRUST_HOME/toolchains/nightly-2026-10-08/bin/rustc" "$JUSTRUST_HOME/toolchains/nightly-2026-10-08/bin/jr-cargo" "$trial/costs.json" | tee "$trial/results/identity-end.txt"
+printf 'JCODE_CHECKPOINT {"message":"Both full epochs done; audit before claims"}\n'

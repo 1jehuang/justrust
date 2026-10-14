@@ -1,0 +1,6 @@
+11G	<host-home>/bench-scheduler-comprehensive-2172-20261014/home/bench/synth/probe-target
+[stderr] error: cannot clean `<host-home>/bench-scheduler-comprehensive-2172-20261014/home/bench/synth/probe-target`: missing or invalid `CACHEDIR.TAG` file
+[stderr]   |
+[stderr]   = note: cleaning has been aborted to prevent accidental deletion of unrelated files
+
+--- Command finished with exit code: 101 ---

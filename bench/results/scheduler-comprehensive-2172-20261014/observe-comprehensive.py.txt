@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Observe unchanged suite execution, retaining controls and actual run identities."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+import time
+
+sys.path.insert(0, str(Path.cwd() / "bench"))
+import suite
+import versus
+
+mode = os.environ["JUSTRUST_CARGO_CRITICAL_PATH"]
+assert mode in {"0", "1"}
+result_dir = Path(os.environ["EXPERIMENT_RESULTS"])
+result_dir.mkdir(parents=True, exist_ok=True)
+receipt_path = result_dir / f"{mode}-exec.jsonl"
+receipt = receipt_path.open("x")
+original = versus.run_counted
+expected_cargo = suite.JR_HOME / "toolchains/nightly-2026-10-08/bin/jr-cargo"
+expected_rustc = suite.JR_HOME / "toolchains/nightly-2026-10-08/bin/rustc"
+expected_hashes = {
+    suite.J: "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+    str(expected_cargo): "c38c3d63e82c74fc4ba9e2978ad74ccad7f74aa21dec6d2bf978e0c4dcf1e13d",
+    str(expected_rustc): "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+    os.environ["JUSTRUST_CARGO_CRITICAL_PATH_COSTS"]: "29bb6618b1ca614cfed13c3bd77777954f2380f757aeeb2fd799abe2040e44d8",
+}
+
+def hashes():
+    for path, expected in expected_hashes.items():
+        assert hashlib.file_digest(open(path, "rb"), "sha256").hexdigest() == expected, path
+
+hashes()
+
+
+def observed(argv, cwd, env, log):
+    if shutil.disk_usage(cwd).free < 8 * 2**30:
+        raise RuntimeError("Storage safety gate: less than 8 GiB free, preserve existing caches and stop experiment")
+    expected = {
+        "JUSTRUST_HOME": str(suite.JR_HOME), "JUSTRUST_REMOTE": "0",
+        "JUSTRUST_TOOLCHAIN": "nightly-2026-10-08", "CARGO_BUILD_JOBS": "24",
+        "JUSTRUST_CARGO_FORK": "1", "JUSTRUST_CARGO_DAEMON": "0",
+        "JUSTRUST_SHADOW": "0", "JUSTRUST_CARGO_CRITICAL_PATH": mode,
+        "JUSTRUST_CARGO_CRITICAL_PATH_COSTS": os.environ["JUSTRUST_CARGO_CRITICAL_PATH_COSTS"],
+        "JUSTRUST_NO_UPDATE": "1", "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+    }
+    assert argv[0] == suite.J
+    for name, value in expected.items():
+        assert env.get(name) == value, (name, env.get(name), value)
+    rid = env["JUSTRUST_RUN_ID_OVERRIDE"]
+    row = {"id": rid, "argv": argv[1:], "mode": mode, "jobs": 24,
+           "exec_controls_verified": True, "private_home_passed": True,
+           "costs_sha256": expected_hashes[os.environ["JUSTRUST_CARGO_CRITICAL_PATH_COSTS"]],
+           "start": time.time()}
+    receipt.write(json.dumps({**row, "event": "before-exec"}) + "\n")
+    receipt.flush()
+    outcome = original(argv, cwd, env, log)
+    record = suite.JR_HOME / "runs" / rid
+    meta = json.loads((record / "meta.json").read_text())
+    summary = json.loads((record / "summary.json").read_text())
+    assert meta["real_cargo"] == str(expected_cargo), meta
+    assert meta["real_rustc"] == str(expected_rustc), meta
+    assert meta["env"]["CARGO_BUILD_JOBS"] == "24", meta
+    assert meta["place"] == "local", meta
+    assert summary["exit"] == outcome["exit"], (summary["exit"], outcome["exit"])
+    row.update({"event": "after-exec", "exit": outcome["exit"],
+                "wall": outcome["wall"], "candidate_cargo_selected": True,
+                "pinned_compiler_selected": True, "private_home_record_found": True,
+                "summary_exit": summary.get("exit"), "cpu": summary.get("cpu"),
+                "meta_sha256": hashlib.sha256((record / "meta.json").read_bytes()).hexdigest(),
+                "summary_sha256": hashlib.sha256((record / "summary.json").read_bytes()).hexdigest()})
+    receipt.write(json.dumps(row) + "\n")
+    receipt.flush()
+    return outcome
+
+versus.run_counted = observed
+sys.argv = ["bench/suite.py", "run", "--synth", "1", "-n", "1", "--points", "40",
+            "--quiet-wait", "30", "--toolchain", "nightly-2026-10-08",
+            "--out", str(result_dir / f"{mode}-suite.json")]
+try:
+    suite.main()
+    hashes()
+    print("JCODE_CHECKPOINT " + json.dumps({"message": f"Full synthetic epoch mode={mode} completed"}), flush=True)
+finally:
+    receipt.close()

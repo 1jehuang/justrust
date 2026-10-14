@@ -1,0 +1,25 @@
+  synth 1/40 suite-nightly-2026-10-08   20.53s  build --release -p jcode-desktop noisy
+JCODE_PROGRESS {"current": 1, "total": 40, "unit": "points", "eta_seconds": 5532}
+Traceback (most recent call last):
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/observer.py", line 83, in <module>
+    suite.main()
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/harness/bench/suite.py", line 1278, in main
+    args.fn(args)
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/harness/bench/suite.py", line 1081, in cmd_run
+    return cmd_run_synth(args)
+           ^^^^^^^^^^^^^^^^^^^
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/harness/bench/suite.py", line 1145, in cmd_run_synth
+    "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume)}
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/harness/bench/synth/run.py", line 151, in run
+    r = run_point(st, plan, base + k * 10 + rep)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/harness/bench/synth/run.py", line 95, in run_point
+    r = _run(st, plan, plan.cmd, "run")
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/harness/bench/synth/run.py", line 55, in _run
+    r = versus.run_counted(argv, root / plan.cwd, env, log)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<host-home>/bench-scheduler-comprehensive-2172-20261014/observer.py", line 40, in observed
+    raise RuntimeError("Storage safety gate: less than 8 GiB free, preserve existing caches and stop experiment")
+RuntimeError: Storage safety gate: less than 8 GiB free, preserve existing caches and stop experiment

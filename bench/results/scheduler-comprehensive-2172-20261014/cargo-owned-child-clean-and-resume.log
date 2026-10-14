@@ -1,0 +1,14 @@
+6.3G	<host-home>/bench-scheduler-comprehensive-2172-20261014/home/bench/synth/probe-target/desktop-jcode
+[stderr]      Removed 13795 files, 6.6GiB total
+4.1G	<host-home>/bench-scheduler-comprehensive-2172-20261014/home/bench/synth/probe-target/desktop-jcode-desktop
+[stderr]      Removed 12529 files, 4.2GiB total
+167M	<host-home>/bench-scheduler-comprehensive-2172-20261014/home/bench/synth/probe-target/justrust-justrust
+[stderr]      Removed 423 files, 205.1MiB total
+Filesystem      Size  Used Avail Use% Mounted on
+[stderr] on-remote: syncing justrust binary and repo
+[stderr] on-remote: perf_event_paranoid > 1 there, instruction counts will be missing
+on-remote: started in tmux session scheduler-synth-2172-r2 on <host-ssh-address> (hosted); log ~/bench-scheduler-synth-2172-r2.log there
+  bench/on-remote.sh status scheduler-synth-2172-r2    bench/on-remote.sh fetch scheduler-synth-2172-r2
+on-remote: hosted keepalive pid 3498602 (connects every 4 min until the session ends)
+
+--- Command finished with exit code: 0 ---

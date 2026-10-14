@@ -1,0 +1,137 @@
+{
+  "schema": "bounded-comprehensive-attempt-v1",
+  "outcome": "BLOCKED_STORAGE",
+  "seed": 1,
+  "requested_points": 40,
+  "observed_measured_points_off": 1,
+  "observed_measured_points_on": 0,
+  "generator": "86207da453da",
+  "jobs": 24,
+  "all_186_tests_passed_on_host": true,
+  "actual_command_records": [
+    {
+      "id": "20261014-081653879-1167169777",
+      "command": [
+        "build",
+        "--release",
+        "-p",
+        "jcode-desktop"
+      ],
+      "exec_wall": 121.141,
+      "recorded_wall": 121.10095453262329,
+      "exit": 0,
+      "jobs": 24,
+      "actual_selection_verified": true,
+      "exec_controls_verified": true,
+      "meta_sha256": "3b6b2c0fd92c2149b8644f37aea060d8aa3bb238a64091f2330835fb8a198a4b",
+      "summary_sha256": "67e5255c485190a9c101ad2e8231d17aa6754fe443934077c024a92e404c46c4",
+      "numeric_resources": {
+        "avg_build_cores": 11.895077966639342,
+        "peak_build_cores": 24.0,
+        "peak_build_rss_mb": 11252.5234375,
+        "peak_unit_rss_mb": 3131.26953125,
+        "min_mem_available_mb": 83054,
+        "avg_other_cores": 1.4827662582043335,
+        "max_foreign_rustc": 20,
+        "psi_cpu_secs": 21.703893000000008,
+        "psi_mem_secs": 0.001798,
+        "psi_io_secs": 0.341489
+      }
+    },
+    {
+      "id": "20261014-081855187-1167169410",
+      "command": [
+        "build",
+        "--release",
+        "-p",
+        "jcode-desktop"
+      ],
+      "exec_wall": 20.529,
+      "recorded_wall": 20.50817370414734,
+      "exit": 0,
+      "jobs": 24,
+      "actual_selection_verified": true,
+      "exec_controls_verified": true,
+      "meta_sha256": "b7897626ab7babb80678f9f48ac7086bd3321cec4d304747e28fdac87a1e36f9",
+      "summary_sha256": "5404f0f3e573c6fb0759a8570896e6397792cdfffe9e44239b05d5d42d23478f",
+      "numeric_resources": {
+        "avg_build_cores": 5.6104459451078075,
+        "peak_build_cores": 16.01934286667429,
+        "peak_build_rss_mb": 3117.515625,
+        "peak_unit_rss_mb": 2868.88671875,
+        "min_mem_available_mb": 89507,
+        "avg_other_cores": 0.16255946228929063,
+        "max_foreign_rustc": 0,
+        "psi_cpu_secs": 0.009919999999999998,
+        "psi_mem_secs": 0.0,
+        "psi_io_secs": 0.0042569999999999995
+      }
+    },
+    {
+      "id": "20261014-081945795-1167169753",
+      "command": [
+        "test",
+        "-p",
+        "jcode-desktop-ui",
+        "--lib",
+        "--no-run"
+      ],
+      "exec_wall": 55.719,
+      "recorded_wall": 55.686562299728394,
+      "exit": 0,
+      "jobs": 24,
+      "actual_selection_verified": true,
+      "exec_controls_verified": true,
+      "meta_sha256": "d41724ffec568dbc02e6b1d5323703eb0c988814c7d4011406783775e0405761",
+      "summary_sha256": "c882758092aec76c68758041548785973293bf01836bd4ac7604824f740882dd",
+      "numeric_resources": {
+        "avg_build_cores": 11.433088912423408,
+        "peak_build_cores": 23.69432281053681,
+        "peak_build_rss_mb": 8945.7578125,
+        "peak_unit_rss_mb": 3242.0078125,
+        "min_mem_available_mb": 87139,
+        "avg_other_cores": 2.0087886739131253,
+        "max_foreign_rustc": 0,
+        "psi_cpu_secs": 2.2868990000000013,
+        "psi_mem_secs": 0.12362899999999999,
+        "psi_io_secs": 0.497819
+      }
+    }
+  ],
+  "measured_sample": {
+    "wall": 20.529,
+    "exit": 0,
+    "cpu": 114.46,
+    "max_rss_mb": 2868.9,
+    "instructions": null,
+    "compile_failed": false,
+    "tests_failed": 0,
+    "id": "20261014-081855187-1167169410",
+    "tests_passed": 0,
+    "load_before": 8.91,
+    "foreign_rustc_before": 0,
+    "noisy": true,
+    "pre_wall": 121.141
+  },
+  "comparison_available": false,
+  "speedup_claim": null,
+  "CPU_work": null,
+  "execution_span": null,
+  "core_ceiling": null,
+  "storage_guard_free_gib": 8,
+  "initial_free_gib_approx": 21,
+  "after_private_setup_free_gib_approx": 18,
+  "first_guard_observed_free_gib": 6.2,
+  "production_cache_deleted": false,
+  "user_source_deleted": false,
+  "global_client_changed_by_this_trial": false,
+  "limitations": [
+    "No ON epoch and only one noisy OFF point. No broad comparison or speedup.",
+    "Authenticated hosted-machine local-compute mode, not agent-visible transport timing.",
+    "Prebuild max_foreign_rustc20, CPU pressure21.70s. Measured point noisy=true from load8.91.",
+    "Epoch-boundary hashes and trusted-owner receipts are consistency, not continuous attestation.",
+    "Coarse hint costs trained on previously confounded CHECK controls.",
+    "Only newly generated unmeasured probe outputs cleaned via valid Cargo CACHEDIR.TAG child roots, tables/evidence retained.",
+    "No EBS, reboot, IAM, general-sudo or service-cache change. Guest filesystem growth unverified."
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "redacted-log-manifest-v1",
+  "files": [
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/final-host-read.log",
+      "raw_sha256": "1dff79dc3b1097232a3b2e022150d2fcbb692929a3d0d7718c21a15a0affdf9f",
+      "published_sha256": "a6c442437f52301c0f7043588fe6ea96edb4445cd5e3b3ccbdc3b1a351a244b2",
+      "bytes": 1013,
+      "lossless_except_explicit_path_and_address_redaction": true
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/cargo-parent-clean-refusal.log",
+      "raw_sha256": "668ffa0f8f5ca577071da7b9fe085a2228b2d5c4af749b0c39fa5c9bc34258cc",
+      "published_sha256": "e78b8da9c78e732b057a956d4da44ab6eaa5f9928fb9533a092f0ac0cc38ce36",
+      "bytes": 401,
+      "lossless_except_explicit_path_and_address_redaction": true
+    },
+    {
+      "path": "bench/results/scheduler-comprehensive-2172-20261014/cargo-owned-child-clean-and-resume.log",
+      "raw_sha256": "1cd6706eea9dbcc379a428c04732288c42a67dbe25fd994abe5f244c2c79c3d7",
+      "published_sha256": "788095c8af62c9a1cd132808f5df75e5e024ccc04f21a6a0671ed102eb2b2912",
+      "bytes": 1030,
+      "lossless_except_explicit_path_and_address_redaction": true
+    }
+  ]
+}

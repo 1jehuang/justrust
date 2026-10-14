@@ -6502,3 +6502,31 @@ do not claim metadata supplied it. All four summaries are exported under
 so these are functional checks, not timing evidence or queue-reordering proof.
 See `docs/synthetic-context-20261014.md`. The separate comprehensive scheduler
 trial must establish its own complete matched result before any speed claim.
+
+## 2026-10-14: comprehensive scheduler gate stopped safely on scratch capacity
+
+The unchanged seed-1, 40-point, one-sample OFF/ON gate used a private frozen
+0a19 client, c38 candidate Cargo, nightly-2026-10-08 and 24 jobs. All 186
+benchmark tests passed before execution. Three successful actual records
+verified private Cargo/compiler selection, exact execution controls and
+process/summary exit equality: `20261014-081653879-1167169777` (release
+pre-build, 121.101 s recorded), `20261014-081855187-1167169410` (first edited
+UI release point, 20.508 s recorded), and `20261014-081945795-1167169753`
+(next test pre-build, 55.687 s recorded). Executable walls are distinct.
+
+Only one OFF point was measured and marked noisy. ON never began. The first
+pre-build observed up to 20 foreign rustc processes. There is no matched
+comparison, scheduler speedup, default promotion or core-ceiling result.
+The 8-GiB free-space guard stopped both attempts. Standard Cargo refused
+cleaning the untagged parent container; only this trial's three tagged,
+unmeasured stock-probe output roots were cleaned. Model tables, measured
+outputs and existing user/service caches were preserved. Read-only source
+inspection did not verify a safe existing authorized filesystem growth path.
+No volume, reboot, IAM or general-sudo changes were made. Host released 08:28 UTC.
+
+See `docs/scheduler-comprehensive-2172-20261014.md`, the exact three exported
+records in `data/runs/broad-scheduler-2172/`, and hash-audited partial results,
+failure logs and execution receipts under
+`bench/results/scheduler-comprehensive-2172-20261014/`. Public log redactions
+cover operator/home paths and the private SSH address, retaining raw hashes.
+Completion of the broad performance gate remains blocked on scratch capacity.
