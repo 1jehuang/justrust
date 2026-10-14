@@ -947,8 +947,12 @@ pub fn build(
             diagnostics.warnings += 1;
         }
     }
-    diagnostics.compile_failed = units.iter().any(|u| u.exit != 0)
-        || lines.iter().any(|l| l.l.contains("could not compile"));
+    // Nested compiler probes can fail intentionally inside successful tests or
+    // build scripts. Preserve their records and diagnostics, but only classify
+    // the outer command as a compile failure when that command failed too.
+    diagnostics.compile_failed = exit != 0
+        && (units.iter().any(|u| u.exit != 0)
+            || lines.iter().any(|l| l.l.contains("could not compile")));
 
     let rebuild_reasons = lines
         .iter()
@@ -1399,6 +1403,140 @@ fn trunc(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn successful_test_run_ignores_nested_compile_failure() {
+        for captured_errors in [false, true] {
+            let mut lines = vec![OutputLine {
+                t: 1.0,
+                s: "o".into(),
+                l: "test result: ok. 397 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.39s".into(),
+            }];
+            if captured_errors {
+                for l in [
+                    "error[E0308]: mismatched types",
+                    "error: could not compile `reconnect-fixture` (lib) due to 1 previous error",
+                ] {
+                    lines.push(OutputLine {
+                        t: 0.5,
+                        s: "e".into(),
+                        l: l.into(),
+                    });
+                }
+            }
+            let units = [Unit {
+                crate_name: "reconnect_fixture".into(),
+                exit: 1,
+                ..Default::default()
+            }];
+            let s = build(
+                &Meta {
+                    subcommand: "test".into(),
+                    ..Default::default()
+                },
+                GitInfo::default(),
+                0.0,
+                1.1,
+                0,
+                0.0,
+                &lines,
+                &[],
+                &[],
+                &units,
+            );
+            assert!(!s.diagnostics.compile_failed);
+            assert!(!s.index_entry().compile_failed);
+            assert_eq!(
+                (s.tests.passed, s.tests.failed, s.tests.ignored),
+                (397, 0, 3)
+            );
+            assert_eq!(s.all_units, 1);
+            assert_eq!(units[0].exit, 1);
+            assert_eq!(s.diagnostics.compile_errors, usize::from(captured_errors));
+            assert_eq!(s.diagnostics.first_error.is_some(), captured_errors);
+            let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+            assert!(footer.contains("ok: 397 tests passed"), "{footer}");
+            assert!(!footer.contains("FAILED to compile"), "{footer}");
+        }
+    }
+
+    #[test]
+    fn unsuccessful_build_keeps_unit_and_output_compile_failure_verdicts() {
+        for failed_unit in [false, true] {
+            let units = if failed_unit {
+                vec![Unit {
+                    crate_name: "broken".into(),
+                    exit: 1,
+                    ..Default::default()
+                }]
+            } else {
+                vec![]
+            };
+            let lines = if failed_unit {
+                vec![]
+            } else {
+                vec![OutputLine {
+                    t: 0.5,
+                    s: "e".into(),
+                    l: "error: could not compile `broken` (lib) due to 1 previous error".into(),
+                }]
+            };
+            let s = build(
+                &Meta::default(),
+                GitInfo::default(),
+                0.0,
+                1.0,
+                101,
+                0.0,
+                &lines,
+                &[],
+                &[],
+                &units,
+            );
+            assert!(s.diagnostics.compile_failed);
+            assert!(s.index_entry().compile_failed);
+            let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+            assert!(footer.contains("FAILED to compile"), "{footer}");
+        }
+    }
+
+    #[test]
+    fn runtime_test_failure_is_not_a_compile_failure() {
+        let lines = [
+            OutputLine {
+                t: 0.5,
+                s: "o".into(),
+                l: "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s".into(),
+            },
+            OutputLine {
+                t: 0.6,
+                s: "e".into(),
+                l: "error: test failed, to rerun pass `--lib`".into(),
+            },
+        ];
+        let units = [Unit::default()];
+        let s = build(
+            &Meta {
+                subcommand: "test".into(),
+                ..Default::default()
+            },
+            GitInfo::default(),
+            0.0,
+            1.0,
+            101,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &units,
+        );
+        assert!(!s.diagnostics.compile_failed);
+        assert!(!s.index_entry().compile_failed);
+        assert_eq!(s.diagnostics.compile_errors, 0);
+        let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+        assert!(footer.contains("FAILED: 1 of 3 tests failed"), "{footer}");
+        assert!(!footer.contains("FAILED to compile"), "{footer}");
+    }
 
     #[test]
     fn timed_test_lines_become_the_slowest_tests() {
