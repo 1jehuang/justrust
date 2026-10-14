@@ -48,8 +48,55 @@ use std::process::{Command, Stdio};
 
 const MAGIC: &[u8] = b"JRDC1\n";
 const BREAKER_SECS: f64 = 600.0;
+// Authenticated Worker and peer traffic retain the Workers request cap.
 const MAX_BUNDLE: u64 = 95 * 1024 * 1024;
+pub(crate) const PUBLIC_MAX_BUNDLE: u64 = 512 * 1024 * 1024;
+pub(crate) const PUBLIC_MAX_EXPANDED: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_FILES: usize = 64;
+const MAX_META: u64 = 256 * 1024;
+
+fn safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && !name.contains(['/', '\\', ':', '\0'])
+}
+
+/// Publishing uses the same finite budgets as public reads, not Worker limits.
+pub(crate) fn pack_public(dir: &Path, dst: &Path) -> Option<()> {
+    let meta_path = dir.join("meta.json");
+    if std::fs::metadata(&meta_path).ok()?.len() > MAX_META {
+        return None;
+    }
+    let meta: Outputs = serde_json::from_slice(&std::fs::read(meta_path).ok()?).ok()?;
+    if meta.files.len() > MAX_FILES {
+        return None;
+    }
+    let mut expanded = MAGIC.len() as u64;
+    let mut seen = std::collections::HashSet::new();
+    for name in meta
+        .files
+        .iter()
+        .map(|f| f.name.as_str())
+        .chain(["meta.json"])
+    {
+        if !safe_name(name) || !seen.insert(name) {
+            return None;
+        }
+        let m = std::fs::symlink_metadata(dir.join(name)).ok()?;
+        if !m.is_file() {
+            return None;
+        }
+        expanded = expanded
+            .checked_add(16 + name.len() as u64)?
+            .checked_add(m.len())?;
+        if expanded > PUBLIC_MAX_EXPANDED {
+            return None;
+        }
+    }
+    pack_limited(dir, dst, PUBLIC_MAX_BUNDLE)?;
+    (std::fs::metadata(dst).ok()?.len() <= PUBLIC_MAX_BUNDLE).then_some(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -194,12 +241,41 @@ fn rand_suffix() -> u64 {
 
 /// Pack `dir` (one `o/<out>` entry) into a gzip bundle at `dst`.
 pub(crate) fn pack(dir: &Path, dst: &Path) -> Option<()> {
+    pack_limited(dir, dst, u64::MAX)
+}
+
+struct BundleWriter<W> {
+    inner: W,
+    remaining: u64,
+}
+
+impl<W: Write> Write for BundleWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.len() as u64 > self.remaining {
+            return Err(std::io::Error::other("compressed bundle budget exceeded"));
+        }
+        let n = self.inner.write(buf)?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn pack_limited(dir: &Path, dst: &Path, compressed: u64) -> Option<()> {
     let meta: Outputs = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
     let mut names: Vec<String> = meta.files.iter().map(|f| f.name.clone()).collect();
     names.push("meta.json".into());
     let f = std::fs::File::create(dst).ok()?;
-    let mut gz =
-        flate2::write::GzEncoder::new(std::io::BufWriter::new(f), flate2::Compression::fast());
+    let mut gz = flate2::write::GzEncoder::new(
+        std::io::BufWriter::new(BundleWriter {
+            inner: f,
+            remaining: compressed,
+        }),
+        flate2::Compression::fast(),
+    );
     gz.write_all(MAGIC).ok()?;
     for name in names {
         let p = dir.join(&name);
@@ -217,8 +293,21 @@ pub(crate) fn pack(dir: &Path, dst: &Path) -> Option<()> {
 /// Unpack a bundle into a fresh `dst` dir, verifying names, the file list
 /// against `meta.json`, and every binary output's content hash.
 pub(crate) fn unpack(src: &Path, dst: &Path) -> Option<()> {
+    unpack_limited(src, dst, MAX_BUNDLE, 4 * MAX_BUNDLE)
+}
+
+/// Static public artifacts bypass the Worker, but still have finite disk budgets.
+pub(crate) fn unpack_public(src: &Path, dst: &Path) -> Option<()> {
+    unpack_limited(src, dst, PUBLIC_MAX_BUNDLE, PUBLIC_MAX_EXPANDED)
+}
+
+fn unpack_limited(src: &Path, dst: &Path, compressed: u64, expanded: u64) -> Option<()> {
     let f = std::fs::File::open(src).ok()?;
-    let mut r = flate2::read::GzDecoder::new(std::io::BufReader::new(f)).take(4 * MAX_BUNDLE);
+    if f.metadata().ok()?.len() > compressed {
+        return None;
+    }
+    // One extra byte distinguishes genuine EOF from exhaustion of the budget.
+    let mut r = flate2::read::GzDecoder::new(std::io::BufReader::new(f)).take(expanded + 1);
     let mut magic = [0u8; 6];
     r.read_exact(&mut magic).ok()?;
     if magic != MAGIC {
@@ -240,11 +329,7 @@ pub(crate) fn unpack(src: &Path, dst: &Path) -> Option<()> {
         let mut name = vec![0u8; n];
         r.read_exact(&mut name).ok()?;
         let name = String::from_utf8(name).ok()?;
-        if name.contains('/')
-            || name.starts_with('.')
-            || name.contains('\0')
-            || seen.contains(&name)
-        {
+        if !safe_name(&name) || seen.contains(&name) {
             return None;
         }
         let mut mode = [0u8; 4];
@@ -252,6 +337,9 @@ pub(crate) fn unpack(src: &Path, dst: &Path) -> Option<()> {
         let mut len = [0u8; 8];
         r.read_exact(&mut len).ok()?;
         let len = u64::from_le_bytes(len);
+        if len > r.limit().saturating_sub(1) || (name == "meta.json" && len > MAX_META) {
+            return None;
+        }
         let p = dst.join(&name);
         let mut out = std::fs::File::create(&p).ok()?;
         if std::io::copy(&mut (&mut r).take(len), &mut out).ok()? != len {
@@ -261,12 +349,16 @@ pub(crate) fn unpack(src: &Path, dst: &Path) -> Option<()> {
         crate::sys::set_mode(&p, mode | 0o600).ok()?;
         seen.push(name);
     }
+    if r.limit() == 0 {
+        return None;
+    }
     let meta: Outputs = serde_json::from_slice(&std::fs::read(dst.join("meta.json")).ok()?).ok()?;
     if seen.len() != meta.files.len() + 1 {
         return None;
     }
+    let mut listed = std::collections::HashSet::new();
     for f in &meta.files {
-        if !seen.contains(&f.name) {
+        if f.name == "meta.json" || !listed.insert(&f.name) || !seen.contains(&f.name) {
             return None;
         }
         if !f.text && depcache::hash_file_content(&dst.join(&f.name))? != f.hash {
@@ -556,6 +648,141 @@ mod tests {
     }
 
     #[test]
+    fn public_unpack_rejects_hostile_record_structure() {
+        let root = tmpdir("records");
+        let write = |records: Vec<(&str, u64, &[u8])>| {
+            let p = root.join("records.gz");
+            let mut gz = flate2::write::GzEncoder::new(
+                std::fs::File::create(&p).unwrap(),
+                flate2::Compression::fast(),
+            );
+            gz.write_all(MAGIC).unwrap();
+            for (name, len, bytes) in records {
+                gz.write_all(&(name.len() as u32).to_le_bytes()).unwrap();
+                gz.write_all(name.as_bytes()).unwrap();
+                gz.write_all(&0o644u32.to_le_bytes()).unwrap();
+                gz.write_all(&len.to_le_bytes()).unwrap();
+                gz.write_all(bytes).unwrap();
+            }
+            gz.finish().unwrap();
+            p
+        };
+        let out = root.join("out");
+        for records in [
+            vec![("x", u64::MAX, b"".as_slice())],
+            vec![("meta.json", MAX_META + 1, b"".as_slice())],
+            vec![("x", 1, b"x".as_slice()), ("x", 1, b"x".as_slice())],
+        ] {
+            assert!(unpack_public(&write(records), &out).is_none());
+            let _ = std::fs::remove_dir_all(&out);
+        }
+        let names: Vec<_> = (0..MAX_FILES + 2).map(|i| format!("file{i}")).collect();
+        assert!(
+            unpack_public(
+                &write(
+                    names
+                        .iter()
+                        .map(|n| (n.as_str(), 0, b"".as_slice()))
+                        .collect()
+                ),
+                &out
+            )
+            .is_none()
+        );
+        std::fs::remove_dir_all(&out).unwrap();
+        let meta = serde_json::json!({"files": [
+            {"name": "x", "hash": "unused", "text": true},
+            {"name": "x", "hash": "unused", "text": true}
+        ], "stderr": [], "wall": 1.0})
+        .to_string();
+        let records = vec![
+            ("x", 0, b"".as_slice()),
+            ("y", 0, b"".as_slice()),
+            ("meta.json", meta.len() as u64, meta.as_bytes()),
+        ];
+        assert!(unpack_public(&write(records), &out).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bundle_budgets_reject_oversize_and_exhaustion() {
+        let root = tmpdir("budgets");
+        let dir = entry_dir(&root);
+        let b = root.join("b.gz");
+        pack_public(&dir, &b).unwrap();
+        let compressed = std::fs::metadata(&b).unwrap().len();
+        let mut decoded = Vec::new();
+        flate2::read::GzDecoder::new(std::fs::File::open(&b).unwrap())
+            .read_to_end(&mut decoded)
+            .unwrap();
+        let expanded = decoded.len() as u64;
+        assert!(unpack_limited(&b, &root.join("exact"), compressed, expanded).is_some());
+        assert!(unpack_limited(&b, &root.join("compressed"), compressed - 1, expanded).is_none());
+        assert!(!root.join("compressed").exists());
+        let limited = root.join("pack-limited.gz");
+        assert!(pack_limited(&dir, &limited, compressed - 1).is_none());
+        assert!(std::fs::metadata(&limited).unwrap().len() < compressed);
+        assert!(unpack_limited(&b, &root.join("expanded"), compressed, expanded - 1).is_none());
+        // A budget ending exactly at a record boundary must not masquerade as EOF.
+        let boundary = MAGIC.len() as u64 + 16 + "build_script_build-abc".len() as u64 + 4;
+        assert!(unpack_limited(&b, &root.join("boundary"), compressed, boundary).is_none());
+        let mut bytes = std::fs::read(&b).unwrap();
+        let crc = bytes.len() - 8;
+        bytes[crc] ^= 1;
+        let corrupt = root.join("corrupt.gz");
+        std::fs::write(&corrupt, &bytes).unwrap();
+        assert!(unpack_public(&corrupt, &root.join("crc")).is_none());
+        bytes.truncate(crc);
+        std::fs::write(&corrupt, &bytes).unwrap();
+        assert!(unpack_public(&corrupt, &root.join("truncated")).is_none());
+        let oversized = root.join("oversized.gz");
+        std::fs::File::create(&oversized)
+            .unwrap()
+            .set_len(PUBLIC_MAX_BUNDLE + 1)
+            .unwrap();
+        assert!(unpack_public(&oversized, &root.join("oversized")).is_none());
+        assert!(!root.join("oversized").exists());
+        std::fs::File::create(dir.join("libx-abc.rlib"))
+            .unwrap()
+            .set_len(PUBLIC_MAX_EXPANDED)
+            .unwrap();
+        assert!(pack_public(&dir, &root.join("too-big.gz")).is_none());
+        assert!(!root.join("too-big.gz").exists());
+        std::fs::File::create(dir.join("meta.json"))
+            .unwrap()
+            .set_len(MAX_META + 1)
+            .unwrap();
+        assert!(pack_public(&dir, &root.join("meta-too-big.gz")).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn public_publish_rejects_unsafe_names_and_symlinks() {
+        let root = tmpdir("publish-bad");
+        let dir = entry_dir(&root);
+        for name in [
+            "../escape",
+            "..\\escape",
+            "C:escape",
+            ".hidden",
+            "meta.json",
+            "x\0y",
+        ] {
+            let meta = serde_json::json!({"files": [{"name": name, "hash": "x", "text": false}], "stderr": [], "wall": 1.0});
+            std::fs::write(dir.join("meta.json"), meta.to_string()).unwrap();
+            assert!(pack_public(&dir, &root.join("bad.gz")).is_none(), "{name}");
+        }
+        #[cfg(unix)]
+        {
+            let dir = entry_dir(&root);
+            std::fs::remove_file(dir.join("libx-abc.rlib")).unwrap();
+            std::os::unix::fs::symlink("/etc/passwd", dir.join("libx-abc.rlib")).unwrap();
+            assert!(pack_public(&dir, &root.join("link.gz")).is_none());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bundle_round_trip_keeps_bytes_and_modes() {
         let root = tmpdir("rt");
         let dir = entry_dir(&root);
@@ -592,6 +819,7 @@ mod tests {
         let b = root.join("b.gz");
         pack(&dir, &b).unwrap();
         assert!(unpack(&b, &root.join("o1")).is_none());
+        assert!(unpack_public(&b, &root.join("public-tampered")).is_none());
 
         // Path traversal in a file name.
         let write = |name: &str| {
@@ -612,6 +840,9 @@ mod tests {
         assert!(unpack(&write("../escape"), &root.join("o2")).is_none());
         assert!(!root.join("escape").exists());
         assert!(unpack(&write(".hidden"), &root.join("o3")).is_none());
+        for name in ["../escape", "..\\escape", "C:escape", ".hidden", "x\0y"] {
+            assert!(unpack_public(&write(name), &root.join("public-path")).is_none());
+        }
         // No meta.json at all.
         assert!(unpack(&write("lonely"), &root.join("o4")).is_none());
         // Not a bundle.

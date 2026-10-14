@@ -36,7 +36,7 @@
 //! the fleet then syncs to the bucket.
 
 use crate::depcache::{self, Entry, Plan};
-use crate::depcache_remote::{pack, unpack};
+use crate::depcache_remote::{PUBLIC_MAX_BUNDLE, pack_public as pack, unpack_public as unpack};
 use crate::paths;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -163,6 +163,7 @@ fn get_once(base: &str, rel: &str, dst: &Path, max_time: u32, max_bytes: u64) ->
         .output();
     let code: u16 = out
         .ok()
+        .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
         .unwrap_or(0);
     match code {
@@ -437,7 +438,13 @@ fn fetch_from(base: &str, plan: &Plan, err: &mut dyn Write) -> Option<depcache::
             .join(format!(".{out}.pb{}", std::process::id()));
         let t0 = std::time::Instant::now();
         let ok = matches!(
-            get(base, &format!("o/{out}.jrdc"), &bundle, 120, 95 << 20),
+            get(
+                base,
+                &format!("o/{out}.jrdc"),
+                &bundle,
+                120,
+                PUBLIC_MAX_BUNDLE
+            ),
             Got::Ok
         ) && {
             let n = std::fs::metadata(&bundle).map(|m| m.len()).unwrap_or(0);
@@ -683,8 +690,33 @@ mod tests {
 
     #[test]
     fn publish_then_fetch_into_an_empty_cache() {
+        publish_fetch_round_trip(false, None);
+    }
+
+    #[test]
+    fn public_publish_fetch_allows_bundle_above_worker_cap() {
+        publish_fetch_round_trip(true, None);
+    }
+
+    #[test]
+    #[ignore = "requires an existing real artifact via JUSTRUST_TEST_PUBLIC_ARTIFACT"]
+    fn public_real_artifact_round_trip() {
+        let artifact = PathBuf::from(
+            std::env::var_os("JUSTRUST_TEST_PUBLIC_ARTIFACT").expect("real artifact path"),
+        );
+        publish_fetch_round_trip(false, Some(&artifact));
+    }
+
+    fn publish_fetch_round_trip(large: bool, real_artifact: Option<&Path>) {
         use crate::depcache::Norm;
-        let dir = std::env::temp_dir().join(format!("jr-prebuilt-rt-{}", std::process::id()));
+        let dir = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "jr-prebuilt-rt-{large}-{}-{}",
+                real_artifact.is_some(),
+                std::process::id()
+            ));
         let _ = std::fs::remove_dir_all(&dir);
         let src = dir.join("src.rs");
         std::fs::create_dir_all(dir.join("t1/debug/deps")).unwrap();
@@ -711,11 +743,65 @@ mod tests {
             format!("{0}/x-abc.d: {1}\n\n{1}:\n", deps1.display(), src.display()),
         )
         .unwrap();
-        std::fs::write(deps1.join("libx-abc.rmeta"), b"rmeta").unwrap();
-        p1.store(0.0, 2.5, &[]).unwrap();
+        let artifact_name =
+            if real_artifact.is_some_and(|p| p.extension().is_some_and(|e| e == "rlib")) {
+                "libx-abc.rlib"
+            } else {
+                "libx-abc.rmeta"
+            };
+        let artifact = deps1.join(artifact_name);
+        if let Some(src) = real_artifact {
+            std::fs::copy(src, &artifact).unwrap();
+        } else if large {
+            // Incompressible deterministic bytes exercise the actual compressed cap,
+            // not just a tiny gzip expanding to a large zero-filled file.
+            let mut file = std::fs::File::create(&artifact).unwrap();
+            let mut state = 0x123456789abcdefu64;
+            let mut chunk = [0u8; 64 * 1024];
+            for _ in 0..1536 {
+                // 96 MiB
+                for bytes in chunk.as_chunks_mut::<8>().0 {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    bytes.copy_from_slice(&state.to_le_bytes());
+                }
+                file.write_all(&chunk).unwrap();
+            }
+        } else {
+            std::fs::write(&artifact, b"rmeta").unwrap();
+        }
+        p1.store(0.0, 2500.0, &[]).unwrap();
         let store = dir.join("store");
         let first = publish(&p1.root, &store).unwrap();
         assert_eq!((first.bundles, first.lines), (1, 1));
+        if real_artifact.is_some() || large {
+            let bundle = std::fs::read_dir(store.join("v1/o"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            eprintln!(
+                "public artifact (real={}): raw={} gzip={}",
+                real_artifact.is_some(),
+                std::fs::metadata(&artifact).unwrap().len(),
+                std::fs::metadata(bundle).unwrap().len()
+            );
+        }
+        if large {
+            let bundle = std::fs::read_dir(store.join("v1/o"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            assert!(std::fs::metadata(&bundle).unwrap().len() > 95 << 20);
+            assert!(
+                crate::depcache_remote::unpack(&bundle, &dir.join("private-rejected")).is_none()
+            );
+            assert!(!dir.join("private-rejected").exists());
+        }
         // Idempotent.
         let again = publish(&p1.root, &store).unwrap();
         assert_eq!((again.bundles, again.lines), (0, 0));
@@ -729,16 +815,16 @@ mod tests {
         let p2 = mk("t2", "cache2");
         assert!(p2.restore(&mut Vec::new()).is_none());
         let hit = fetch_from(&base, &p2, &mut Vec::new()).expect("prebuilt hit");
-        assert_eq!(hit.saved_secs, 2.5);
+        assert_eq!(hit.saved_secs, 2500.0);
         // Published with its price: compile ms and bundle bytes.
         let costs = std::fs::read_to_string(store.join("v1/costs")).unwrap();
         assert!(
-            costs.starts_with(&format!("{} 2500 ", "b".repeat(32))),
+            costs.starts_with(&format!("{} 2500000 ", "b".repeat(32))),
             "{costs}"
         );
         assert_eq!(
-            std::fs::read(p2.out_dir.join("libx-abc.rmeta")).unwrap(),
-            b"rmeta"
+            depcache::hash_file_content(&p2.out_dir.join(artifact_name)),
+            depcache::hash_file_content(&artifact)
         );
         // Installed locally: the next lookup is a local hit.
         assert!(p2.restore(&mut Vec::new()).is_some());
