@@ -6150,5 +6150,15 @@ bindings, quotas or defaults. Pinned independent fleet launched at 03:21 but fin
 publication/fresh reuse and a new tenant bootstrap remain unobserved. Native
 rootfs sharing remains unauthorized. Registry archive seeding stays opt-in
 because measured full-network median 1.697 s lost to direct cold 1.057 s. No
-performance speedup is claimed. Full observations and 37 exact redacted records
+performance speedup is claimed. Full observations and 41 exact redacted records
 are mapped in `docs/sharing-rollout-20261014.md`.
+
+The prospective frozen-client guard then passed actual hosted acceptance at
+04:12:42–04:13:16 UTC: known SHA2153a809/ec42 snapshot, 66 matched Git source
+blobs, all four commands exit zero, exact snapshot tests 386 passed/three ignored
+(`20261013-211249431-1273980`), strict lint and repeated check passed. All
+per-step client digest and hosted/compiler-pin metadata guards passed. Receipt
+`docs/sharing-frozen-acceptance-20261014.json` and four new exact exports close
+future attribution, not the historical mutable-client epoch. Initial check
+`20261013-211242111-1273414` had 68 account dependency-cache hits/five misses,
+not public-store hits or the 73 hits of an older packaging run. No speed claim.

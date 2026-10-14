@@ -64,8 +64,23 @@ missing/ambiguous/mismatched records, unrelated and old records, actual parser
 help/rejection, timeout diagnostics, failed workflow receipts and no-clobber
 output directories. Simulated process/metadata checks are synthetic validation.
 
-Live frozen-client execution is a separate pending rollout gate. Fleet final
-publication, a fresh public dependency hit, a genuinely new host consuming
-bootstrap configuration, and portable native-script closure must each have
-their own actual observations. The general functional receipt cannot substitute
+## Actual frozen hosted acceptance
+
+At 04:12:42–04:13:16 UTC on 2026-10-14, after explicit host lease release,
+the known `2153a809...` client ran all four real workflows against the separate
+`ec42e0f` snapshot. All 66 source/test/asset/manifest Git blobs matched the
+committed input. Check, full tests (386 passed, three ignored), strict all-target
+clippy and repeated check exited zero. Every per-step executable digest guard
+and hosted/compiler-pin/own-session metadata guard passed. The reviewed receipt
+is `docs/sharing-frozen-acceptance-20261014.json`, and the four exact redacted
+records are in `data/runs/sharing-20261014/2026-10.jsonl`. Private raw-log digests
+were checked against the receipt. No install or service default change occurred.
+
+This is actual end-user functional acceptance of the guard and frozen snapshot,
+not a controlled timing comparison. It does not retroactively attribute the
+older mutable-client epoch or attest every remote compiler byte.
+
+Fleet final publication, a fresh public dependency hit, a genuinely new host
+consuming bootstrap configuration, and portable native-script closure remain
+separate pending rollout gates. The general functional receipt cannot substitute
 for those outcomes.

@@ -1,0 +1,115 @@
+{
+  "client_sha256": "2153a809b3f91826f4baa9acd81ad5ccc4fb7102f17aacb029469853f38b5a53",
+  "complete": true,
+  "finished": 1791951196.714817,
+  "observed_tests": {
+    "failed": 0,
+    "ignored": 3,
+    "passed": 386
+  },
+  "schema_version": 1,
+  "scope": "hosted functionality and executable identity, not speed",
+  "source_snapshot_verification": {
+    "commit": "ec42e0f2e92eb429ac5a020419f03e9a1288a15c",
+    "matched_git_blobs": 66,
+    "scope": [
+      "src",
+      "tests",
+      "Cargo.toml",
+      "Cargo.lock",
+      "assets"
+    ]
+  },
+  "started": 1791951161.9928226,
+  "steps": [
+    {
+      "args": [
+        "check"
+      ],
+      "exit": 0,
+      "finished": 1791951169.3221586,
+      "name": "check",
+      "output_sha256": "b82495c66c708456bcb410852c6180ca2068468f4f9783d1ce2b85a6e3fdf7d9",
+      "run": {
+        "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+        "args": [
+          "check"
+        ],
+        "id": "20261013-211242111-1273414",
+        "ncpu": 24,
+        "place": "hosted",
+        "toolchain": "nightly-2026-10-08"
+      },
+      "started": 1791951162.028026
+    },
+    {
+      "args": [
+        "test"
+      ],
+      "exit": 0,
+      "finished": 1791951189.1224136,
+      "name": "test",
+      "output_sha256": "5104b20041d079a0b72125312925048de8d427c5848102fddcae36275043deee",
+      "run": {
+        "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+        "args": [
+          "test"
+        ],
+        "id": "20261013-211249431-1273980",
+        "ncpu": 24,
+        "place": "hosted",
+        "toolchain": "nightly-2026-10-08"
+      },
+      "started": 1791951169.4302452
+    },
+    {
+      "args": [
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "finished": 1791951195.9695072,
+      "name": "clippy",
+      "output_sha256": "10fa9f661f6ff55399bf81ee76b4c81e07b94533f2ce88c80db658c3807f77b6",
+      "run": {
+        "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+        "args": [
+          "clippy",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "id": "20261013-211309237-1275511",
+        "ncpu": 24,
+        "place": "hosted",
+        "toolchain": "nightly-2026-10-08"
+      },
+      "started": 1791951189.235903
+    },
+    {
+      "args": [
+        "check"
+      ],
+      "exit": 0,
+      "finished": 1791951196.6677034,
+      "name": "recheck",
+      "output_sha256": "bd21f5a794b853259b940ef46446aaf87a61d1a11f33f2bd2ddcaed11afada85",
+      "run": {
+        "agent_session": "session_turtle_1791942231222_3185232151e7f625",
+        "args": [
+          "check"
+        ],
+        "id": "20261013-211316062-1276007",
+        "ncpu": 24,
+        "place": "hosted",
+        "toolchain": "nightly-2026-10-08"
+      },
+      "started": 1791951196.061307
+    }
+  ],
+  "toolchain": "nightly-2026-10-08"
+}

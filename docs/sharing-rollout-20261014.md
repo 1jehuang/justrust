@@ -74,7 +74,15 @@ Corrected hosted unit/lint records are `20261013-204019831-1054567`, `20261013-2
 
 The final truly plain hosted check/full tests/strict all-target lint/recheck passed: `20261013-204221552-1065216`, `20261013-204245695-1067158` (390 passed, three ignored), `20261013-204256351-1067708`, `20261013-204301091-1067934`. Concurrent agents subsequently replaced the mutable global CLI with other digests; these run records contain no exact client digest field. Retain their functional hosted results, but do not attribute the entire sequence to one frozen executable or claim the current global CLI is our accepted digest. The direct installer digest and separate immutable binary remain verified; subsequent benchmarks use that explicit frozen artifact.
 
-All 37 selected records in `data/runs/sharing-20261014/2026-10.jsonl` retain failures and are path-redacted. No unrelated peer rows are included.
+All 41 selected records in `data/runs/sharing-20261014/2026-10.jsonl` retain failures and are path-redacted. No unrelated peer rows are included.
+
+## Independent frozen-client whole-workflow acceptance
+
+The prospective guard in `7a68c0d` was exercised on the actual hosted interface at 04:12:42–04:13:16 UTC after an explicit serialized host release. It invoked the separate known `2153a809...` executable, never the mutable global symlink, against the exact `ec42e0f` snapshot. All 66 source/test/asset/manifest blobs matched their committed Git object identities. The receipt verified the client SHA before and after every command, current-session argv/run attribution, recorded `place=hosted`, and `toolchain=nightly-2026-10-08`. No run-ID override, client installation, service default change or worker deployment occurred.
+
+Actual check `20261013-211242111-1273414`, full tests `20261013-211249431-1273980`, strict all-target lint `20261013-211309237-1275511`, and recheck `20261013-211316062-1276007` all exited zero. The exact snapshot passed **386 tests with three ignored**, distinct from the later working-tree 390-test sequence. The initial new-root check had 68 dependency-cache hits and five misses, not the 73-hit count of an older packaging run. Those hits were existing account cache reuse, not fresh public-store acceptance. The final check had 62 fresh units.
+
+`docs/sharing-frozen-acceptance-20261014.json` contains the reviewed path-free complete receipt, exact run IDs and raw-log SHA-256 identities. Raw logs remain private. This closes the frozen-client functionality attribution gap prospectively without relabeling historical mutable-client runs or claiming a quiet speed comparison. The selected compiler pin is observed in metadata, not an independent per-invocation digest attestation of every server tool. Host ownership was explicitly released at 04:13:16.72 UTC to the waiting platform/package sessions.
 
 ## Rollout and remaining boundaries
 
