@@ -1,0 +1,42 @@
+{
+  "variant": "before-disabled",
+  "summary": {
+    "one": {
+      "samples": 1,
+      "min_ns": 175797477,
+      "median_ns": 175797477,
+      "max_ns": 175797477,
+      "median_throughput_pairs_per_second": 455069.1020440527
+    },
+    "multi": {
+      "samples": 1,
+      "min_ns": 171087859,
+      "median_ns": 171087859,
+      "max_ns": 171087859,
+      "median_throughput_pairs_per_second": 467596.0086682714
+    },
+    "immediate": {
+      "samples": 1,
+      "min_ns": 847706,
+      "median_ns": 847706,
+      "max_ns": 847706,
+      "median_throughput_pairs_per_second": 11796542.669274488
+    },
+    "pending-one": {
+      "samples": 1,
+      "min_ns": 123223,
+      "median_ns": 123223,
+      "max_ns": 123223,
+      "median_throughput_pairs_per_second": 64922.94458015143
+    },
+    "pending-multi": {
+      "samples": 1,
+      "min_ns": 136667,
+      "median_ns": 136667,
+      "max_ns": 136667,
+      "median_throughput_pairs_per_second": 58536.442594042455
+    }
+  },
+  "failures": [],
+  "out": "results/preliminary-individual/0-before-disabled.json"
+}

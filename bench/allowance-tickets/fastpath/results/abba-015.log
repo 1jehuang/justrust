@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/allowance-tickets/fastpath/compare.py", line 93, in <module>
+    main()
+    ~~~~^^
+  File "/home/jeremy/justrust/bench/allowance-tickets/fastpath/compare.py", line 44, in main
+    'exit_code': result.returncode, 'evidence_file': str(out.relative_to(ROOT))})
+                                                         ~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 490, in relative_to
+    raise ValueError(f"{str(self)!r} is not in the subpath of {str(other)!r}")
+ValueError: 'results/abba-015-individual/00-disabled-0-before.json' is not in the subpath of '/home/jeremy/justrust/bench/allowance-tickets/fastpath'

@@ -1,0 +1,42 @@
+{
+  "variant": "after-enabled",
+  "summary": {
+    "one": {
+      "samples": 1,
+      "min_ns": 265182932,
+      "median_ns": 265182932,
+      "max_ns": 265182932,
+      "median_throughput_pairs_per_second": 301678.54091001605
+    },
+    "multi": {
+      "samples": 1,
+      "min_ns": 145142267,
+      "median_ns": 145142267,
+      "max_ns": 145142267,
+      "median_throughput_pairs_per_second": 551183.343443299
+    },
+    "immediate": {
+      "samples": 1,
+      "min_ns": 320848,
+      "median_ns": 320848,
+      "max_ns": 320848,
+      "median_throughput_pairs_per_second": 31167406.373111255
+    },
+    "pending-one": {
+      "samples": 1,
+      "min_ns": 176139,
+      "median_ns": 176139,
+      "max_ns": 176139,
+      "median_throughput_pairs_per_second": 45418.67502370287
+    },
+    "pending-multi": {
+      "samples": 1,
+      "min_ns": 192021,
+      "median_ns": 192021,
+      "max_ns": 192021,
+      "median_throughput_pairs_per_second": 41662.10987339926
+    }
+  },
+  "failures": [],
+  "out": "results/preliminary-individual/5-after-enabled.json"
+}

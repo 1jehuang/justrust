@@ -1,0 +1,15 @@
+[package]
+name = "allowance-tickets-baseline"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = []
+after = []
+
+[dependencies]
+jobserver_crate = { version = "=0.1.34", package = "jobserver" }
+parking_lot = "0.12"

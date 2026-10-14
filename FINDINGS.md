@@ -7117,3 +7117,31 @@ default promotion. Callback-in-flight teardown, real helper IO error injection,
 Registry/query integration, resource receipt reconciliation and comprehensive
 session-weighted performance gates remain open. No full graph or CPU/span
 ceiling follows from these results.
+
+## 2026-10-14: slot-free allowance candidate trades idle cost for contention
+
+The evaluated `1233aa16` candidate eliminates the idle path's request-slot
+allocation and acknowledges the implicit grant under one protected State lock.
+Its native crate passed 133 tests and 5 doctests. Source-matched compiler/query,
+Cargo and macro-neutrality acceptance also passed after correcting acceptance
+ordering: native crate tests replace the bootstrap private-metadata sysroot,
+so the real private-driver callback fixture must run before those crate tests.
+No compiler-source fix or metadata substitution was used for that setup failure.
+Hosted whole-client run `20261014-134444010-1418389` passed 559 tests, alongside
+check `20261014-134442741-1418120` and strict lint
+`20261014-134457381-1417956`.
+
+The matched real-source ABBA/BAAB fixture retained 720 samples in 120 batches.
+Idle 10,000-pair medians improved from 1.073910 to 0.266289 ms with event rows
+disabled and 1.176994 to 0.383702 ms enabled. But natural four-token contention
+medians increased from 174.861898 to 189.085572 ms disabled and 170.185051 to
+214.829179 ms enabled. Paired blocks were slower in 11/15 disabled and 14/15
+enabled comparisons. Forced-pending one-token medians also increased. These
+regressions are not averaged away or dismissed as noise; all outliers and
+capacity/conservation checks remain in `bench/allowance-tickets/fastpath/`.
+
+The candidate is not promoted as an overall improvement or made the default.
+The extra initial State lock on the contended path motivates a separately
+measured advisory-idle-hint alternative. Correct native predicates remain the
+only admission authority. Full pipeline/resource mapping, fairness and general
+compile-speed claims are still unsupported.

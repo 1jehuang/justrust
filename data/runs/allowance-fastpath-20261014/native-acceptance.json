@@ -1,0 +1,1002 @@
+{
+  "benchmark": {
+    "batch_hashes": {
+      "base": "bench/allowance-tickets/fastpath",
+      "columns": [
+        "relative_path",
+        "sha256"
+      ],
+      "rows": [
+        [
+          "results/abba-015-retry-individual/00-disabled-0-before.json",
+          "96cfa9fc6549bb9ce469a05c57c3f301cbb265eda82358d5beb81e19819c98bb"
+        ],
+        [
+          "results/abba-015-retry-individual/00-disabled-1-after.json",
+          "29947c34dc3ef8537ec5a8bed47769adc3b5774f25abe579db4d0f98c516c497"
+        ],
+        [
+          "results/abba-015-retry-individual/00-disabled-2-after.json",
+          "0b85194b5d0907d02276958b5f583b535f76f1b0aefd29127133763cfcfc570b"
+        ],
+        [
+          "results/abba-015-retry-individual/00-disabled-3-before.json",
+          "38246bb33bb707264f9f40d7b1b7fd625907614bd8b55b799c0675b5aa1400a1"
+        ],
+        [
+          "results/abba-015-retry-individual/00-enabled-0-before.json",
+          "a72fdf56581911634f8831f0f98c0794621fbd036c70407ecdecf3e0d6dff5fc"
+        ],
+        [
+          "results/abba-015-retry-individual/00-enabled-1-after.json",
+          "fde0c9e71c5eb06b78164904c446ed4040ef1d3aaa0cbd91a494429b82dc8d02"
+        ],
+        [
+          "results/abba-015-retry-individual/00-enabled-2-after.json",
+          "5396badaf1c472a0f626b1e4dd1149747205573aace91a667507321d19d78691"
+        ],
+        [
+          "results/abba-015-retry-individual/00-enabled-3-before.json",
+          "29f3a54b94ae079661a89afc8c803bc60cad4b6c911c9cbdd0c6ea4dafb545ff"
+        ],
+        [
+          "results/abba-015-retry-individual/01-enabled-0-after.json",
+          "b2706d58073bdb25f3c93b78b97e7e52cdd46c748de6e23528a8d9a9ab1ea260"
+        ],
+        [
+          "results/abba-015-retry-individual/01-enabled-1-before.json",
+          "875fe72b863baf09037369f112d0d3d34dbf6682ce1558b556fa0ef6d8a8e8f7"
+        ],
+        [
+          "results/abba-015-retry-individual/01-enabled-2-before.json",
+          "8d83fa2f61d901e51c72888abd16d12cefeab72f90181a0439339516e1c0f444"
+        ],
+        [
+          "results/abba-015-retry-individual/01-enabled-3-after.json",
+          "a722a3f1f8b13aa741161a06362861e145e403922a021617900dd4270e1b86e0"
+        ],
+        [
+          "results/abba-015-retry-individual/01-disabled-0-after.json",
+          "69792d4762b24474bf87cf1ff99b3ba90fc6298a5e32cdf0b1eb7489f7dedf87"
+        ],
+        [
+          "results/abba-015-retry-individual/01-disabled-1-before.json",
+          "52a1f4baf805b1a1e702506523ee504d18b6ab47b5e2ae9dbc4c5108d05dbd58"
+        ],
+        [
+          "results/abba-015-retry-individual/01-disabled-2-before.json",
+          "3b36d68606156a963b16f485a5aaae1b6b2de97dd61f64eaeb1db70fd239fd3c"
+        ],
+        [
+          "results/abba-015-retry-individual/01-disabled-3-after.json",
+          "5f358254d848d6ea7471ed7d6f7adfd7539a8ba317aae9a648c5ddd2e9104038"
+        ],
+        [
+          "results/abba-015-retry-individual/02-disabled-0-before.json",
+          "33c558d1a78ef95f00fae999db210b602ad08470e9fd14313225a7c158721874"
+        ],
+        [
+          "results/abba-015-retry-individual/02-disabled-1-after.json",
+          "c65cae6e5add4361a745bc9fb704f7146105d0650aab3f2f763e118c496dde47"
+        ],
+        [
+          "results/abba-015-retry-individual/02-disabled-2-after.json",
+          "6768bcad302e366c6253c0b422f61aa6051daeeca3a825e56bcfee3e42f2582c"
+        ],
+        [
+          "results/abba-015-retry-individual/02-disabled-3-before.json",
+          "3beaaf84eea3b44fce605933b618d7c3834e9de10a4a1dfe861919ead72785d8"
+        ],
+        [
+          "results/abba-015-retry-individual/02-enabled-0-before.json",
+          "e453b7142c90308cb64c37d91acf5573cde120848d3210ca495e08966e635b6c"
+        ],
+        [
+          "results/abba-015-retry-individual/02-enabled-1-after.json",
+          "ee80b3218347688303832136d6357d56daf67f9463641b1444af270137848b17"
+        ],
+        [
+          "results/abba-015-retry-individual/02-enabled-2-after.json",
+          "735baddbd9df86b4fd9a0fb82936b937744330b3303b1d5bc245d2a6863db22d"
+        ],
+        [
+          "results/abba-015-retry-individual/02-enabled-3-before.json",
+          "f945cc4b9ac5c393f1acfa6ac7a4f98128ca81b6efb7444c60643373706dd095"
+        ],
+        [
+          "results/abba-015-retry-individual/03-enabled-0-after.json",
+          "7db8b418efebc73bdb9a876f884af5d297447757a67ba1709c578f0a29746f8b"
+        ],
+        [
+          "results/abba-015-retry-individual/03-enabled-1-before.json",
+          "16c182ebbcceb9c4ba865b9942019a430443c7e43d8a198e043ba53ad97abaaf"
+        ],
+        [
+          "results/abba-015-retry-individual/03-enabled-2-before.json",
+          "115f4575ed88a93192b843140f7cc51e5322272ab5c015044c98bc07d7dc5e8d"
+        ],
+        [
+          "results/abba-015-retry-individual/03-enabled-3-after.json",
+          "7590e626afe478ffde326cdc3888ecfce11b1287b09d1768e7557f4a2e296d18"
+        ],
+        [
+          "results/abba-015-retry-individual/03-disabled-0-after.json",
+          "3744c0fc91bb297d15df2957b683958f40b10fd66d2bf0b43b26b5ab11db55d2"
+        ],
+        [
+          "results/abba-015-retry-individual/03-disabled-1-before.json",
+          "afd715a4bb6f13469a8f87a1244bcfeded53542235c2e83c1fa5e3e672813f50"
+        ],
+        [
+          "results/abba-015-retry-individual/03-disabled-2-before.json",
+          "f906b83764b6bea332275916ae8ee326bd5c4af3ce57e94a4fb01c0c773aef25"
+        ],
+        [
+          "results/abba-015-retry-individual/03-disabled-3-after.json",
+          "b732baea557121ff98dd710a4ced0ef85c12cf36d5a36f98a54e7947478d328d"
+        ],
+        [
+          "results/abba-015-retry-individual/04-disabled-0-before.json",
+          "1ce01ff4bdd1a0351accbb4c5abde50d90338bbfea939ad7ad78bc02bfed17c2"
+        ],
+        [
+          "results/abba-015-retry-individual/04-disabled-1-after.json",
+          "2539107906763791196a1eb1b03b38e776604b3dc69fa85e6b17f618883befa8"
+        ],
+        [
+          "results/abba-015-retry-individual/04-disabled-2-after.json",
+          "1538c37c2335a2054789ea48e9a3fd212a7166f4029c849b5ff664f9d6a725ac"
+        ],
+        [
+          "results/abba-015-retry-individual/04-disabled-3-before.json",
+          "9d1368ddc73497aad8163e07886f72ffc71243906bb20c4919977040581c27a2"
+        ],
+        [
+          "results/abba-015-retry-individual/04-enabled-0-before.json",
+          "111cb8afb178584ae9464a699662a171c3565d736bd97d42678cf8af85809013"
+        ],
+        [
+          "results/abba-015-retry-individual/04-enabled-1-after.json",
+          "ad7e166886109197efbd90504b22f6a3081e927a4d0383d593863d643e3af27e"
+        ],
+        [
+          "results/abba-015-retry-individual/04-enabled-2-after.json",
+          "7438e35012cae15d2f516a9b8d1b1bbbe3bee7c5476464638f5bd39ab6b2ecc6"
+        ],
+        [
+          "results/abba-015-retry-individual/04-enabled-3-before.json",
+          "a08f201bf889f5048fc3de25fbc625127a522109a2ce4869fcceb5c4eced60b1"
+        ],
+        [
+          "results/abba-015-retry-individual/05-enabled-0-after.json",
+          "5fb9b8f662bd35f6ac0db5a5b25b0c890719b64fbb817c6941b7e8e6a1ae4bbf"
+        ],
+        [
+          "results/abba-015-retry-individual/05-enabled-1-before.json",
+          "1fd643010304a37d7ef18ba67b7d461cb582662946950b168c4a095d4dcff1f3"
+        ],
+        [
+          "results/abba-015-retry-individual/05-enabled-2-before.json",
+          "00847e7579ab91e0eef51d7a7123bd155665d206845ccc4b03c78404ed53f882"
+        ],
+        [
+          "results/abba-015-retry-individual/05-enabled-3-after.json",
+          "459f20098a6dc745d8a7083777df650c7d16b76659a25ae487a5f940c12fc5fe"
+        ],
+        [
+          "results/abba-015-retry-individual/05-disabled-0-after.json",
+          "48b05ceb7ebaa02968d3c31dfd277fa007b03563a5f72806c0778ab363a0d2a4"
+        ],
+        [
+          "results/abba-015-retry-individual/05-disabled-1-before.json",
+          "ff195e733b0388e66aaaf029496d797ae5dce111ae4ad442dbebc63c4f142be5"
+        ],
+        [
+          "results/abba-015-retry-individual/05-disabled-2-before.json",
+          "a454f3d536fb0e20c6fa77c5e0da3161f1000ec2f2e985fe8c67d757f8f8e55b"
+        ],
+        [
+          "results/abba-015-retry-individual/05-disabled-3-after.json",
+          "c685ecb6a1aa627abe6351b948c7231c1497fa3696a1f493efdda15d2685ea99"
+        ],
+        [
+          "results/abba-015-retry-individual/06-disabled-0-before.json",
+          "f9fb749c711260f344eb7a73a1abf2f084d591e29180926ed9820908c028ce06"
+        ],
+        [
+          "results/abba-015-retry-individual/06-disabled-1-after.json",
+          "cc83043d7171f6be8f6a32f945692ebdeec902ab02b836fd1bafc9ca2f9c7d0d"
+        ],
+        [
+          "results/abba-015-retry-individual/06-disabled-2-after.json",
+          "bbdc379cedaae6467031a77bc5a06b77cffc5c0966bc5ca5241856dfcc66a69d"
+        ],
+        [
+          "results/abba-015-retry-individual/06-disabled-3-before.json",
+          "c84cdff9b2938f1356e7f75f826cc136d5ae5b16d75d3606e2fb00811c977abb"
+        ],
+        [
+          "results/abba-015-retry-individual/06-enabled-0-before.json",
+          "84eafcf29fb476e1787b7acd1096d455d130f81aa82d4bfc1147c5a3772bd84c"
+        ],
+        [
+          "results/abba-015-retry-individual/06-enabled-1-after.json",
+          "5c0006e2ba8fc2076e157b806bd3571191e02393175de3a19a752437b3fed5d0"
+        ],
+        [
+          "results/abba-015-retry-individual/06-enabled-2-after.json",
+          "ba91236d1e7a2f92ef3b0324e9a5db1a46ba41cffbb6168bd4373caa0d898e0c"
+        ],
+        [
+          "results/abba-015-retry-individual/06-enabled-3-before.json",
+          "057968d2e463da7b143be30454399ee54a2b0511b6f1a8b49241dc8ab21652e7"
+        ],
+        [
+          "results/abba-015-retry-individual/07-enabled-0-after.json",
+          "e67c2d9da1f9a14c0f50b91f9b1fc9a5f6970479e7f6754f64a730509710dd22"
+        ],
+        [
+          "results/abba-015-retry-individual/07-enabled-1-before.json",
+          "3d8b4a55e7abc8feefe02669bafa4f6d965fc2c0c8ba40a18e8a9dd31221264b"
+        ],
+        [
+          "results/abba-015-retry-individual/07-enabled-2-before.json",
+          "6cb544fe7f0c61ca7b30fc3cdc7a6c8ba2afb4e0f5a42ab0460394f9180f3630"
+        ],
+        [
+          "results/abba-015-retry-individual/07-enabled-3-after.json",
+          "91ab77f7112d74d1bb5682e94a8c8586150694ab76ae31e357a1bb1446593ebe"
+        ],
+        [
+          "results/abba-015-retry-individual/07-disabled-0-after.json",
+          "cca38c1cf54593aae154f352b0e77491a3663c66dd761ccf7598011456d411a8"
+        ],
+        [
+          "results/abba-015-retry-individual/07-disabled-1-before.json",
+          "bd1230ae4021b8bec5bce594b7cf8cb6a01c1fbdb70df744bc13fb552099a001"
+        ],
+        [
+          "results/abba-015-retry-individual/07-disabled-2-before.json",
+          "90615911a6c40f4f5f2053947446fe9b886f703b0ac3987405e524528826631e"
+        ],
+        [
+          "results/abba-015-retry-individual/07-disabled-3-after.json",
+          "d216c1c112b486291b5b0247fab9069c0e7ae08f63fb5b37d9d1d5894cb33ffe"
+        ],
+        [
+          "results/abba-015-retry-individual/08-disabled-0-before.json",
+          "1c924f41ad15ad5c8e4821df62d904c2876c6b8d805c3a30c504f77db275d257"
+        ],
+        [
+          "results/abba-015-retry-individual/08-disabled-1-after.json",
+          "0801454e8fbc4672eb2363b621214f1c02ac230c7e8efefc90205bd1592cf890"
+        ],
+        [
+          "results/abba-015-retry-individual/08-disabled-2-after.json",
+          "8f218253d4d75d64ef244f0a5be7d8567ae70d0247611919bdfe2d6f3b968efb"
+        ],
+        [
+          "results/abba-015-retry-individual/08-disabled-3-before.json",
+          "1868a0a5543354ea0ee2573d325a1760e550f2debd35ec07e58064c6e7a15b58"
+        ],
+        [
+          "results/abba-015-retry-individual/08-enabled-0-before.json",
+          "be9619867d789acab890f23d563d7669b49b0af31af655c0d06878a3aee0a71f"
+        ],
+        [
+          "results/abba-015-retry-individual/08-enabled-1-after.json",
+          "ee5ff6e99d3fa046f5212791490b744d8b8363a5ba5e424ad8876a399939ea5c"
+        ],
+        [
+          "results/abba-015-retry-individual/08-enabled-2-after.json",
+          "7d635da2fccfb8734ca1a6427709b05da2a684b8110627eb56648ce4d13f5151"
+        ],
+        [
+          "results/abba-015-retry-individual/08-enabled-3-before.json",
+          "c0b91f4873c306404f084cedaa3fd5c986a093230b30a4a5010bacd51fa8b8cc"
+        ],
+        [
+          "results/abba-015-retry-individual/09-enabled-0-after.json",
+          "62da2d8fd7a2eb1aa9c528b41ce9d26be60f9f533daa70037bb0d54866756e4f"
+        ],
+        [
+          "results/abba-015-retry-individual/09-enabled-1-before.json",
+          "5b221f782cb1b86f1390b71f8635970196c26944c3d8e36c388debe076c973f7"
+        ],
+        [
+          "results/abba-015-retry-individual/09-enabled-2-before.json",
+          "2722926573668c3d0953b46fb393a53d481cd7691800a7da68ff8bf18f64fe0f"
+        ],
+        [
+          "results/abba-015-retry-individual/09-enabled-3-after.json",
+          "cccea284e3dbd081f491e039819a2630af9ca4f153e927ddd6b2ac39f02631da"
+        ],
+        [
+          "results/abba-015-retry-individual/09-disabled-0-after.json",
+          "70f06512e73815c971b65cc2adf1b07dde943a2199e610200e5ba4b7fe6c3268"
+        ],
+        [
+          "results/abba-015-retry-individual/09-disabled-1-before.json",
+          "8f69cc2139aaa9107a972de504a318a8d37b4d946266d30a239d5156843c96af"
+        ],
+        [
+          "results/abba-015-retry-individual/09-disabled-2-before.json",
+          "fb5a832cae0846a5160f227c6a7873a98518d130868cd78a0c22fc145ca73558"
+        ],
+        [
+          "results/abba-015-retry-individual/09-disabled-3-after.json",
+          "9b29866ca318be3e28170cc287858630784435bbbb1cf0c9182537426e88ef31"
+        ],
+        [
+          "results/abba-015-retry-individual/10-disabled-0-before.json",
+          "a13d4a5356aaca86e383ef89c70e7d75f88807e5e716e36615594108c7ca25b5"
+        ],
+        [
+          "results/abba-015-retry-individual/10-disabled-1-after.json",
+          "040d8ef4e96f6ba032ee9ebd27623bcce8b74b1feb670135f342a83095741a21"
+        ],
+        [
+          "results/abba-015-retry-individual/10-disabled-2-after.json",
+          "0fccfc3ceebf8646902faeff914576d189303f99516b04793fe2d95809ab84eb"
+        ],
+        [
+          "results/abba-015-retry-individual/10-disabled-3-before.json",
+          "18b44f32b543d0cdad1714cd98ff98ec29c39420ac5828c463b77243a41ce229"
+        ],
+        [
+          "results/abba-015-retry-individual/10-enabled-0-before.json",
+          "f0c3ab7a3a9fc307af117f80fe48e613eae6eca28029a0214632ca6af23ffa2b"
+        ],
+        [
+          "results/abba-015-retry-individual/10-enabled-1-after.json",
+          "2f5ee0d9e73cc5241d93600fd76671525626d71b27548fbb5ff84153778b3b77"
+        ],
+        [
+          "results/abba-015-retry-individual/10-enabled-2-after.json",
+          "2e6028e4f9b0eb8f0d420828e7cc4f46fb2931e3825e6280ee0e7c4cc2cc41c9"
+        ],
+        [
+          "results/abba-015-retry-individual/10-enabled-3-before.json",
+          "8052290cba5905fed9ca88cb05d95b98039bad5b58ee30e8703da24038851f26"
+        ],
+        [
+          "results/abba-015-retry-individual/11-enabled-0-after.json",
+          "15931accb87d8e6aeadeb04376caf333fb490bbf114751fe8ffc93b6570f280b"
+        ],
+        [
+          "results/abba-015-retry-individual/11-enabled-1-before.json",
+          "5caa33322a86616f29f7bca700a8c774bb1ac92aa832cb44615f847b8efd8f5a"
+        ],
+        [
+          "results/abba-015-retry-individual/11-enabled-2-before.json",
+          "3128c8e34cf472f0c27dca72305134f6ef21ca0c39e129ad1cf9ece27a371774"
+        ],
+        [
+          "results/abba-015-retry-individual/11-enabled-3-after.json",
+          "e050d412368fa0ade8f6838c418abab608d6c39873d804e39a5ced5bf7c84adb"
+        ],
+        [
+          "results/abba-015-retry-individual/11-disabled-0-after.json",
+          "e71a80a4f9adf0ed42d4af3aa9923f4d941d5c1361bc447432ea914df9a155f1"
+        ],
+        [
+          "results/abba-015-retry-individual/11-disabled-1-before.json",
+          "2d657e1da60e4220a0c6fd70e4160a4798fc3cd59138c02e8e7620da767ad1e0"
+        ],
+        [
+          "results/abba-015-retry-individual/11-disabled-2-before.json",
+          "a11dddb59e8e7a6b84f3faa2f15f5f5f11ee0b51af35698a1ad143820932510e"
+        ],
+        [
+          "results/abba-015-retry-individual/11-disabled-3-after.json",
+          "fde0096153824284f74d26130b5e7cfa2d3eed510d6609891e8c6a9ac2be605b"
+        ],
+        [
+          "results/abba-015-retry-individual/12-disabled-0-before.json",
+          "2e2fb74167e6fa702733120b7e9aa16dbebc8cf898686edf6236c7427a87946c"
+        ],
+        [
+          "results/abba-015-retry-individual/12-disabled-1-after.json",
+          "c5b4eb8b81c0c3cd596b776945f051e53db6de16632bff0d957ca250d0b92c3d"
+        ],
+        [
+          "results/abba-015-retry-individual/12-disabled-2-after.json",
+          "78fdcd5effd706fce43e56775aec1dcba4cd0cd0905ee261c79a3a536f7939be"
+        ],
+        [
+          "results/abba-015-retry-individual/12-disabled-3-before.json",
+          "3c947dfe98c22e1e56d2f129f5179aeec04f3bcac06b7dd07c9635e6f3e1e688"
+        ],
+        [
+          "results/abba-015-retry-individual/12-enabled-0-before.json",
+          "52d1e0da5d066aab682f4289feb670cd21eebd66e86470fdc7334a5678eec9af"
+        ],
+        [
+          "results/abba-015-retry-individual/12-enabled-1-after.json",
+          "b252933edf609f169b61be193989561af366d8aea77ba4bf8f3752794a8094c0"
+        ],
+        [
+          "results/abba-015-retry-individual/12-enabled-2-after.json",
+          "12bbdddd0c329f315471f0becd97e17315e268945b35de6da974b7cd4dc6ad39"
+        ],
+        [
+          "results/abba-015-retry-individual/12-enabled-3-before.json",
+          "855c2dd1ef85c8b86a808a1a6187eb5ee4a0b2584c22334c486533a2eb80c987"
+        ],
+        [
+          "results/abba-015-retry-individual/13-enabled-0-after.json",
+          "55584c4d13cd23905932d36b0b3b51020f0f2b39ec3af64bf7ce616d545928b2"
+        ],
+        [
+          "results/abba-015-retry-individual/13-enabled-1-before.json",
+          "57ebdfa93c8a448ced9a9a026a3f590c88777730179faba0423a21f4d0b60ffc"
+        ],
+        [
+          "results/abba-015-retry-individual/13-enabled-2-before.json",
+          "ade577e5a370d4a2a88ecd210190159cfe71063fa15899153998754341ca4e0c"
+        ],
+        [
+          "results/abba-015-retry-individual/13-enabled-3-after.json",
+          "d059897ce679064b6a8e2295f303ad57157a541233aead02bca9a4e817d4b92a"
+        ],
+        [
+          "results/abba-015-retry-individual/13-disabled-0-after.json",
+          "aa328e80192eac16e0a1d3cde63cf0057cae277c8aa16896251dddbbd1a21087"
+        ],
+        [
+          "results/abba-015-retry-individual/13-disabled-1-before.json",
+          "49b170b93b48266707eca8118e6e1cd6b31f81c88bb51d2a644f943466d786cd"
+        ],
+        [
+          "results/abba-015-retry-individual/13-disabled-2-before.json",
+          "e2c9ce6c3ab0f355ec10177abdbf8ef8a789ec9f04ac92b765318a5896fb995b"
+        ],
+        [
+          "results/abba-015-retry-individual/13-disabled-3-after.json",
+          "6dbdcbe50245cd961d46a32f99567b3dec596fc4b41defd8686b969b44bf62c4"
+        ],
+        [
+          "results/abba-015-retry-individual/14-disabled-0-before.json",
+          "25c165142917a3bf8ba3c06aba0062b96f323c87cba2f5d73f2c0aba75f91676"
+        ],
+        [
+          "results/abba-015-retry-individual/14-disabled-1-after.json",
+          "c4470348db97341295800bec0b4c4ccdd6c7d0e5b0d587e0ee8a911b10fde178"
+        ],
+        [
+          "results/abba-015-retry-individual/14-disabled-2-after.json",
+          "697bd1f74c1577b96b242f47c1db94ea29d062f46ad7d916c344f2b8476e95af"
+        ],
+        [
+          "results/abba-015-retry-individual/14-disabled-3-before.json",
+          "c8228b42e74ec7a7de6df3b019c54e98bb08c24031629ef26d0da144cc21b483"
+        ],
+        [
+          "results/abba-015-retry-individual/14-enabled-0-before.json",
+          "25df45acfa99541f4cb73ebab256771f21730162be61eb8f1ecf3fcc37482f82"
+        ],
+        [
+          "results/abba-015-retry-individual/14-enabled-1-after.json",
+          "0f384295e21ba38ea154c9c2ec697b38353ec3747f64637891dc72dac6364cf8"
+        ],
+        [
+          "results/abba-015-retry-individual/14-enabled-2-after.json",
+          "49daac64f6952008234b7d5664a40ea23b73b76c9ac9fc3985ffe0cd48099c2b"
+        ],
+        [
+          "results/abba-015-retry-individual/14-enabled-3-before.json",
+          "c963d1e7b6bf432b90d3df576425dc59cb6b9b99afd43be30e6310ed8c754fe7"
+        ]
+      ]
+    },
+    "batches": 120,
+    "checks": {
+      "all_exit_zero": true,
+      "disabled_events_loss_zero": true,
+      "exact_completed_pairs": true,
+      "no_counter_overflow": true,
+      "peak_active_within_capacity": true,
+      "releases_include_bootstrap": true,
+      "requests_grants_acks_exact": true,
+      "surplus_callback_acked": true,
+      "surplus_samples": 120,
+      "used_pending_errors_zero": true
+    },
+    "compare_runner_sha256": "624b76a6a00fb927b277a5992ebffb47ffd4bcfda80767ee7961444758368643",
+    "cpu_policy": "unchanged inherited affinity, not pinned; heterogeneous CPU and scheduling may vary",
+    "exit": 0,
+    "failures": [],
+    "paired_block_median_ratios": {
+      "disabled": {
+        "immediate": 0.24529088633050347,
+        "multi": 1.090200555852642,
+        "one": 1.0178200168599532,
+        "pending-multi": 0.9851748056823284,
+        "pending-one": 1.0902221656055204
+      },
+      "enabled": {
+        "immediate": 0.31747882142726036,
+        "multi": 1.1655257976384337,
+        "one": 0.964175334009923,
+        "pending-multi": 1.0381238524404923,
+        "pending-one": 1.1070466837183108
+      }
+    },
+    "path": "bench/allowance-tickets/fastpath/results/abba-015-retry.json",
+    "provenance": {
+      "after-disabled": {
+        "affinity_policy": "unchanged inherited affinity, not pinned",
+        "artifact_compiler_stamp": "\nString dump of section '.comment':\n  [     1]  rustc version 1.101.0-nightly (1d81eb4ad 2026-10-07)\n  [    36]  GCC: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n  [    63]  Linker: Wild 0.10.0 (compatible with GNU linkers)\n\n",
+        "artifact_sha256": "b5fc3065499e8d523694b25a60020a9ab8dd350c1db8cccac1cc6c309fb915e1",
+        "binary": "archive/after/executable",
+        "blockers": [],
+        "capture_event_capacity": 0,
+        "compiler_version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+        "cpu_description": "Intel(R) Core(TM) Ultra X9 388H",
+        "harness_sha256": "eca652fed0bb108abd6d14d18ffaeb5253afccc61e233b78a4a0537f1414a927",
+        "local_pinned_compiler_binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "lockfile_sha256": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+        "machine": [
+          "Linux",
+          "xps14",
+          "7.2.3-arch1-2",
+          "#1 SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 17:55:06 +0000",
+          "x86_64"
+        ],
+        "operations_per_thread": 10000,
+        "pending_rounds": 200,
+        "quiet_status": "unknown",
+        "runner_sha256": "029bf457b2d86b9b2b238de9038d8a6646c88ebc1e2d8d41c32a3e42ab5cc71b",
+        "scope": "actual archived Proxy microfixture, no resource identity, lease or broad speed claim",
+        "sibling_source_sha256": "1233aa16d73ae11cf447ab5bac0abd2adf48efcb2873574fb08e4e9428f7e631",
+        "source_sha256": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+        "variant": "after-disabled"
+      },
+      "after-enabled": {
+        "affinity_policy": "unchanged inherited affinity, not pinned",
+        "artifact_compiler_stamp": "\nString dump of section '.comment':\n  [     1]  rustc version 1.101.0-nightly (1d81eb4ad 2026-10-07)\n  [    36]  GCC: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n  [    63]  Linker: Wild 0.10.0 (compatible with GNU linkers)\n\n",
+        "artifact_sha256": "b5fc3065499e8d523694b25a60020a9ab8dd350c1db8cccac1cc6c309fb915e1",
+        "binary": "archive/after/executable",
+        "blockers": [],
+        "capture_event_capacity": 4096,
+        "compiler_version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+        "cpu_description": "Intel(R) Core(TM) Ultra X9 388H",
+        "harness_sha256": "eca652fed0bb108abd6d14d18ffaeb5253afccc61e233b78a4a0537f1414a927",
+        "local_pinned_compiler_binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "lockfile_sha256": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+        "machine": [
+          "Linux",
+          "xps14",
+          "7.2.3-arch1-2",
+          "#1 SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 17:55:06 +0000",
+          "x86_64"
+        ],
+        "operations_per_thread": 10000,
+        "pending_rounds": 200,
+        "quiet_status": "unknown",
+        "runner_sha256": "029bf457b2d86b9b2b238de9038d8a6646c88ebc1e2d8d41c32a3e42ab5cc71b",
+        "scope": "actual archived Proxy microfixture, no resource identity, lease or broad speed claim",
+        "sibling_source_sha256": "1233aa16d73ae11cf447ab5bac0abd2adf48efcb2873574fb08e4e9428f7e631",
+        "source_sha256": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+        "variant": "after-enabled"
+      },
+      "before-disabled": {
+        "affinity_policy": "unchanged inherited affinity, not pinned",
+        "artifact_compiler_stamp": "\nString dump of section '.comment':\n  [     1]  rustc version 1.101.0-nightly (1d81eb4ad 2026-10-07)\n  [    36]  GCC: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n  [    63]  Linker: Wild 0.10.0 (compatible with GNU linkers)\n\n",
+        "artifact_sha256": "86e76145438916c201a449afa189d67118bae506db9926265c4dbcd23a08e394",
+        "binary": "archive/before/executable",
+        "blockers": [],
+        "capture_event_capacity": 0,
+        "compiler_version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+        "cpu_description": "Intel(R) Core(TM) Ultra X9 388H",
+        "harness_sha256": "eca652fed0bb108abd6d14d18ffaeb5253afccc61e233b78a4a0537f1414a927",
+        "local_pinned_compiler_binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "lockfile_sha256": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+        "machine": [
+          "Linux",
+          "xps14",
+          "7.2.3-arch1-2",
+          "#1 SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 17:55:06 +0000",
+          "x86_64"
+        ],
+        "operations_per_thread": 10000,
+        "pending_rounds": 200,
+        "quiet_status": "unknown",
+        "runner_sha256": "029bf457b2d86b9b2b238de9038d8a6646c88ebc1e2d8d41c32a3e42ab5cc71b",
+        "scope": "actual archived Proxy microfixture, no resource identity, lease or broad speed claim",
+        "sibling_source_sha256": "96d803532813f0cd7e27c704ca5ed84eaf8a145995e3111b354586a095c0cc18",
+        "source_sha256": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+        "variant": "before-disabled"
+      },
+      "before-enabled": {
+        "affinity_policy": "unchanged inherited affinity, not pinned",
+        "artifact_compiler_stamp": "\nString dump of section '.comment':\n  [     1]  rustc version 1.101.0-nightly (1d81eb4ad 2026-10-07)\n  [    36]  GCC: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\n  [    63]  Linker: Wild 0.10.0 (compatible with GNU linkers)\n\n",
+        "artifact_sha256": "86e76145438916c201a449afa189d67118bae506db9926265c4dbcd23a08e394",
+        "binary": "archive/before/executable",
+        "blockers": [],
+        "capture_event_capacity": 4096,
+        "compiler_version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+        "cpu_description": "Intel(R) Core(TM) Ultra X9 388H",
+        "harness_sha256": "eca652fed0bb108abd6d14d18ffaeb5253afccc61e233b78a4a0537f1414a927",
+        "local_pinned_compiler_binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "lockfile_sha256": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+        "machine": [
+          "Linux",
+          "xps14",
+          "7.2.3-arch1-2",
+          "#1 SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 17:55:06 +0000",
+          "x86_64"
+        ],
+        "operations_per_thread": 10000,
+        "pending_rounds": 200,
+        "quiet_status": "unknown",
+        "runner_sha256": "029bf457b2d86b9b2b238de9038d8a6646c88ebc1e2d8d41c32a3e42ab5cc71b",
+        "scope": "actual archived Proxy microfixture, no resource identity, lease or broad speed claim",
+        "sibling_source_sha256": "96d803532813f0cd7e27c704ca5ed84eaf8a145995e3111b354586a095c0cc18",
+        "source_sha256": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+        "variant": "before-enabled"
+      }
+    },
+    "quiet_status": "unknown",
+    "rounds": 15,
+    "samples": 720,
+    "samples_per_variant": {
+      "after-disabled": 180,
+      "after-enabled": 180,
+      "before-disabled": 180,
+      "before-enabled": 180
+    },
+    "sha256": "22829467a07bffa91cd91eea23a84bbfe922d999431b26e91f9562d8e8b3eae5",
+    "summary": {
+      "after-disabled": {
+        "immediate": {
+          "max_ns": 570074,
+          "median_ns": 266288.5,
+          "median_pairs_per_second": 37555506.00261803,
+          "min_ns": 213212,
+          "samples": 30
+        },
+        "multi": {
+          "max_ns": 253490919,
+          "median_ns": 189085572,
+          "median_pairs_per_second": 423182.8902373419,
+          "min_ns": 144021830,
+          "samples": 30
+        },
+        "one": {
+          "max_ns": 383307116,
+          "median_ns": 277143256.5,
+          "median_pairs_per_second": 288659.7055333998,
+          "min_ns": 196319313,
+          "samples": 30
+        },
+        "pending-multi": {
+          "max_ns": 34575854,
+          "median_ns": 16718671,
+          "median_pairs_per_second": 95701.40055756619,
+          "min_ns": 10703247,
+          "samples": 30
+        },
+        "pending-one": {
+          "max_ns": 31453881,
+          "median_ns": 22166133,
+          "median_pairs_per_second": 72193.99181605066,
+          "min_ns": 15217844,
+          "samples": 30
+        }
+      },
+      "after-enabled": {
+        "immediate": {
+          "max_ns": 770385,
+          "median_ns": 383701.5,
+          "median_pairs_per_second": 26064482.81749346,
+          "min_ns": 275682,
+          "samples": 30
+        },
+        "multi": {
+          "max_ns": 563457559,
+          "median_ns": 214829178.5,
+          "median_pairs_per_second": 372389.05733736313,
+          "min_ns": 154743032,
+          "samples": 30
+        },
+        "one": {
+          "max_ns": 391451137,
+          "median_ns": 279864320,
+          "median_pairs_per_second": 286008.11478296685,
+          "min_ns": 21560394,
+          "samples": 30
+        },
+        "pending-multi": {
+          "max_ns": 407465366,
+          "median_ns": 24051119.5,
+          "median_pairs_per_second": 66528.03683408163,
+          "min_ns": 17567375,
+          "samples": 30
+        },
+        "pending-one": {
+          "max_ns": 202646491,
+          "median_ns": 41391242,
+          "median_pairs_per_second": 38655.55575650945,
+          "min_ns": 33676816,
+          "samples": 30
+        }
+      },
+      "before-disabled": {
+        "immediate": {
+          "max_ns": 1584048,
+          "median_ns": 1073910,
+          "median_pairs_per_second": 9311787.769693587,
+          "min_ns": 850357,
+          "samples": 30
+        },
+        "multi": {
+          "max_ns": 726726572,
+          "median_ns": 174861898,
+          "median_pairs_per_second": 457591.6519716749,
+          "min_ns": 118053926,
+          "samples": 30
+        },
+        "one": {
+          "max_ns": 1008638657,
+          "median_ns": 287338010,
+          "median_pairs_per_second": 278629.8584697745,
+          "min_ns": 202402293,
+          "samples": 30
+        },
+        "pending-multi": {
+          "max_ns": 28234841,
+          "median_ns": 16419868,
+          "median_pairs_per_second": 97447.49287615265,
+          "min_ns": 10178890,
+          "samples": 30
+        },
+        "pending-one": {
+          "max_ns": 35415072,
+          "median_ns": 20361399,
+          "median_pairs_per_second": 78583.87902239816,
+          "min_ns": 9780644,
+          "samples": 30
+        }
+      },
+      "before-enabled": {
+        "immediate": {
+          "max_ns": 1706391,
+          "median_ns": 1176994,
+          "median_pairs_per_second": 8496680.540499888,
+          "min_ns": 931799,
+          "samples": 30
+        },
+        "multi": {
+          "max_ns": 307927155,
+          "median_ns": 170185051,
+          "median_pairs_per_second": 470146.2773596787,
+          "min_ns": 128704699,
+          "samples": 30
+        },
+        "one": {
+          "max_ns": 546734192,
+          "median_ns": 280705361.5,
+          "median_pairs_per_second": 284997.4768678881,
+          "min_ns": 185660265,
+          "samples": 30
+        },
+        "pending-multi": {
+          "max_ns": 49275285,
+          "median_ns": 24025002.5,
+          "median_pairs_per_second": 66649.62438565439,
+          "min_ns": 14002615,
+          "samples": 30
+        },
+        "pending-one": {
+          "max_ns": 117797306,
+          "median_ns": 39655131,
+          "median_pairs_per_second": 40347.86828105175,
+          "min_ns": 31497341,
+          "samples": 30
+        }
+      }
+    },
+    "task_id": "523798sl96",
+    "wall_seconds": 76.48,
+    "paired_multi_blocks_slower": {
+      "disabled": 11,
+      "enabled": 14,
+      "blocks_per_mode": 15,
+      "provenance": "reported by sheep, validated against paired blocks during artifact check"
+    }
+  },
+  "caveats": [
+    "Prototype remains unwired, legacy compiler frontend unchanged. Actual native compiler harnesses prove legacy neutrality only.",
+    "Natural contended path adds preliminary State lock; idle win cannot conceal contention regression.",
+    "Forced-pending timer includes barrier/channel coordination and private snapshot cloning, not pure lock/allocation attribution.",
+    "Historical callback 33319 points/11 wait pairs is schedule-dependent, not deterministic or resource-query linkage.",
+    "No holder/lease/thread/physical-token ownership, full mapping, full-pipeline coverage, thread ceiling or CPU work/span authority.",
+    "Quiet status unknown, inherited unpinned affinity on heterogeneous CPU and OS scheduling variability.",
+    "Initial balanced runner task4717919awt failed relative output-path bookkeeping. compare.py resolves output path in retry, workload/runtime/artifacts unchanged. Initial six raw samples and48 preliminary samples retained outside final720sample matrix.",
+    "Final candidate has lower focused idle medians but higher natural multi and forced-pending-one medians. Correctness/source validity does not establish overall performance acceptance.",
+    "Candidate1233aa source and native driver are historical exact evaluated artifacts. A separately authorized advisory-idle-hint hypothesis is unmeasured here and excluded from these conclusions."
+  ],
+  "compiler": {
+    "driver_sha256": "1e876cc55afa97e8520bec40f5ad348fb3ee3c2a6f40f8ba39544ce6a52fbc8c",
+    "frontend": "legacy Proxy, TicketedProxy unwired",
+    "launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba"
+  },
+  "date": "2026-10-14",
+  "evidence_root": "scratch/allowance-fastpath-native-retry-20261014",
+  "mode_semantics": {
+    "disabled": "event-buffer-off only, independent inventory and optional IDs still active",
+    "enabled": "4096 preallocated rows, capped and explicitly lossy",
+    "zero_telemetry_capture_off": false
+  },
+  "native_evidence": [
+    {
+      "bytes": 269,
+      "path": "source-before.sha256",
+      "sha256": "0cb4ebe2020b6fc833aacc5b69741455830023a3987ad73606de857862c22431"
+    },
+    {
+      "bytes": 250,
+      "path": "compiler.sha256",
+      "sha256": "3ae70672ec402721a00b12020b2e818d9da69a78bc0f19b5dc08a58750cc2a66"
+    },
+    {
+      "bytes": 530,
+      "path": "query.log",
+      "sha256": "de3453fcf32628af5c2da92aad4860eff4d2982c9ba9395be2be8b6c163563a5"
+    },
+    {
+      "bytes": 21703372,
+      "path": "wait.log",
+      "sha256": "992b509ab82a13b6bcccf2a2de6ccd278e49b959ada6da3778eef8a93f592e6c"
+    },
+    {
+      "bytes": 684,
+      "path": "task_binding.log",
+      "sha256": "a2d016c236730e9a33607c1ab9a600e8f646fd2b234dc24632872903ea525d37"
+    },
+    {
+      "bytes": 1308,
+      "path": "compiler.log",
+      "sha256": "b4323cabcd96c6c2ce1a02ab669f16f629498bc0282716bc8a021a42e10d32f3"
+    },
+    {
+      "bytes": 2546,
+      "path": "compiler_argv.log",
+      "sha256": "884f1bbeb81e55287ab21e603e1514a5412cfac72de9b151ee7c31ef0be42a7e"
+    }
+  ],
+  "publication_status": "historical evaluated 1233aa candidate, evidence-only checkpoint, mixed performance, not promoted or accepted overall",
+  "receipts": [
+    {
+      "all_targets_bound": false,
+      "bound_points": 3874,
+      "expected_points": 33319,
+      "lost_events": 0,
+      "path": "query/native-task-binding-693d4uh9/capture/1792010397206114139-1362290-1.json",
+      "points": 33319,
+      "read_lost_events": 0,
+      "sha256": "7ccce6d7bd31c45627da4712adae68c22d0682a950575f7461054c374ef30fac",
+      "wait_pairs": 11
+    }
+  ],
+  "remaining_gates": [
+    "Actual callback already in-flight teardown, not merely helper blocked acquiring.",
+    "Real helper Client IO/callback and raw-release errors, not direct State::error injection.",
+    "Ticketed frontend Registry/query wiring and startup/sleep/cycle/reacquire/shutdown, reservation convoy and fairness.",
+    "Resource wire/reciprocal attachment/checkpoint/seal and complete independent receipt authority, explicit query-wait linkage.",
+    "Comprehensive session-weighted workload and relevant cold/incremental/contention gates before speed/default promotion."
+  ],
+  "schema": 1,
+  "scope": "experimental unwired TicketedProxy slot-free immediate path, before/after protocol comparison only",
+  "source_hashes": {
+    "bench/allowance-tickets/fastpath/Cargo.lock": "cb87ed9dad272415aca309ec0fd12b26e43b380d7a7185c8db1b08ab36c76236",
+    "bench/allowance-tickets/fastpath/archive/after/jobserver_ticketed.rs": "1233aa16d73ae11cf447ab5bac0abd2adf48efcb2873574fb08e4e9428f7e631",
+    "bench/allowance-tickets/fastpath/archive/before/jobserver_ticketed.rs": "96d803532813f0cd7e27c704ca5ed84eaf8a145995e3111b354586a095c0cc18",
+    "bench/allowance-tickets/fastpath/compare.py": "624b76a6a00fb927b277a5992ebffb47ffd4bcfda80767ee7961444758368643",
+    "bench/allowance-tickets/fastpath/measure.py": "029bf457b2d86b9b2b238de9038d8a6646c88ebc1e2d8d41c32a3e42ab5cc71b",
+    "bench/allowance-tickets/fastpath/src/main.rs": "eca652fed0bb108abd6d14d18ffaeb5253afccc61e233b78a4a0537f1414a927",
+    "toolchain/rustc/compiler/rustc_data_structures/src/jobserver.rs": "5f5d43e64ced6353dfefcbf12e8cb6b135c7aa4e43135985b2c74b11aadd5fc7",
+    "toolchain/rustc/compiler/rustc_data_structures/src/jobserver_ticketed.rs": "1233aa16d73ae11cf447ab5bac0abd2adf48efcb2873574fb08e4e9428f7e631"
+  },
+  "source_review": {
+    "fairness": "registration order, not API-call start order or preliminary-check order",
+    "owner": "mouse",
+    "production_fastpath": "used==0 while owning State, assert pending==0, register exactly once, reserve used=1, IdleImplicit grant and Ack under same critical section without Slot Arc/allocation or subordinate predicate lock",
+    "result": "no substantive immediate-path race, predicate, registered-Pending fairness or ID/inventory blocker",
+    "scope": "read-only delta against accepted 7174ca296, no builds/tests performed by reviewer",
+    "slowpath": "failed preliminary check changes no IDs/counters, allocate outside State, register once and recheck used under second State lock, ordinary Pending predicate preserved",
+    "test_only_difference": "cfg(test) unlocks after reservation for before_ack hook and reacquires before Ack. Production benchmark uses release MAIN, not cfg(test)/test binaries."
+  },
+  "tasks": {
+    "benchmark_initial_bookkeeping_failure": {
+      "fix": "compare.py resolves output path, no workload/runtime/artifact change",
+      "id": "4717919awt",
+      "outcome": "relative --out path bookkeeping failure; one six-sample batch retained outside final balanced comparison",
+      "retry": "523798sl96"
+    },
+    "include_source": {
+      "clippy": [
+        "20261014-133045538-1256117",
+        "20261014-133045816-1256247"
+      ],
+      "debug": "20261014-133045116-1255662",
+      "owner": "sloth",
+      "release": "20261014-133045248-1255761",
+      "source_tests": 15,
+      "status": "pass reported by coordinator"
+    },
+    "native_crate": {
+      "doctests_ignored": 1,
+      "doctests_passed": 5,
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "id": "934537nw1f",
+      "ignored": 0,
+      "passed": 133,
+      "wall_provenance": "coordinator task wall time",
+      "wall_seconds": 14.8
+    },
+    "native_retry": {
+      "cached_assembly_seconds": 2,
+      "correction": "Run all actual compiler/private callback harnesses before native crate tests, no source fix or harness weakening",
+      "doctests_ignored": 1,
+      "doctests_passed": 5,
+      "exit": 0,
+      "harnesses": [
+        {
+          "name": "admission",
+          "seconds": 1.809,
+          "tests": 1
+        },
+        {
+          "name": "wait",
+          "seconds": 28.122,
+          "tests": 4
+        },
+        {
+          "name": "callback_task_binding",
+          "seconds": 4.02,
+          "tests": 1
+        },
+        {
+          "name": "compiler_binding",
+          "seconds": 14.061,
+          "tests": 2
+        },
+        {
+          "name": "macro_argv",
+          "seconds": 1.485,
+          "tests": 1
+        }
+      ],
+      "id": "3640775w60",
+      "native_crate_passed": 133,
+      "scope": "compiler harnesses are legacy frontend neutrality only, NOT ticketed Registry/query integration",
+      "wall_provenance": "coordinator task wall times",
+      "wall_seconds": 65
+    },
+    "root_current": {
+      "id": "682331ltmb",
+      "exit": 0,
+      "wall_seconds": 16.23,
+      "fmt_check": "pass",
+      "check_run": "20261014-134442741-1418120",
+      "test_run": "20261014-134444010-1418389",
+      "lint_run": "20261014-134457381-1417956",
+      "passed": 559,
+      "failed": 0,
+      "ignored": 3,
+      "lint": "all targets, deny warnings",
+      "execution": "hosted"
+    },
+    "superseded_native_attempt": {
+      "build_seconds": 79,
+      "exit": 1,
+      "id": "173203c39a",
+      "reason": "matching full private metadata unavailable at callback setup after x.py crate test cleared stage0 sysroot metadata",
+      "scope": "source-exact build, native crate, admission and wait passed before setup failure"
+    }
+  }
+}

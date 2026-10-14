@@ -1,0 +1,42 @@
+{
+  "variant": "after-disabled",
+  "summary": {
+    "one": {
+      "samples": 1,
+      "min_ns": 201640671,
+      "median_ns": 201640671,
+      "max_ns": 201640671,
+      "median_throughput_pairs_per_second": 396745.356991993
+    },
+    "multi": {
+      "samples": 1,
+      "min_ns": 160055449,
+      "median_ns": 160055449,
+      "max_ns": 160055449,
+      "median_throughput_pairs_per_second": 499826.7819048135
+    },
+    "immediate": {
+      "samples": 1,
+      "min_ns": 211910,
+      "median_ns": 211910,
+      "max_ns": 211910,
+      "median_throughput_pairs_per_second": 47189844.745410785
+    },
+    "pending-one": {
+      "samples": 1,
+      "min_ns": 114508,
+      "median_ns": 114508,
+      "max_ns": 114508,
+      "median_throughput_pairs_per_second": 69864.11429769099
+    },
+    "pending-multi": {
+      "samples": 1,
+      "min_ns": 120026,
+      "median_ns": 120026,
+      "max_ns": 120026,
+      "median_throughput_pairs_per_second": 66652.22535117391
+    }
+  },
+  "failures": [],
+  "out": "results/preliminary-individual/1-after-disabled.json"
+}
