@@ -202,6 +202,7 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
         eprintln!(
             "justrust: toolchain required: no installed explicit pin, refusing unrecorded system compiler fallback"
         );
+        report_build_failure(args, "toolchain_required", false, Some(1));
         std::process::exit(1);
     }
     let mut cmd;
@@ -219,7 +220,31 @@ pub fn exec_cargo(args: &[OsString]) -> ! {
     let cargo = PathBuf::from(cmd.get_program());
     let err = crate::sys::exec(cmd.args(args));
     eprintln!("justrust: failed to exec {}: {err}", cargo.display());
+    report_build_failure(args, "cargo_exec", false, Some(127));
     std::process::exit(127);
+}
+
+/// Initialization errors otherwise fall through to an unrecorded cargo exec.
+/// Fixed labels only: error chains can contain source, credentials and paths.
+fn build_failure_data(
+    args: &[OsString],
+    stage: &'static str,
+    fallback: bool,
+    exit: Option<i32>,
+) -> serde_json::Value {
+    let sub = subcommand(args)
+        .filter(|s| RECORDED.contains(&s.as_str()))
+        .unwrap_or_else(|| "other".to_string());
+    serde_json::json!({ "schema_version": 2, "sub": sub, "stage": stage,
+        "fallback": fallback, "exit": exit })
+}
+
+fn report_build_failure(args: &[OsString], stage: &'static str, fallback: bool, exit: Option<i32>) {
+    crate::telemetry::record(
+        "build_failure",
+        build_failure_data(args, stage, fallback, exit),
+    );
+    crate::telemetry::maybe_spawn_background();
 }
 
 /// How a recorded run presents its output.
@@ -255,9 +280,11 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
         Err(e) => {
             if e.downcast_ref::<ToolchainRequired>().is_some() {
                 eprintln!("justrust: {e:#}");
+                report_build_failure(&args, "toolchain_required", false, Some(1));
                 std::process::exit(1);
             }
             eprintln!("justrust: recording disabled for this run: {e:#}");
+            report_build_failure(&args, "recording_init", true, None);
             exec_cargo(&args);
         }
     }
@@ -1217,6 +1244,31 @@ fn unify_features(cmd: &mut Command) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn build_failure_telemetry_excludes_private_arguments() {
+        let args = [
+            "test",
+            "-p",
+            "private-crate",
+            "--features=secret",
+            "--",
+            "private_test",
+        ]
+        .map(std::ffi::OsString::from);
+        let data = super::build_failure_data(&args, "recording_init", true, None);
+        assert_eq!(data["sub"], "test");
+        assert_eq!(data["stage"], "recording_init");
+        assert_eq!(data["fallback"], true);
+        assert!(data["exit"].is_null());
+        let text = data.to_string();
+        assert!(!text.contains("private"));
+        assert!(!text.contains("secret"));
+        let unknown = [std::ffi::OsString::from("private-subcommand")];
+        assert_eq!(
+            super::build_failure_data(&unknown, "cargo_exec", false, Some(127))["sub"],
+            "other"
+        );
+    }
     use super::*;
 
     fn cpu_stat(pid: i32, start_ticks: u64, cpu_ticks: u64) -> procfs::ProcStat {
