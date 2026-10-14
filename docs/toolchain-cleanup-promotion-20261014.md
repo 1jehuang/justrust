@@ -53,6 +53,39 @@ All 55 observed baseline/candidate run IDs have redacted exports in
 run `20261014-093757263-2242292135` and candidate run
 `20261014-101956044-2917310751`, both with detected foreign compiler activity.
 
+## Outcome failures investigated after the initial gate report
+
+The outcome blockers are not merely missing telemetry. Baseline workspace run
+`20261014-094536977-2242292635` and candidate workspace run
+`20261014-104409647-2917310344` both exited 101 with the same seven confirmed
+failing tests:
+
+- `auth::tests::browser_suppressed_inside_test_harness_without_env_overrides`:
+  assertion that a test binary should be detected with a custom target directory.
+- `provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list`:
+  observed model catalog did not equal the fixture's two-entry expected catalog.
+- `tool::bash::tests::repository_commands_export_a_logged_cargo_function`:
+  assertion that execution occurs inside a discoverable Jcode repository.
+- `tool::tests::tool_descriptions_stay_under_token_cap`: descriptions exceeded
+  the snapshot's 20-token cap, including the codemode description.
+- `tool::tests::tool_parameter_descriptions_stay_under_token_cap`: a Gmail
+  parameter description exceeded the snapshot's 25-token cap.
+- `server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution`:
+  could not discover a Jcode repository directory.
+- `tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result`:
+  expected hook-output assertion failed.
+
+A separate wake-delivery timeout passed the harness's isolated retry and was
+not counted among these seven. Full assertion output remains in each run's
+`output.jsonl` and is accessible with `justrust log <id>`. The matching failure
+names are evidence of existing baseline problems for these cases, not proof
+that the entire candidate workload is equivalent or passing. Other baseline
+points also have confirmed failures. A fresh promotion gate must establish
+valid supported snapshot/test-environment behavior in addition to low noise;
+do not suppress these tests or reinterpret exit 101 as a passing timing sample.
+These pinned Jcode fixture/environment failures were not fixed by modifying the
+user's live projects during a toolchain-cleanup task.
+
 ## Safe next step
 
 Keep the installed candidate selectable with
