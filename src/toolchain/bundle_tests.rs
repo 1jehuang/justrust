@@ -64,7 +64,7 @@ fn mandatory_rustdoc_must_run_and_helper_timeout_is_bounded() {
     let start = std::time::Instant::now();
     let error =
         helper_version(&prefix, "rustfmt", std::time::Duration::from_millis(50)).unwrap_err();
-    assert!(error.to_string().contains("timed out"));
+    assert!(error.to_string().contains("timed out"), "{error:#}");
     assert!(start.elapsed() < std::time::Duration::from_secs(2));
 }
 
