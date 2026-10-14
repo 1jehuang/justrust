@@ -59,3 +59,23 @@ provenance are still incomplete. CPU work and execution span remain null.
 No theoretical parallelism ceiling, architecture speedup, or default promotion
 is claimed. Scoped overhead samples are diagnostics, not the comprehensive
 session-weighted benchmark gate.
+
+## Scoped recorder overhead diagnostic
+
+Three sequential samples per configuration used the identical frozen fixture
+(source SHA256 b3c73cbfc55f6150bb8e2386e97dde708a7bae6b3742e162047a91246842000a).
+Median compile wall seconds:
+
+| Compiler / recording | 1 frontend thread | 4 frontend threads |
+| --- | ---: | ---: |
+| Frozen admission baseline / off | 0.2777 | 0.1995 |
+| Frozen admission baseline / on | 0.2388 | 0.1527 |
+| Native causal candidate / off | 0.1617 | 0.1233 |
+| Native causal candidate / on | 0.2862 | 0.3007 |
+
+The baseline on/off inversion demonstrates noise and cache/order effects.
+These samples have unknown quiet provenance and are explicitly ineligible for
+speed claims. The candidate capture cost is material and motivates reducing
+recording overhead before any default promotion. Raw samples, compiler hashes,
+executed output, and fixture text are in bench/results/native-causal-map-20261014.
+They measure this recorder fixture only, not general build performance.
