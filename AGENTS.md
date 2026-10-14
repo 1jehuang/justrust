@@ -36,6 +36,25 @@ Small, safe wins still ship, but
 never stop at "good enough" when a deeper change (a fork, a server, a new
 component) would be measurably faster.
 
+## Own the boundaries, not upstream's architecture
+
+justrust is an integrated source-to-binary system, not a collection of
+permanently upstream-compatible replacements. Where we own both sides of
+a boundary, internal compatibility with stock tools is not a requirement.
+Change compiler/Cargo protocols, metadata and artifact formats, scheduling,
+cache interfaces, or linking internals together when measurements justify it.
+Do not reject a design merely because it cannot be upstreamed or mixed with
+stock components. Version the integrated toolchain and its cache keys so
+incompatible artifacts cannot be reused.
+
+Preserve the external contract: supported Rust language semantics, existing
+project manifests, build-script and proc-macro behavior, native-library and
+platform ABIs, build correctness, and useful diagnostics. Stock fallback is
+a separate compatibility path, not a restriction on our native architecture;
+never feed private formats to stock tools. Upstream is a source of fixes and
+improvements, not an architectural veto. Track and integrate relevant fixes
+without treating minimal divergence or a fixed rebase cadence as the goal.
+
 ## Native toolchain integration, not permanent shims
 
 We own the toolchain: embed functionality in the component that owns the

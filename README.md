@@ -104,6 +104,11 @@ updating test binaries without a full relink.
 The goal is for agents to spend their time editing and reasoning, not waiting
 for builds. We will fork tools and run infrastructure wherever that makes the
 loop faster, while preserving build correctness and useful diagnostics.
+We own both sides of the internal toolchain boundaries, so we can redesign
+them together rather than preserve upstream's architecture. Compatibility
+is required at the project and platform boundaries, not between our private
+compiler, Cargo, cache, and linker interfaces. Upstream remains a source of
+fixes and improvements, not a limit on the designs we can measure and ship.
 See the [toolchain plan](docs/toolchain.md) for the roadmap.
 
 ## Contributing and license
