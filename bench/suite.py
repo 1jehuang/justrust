@@ -29,6 +29,7 @@ import platform
 import random
 import re
 import shutil
+import stat
 import statistics
 import subprocess
 import sys
@@ -910,6 +911,29 @@ def compiler_scenario(s: Scenario, threads: int | None, passes: bool,
     return replace(s, cmd=s.cmd[:1] + configs + s.cmd[1:]) if configs else s
 
 
+def load_scheduler_hints(path: Path) -> tuple[bytes, dict]:
+    """Read Cargo's bounded regular-file table without following a final symlink."""
+    try:
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise ValueError("cost hints must be a regular non-symlink file")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+                raise ValueError("cost hints exceed the regular-file size bound")
+            raw = handle.read(65537)
+        if len(raw) > 65536:
+            raise ValueError("cost hints exceed the size bound")
+        table = json.loads(raw)
+        if (not isinstance(table, dict) or len(table) > 1024
+                or any(type(value) is not int or not 0 < value < 2**64
+                       for value in table.values())):
+            raise ValueError("cost hints need at most 1024 positive usize values")
+        return raw, {"sha256": hashlib.sha256(raw).hexdigest(), "packages": len(table)}
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("cannot read a valid bounded cost hint table") from error
+
+
 def optimization_env() -> dict:
     """Only public performance controls, never credential-bearing environment."""
     names = (
@@ -921,7 +945,17 @@ def optimization_env() -> dict:
         "JUSTRUST_UNIFY_FEATURES",
         "JUSTRUST_HOSTED_HTTP_POOL",
     )
-    return {name: os.environ[name] for name in names if name in os.environ}
+    controls = {name: os.environ[name] for name in names if name in os.environ}
+    hint_path = os.environ.get("JUSTRUST_CARGO_CRITICAL_PATH_COSTS")
+    if hint_path:
+        try:
+            _, hints = load_scheduler_hints(Path(hint_path))
+            controls["JUSTRUST_CARGO_CRITICAL_PATH_COSTS_SHA256"] = hints["sha256"]
+        except ValueError:
+            # Missing/invalid optional hints make Cargo use its normal fallback.
+            # The explicit weighted sweep rejects missing provenance separately.
+            pass
+    return controls
 
 
 def env_info() -> dict:

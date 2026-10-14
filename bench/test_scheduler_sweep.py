@@ -285,5 +285,90 @@ class SchedulerSweepTests(unittest.TestCase):
             self.assertFalse((out / 'on.json').exists())
 
 
+class WeightedSchedulerTests(unittest.TestCase):
+    def test_bounded_regular_cost_file_and_digest_only_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'private-project-costs.json'
+            path.write_text('{"package-name":42}')
+            raw, info = suite.load_scheduler_hints(path)
+            self.assertEqual(raw, path.read_bytes())
+            self.assertEqual(info, {'sha256': suite.binary_sha256(path), 'packages': 1})
+            with patch.dict(os.environ, {'JUSTRUST_CARGO_CRITICAL_PATH': '1',
+                                         'JUSTRUST_CARGO_CRITICAL_PATH_COSTS': str(path)}, clear=True):
+                provenance = suite.optimization_env()
+            self.assertEqual(provenance['JUSTRUST_CARGO_CRITICAL_PATH_COSTS_SHA256'], info['sha256'])
+            self.assertNotIn(str(path), json.dumps(provenance))
+
+    def test_invalid_tables_and_nonregular_files_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'costs.json'
+            for raw in (b'[]', b'null', b'{"p":true}', b'{"p":0}', b'{"p":-1}',
+                        b'{"p":1.5}', b'{"p":18446744073709551616}', b' ' * 65537,
+                        json.dumps({str(i): 1 for i in range(1025)}).encode()):
+                path.write_bytes(raw)
+                with self.subTest(raw=raw[:50]), self.assertRaises(ValueError):
+                    suite.load_scheduler_hints(path)
+            path.write_text('{"p":1}')
+            link = Path(tmp) / 'link'
+            link.symlink_to(path)
+            for bad in (link, Path(tmp), Path(tmp) / 'absent'):
+                with self.subTest(path=bad), self.assertRaises(ValueError):
+                    suite.load_scheduler_hints(bad)
+
+    def run_weighted(self, tmp, mutation=False, wrong_digest=False):
+        out = Path(tmp) / 'out'
+        source = Path(tmp) / 'source.json'
+        source.write_text('{"p":42}')
+        digest = suite.binary_sha256(source)
+        argv = ['scheduler-sweep.py', '--toolchain', 'nightly-2026-10-08',
+                '--out-dir', str(out), '--costs', str(source), 'desktop-body-check']
+        seen = []
+        def execute(cmd, **kwargs):
+            if cmd[2] == 'run':
+                mode = 'on' if os.environ['JUSTRUST_CARGO_CRITICAL_PATH'] == '1' else 'off'
+                hint = os.environ.get('JUSTRUST_CARGO_CRITICAL_PATH_COSTS')
+                seen.append((mode, hint))
+                result = segment(mode)['result']
+                if mode == 'on':
+                    self.assertEqual(Path(hint), out.resolve() / 'costs.json')
+                    self.assertEqual(Path(hint).read_bytes(), source.read_bytes())
+                    self.assertEqual(Path(hint).stat().st_mode & 0o777, 0o400)
+                    result['env']['optimization_env']['JUSTRUST_CARGO_CRITICAL_PATH_COSTS_SHA256'] = (
+                        'wrong' if wrong_digest else digest)
+                    if mutation:
+                        Path(hint).chmod(0o600)
+                        Path(hint).write_text('{"p":99}')
+                else:
+                    self.assertIsNone(hint)
+                Path(cmd[cmd.index('--out')+1]).write_text(json.dumps(result))
+        with patch.dict(os.environ, {'JUSTRUST_HOME': tmp}, clear=True), patch('sys.argv', argv), \
+             patch.object(sweep, 'identities', return_value={'cargo_sha256': 'fixed'}), \
+             patch.object(sweep, 'verify_recorded_selection'), \
+             patch.object(sweep.subprocess, 'run', side_effect=execute):
+            sweep.main()
+        return out, seen, digest
+
+    def test_explicit_weighted_sweep_captures_table_and_all_segment_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out, seen, digest = self.run_weighted(tmp)
+            self.assertEqual([m for m, _ in seen], list(sweep.MODES))
+            for mode in ('off', 'on'):
+                result = json.loads((out / (mode+'.json')).read_text())
+                proof = result['scheduler_experiment']['identities']['cost_hints']
+                self.assertEqual(proof, {'sha256': digest, 'packages': 1})
+
+    def test_replaced_cost_snapshot_never_writes_completed_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'cost'):
+                self.run_weighted(tmp, mutation=True)
+            self.assertFalse((Path(tmp) / 'out/off.json').exists())
+
+    def test_missing_or_wrong_recorded_digest_never_writes_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'cost'):
+                self.run_weighted(tmp, wrong_digest=True)
+            self.assertFalse((Path(tmp) / 'out/off.json').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

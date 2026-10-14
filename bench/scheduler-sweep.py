@@ -115,6 +115,8 @@ def main():
     parser.add_argument("--jobs", type=int, choices=(1, 2, 4, 8, 16, 24), default=24)
     parser.add_argument("--quiet-wait", type=float, default=30)
     parser.add_argument("--samples", type=int, default=2)
+    parser.add_argument("--costs", type=Path,
+                        help="explicit bounded package hints, copied and digest-guarded")
     parser.add_argument("scenarios", nargs="+", choices=tuple(suite.BY_NAME))
     args = parser.parse_args()
     if args.samples < 1:
@@ -126,26 +128,48 @@ def main():
     if os.environ.get("JUSTRUST_CARGO_FORK") in ("0", "off", "false", "no"):
         parser.error("candidate Cargo fork selection is disabled")
     if os.environ.get("JUSTRUST_CARGO_CRITICAL_PATH_COSTS"):
-        parser.error("initial sweep uses uniform costs, not unrecorded hint tables")
-    args.out_dir.mkdir(parents=True, exist_ok=False)
+        parser.error("use explicit --costs, not unrecorded environment hint tables")
+    hints = suite.load_scheduler_hints(args.costs) if args.costs is not None else None
+    args.out_dir = args.out_dir.resolve()
+    args.out_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
     identity = identities(args.toolchain)
+    hint_snapshot = args.out_dir / "costs.json"
+    if hints is not None:
+        with hint_snapshot.open("xb") as handle:
+            handle.write(hints[0])
+        hint_snapshot.chmod(0o400)
+        identity["cost_hints"] = hints[1]
     os.environ.update({"JUSTRUST_CARGO_DAEMON": "0", "JUSTRUST_CARGO_FORK": "1",
                        "CARGO_BUILD_JOBS": str(args.jobs), "JUSTRUST_NO_UPDATE": "1",
                        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0", "JUSTRUST_SHADOW": "0"})
     segments = []
     for index, mode in enumerate(MODES):
+        if hints is not None and suite.load_scheduler_hints(hint_snapshot) != hints:
+            raise ValueError("cost hint snapshot changed before the segment")
+        if hints is not None and mode == "on":
+            os.environ["JUSTRUST_CARGO_CRITICAL_PATH_COSTS"] = str(hint_snapshot)
+        else:
+            os.environ.pop("JUSTRUST_CARGO_CRITICAL_PATH_COSTS", None)
         os.environ["JUSTRUST_CARGO_CRITICAL_PATH"] = "1" if mode == "on" else "0"
         out = args.out_dir / f"{index}-{mode}.json"
         command = [sys.executable, str(Path(suite.__file__)), "run", "--toolchain", args.toolchain,
                    "--warmup", "1", "-n", str(args.samples), "--quiet-wait", str(args.quiet_wait),
                    "--out", str(out), *args.scenarios]
         subprocess.run(command, check=True)
-        if identities(args.toolchain) != identity:
+        current = identities(args.toolchain)
+        if hints is not None:
+            current["cost_hints"] = hints[1]
+        if current != identity:
             raise ValueError("toolchain or justrust changed during scheduler sweep")
+        if hints is not None and suite.load_scheduler_hints(hint_snapshot) != hints:
+            raise ValueError("cost hint snapshot changed during the segment")
         result = json.loads(out.read_text())
         expected_mode = "1" if mode == "on" else "0"
         if result.get("env", {}).get("optimization_env", {}).get("JUSTRUST_CARGO_CRITICAL_PATH") != expected_mode:
             raise ValueError("recorded segment mode does not match the scheduler experiment")
+        expected_costs = hints[1]["sha256"] if hints is not None and mode == "on" else None
+        if result.get("env", {}).get("optimization_env", {}).get("JUSTRUST_CARGO_CRITICAL_PATH_COSTS_SHA256") != expected_costs:
+            raise ValueError("recorded cost hints do not match the scheduler experiment")
         verify_recorded_selection(result, args.toolchain, identity, args.jobs)
         segments.append({"mode": mode, "result": result})
         (args.out_dir / "partial.json").write_text(json.dumps({"segments": segments,
