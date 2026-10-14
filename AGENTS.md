@@ -15,11 +15,14 @@ is not faster.
 
 What we own, or are working toward owning (plan: `docs/toolchain.md`):
 
-- **The vendored toolchain.** rustc (pinned nightly, then our fork), LLVM,
-  cargo, std/sysroot, codegen backends (cranelift), the linker (wild, mold),
+- **The vendored toolchain.** Owned rustc and Cargo source trees live here in
+  `toolchain/rustc` and `toolchain/cargo`, including Rust's library sources.
+  LLVM, std/sysroot, codegen backends (cranelift), the linker (wild, mold),
   the C toolchain and -sys library sysroot, rust-analyzer, and the test
-  runner. Pinned and shipped by justrust, so we control every flag and every
-  cache key.
+  runner are part of the end-to-end ownership plan. Source vendoring of our
+  compiler and Cargo does not mean every external dependency is already
+  vendored or every component has an independently redesigned implementation.
+  Pinned and shipped artifacts give us control of flags and cache keys.
 - **Prebuilt artifact servers.** A cargo-like registry service that serves
   prebuilt dependency artifacts (rlibs, build-script outputs, proc macros)
   keyed by exact toolchain and flags, so cold builds download instead of
@@ -84,16 +87,32 @@ and after, including cold and incremental debug/release builds. Removing a
 process boundary is not itself evidence of a speedup. Prioritize build
 performance; checks and tests remain correctness and regression gates.
 
-## Related repositories (where things live)
+## Source ownership and policy
 
-| Piece | Repo |
+The compiler and Cargo are ordinary source trees in this repository, not
+submodules or independently released pinned forks. Edit them here and commit
+coordinated changes together with the client, tests, and cache protocols.
+`jr-rustc` and `jr-cargo` remain component/binary names, not separate source
+repositories that agents should edit or rebase.
+
+This root AGENTS.md is authoritative throughout `toolchain/`. Imported
+technical documentation describes existing implementation and test fixtures,
+not an upstream architectural mandate or contribution policy. Retain licenses,
+attribution, required documentation inputs, and test fixtures. Do not restore
+inherited agent policies, separate-repo workflow instructions, or mandatory
+upstream rebasing. Build and source-import details are in
+`docs/toolchain-vendoring.md`.
+
+## Source locations and related services
+
+| Piece | Location |
 |---|---|
 | This client, local depcache, cache key scheme, remote cache wire format (MIT) | here (`src/depcache.rs`, `src/depcache_remote.rs`) |
 | Self-hostable single-tenant server (FSL) | `server/` here |
 | **Multitenant cloud**: hosted build hosts, global shared dependency cache (R2), prebuild publish, tenant isolation, poisoning defenses | `~/justrust-cloud` (private, github.com/1jehuang/justrust-cloud, `build.jcode.sh`) |
 | Accounts, billing, API keys, `/internal/builds/*` | `~/solosystems-backend` (`api.jcode.sh`) |
-| cargo fork (`jr-cargo`): build, install, rebase steps in its `JUSTRUST.md`. Submodule pointer `toolchain/cargo` here pins the commit justrust expects | `~/jr-cargo` (private, github.com/1jehuang/jr-cargo, branch `justrust`) |
-| rustc fork (`jr-rustc`): `./build-jr.sh`, rebase steps in its `JUSTRUST.md`. Submodule pointer `toolchain/rustc` here pins the commit justrust expects | `~/jr-rustc` (private, github.com/1jehuang/jr-rustc, branch `justrust`) |
+| Cargo (`jr-cargo`): owned source and build helper | `toolchain/cargo/`, `toolchain/cargo/build-jr.sh` |
+| Compiler (`jr-rustc`), Rust libraries, and included tools: owned source and build helper | `toolchain/rustc/`, `toolchain/rustc/build-jr.sh` |
 
 Anything multitenant goes in `~/justrust-cloud`, never here (see
 `docs/remote-strategy.md`, licensing). Remote cache protocol changes touch

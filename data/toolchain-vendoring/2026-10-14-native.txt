@@ -1,0 +1,108 @@
+Toolchain vendoring native acceptance, October 14, 2026
+
+Captured stdout/stderr from real commands. Local repository/scratch paths are
+redacted. The initial failed build is included to distinguish the diagnosed
+resolver regression from final acceptance. No new compiler was activated.
+
+=== Initial real build exposed optimized-builtins resolver gap ===
+Command: cd toolchain/rustc && ./build-jr.sh dev
+Task: 864093enhn
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 0.28s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+[stderr] <repo>/toolchain/rustc/build/x86_64-unknown-linux-gnu/ci-llvm/bin/llvm-strip does not exist; skipping copy
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 6m 24s
+Creating a sysroot for stage1 compiler (use `rustup toolchain link 'name' build/host/stage1`)
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 1m 19s
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.60s
+[stderr] optional source src/llvm-project is required for this step.
+[stderr] From the justrust root, run: python3 scripts/toolchain-source.py llvm
+[stderr] The `build.optimized-compiler-builtins` config option requires `compiler-rt` sources from LLVM.
+[stderr] Build completed unsuccessfully in 0:07:48
+
+--- Command finished with exit code: 1 ---
+
+
+=== Final native bootstrap and compiler-rt source selector tests ===
+Command: cd toolchain/rustc && ./x test src/bootstrap --test-args compiler_rt_source_tests && ./x test src/bootstrap
+Task: 833987fj8c
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 3.11s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+[stderr]     Finished `test` profile [unoptimized] target(s) in 7.34s
+
+running 6 tests
+......
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 283 filtered out; finished in 6.75ms
+
+	finished in 7.368 seconds
+[stderr] Build completed successfully in 0:00:17
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 0.05s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+[stderr]     Finished `test` profile [unoptimized] target(s) in 0.08s
+
+running 289 tests
+......................test core::builder::tests::test_test_coverage has been running for a long time
+.test core::config::tests::rust_optimize has been running for a long time
+..
+
+test result: ok. 289 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 220.20s
+
+	finished in 220.308 seconds
+[stderr] Build completed successfully in 0:03:43
+
+--- Command finished with exit code: 0 ---
+
+
+=== Final real compiler, Cranelift and optimized std build ===
+Command: cd toolchain/rustc && ./build-jr.sh dev
+Task: 101940bpm0
+[stderr]     Finished `dev` profile [unoptimized] target(s) in 0.26s
+WARNING: The `jemalloc` option is deprecated. Please use `build.allocator = "jemalloc"` instead of `rust.jemalloc = true`
+[stderr] <repo>/toolchain/rustc/build/x86_64-unknown-linux-gnu/ci-llvm/bin/llvm-strip does not exist; skipping copy
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 8.88s
+Creating a sysroot for stage1 compiler (use `rustup toolchain link 'name' build/host/stage1`)
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 4.36s
+[stderr]     Finished `release` profile [optimized + debuginfo] target(s) in 0.32s
+[stderr]     Finished `dist` profile [optimized + debuginfo] target(s) in 2m 08s
+[stderr] Build completed successfully in 0:02:28
+build-jr: dev -> build/jr/dev/bin/rustc
+
+--- Command finished with exit code: 0 ---
+
+
+=== Actual rebuilt compiler and std smoke, both backends ===
+Command: stage1 rustc -vV, metadata check, --test LLVM and -Zcodegen-backend=cranelift, saved dev rustc -vV
+Task: 27840786vh
+rustc 1.101.0-nightly (47ab1d17f 2026-10-14)
+binary: rustc
+commit-hash: 47ab1d17fd84ef646af7c065f1c77c84e04ded4e
+commit-date: 2026-10-14
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+
+running 3 tests
+test tests::optimized_runtime_integer_arithmetic ... ok
+test tests::std_allocation_strings_and_iterators ... ok
+test tests::std_threads_and_synchronization ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 3 tests
+test tests::optimized_runtime_integer_arithmetic ... ok
+test tests::std_allocation_strings_and_iterators ... ok
+test tests::std_threads_and_synchronization ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+rustc 1.101.0-nightly (47ab1d17f 2026-10-14)
+binary: rustc
+commit-hash: 47ab1d17fd84ef646af7c065f1c77c84e04ded4e
+commit-date: 2026-10-14
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+Default full compiler/std build and LLVM/Cranelift smoke passed without LLVM source checkout.
+
+--- Command finished with exit code: 0 ---

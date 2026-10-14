@@ -63,7 +63,7 @@ changes, so read the same-command table and System 2 for causes.
 ```sh
 bench/versus.py run                   # every warm workload on every stack (add --cold for fresh-dir)
 bench/versus.py run reference-loop -n 8
-bench/versus.py run --stack jr-rustc:RUSTC=$HOME/jr-rustc/build/host/stage1/bin/rustc
+bench/versus.py run --stack jr-rustc:RUSTC=$HOME/justrust/toolchain/rustc/build/host/stage1/bin/rustc
 bench/versus.py report                # rebuild VERSUS.md from the newest result
 bench/versus.py compare A.json B.json # same stacks, two dates or justrust versions
 ```

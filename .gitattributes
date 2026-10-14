@@ -1,0 +1,3 @@
+# Attribute macros must be defined at the repository root, not in a nested
+# .gitattributes. Keep compiler source formatting rules without Git warnings.
+[attr]rust text eol=lf whitespace=tab-in-indent,trailing-space,tabwidth=4

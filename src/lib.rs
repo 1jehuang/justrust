@@ -426,7 +426,7 @@ enum ToolchainCmd {
     /// (`JUSTRUST_CARGO_FORK=0` turns it off). Must be built from the
     /// cargo commit the toolchain ships.
     CargoFork {
-        /// Path to the built binary, e.g. ~/jr-cargo/target/release/cargo.
+        /// Path to the built binary, e.g. ~/justrust/toolchain/cargo/target/release/cargo.
         binary: PathBuf,
         /// Toolchain (default: the one pinned here, or the only installed one).
         #[arg(long)]
@@ -442,7 +442,7 @@ enum ToolchainCmd {
     /// `JUSTRUST_CACHE_PROC_MACROS=0` to opt out).
     JrInstall {
         /// Sysroot with bin/{rustc,rustdoc,clippy-driver,cargo-clippy}.
-        #[arg(default_value = "~/jr-rustc/build/host/stage2")]
+        #[arg(default_value = "~/justrust/toolchain/rustc/build/host/stage2")]
         sysroot: String,
         /// Installed official toolchain to take cargo and rustfmt from.
         #[arg(long, default_value = "nightly-2026-10-08")]
@@ -885,6 +885,36 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
 #[cfg(test)]
 mod passthrough_tests {
     use super::*;
+
+    #[test]
+    fn jr_install_defaults_to_vendored_stage2() {
+        let cli = Cli::try_parse_from(["justrust", "toolchain", "jr-install"]).unwrap();
+        let Command::Toolchain {
+            cmd: Some(ToolchainCmd::JrInstall { sysroot, .. }),
+        } = cli.command
+        else {
+            panic!("expected jr-install command");
+        };
+        assert_eq!(sysroot, "~/justrust/toolchain/rustc/build/host/stage2");
+    }
+
+    #[test]
+    fn jr_install_preserves_explicit_sysroot() {
+        let cli = Cli::try_parse_from([
+            "justrust",
+            "toolchain",
+            "jr-install",
+            "/custom/rustc/stage2",
+        ])
+        .unwrap();
+        let Command::Toolchain {
+            cmd: Some(ToolchainCmd::JrInstall { sysroot, .. }),
+        } = cli.command
+        else {
+            panic!("expected jr-install command");
+        };
+        assert_eq!(sysroot, "/custom/rustc/stage2");
+    }
 
     fn split(args: &[&str]) -> Option<(&'static str, Vec<String>)> {
         let argv: Vec<OsString> = args.iter().map(OsString::from).collect();

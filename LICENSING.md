@@ -1,7 +1,7 @@
 # Licensing
 
-justrust is open core. Each part of the project has one license, decided by
-its directory. The reasoning is in
+justrust is open core. Licenses are scoped by directory; imported components
+also retain their file-level licenses and third-party notices. The reasoning is in
 [docs/remote-strategy.md](docs/remote-strategy.md#open-source-and-licensing).
 
 | Path | License | Covers |
@@ -9,6 +9,12 @@ its directory. The reasoning is in
 | Everything not listed below | [MIT](LICENSE) | The `justrust` CLI, local build tooling, shared dependency cache, remote machine management, docs |
 | `protocol/` (future) | MIT | Wire protocol and cache key format, so other tools can implement them |
 | `server/` | FSL-1.1-ALv2 ([server/LICENSE](server/LICENSE)) | Self-hostable single-tenant remote executor and artifact cache |
+| `toolchain/` imported sources | Component and file-level licenses retained in each tree, including MIT/Apache-2.0 and third-party notices | Owned compiler, Rust libraries, Cargo, and included tools; see `toolchain/sources.json` for import provenance |
+
+Vendoring does not relicense imported code. Preserve the component `LICENSE*`,
+`COPYRIGHT`, attribution, and third-party notices when changing or distributing
+these trees. The root MIT license is not a replacement for those notices.
+The client crate excludes `toolchain/` from its package.
 
 The hosted multi-tenant service (global shared cache, prebuild fleet, tenant
 isolation, billing) is not in this repository and is not open source.
@@ -33,8 +39,9 @@ sign-off.
 
 | Contribution to | Licensed to the project under |
 |---|---|
-| Anything outside `server/` | MIT |
+| Project code outside `server/` and imported `toolchain/` sources | MIT |
 | `server/` | Apache License 2.0 |
+| Imported component sources under `toolchain/` | The applicable component/file license terms |
 
 `server/` contributions come in under Apache 2.0 even though `server/` goes
 out under FSL. Apache 2.0 lets the maintainer relicense that code, including

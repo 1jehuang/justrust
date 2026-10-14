@@ -1,0 +1,35 @@
+# justrust build of rustc. Use: ./build-jr.sh [dev|release]
+#
+# Matches the pinned nightly (nightly channel, so -Z flags and cargo's
+# channel-dependent defaults are the same) with prebuilt CI LLVM, so a
+# compiler-only rebuild skips LLVM. build-jr.sh appends the [rust] speed
+# settings for the chosen mode (see ../../docs/toolchain-vendoring.md).
+change-id = "ignore"
+profile = "compiler"
+
+[build]
+submodules = false
+docs = false
+compiler-docs = false
+extended = false
+# profiler_builtins in our std, as the official dist (--enable-profiler):
+# PGO-instrumenting a stage 2 compiler links it against our stage 1 std.
+profiler = true
+
+[rust]
+channel = "nightly"
+debug-assertions = false
+debug-logging = false
+debuginfo-level = "line-tables-only"
+jemalloc = true
+# profile = "compiler" turns frame pointers on; the official dist build has
+# them off (its driver has almost no `mov %rsp,%rbp` prologues).
+frame-pointers = false
+# Also from the compiler profile, both off in dist.
+backtrace-on-ice = false
+download-rustc = false
+codegen-backends = ["llvm", "cranelift"]
+
+[llvm]
+download-ci-llvm = true
+assertions = false

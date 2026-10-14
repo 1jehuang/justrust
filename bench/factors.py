@@ -53,9 +53,9 @@ CUTOFF_TOOLCHAIN = os.environ.get("JR_CUTOFF_TOOLCHAIN", "jr-b35416a3743d")
 UNSTABLE_PROFILE = {"CARGO_UNSTABLE_PROFILE_RUSTFLAGS": "true",
                     "CARGO_UNSTABLE_PROFILE_HINT_MOSTLY_UNUSED": "true"}
 # The jr-rustc build fork-change factors run on both sides
-# (JR_RUSTC_MODE picks another saved mode under ~/jr-rustc/build/jr).
+# (JR_RUSTC_MODE picks another saved mode under ~/justrust/toolchain/rustc/build/jr).
 JR_RUSTC_ENV = {"JUSTRUST_TOOLCHAIN": "system",
-                "RUSTC": str(Path(os.environ.get("JR_RUSTC_DIR", Path.home() / "jr-rustc")) / "build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-bolt-stage2") / "bin/rustc")}
+                "RUSTC": str(Path(os.environ.get("JR_RUSTC_DIR", suite.ROOT / "toolchain/rustc")) / "build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-bolt-stage2") / "bin/rustc")}
 # The slowest dependencies of a cold Desktop UI test build (run
 # 20261011-043427013-426230: gpui 115 s, aws-sdk-bedrock 68 s, wgpu-core 67 s, ...).
 BIG_DEPS = ["gpui", "aws-sdk-bedrock", "wgpu-core", "gpui_linux", "read-fonts", "wgpu-hal",
@@ -377,10 +377,10 @@ FACTORS = [
         "replay: link done 3.41 s, exit 3.82 s",
     ),
     Factor(
-        "jr-rustc", "justrust's rustc fork (~/jr-rustc/build/jr/$JR_RUSTC_MODE, default pgo-bolt-stage2) vs the official nightly at the same commit",
+        "jr-rustc", "justrust's rustc fork (~/justrust/toolchain/rustc/build/jr/$JR_RUSTC_MODE, default pgo-bolt-stage2) vs the official nightly at the same commit",
         "loop", "desktop-test-edit",
         on={"JUSTRUST_TOOLCHAIN": "system",
-            "RUSTC": str(Path.home() / "jr-rustc/build/jr" / os.environ.get("JR_RUSTC_MODE", "pgo-bolt-stage2") / "bin/rustc")},
+            "RUSTC": JR_RUSTC_ENV["RUSTC"]},
         off={"JUSTRUST_TOOLCHAIN": "system",
              "RUSTC": str(suite.JR_HOME / "toolchains" / NIGHTLY / "bin" / "rustc")},
         n=4, slow=True,

@@ -767,7 +767,7 @@ fn install_at(
 }
 
 /// Install a jr-rustc build (a stage sysroot such as
-/// `~/jr-rustc/build/host/stage2`, with rustc, rustdoc and clippy) as the
+/// `~/justrust/toolchain/rustc/build/host/stage2`, with rustc, rustdoc and clippy) as the
 /// toolchain `jr-<commit>`. Cargo comes from `cargo_from` (an installed
 /// official toolchain, the one the fork is based on). Copied, not linked:
 /// rebuilding the fork never changes an installed toolchain under a build.

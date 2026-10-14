@@ -1,4 +1,14 @@
 /target
+/toolchain/rustc/src/llvm-project/
+/toolchain/rustc/src/gcc/
+/toolchain/rustc/src/tools/enzyme/
+/toolchain/rustc/src/tools/rustc-perf/
+/toolchain/rustc/src/doc/book/
+/toolchain/rustc/src/doc/edition-guide/
+/toolchain/rustc/src/doc/embedded-book/
+/toolchain/rustc/src/doc/nomicon/
+/toolchain/rustc/src/doc/reference/
+/toolchain/rustc/src/doc/rust-by-example/
 __pycache__/
 # In-progress synthetic runs (bench/synth/run.py), rewritten after every point
 bench/results/partial/

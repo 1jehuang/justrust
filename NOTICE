@@ -3,8 +3,9 @@ Copyright 2026 Jeremy Huang
 
 This product includes contributions from the people listed below. Each
 contribution remains under its author's copyright and is licensed to the
-project as described in LICENSING.md: MIT for code outside server/, and the
-Apache License 2.0 for contributions to server/.
+project as described in LICENSING.md: MIT for our client and tooling,
+Apache License 2.0 for contributions to server/, and applicable
+component/file licenses for imported toolchain code.
 
 Keep this file in every copy of justrust, including the hosted service, as MIT
 and Apache 2.0 require. Update it when a pull request from a new contributor
@@ -18,7 +19,14 @@ Jeremy Huang (@1jehuang): maintainer, all directories.
 Third-party code
 ----------------
 
-No third-party source code is vendored into this repository. Dependencies are
-pulled from crates.io under their own licenses. If code from another project
-is ever copied in, list it here with its origin and license, and keep its
-original license notice next to the code.
+Rust compiler, standard libraries, and included tools: toolchain/rustc/,
+derived from the Rust Project through justrust's compiler development line.
+Cargo and included libraries: toolchain/cargo/, derived from the Cargo
+Project through justrust's Cargo development line. Backtrace sources are
+included at toolchain/rustc/library/backtrace/.
+
+These sources retain their original copyrights, component licenses
+(including MIT and Apache License 2.0), and file-level/third-party notices.
+See the LICENSE*, COPYRIGHT, and other attribution files in the respective
+trees. toolchain/sources.json records exact import origins and revisions.
+Other dependencies are obtained under their own licenses.

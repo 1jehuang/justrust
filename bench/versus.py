@@ -16,7 +16,7 @@ identical source edit and the same machine state:
 rustc/cargo, flags, linker, scheduling). `jr-nocache -> justrust` is what
 the caches add. Try a candidate component as an extra stack:
 
-  bench/versus.py run --stack jr-rustc:RUSTC=$HOME/jr-rustc/build/host/stage1/bin/rustc
+  bench/versus.py run --stack jr-rustc:RUSTC=$HOME/justrust/toolchain/rustc/build/host/stage1/bin/rustc
 
 Besides wall time, every run counts user-space CPU instructions retired by
 the whole process tree (perf_event_open, inherited by every rustc, linker

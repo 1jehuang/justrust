@@ -958,9 +958,9 @@ mod tests {
 
     /// The real case: cargo's testsuite fixtures under `.../target/`.
     #[test]
-    #[ignore = "needs ~/jr-cargo"]
+    #[ignore = "needs ~/justrust/toolchain/cargo"]
     fn jr_cargo_scan_keeps_target_fixtures() {
-        let root = PathBuf::from(std::env::var("HOME").unwrap()).join("jr-cargo");
+        let root = PathBuf::from(std::env::var("HOME").unwrap()).join("justrust/toolchain/cargo");
         let s = scan(&root).unwrap();
         let n = s
             .files

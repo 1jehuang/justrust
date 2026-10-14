@@ -33,9 +33,9 @@ The JSON manifest accepts exactly these fields:
 | `schema_version` | Integer `1` |
 | `id`, `target` | Exact requested pinned ID and client host target |
 | `rustc_version` | Exact first line of `rustc -vV` |
-| `rustc_commit_hash` | Full 40-character lowercase commit hash |
+| `rustc_commit_hash` | Full 40-character lowercase identity reported as `commit-hash` by `rustc -vV` |
 | `cargo_upstream_commit` | Exact 7 to 40-character lowercase commit printed by stock `cargo -V` |
-| `jr_cargo` | Optional lowercase fork commit printed in `(jr-cargo <commit>)` |
+| `jr_cargo` | Optional lowercase source identity printed in `(jr-cargo <identity>)`, historically a fork Git commit |
 | `archive_sha256` | Lowercase 64-character SHA-256 of the compressed archive |
 | `archive_size` | Exact compressed byte count, at most 8 GiB |
 | `unpacked_size` | Exact sum of regular-file payload bytes, at most 32 GiB |
@@ -53,7 +53,14 @@ optional components receive corresponding executable/source/library checks.
 Before publication into the install namespace, rustc's version, full commit, and
 host must match. JR commits must also match the requested ID prefix. Stock cargo
 and an optional jr-cargo must report the declared upstream commit, and jr-cargo
-must report its declared fork commit.
+must report its declared JR source identity.
+
+For owned sources, compiler and JR Cargo identities are content-derived source
+fingerprints, not commits in separate fork repositories. Existing manifest
+field names and historical Git-based IDs remain supported. Identity checks
+still require an exact match to the executable's reported value; upstream
+import provenance and CI LLVM download commits are separate inputs. See
+`toolchain-vendoring.md` for the owned-source workflow.
 
 The client writes its own serialized `Installed` marker only after all checks.
 A process-wide install lock covers discovery, interrupted-staging cleanup,

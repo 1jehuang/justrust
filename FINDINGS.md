@@ -1,5 +1,39 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: compiler and Cargo become owned source
+
+Both forks are ordinary monorepo source, with shared bootstrap Cargo and
+vendored backtrace. Native source-content identities distinguish dirty edits
+and archive builds without using the outer Git commit as upstream identity.
+The frozen CI LLVM artifact commit is independent. OwnedSource is not an
+upstream release tarball: treating it as one accidentally selected the dist
+profile and changed bootstrap stage defaults. Missing optional-source paths
+are registered from the explicit source manifest rather than hidden by dummy
+checkout directories. After these fixes, all 289 native bootstrap tests passed
+without changing any expected snapshots, including nine source-identity tests
+and six CI/local compiler-rt source-selection tests. The real dev compiler,
+Cranelift and optimized std build then passed without an LLVM source checkout.
+Metadata checking and all three arithmetic/std/thread smoke tests passed on
+both LLVM and Cranelift. Durable redacted native stdout/stderr is retained in
+`data/toolchain-vendoring/2026-10-14-native.txt`.
+
+Hosted Cargo identity acceptance `20261014-065210842-3760408` passed all four
+tests, including credential helper and Windows manifest changes. The actual
+Cargo binary build `20261014-063157746-3596184` passed locally in 95.73s using
+justrust's documented debug-build local route. Hosted version acceptance
+`20261014-064302039-3684155` passed 31 tests. A broader accidental version
+substring filter (`20261014-064035177-3661945`) passed 167 tests but failed one
+cross-target test because i686 std was unavailable, not a complete Cargo
+suite pass. Final Cargo binary build `20261014-070837591-3919225` and final
+31-test hosted version acceptance `20261014-070929167-3919209` passed against
+the complete source-fingerprint inputs. Receipts are isolated under
+data/runs/xps14-toolchain-vendoring.
+
+These are migration correctness observations, not a measured compile-time
+improvement or an experimental toolchain default promotion. Full migration
+provenance, build commands and compiler acceptance are in
+`docs/toolchain-vendoring.md`.
+
 ## 2026-10-14: incremental local output survives interrupted builds
 
 The local recorder now streams existing OutputLine JSONL into a 64 KiB

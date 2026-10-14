@@ -1,0 +1,14 @@
+/target
+/Cargo.lock
+/config.stamp
+/Makefile
+/config.mk
+/doc/build
+/etc/*.pyc
+/src/registry/target
+rustc
+__pycache__
+.idea/
+.vscode/
+*.iml
+*.swp
