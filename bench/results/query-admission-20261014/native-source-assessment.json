@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "producer": "rustc-query-admission",
+  "scope": "query-job-admission-lifecycle",
+  "capture_id": "1791996977749624171-2571701-1",
+  "structural_complete": true,
+  "full_pipeline_complete": false,
+  "nodes": 47517,
+  "edges": 45130,
+  "issues": [],
+  "opaque_boundaries": ["fast-cache-hits", "race-cache-hits", "green-ensure-no-job", "feeds", "direct-paths", "nonquery", "resource-internals", "driver-and-process-outcome", "cargo-parent-binding", "cache-read-dependencies", "wait-and-resource-dependencies"],
+  "cpu_work_ns": null,
+  "execution_span_ns": null
+}

@@ -28,10 +28,11 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
             env.pop('JUSTRUST_EXECUTION_GRAPH_DIR', None)
             source = root / 'fixture.rs'
             original = ('const _: () = assert!(option_env!("JUSTRUST_EXECUTION_GRAPH_DIR").is_none());\n'
-                        'pub fn sum(n: u32) -> u32 { (0..n).fold(0u32, |a,b| a.wrapping_add(b)) }\n')
+                        'pub fn sum(n: u32) -> u32 { (0..n).fold(0u32, |a,b| a.wrapping_add(b)) }\n'
+                        'fn main() { assert_eq!(sum(10), 45); }\n')
             source.write_text(original)
-            artifact = root / 'fixture.rlib'
-            args = [rustc, '--crate-name=query_admission_fixture', '--crate-type=rlib',
+            artifact = root / 'fixture-bin'
+            args = [rustc, '--crate-name=query_admission_fixture', '--crate-type=bin',
                     '--edition=2024', '-Copt-level=0', '-Cdebuginfo=0',
                     '-Cincremental=' + str(root / 'incremental'),
                     '-Zincremental-info', '-o', str(artifact), str(source)]
@@ -97,7 +98,13 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
                 return receipts
 
             compile()
+            subprocess.run([str(artifact)], check=True, cwd=root, env=env, timeout=30)
+            # Compare equally warm compilations, not cold output versus incremental output.
+            compile()
             before = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            compile()
+            self.assertEqual(before, hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                             'capture-off baseline itself is not byte-stable')
             capture = root / 'incremental-capture'
             compile(capture)
             inspect(capture)
@@ -113,7 +120,7 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
             receipts = inspect(parallel)
             self.assertTrue(any(e['kind'] == 'admitted' for r in receipts for e in r['events']))
 
-            source.write_text('pub fn bad() -> u32 { "intentional query type error" }\n')
+            source.write_text('pub fn bad() -> u32 { "intentional query type error" }\nfn main() {}\n')
             failed = root / 'failed-capture'
             output = compile(failed, success=False)
             self.assertIn('mismatched types', output)

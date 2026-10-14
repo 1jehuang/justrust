@@ -1,5 +1,25 @@
 # Findings: where agent build time goes
 
+## 2026-10-14: native admitted-query lifecycle acceptance
+
+The owned stage1 compiler, std and libtest were rebuilt, then the opt-in
+`-Zjr-query-graph` capture passed native serial/parallel, failure and unwritable
+sink acceptance. Compiling the production observer module recorded 47,517
+admitted jobs and 45,130 descriptive parent edges with no assessment issues;
+all 16 observer tests passed. This proves the declared admitted-job lifecycle
+slice, not cache/read/wait dependencies, Cargo binding or whole-pipeline coverage.
+The final client suite passed 476 tests (3 ignored), run
+`20261014-093727237-2236830`; consumer and strict lint records are exported under
+`data/runs/query-admission-20261014/`. Native bootstrap/direct rustc commands
+have no invented justrust run IDs. Details and assessment are in
+`docs/execution-graph-query-admission.md` and
+`bench/results/query-admission-20261014/native-source-assessment.json`.
+
+Warm executable bytes were identical with capture off/off/on/off. Incremental
+rlib container bytes differed even off/off because per-invocation temporary CGU
+names are serialized in private `lib.rmeta-link`; metadata and object payloads
+were stable. No universal rlib byte-neutrality or performance claim is made.
+
 ## 2026-10-14: hosted target preflight for direct WASM checks
 
 Direct default `justrust check --target wasm32-unknown-unknown` also reached

@@ -41,19 +41,32 @@ private temporary files and atomic no-replace publication. Directory ancestors
 are caller-trusted. Diagnostic serialization and filesystem synchronization can
 add latency, and no bounded I/O latency or production performance claim is made.
 
-## Validation status
+## Validation
 
 The initial actual compiler bootstrap exposed missing `rustc_session` crate
-dependencies in query implementation hooks and timed out. Standalone observer
-unit tests and synthetic consumer tests do not substitute for rebuilt-compiler
-acceptance. Before promotion, rebuild the actual owned compiler and run
-`tests/test_execution_graph_query_native.py` with `JR_QUERY_RUSTC` selecting that
-binary. The harness exercises serial and parallel admission accounting,
-capture-on/off artifact identity, failed-interface receipts and an unwritable
-sink. Full native acceptance is pending. The subsequent actual bootstrap reached
-`rustc_interface` and exposed a generic `QuerySystem` Drop lifetime regression
-(E0597/E0505). The corrective design moves allocator snapshot Drop into a
-non-generic allocator owner instead of rearranging arena lifetimes.
+dependencies in query implementation hooks and timed out. The next build exposed
+a generic `QuerySystem` Drop lifetime regression (E0597/E0505). Both were fixed:
+allocator snapshot Drop now belongs to a non-generic allocator owner without
+rearranging arena lifetimes. The final stage1 compiler, matching std and libtest
+were rebuilt successfully using the owned bootstrap.
+
+Actual native acceptance passed on October 14, 2026:
+
+- `tests/test_execution_graph_query_native.py` against the rebuilt stage1 binary:
+  serial and two-thread captures, independent context/job accounting, warm
+  capture-off/off/on/off executable SHA-256 identity, executed output correctness,
+  intentional type failure remaining incomplete, and an unwritable sink failing open.
+- Native compilation of the production observer module with two compiler threads:
+  **47,517 admitted jobs**, **45,130 descriptive parent edges**, no assessment
+  issues, scoped structural completeness true and full pipeline completeness false.
+  All **16 observer tests** passed using the matching rebuilt test library.
+- Assessment preserved in
+  `bench/results/query-admission-20261014/native-source-assessment.json`.
+
+The native workload is the actual observer source compiled as a standalone test
+module. Its test configuration aliases the atomic to the matching host std type.
+It is not a full rustc test suite, hosted integration test or fleet promotion.
+The rebuilt artifacts remain diagnostic stage1 artifacts, not promoted defaults.
 
 Observed client gates, exported under `data/runs/query-admission-20261014/`:
 
@@ -65,9 +78,21 @@ Observed client gates, exported under `data/runs/query-admission-20261014/`:
 | Root-inventory hosted check | `20261014-093126015-2114162` | passed |
 | Root-inventory consumer tests | `20261014-093153907-2119512` | 14 passed |
 | Root-inventory strict client lint | `20261014-093200356-2120729` | passed |
+| Final full client suite | `20261014-093727237-2236830` | 476 passed, 3 ignored |
 
 The query-aware client was installed after both gate sequences. The standalone
 observer receipt round-trip passed with two contexts, three admitted jobs and
-one descriptive parent edge. This is synthetic interoperability evidence, not
-rebuilt compiler acceptance. Bootstrap and direct compiler fixtures do not have
-justrust build run IDs and are not attributed invented IDs.
+one descriptive parent edge. That round-trip alone is synthetic interoperability
+evidence, not rebuilt compiler acceptance. Bootstrap and direct compiler fixtures
+do not have justrust build run IDs and are not attributed invented IDs.
+
+### Artifact comparison limitation
+
+Incremental rlib container SHA-256 changed even on repeated capture-off builds.
+The owned compiler generates a per-invocation temporary suffix for CGU filenames,
+and its private `lib.rmeta-link` records those names. Archive timestamps are zero.
+A separate diagnostic found identical `lib.rmeta` and all object payloads while
+filenames and `lib.rmeta-link` differed. No universal rlib byte-neutrality claim
+is made and no private metadata was normalized away to claim one. The acceptance
+harness instead requires exact executable SHA-256 identity after first proving
+that the capture-off warm executable baseline itself is stable.
