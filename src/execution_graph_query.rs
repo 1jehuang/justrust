@@ -1,5 +1,6 @@
 //! Independent validation of admitted query jobs, not query requests or a dependency graph.
-//! Only synthetic fixtures exercise this module until a rebuilt native compiler is accepted.
+//! Native admission/read acceptance is tracked by the query-read benchmark provenance.
+//! Schema4 task lineage additionally requires reciprocal continuation-pool authority.
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,6 +104,42 @@ struct ReceiptV3 {
     wait_capture_complete: bool,
     wait_events: Vec<WaitEvent>,
     query_reads: crate::execution_graph_reads::ReadCapture,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptV4 {
+    schema: u32,
+    producer: String,
+    scope: String,
+    capture_id: String,
+    full_pipeline_complete: bool,
+    #[serde(deserialize_with = "nullable")]
+    cpu_work_ns: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    execution_span_ns: Option<u64>,
+    interface_outcome: InterfaceOutcome,
+    capture_complete: bool,
+    lost_events: u64,
+    opaque_boundaries: Vec<String>,
+    expected_contexts: u64,
+    contexts: Vec<QueryContext>,
+    events: Vec<Event>,
+    wait_allocator_baseline: u64,
+    #[serde(deserialize_with = "nullable")]
+    wait_allocator_high_water: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    expected_waits: Option<u64>,
+    wait_capture_complete: bool,
+    wait_events: Vec<WaitEvent>,
+    query_reads: crate::execution_graph_reads::ReadCapture,
+    task_bindings: crate::execution_graph_task_bindings::BindingCapture,
+}
+
+/// Typed captures are retained until the caller's second, reciprocal-authority pass.
+pub struct CollectedQuery {
+    pub assessment: QueryAssessment,
+    pub bindings: Option<crate::execution_graph_task_bindings::ValidatedBindingCapture>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -274,6 +311,8 @@ pub struct QueryAssessment {
     pub waits: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
+    /// None for schemas 1/2/3: legacy absence is unknown, never zero lineage.
+    pub task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
     pub issues: Vec<String>,
     pub opaque_boundaries: Vec<String>,
     pub cpu_work_ns: Option<u64>,
@@ -283,7 +322,12 @@ pub struct QueryAssessment {
 /// Parse the original bytes directly so duplicate fields cannot disappear through a Value.
 /// Malformed/unsupported receipts fail parsing. Lifecycle discrepancies return issues.
 /// Capture identity uniqueness across receipts must be enforced by the caller.
+#[allow(dead_code)] // Public assessment-only entry point retained alongside collection.
 pub fn assess_bytes(bytes: &[u8]) -> Result<QueryAssessment> {
+    Ok(collect_bytes(bytes)?.assessment)
+}
+
+pub fn collect_bytes(bytes: &[u8]) -> Result<CollectedQuery> {
     if bytes.len() > MAX_BYTES {
         bail!("query receipt exceeds 64 MiB byte budget");
     }
@@ -293,17 +337,191 @@ pub fn assess_bytes(bytes: &[u8]) -> Result<QueryAssessment> {
     }
     let version: Version =
         serde_json::from_slice(bytes).context("invalid query receipt version")?;
-    match version.schema {
+    let assessment = match version.schema {
         1 => assess_admissions(
             serde_json::from_slice(bytes).context("invalid query admission receipt")?,
         ),
         2 => assess_waits(serde_json::from_slice(bytes).context("invalid query wait receipt")?),
         3 => assess_reads(serde_json::from_slice(bytes).context("invalid query read receipt")?),
+        4 => return collect_bindings(bytes),
         _ => bail!("unsupported query receipt schema"),
+    }?;
+    Ok(CollectedQuery {
+        assessment,
+        bindings: None,
+    })
+}
+
+// This projection is read only AFTER the strict, duplicate-preserving ReceiptV4
+// parser accepted the original bytes. It does not replace the read schema parser.
+#[derive(Deserialize)]
+struct ReadInventoryProjection {
+    query_reads: ReadPointInventory,
+}
+#[derive(Deserialize)]
+struct ReadPointInventory {
+    request_high_water: u64,
+    read_high_water: u64,
+    result_high_water: u64,
+    events: Vec<ReadPointEvent>,
+}
+#[derive(Deserialize)]
+struct ReadPointEvent {
+    kind: String,
+    request_id: Option<u64>,
+    read_id: Option<u64>,
+    result_id: Option<u64>,
+}
+
+fn collect_bindings(bytes: &[u8]) -> Result<CollectedQuery> {
+    use crate::execution_graph_task_bindings::{QuerySourceInventory, Source};
+    let r: ReceiptV4 =
+        serde_json::from_slice(bytes).context("invalid query task-binding receipt")?;
+    if r.schema != 4 {
+        bail!("unsupported query task-binding receipt schema");
     }
+    let reads: ReadInventoryProjection = serde_json::from_slice(bytes)?;
+    let reads = reads.query_reads;
+    if r.contexts.len() > MAX_CONTEXTS {
+        bail!("task-binding context budget exceeded");
+    }
+    let mut inventory = QuerySourceInventory {
+        expected_points: Some(0),
+        ..Default::default()
+    };
+    let mut add_count = |count: Option<u64>| {
+        inventory.expected_points = inventory
+            .expected_points
+            .and_then(|sum| sum.checked_add(count?));
+    };
+    for context in &r.contexts {
+        add_count(
+            context
+                .allocator_high_water
+                .and_then(|high| high.checked_sub(1)),
+        );
+    }
+    for high in [
+        reads.request_high_water,
+        reads.read_high_water,
+        reads.result_high_water,
+    ] {
+        add_count(high.checked_sub(1));
+    }
+    add_count(
+        r.wait_allocator_high_water
+            .and_then(|high| high.checked_sub(1))
+            .and_then(|n| n.checked_mul(2)),
+    );
+    let context_ids: BTreeSet<_> = r.contexts.iter().map(|c| c.context_id).collect();
+    if context_ids.len() != r.contexts.len()
+        || context_ids.iter().copied().ne(1..=r.expected_contexts)
+    {
+        inventory.expected_points = None;
+        inventory
+            .issues
+            .push("task-binding independent context inventory mismatch".into());
+    }
+    inventory.expected_contexts = r.expected_contexts;
+    inventory.context_high_water = r
+        .contexts
+        .iter()
+        .map(|c| (c.context_id, c.allocator_high_water))
+        .collect();
+    inventory.read_high_water = [
+        reads.request_high_water,
+        reads.read_high_water,
+        reads.result_high_water,
+    ];
+    inventory.wait_high_water = r.wait_allocator_high_water;
+    for context in &r.contexts {
+        if context.allocator_high_water.is_none() {
+            inventory.unknown_contexts.insert(context.context_id);
+        }
+    }
+    inventory.unknown_waits = r.wait_allocator_high_water.is_none();
+    for event in &r.events {
+        if let Event::Admitted {
+            context_id, job_id, ..
+        } = event
+        {
+            inventory.observed.insert(Source::Admitted {
+                context_id: *context_id,
+                job_id: *job_id,
+            });
+        }
+    }
+    for event in &r.wait_events {
+        match event {
+            WaitEvent::Registered { wait_id, .. } => {
+                inventory
+                    .observed
+                    .insert(Source::WaitRegistered { wait_id: *wait_id });
+            }
+            WaitEvent::Resumed { wait_id, .. } => {
+                inventory
+                    .observed
+                    .insert(Source::WaitResumed { wait_id: *wait_id });
+            }
+            _ => {}
+        }
+    }
+    for event in reads.events {
+        let source = match event.kind.as_str() {
+            "request_started" => event
+                .request_id
+                .map(|request_id| Source::RequestStarted { request_id }),
+            "dep_read" => event.read_id.map(|read_id| Source::DepRead { read_id }),
+            "result_produced" => event
+                .result_id
+                .map(|result_id| Source::ResultProduced { result_id }),
+            _ => None,
+        };
+        if let Some(source) = source {
+            inventory.observed.insert(source);
+        }
+    }
+    // Assess admission, wait and read contracts independently. Binding partiality
+    // must not downgrade any of these existing completeness assessments.
+    let mut assessment = assess_reads_policy(
+        ReceiptV3 {
+            schema: 3,
+            producer: r.producer,
+            scope: r.scope,
+            capture_id: r.capture_id,
+            full_pipeline_complete: r.full_pipeline_complete,
+            cpu_work_ns: r.cpu_work_ns,
+            execution_span_ns: r.execution_span_ns,
+            interface_outcome: r.interface_outcome,
+            capture_complete: r.capture_complete,
+            lost_events: r.lost_events,
+            opaque_boundaries: r.opaque_boundaries,
+            expected_contexts: r.expected_contexts,
+            contexts: r.contexts,
+            events: r.events,
+            wait_allocator_baseline: r.wait_allocator_baseline,
+            wait_allocator_high_water: r.wait_allocator_high_water,
+            expected_waits: r.expected_waits,
+            wait_capture_complete: r.wait_capture_complete,
+            wait_events: r.wait_events,
+            query_reads: r.query_reads,
+        },
+        true,
+    )?;
+    let bindings = crate::execution_graph_task_bindings::assess(r.task_bindings, inventory)?;
+    assessment.schema = 4;
+    assessment.task_bindings = Some(bindings.assessment.clone());
+    Ok(CollectedQuery {
+        assessment,
+        bindings: Some(bindings),
+    })
 }
 
 fn assess_admissions(r: Receipt) -> Result<QueryAssessment> {
+    assess_admissions_policy(r, false)
+}
+
+fn assess_admissions_policy(r: Receipt, large_inventory: bool) -> Result<QueryAssessment> {
     if r.schema != 1
         || r.producer != "rustc-query-admission"
         || r.scope != "query-job-admission-lifecycle"
@@ -313,7 +531,7 @@ fn assess_admissions(r: Receipt) -> Result<QueryAssessment> {
     if r.capture_id.is_empty() || r.capture_id.len() > 128 {
         bail!("query capture identity must contain 1..=128 bytes");
     }
-    if r.expected_contexts > MAX_CONTEXTS as u64
+    if (!large_inventory && r.expected_contexts > MAX_CONTEXTS as u64)
         || r.contexts.len() > MAX_CONTEXTS
         || r.events.len() > MAX_EVENTS
         || r.opaque_boundaries.len() > 1024
@@ -353,15 +571,17 @@ fn assess_admissions(r: Receipt) -> Result<QueryAssessment> {
         if c.allocator_baseline != 1 {
             issues.insert(format!("context {} baseline is not 1", c.context_id));
         }
-        if c.allocator_high_water
-            .is_some_and(|high| high > MAX_JOBS + 1)
-            || c.expected_jobs.is_some_and(|expected| expected > MAX_JOBS)
+        if !large_inventory
+            && (c
+                .allocator_high_water
+                .is_some_and(|high| high > MAX_JOBS + 1)
+                || c.expected_jobs.is_some_and(|expected| expected > MAX_JOBS))
         {
             bail!("allocator counts exceed job budget");
         }
         match (c.allocator_high_water, c.expected_jobs) {
             (Some(high), Some(expected)) => {
-                if expected > MAX_JOBS || high > MAX_JOBS + 1 {
+                if !large_inventory && (expected > MAX_JOBS || high > MAX_JOBS + 1) {
                     bail!("allocator counts exceed job budget");
                 }
                 total_expected = total_expected.saturating_add(expected);
@@ -383,7 +603,7 @@ fn assess_admissions(r: Receipt) -> Result<QueryAssessment> {
     if contexts.keys().copied().ne(1..=r.expected_contexts) {
         issues.insert("context IDs do not exactly cover independent allocator range".into());
     }
-    if total_expected > MAX_JOBS {
+    if !large_inventory && total_expected > MAX_JOBS {
         bail!("aggregate allocator count exceeds job budget");
     }
     if contexts.is_empty()
@@ -504,6 +724,7 @@ fn assess_admissions(r: Receipt) -> Result<QueryAssessment> {
             && issues.is_empty(),
         full_pipeline_complete: false,
         nodes: admitted.len(),
+        task_bindings: None,
         edges,
         descriptive_parent_edges: edges,
         control_causal_edges: 0,
@@ -526,6 +747,10 @@ struct WaitLifecycle {
 }
 
 fn assess_reads(r: ReceiptV3) -> Result<QueryAssessment> {
+    assess_reads_policy(r, false)
+}
+
+fn assess_reads_policy(r: ReceiptV3, large_inventory: bool) -> Result<QueryAssessment> {
     if r.schema != 3 {
         bail!("unsupported query read receipt schema");
     }
@@ -540,29 +765,46 @@ fn assess_reads(r: ReceiptV3) -> Result<QueryAssessment> {
         })
         .collect();
     let expected_contexts = r.expected_contexts;
-    let mut assessment = assess_waits(ReceiptV2 {
-        schema: 2,
-        producer: r.producer,
-        scope: r.scope,
-        capture_id: r.capture_id,
-        full_pipeline_complete: r.full_pipeline_complete,
-        cpu_work_ns: r.cpu_work_ns,
-        execution_span_ns: r.execution_span_ns,
-        interface_outcome: r.interface_outcome,
-        capture_complete: r.capture_complete,
-        lost_events: r.lost_events,
-        opaque_boundaries: r.opaque_boundaries,
-        expected_contexts: r.expected_contexts,
-        contexts: r.contexts,
-        events: r.events,
-        wait_allocator_baseline: r.wait_allocator_baseline,
-        wait_allocator_high_water: r.wait_allocator_high_water,
-        expected_waits: r.expected_waits,
-        wait_capture_complete: r.wait_capture_complete,
-        wait_events: r.wait_events,
-    })?;
+    let context_high_water = r
+        .contexts
+        .iter()
+        .map(|context| (context.context_id, context.allocator_high_water))
+        .collect();
+    let mut assessment = assess_waits_policy(
+        ReceiptV2 {
+            schema: 2,
+            producer: r.producer,
+            scope: r.scope,
+            capture_id: r.capture_id,
+            full_pipeline_complete: r.full_pipeline_complete,
+            cpu_work_ns: r.cpu_work_ns,
+            execution_span_ns: r.execution_span_ns,
+            interface_outcome: r.interface_outcome,
+            capture_complete: r.capture_complete,
+            lost_events: r.lost_events,
+            opaque_boundaries: r.opaque_boundaries,
+            expected_contexts: r.expected_contexts,
+            contexts: r.contexts,
+            events: r.events,
+            wait_allocator_baseline: r.wait_allocator_baseline,
+            wait_allocator_high_water: r.wait_allocator_high_water,
+            expected_waits: r.expected_waits,
+            wait_capture_complete: r.wait_capture_complete,
+            wait_events: r.wait_events,
+        },
+        large_inventory,
+    )?;
     assessment.schema = 3;
-    let reads = crate::execution_graph_reads::assess(&r.query_reads, &admitted, expected_contexts)?;
+    let reads = if large_inventory {
+        crate::execution_graph_reads::assess_with_inventory(
+            &r.query_reads,
+            &admitted,
+            expected_contexts,
+            &context_high_water,
+        )?
+    } else {
+        crate::execution_graph_reads::assess(&r.query_reads, &admitted, expected_contexts)?
+    };
     if !reads.records_complete {
         assessment.structural_complete = false;
         assessment
@@ -574,13 +816,18 @@ fn assess_reads(r: ReceiptV3) -> Result<QueryAssessment> {
 }
 
 fn assess_waits(r: ReceiptV2) -> Result<QueryAssessment> {
+    assess_waits_policy(r, false)
+}
+
+fn assess_waits_policy(r: ReceiptV2, large_inventory: bool) -> Result<QueryAssessment> {
     if r.schema != 2 {
         bail!("unsupported query wait receipt schema");
     }
     if r.wait_events.len() > MAX_EVENTS
-        || r.expected_waits.is_some_and(|n| n > MAX_JOBS)
-        || r.wait_allocator_high_water
-            .is_some_and(|n| n > MAX_JOBS + 1)
+        || (!large_inventory
+            && (r.expected_waits.is_some_and(|n| n > MAX_JOBS)
+                || r.wait_allocator_high_water
+                    .is_some_and(|n| n > MAX_JOBS + 1)))
     {
         bail!("query wait receipt exceeds wait budget");
     }
@@ -722,22 +969,25 @@ fn assess_waits(r: ReceiptV2) -> Result<QueryAssessment> {
             control_causal_edges += 1;
         }
     }
-    let mut assessment = assess_admissions(Receipt {
-        schema: 1,
-        producer: r.producer,
-        scope: r.scope,
-        capture_id: r.capture_id,
-        full_pipeline_complete: r.full_pipeline_complete,
-        cpu_work_ns: r.cpu_work_ns,
-        execution_span_ns: r.execution_span_ns,
-        interface_outcome: r.interface_outcome,
-        capture_complete: r.capture_complete,
-        lost_events: r.lost_events,
-        opaque_boundaries: r.opaque_boundaries,
-        expected_contexts: r.expected_contexts,
-        contexts: r.contexts,
-        events: r.events,
-    })?;
+    let mut assessment = assess_admissions_policy(
+        Receipt {
+            schema: 1,
+            producer: r.producer,
+            scope: r.scope,
+            capture_id: r.capture_id,
+            full_pipeline_complete: r.full_pipeline_complete,
+            cpu_work_ns: r.cpu_work_ns,
+            execution_span_ns: r.execution_span_ns,
+            interface_outcome: r.interface_outcome,
+            capture_complete: r.capture_complete,
+            lost_events: r.lost_events,
+            opaque_boundaries: r.opaque_boundaries,
+            expected_contexts: r.expected_contexts,
+            contexts: r.contexts,
+            events: r.events,
+        },
+        large_inventory,
+    )?;
     assessment.schema = 2;
     assessment.wait_structural_complete = Some(assessment.structural_complete && issues.is_empty());
     assessment.structural_complete &= issues.is_empty();
@@ -750,7 +1000,7 @@ fn assess_waits(r: ReceiptV2) -> Result<QueryAssessment> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::{Value, json};
 
@@ -1327,6 +1577,360 @@ mod tests {
             "events":[]
         });
         v
+    }
+
+    pub(crate) fn task_binding_fixture() -> Value {
+        let mut v = read_fixture();
+        v["schema"] = json!(4);
+        let start = json!({"kind":"request_started","request_id":1,"read_id":null,"result_id":null,
+            "context_id":1,"consumer_job_id":2,"producer_job_id":null,"dep_node_index":null,"mode":"get","outcome":null});
+        let mut finish = start.clone();
+        finish["kind"] = json!("request_finished");
+        finish["outcome"] = json!("value");
+        let mut produced = start.clone();
+        produced["kind"] = json!("result_produced");
+        produced["request_id"] = Value::Null;
+        produced["consumer_job_id"] = Value::Null;
+        produced["producer_job_id"] = json!(1);
+        produced["result_id"] = json!(1);
+        produced["dep_node_index"] = json!(42);
+        produced["mode"] = Value::Null;
+        let mut read = start.clone();
+        read["kind"] = json!("dep_read");
+        read["read_id"] = json!(1);
+        read["dep_node_index"] = json!(42);
+        read["mode"] = Value::Null;
+        read["outcome"] = json!("tracked_new");
+        for name in ["request", "read", "result"] {
+            v["query_reads"][format!("{name}_high_water")] = json!(2);
+            v["query_reads"][format!("expected_{name}s")] = json!(1);
+        }
+        v["query_reads"]["events"] = json!([start, produced, read, finish]);
+        let sources = [
+            json!({"kind":"admitted","context_id":1,"job_id":1}),
+            json!({"kind":"admitted","context_id":1,"job_id":2}),
+            json!({"kind":"request_started","request_id":1}),
+            json!({"kind":"dep_read","read_id":1}),
+            json!({"kind":"result_produced","result_id":1}),
+            json!({"kind":"wait_registered","wait_id":1}),
+            json!({"kind":"wait_resumed","wait_id":1}),
+        ];
+        v["task_bindings"] = json!({"schema":1,"records_complete":true,"all_targets_bound":true,
+            "expected_points":7,"lost_events":0,"loss_overflowed":false,
+            "pool":{"capture_id":"pool-1","observer":1},"unavailable_reason":null,
+            "events":sources.into_iter().map(|source| json!({"source":source,"target":{"task":1,"at_pool_ns":10},"unbound_reason":null})).collect::<Vec<_>>()});
+        v
+    }
+
+    #[test]
+    fn schema4_separates_records_targets_and_pool_authority() {
+        let v = task_binding_fixture();
+        let collected = collect_bytes(&serde_json::to_vec(&v).unwrap()).unwrap();
+        let a = collected.assessment;
+        assert!(a.structural_complete, "{a:?}");
+        assert_eq!(a.wait_structural_complete, Some(true));
+        assert!(a.query_reads.as_ref().unwrap().records_complete);
+        let binding = a.task_bindings.unwrap();
+        assert!(binding.records_complete && binding.all_targets_bound);
+        assert!(!binding.graph_binding_complete);
+        assert_eq!(
+            (
+                binding.expected_points,
+                binding.bound_points,
+                binding.unbound_points
+            ),
+            (Some(7), 7, 0)
+        );
+        assert!(!a.full_pipeline_complete);
+        assert_eq!((a.cpu_work_ns, a.execution_span_ns), (None, None));
+        for v in [fixture(), wait_fixture(), read_fixture()] {
+            assert!(assess(&v).task_bindings.is_none());
+        }
+    }
+
+    #[test]
+    fn schema4_missing_duplicate_foreign_source_category_matrix() {
+        for index in 0..7 {
+            let mut v = task_binding_fixture();
+            v["task_bindings"]["events"]
+                .as_array_mut()
+                .unwrap()
+                .remove(index);
+            malformed(&v);
+            v["task_bindings"]["records_complete"] = json!(false);
+            v["task_bindings"]["all_targets_bound"] = json!(false);
+            let a = assess(&v);
+            assert!(a.structural_complete);
+            assert!(!a.task_bindings.unwrap().records_complete);
+            let mut v = task_binding_fixture();
+            let row = v["task_bindings"]["events"][index].clone();
+            v["task_bindings"]["events"]
+                .as_array_mut()
+                .unwrap()
+                .push(row);
+            malformed(&v);
+            let mut v = task_binding_fixture();
+            let source = v["task_bindings"]["events"][index]["source"]
+                .as_object_mut()
+                .unwrap();
+            let id = source
+                .keys()
+                .find(|key| key.ends_with("_id") && key.as_str() != "context_id")
+                .unwrap()
+                .clone();
+            source.insert(id, json!(99));
+            malformed(&v);
+        }
+        let mut v = task_binding_fixture();
+        v["task_bindings"]["events"][0]["source"]["context_id"] = json!(2);
+        malformed(&v);
+    }
+
+    #[test]
+    fn schema4_strict_nested_nullable_and_unknown_matrix() {
+        let paths: &[&[&str]] = &[
+            &["task_bindings"],
+            &["task_bindings", "pool"],
+            &["task_bindings", "events", "0"],
+            &["task_bindings", "events", "0", "source"],
+            &["task_bindings", "events", "0", "target"],
+        ];
+        for path in paths {
+            let mut v = task_binding_fixture();
+            let mut object = &mut v;
+            for key in *path {
+                object = if *key == "0" {
+                    &mut object[0]
+                } else {
+                    &mut object[*key]
+                };
+            }
+            object["unknown"] = json!(0);
+            malformed(&v);
+        }
+        for field in ["expected_points", "pool", "unavailable_reason"] {
+            let mut v = task_binding_fixture();
+            v["task_bindings"].as_object_mut().unwrap().remove(field);
+            malformed(&v);
+        }
+        for field in ["target", "unbound_reason"] {
+            let mut v = task_binding_fixture();
+            v["task_bindings"]["events"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            malformed(&v);
+        }
+        for schema in [1, 2, 3] {
+            let mut v = task_binding_fixture();
+            v["schema"] = json!(schema);
+            malformed(&v);
+        }
+        let raw = serde_json::to_string(&task_binding_fixture()).unwrap();
+        for (key, value) in [
+            ("schema", "1"),
+            ("observer", "1"),
+            ("at_pool_ns", "10"),
+            ("job_id", "1"),
+            ("unbound_reason", "null"),
+            ("expected_points", "7"),
+        ] {
+            let needle = format!("\"{key}\":{value}");
+            let duplicate = raw.replacen(&needle, &format!("{needle},{needle}"), 1);
+            assert_ne!(duplicate, raw);
+            assert!(assess_bytes(duplicate.as_bytes()).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn schema4_loss_counters_nulls_and_honest_partial_matrix() {
+        for (field, value) in [
+            ("lost_events", json!(1)),
+            ("loss_overflowed", json!(true)),
+            ("expected_points", json!(8)),
+            ("expected_points", Value::Null),
+            ("expected_points", json!(u64::MAX)),
+        ] {
+            let mut v = task_binding_fixture();
+            v["task_bindings"][field] = value;
+            malformed(&v);
+        }
+        for field in ["lost_events", "loss_overflowed"] {
+            let mut v = task_binding_fixture();
+            v["task_bindings"][field] = if field == "lost_events" {
+                json!(1)
+            } else {
+                json!(true)
+            };
+            v["task_bindings"]["records_complete"] = json!(false);
+            v["task_bindings"]["all_targets_bound"] = json!(false);
+            let a = assess(&v);
+            assert!(a.structural_complete);
+            assert_eq!(a.wait_structural_complete, Some(true));
+            assert!(a.query_reads.unwrap().records_complete);
+            assert!(!a.task_bindings.unwrap().records_complete);
+        }
+        for reason in [
+            "no_active",
+            "suspended",
+            "foreign_observer",
+            "clock_overflow",
+            "pool_unavailable",
+        ] {
+            let mut v = task_binding_fixture();
+            v["task_bindings"]["events"][0]["target"] = Value::Null;
+            v["task_bindings"]["events"][0]["unbound_reason"] = json!(reason);
+            malformed(&v);
+            v["task_bindings"]["all_targets_bound"] = json!(false);
+            let a = assess(&v);
+            assert!(a.structural_complete);
+            let b = a.task_bindings.unwrap();
+            assert!(b.records_complete && !b.all_targets_bound);
+            assert_eq!((b.bound_points, b.unbound_points), (6, 1));
+        }
+        let mut v = task_binding_fixture();
+        v["task_bindings"]["pool"] = Value::Null;
+        v["task_bindings"]["unavailable_reason"] = json!("pool_unavailable");
+        v["task_bindings"]["all_targets_bound"] = json!(false);
+        for row in v["task_bindings"]["events"].as_array_mut().unwrap() {
+            row["target"] = Value::Null;
+            row["unbound_reason"] = json!("pool_unavailable");
+        }
+        let b = assess(&v).task_bindings.unwrap();
+        assert!(b.records_complete);
+        assert_eq!(b.unbound_points, 7);
+        let mut v = task_binding_fixture();
+        v["contexts"][0]["allocator_high_water"] = Value::Null;
+        v["contexts"][0]["expected_jobs"] = Value::Null;
+        v["task_bindings"]["expected_points"] = Value::Null;
+        v["task_bindings"]["records_complete"] = json!(false);
+        v["task_bindings"]["all_targets_bound"] = json!(false);
+        assert_eq!(assess(&v).task_bindings.unwrap().expected_points, None);
+    }
+
+    #[test]
+    fn schema4_unknown_total_missing_context_and_sticky_overflow() {
+        for missing_context in [false, true] {
+            let mut v = task_binding_fixture();
+            if missing_context {
+                v["expected_contexts"] = json!(2);
+            }
+            v["task_bindings"]["expected_points"] = Value::Null;
+            v["task_bindings"]["records_complete"] = json!(false);
+            v["task_bindings"]["all_targets_bound"] = json!(false);
+            // A sticky overflow latch remains evidence of loss after modulo wrap.
+            v["task_bindings"]["loss_overflowed"] = json!(true);
+            v["task_bindings"]["lost_events"] = json!(1);
+            let a = assess(&v);
+            assert_eq!(a.structural_complete, !missing_context);
+            let b = a.task_bindings.unwrap();
+            assert_eq!(b.expected_points, None);
+            assert!(!b.records_complete && !b.all_targets_bound && !b.graph_binding_complete);
+            assert_eq!(b.bound_points, 7);
+            assert!(!b.issues.is_empty());
+        }
+    }
+
+    #[test]
+    fn schema4_huge_independent_counts_do_not_expand_inventory() {
+        for category in ["context", "read", "wait"] {
+            let mut v = task_binding_fixture();
+            let extra: u64 = match category {
+                "context" => {
+                    v["contexts"][0]["allocator_high_water"] = json!(1_000_001);
+                    v["contexts"][0]["expected_jobs"] = json!(1_000_000);
+                    v["capture_complete"] = json!(false);
+                    999_998
+                }
+                "read" => {
+                    v["query_reads"]["read_high_water"] = json!(1_000_001);
+                    v["query_reads"]["expected_reads"] = json!(1_000_000);
+                    v["query_reads"]["records_complete"] = json!(false);
+                    v["query_reads"]["lost_events"] = json!(1);
+                    999_999
+                }
+                _ => {
+                    v["wait_allocator_high_water"] = json!(1_000_001);
+                    v["expected_waits"] = json!(1_000_000);
+                    v["wait_capture_complete"] = json!(false);
+                    1_999_998
+                }
+            };
+            v["task_bindings"]["expected_points"] = json!(7 + extra);
+            v["task_bindings"]["records_complete"] = json!(false);
+            v["task_bindings"]["all_targets_bound"] = json!(false);
+            v["task_bindings"]["lost_events"] = json!(extra);
+            let b = assess(&v).task_bindings.unwrap();
+            assert_eq!(b.expected_points, Some(7 + extra));
+            assert_eq!(b.bound_points, 7);
+            assert!(!b.records_complete);
+        }
+    }
+
+    #[test]
+    fn schema4_admission_loss_preserves_complete_read_records() {
+        let mut v = task_binding_fixture();
+        v["events"].as_array_mut().unwrap().remove(0);
+        v["capture_complete"] = json!(false);
+        v["lost_events"] = json!(1);
+        let a = assess(&v);
+        assert!(!a.structural_complete);
+        let reads = a.query_reads.unwrap();
+        assert!(reads.records_complete);
+        assert!(!reads.endpoints_complete && !reads.semantic_complete);
+        assert_eq!(reads.resolved_job_edges, 0);
+        let bindings = a.task_bindings.unwrap();
+        assert!(bindings.records_complete && bindings.all_targets_bound);
+        assert!(!bindings.source_endpoints_complete && !bindings.graph_binding_valid);
+        v["query_reads"]["events"][1]["producer_job_id"] = json!(99);
+        malformed(&v);
+    }
+
+    #[test]
+    fn schema4_underlying_read_loss_does_not_falsify_binding_record_inventory() {
+        let mut v = task_binding_fixture();
+        v["query_reads"]["events"].as_array_mut().unwrap().remove(1);
+        v["query_reads"]["records_complete"] = json!(false);
+        v["query_reads"]["lost_events"] = json!(1);
+        let a = assess(&v);
+        assert!(!a.query_reads.unwrap().records_complete);
+        let b = a.task_bindings.unwrap();
+        assert!(b.records_complete && b.all_targets_bound);
+        assert!(!b.source_endpoints_complete && !b.graph_binding_complete);
+        assert!(!b.issues.is_empty());
+    }
+
+    #[test]
+    fn schema4_budgets_and_incoherent_target_reasons() {
+        let mut v = task_binding_fixture();
+        let row = v["task_bindings"]["events"][0].clone();
+        v["task_bindings"]["events"] = Value::Array(vec![row; MAX_EVENTS + 1]);
+        malformed(&v);
+        for high in [json!(u64::MAX), json!(MAX_JOBS + 2), json!(0)] {
+            let mut v = task_binding_fixture();
+            v["contexts"][0]["allocator_high_water"] = high;
+            malformed(&v);
+        }
+        for (field, value) in [
+            ("task", json!(0)),
+            ("task", json!(-1)),
+            ("at_pool_ns", Value::Null),
+        ] {
+            let mut v = task_binding_fixture();
+            v["task_bindings"]["events"][0]["target"][field] = value;
+            malformed(&v);
+        }
+        {
+            let reason = "foreign_kind";
+            let mut v = task_binding_fixture();
+            v["task_bindings"]["events"][0]["target"] = Value::Null;
+            v["task_bindings"]["events"][0]["unbound_reason"] = json!(reason);
+            v["task_bindings"]["all_targets_bound"] = json!(false);
+            malformed(&v);
+        }
+        let mut v = task_binding_fixture();
+        v["task_bindings"]["records_complete"] = json!(false);
+        malformed(&v); // all_targets_bound cannot bypass declared record incompleteness.
     }
 
     #[test]

@@ -15,6 +15,7 @@ build routing, forced cache disabling, bootstrap, or rustflags are injected.
 Byte identity and fresh-unit observations are correctness checks, not speed claims.
 """
 import hashlib
+import copy
 import json
 import os
 from pathlib import Path
@@ -24,9 +25,11 @@ import tempfile
 import time
 import unittest
 
+from test_execution_graph_task_binding_native import assert_binding_inventory
+
 
 PROFILE = 'buildrunner-compiler-launch-v1'
-CAPABILITY = 'jr-query-admission-binding: reserved-fd-v2,query-schema=3'
+CAPABILITY = 'jr-query-admission-binding: reserved-fd-v2,query-schema=4'
 
 
 @unittest.skipUnless(os.environ.get('JUSTRUST_NATIVE_CARGO') and
@@ -170,8 +173,9 @@ class NativeCompilerBindingAcceptance(unittest.TestCase):
                 query = json.loads((sink / (launch['capture_id'] + '.json')).read_text())
                 self.assertEqual(entry['producer'], 'rustc-query-admission-entry')
                 self.assertEqual(query['producer'], 'rustc-query-admission')
-                self.assertEqual(entry['query_receipt_schema'], 3)
-                self.assertEqual(query['schema'], 3)
+                self.assertEqual(entry['query_receipt_schema'], 4)
+                self.assertEqual(query['schema'], 4)
+                assert_binding_inventory(self, query)
                 self.assertEqual(entry['expected_query_captures'], 1)
                 self.assertEqual(entry['query_capture_ids'], [launch['capture_id']])
                 self.assertEqual(entry['capture_id'], launch['entry_capture_id'])
@@ -182,12 +186,86 @@ class NativeCompilerBindingAcceptance(unittest.TestCase):
                 self.assertEqual(entry['parent_task_id'], launch['parent_task_id'])
                 self.assertFalse(entry['full_pipeline_complete'])
                 self.assertFalse(query['full_pipeline_complete'])
-                self.assertIn('query_reads', query, 'raw schema3 read accounting required')
+                self.assertIn('query_reads', query, 'raw schema4 read accounting required')
                 if complete:
                     self.assertEqual(launch['outcome'], 'success')
                     self.assertEqual(launch['wait_status'], 0)
         self.assertTrue(launches, 'actual native launches required, not just fresh units')
         return launches
+
+    def test_selected_native_pool_point_authority(self):
+        # Keep real parallel bodies, but avoid assert_eq formatting/type-query
+        # fanout that exhausts the independent read recorder on a cold build.
+        self.source.write_text('\n'.join(f'fn f{i}() -> u64 {{ {i} }}' for i in range(8)) +
+                               '\nfn main() { assert!(' +
+                               '+'.join(f'f{i}()' for i in range(8)) + ' == 28); }\n')
+        self.env['RUSTFLAGS'] = '-Zthreads=4'
+        sink = self.private_sink('parallel-bound')
+        self.build(sink)
+        self.run_command([self.binary])
+        self.inspect_point_authority_copies(sink, self.inspect_bound(sink))
+
+    def inspect_point_authority_copies(self, sink, bound):
+        manifest_path, _, launch = next((p, m, l) for p, m, l in bound
+                                       if json.loads((sink / (l['capture_id'] + '.json')).read_text())['task_bindings']['pool'] is not None)
+        query_path = sink / (launch['capture_id'] + '.json')
+        query = json.loads(query_path.read_text())
+        pool_id = query['task_bindings']['pool']['capture_id']
+        pool_path = next(p for p in sink.glob('*.json')
+                         if json.loads(p.read_text()).get('capture_id') == pool_id)
+        pool = json.loads(pool_path.read_text())
+        self.assertEqual(pool['schema'], 2)
+        self.assertEqual(pool['query_capture_id'], query['capture_id'])
+        baseline = self.assess(sink, manifest_path)
+        binding = baseline['task_bindings'][query['capture_id']]
+        self.assertTrue(binding['graph_binding_valid'], baseline)
+        for label in ('missing-pool', 'duplicate-pool', 'foreign-capture', 'stale-observer',
+                      'foreign-query', 'outside-interval', 'remapped-task'):
+            altered = self.root / ('selected-' + label)
+            shutil.copytree(sink, altered)
+            q, p = copy.deepcopy(query), copy.deepcopy(pool)
+            if label == 'missing-pool':
+                (altered / pool_path.name).unlink()
+            elif label == 'duplicate-pool':
+                (altered / 'duplicate-pool.json').write_text(json.dumps(p))
+            elif label == 'foreign-capture':
+                p['capture_id'] = 'foreign-pool'
+            elif label == 'foreign-query':
+                p['query_capture_id'] = 'foreign-query'
+            elif label == 'stale-observer':
+                q['task_bindings']['pool']['observer'] += 1
+            else:
+                row = next(e for e in q['task_bindings']['events'] if e['target'] is not None)
+                if label == 'outside-interval':
+                    row['target']['at_pool_ns'] = max(e['at_ns'] for e in pool['events']) + 1
+                else:
+                    row['target']['task'] = pool['task_allocator_high_water'] + 1
+            if label != 'missing-pool':
+                (altered / pool_path.name).write_text(json.dumps(p))
+            (altered / query_path.name).write_text(json.dumps(q))
+            coverage = self.assess(altered, altered / manifest_path.name)
+            self.assertFalse(coverage['task_bindings'][query['capture_id']]['graph_binding_valid'], coverage)
+            self.assertFalse(coverage['task_bindings'][query['capture_id']]['graph_binding_complete'], coverage)
+            # Pool mapping cannot erase independently valid compiler launch evidence.
+            for key in ('structural_complete', 'expected_launches', 'observed_entries', 'observed_queries'):
+                self.assertEqual(coverage[key], baseline[key], (label, key, coverage))
+
+        legacy = self.root / 'selected-legacy3'
+        shutil.copytree(sink, legacy)
+        for path in legacy.glob('*.json'):
+            receipt = json.loads(path.read_text())
+            if receipt.get('producer') == 'rustc-query-admission':
+                receipt['schema'] = 3
+                receipt.pop('task_bindings')
+            elif receipt.get('producer') == 'rustc-query-admission-entry':
+                receipt['query_receipt_schema'] = 3
+            elif receipt.get('producer') == 'rustc-thread-pool-join':
+                receipt['schema'] = 1
+                receipt.pop('query_capture_id')
+            path.write_text(json.dumps(receipt))
+        coverage = self.assess(legacy, legacy / manifest_path.name)
+        self.assertEqual(coverage['structural_complete'], baseline['structural_complete'])
+        self.assertNotIn('task_bindings', coverage, 'legacy absence is unknown, not complete or zero')
 
     def test_actual_binding_neutrality_failure_and_missing_evidence(self):
         self.build()
@@ -276,7 +354,7 @@ class NativeCompilerBindingAcceptance(unittest.TestCase):
                          'nonprivate sink must not admit compiler binding')
         self.run_command([self.binary])
         print('native compiler binding acceptance passed: selected structural coverage only, '
-              'schema3, warm off/on/off byte identity, fresh zero launches, failure, '
+              'schema4, warm off/on/off byte identity, fresh zero launches, failure, '
               'missing evidence and fail-open sinks', flush=True)
 
 

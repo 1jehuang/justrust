@@ -79,6 +79,8 @@ struct Assessment {
     waits: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
     issues: Vec<String>,
     opaque_boundaries: Vec<String>,
     /// No CPU or execution-span estimate is inferred from elapsed lifetimes.
@@ -289,6 +291,7 @@ fn assess(r: Receipt) -> Result<Assessment> {
         wait_structural_complete: None,
         waits: None,
         query_reads: None,
+        task_bindings: None,
         issues,
         opaque_boundaries: r.opaque_boundaries,
         cpu_work_ns: None,
@@ -319,18 +322,73 @@ pub(crate) fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn read_receipt(path: &Path) -> Result<Assessment> {
     let bytes = read_bytes(path, MAX_BYTES)?;
+    assess_receipt_bytes(&bytes, &BTreeMap::new())
+}
+
+/// Collect independently validated pool authorities before any query summary is
+/// flattened. Duplicate identities are deliberately unavailable to all queries.
+pub(crate) fn collect_pool_inventories(
+    documents: &[Vec<u8>],
+) -> Result<BTreeMap<String, crate::execution_graph_continuation::PoolInventory>> {
+    let mut pools = BTreeMap::new();
+    let mut identities = BTreeMap::<String, usize>::new();
+    for bytes in documents {
+        let header: serde_json::Value = serde_json::from_slice(bytes)?;
+        if let Some(id) = header["capture_id"].as_str() {
+            *identities.entry(id.to_owned()).or_default() += 1;
+        }
+        if header["producer"] != "rustc-thread-pool-join" {
+            continue;
+        }
+        let pool = crate::execution_graph_continuation::collect_bytes(bytes)?;
+        let id = pool.assessment.capture_id;
+        if let Some(inventory) = pool.inventory {
+            pools.insert(id, inventory);
+        }
+    }
+    pools.retain(|id, pool| {
+        identities.get(id) == Some(&1)
+            && pool
+                .query_capture_id
+                .as_ref()
+                .is_some_and(|query_id| identities.get(query_id) == Some(&1))
+    });
+    Ok(pools)
+}
+
+pub(crate) fn collect_query(
+    bytes: &[u8],
+    pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+) -> Result<crate::execution_graph_query::QueryAssessment> {
+    let mut query = crate::execution_graph_query::collect_bytes(bytes)?;
+    if let Some(bindings) = &query.bindings {
+        query.assessment.task_bindings =
+            Some(crate::execution_graph_task_bindings::reconcile_bindings(
+                &query.assessment.capture_id,
+                bindings,
+                pools,
+            ));
+    }
+    Ok(query.assessment)
+}
+
+fn assess_receipt_bytes(
+    bytes: &[u8],
+    pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+) -> Result<Assessment> {
     #[derive(Deserialize)]
     struct ProducerTag {
         producer: String,
     }
     let document: ProducerTag =
-        serde_json::from_slice(&bytes).context("invalid execution graph document")?;
+        serde_json::from_slice(bytes).context("invalid execution graph document")?;
     match document.producer.as_str() {
-        "cargo-scheduler" => assess(serde_json::from_slice(&bytes)?),
+        "cargo-scheduler" => assess(serde_json::from_slice(bytes)?),
         "rustc-query-admission-entry" => {
-            let entry = crate::execution_graph_compiler::parse_entry(&bytes)?;
+            let entry = crate::execution_graph_compiler::parse_entry(bytes)?;
             Ok(Assessment {
                 schema: entry.schema,
                 producer: entry.producer,
@@ -345,6 +403,7 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
                 wait_structural_complete: None,
                 waits: None,
                 query_reads: None,
+                task_bindings: None,
                 issues: vec!["requires explicit --compiler-manifest reconciliation".into()],
                 opaque_boundaries: vec!["compiler-launch-authority".into()],
                 cpu_work_ns: None,
@@ -352,7 +411,7 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
             })
         }
         "rustc-query-admission" => {
-            let query = crate::execution_graph_query::assess_bytes(&bytes)?;
+            let query = collect_query(bytes, pools)?;
             Ok(Assessment {
                 schema: query.schema,
                 producer: query.producer,
@@ -367,6 +426,7 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
                 wait_structural_complete: query.wait_structural_complete,
                 waits: query.waits,
                 query_reads: query.query_reads,
+                task_bindings: query.task_bindings,
                 issues: query.issues,
                 opaque_boundaries: query.opaque_boundaries,
                 cpu_work_ns: query.cpu_work_ns,
@@ -374,7 +434,7 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
             })
         }
         "rustc-thread-pool-join" => {
-            let join = crate::execution_graph_continuation::assess_bytes(&bytes)?;
+            let join = crate::execution_graph_continuation::assess_bytes(bytes)?;
             Ok(Assessment {
                 schema: join.schema,
                 producer: join.producer,
@@ -389,6 +449,7 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
                 wait_structural_complete: None,
                 waits: None,
                 query_reads: None,
+                task_bindings: None,
                 issues: join.issues,
                 opaque_boundaries: join.opaque_boundaries,
                 cpu_work_ns: join.cpu_work_ns,
@@ -636,6 +697,8 @@ fn command_manifest(path: &Path, manifest_path: &Path, json: bool) -> Result<()>
     let mut summaries = Vec::new();
     let mut journal_kinds = BTreeSet::new();
     let mut excluded_roots = BTreeSet::new();
+    let mut receipt_files = Vec::new();
+    let mut documents = Vec::new();
     for file in files {
         if !file.extension().is_some_and(|s| s == "json") {
             continue;
@@ -644,27 +707,30 @@ fn command_manifest(path: &Path, manifest_path: &Path, json: bool) -> Result<()>
         if total_bytes > MAX_BYTES {
             bail!("manifest reconciliation exceeds total byte budget");
         }
+        documents.push(read_bytes(&file, MAX_BYTES)?);
+        receipt_files.push(file);
+    }
+    let pools = collect_pool_inventories(&documents)?;
+    for (file, bytes) in receipt_files.iter().zip(&documents) {
         if file
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("compiler-owner-"))
         {
-            let bytes = read_bytes(&file, MAX_BYTES)?;
             let name = file
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or_default();
             let authority = if name.contains(".event-") {
-                crate::execution_graph_compiler::parse_journal(&bytes)?.authority_root
+                crate::execution_graph_compiler::parse_journal(bytes)?.authority_root
             } else {
-                crate::execution_graph_compiler::parse_manifest(&bytes)?.authority_root
+                crate::execution_graph_compiler::parse_manifest(bytes)?.authority_root
             };
             excluded_roots.insert(authority);
             continue;
         }
-        if is_owner_document(&file) {
-            let journal =
-                protocol::parse_manifest(&read_bytes(&file, protocol::MAX_BYTES as u64)?)?;
+        if is_owner_document(file) {
+            let journal = protocol::parse_manifest(bytes)?;
             if journal.authority_root != manifest.authority_root {
                 excluded_roots.insert(journal.authority_root);
             } else {
@@ -684,12 +750,9 @@ fn command_manifest(path: &Path, manifest_path: &Path, json: bool) -> Result<()>
             .and_then(|s| s.to_str())
             .is_some_and(|s| s.ends_with(".envelope.json"))
         {
-            envelopes.push(protocol::parse_envelope(&read_bytes(
-                &file,
-                protocol::MAX_BYTES as u64,
-            )?)?);
+            envelopes.push(protocol::parse_envelope(bytes)?);
         } else {
-            let receipt = read_receipt(&file)?;
+            let receipt = assess_receipt_bytes(bytes, &pools)?;
             summaries.push(ReceiptSummary {
                 schema: receipt.schema,
                 capture_id: receipt.capture_id,
@@ -722,6 +785,11 @@ pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
     if let Some(manifest) = manifest {
         return command_manifest(path, manifest, json);
     }
+    let assessments = collect_path(path)?;
+    render_assessments(assessments, json)
+}
+
+fn collect_path(path: &Path) -> Result<Vec<Assessment>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         bail!("capture path must not be a symlink");
@@ -759,12 +827,17 @@ pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
     let mut identities = BTreeMap::new();
     let mut assessments: Vec<Assessment> = Vec::new();
     let mut total_bytes = 0u64;
+    let mut documents = Vec::new();
     for file in files {
         total_bytes = total_bytes.saturating_add(std::fs::symlink_metadata(&file)?.len());
         if total_bytes > MAX_BYTES {
             bail!("capture directory exceeds total receipt byte budget");
         }
-        let mut assessment = read_receipt(&file)?;
+        documents.push(read_bytes(&file, MAX_BYTES)?);
+    }
+    let pools = collect_pool_inventories(&documents)?;
+    for bytes in &documents {
+        let mut assessment = assess_receipt_bytes(bytes, &pools)?;
         if let Some(&previous) = identities.get(&assessment.capture_id) {
             let previous: &mut Assessment = &mut assessments[previous];
             previous.structural_complete = false;
@@ -776,6 +849,10 @@ pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
         }
         assessments.push(assessment);
     }
+    Ok(assessments)
+}
+
+fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&assessments)?);
     } else {
@@ -814,6 +891,21 @@ pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
                         "INCOMPLETE"
                     }
                 );
+            }
+            if let Some(bindings) = &a.task_bindings {
+                println!(
+                    "  task point mapping: {} bound, {} unbound, graph binding {} (not query slices)",
+                    bindings.bound_points,
+                    bindings.unbound_points,
+                    if bindings.graph_binding_complete {
+                        "validated"
+                    } else {
+                        "INCOMPLETE"
+                    }
+                );
+                for issue in &bindings.issues {
+                    println!("  task binding: {issue}");
+                }
             }
             for issue in a.issues {
                 println!("  issue: {issue}");
@@ -1115,5 +1207,161 @@ mod tests {
         .unwrap();
         assert!(read_receipt(&path).is_err());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn public_task_binding_file_copies_require_exact_reciprocal_pool_authority() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::paths::home().unwrap());
+        let directory = root.join(format!(
+            "graph-task-binding-copies-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let query = crate::execution_graph_query::tests::task_binding_fixture();
+        let mut pool = join_fixture();
+        pool["schema"] = json!(2);
+        pool["capture_id"] = json!("pool-1");
+        pool["query_capture_id"] = query["capture_id"].clone();
+        pool["events"][2]["at_ns"] = json!(20);
+        for case in [
+            "valid",
+            "missing",
+            "duplicate",
+            "foreign-capture",
+            "stale-observer",
+            "nonreciprocal",
+            "outside-interval",
+        ] {
+            let case_dir = directory.join(case);
+            std::fs::create_dir(&case_dir).unwrap();
+            let mut candidate_pool = pool.clone();
+            match case {
+                "foreign-capture" => candidate_pool["capture_id"] = json!("another-pool"),
+                "stale-observer" => candidate_pool["observer"] = json!(2),
+                "nonreciprocal" => candidate_pool["query_capture_id"] = json!("another-query"),
+                "outside-interval" => candidate_pool["events"][2]["at_ns"] = json!(9),
+                _ => {}
+            }
+            // Names intentionally provide neither capture identity nor a -pool
+            // suffix. Query sorts before its independently collected authority.
+            std::fs::write(case_dir.join("a.json"), serde_json::to_vec(&query).unwrap()).unwrap();
+            if case != "missing" {
+                let bytes = serde_json::to_vec(&candidate_pool).unwrap();
+                std::fs::write(case_dir.join("z.json"), &bytes).unwrap();
+                if case == "duplicate" {
+                    std::fs::write(case_dir.join("y.json"), &bytes).unwrap();
+                }
+            }
+            let assessments = collect_path(&case_dir).unwrap();
+            let result = assessments
+                .iter()
+                .find(|a| a.producer == "rustc-query-admission")
+                .unwrap();
+            assert!(
+                result.structural_complete,
+                "{case}: admission validity was erased"
+            );
+            assert_eq!(result.wait_structural_complete, Some(true), "{case}");
+            assert!(
+                result.query_reads.as_ref().unwrap().records_complete,
+                "{case}"
+            );
+            let bindings = result.task_bindings.as_ref().unwrap();
+            assert!(bindings.records_complete, "{case}");
+            assert!(bindings.bound_points > 0, "{case}");
+            assert_eq!(
+                bindings.graph_binding_complete,
+                case == "valid",
+                "{case}: {bindings:?}"
+            );
+            assert!(!result.full_pipeline_complete);
+            command(&case_dir, true, None).unwrap();
+        }
+        let duplicate_dir = directory.join("duplicate-query-authority");
+        std::fs::create_dir(&duplicate_dir).unwrap();
+        for name in ["a.json", "b.json"] {
+            std::fs::write(
+                duplicate_dir.join(name),
+                serde_json::to_vec(&query).unwrap(),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            duplicate_dir.join("z.json"),
+            serde_json::to_vec(&pool).unwrap(),
+        )
+        .unwrap();
+        let duplicates = collect_path(&duplicate_dir).unwrap();
+        for result in duplicates
+            .iter()
+            .filter(|a| a.producer == "rustc-query-admission")
+        {
+            assert!(!result.structural_complete);
+            assert!(
+                !result
+                    .task_bindings
+                    .as_ref()
+                    .unwrap()
+                    .graph_binding_complete
+            );
+            assert!(result.query_reads.as_ref().unwrap().records_complete);
+            assert_eq!(result.wait_structural_complete, Some(true));
+        }
+        command(&duplicate_dir, true, None).unwrap();
+        for schema in [1, 2, 3] {
+            let case_dir = directory.join(format!("legacy-{schema}"));
+            std::fs::create_dir(&case_dir).unwrap();
+            let mut legacy = query.clone();
+            legacy["schema"] = json!(schema);
+            let fields = legacy.as_object_mut().unwrap();
+            fields.remove("task_bindings");
+            if schema < 3 {
+                fields.remove("query_reads");
+            }
+            if schema < 2 {
+                for field in [
+                    "wait_allocator_baseline",
+                    "wait_allocator_high_water",
+                    "expected_waits",
+                    "wait_capture_complete",
+                    "wait_events",
+                ] {
+                    fields.remove(field);
+                }
+            }
+            let mut legacy_pool = pool.clone();
+            legacy_pool["schema"] = json!(1);
+            legacy_pool
+                .as_object_mut()
+                .unwrap()
+                .remove("query_capture_id");
+            std::fs::write(
+                case_dir.join("a.json"),
+                serde_json::to_vec(&legacy).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                case_dir.join("z.json"),
+                serde_json::to_vec(&legacy_pool).unwrap(),
+            )
+            .unwrap();
+            let assessments = collect_path(&case_dir).unwrap();
+            let result = assessments
+                .iter()
+                .find(|a| a.producer == "rustc-query-admission")
+                .unwrap();
+            assert!(result.structural_complete);
+            assert!(
+                result.task_bindings.is_none(),
+                "legacy lineage is unknown, not zero"
+            );
+            command(&case_dir, true, None).unwrap();
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

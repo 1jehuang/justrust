@@ -37,7 +37,7 @@ impl Binding {
     pub fn valid(&self) -> bool {
         self.schema == 1
             && self.protocol == PROTOCOL
-            && self.receipt_schema == 3
+            && matches!(self.receipt_schema, 3 | 4)
             && self.entry_capture_id != self.capture_id
             && self.ids().iter().all(|s| {
                 !s.is_empty()
@@ -289,8 +289,8 @@ mod tests {
     use super::*;
     use std::os::fd::IntoRawFd;
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static ID: AtomicU64 = AtomicU64::new(1);
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ID: AtomicUsize = AtomicUsize::new(1);
     fn directory() -> std::path::PathBuf {
         let base = std::env::var_os("JCODE_SCRATCH_DIR")
             .map(std::path::PathBuf::from)

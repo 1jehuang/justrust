@@ -1,8 +1,9 @@
 //! Bounded, opt-in direct query reads. Publication must occur outside query/dep locks.
 //! Request IDs are explicit, never inferred from OS TLS or admission nesting.
+use crate::query_task_bindings::{Source, TaskBindings};
 use std::fmt::Write as _;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 const MAX_EVENTS: usize = 100_000;
 
@@ -78,6 +79,7 @@ struct Event {
 }
 
 pub struct QueryReadObserver {
+    bindings: Option<Arc<TaskBindings>>,
     requests: AtomicU64,
     reads: AtomicU64,
     results: AtomicU64,
@@ -90,6 +92,7 @@ pub struct QueryReadObserver {
 impl Default for QueryReadObserver {
     fn default() -> Self {
         Self {
+            bindings: None,
             requests: AtomicU64::new(1),
             reads: AtomicU64::new(1),
             results: AtomicU64::new(1),
@@ -101,6 +104,16 @@ impl Default for QueryReadObserver {
     }
 }
 impl QueryReadObserver {
+    pub fn with_bindings(bindings: Arc<TaskBindings>) -> Self {
+        Self { bindings: Some(bindings), ..Self::default() }
+    }
+    pub fn high_waters(&self) -> [u64; 3] {
+        [
+            self.requests.load(Ordering::Relaxed),
+            self.reads.load(Ordering::Relaxed),
+            self.results.load(Ordering::Relaxed),
+        ]
+    }
     fn loss(&self, amount: u64) {
         // Keep the common path to one fetch_add, not a contended CAS retry loop.
         // Counts are exact while representable; wrapping must never restore completeness.
@@ -145,6 +158,10 @@ impl QueryReadObserver {
         mode: RequestMode,
     ) -> QueryReadRequest<'_> {
         let id = self.requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(bindings) = &self.bindings {
+            bindings.allocator_id(id);
+            bindings.record(Source::RequestStarted { request_id: id });
+        }
         let event = Event {
             kind: "request_started",
             request: Some(id),
@@ -169,6 +186,10 @@ impl QueryReadObserver {
         outcome: DepReadOutcome,
     ) {
         let id = self.reads.fetch_add(1, Ordering::Relaxed);
+        if let Some(bindings) = &self.bindings {
+            bindings.allocator_id(id);
+            bindings.record(Source::DepRead { read_id: id });
+        }
         self.event(Event {
             kind: "dep_read",
             request,
@@ -184,6 +205,10 @@ impl QueryReadObserver {
     }
     pub fn result_produced(&self, context: u64, job: u64, index: u32) {
         let id = self.results.fetch_add(1, Ordering::Relaxed);
+        if let Some(bindings) = &self.bindings {
+            bindings.allocator_id(id);
+            bindings.record(Source::ResultProduced { result_id: id });
+        }
         self.event(Event {
             kind: "result_produced",
             request: None,
@@ -342,6 +367,41 @@ fn inventory_matches(events: &[Event], requests: u64, reads: u64, results: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn task_binding_inventory_is_independent_of_read_record_loss() {
+        let bindings =
+            Arc::new(TaskBindings::new(Arc::new(crate::query_task_bindings::UnavailableSampler)));
+        let observer = QueryReadObserver::with_bindings(bindings.clone());
+        observer.begin(None, None, RequestMode::Get).finish(RequestOutcome::Value);
+        observer.read(None, None, None, 3, DepReadOutcome::Disabled);
+        observer.result_produced(1, 2, 3);
+        observer.events.lock().unwrap().clear();
+        observer.loss(17);
+        assert!(json(&observer).contains("\"records_complete\":false"));
+        let [requests, reads, results] = observer.high_waters();
+        let mut out = String::new();
+        bindings.append_json(&mut out, &[], Some(0), [requests, reads, results, 1]);
+        assert!(out.contains("\"records_complete\":true"));
+        assert!(out.contains("\"expected_points\":3"));
+        assert!(out.contains("\"lost_events\":0"));
+        for kind in ["request_started", "dep_read", "result_produced"] {
+            assert_eq!(out.matches(&format!("\"kind\":\"{kind}\"")).count(), 1);
+        }
+        assert!(QueryReadObserver::default().bindings.is_none());
+    }
+    #[test]
+    fn bound_allocator_wrap_cannot_restore_empty_inventory() {
+        let bindings =
+            Arc::new(TaskBindings::new(Arc::new(crate::query_task_bindings::UnavailableSampler)));
+        let observer = QueryReadObserver::with_bindings(bindings.clone());
+        observer.reads.store(u64::MAX, Ordering::Relaxed);
+        observer.read(None, None, None, 3, DepReadOutcome::Disabled);
+        observer.read(None, None, None, 3, DepReadOutcome::Disabled);
+        let mut out = String::new();
+        bindings.append_json(&mut out, &[], Some(0), [1; 4]);
+        assert!(out.contains("\"expected_points\":null"));
+        assert!(out.contains("\"records_complete\":false"));
+    }
     #[test]
     fn produced_result_has_independent_inventory() {
         let observer = QueryReadObserver::default();

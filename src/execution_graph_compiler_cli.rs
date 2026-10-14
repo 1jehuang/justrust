@@ -19,6 +19,15 @@ struct Header {
 }
 
 pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()> {
+    let output = assess_directory(directory, manifest_path)?;
+    if !json {
+        println!("Selected native compiler-launch coverage, not full-pipeline coverage:");
+    }
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn assess_directory(directory: &Path, manifest_path: &Path) -> Result<serde_json::Value> {
     ensure!(
         std::fs::symlink_metadata(directory)?.is_dir(),
         "compiler reconciliation requires a non-symlink capture directory"
@@ -60,8 +69,11 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
     let mut journals = Vec::new();
     let mut entries = Vec::new();
     let mut queries = Vec::new();
+    let mut task_bindings = std::collections::BTreeMap::new();
     let mut excluded = BTreeSet::new();
     let mut unreconciled = 0usize;
+    let mut selected_files = Vec::new();
+    let mut documents = Vec::new();
     for file in files {
         if !file.extension().is_some_and(|value| value == "json") {
             continue;
@@ -79,6 +91,32 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
             total <= MAX_TOTAL_BYTES,
             "compiler reconciliation exceeds total byte budget"
         );
+        selected_files.push(file);
+        documents.push(bytes);
+    }
+    let pools = crate::execution_graph::collect_pool_inventories(&documents)?;
+    let mut selected_pools = BTreeSet::new();
+    // Query declarations, not filenames or reused numeric task IDs, select the
+    // pool authorities eligible to contribute to this compiler root.
+    for bytes in &documents {
+        let header: Header = serde_json::from_slice(bytes).context("invalid capture header")?;
+        if header.producer.as_deref() == Some("rustc-query-admission")
+            && header
+                .capture_id
+                .as_deref()
+                .is_some_and(|id| expected_queries.contains(id))
+        {
+            let query = crate::execution_graph_query::collect_bytes(bytes)?;
+            if let Some(bindings) = &query.bindings {
+                selected_pools.extend(bindings.pool_capture_id().map(str::to_owned));
+            }
+        }
+    }
+    for (file, bytes) in selected_files.iter().zip(&documents) {
+        let name = file
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("capture filename is not UTF-8")?;
         if let Some(sequence) = name
             .strip_prefix(&format!("{prefix}.event-"))
             .and_then(|suffix| suffix.strip_suffix(".json"))
@@ -86,7 +124,7 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
             let sequence: u64 = sequence
                 .parse()
                 .context("invalid compiler journal filename")?;
-            let journal = protocol::parse_journal(&bytes)?;
+            let journal = protocol::parse_journal(bytes)?;
             ensure!(
                 journal.sequence == sequence,
                 "journal filename and sequence disagree"
@@ -94,10 +132,10 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
             journals.push(journal);
             continue;
         }
-        let header: Header = serde_json::from_slice(&bytes).context("invalid capture header")?;
+        let header: Header = serde_json::from_slice(bytes).context("invalid capture header")?;
         if header.profile.as_deref() == Some(protocol::PROFILE) {
             if name.contains(".event-") {
-                let journal = protocol::parse_journal(&bytes)?;
+                let journal = protocol::parse_journal(bytes)?;
                 ensure!(
                     header.authority_root.as_deref() == Some(journal.authority_root.as_str()),
                     "journal authority header disagrees"
@@ -115,7 +153,7 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
                 excluded.insert(journal.authority_root);
                 continue;
             }
-            let other = protocol::parse_manifest(&bytes)?;
+            let other = protocol::parse_manifest(bytes)?;
             if other.authority_root == manifest.authority_root {
                 // The selected final file can be outside the capture directory,
                 // but a contradictory local final may not be silently ignored.
@@ -133,7 +171,7 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
             continue;
         }
         if header.profile.as_deref() == Some("buildrunner-scheduler-entry-v1") {
-            let other = crate::execution_graph_manifest::parse_manifest(&bytes)?;
+            let other = crate::execution_graph_manifest::parse_manifest(bytes)?;
             if other.authority_root != manifest.parent_authority_root {
                 excluded.insert(other.authority_root);
             } else {
@@ -154,7 +192,7 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
         }
         match header.producer.as_deref() {
             Some("rustc-query-admission-entry") => {
-                let entry = protocol::parse_entry(&bytes)?;
+                let entry = protocol::parse_entry(bytes)?;
                 ensure!(
                     file.file_stem().and_then(|value| value.to_str())
                         == Some(entry.capture_id.as_str()),
@@ -172,12 +210,20 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
                     .as_deref()
                     .is_some_and(|id| expected_queries.contains(id)) =>
             {
-                let query = crate::execution_graph_query::assess_bytes(&bytes)?;
+                let query = crate::execution_graph::collect_query(bytes, &pools)?;
                 ensure!(
                     file.file_stem().and_then(|value| value.to_str())
                         == Some(query.capture_id.as_str()),
                     "query filename and capture identity disagree"
                 );
+                if let Some(bindings) = query.task_bindings {
+                    ensure!(
+                        task_bindings
+                            .insert(query.capture_id.clone(), bindings)
+                            .is_none(),
+                        "duplicate selected query task binding authority"
+                    );
+                }
                 queries.push(protocol::QuerySummary {
                     schema: query.schema,
                     capture_id: query.capture_id,
@@ -186,6 +232,15 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
             }
             Some("cargo-scheduler")
                 if header.capture_id.as_deref() == Some(manifest.scheduler_capture_id.as_str()) => {
+            }
+            Some("rustc-thread-pool-join")
+                if header
+                    .capture_id
+                    .as_ref()
+                    .is_some_and(|id| selected_pools.contains(id)) =>
+            {
+                // Already validated in pass one and reconciled against the
+                // query's complete authority tuple in pass two.
             }
             _ => {
                 unreconciled += 1;
@@ -199,9 +254,8 @@ pub fn command(directory: &Path, manifest_path: &Path, json: bool) -> Result<()>
     output["excluded_authority_roots"] = serde_json::to_value(excluded)?;
     output["unreconciled_receipt_files"] = serde_json::to_value(unreconciled)?;
     output["selection"] = serde_json::json!("explicit-compiler-authority");
-    if !json {
-        println!("Selected native compiler-launch coverage, not full-pipeline coverage:");
+    if !task_bindings.is_empty() {
+        output["task_bindings"] = serde_json::to_value(task_bindings)?;
     }
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    Ok(output)
 }

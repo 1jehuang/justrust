@@ -16,6 +16,8 @@ struct Receipt {
     producer: String,
     scope: String,
     capture_id: String,
+    #[serde(default, deserialize_with = "query_identity")]
+    query_capture_id: Option<String>,
     observer: u64,
     full_pipeline_complete: bool,
     #[serde(deserialize_with = "nullable")]
@@ -162,12 +164,60 @@ fn lineage(
     }
     Ok(result)
 }
+fn query_identity<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
+}
+
+#[derive(Debug)]
+pub(crate) struct TaskInterval {
+    pub start_ns: u64,
+    pub finish_ns: u64,
+}
+pub(crate) struct CollectedPool {
+    pub assessment: Assessment,
+    pub inventory: Option<PoolInventory>,
+}
+#[derive(Debug)]
+pub(crate) struct PoolInventory {
+    pub schema: u32,
+    pub capture_id: String,
+    pub observer: u64,
+    pub query_capture_id: Option<String>,
+    pub structural_complete: bool,
+    pub task_intervals: BTreeMap<u64, TaskInterval>,
+}
+impl PoolInventory {
+    pub fn validate_point(&self, task: u64, at_ns: u64) -> Result<()> {
+        if !self.structural_complete {
+            bail!("incomplete pool inventory cannot validate a binding");
+        }
+        match self.task_intervals.get(&task) {
+            Some(interval) if interval.start_ns <= at_ns && at_ns <= interval.finish_ns => Ok(()),
+            Some(_) => bail!("binding point outside task lifecycle"),
+            None => bail!("binding refers to foreign pool task"),
+        }
+    }
+}
+
 pub(crate) fn assess_bytes(bytes: &[u8]) -> Result<Assessment> {
+    collect_bytes(bytes).map(|collected| collected.assessment)
+}
+pub(crate) fn collect_bytes(bytes: &[u8]) -> Result<CollectedPool> {
+    let (assessment, inventory) = validate_bytes(bytes)?;
+    let inventory = (inventory.schema == 2).then_some(inventory);
+    Ok(CollectedPool {
+        assessment,
+        inventory,
+    })
+}
+fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
     if bytes.len() > MAX_BYTES {
         bail!("join receipt byte budget exceeded");
     }
     let r: Receipt = serde_json::from_slice(bytes)?;
-    if r.schema != 1
+    if !matches!(r.schema, 1 | 2)
         || r.producer != "rustc-thread-pool-join"
         || r.scope != "native-join-continuations"
     {
@@ -182,6 +232,17 @@ pub(crate) fn assess_bytes(bytes: &[u8]) -> Result<Assessment> {
         || r.observer == 0
     {
         bail!("invalid join identity");
+    }
+    match (r.schema, r.query_capture_id.as_deref()) {
+        (1, None) => {}
+        (2, Some(id))
+            if !id.is_empty()
+                && id.len() <= 128
+                && id != r.capture_id
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)) => {}
+        _ => bail!("invalid or unsupported query capture identity"),
     }
     if r.full_pipeline_complete
         || r.cpu_work_ns.is_some()
@@ -423,27 +484,49 @@ pub(crate) fn assess_bytes(bytes: &[u8]) -> Result<Assessment> {
     if !r.sealed || r.interface_outcome != Outcome::Returned {
         issues.push("join owner is not sealed after normal interface return".into());
     }
-    Ok(Assessment {
-        schema: 1,
-        producer: r.producer,
-        scope: r.scope,
-        capture_id: r.capture_id,
+    let inventory = PoolInventory {
+        schema: r.schema,
+        capture_id: r.capture_id.clone(),
+        observer: r.observer,
+        query_capture_id: r.query_capture_id,
         structural_complete: issues.is_empty(),
-        full_pipeline_complete: false,
-        nodes: tasks.len(),
-        edges,
-        issues,
-        opaque_boundaries: vec![
-            "scope-tasks".into(),
-            "scheduler-and-resource-grants".into(),
-            "pre-attach-work".into(),
-            "query-to-task-binding".into(),
-            "cross-capture-clock-binding".into(),
-            "cargo-and-process-binding".into(),
-        ],
-        cpu_work_ns: None,
-        execution_span_ns: None,
-    })
+        task_intervals: tasks
+            .iter()
+            .filter_map(|(&id, task)| {
+                Some((
+                    id,
+                    TaskInterval {
+                        start_ns: task.start?,
+                        finish_ns: task.finish?,
+                    },
+                ))
+            })
+            .collect(),
+    };
+    Ok((
+        Assessment {
+            schema: r.schema,
+            producer: r.producer,
+            scope: r.scope,
+            capture_id: r.capture_id,
+            structural_complete: issues.is_empty(),
+            full_pipeline_complete: false,
+            nodes: tasks.len(),
+            edges,
+            issues,
+            opaque_boundaries: vec![
+                "scope-tasks".into(),
+                "scheduler-and-resource-grants".into(),
+                "pre-attach-work".into(),
+                "query-to-task-binding".into(),
+                "cross-capture-clock-binding".into(),
+                "cargo-and-process-binding".into(),
+            ],
+            cpu_work_ns: None,
+            execution_span_ns: None,
+        },
+        inventory,
+    ))
 }
 
 #[cfg(test)]
@@ -456,6 +539,98 @@ mod tests {
             {"kind":"fork","parent":1,"child":2,"continuation":4,"at_ns":2},{"kind":"fork","parent":1,"child":3,"continuation":4,"at_ns":2},{"kind":"finish","task":1,"outcome":"normal","at_ns":3},
             {"kind":"start","task":2,"at_ns":4},{"kind":"finish","task":2,"outcome":"normal","at_ns":5},{"kind":"start","task":3,"at_ns":4},{"kind":"finish","task":3,"outcome":"panic","at_ns":6},
             {"kind":"join","branch":2,"child":2,"continuation":4,"at_ns":7},{"kind":"join","branch":3,"child":3,"continuation":4,"at_ns":7},{"kind":"resume","continuation":4,"at_ns":8},{"kind":"start","task":4,"at_ns":9},{"kind":"finish","task":4,"outcome":"panic","at_ns":10}]})
+    }
+    fn schema2() -> Value {
+        let mut v = fixture();
+        v["schema"] = json!(2);
+        v["query_capture_id"] = json!("query_123-safe");
+        v
+    }
+    fn collect(v: &Value) -> Result<CollectedPool> {
+        collect_bytes(&serde_json::to_vec(v).unwrap())
+    }
+    #[test]
+    fn schema2_retains_actual_inclusive_lifecycles() {
+        let c = collect(&schema2()).unwrap();
+        assert_eq!(c.assessment.schema, 2);
+        assert!(!c.assessment.full_pipeline_complete);
+        assert!(c.assessment.cpu_work_ns.is_none());
+        assert!(c.assessment.execution_span_ns.is_none());
+        let p = c.inventory.unwrap();
+        assert_eq!(p.schema, 2);
+        assert_eq!(p.capture_id, "pool-test");
+        assert_eq!(p.observer, 1);
+        assert_eq!(p.query_capture_id.as_deref(), Some("query_123-safe"));
+        assert_eq!(p.task_intervals.len(), 4);
+        assert_eq!(p.task_intervals[&4].start_ns, 9);
+        assert_eq!(p.task_intervals[&4].finish_ns, 10);
+        for point in [9, 10] {
+            p.validate_point(4, point).unwrap();
+        }
+        for point in [8, 11] {
+            assert!(p.validate_point(4, point).is_err());
+        }
+        assert!(p.validate_point(5, 9).is_err());
+    }
+    #[test]
+    fn legacy_schema1_retains_unknown_lineage_and_exact_fields() {
+        let c = collect(&fixture()).unwrap();
+        assert_eq!(c.assessment.schema, 1);
+        assert!(c.inventory.is_none());
+        for id in [json!(null), json!("query-safe")] {
+            let mut v = fixture();
+            v["query_capture_id"] = id;
+            assert!(collect(&v).is_err());
+        }
+    }
+    #[test]
+    fn schema2_rejects_missing_null_duplicate_unknown_and_invalid_identity() {
+        let mut v = schema2();
+        v.as_object_mut().unwrap().remove("query_capture_id");
+        assert!(collect(&v).is_err());
+        for id in [
+            json!(null),
+            json!(0),
+            json!(""),
+            json!("pool-test"),
+            json!("query.with.dot"),
+            json!("query:colon"),
+            json!("query/foreign"),
+            json!("é"),
+            json!("a".repeat(129)),
+        ] {
+            let mut v = schema2();
+            v["query_capture_id"] = id;
+            assert!(collect(&v).is_err(), "accepted {v}");
+        }
+        let bytes = serde_json::to_string(&schema2()).unwrap();
+        let duplicate = bytes.replacen("{", "{\"query_capture_id\":\"other\",", 1);
+        assert!(collect_bytes(duplicate.as_bytes()).is_err());
+        let mut v = schema2();
+        v["unknown"] = json!(true);
+        assert!(collect(&v).is_err());
+        let mut v = schema2();
+        v["events"][9]["child"] = json!(5);
+        assert!(collect(&v).is_err());
+    }
+    #[test]
+    fn schema2_loss_unsealed_and_missing_tasks_cannot_validate_points() {
+        for key in ["sealed", "dropped_events", "expected_tasks"] {
+            let mut v = schema2();
+            match key {
+                "sealed" => v[key] = json!(false),
+                "dropped_events" => v[key] = json!(1),
+                _ => {
+                    v[key] = json!(5);
+                    v["task_allocator_high_water"] = json!(6);
+                }
+            }
+            let c = collect(&v).unwrap();
+            assert!(!c.assessment.structural_complete);
+            let p = c.inventory.unwrap();
+            assert!(!p.structural_complete);
+            assert!(p.validate_point(4, 9).is_err());
+        }
     }
     fn assess(v: &Value) -> Result<Assessment> {
         assess_bytes(&serde_json::to_vec(v).unwrap())

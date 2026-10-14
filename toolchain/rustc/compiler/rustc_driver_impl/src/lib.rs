@@ -949,7 +949,7 @@ pub fn version_at_macro_invocation(
     if verbose {
         #[cfg(target_os = "linux")]
         if binary == "rustc" {
-            safe_println!("jr-query-admission-binding: reserved-fd-v2,query-schema=3");
+            safe_println!("jr-query-admission-binding: reserved-fd-v2,query-schema=4");
         }
         safe_println!("binary: {binary}");
         safe_println!("commit-hash: {commit_hash}");

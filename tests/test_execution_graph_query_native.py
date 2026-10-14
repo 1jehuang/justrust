@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 import unittest
 
+from test_execution_graph_task_binding_native import assert_binding_inventory
+
 
 @unittest.skipUnless(os.environ.get('JR_QUERY_RUSTC'),
                      'requires an actual rebuilt native query producer')
@@ -99,6 +101,8 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
                 self.assertEqual(len(receipts), len(query_assessments))
                 self.assertEqual(len(pools), len(pool_assessments))
                 for pool in pools:
+                    self.assertEqual(pool['schema'], 2)
+                    self.assertIn(pool['query_capture_id'], {r['capture_id'] for r in receipts})
                     self.assertFalse(pool['full_pipeline_complete'])
                     self.assertIsNone(pool['cpu_work_ns'])
                     self.assertIsNone(pool['execution_span_ns'])
@@ -106,6 +110,7 @@ class NativeQueryAdmissionAcceptance(unittest.TestCase):
                         self.assertTrue(pool['sealed'])
                         self.assertEqual(pool['interface_outcome'], 'returned')
                 for receipt in receipts:
+                    assert_binding_inventory(self, receipt)
                     self.assertEqual(receipt['scope'], 'query-job-admission-lifecycle')
                     self.assertFalse(receipt['full_pipeline_complete'])
                     if complete:

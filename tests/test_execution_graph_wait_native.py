@@ -17,6 +17,8 @@ import tempfile
 import time
 import unittest
 
+from test_execution_graph_task_binding_native import assert_binding_inventory
+
 
 def shared_query_fixture(functions=512, width=512, depth=64):
     """Independent typecheck jobs converge on one costly projection-bearing alias."""
@@ -110,6 +112,8 @@ class NativeQueryWaitAcceptance(unittest.TestCase):
         if self.capture_threads[directory] > 1:
             self.assertTrue(pools, 'parallel capture requires separate pool receipts')
         for pool in pools:
+            self.assertEqual(pool['schema'], 2)
+            self.assertIn(pool['query_capture_id'], {r['capture_id'] for r in receipts})
             self.assertFalse(pool['full_pipeline_complete'])
             self.assertIsNone(pool['cpu_work_ns'])
             self.assertIsNone(pool['execution_span_ns'])
@@ -119,12 +123,13 @@ class NativeQueryWaitAcceptance(unittest.TestCase):
         counts = collections.Counter()
         reasons = collections.Counter()
         for receipt in receipts:
-            self.assertEqual(receipt['schema'], 3, 'requires rebuilt v3 producer')
+            self.assertEqual(receipt['schema'], 4, 'requires rebuilt v4 producer')
+            assert_binding_inventory(self, receipt)
             self.assertEqual(receipt['producer'], 'rustc-query-admission')
             self.assertFalse(receipt['full_pipeline_complete'])
             self.assertIsNone(receipt['cpu_work_ns'])
             self.assertIsNone(receipt['execution_span_ns'])
-            if receipt['schema'] == 3:
+            if receipt['schema'] == 4:
                 self.assertFalse(receipt['query_reads']['semantic_complete'])
                 self.assertFalse(receipt['query_reads']['full_pipeline_complete'])
             events = receipt['wait_events']
@@ -212,14 +217,32 @@ class NativeQueryWaitAcceptance(unittest.TestCase):
         directory, _ = self.compile(1, capture=True)
         counts, _ = self.inspect(directory)
         self.assertEqual(sum(counts.values()), 0, counts)
+        self.assert_huge_binding_inventory()
         self.execute()
         for threads in (4, 8):
             directory, _ = self.compile(threads, capture=True)
             counts, _ = self.inspect(directory)
+            self.assert_huge_binding_inventory()
             for kind in ('registered', 'notified', 'resumed'):
                 self.assertGreater(counts[kind], 0,
                                    f'-Zthreads={threads} fixture did not exercise {kind}: {counts}')
             self.execute()
+
+    def assert_huge_binding_inventory(self):
+        for receipt, assessment in zip(self.last_receipts, self.last_assessments):
+            bindings = assert_binding_inventory(self, receipt, complete=False)
+            self.assertGreater(bindings['expected_points'], len(bindings['events']))
+            self.assertGreater(bindings['lost_events'], 0)
+            self.assertFalse(assessment['task_bindings']['records_complete'])
+            self.assertFalse(assessment['task_bindings']['graph_binding_complete'])
+            observed = collections.Counter(row['source']['kind'] for row in bindings['events'])
+            print(json.dumps({'huge_binding_expected_points': bindings['expected_points'],
+                              'huge_binding_observed_points': len(bindings['events']),
+                              'huge_binding_lost_points': bindings['lost_events'],
+                              'huge_binding_source_counts': dict(observed),
+                              'real_wait_point_exercise': 'observed' if observed['wait_registered']
+                                  and observed['wait_resumed'] else
+                                  'blocked: actual waits absent or independently capped point recorder'}), flush=True)
 
     def test_equally_warmed_capture_identity_and_output(self):
         for threads in (1, 4, 8):
@@ -252,7 +275,8 @@ class NativeQueryWaitAcceptance(unittest.TestCase):
         self.inspect(directory)
         tracked = 0
         for receipt in self.last_receipts:
-            self.assertEqual(receipt['schema'], 3, 'integrated semantic reads require v3')
+            self.assertEqual(receipt['schema'], 4, 'integrated semantic reads require v4')
+            assert_binding_inventory(self, receipt, complete=True)
             reads = receipt['query_reads']
             self.assertTrue(reads['records_complete'], reads)
             self.assertEqual(reads['lost_events'], 0)

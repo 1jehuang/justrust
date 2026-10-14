@@ -38,6 +38,25 @@ pub struct TaskId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PoolPoint {
+    pub task: u64,
+    pub at_pool_ns: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolPointUnbound {
+    NoActiveTask,
+    SuspendedTask,
+    ForeignObserver,
+    ClockOverflow,
+}
+
+fn safe_capture_id(id: &str) -> bool {
+    (1..=128).contains(&id.len())
+        && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Normal,
     Panic,
@@ -91,12 +110,33 @@ pub struct ExecutionObserver {
     buffer: Mutex<Buffer>,
     epoch: Instant,
     capture_id: String,
+    query_capture_id: Option<String>,
 }
 
 impl ExecutionObserver {
     /// Identity exhaustion disables recording, never wraps or affects work.
     pub fn new(capacity: usize) -> Option<Arc<Self>> {
+        Self::create(capacity, None)
+    }
+
+    /// Establish immutable, reciprocal capture linkage without inferring query context.
+    pub fn new_for_query(capacity: usize, query_capture_id: &str) -> Option<Arc<Self>> {
+        if !safe_capture_id(query_capture_id) {
+            return None;
+        }
+        Self::create(capacity, Some(query_capture_id))
+    }
+
+    fn create(capacity: usize, query_capture_id: Option<&str>) -> Option<Arc<Self>> {
         let id = allocate_id(&NEXT_OBSERVER, u64::MAX)?;
+        let capture_id = format!(
+            "{}-{}-{id}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+        );
+        if query_capture_id == Some(capture_id.as_str()) {
+            return None;
+        }
         let capacity = capacity.min(MAX_RECORDS);
         let mut events = Vec::new();
         let mut timestamps = Vec::new();
@@ -108,11 +148,8 @@ impl ExecutionObserver {
             next_task: AtomicU64::new(1),
             capacity,
             epoch: Instant::now(),
-            capture_id: format!(
-                "{}-{}-{id}",
-                std::process::id(),
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
-            ),
+            capture_id,
+            query_capture_id: query_capture_id.map(str::to_owned),
             buffer: Mutex::new(Buffer {
                 events,
                 timestamps,
@@ -123,8 +160,32 @@ impl ExecutionObserver {
         }))
     }
 
+    pub fn capture_id(&self) -> &str {
+        &self.capture_id
+    }
+
+    pub fn observer_id(&self) -> u64 {
+        self.id
+    }
+
+    /// Borrow the worker's active slot without cloning contexts or locking receipts.
+    pub fn current_point(self: &Arc<Self>) -> Result<PoolPoint, PoolPointUnbound> {
+        CURRENT.with(|current| {
+            let current = current.borrow();
+            let active = current.as_ref().ok_or(PoolPointUnbound::NoActiveTask)?;
+            let active = active.borrow();
+            let task = active.as_ref().ok_or(PoolPointUnbound::SuspendedTask)?;
+            if !Arc::ptr_eq(self, &task.observer) {
+                return Err(PoolPointUnbound::ForeignObserver);
+            }
+            let at_pool_ns = u64::try_from(self.epoch.elapsed().as_nanos())
+                .map_err(|_| PoolPointUnbound::ClockOverflow)?;
+            Ok(PoolPoint { task: task.id.task, at_pool_ns })
+        })
+    }
+
     fn event(&self, event: Event) {
-        let mut buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = self.receipt_buffer();
         if !buffer.sealed
             && buffer.events.len() < self.capacity
             && buffer.events.try_reserve(1).is_ok()
@@ -158,7 +219,7 @@ impl ExecutionObserver {
     }
 
     pub fn snapshot(&self) -> Receipt {
-        let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let buffer = self.receipt_buffer();
         let high_water = self.next_task.load(Ordering::Relaxed);
         Receipt {
             observer: self.id,
@@ -174,13 +235,23 @@ impl ExecutionObserver {
     }
 
     fn loss(&self) {
-        let mut buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = self.receipt_buffer();
         buffer.dropped = buffer.dropped.saturating_add(1);
+    }
+
+    fn receipt_buffer(&self) -> std::sync::MutexGuard<'_, Buffer> {
+        self.buffer.lock().unwrap_or_else(|error| {
+            let mut buffer = error.into_inner();
+            // Poison can interrupt event/timestamp publication. Never authorize
+            // bindings from a receipt whose buffer integrity is uncertain.
+            buffer.dropped = buffer.dropped.saturating_add(1);
+            buffer
+        })
     }
 
     /// Seal only after the root interface and pool work finish. Never implicit.
     pub fn seal(&self, outcome: InterfaceOutcome) {
-        let mut buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buffer = self.receipt_buffer();
         if !buffer.sealed {
             buffer.outcome = outcome;
             buffer.sealed = true;
@@ -191,9 +262,14 @@ impl ExecutionObserver {
     /// IDs in events are task-local numbers qualified by the header observer.
     pub fn write_json(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         let receipt = self.snapshot();
+        let schema = if self.query_capture_id.is_some() { 2 } else { 1 };
+        let reciprocal = self
+            .query_capture_id
+            .as_ref()
+            .map_or_else(String::new, |id| format!(",\"query_capture_id\":\"{id}\""));
         write!(
             out,
-            "{{\"schema\":1,\"producer\":\"rustc-thread-pool-join\",\"scope\":\"native-join-continuations\",\"capture_id\":\"{}\",\"observer\":{},\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"scope_coverage\":false,\"scheduler_coverage\":false,\"pre_attach_coverage\":false,\"sealed\":{},\"interface_outcome\":\"{}\",\"task_allocator_baseline\":1,\"task_allocator_high_water\":{},\"expected_tasks\":{},\"dropped_events\":{},\"events\":[",
+            "{{\"schema\":{schema},\"producer\":\"rustc-thread-pool-join\",\"scope\":\"native-join-continuations\",\"capture_id\":\"{}\"{reciprocal},\"observer\":{},\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"scope_coverage\":false,\"scheduler_coverage\":false,\"pre_attach_coverage\":false,\"sealed\":{},\"interface_outcome\":\"{}\",\"task_allocator_baseline\":1,\"task_allocator_high_water\":{},\"expected_tasks\":{},\"dropped_events\":{},\"events\":[",
             self.capture_id,
             receipt.observer,
             receipt.sealed,
@@ -445,6 +521,107 @@ impl Fork {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poisoned_buffer_permanently_reports_loss() {
+        let observer = ExecutionObserver::new_for_query(20, "query-poison").unwrap();
+        let root = observer.root().unwrap();
+        drop(root.enter());
+        assert_eq!(observer.snapshot().dropped_events, 0);
+        let poisoned = std::panic::catch_unwind(|| {
+            let _buffer = observer.buffer.lock().unwrap();
+            panic!("interrupted receipt publication");
+        });
+        assert!(poisoned.is_err());
+        observer.seal(InterfaceOutcome::Returned);
+        let first = observer.snapshot();
+        assert!(first.sealed);
+        assert!(first.dropped_events > 0);
+        assert!(observer.snapshot().dropped_events >= first.dropped_events);
+        let mut output = Vec::new();
+        observer.write_json(&mut output).unwrap();
+        assert!(!String::from_utf8(output).unwrap().contains("\"dropped_events\":0"));
+    }
+
+    #[test]
+    fn points_bind_root_children_and_continuation_without_locks_or_clones() {
+        let observer = ExecutionObserver::new_for_query(100, "query-1").unwrap();
+        let foreign = ExecutionObserver::new_for_query(100, "query-1").unwrap();
+        assert_ne!(observer.observer_id(), foreign.observer_id());
+        assert_ne!(observer.capture_id(), foreign.capture_id());
+        assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+        let root = observer.root().unwrap();
+        let guard = root.enter().unwrap();
+        let references = Arc::strong_count(&observer);
+        // Holding both locks demonstrates that point sampling takes neither.
+        let buffer = observer.buffer.lock().unwrap();
+        let state = root.state.lock().unwrap();
+        let first = observer.current_point().unwrap();
+        assert_eq!(first.task, root.id().task);
+        assert!(observer.current_point().unwrap().at_pool_ns >= first.at_pool_ns);
+        assert_eq!(Arc::strong_count(&observer), references);
+        assert_eq!(foreign.current_point(), Err(PoolPointUnbound::ForeignObserver));
+        drop(state);
+        drop(buffer);
+        {
+            let _dispatch = suspend_for_dispatch();
+            assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+        }
+        assert_eq!(observer.current_point().unwrap().task, root.id().task);
+        let fork = root.fork(2).unwrap();
+        assert_eq!(observer.current_point(), Err(PoolPointUnbound::SuspendedTask));
+        for child in fork.children() {
+            let _child = child.enter().unwrap();
+            assert_eq!(observer.current_point().unwrap().task, child.id().task);
+        }
+        let continuation = fork.resume().ok().unwrap();
+        assert_eq!(observer.current_point().unwrap().task, continuation.task);
+        assert_ne!(continuation.task, root.id().task);
+        drop(guard);
+        assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+    }
+
+    #[test]
+    fn reciprocal_header_and_exact_legacy_header() {
+        let legacy = ExecutionObserver::new(0).unwrap();
+        let mut output = Vec::new();
+        legacy.write_json(&mut output).unwrap();
+        let legacy_json = String::from_utf8(output).unwrap();
+        let expected = format!(
+            "{{\"schema\":1,\"producer\":\"rustc-thread-pool-join\",\"scope\":\"native-join-continuations\",\"capture_id\":\"{}\",\"observer\":{},\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"scope_coverage\":false,\"scheduler_coverage\":false,\"pre_attach_coverage\":false,\"sealed\":false,\"interface_outcome\":\"unknown\",\"task_allocator_baseline\":1,\"task_allocator_high_water\":1,\"expected_tasks\":0,\"dropped_events\":0,\"events\":[]}}\n",
+            legacy.capture_id(),
+            legacy.observer_id()
+        );
+        assert_eq!(legacy_json, expected);
+        let linked = ExecutionObserver::new_for_query(0, "Query_123-abc").unwrap();
+        assert!(safe_capture_id(linked.capture_id()));
+        assert_ne!(linked.capture_id(), "Query_123-abc");
+        let mut output = Vec::new();
+        linked.write_json(&mut output).unwrap();
+        let linked_json = String::from_utf8(output).unwrap();
+        let expected = expected
+            .replace("\"schema\":1", "\"schema\":2")
+            .replace(legacy.capture_id(), linked.capture_id())
+            .replace(
+                &format!("\"observer\":{}", legacy.observer_id()),
+                &format!(
+                    "\"query_capture_id\":\"Query_123-abc\",\"observer\":{}",
+                    linked.observer_id()
+                ),
+            );
+        assert_eq!(linked_json, expected);
+    }
+
+    #[test]
+    fn reciprocal_ids_are_bounded_safe_ascii() {
+        for id in ["", "a b", "a/b", "a.b", "a\"b", "a\\b", "é", "\n"] {
+            assert!(ExecutionObserver::new_for_query(0, id).is_none(), "{id:?}");
+        }
+        assert!(ExecutionObserver::new_for_query(0, &"a".repeat(129)).is_none());
+        for id in ["a", "-_", &"A".repeat(128)] {
+            assert!(ExecutionObserver::new_for_query(0, id).is_some());
+        }
+    }
 
     #[test]
     fn allocator_is_bounded_and_never_wraps() {

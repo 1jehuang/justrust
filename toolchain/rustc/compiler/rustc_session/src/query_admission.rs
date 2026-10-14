@@ -1,5 +1,8 @@
 //! Opt-in bounded admission and registered-wait diagnostics, not a complete compiler graph.
 //! Never call publication methods while holding query shard or latch locks.
+use crate::query_task_bindings::{Sample, Source, TaskBindings};
+#[cfg(not(test))]
+use crate::query_task_bindings::{Sampler, Unbound};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::Write as _;
@@ -21,6 +24,41 @@ use std::sync::OnceLock;
 const MAX_EVENTS: usize = 100_000;
 const MAX_CONTEXTS: usize = 1024;
 static FILE_ID: AtomicU64 = AtomicU64::new(1);
+fn mint_capture_id() -> String {
+    let id = FILE_ID.fetch_add(1, Ordering::Relaxed);
+    let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    format!("{epoch}-{}-{id}", std::process::id())
+}
+#[cfg(not(test))]
+#[derive(Default)]
+struct PoolSampler(OnceLock<Arc<ExecutionObserver>>);
+#[cfg(not(test))]
+impl Sampler for PoolSampler {
+    fn sample(&self) -> Sample {
+        use rustc_thread_pool::execution_observer::PoolPointUnbound;
+        let pool = self.0.get().ok_or(Unbound::PoolUnavailable)?;
+        pool.current_point()
+            .map(|p| crate::query_task_bindings::Point { task: p.task, at_pool_ns: p.at_pool_ns })
+            .map_err(|reason| match reason {
+                PoolPointUnbound::NoActiveTask => Unbound::NoActive,
+                PoolPointUnbound::SuspendedTask => Unbound::Suspended,
+                PoolPointUnbound::ForeignObserver => Unbound::ForeignObserver,
+                PoolPointUnbound::ClockOverflow => Unbound::ClockOverflow,
+            })
+    }
+    fn authority(&self) -> Option<(String, u64)> {
+        self.0.get().map(|pool| (pool.capture_id().to_owned(), pool.observer_id()))
+    }
+}
+#[cfg(not(test))]
+fn new_bindings() -> (Arc<TaskBindings>, Arc<PoolSampler>) {
+    let pool = Arc::new(PoolSampler::default());
+    (Arc::new(TaskBindings::new(pool.clone())), pool)
+}
+#[cfg(test)]
+fn new_bindings() -> (Arc<TaskBindings>, ()) {
+    (Arc::new(TaskBindings::new(Arc::new(crate::query_task_bindings::UnavailableSampler))), ())
+}
 
 #[derive(Clone)]
 pub struct QueryAdmissionObserver(Arc<Inner>);
@@ -33,8 +71,9 @@ struct Inner {
     next_wait: AtomicU64,
     reads: crate::query_reads::QueryReadObserver,
     returned: AtomicBool,
+    bindings: Arc<TaskBindings>,
     #[cfg(not(test))]
-    pool: OnceLock<Arc<ExecutionObserver>>,
+    pool: Arc<PoolSampler>,
     data: Mutex<Data>,
 }
 #[derive(Default)]
@@ -63,6 +102,7 @@ struct WaitFacts {
     waitee: u64,
     consumer: Option<u64>,
     registered: u64,
+    registered_point: Option<Sample>,
     notified: AtomicU64,
     reason: AtomicU64,
 }
@@ -90,6 +130,11 @@ impl QueryWaitToken {
     }
     /// Only the waiting thread calls this, after pool allowance reacquisition.
     pub fn resumed(&self, condvar_returned: u64) {
+        let bindings = &self.0.context.observer.0.bindings;
+        let resumed_point = bindings.sample();
+        bindings
+            .record_sample(Source::WaitRegistered { wait_id: self.0.id }, self.0.registered_point);
+        bindings.record_sample(Source::WaitResumed { wait_id: self.0.id }, resumed_point);
         let resumed = self.now();
         let reason = self.0.reason.load(Ordering::Acquire);
         let record = WaitRecord {
@@ -185,16 +230,18 @@ impl QueryAdmissionObserver {
     pub fn attach_current_pool(&self) {
         #[cfg(not(test))]
         {
-            if self.0.pool.get().is_some() {
+            if self.0.pool.0.get().is_some() {
                 return;
             }
-            let Some(observer) = ExecutionObserver::new(MAX_EVENTS) else {
+            let Some(observer) =
+                ExecutionObserver::new_for_query(MAX_EVENTS, self.0.capture_id.as_deref().unwrap())
+            else {
                 return;
             };
             if rustc_thread_pool::Registry::current()
                 .attach_execution_observer(Arc::clone(&observer))
             {
-                let _ = self.0.pool.set(observer);
+                let _ = self.0.pool.0.set(observer);
             }
         }
     }
@@ -237,16 +284,19 @@ impl QueryAdmissionObserver {
             if metadata.uid() != owner {
                 return None;
             }
+            let capture_id = Some(mint_capture_id());
+            let (bindings, _pool) = new_bindings();
             Some(Self(Arc::new(Inner {
                 _directory_handle: handle,
-                capture_id: None,
+                capture_id,
                 epoch: Instant::now(),
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
-                reads: crate::query_reads::QueryReadObserver::default(),
+                reads: crate::query_reads::QueryReadObserver::with_bindings(Arc::clone(&bindings)),
+                bindings,
                 returned: AtomicBool::new(false),
                 #[cfg(not(test))]
-                pool: OnceLock::new(),
+                pool: _pool,
                 data: Mutex::new(Data::default()),
             })))
         }
@@ -275,22 +325,25 @@ impl QueryAdmissionObserver {
             {
                 return None;
             }
+            let (bindings, _pool) = new_bindings();
             Some(Self(Arc::new(Inner {
                 _directory_handle: directory,
                 capture_id: Some(capture_id),
                 epoch: Instant::now(),
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
-                reads: crate::query_reads::QueryReadObserver::default(),
+                reads: crate::query_reads::QueryReadObserver::with_bindings(Arc::clone(&bindings)),
+                bindings,
                 returned: AtomicBool::new(false),
                 #[cfg(not(test))]
-                pool: OnceLock::new(),
+                pool: _pool,
                 data: Mutex::new(Data::default()),
             })))
         }
     }
     pub fn context(&self) -> QueryAdmissionContext {
         let id = self.0.next_context.fetch_add(1, Ordering::Relaxed);
+        self.0.bindings.allocator_id(id);
         let mut data = self.0.data();
         if data.contexts.len() < MAX_CONTEXTS && data.contexts.try_reserve(1).is_ok() {
             data.contexts.push((id, None));
@@ -316,11 +369,14 @@ impl QueryAdmissionContext {
     }
     /// Lock-free observer facts allocation, called only for an actual registration.
     pub fn register_wait(&self, waitee: u64, consumer: Option<u64>) -> QueryWaitToken {
+        let id = self.observer.0.next_wait.fetch_add(1, Ordering::Relaxed);
+        self.observer.0.bindings.allocator_id(id);
         QueryWaitToken(Arc::new(WaitFacts {
             context: self.clone(),
-            id: self.observer.0.next_wait.fetch_add(1, Ordering::Relaxed),
+            id,
             waitee,
             consumer,
+            registered_point: self.observer.0.bindings.sample(),
             registered: self.now(),
             notified: AtomicU64::new(0),
             reason: AtomicU64::new(0),
@@ -338,6 +394,8 @@ impl QueryAdmissionContext {
     }
 
     pub fn admit(&self, id: u64, parent: Option<u64>, at: Instant) -> QueryAdmissionJob {
+        self.observer.0.bindings.allocator_id(id);
+        self.observer.0.bindings.record(Source::Admitted { context_id: self.id, job_id: id });
         self.event("admitted", id, parent, at);
         QueryAdmissionJob { context: self.clone(), id, terminal: false }
     }
@@ -545,7 +603,7 @@ impl Data {
     }
     fn json(&self, returned: bool, capture_id: &str, expected_contexts: u64) -> String {
         let mut out = format!(
-            "{{\"schema\":3,\"capture_id\":\"{capture_id}\",\"producer\":\"rustc-query-admission\",\"scope\":\"query-job-admission-lifecycle\",\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"interface_outcome\":\"{}\",\"capture_complete\":{},\"lost_events\":{},\"expected_contexts\":{expected_contexts},\"opaque_boundaries\":[\"fast-cache-hits\",\"race-cache-hits\",\"green-ensure-no-job\",\"feeds\",\"direct-paths\",\"nonquery\",\"resource-internals\",\"driver-and-process-outcome\",\"cargo-parent-binding\",\"cache-read-dependencies\",\"wait-and-resource-dependencies\"],\"contexts\":[",
+            "{{\"schema\":4,\"capture_id\":\"{capture_id}\",\"producer\":\"rustc-query-admission\",\"scope\":\"query-job-admission-lifecycle\",\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"interface_outcome\":\"{}\",\"capture_complete\":{},\"lost_events\":{},\"expected_contexts\":{expected_contexts},\"opaque_boundaries\":[\"fast-cache-hits\",\"race-cache-hits\",\"green-ensure-no-job\",\"feeds\",\"direct-paths\",\"nonquery\",\"resource-internals\",\"driver-and-process-outcome\",\"cargo-parent-binding\",\"cache-read-dependencies\",\"wait-and-resource-dependencies\"],\"contexts\":[",
             if returned { "returned" } else { "interrupted" },
             returned && self.complete(expected_contexts),
             self.lost
@@ -593,12 +651,7 @@ impl Drop for Inner {
                 data
             }
         };
-        let id = FILE_ID.fetch_add(1, Ordering::Relaxed);
-        let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let name = self
-            .capture_id
-            .clone()
-            .unwrap_or_else(|| format!("{epoch}-{}-{id}", std::process::id()));
+        let name = self.capture_id.clone().unwrap();
         // All context/job handles own this root Arc. Its final Drop observes a stable
         // independent allocator highwater, including contexts whose receipts were lost.
         let expected_contexts = self.next_context.load(Ordering::Relaxed).saturating_sub(1);
@@ -614,6 +667,13 @@ impl Drop for Inner {
         json.truncate(json.len().saturating_sub(2));
         data.append_wait_json(&mut json, wait_high, returned);
         self.reads.append_json(&mut json);
+        let [requests, reads, results] = self.reads.high_waters();
+        self.bindings.append_json(
+            &mut json,
+            &data.contexts,
+            self.next_context.load(Ordering::Relaxed).checked_sub(1),
+            [requests, reads, results, wait_high],
+        );
         json.push_str("}\n");
         #[cfg(target_os = "linux")]
         let _ = publish(&self._directory_handle, &name, json.as_bytes());
@@ -622,7 +682,7 @@ impl Drop for Inner {
         // Final root drop follows frontend return and pool teardown. Keep the pool
         // protocol separate: its clock and task IDs are not query bindings.
         #[cfg(all(not(test), target_os = "linux"))]
-        if let Some(pool) = self.pool.get() {
+        if let Some(pool) = self.pool.0.get() {
             if returned {
                 pool.seal(InterfaceOutcome::Returned);
             } else {
@@ -1048,14 +1108,52 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn standalone_capture_identity_exists_before_any_pool_attach_or_drop() {
+        let path = private_directory();
+        let observer = QueryAdmissionObserver::new(&path).unwrap();
+        let id = observer.0.capture_id.clone().unwrap();
+        assert!(!id.is_empty());
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        drop(observer);
+        assert!(path.join(format!("{id}.json")).is_file());
+        assert!(receipt(&path).contains(&format!("\"capture_id\":\"{id}\"")));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wait_registration_under_latch_does_not_lock_or_publish_records() {
+        let text = wait_receipt(|context| {
+            let data = context.observer.0.data.lock().unwrap();
+            let wait = context.register_wait(1, Some(2));
+            assert!(data.waits.is_empty());
+            drop(wait);
+            assert!(data.waits.is_empty());
+            drop(data);
+        });
+        let bindings = text.split("\"task_bindings\":").nth(1).unwrap();
+        assert!(bindings.contains("\"records_complete\":false"));
+        assert!(bindings.contains("\"expected_points\":5"));
+        assert!(!bindings.contains("\"kind\":\"wait_registered\""));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn registered_wait_resume_before_terminal_is_valid() {
         let text = wait_receipt(|context| {
             let wait = context.register_wait(1, Some(2));
             wait.notify("completed");
             wait.resumed(wait.now());
         });
-        assert!(text.contains("\"schema\":3"));
+        assert!(text.contains("\"schema\":4"));
         assert!(text.contains("\"wait_capture_complete\":true"));
+        let bindings = text.split("\"task_bindings\":").nth(1).unwrap();
+        assert!(bindings.contains("\"records_complete\":true"));
+        assert!(bindings.contains("\"expected_points\":5"));
+        assert!(bindings.contains("\"all_targets_bound\":false"));
+        for kind in ["wait_registered", "wait_resumed"] {
+            assert_eq!(bindings.matches(&format!("\"kind\":\"{kind}\"")).count(), 1);
+        }
         for kind in ["registered", "notified", "condvar_returned", "resumed"] {
             assert_eq!(text.matches(&format!("\"kind\":\"{kind}\"")).count(), 1);
         }
@@ -1068,6 +1166,11 @@ mod tests {
             let _wait = context.register_wait(1, Some(2));
         });
         assert!(text.contains("\"expected_waits\":1"));
+        let bindings = text.split("\"task_bindings\":").nth(1).unwrap();
+        assert!(bindings.contains("\"expected_points\":5"));
+        assert!(bindings.contains("\"records_complete\":false"));
+        assert!(bindings.contains("\"lost_events\":0"));
+        assert!(!bindings.contains("\"kind\":\"wait_registered\""));
         assert!(text.contains("\"wait_capture_complete\":false"));
         assert!(text.contains("\"lost_events\":1"));
         let text = wait_receipt(|context| {
@@ -1115,6 +1218,10 @@ mod tests {
             }
         });
         assert!(text.contains("\"expected_waits\":25001"));
+        let bindings = text.split("\"task_bindings\":").nth(1).unwrap();
+        assert!(bindings.contains("\"expected_points\":50005"));
+        assert!(bindings.contains("\"records_complete\":true"));
+        assert!(bindings.contains("\"lost_events\":0"));
         assert!(text.contains("\"wait_capture_complete\":false"));
         assert_eq!(text.matches("\"kind\":\"resumed\"").count(), 25_000);
     }

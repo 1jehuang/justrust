@@ -94,6 +94,7 @@ struct ReadEvent {
 #[derive(Debug, Serialize)]
 pub(crate) struct ReadAssessment {
     pub(crate) records_complete: bool,
+    pub(crate) endpoints_complete: bool,
     pub(crate) semantic_complete: bool,
     pub(crate) observed_requests: u64,
     pub(crate) observed_reads: u64,
@@ -113,6 +114,31 @@ pub(crate) fn assess(
     capture: &ReadCapture,
     admitted: &BTreeSet<(u64, u64)>,
     expected_contexts: u64,
+) -> Result<ReadAssessment> {
+    assess_policy(capture, admitted, expected_contexts, None)
+}
+
+/// Schema4 supplies independent job allocators, so absent admission records are
+/// unknown endpoints rather than false read-local record coverage claims.
+pub(crate) fn assess_with_inventory(
+    capture: &ReadCapture,
+    admitted: &BTreeSet<(u64, u64)>,
+    expected_contexts: u64,
+    context_high_water: &BTreeMap<u64, Option<u64>>,
+) -> Result<ReadAssessment> {
+    assess_policy(
+        capture,
+        admitted,
+        expected_contexts,
+        Some(context_high_water),
+    )
+}
+
+fn assess_policy(
+    capture: &ReadCapture,
+    admitted: &BTreeSet<(u64, u64)>,
+    expected_contexts: u64,
+    context_high_water: Option<&BTreeMap<u64, Option<u64>>>,
 ) -> Result<ReadAssessment> {
     ensure!(capture.schema == 1, "unsupported query-read schema");
     ensure!(
@@ -179,6 +205,16 @@ pub(crate) fn assess(
             let context = event
                 .context_id
                 .ok_or_else(|| anyhow::anyhow!("job without context"))?;
+            if let Some(high) = context_high_water
+                .and_then(|ranges| ranges.get(&context))
+                .copied()
+                .flatten()
+            {
+                ensure!(
+                    job < high,
+                    "read job outside independent context allocator inventory"
+                );
+            }
             if !admitted.contains(&(context, job)) {
                 unresolved_endpoint = true;
             }
@@ -341,7 +377,8 @@ pub(crate) fn assess(
             }
         }
     }
-    let mut incomplete = capture.lost_events != 0 || unresolved_endpoint;
+    let mut incomplete =
+        capture.lost_events != 0 || (context_high_water.is_none() && unresolved_endpoint);
     for (position, event) in capture.events.iter().enumerate() {
         if let Some(id) = event.request_id {
             if let Some(&(start_position, start)) = starts.get(&id) {
@@ -378,6 +415,7 @@ pub(crate) fn assess(
     }
     Ok(ReadAssessment {
         records_complete: capture.records_complete && !incomplete,
+        endpoints_complete: !unresolved_endpoint,
         semantic_complete: false,
         observed_requests: starts.len() as u64,
         observed_reads: reads.len() as u64,
@@ -423,6 +461,23 @@ mod tests {
         let capture: ReadCapture = serde_json::from_value(value)?;
         assess(&capture, &BTreeSet::from([(1, 1), (1, 2)]), 1)
     }
+    #[test]
+    fn schema4_missing_admission_is_unknown_not_read_record_loss() {
+        let capture: ReadCapture = serde_json::from_value(fixture()).unwrap();
+        let ranges = BTreeMap::from([(1, Some(3))]);
+        let report =
+            assess_with_inventory(&capture, &BTreeSet::from([(1, 2)]), 1, &ranges).unwrap();
+        assert!(report.records_complete);
+        assert!(!report.endpoints_complete && !report.semantic_complete);
+        assert_eq!(report.resolved_job_edges, 0);
+        assert_eq!(report.unbound_reads, 1);
+        assert!(assess(&capture, &BTreeSet::from([(1, 2)]), 1).is_err());
+        let mut value = fixture();
+        value["events"][1]["producer_job_id"] = json!(99);
+        let capture: ReadCapture = serde_json::from_value(value).unwrap();
+        assert!(assess_with_inventory(&capture, &BTreeSet::from([(1, 2)]), 1, &ranges).is_err());
+    }
+
     #[test]
     fn resolved_native_binding_is_not_full_semantics() {
         let report = run(fixture()).unwrap();

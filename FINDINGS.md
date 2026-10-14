@@ -7069,3 +7069,25 @@ Combined hosted client gates passed 540 tests, check and strict all-target lint.
 Capture remains opt-in and scoped: full-pipeline completeness is false,
 CPU-work/span are null, wrappers and early-reply cache paths remain unsupported,
 and no speedup or thread ceiling follows from these receipts.
+
+## 2026-10-14: explicit native query-to-task point authority
+
+Query schema 4 and pool schema 2 now bind direct admission, request, read,
+result and wait points through reciprocal capture authority. Actual rebuilt
+compiler acceptance observed 33,319/33,319 callback points, including 11
+registered/resumed wait pairs. Missing or remapped authority and out-of-lifetime
+points fail mapping validity without inventing task ownership.
+
+Whole client run `20261014-123649185-667605` passed 559 tests (3 ignored),
+with strict all-target lint `20261014-123702967-671342`. The nine exact cited
+client/transport runs are exported under `data/runs/query-task-binding-20261014/`.
+Actual native acceptance and the requirement matrix are in
+`docs/native-query-task-binding-results-20261014.md`.
+
+The 32 paired fixed-fixture controls retained equal executed output and
+capture-off/on artifact hashes within each compiler. Capture-on medians were
+0.264366 to 0.266704 seconds at one thread and 0.174602 to 0.204570 seconds at
+four threads. This is an opt-in mapping capability with measured capture cost,
+not a speedup or default promotion. Quiet-machine provenance is unknown, and
+no comprehensive session-weighted speed gate was run. Full pipeline mapping,
+resource-grant causality and CPU/span ceilings remain unsupported.

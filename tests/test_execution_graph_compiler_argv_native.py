@@ -14,6 +14,8 @@ import tempfile
 import time
 import unittest
 
+from test_execution_graph_task_binding_native import assert_binding_inventory
+
 
 @unittest.skipUnless(os.environ.get('JUSTRUST_NATIVE_CARGO') and
                      os.environ.get('JUSTRUST_NATIVE_RUSTC'),
@@ -36,6 +38,11 @@ class CompilerArgvNative(unittest.TestCase):
         env['CARGO_HOME'] = str(root / 'cargo-home')
         Path(env['CARGO_HOME']).mkdir(mode=0o700)
         cargo = str(Path(env['JUSTRUST_NATIVE_CARGO']).resolve(strict=True))
+        version = subprocess.run([env['RUSTC'], '-vV'], env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(version.returncode, 0, version.stdout + version.stderr)
+        self.assertEqual([line for line in version.stdout.splitlines()
+                          if line.startswith('jr-query-admission-binding:')],
+                         ['jr-query-admission-binding: reserved-fd-v2,query-schema=4'])
         (root / 'Cargo.toml').write_text('[workspace]\nmembers = ["app", "observer"]\nresolver = "2"\n')
         for crate in ('app', 'observer'):
             (root / crate / 'src').mkdir(parents=True)
@@ -83,6 +90,11 @@ pub fn observe(_: TokenStream) -> TokenStream {
         entries = [json.loads(path.read_text()) for path in sink.glob('*.json')
                    if json.loads(path.read_text()).get('producer') == 'rustc-query-admission-entry']
         self.assertTrue(entries, 'capture-on must exercise actual compiler binding, not unsupported fallback')
+        for entry in entries:
+            self.assertEqual(entry['query_receipt_schema'], 4)
+            for capture_id in entry['query_capture_ids']:
+                query = json.loads((sink / (capture_id + '.json')).read_text())
+                assert_binding_inventory(self, query)
         self.assertIn('binding_visible=false', outputs['on'],
                       'Recording changed proc-macro-visible process argv and application output. Evidence: ' + str(root))
         self.assertEqual(outputs['off'], outputs['on'], 'complete proc-macro-visible argv changed')

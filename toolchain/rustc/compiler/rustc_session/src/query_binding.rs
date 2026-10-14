@@ -11,6 +11,11 @@ pub unsafe fn admit_inherited(
     ticket_fd: i32,
 ) -> Option<crate::query_admission::QueryAdmissionObserver> {
     let (binding, directory) = unsafe { protocol::receive_inherited(ticket_fd) }?;
+    // This compiler emits schema 4. A legacy ticket must not declare a different
+    // expected receipt even though the shared transport can still decode it.
+    if binding.receipt_schema != 4 {
+        return None;
+    }
     let entry = entry_json(&binding)?;
     if !crate::query_admission::publish(&directory, &binding.entry_capture_id, entry.as_bytes()) {
         return None;
@@ -32,12 +37,13 @@ pub fn entry_json(binding: &protocol::Binding) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{{\"schema\":1,\"producer\":\"rustc-query-admission-entry\",\"scope\":\"compiler-entry-to-query-capture-binding\",\"capture_id\":\"{}\",\"run_id\":\"{}\",\"invocation_id\":\"{}\",\"parent_invocation_id\":\"{}\",\"parent_task_id\":\"{}\",\"expected_query_captures\":1,\"query_receipt_schema\":3,\"query_capture_ids\":[\"{}\"],\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null}}\n",
+        "{{\"schema\":1,\"producer\":\"rustc-query-admission-entry\",\"scope\":\"compiler-entry-to-query-capture-binding\",\"capture_id\":\"{}\",\"run_id\":\"{}\",\"invocation_id\":\"{}\",\"parent_invocation_id\":\"{}\",\"parent_task_id\":\"{}\",\"expected_query_captures\":1,\"query_receipt_schema\":{},\"query_capture_ids\":[\"{}\"],\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null}}\n",
         binding.entry_capture_id,
         binding.run_id,
         binding.invocation_id,
         binding.parent_invocation_id,
         binding.parent_task_id,
+        binding.receipt_schema,
         binding.capture_id
     ))
 }
@@ -75,7 +81,7 @@ mod tests {
         let binding = protocol::Binding {
             schema: 1,
             protocol: protocol::PROTOCOL.into(),
-            receipt_schema: 3,
+            receipt_schema: 4,
             run_id: "run".into(),
             invocation_id: "invocation".into(),
             parent_invocation_id: "parent".into(),
@@ -98,11 +104,11 @@ mod tests {
     }
     #[cfg(target_os = "linux")]
     #[test]
-    fn bound_entry_precedes_final_query_and_preserves_schema3_accounting() {
+    fn bound_entry_precedes_final_query_and_preserves_schema4_accounting() {
         let (path, binding) = bound_fixture();
         let observer = transport_admit(&path, &binding).unwrap();
         let entry = std::fs::read_to_string(path.join("entry.json")).unwrap();
-        assert!(entry.contains("\"query_receipt_schema\":3"));
+        assert!(entry.contains("\"query_receipt_schema\":4"));
         assert!(!path.join("query.json").exists());
         let jobs = crate::query_admission::QueryJobAllocator::new(Some(&observer));
         use std::sync::atomic::Ordering;
@@ -112,7 +118,7 @@ mod tests {
         observer.finalize_interface_returned();
         drop(observer);
         let query = std::fs::read_to_string(path.join("query.json")).unwrap();
-        assert!(query.contains("\"schema\":3"));
+        assert!(query.contains("\"schema\":4"));
         assert!(query.contains("\"capture_id\":\"query\""));
         assert!(query.contains("\"capture_complete\":true"));
         assert!(query.contains("\"allocator_high_water\":2"));
@@ -133,6 +139,18 @@ mod tests {
     }
     #[cfg(target_os = "linux")]
     #[test]
+    fn legacy_transport_ticket_does_not_declare_a_mismatched_native_receipt() {
+        let (path, mut binding) = bound_fixture();
+        binding.receipt_schema = 3;
+        assert!(binding.valid(), "shared transport retains legacy decoding");
+        assert!(entry_json(&binding).unwrap().contains("\"query_receipt_schema\":3"));
+        assert!(transport_admit(&path, &binding).is_none());
+        assert!(!path.join("entry.json").exists());
+        assert!(!path.join("query.json").exists());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
     fn bound_early_return_is_interrupted_not_successful_capture() {
         let (path, binding) = bound_fixture();
         drop(transport_admit(&path, &binding).unwrap());
@@ -147,7 +165,7 @@ mod tests {
         let binding = protocol::Binding {
             schema: 1,
             protocol: protocol::PROTOCOL.into(),
-            receipt_schema: 3,
+            receipt_schema: 4,
             run_id: "run".into(),
             invocation_id: "invocation".into(),
             parent_invocation_id: "parent".into(),

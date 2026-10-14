@@ -1,0 +1,1194 @@
+{
+  "callback_assessments": [
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/assessment.json",
+      "sha256": "bf3058345700f0a531a9e8fbe7c01d267d56cc9bd361d8aabd1cadb850ddfd45",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": true,
+        "issues": [
+          "task-binding targets declared incomplete"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    },
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/missing-pool-assessment.json",
+      "sha256": "207690e1b04f05d34228f850158def4f91ca8a706d9bbd49e2354bcc61b8302a",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding matching pool authority unavailable"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    },
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/remapped-task-assessment.json",
+      "sha256": "7cffb9250c62a6919e3ba9b875d75760bdccaa1ae78f7f149c92b135432a388b",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding target 20 outside defined complete task interval"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    },
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/duplicate-pool-assessment.json",
+      "sha256": "7683e68740f3eab4503814132ba760ec3bb2923f310b1eca44224fbf0fb13eb6",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding matching pool authority unavailable"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    },
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/foreign-query-assessment.json",
+      "sha256": "41bf898b844224636703115fd4d6833872027983c74f915fa7ff655349ccdc9a",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding matching pool authority unavailable"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    },
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/stale-observer-assessment.json",
+      "sha256": "16d15fe5019426cc18f95c360700ee3eaefb125501d1447e4b3db1a096d39357",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding reciprocal pool authority mismatch or incomplete"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    },
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/same-task-foreign-capture-assessment.json",
+      "sha256": "044bcefd960f3d62bfa409ffaf1868d766b5f478437e5e0b5d7e391047cb46c7",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding matching pool authority unavailable"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    },
+    {
+      "exit_code": 0,
+      "path": "task_binding/native-task-binding-gpfrr6ur/outside-interval-assessment.json",
+      "sha256": "14d3b57e94e014ff9b1260bbe1b510178175ec23ea7bf6b934c3d4468b8dbb4f",
+      "task_bindings": {
+        "all_targets_bound": false,
+        "bound_points": 3873,
+        "expected_points": 33319,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding target 5 outside defined complete task interval"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 29446
+      }
+    }
+  ],
+  "caveats": [
+    "No full mapping, full-pipeline coverage, thread ceiling, CPU work/span, speedup or default-promotion claim.",
+    "Historical selected capture has 2276 bound points; final capture has 2278. Both have 34877 points and 60712 read records. Schedule-dependent counts are observations, not invariant expectations.",
+    "Callback observed 11 wait pairs in this run. Bounded fixture alone does not guarantee contention; separate wait gate exercises contention.",
+    "Cross-compiler artifact hashes differ. Capture off/on byte identity holds within each compiler, and executed output is identical across compilers.",
+    "Paired capture inventories overflow. These controls establish neutrality only, not loss-free graph acceptance. Quiet provenance is unknown.",
+    "Theoretical allocator wrap can retain zero or historical IDs and fail strict decoding. Unknown totals prevent false completeness, not make malformed histories supported.",
+    "Slim JSON preserves relative paths and SHA256 of original evidence, not complete raw records or privately redacted exported run bodies.",
+    "Latest callback after evidence-directory creation fix: 33317 points and 9 wait pairs, task 621929di65. Earlier 33319/11 pairs remains a separate valid historical capture; per-run off/on artifact identity does not imply cross-run artifact stability."
+  ],
+  "date": "2026-10-14",
+  "evidence_root": "scratch/point-native-final-20261014",
+  "historical": [
+    {
+      "actual_points": 34877,
+      "bound_points": 2276,
+      "lost_events": 0,
+      "path": "compiler/compiler-native-d8pe3kac/parallel-bound/rustc-query-800933-1792007324390258453-7.json",
+      "read_records": 60712,
+      "sha256": "a77c4172d2b5bf431b092bca047556a39d0d955cf9f14d150ba3803afa55f8c2"
+    }
+  ],
+  "paired": {
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "artifact_hashes": {
+      "after": [
+        "9fd3cfb19a3d16596a11738658f435bbd94a1197b62c59e45c8c52cf14f0c010"
+      ],
+      "before": [
+        "0925a39c5914b6ce2a653ce4577aa047f957d8c28e28672c26d2d931c4ab3d43"
+      ]
+    },
+    "compilers": {
+      "after": {
+        "driver_sha256": "50c4c38f33c170cb8aa69588711c578d57c1462020347954957510bde3fe7fc4",
+        "launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+        "version": "rustc 1.101.0-nightly (54e3f9238 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 54e3f9238bba6c12993f75880d9b20ec08413970\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n"
+      },
+      "before": {
+        "driver_sha256": "270af337d3643eda83e3f14660bd7e6ea35fc6bd170c088a70aeb9121758f90e",
+        "launcher_sha256": "95466164bba3372fee62e475ca1e20164f10d6ac23e3568a371f7e0fc636beba",
+        "version": "rustc 1.101.0-nightly (c0ad3fea5 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=3\nbinary: rustc\ncommit-hash: c0ad3fea53f9877ed081a9d18ed342f87f4da85c\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n"
+      }
+    },
+    "default_promotion_eligible": false,
+    "executed_outputs": [
+      "shared-query-bytes=512; independent-sum=32768\n"
+    ],
+    "order_per_round": [
+      "before",
+      "after",
+      "after",
+      "before"
+    ],
+    "path": "bench/results/native-query-task-binding-20261014/paired.json",
+    "quiet_provenance": "unknown",
+    "sample_count": 32,
+    "schema": 1,
+    "scope": "native-fixed-small-fixture-only",
+    "sha256": "bb1ca58c74bf8449625c8c050a7781bcf59725a4abe428f4822c72709cefb6fa",
+    "source_sha256": "b3c73cbfc55f6150bb8e2386e97dde708a7bae6b3742e162047a91246842000a",
+    "speed_claim_eligible": false,
+    "within_compiler_capture_byte_identity": true
+  },
+  "pools": [
+    {
+      "event_count": 64,
+      "path": "task_binding/native-task-binding-gpfrr6ur/capture/1792007235095103783-784363-1-pool.json",
+      "schema": 2,
+      "sha256": "6755c0b031d8a94e9336eac57d1e0c246c83af40e67561dd0977d4c633faaca2"
+    },
+    {
+      "event_count": 53,
+      "path": "compiler-final/compiler-native-ydv0o3k8/parallel-bound/rustc-query-813546-1792007387569960802-7-pool.json",
+      "schema": 2,
+      "sha256": "ba38403d472724b0a7f205ff4eb30f2d6a2127ec34fb12f2692dc687b928e89e"
+    }
+  ],
+  "receipts": [
+    {
+      "actual_points": 33319,
+      "binding": {
+        "all_targets_bound": false,
+        "expected_points": 33319,
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "schema": 1,
+        "unavailable_reason": null
+      },
+      "bound_points": 3873,
+      "path": "task_binding/native-task-binding-gpfrr6ur/capture/1792007235095103783-784363-1.json",
+      "pool_present": true,
+      "query_schema": 4,
+      "read_record_count": 59154,
+      "reads": {
+        "dep_node_namespace": "current-context",
+        "expected_reads": 12996,
+        "expected_requests": 15399,
+        "expected_results": 2451,
+        "full_pipeline_complete": false,
+        "lost_events": 0,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "read_high_water": 12997,
+        "records_complete": true,
+        "request_high_water": 15400,
+        "result_high_water": 2452,
+        "schema": 1,
+        "semantic_complete": false
+      },
+      "sha256": "d833f6f44a600aee06e16a07993e4ff051d0aaf9e286d0fb206183fff82c013c",
+      "source_kinds": {
+        "admitted": 2451,
+        "dep_read": 12996,
+        "request_started": 15399,
+        "result_produced": 2451,
+        "wait_registered": 11,
+        "wait_resumed": 11
+      },
+      "unbound_reasons": {
+        "no_active": 29446
+      }
+    },
+    {
+      "actual_points": 34877,
+      "binding": {
+        "all_targets_bound": false,
+        "expected_points": 34877,
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "schema": 1,
+        "unavailable_reason": null
+      },
+      "bound_points": 2278,
+      "path": "compiler-final/compiler-native-ydv0o3k8/parallel-bound/rustc-query-813546-1792007387569960802-7.json",
+      "pool_present": true,
+      "query_schema": 4,
+      "read_record_count": 60712,
+      "reads": {
+        "dep_node_namespace": "current-context",
+        "expected_reads": 15244,
+        "expected_requests": 15169,
+        "expected_results": 2221,
+        "full_pipeline_complete": false,
+        "lost_events": 0,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "read_high_water": 15245,
+        "records_complete": true,
+        "request_high_water": 15170,
+        "result_high_water": 2222,
+        "schema": 1,
+        "semantic_complete": false
+      },
+      "sha256": "e0d2547a2f0633f8d2bcf34c95b45a4ec40e26e110a914b9248e386d31dc84c0",
+      "source_kinds": {
+        "admitted": 2221,
+        "dep_read": 15244,
+        "request_started": 15169,
+        "result_produced": 2221,
+        "wait_registered": 11,
+        "wait_resumed": 11
+      },
+      "unbound_reasons": {
+        "no_active": 32599
+      }
+    },
+    {
+      "actual_points": 5715,
+      "binding": {
+        "all_targets_bound": false,
+        "expected_points": 5715,
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "schema": 1,
+        "unavailable_reason": "pool_unavailable"
+      },
+      "bound_points": 0,
+      "path": "compiler-final/compiler-native-6pwlc294/bound/rustc-query-812306-1792007382372987389-7.json",
+      "pool_present": false,
+      "query_schema": 4,
+      "read_record_count": 8429,
+      "reads": {
+        "dep_node_namespace": "current-context",
+        "expected_reads": 2093,
+        "expected_requests": 2102,
+        "expected_results": 760,
+        "full_pipeline_complete": false,
+        "lost_events": 0,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "read_high_water": 2094,
+        "records_complete": true,
+        "request_high_water": 2103,
+        "result_high_water": 761,
+        "schema": 1,
+        "semantic_complete": false
+      },
+      "sha256": "4fc3877daee90636ea4f5fcd778b9f7fa0fdf9073969cda41b31bdd4a294cf47",
+      "source_kinds": {
+        "admitted": 760,
+        "dep_read": 2093,
+        "request_started": 2102,
+        "result_produced": 760
+      },
+      "unbound_reasons": {
+        "pool_unavailable": 5715
+      }
+    },
+    {
+      "actual_points": 40393,
+      "binding": {
+        "all_targets_bound": false,
+        "expected_points": 40393,
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "schema": 1,
+        "unavailable_reason": "pool_unavailable"
+      },
+      "bound_points": 0,
+      "path": "compiler-final/compiler-native-6pwlc294/failed/rustc-query-812792-1792007383701289511-7.json",
+      "pool_present": false,
+      "query_schema": 4,
+      "read_record_count": 54627,
+      "reads": {
+        "dep_node_namespace": "current-context",
+        "expected_reads": 13651,
+        "expected_requests": 13651,
+        "expected_results": 6545,
+        "full_pipeline_complete": false,
+        "lost_events": 0,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "read_high_water": 13652,
+        "records_complete": true,
+        "request_high_water": 13652,
+        "result_high_water": 6546,
+        "schema": 1,
+        "semantic_complete": false
+      },
+      "sha256": "c06aee19670a7d3c4d322cc2e5f6fe193d6dd5e30f1c9a1cfa155ad7c0f3f14a",
+      "source_kinds": {
+        "admitted": 6546,
+        "dep_read": 13651,
+        "request_started": 13651,
+        "result_produced": 6545
+      },
+      "unbound_reasons": {
+        "pool_unavailable": 40393
+      }
+    }
+  ],
+  "recommended_export_run_ids": [
+    "20261014-123646066-667209",
+    "20261014-123649185-667605",
+    "20261014-123702967-671342"
+  ],
+  "schema": 1,
+  "scope": "selected native query-to-task point authority, not full mapping",
+  "selected_public_checks": [
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": true,
+            "issues": [
+              "task-binding targets declared incomplete"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/004.json",
+      "sha256": "681bff821981e8a14b95b127b80ad3e228c858d6a3517735cd72f12dce64394a",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": true,
+            "issues": [
+              "task-binding targets declared incomplete"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/005.json",
+      "sha256": "151b77c5f680043ab022b5e37c1361c2c040785f0d30f1fd80e59465016014db",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/006.json",
+      "sha256": "98019a9aebbcce5dc2b0bc37708a9a46d886a1f186ed17bf80b25aa2e0fc13d3",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/007.json",
+      "sha256": "3ebb6ef207601cb41a75dc8afe53172b7e8f55d6c0d471a3f118b5244f44ebaf",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/008.json",
+      "sha256": "c4428f44932618890674a9134b9782c77a0c5b271db3be3e00e084247c4ab4ff",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding reciprocal pool authority mismatch or incomplete"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/009.json",
+      "sha256": "38a1b183c63f9279ca36ccfa9e8236355cb054d8acfaa8e45745e883e8d21a18",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/010.json",
+      "sha256": "707ca7b81eb52200d826ee070ce1b1991783a28332525ab0c2083b16ae01d17b",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding target 2 outside defined complete task interval"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/011.json",
+      "sha256": "8b242cb522316f039cb84d08d5f81439e2accbacbfac37d3090f3467db152d38",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-813546-1792007387569960802-7": {
+            "all_targets_bound": false,
+            "bound_points": 2278,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding target 17 outside defined complete task interval"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32599
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler-final/compiler-native-ydv0o3k8/commands/012.json",
+      "sha256": "aaa2f06b02147fffc4753328a82850e8df8246824e6e9a6a944efee6fa646b41",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": true,
+            "issues": [
+              "task-binding targets declared incomplete"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/004.json",
+      "sha256": "bef61db59de69c9390c4021f9e225d85c15258fcfb4b97154d8b63f2af4186cb",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": true,
+            "issues": [
+              "task-binding targets declared incomplete"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/005.json",
+      "sha256": "965d801b266ec6abcbe8fb238ccc16dea64a05085a63d3a98d06df439c1b7452",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/006.json",
+      "sha256": "c4d9ad660d7a20f66361e2d121258128335fcd8bf77c1d61246dbe4c59ad4ee0",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/007.json",
+      "sha256": "86c5ba640a2f935a74c372589a12aa1ae1625f4a56cb29f2d91c89d9cd2f7e26",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/008.json",
+      "sha256": "709dc62a81bacf1b590e1514d562887aea59400ec44642565459455ab9ce4313",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding reciprocal pool authority mismatch or incomplete"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/009.json",
+      "sha256": "b5f9851732c0a2ca18bdf9ba1c0b59da3484a41751b5c97b2fa7da6ed4134ef7",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding matching pool authority unavailable"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/010.json",
+      "sha256": "1775ffe558b4964062182e40d966050c9ce0165bbe6d1402164bfbd4e647ce79",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding target 2 outside defined complete task interval"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/011.json",
+      "sha256": "1c66b60462988107afec18d09c88445b5d7dcef6329ac7fdf1c477218c3a628e",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    },
+    {
+      "coverage": {
+        "cpu_work_ns": null,
+        "execution_span_ns": null,
+        "expected_launches": 1,
+        "full_pipeline_complete": false,
+        "observed_entries": 1,
+        "observed_queries": 1,
+        "outcome": "success",
+        "structural_complete": true,
+        "task_bindings": {
+          "rustc-query-800933-1792007324390258453-7": {
+            "all_targets_bound": false,
+            "bound_points": 2276,
+            "expected_points": 34877,
+            "graph_binding_complete": false,
+            "graph_binding_valid": false,
+            "issues": [
+              "task-binding targets declared incomplete",
+              "task-binding target 17 outside defined complete task interval"
+            ],
+            "loss_overflowed": false,
+            "lost_events": 0,
+            "records_complete": true,
+            "source_endpoints_complete": true,
+            "unbound_points": 32601
+          }
+        }
+      },
+      "exit_code": 0,
+      "path": "compiler/compiler-native-d8pe3kac/commands/012.json",
+      "sha256": "c83e859dd32f236be3a58fe03ad4c7fcb6090a4e1eff42f87d7e5751c4d58bf5",
+      "source_sha256": "db746ff85bdc7c5ac873b55a2e13136caa034cc32ea2d6dd8d13a77a3994a93e"
+    }
+  ],
+  "source_hashes": {
+    "docs/native-query-task-binding-schema.md": "3039d9326a9e343bacf2c65d48b7e20550de77dd59e6d18d0315f4421564cdaf",
+    "src/execution_graph_query.rs": "f0cbe37213969b7fef9b2f671ed962912a7f4b238b1999e5821de8c23e1af08d",
+    "tests/fixtures/execution_graph_task_binding.rs": "eb285ec80e0c5fde953db73b08d1b5975d715eaaf5c4608f154a1b53dbce2c14",
+    "tests/test_execution_graph_compiler_argv_native.py": "8acf3b55f5402a5b698f1c183055b8afd067e31ba307d7cec5465a5edf5222f3",
+    "tests/test_execution_graph_compiler_native.py": "ee894407e095d641759265a93108b2a30a8e3dca1549b2f113bd35674f333984",
+    "tests/test_execution_graph_query_native.py": "de51d4b80613f6f4d570d5f65aa9ec951d4d05c9f4ec8fb1199294404aab98a7",
+    "tests/test_execution_graph_task_binding_native.py": "48f6b0d3768de1deddd5a887e5e5451a00da665fc211dea942d745359e677800",
+    "tests/test_execution_graph_wait_native.py": "4dee3874d6f1b5397eb1a490729697a59e80faa16e01f9268ede99d14b93cabf",
+    "toolchain/rustc/compiler/rustc_session/src/query_task_bindings.rs": "baee5a7f22656e91074d94a074c13b400e034d30c190b78138ae16ed4f5cca97"
+  },
+  "tasks": {
+    "admission_and_wait": {
+      "admission": "pass reported by coordinator",
+      "caveat": "Trailing callback setup failed because its evidence directory was absent. Do not describe this combined task as globally passing.",
+      "id": "1924718ll4",
+      "overall_exit": 1,
+      "wait": "pass reported by coordinator",
+      "wait_tests": 4
+    },
+    "callback": {
+      "exit": 0,
+      "id": "2344859d6a",
+      "seconds": 4.073,
+      "tests": 1
+    },
+    "compiler_final": {
+      "exit": 0,
+      "id": "379178ynj9",
+      "seconds": 13.557,
+      "tests": 2
+    },
+    "export": {
+      "exit": 0,
+      "id": "396404dg7c",
+      "missing_summaries": 27,
+      "path": "scratch/point-export-final/query-task-binding-20261014",
+      "runs": 13126
+    },
+    "initial_overflow": {
+      "exit": 1,
+      "id": "242408d942",
+      "interpretation": "Correctly incomplete underlying source coverage, not accepted mapping"
+    },
+    "macro": {
+      "exit": 0,
+      "id": "319985bm1z",
+      "seconds": 1.63,
+      "tests": 1
+    },
+    "native_build": {
+      "exit": 0,
+      "id": "315253rk0m",
+      "observer_unit_tests": 47,
+      "seconds": 520.8,
+      "seconds_provenance": "coordinator task wall time"
+    },
+    "native_final_build": {
+      "exit": 0,
+      "id": "089541kolg",
+      "seconds": 79.56,
+      "seconds_provenance": "coordinator task wall time"
+    },
+    "paired": {
+      "exit": 0,
+      "id": "343879nhhr",
+      "samples": 32
+    },
+    "root": {
+      "check": "pass hosted",
+      "check_run": "20261014-123646066-667209",
+      "exit": 0,
+      "failed": 0,
+      "id": "605394rfnq",
+      "ignored": 3,
+      "install": "pass, 54.98 seconds",
+      "lint": "pass all targets",
+      "lint_run": "20261014-123702967-671342",
+      "passed": 559,
+      "test_run": "20261014-123649185-667605"
+    },
+    "callback_latest": {
+      "id": "621929di65",
+      "exit": 0,
+      "tests": 1,
+      "seconds": 4.089,
+      "points": 33317,
+      "wait_pairs": 9
+    }
+  },
+  "selected_legacy": {
+    "path": "compiler-final/compiler-native-ydv0o3k8/commands/013.json",
+    "sha256": "41058011eafd72750b64503f0ac68e5bb08f7be5d70c5d86998b898d87027d3f",
+    "exit_code": 0,
+    "binding_field_present": false,
+    "structural_complete": true
+  },
+  "latest_callback": [
+    {
+      "path": "task-fresh-directory-check/native-task-binding-mndr_fbs/capture/1792007622735112905-853344-1.json",
+      "sha256": "6e503454d9d13f699d04d5ac3243818e55f334aedbaa9f68073bd437470124d2",
+      "actual_points": 33317,
+      "expected_points": 33317,
+      "lost_events": 0
+    }
+  ],
+  "source_hashes_at_initial_extraction": {
+    "tests/test_execution_graph_task_binding_native.py": "c8476fc71b60d7df9fdb592d1a2c9c67594adde10c08f8f94633755597cbb34f"
+  }
+}

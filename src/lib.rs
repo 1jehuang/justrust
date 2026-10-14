@@ -26,6 +26,7 @@ mod execution_graph_continuation;
 mod execution_graph_manifest;
 mod execution_graph_query;
 mod execution_graph_reads;
+mod execution_graph_task_bindings;
 mod export;
 mod findings;
 mod history;

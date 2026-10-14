@@ -426,8 +426,8 @@ fn validate_entry(entry: &Entry) -> Result<()> {
     );
     id(&entry.query_capture_ids[0], "entry query capture")?;
     ensure!(
-        entry.query_receipt_schema == 3,
-        "entry requires final query receipt schema 3"
+        matches!(entry.query_receipt_schema, 3 | 4),
+        "entry requires a supported final query receipt schema (3 or 4)"
     );
     ensure!(
         !entry.full_pipeline_complete
@@ -862,14 +862,16 @@ pub fn reconcile(
             }
             match query_map.get(launch.capture_id.as_str()) {
                 Some(query)
-                    if query.schema == 3
+                    if entry_map
+                        .get(launch.entry_capture_id.as_str())
+                        .is_some_and(|entry| query.schema == entry.query_receipt_schema)
                         && query.structural_complete
                         && bound_entries.contains(launch.entry_capture_id.as_str()) =>
                 {
                     bound_queries.insert(query.capture_id.as_str());
                 }
                 Some(_) => issues.push(format!(
-                    "launch {} final query requires structurally complete schema 3 and an exactly bound entry",
+                    "launch {} final query requires structural completeness and the exact schema declared by its bound entry",
                     launch.launch_ordinal
                 )),
                 None => issues.push(format!(
@@ -1095,6 +1097,25 @@ mod tests {
             structural_complete: true,
         });
         f
+    }
+
+    #[test]
+    fn supported_query_schema_must_equal_its_independent_entry_declaration() {
+        for schema in [3, 4] {
+            let mut fixture = successful();
+            fixture.entries[0].query_receipt_schema = schema;
+            fixture.queries[0].schema = schema;
+            assert!(fixture.assess().unwrap().structural_complete);
+            fixture.queries[0].schema = if schema == 3 { 4 } else { 3 };
+            let assessment = fixture.assess().unwrap();
+            assert!(!assessment.structural_complete);
+            assert!(
+                assessment
+                    .issues
+                    .iter()
+                    .any(|issue| issue.contains("exact schema"))
+            );
+        }
     }
 
     fn no_child(disposition: Disposition, outcome: UnitOutcome) -> Fixture {

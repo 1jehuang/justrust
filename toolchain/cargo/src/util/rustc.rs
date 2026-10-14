@@ -22,6 +22,7 @@ fn query_binding_schema(verbose: &str) -> Option<u32> {
     let mut markers = markers;
     match (markers.next(), markers.next()) {
         (Some("jr-query-admission-binding: reserved-fd-v2,query-schema=3"), None) => Some(3),
+        (Some("jr-query-admission-binding: reserved-fd-v2,query-schema=4"), None) => Some(4),
         _ => None,
     }
 }
@@ -427,16 +428,21 @@ mod jr_binding_tests {
     fn capability_requires_one_exact_native_line() {
         let marker = "jr-query-admission-binding: reserved-fd-v2,query-schema=3";
         assert_eq!(query_binding_schema(marker), Some(3));
+        let current = "jr-query-admission-binding: reserved-fd-v2,query-schema=4";
+        assert_eq!(query_binding_schema(current), Some(4));
         for unsupported in [
             "rustc 1.98.0-nightly",
             "jr-query-admission-binding: fd-v1,query-schema=3",
             "jr-query-admission-binding: fd-v1,query-schema=2",
             "jr-query-admission-binding: reserved-fd-v2,query-schema=30",
             "jr-query-admission-binding: reserved-fd-v2,query-schema=3 extra",
+            "jr-query-admission-binding: reserved-fd-v2,query-schema=4 extra",
+            "jr-query-admission-binding: reserved-fd-v2,query-schema=5",
         ] {
             assert_eq!(query_binding_schema(unsupported), None);
         }
         assert_eq!(query_binding_schema(&format!("{marker}\n{marker}")), None);
+        assert_eq!(query_binding_schema(&format!("{marker}\n{current}")), None);
     }
     #[test]
     #[cfg(target_os = "linux")]
