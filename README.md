@@ -11,7 +11,7 @@
 
 A faster, vertically integrated Rust build toolchain optimized for agents.
 
-[Website](https://jcode.sh/rust) · [Install](#install) · [Remote builds](#remote-builds) · [How it is faster](#how-it-is-faster) · [Findings](FINDINGS.md) · [Changelog](CHANGELOG.md)
+[Website](https://jcode.sh/rust) · [Install](#install) · [Use](#use) · [Remote builds](#remote-builds) · [Goal](#goal) · [Findings](FINDINGS.md) · [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -20,9 +20,7 @@ A faster, vertically integrated Rust build toolchain optimized for agents.
 Coding agents run `cargo check` and `cargo test` hundreds of times a day and
 spend most of that time waiting on the compiler. justrust takes cargo's
 exact arguments, makes the loop faster (locally and remotely), prints only
-what an agent needs, and records where every second went. Every
-optimization ships only with before and after measurements, all in
-[FINDINGS.md](FINDINGS.md).
+what an agent needs, and records where every second went.
 
 On [uv](https://github.com/astral-sh/uv) (674 units, measured 2026-10-10,
 laptop under typical multi-agent load vs a 16 vCPU build machine):
@@ -40,98 +38,29 @@ Remote builds leave no `target/` and use no rustc RAM or CPU on your machine.
 
 ```sh
 curl -fsSL https://jcode.sh/rust.sh | sh
+justrust agents
 ```
 
-Prebuilt for Linux and macOS (x86_64, aarch64); a few Linux-only features
-are listed under [Status](#status). Installs to
-`~/.local/bin` (`JUSTRUST_INSTALL_DIR` to change it), verifies the sha256,
-and runs `justrust login` when interactive (`JUSTRUST_NO_LOGIN=1` skips it).
+Prebuilt for Linux and macOS (x86_64, aarch64). The installer places
+justrust in `~/.local/bin` and starts sign-in. `justrust agents` adds usage
+instructions to your coding agents, or copy the [AGENTS snippet](docs/AGENTS-snippet.md).
 
-Signed in at [jcode.sh/rust](https://jcode.sh/rust#connect), the page shows
-an install command with a one-time token (`rust.sh?t=jri_...`, single use,
-30 minutes). The installer exchanges it for an API key and saves it to
-`~/.config/jcode/jcode-subscription.env`, so the machine is signed in with no
-`justrust login`. Once used or expired the token is worthless, so the
-command can sit in shell history or an agent transcript.
-
-What the installer sends: a random install id, the OS and CPU
-architecture, and whether the install succeeded (or which step failed), to
-build.jcode.sh. `justrust login` sends the same id with its sign-in flow id
-so a sign-in can be matched to its install. Nothing else is sent before you
-sign in, and no IP address is stored. `JUSTRUST_NO_TELEMETRY=1` or
-`DO_NOT_TRACK=1` turns it off. Signed in, hosted builds also report each
-remote run (command, exit code, time) and why a build stayed local.
 From source: `cargo install justrust --locked` (Rust 1.91 or newer).
-
-**Updates.** Installed binaries keep themselves current: at most once a
-day, after a command, a background process asks build.jcode.sh for the
-latest release, downloads it from GitHub, checks its sha256 and that it
-runs, and swaps it in (never while a build is running). The next command
-says `updated A -> B`. `justrust update` updates now, `justrust update
-status` shows the state, `justrust update off` (or `JUSTRUST_NO_UPDATE=1`)
-stops it. Source builds are never replaced: they print one line when a
-newer release is out. CI (`CI` set) never updates.
-
-**Telemetry.** justrust sends anonymous usage stats so we can see where
-builds are slow and what breaks: per build the subcommand, flag names
-(never their values), exit code, phase timings, unit, cache, and test
-counts, waste kinds, rustc error codes, and which coding agent ran it; per
-other command its name and duration; update outcomes; panic locations.
-Each event carries the random install id above, the justrust version, OS,
-and CPU architecture. Never source, paths, crate or package names,
-argument values, hostnames, or environment values. Events are queued in
-`~/.justrust/telemetry/` and sent in the background in batches, so they
-never slow a build. Turn it off with any of:
-
-```sh
-justrust telemetry off          # also deletes anything not yet sent
-export JUSTRUST_NO_TELEMETRY=1  # or DO_NOT_TRACK=1
-```
-
-`justrust telemetry status` shows whether it is on, why not, and what is
-queued. The first event on a machine prints a one-line notice.
-
-Then tell your agents to use it:
-
-```sh
-justrust agents      # adds a short block to Claude Code, Codex, Gemini CLI, and Jcode instructions
-```
-
-Or paste [docs/AGENTS-snippet.md](docs/AGENTS-snippet.md) into an
-`AGENTS.md` yourself. Or give your agent this prompt:
-
-```text
-Install justrust with `curl -fsSL https://jcode.sh/rust.sh | sh`, run `justrust login --no-wait`,
-give me the link it prints, and use `justrust check` / `justrust test` instead of cargo from now on.
-```
+Prebuilt installs update automatically. Disable updates with
+`justrust update off`, and anonymous usage telemetry with `justrust telemetry off`.
 
 ## Use
 
 ```sh
 justrust check -p my-crate
 justrust test -p my-crate --lib some_module::
-justrust test -p my-crate -- --nocapture
-justrust log --grep warning     # full saved output of the last run
-justrust show                   # where the time went
+justrust build
 ```
 
-`check`, `test`, `build`, `clippy`, and `run` take exactly cargo's
-arguments and return cargo's exit code. Output keeps errors and failing
-tests in full and the first 3 warnings (`JUSTRUST_MAX_WARNINGS`), drops
-`Compiling`/`Running`/`Finished` lines and passing tests, then ends with a
-report: verdict, where the wall time went, why each crate rebuilt, and
-`waste` lines for fixable inefficiencies.
-
-```text
-justrust: ok: 3 tests passed in 0.5s
-justrust: 16 more warnings hidden, 1664 tests filtered out
-justrust: full log `justrust log 20261007-202534713-2006572`, timing `justrust show 20261007-202534713-2006572`
-```
-
-```text
-justrust: FAILED: 1 of 3 tests failed in 0.1s (0.1s compiling)
-justrust: FAILED to compile (1 error) in 0.0s
-```
+`check`, `test`, `build`, `clippy`, and `run` take cargo's arguments and
+return its exit code. Errors and failing tests stay in full, followed by
+a concise result and timing report. Use `justrust log` for the full output
+and `justrust show` for the timing breakdown.
 
 Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
 
@@ -139,198 +68,38 @@ Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
 
 ```sh
 justrust login     # approve in the browser
-justrust upgrade   # add a card: first month free, then $20/mo (5,000 builds)
-justrust check     # now runs on a build machine
+justrust upgrade   # activate a remote build plan
+justrust check
 ```
 
-Signed in, `check`, `clippy`, and `test` run remote by default. Choose per
-command with `--local`, `--remote`, or `--auto` (remote only when predicted
-faster), or `JUSTRUST_REMOTE=off|force|auto`. Offline, out of builds, or
-signed out, the build runs locally and prints one line saying why.
+Signed in, `check`, `clippy`, and `test` use hosted build machines by default
+on Linux. Choose `--local`, `--remote`, or `--auto` (remote only when predicted
+faster). If hosted builds are unavailable, justrust falls back to local builds.
 
-- **Agents without a browser:** `justrust login --no-wait` prints the link
-  for the user and returns at once. Builds stay local until it is approved.
-- **CI:** create an API key at [jcode.sh/account](https://jcode.sh/account)
-  and export it as `JCODE_API_KEY`. No login step needed.
-- **Pricing:** remote builds need a card on file. The first month of the
-  $20 plan is free (`justrust upgrade`, or start it at
-  [jcode.sh/rust](https://jcode.sh/rust#get-started)), then from $20/month for
-  5,000 remote builds (2,500 more per $10 of plan), $0.10 each after that.
-  Local builds are always free. See [jcode.sh/rust](https://jcode.sh/rust#pricing).
-- **MCP:** `justrust mcp` serves the account (status, builds left, sign-in
-  link, API keys, billing links) to agents:
-  `claude mcp add justrust -- justrust mcp`. Billing changes are links for
-  the human, never actions the agent can take.
+Local builds are free. Hosted plans start at $20/month for 5,000 builds,
+with the first month free and a card required. See [pricing](https://jcode.sh/rust#pricing).
+For agents without a browser, `justrust login --no-wait` prints a sign-in link.
+For CI, set `JCODE_API_KEY` from your [account](https://jcode.sh/account).
+More setup details: [remote builds](docs/remote.md).
 
-A sync daemon pushes edits on save, so a warm remote build pays only
-milliseconds of sync. Details, the legacy own-AWS-machine backend
-(`justrust remote up`), and measurements: [docs/remote.md](docs/remote.md).
+## Goal
 
-## How it is faster
+**The shortest possible path from a source edit to a trustworthy test result.**
 
-All of these are on by default unless marked opt-in, fail open to plain
-cargo, and have an off switch.
+justrust is building one integrated system across the entire Rust build stack:
+Cargo, rustc, code generation, linking, and test execution, backed by shared
+artifact caches and our own build infrastructure. We optimize the whole loop,
+not just individual compiler stages.
 
-| What | Effect (measured) | Off / on |
-|---|---|---|
-| **Prebuilt dependency store.** Popular crates.io crates compiled by our fleet, fetched only when downloading beats compiling here | cold check of 105 crates: 19-26 s vs 34-35 s (FINDINGS 44) | `JUSTRUST_PREBUILT=off` |
-| **Shared dependency cache.** Content-addressed rustc outputs reused across target dirs, checkouts, and agents (sccache shares 0 of these) | cold Desktop check from cache: 53.3 s -> 14.8 s (FINDINGS 37) | `JUSTRUST_DEPCACHE=0`, `justrust cache` |
-| **Test pool.** Test binaries in parallel, last failures and slow tests first, overlapped failures confirmed alone, fail-fast honored | first failure 14.4 s -> 7.0 s on Desktop (FINDINGS 34) | `JUSTRUST_TEST_PARALLEL=0` |
-| **Per-agent build slots.** Each agent gets its own reflinked target dir, so nobody waits on cargo's lock | no lock waits between parallel agents | `JUSTRUST_SLOTS=0`, `justrust slots` |
-| **Build priority.** Short edit builds get the fast cores when cold builds compete (cgroup weights, CPU affinity under sched_ext) | the 30-200 s contention tail (FINDINGS 13) | `JUSTRUST_SCHED=0` |
-| **wild linker** for local crates, after `justrust toolchain wild` | link 0.92 s (mold) -> 0.35 s (FINDINGS 36) | `JUSTRUST_LINKER=off` |
-| **jr-rustc proc-macro cache**, with a jr toolchain installed | Desktop loop 8.65 -> 5.70 s (FINDINGS 30) | `JUSTRUST_CACHE_PROC_MACROS=0` |
-| **jr-cargo** (cargo fork: mimalloc, parallel manifest parsing) | no-op `test` 0.39 -> 0.22 s (FINDINGS 38, 39) | `JUSTRUST_CARGO_FORK=0` |
-| **Early diagnostics** (opt-in). A resident rust-analyzer prints type errors while cargo runs | first type error in ~0.1 s (FINDINGS 28) | `JUSTRUST_EARLY=1` or `auto` |
-| **`justrust split`.** Which module to move into its own crate to stop rebuild cascades, from your recorded edits; `--apply` does it | per-build hints name the move | `JUSTRUST_SPLIT_HINTS=0` |
+Today, that includes our Cargo and rustc forks, prebuilt dependencies, shared
+caches, hosted builds, and test scheduling. The next steps are keeping compiler
+state alive between edits, avoiding unnecessary downstream recompilation, and
+updating test binaries without a full relink.
 
-## Recording and profiling
-
-Every `justrust` build is recorded: cargo startup, lock waits, each rustc
-unit (frontend, codegen, link, incremental cache, per-pass timings), build
-gaps, test execution, CPU, memory, and machine-wide stalls.
-
-```sh
-justrust runs             # recorded runs
-justrust show             # full breakdown of the latest run
-justrust show <id> --json # machine-readable
-justrust status           # what is compiling right now, and time left
-justrust install          # optional `cargo` proxy so plain `cargo` calls are recorded too
-```
-
-```text
-Where the wall time went
-  cargo startup     0.45s    5%  █                        resolve, fingerprints, planning
-  compiling         8.97s   95%  ███████████████████████  at least one rustc running
-  running tests     0.01s    0%                           test binaries
-
-  UNIT                                 SHARE    WALL     CPU   RMETA  PEAK MB  SPLIT (frontend/codegen/link/incr)
-  jcode_desktop_ui (test)               9.0s    9.0s   10.3s       -     2260  4.4 / 1.6 / 0.7 / 1.1
-
-  Slowest rustc passes in jcode_desktop_ui (test)
-    macro_expand_crate                              2.40s
-    codegen_crate                                   1.55s
-    incr_comp_persist_result_cache                  1.07s
-```
-
-<details>
-<summary>How recording works, and where the data lives</summary>
-
-- cargo runs with `RUSTC` pointed at a justrust shim. `RUSTC` is not part of
-  cargo's fingerprint, so recorded and unrecorded builds share artifacts:
-  switching between them rebuilds nothing.
-- The shim times each rustc with `wait4` (wall, user and system CPU, peak
-  memory, including the linker) and records when `.rmeta` became available.
-  On a pinned nightly every local crate gets `-Ztime-passes`. On stable it
-  is added only when the unit already runs with `RUSTC_BOOTSTRAP=1`, since
-  rustc's incremental cache keys on that (`JUSTRUST_PASSES=always|off`).
-- A sampler reads `/proc` every 200 ms: the build's process tree, machine
-  CPU, memory, pressure stalls, and competing rustc processes.
-- Recording fails open. Overhead on a no-op build is within noise.
-
-```text
-~/.justrust/                  (JUSTRUST_HOME to move it)
-  index.jsonl                 one summary line per run
-  runs/<id>/meta.json         command, cwd, agent session, environment
-  runs/<id>/summary.json      computed breakdown (what `show` prints)
-  runs/<id>/units.jsonl       one record per rustc invocation, with pass timings
-  runs/<id>/output.jsonl      every output line with a timestamp
-  runs/<id>/samples.jsonl     200 ms CPU, memory, and pressure samples
-  runs/<id>/processes.json    every process the build spawned
-```
-
-`JUSTRUST_DISABLE=1` turns recording off. `justrust history` mines past
-[Jcode](https://github.com/1jehuang/jcode) sessions for cargo calls, and
-`justrust export` writes slim, path-redacted run summaries to `data/runs/`.
-
-</details>
-
-## Toolchains
-
-```sh
-justrust toolchain                         # what builds here use, what is installed
-justrust toolchain pin nightly             # latest complete nightly, writes justrust.toml, installs it (~25 s)
-justrust toolchain pin nightly-2026-10-08  # or exact; X.Y.Z and beta-YYYY-MM-DD work too
-justrust toolchain unpin
-justrust toolchain wild                    # wild linker, pinned release, checksum verified
-```
-
-Toolchains come straight from static.rust-lang.org into
-`~/.justrust/toolchains/<id>`, checksum-verified, no rustup. A pinned
-project's builds use that cargo, rustc, clippy, rustfmt, and rustdoc.
-`JUSTRUST_TOOLCHAIN=<spec>` overrides the pin for one run,
-`JUSTRUST_TOOLCHAIN=system` turns it off. A missing toolchain installs on
-first use (`JUSTRUST_TOOLCHAIN_AUTO_INSTALL=0` to never download during a
-build); if that fails the build uses the system toolchain and says so.
-
-**jr-rustc**, justrust's rustc fork: `justrust toolchain jr-install <build dir>`
-packages a build as `jr-<commit>`. With nothing pinned, builds use the
-newest jr toolchain, and every incremental crate gets
-`-Zcache-proc-macros`, which reuses derive and attribute macro output when
-the macro's input tokens are unchanged (724 to 1 `#[gpui::test]` expansions
-per Desktop edit). A proc macro whose output depends on something other
-than its input (a file it reads, an env var) is not re-run when only that
-changes. Dependencies keep their cache keys.
-
-Use `justrust toolchain jr-install <build dir> --no-default` to stage an
-experimental compiler without changing the default, even on a fresh host.
-Select it only for a measured run with `JUSTRUST_TOOLCHAIN=jr-<commit>`.
-Staged compilers live under `toolchains/staged/`, so older running agents
-cannot accidentally select them either. Staging refuses to overwrite an
-already activated revision. The usual install without `--no-default` retains
-its existing default-activation behavior.
-
-**wild**: once installed, local crates that link (test binaries, bins,
-cdylibs) link with [wild](https://github.com/wild-linker/wild) through a
-`-B` linker directory, which works with `cc`, `clang -fuse-ld=mold`, and
-rustc's bundled lld alike. Link args are untracked, so switching it
-rebuilds nothing. If wild fails, the original linker runs with the same
-arguments (logged in `~/.justrust/linker-fallbacks.jsonl`).
-
-## Status
-
-Alpha (`0.1.0-alpha.7`). Output formats, `~/.justrust`, and environment
-variables may change between releases ([CHANGELOG.md](CHANGELOG.md)).
-
-- **Linux:** everything.
-- **macOS:** everything except what has no macOS counterpart: CPU priority
-  between concurrent builds (cgroups), pressure-stall reporting (reports
-  say "not measured" instead of showing zeros), the wild linker and hot
-  patching (ELF only), and automatic remote routing (the build machines
-  are Linux, so a Mac builds locally unless `JUSTRUST_REMOTE=force`).
-  Process sampling uses libproc and Mach, dependency-cache restores and
-  build slots clone with APFS `clonefile`, and the sync daemon watches
-  with kqueue.
-- **Windows:** recording, agent output, reports, the depcache (plain
-  copies with a fresh mtime; no hash memo, since an NTFS stream would bump
-  the mtime cargo watches), the test pool, and pinned toolchains. Build
-  CPU comes from a job object around cargo, processes from Toolhelp. Not
-  on Windows: the resident build daemon (Linux only so far), per-agent
-  build slots (they need copy-on-write clones; builds share the target
-  dir), cgroup priority, pressure-stall reporting, wild and hot patching
-  (ELF only), the sync daemon's file watcher (pushes fall back to the
-  per-run rescan), ssh connection reuse (Windows OpenSSH has no
-  ControlMaster), and automatic remote routing (the build machines are
-  Linux).
-
-## Where this is going
-
-justrust is going all in on optimal compile times: one tool that owns the
-whole path from source to test result, including a vendored and forked
-toolchain and our own servers. An idea is dropped only when measurements
-show it is not faster. Plan: [docs/toolchain.md](docs/toolchain.md).
-
-| | |
-|---|---|
-| Done | recorder, agent output, pinned toolchains, depcache, public prebuilt store, test pool, build slots and priority, wild, jr-cargo, jr-rustc with the proc-macro cache, hosted remote builds |
-| In progress | hermetic C sysroot for `-sys` crates ([docs/c-sysroot.md](docs/c-sysroot.md)), hot patching of test binaries (prototype: link 0.54 -> 0.20 s, FINDINGS 35) |
-| Next | resident compiler in jr-rustc (query cache in memory between edits), streamed diagnostics, body-only upstream edits that do not invalidate downstream codegen |
-
-The reference loop, a one-line edit in `jcode-desktop-ui` (122k lines) and
-3 tests, is 7.6 s today (`bench/suite.py run desktop-test-edit`). Estimated
-end state with a resident compiler, Cranelift, and hot patching: about
-0.4 s, with the first type error in 0.1 to 0.2 s. These are estimates;
-each step is measured before and after in [FINDINGS.md](FINDINGS.md).
+The goal is for agents to spend their time editing and reasoning, not waiting
+for builds. We will fork tools and run infrastructure wherever that makes the
+loop faster, while preserving build correctness and useful diagnostics.
+See the [toolchain plan](docs/toolchain.md) for the roadmap.
 
 ## Contributing and license
 
