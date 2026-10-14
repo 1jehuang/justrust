@@ -45,15 +45,39 @@ fn declared_helpers_must_run_before_atomic_install() {
 #[test]
 fn mandatory_rustdoc_must_run_and_helper_timeout_is_bounded() {
     let f = Fixture::new();
-    let mut entries = valid_entries();
-    entries[1].1 = b"#!/bin/sh\nexit 127\n".to_vec();
-    f.publish(&jr(), &entries, |_| {});
-    assert!(f.install(&jr()).is_err());
-    assert!(
-        super::super::installed_in(&jr(), &f.root())
-            .unwrap()
-            .is_none()
-    );
+    if std::env::var_os("JR_HELPER_TIMEOUT_CHILD").is_none() {
+        let mut entries = valid_entries();
+        entries[1].1 = b"#!/bin/sh\nexit 127\n".to_vec();
+        f.publish(&jr(), &entries, |_| {});
+        assert!(f.install(&jr()).is_err());
+        assert!(
+            super::super::installed_in(&jr(), &f.root())
+                .unwrap()
+                .is_none()
+        );
+
+        // Concurrent tests can fork while this fixture writes its executable.
+        // Their children briefly inherit the writable descriptor, making exec
+        // fail with ETXTBSY even after our write has closed. Create and run the
+        // timeout fixture in a single-test child, without hiding spawn errors.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "toolchain::bundle::tests::mandatory_rustdoc_must_run_and_helper_timeout_is_bounded",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("JR_HELPER_TIMEOUT_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
 
     let prefix = f.0.join("probe");
     std::fs::create_dir_all(prefix.join("bin")).unwrap();
