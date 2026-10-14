@@ -179,3 +179,141 @@ fn bundled_native_rlib_change_invalidates_shim_depcache() {
         eprintln!("native version {version}: output {version}, depcache {expected_cache}");
     }
 }
+
+#[test]
+fn host_native_and_response_file_flags_compile_without_cache_reuse() {
+    let base = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let fixture = Fixture(base.join(format!(
+        "jr-native-flags-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )));
+    let root = &fixture.0;
+    let cargo_home = root.join("cargo-home");
+    let rustc = std::env::var_os("JUSTRUST_REAL_RUSTC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|dir| dir.join("rustc"))
+                .find(|path| path.is_file())
+                .expect("rustc must be on PATH")
+        });
+    std::fs::create_dir_all(root).unwrap();
+    let shim = root.join("rustc");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_justrust"), &shim).unwrap();
+    for local in [false, true] {
+        let source = if local {
+            root.join("workspace")
+        } else {
+            cargo_home.join("registry/src/fixture/consumer-0.0.0")
+        };
+        let deps = source.join("target/debug/deps");
+        std::fs::create_dir_all(&deps).unwrap();
+        std::fs::write(
+            source.join("consumer.rs"),
+            "fn main() { println!(\"42\"); }\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("native.args"), "-C\ntarget-cpu=native\n").unwrap();
+        let cases: &[&[&str]] = &[
+            &["-C", "target-cpu=x86-64"],
+            &["-C", "target-cpu=native"],
+            &["-Ctarget-cpu=native"],
+            &["--codegen", "target-cpu=native"],
+            &["--codegen=target-cpu=native"],
+            &["-C", "target_cpu=native"],
+            &["-Ctarget_cpu=native"],
+            &["--codegen", "target_cpu=native"],
+            &["--codegen=target_cpu=native"],
+            &["@native.args"],
+        ];
+        for (case, flags) in cases.iter().enumerate() {
+            let run = source.join(format!("recorded-{case}"));
+            std::fs::create_dir_all(&run).unwrap();
+            let binary = deps.join("consumer-flags");
+            for repeat in 0..2 {
+                if binary.exists() {
+                    std::fs::remove_file(&binary).unwrap();
+                }
+                let mut cmd = command(&shim, &source);
+                cmd.args([
+                    "--crate-name",
+                    "consumer",
+                    "--crate-type",
+                    "bin",
+                    "--edition=2021",
+                    "--emit=dep-info,link",
+                    "-Cextra-filename=-flags",
+                    "consumer.rs",
+                    "--out-dir",
+                ])
+                .arg(&deps)
+                .args(*flags)
+                .env("CARGO_HOME", &cargo_home)
+                .env("CARGO_MANIFEST_DIR", &source)
+                .env("CARGO_CRATE_NAME", "consumer")
+                .env("CARGO_PKG_NAME", "consumer")
+                .env("CARGO_PKG_VERSION", "0.0.0")
+                .env("JUSTRUST_REAL_RUSTC", &rustc)
+                .env("JUSTRUST_RUN_DIR", &run)
+                .env("JUSTRUST_HOME", root.join("home"))
+                .env("JUSTRUST_DEPCACHE_DIR", source.join("depcache"))
+                .env("JUSTRUST_LOCALCACHE_DIR", source.join("localcache"))
+                .env("JUSTRUST_DEPCACHE", "1")
+                .env("JUSTRUST_LOCALCACHE", "1")
+                .env("JUSTRUST_PREBUILT", "0")
+                .env("JUSTRUST_REMOTE_CACHE", "0")
+                .env("JUSTRUST_PEER_CACHE", "0")
+                .env("JUSTRUST_HOTPATCH", "0")
+                .env("JUSTRUST_PASSES", "0")
+                .env("JUSTRUST_NO_UPDATE", "1")
+                .env("JUSTRUST_NO_TELEMETRY", "1");
+                success(&mut cmd);
+                let output = success(&mut command(&binary, &source));
+                assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
+                let log = std::fs::read_to_string(run.join("units.jsonl")).unwrap();
+                let unit: serde_json::Value =
+                    serde_json::from_str(log.lines().last().unwrap()).unwrap();
+                assert_eq!(unit["local"], local);
+                let expected = if case != 0 {
+                    ""
+                } else if local {
+                    if repeat == 0 { "local-miss" } else { "local" }
+                } else if repeat == 0 {
+                    "miss"
+                } else {
+                    "hit"
+                };
+                assert_eq!(
+                    unit["depcache"].as_str().unwrap_or(""),
+                    expected,
+                    "local={local} flags={flags:?} repeat={repeat}: {unit}"
+                );
+                if local && case == 0 && repeat == 0 {
+                    // Local cache publication has a separate finisher. Wait for
+                    // its actual receipt instead of racing the second compile.
+                    let receipt = source.join("localcache/finish.jsonl");
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                    loop {
+                        if let Ok(text) = std::fs::read_to_string(&receipt) {
+                            let finished: serde_json::Value =
+                                serde_json::from_str(text.lines().last().unwrap()).unwrap();
+                            assert_eq!(finished["ok"], true, "{finished}");
+                            break;
+                        }
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "local cache finisher timed out"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                }
+            }
+        }
+    }
+}
