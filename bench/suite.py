@@ -935,7 +935,8 @@ def env_info() -> dict:
         if line.startswith("model name"):
             cpu = line.split(":", 1)[1].strip()
             break
-    repo_rev = tryrun(["git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"])
+    repo_rev = (tryrun(["git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"])
+                or os.environ.get("JUSTRUST_BENCH_REPO_REV") or None)
     declared_rev = os.environ.get("JUSTRUST_BENCH_REV") or None
     digest = binary_sha256()
     version = tryrun([J, "-V"])

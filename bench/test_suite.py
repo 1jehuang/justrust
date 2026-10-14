@@ -164,6 +164,22 @@ class HostedMeasurements(unittest.TestCase):
                 self.assertEqual(declared["benchmark_repo_rev"], "repo-rev")
                 self.assertEqual(declared["justrust_binary_sha256"], info["justrust_binary_sha256"])
 
+    def test_remote_source_revision_fallback_is_not_a_binary_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "justrust"
+            binary.write_bytes(b"fixture executable")
+            def no_git(command):
+                if command[0] == "git":
+                    raise RuntimeError("remote sync has no .git")
+                return "fixture version"
+            with patch.object(suite, "J", str(binary)), patch.object(suite, "sh", side_effect=no_git), \
+                    patch.dict(suite.os.environ, {"JUSTRUST_BENCH_REPO_REV": "source-only"}, clear=True):
+                info = suite.env_info()
+            self.assertEqual(info["benchmark_repo_rev"], "source-only")
+            self.assertEqual(info["justrust_rev"], "source-only")
+            self.assertIsNone(info["justrust_binary_revision"])
+            self.assertEqual(info["justrust_revision_source"], "repository HEAD, not binary revision")
+
     def test_changed_binary_never_writes_a_completed_suite_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary, replacement, out = (Path(tmp) / name for name in ("binary", "replacement", "result.json"))

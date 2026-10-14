@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Capture -Zself-profile of the reference loop's rustc unit, for
+# Capture observed -Zself-profile occupancy of the reference loop's rustc unit, for
 # bench/critpath.py. Runs on the build host (or locally), inside the pinned
 # Desktop bench snapshot that bench/suite.py prepares.
 #
 #   bench/critpath-capture.sh [THREADS...]     default: 1 16
+#   PROFILE_EVENTS=default,args,query-blocked ...   opt-in expensive detail
+#   SCENARIO=desktop-body-check ...                check-only control
 #
 # For each frontend thread count: warm the target with the normal reference
 # edit, then one profiled one-line body edit. The profiler is added only to
@@ -18,15 +20,23 @@ TOOLCHAIN=${TOOLCHAIN:-nightly-2026-10-08}
 out=bench/results/critpath/$(hostname -s)-$(date +%Y%m%d-%H%M%S)
 mkdir -p "$out"
 python3 - "$out" "$TOOLCHAIN" "${threads[@]}" <<'EOF'
-import os, subprocess, sys, dataclasses
+import os, subprocess, sys, dataclasses, json
 from pathlib import Path
 sys.path.insert(0, "bench")
 import suite
 out, tc, threads = Path(sys.argv[1]).resolve(), sys.argv[2], [int(t) for t in sys.argv[3:]]
 suite.TOOLCHAIN = tc
-s = suite.BY_NAME["desktop-test-edit"]
+s = suite.BY_NAME[os.environ.get("SCENARIO", "desktop-test-edit")]
+if s.snapshot != "desktop" or "jcode-desktop-ui" not in s.cmd:
+    raise SystemExit("capture currently requires a pinned Desktop UI scenario")
+events = os.environ.get("PROFILE_EVENTS", "generic-activity,query-blocked")
+allowed = {"none", "all", "default", "generic-activity", "query-provider", "query-cache-hit",
+           "query-cache-hit-count", "query-blocked", "incr-cache-load", "query-keys",
+           "function-args", "args", "llvm", "incr-result-hashing", "artifact-sizes"}
+if not events or not set(events.split(",")) <= allowed:
+    raise SystemExit("unknown or empty PROFILE_EVENTS category")
 root = suite.prepare(s.snapshot)
-target = root / f"target-critpath-{tc}"
+target = root / f"target-critpath-{tc}-{s.name}"
 # Desktop sets build.rustc-wrapper = scripts/rustc-parallel-frontend. We put
 # our wrapper in that slot for every run (so warm and profiled runs share one
 # compiler command line and incremental cache); it adds the profiler only for
@@ -38,12 +48,16 @@ wrap = out / "prof-wrapper.sh"
 wrap.write_text(f"""#!/bin/sh
 rustc="$1"; shift
 if [ "${{CARGO_CRATE_NAME:-}}" = jcode_desktop_ui ] && [ -n "${{CRITPATH_PROFILE_DIR:-}}" ]; then
-  set -- "$@" -Zself-profile="$CRITPATH_PROFILE_DIR" -Zself-profile-events=default,args,query-blocked
+  set -- "$@" -Zself-profile="$CRITPATH_PROFILE_DIR" -Zself-profile-events={events}
 fi
 exec {desk} "$rustc" "$@"
 """)
 wrap.chmod(0o755)
+records = {"toolchain": tc, "scenario": s.name, "profile_events": events,
+           "target_directory": str(target), "env": suite.env_info(), "runs": []}
 for t in threads:
+    if t not in [1, 2, 4, 8, 16]:
+        raise SystemExit("frontend thread counts must be 1, 2, 4, 8 or 16")
     d = out / f"t{t}"; d.mkdir(parents=True, exist_ok=True)
     base = {**s.env, "JCODE_FRONTEND_THREADS": str(t)}
     for i, profiled in enumerate([False, False, True]):
@@ -59,6 +73,8 @@ for t in threads:
         finally:
             suite.restore(root, s.edit)
         print(f"threads={t} run {i} {'profiled' if profiled else 'warm'}: wall {r['wall']:.2f}s id {r['id']}", flush=True)
+        records["runs"].append({"frontend_threads": t, "profiled": profiled, "result": r})
+        (out / "capture.json").write_text(json.dumps(records, indent=2) + "\n")
     prof = sorted(d.glob("jcode_desktop_ui-*.mm_profdata"))
     print(f"threads={t}: {len(prof)} profile(s) in {d}", flush=True)
 EOF

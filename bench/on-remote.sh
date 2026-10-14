@@ -83,7 +83,9 @@ start)
   ssh_t 'mkdir -p ~/bench-bin'
   rsync_t "$(readlink -f "$(command -v "$JR")")" R:bench-bin/.justrust.upload
   ssh_t 'chmod +x ~/bench-bin/.justrust.upload && mv -f ~/bench-bin/.justrust.upload ~/bench-bin/justrust'
-  rsync_t --delete --exclude target/ --exclude .git/ --exclude 'bench/results/*.json' --exclude 'bench/results/partial/' ./ R:bench-justrust/
+  # Results include raw profiles and nested evidence, not only top-level
+  # JSON. Never delete a completed host experiment while syncing sources.
+  rsync_t --delete --exclude target/ --exclude .git/ --exclude 'bench/results/' ./ R:bench-justrust/
   ssh_t 'mkdir -p bench-justrust/bench/results bench-src'
   # Pinned snapshot trees, as `git archive` tarballs (only what is missing).
   python3 - <<'PY' >"${TMPDIR:-/tmp}/on-remote-pins.$$"
@@ -116,7 +118,10 @@ PY
     echo 'export PATH=$HOME/bench-bin:$HOME/.cargo/bin:$PATH JUSTRUST_BENCH_SRC=$HOME/bench-src JUSTRUST_REMOTE=0'
     # The machine has rustup's stable, not a distro cargo: that is "stock" there.
     echo '[ -x /usr/bin/cargo ] || export VERSUS_STOCK_CARGO=$HOME/.cargo/bin/cargo'
-    echo "export JUSTRUST_BENCH_REV=$rev JUSTRUST_BENCH_DIRTY=$dirty"
+    # The executable copied above may be older than this source checkout.
+    # Repository HEAD is not evidence of the installed binary's revision.
+    echo "unset JUSTRUST_BENCH_REV"
+    echo "export JUSTRUST_BENCH_REPO_REV=$rev JUSTRUST_BENCH_DIRTY=$dirty"
     echo 'date'
     printf '%q ' "$@"; echo
     echo 'echo EXIT $?'
