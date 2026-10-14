@@ -1,0 +1,84 @@
+0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d  <trial>/bin/justrust
+66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56  <trial>/home/toolchains/nightly-2026-10-08/bin/rustc
+c38c3d63e82c74fc4ba9e2978ad74ccad7f74aa21dec6d2bf978e0c4dcf1e13d  <trial>/home/toolchains/nightly-2026-10-08/bin/jr-cargo
+29bb6618b1ca614cfed13c3bd77777954f2380f757aeeb2fd799abe2040e44d8  <trial>/costs.json
+db89fc7f5eceaa0e10b630b6ee38f336bb9322ab4275daf6b8f0193d7ebcb68f  bench/suite.py
+80d7b3a42b55ab9196e6f64af7d10570b0fee6970d8fb6a98a7e0bf95101bc29  bench/versus.py
+6c05a4a0242b3713afaa05a317d9fc11cc0df0eb9f399815f2dc856973872d29  bench/synth/gen.py
+58d891419f07129b2c4b34d2b88f0dd032e3ad0512c8e5cfc96604a15aaa03af  bench/synth/weights.json
+Wed Oct 14 09:50:46 UTC 2026
+32
+Filesystem        1B-blocks         Used    Available Use% Mounted on
+/dev/root      518933680128 302646505472 216270397440  59% /
+.................................................................................................................................................bench: desktop-noop-test (1/1)
+......................................................
+----------------------------------------------------------------------
+Ran 199 tests in 5.113s
+
+OK
+JCODE_CHECKPOINT {"message":"Begin fresh same-host seed1/40-point synthetic epoch mode=0"}
+synth: probing jcode-tui-visual-debug (29 locations)
+synth: jcode-tui-visual-debug: 29 live body, 0 live test locations in 1 files
+synth: probing jcode-tui-workspace (77 locations)
+synth: jcode-tui-workspace: 52 live body, 24 live test locations in 3 files
+synth: probing jcode-update-core (28 locations)
+synth: jcode-update-core: 13 live body, 15 live test locations in 1 files
+  synth 1/40 suite-nightly-2026-10-08   29.30s  build --release -p jcode-desktop noisy
+JCODE_PROGRESS {"current": 1, "total": 40, "unit": "points", "eta_seconds": 7533}
+  synth 2/40 suite-nightly-2026-10-08   15.14s  test -p jcode-desktop-ui --lib noisy
+JCODE_PROGRESS {"current": 2, "total": 40, "unit": "points", "eta_seconds": 6077}
+  synth 3/40 suite-nightly-2026-10-08   10.95s  test -- reload_config noisy
+JCODE_PROGRESS {"current": 3, "total": 40, "unit": "points", "eta_seconds": 4629}
+  synth 4/40 suite-nightly-2026-10-08    1.67s  test -- remote_watch
+JCODE_PROGRESS {"current": 4, "total": 40, "unit": "points", "eta_seconds": 3765}
+  synth 5/40 suite-nightly-2026-10-08   15.87s  test -p jcode-tui --lib -- backend noisy
+JCODE_PROGRESS {"current": 5, "total": 40, "unit": "points", "eta_seconds": 3754}
+  synth 6/40 suite-nightly-2026-10-08    5.45s  build -p jcode-desktop-ui noisy
+JCODE_PROGRESS {"current": 6, "total": 40, "unit": "points", "eta_seconds": 3485}
+  synth 7/40 suite-nightly-2026-10-08   14.00s  test -p jcode-desktop-ui --lib
+JCODE_PROGRESS {"current": 7, "total": 40, "unit": "points", "eta_seconds": 3157}
+  synth 8/40 suite-nightly-2026-10-08    0.25s  build
+JCODE_PROGRESS {"current": 8, "total": 40, "unit": "points", "eta_seconds": 2815}
+  synth 9/40 suite-nightly-2026-10-08    0.19s  check -p jcode-desktop-motion noisy
+JCODE_PROGRESS {"current": 9, "total": 40, "unit": "points", "eta_seconds": 2537}
+  synth 10/40 suite-nightly-2026-10-08   13.67s  test -p jcode-desktop-ui --lib
+JCODE_PROGRESS {"current": 10, "total": 40, "unit": "points", "eta_seconds": 2394}
+  synth 11/40 suite-nightly-2026-10-08    0.25s  build -p jcode-desktop
+JCODE_PROGRESS {"current": 11, "total": 40, "unit": "points", "eta_seconds": 2151}
+  synth 12/40 suite-nightly-2026-10-08   60.16s  test --workspace noisy
+JCODE_PROGRESS {"current": 12, "total": 40, "unit": "points", "eta_seconds": 2272}
+  synth 13/40 suite-nightly-2026-10-08    0.91s  test -p jcode-desktop-model -- diff
+JCODE_PROGRESS {"current": 13, "total": 40, "unit": "points", "eta_seconds": 2092}
+  synth 14/40 suite-nightly-2026-10-08   22.65s  test -p jcode-base --lib -- tests
+JCODE_PROGRESS {"current": 14, "total": 40, "unit": "points", "eta_seconds": 1965}
+  synth 15/40 suite-nightly-2026-10-08   64.85s  build --release
+JCODE_PROGRESS {"current": 15, "total": 40, "unit": "points", "eta_seconds": 1874}
+Traceback (most recent call last):
+  File "<trial>/observer.py", line 83, in <module>
+    suite.main()
+  File "<trial>/harness/bench/suite.py", line 1307, in main
+    args.fn(args)
+  File "<trial>/harness/bench/suite.py", line 1081, in cmd_run
+    return cmd_run_synth(args)
+           ^^^^^^^^^^^^^^^^^^^
+  File "<trial>/harness/bench/suite.py", line 1145, in cmd_run_synth
+    "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume)}
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<trial>/harness/bench/synth/run.py", line 152, in run
+    r = run_point(st, plan, base + k * 10 + rep)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<trial>/harness/bench/synth/run.py", line 96, in run_point
+    r = _run(st, plan, plan.cmd, "run")
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<trial>/harness/bench/synth/run.py", line 56, in _run
+    r = versus.run_counted(argv, root / plan.cwd, env, log)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<trial>/observer.py", line 59, in observed
+    outcome = original(argv, cwd, env, log)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<trial>/harness/bench/versus.py", line 173, in run_counted
+    _, status, ru = os.wait4(pid, 0)
+                    ^^^^^^^^^^^^^^^^
+  File "<trial>/harness/bench/synth/gen.py", line 308, in _raise_interrupt
+    raise KeyboardInterrupt
+KeyboardInterrupt

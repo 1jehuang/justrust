@@ -1,0 +1,24 @@
+{"id": "20261014-101022743-43443971", "argv": ["test", "-p", "jcode-tui", "--lib"], "mode": "0", "jobs": 24, "exec_controls_verified": true, "private_home_passed": true, "costs_sha256": "29bb6618b1ca614cfed13c3bd77777954f2380f757aeeb2fd799abe2040e44d8", "start": 1791972622.7553453, "event": "before-exec"}
+record files [('live.json', 213), ('meta.json', 900)]
+    PID    PPID    PGID     ELAPSED STAT %CPU COMMAND         COMMAND
+  43347       1   43347       26:29 Ss    0.0 tmux: server    tmux new-session -d -s scheduler-legacy-3f47 bash <trial>/run.sh ><trial>/results/full-stream-r1.log 2>&1
+wchan 43347 poll_schedule_timeout.constprop.0
+  43348   43347   43348       26:29 Ss+   0.0 bash            bash -c bash <trial>/run.sh ><trial>/results/full-stream-r1.log 2>&1
+wchan 43348 do_wait
+  43350   43348   43348       26:29 S+    0.0 bash            bash <trial>/run.sh
+wchan 43350 do_wait
+  43351   43350   43348       26:29 S+    0.0 bash            bash <trial>/run.sh
+wchan 43351 do_wait
+  43441   43350   43441       26:24 S     0.0 timeout         timeout --signal=TERM --kill-after=15s 4089 python3 <trial>/observer.py
+wchan 43441 sigsuspend
+  43442   43350   43348       26:24 S+    0.0 tee             tee <trial>/results/0-output.log
+wchan 43442 anon_pipe_read
+  43443   43441   43441       26:24 T     0.0 python3         python3 <trial>/observer.py
+wchan 43443 do_signal_stop
+ 275015   43443   43441       06:53 Tl    0.0 justrust        <trial>/bin/justrust test -p jcode-tui --lib
+wchan 275015 do_signal_stop
+ 275048  275015   43441       06:53 Tl    2.2 jcode_tui-fc4ce <trial>/home/bench/versus/target/desktop/suite-nightly-2026-10-08/debug/build/jcode-tui/fc4cea1f23d3a710/out/jcode_tui-fc4cea1f23d3a710 -Z unstable-options --report-time
+wchan 275048 do_signal_stop
+ 294068   43351   43348       00:29 S+    0.0 sleep           sleep 60
+wchan 294068 hrtimer_nanosleep
+

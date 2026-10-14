@@ -1,0 +1,29 @@
+{
+  "schema": "legacy-instance-stopped-restoration-v1",
+  "stop_requested_at": 1791973588.2706184,
+  "stopped_verified_at": 1791973629.1091716,
+  "instance_id": "<legacy-instance>",
+  "region": "us-west-2",
+  "initial_state": "stopped",
+  "restored_state": "stopped",
+  "volume_id": "<preserved-volume>",
+  "volume_size_gib": 500,
+  "volume_preserved": true,
+  "termination": false,
+  "normal_tenant_service_changed": false,
+  "stop_response": {
+    "StoppingInstances": [
+      {
+        "InstanceId": "<legacy-instance>",
+        "CurrentState": {
+          "Code": 64,
+          "Name": "stopping"
+        },
+        "PreviousState": {
+          "Code": 16,
+          "Name": "running"
+        }
+      }
+    ]
+  }
+}

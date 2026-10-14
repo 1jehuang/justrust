@@ -1,0 +1,19 @@
+{
+  "schema": "headless-invocation-diagnostic-v1",
+  "argv": [
+    "test",
+    "-p",
+    "jcode-tui",
+    "--lib"
+  ],
+  "start": 1791973409.7075264,
+  "stdin": "DEVNULL",
+  "controlling_tty": "SSH without PTY, not the suspended tmux context",
+  "source": "same retained point16 workspace bytes, no source restore or edit",
+  "performance_eligibility": "diagnostic only, no benchmark sample",
+  "exit": 101,
+  "end": 1791973429.7081466,
+  "run_ids": [
+    "20261014-102329731-294199"
+  ]
+}

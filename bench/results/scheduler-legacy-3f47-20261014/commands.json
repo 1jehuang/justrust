@@ -1,0 +1,1130 @@
+[
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "--release",
+      "-p",
+      "jcode-desktop"
+    ],
+    "compile_failed": false,
+    "compiled": 895,
+    "cpu_sampled_lower_bound_seconds": 2391.5043570000003,
+    "exec_wall_seconds": 163.61,
+    "exit": 0,
+    "fresh": 0,
+    "id": "20261014-095053817-43443546",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "227cfbdb942afcb7aefd90549dc394cda19af37a24ee0b16463dbfbd71a06e23",
+    "raw_output_sha256": "77ab604806428e7bf9ba3611a6e4b6fea561fceffdb3fe34f730e77786eba9c9",
+    "raw_summary_sha256": "ed00ae75a092fbc7f5a65251c691708e086d9f4d8aedf66cfc318961a7e43d90",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 163.56117153167725,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "--release",
+      "-p",
+      "jcode-desktop"
+    ],
+    "compile_failed": false,
+    "compiled": 2,
+    "cpu_sampled_lower_bound_seconds": 164.00000000000003,
+    "exec_wall_seconds": 29.303,
+    "exit": 0,
+    "fresh": 748,
+    "id": "20261014-095337619-43443337",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "f6e649404b3ed7bd20efcda7688d4856c8509b8bb7499547fdceccf7d3579d1f",
+    "raw_output_sha256": "0f510d6fd0a0cd27f684fe7d554bab2207d4f4f67ef18654ee71415790e5ce6f",
+    "raw_summary_sha256": "710514a40c4fb905e2c35e73bb0f83cccc2b0a2934fb9682181a4bcf6e649ff9",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 29.269854307174683,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-ui",
+      "--lib",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 887,
+    "cpu_sampled_lower_bound_seconds": 1039.836458,
+    "exec_wall_seconds": 79.119,
+    "exit": 0,
+    "fresh": 0,
+    "id": "20261014-095437019-43443899",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "4a59cc12b43d7052f47e0f4e985dbc079cacbd7a4d4ec3a42d65e22705361527",
+    "raw_output_sha256": "fab1a64245057a15166defaffa952a9f3c0d2256febdd0bb8c5d81dd9f6cf408",
+    "raw_summary_sha256": "8a97e82faf5cf4135b23abe599324ba0da91e2be81a7d295e6d355d87f2365cc",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 79.07132577896118,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-ui",
+      "--lib"
+    ],
+    "compile_failed": false,
+    "compiled": 1,
+    "cpu_sampled_lower_bound_seconds": 84.35000000000004,
+    "exec_wall_seconds": 15.137,
+    "exit": 101,
+    "fresh": 743,
+    "id": "20261014-095558516-43443865",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "86b2da62b821a717de3c5f6b09e53b826e3e986c0856712d7c34b72fd261731f",
+    "raw_output_sha256": "8d2c0fefb7a5982ed44972b3b8de816fcca8d6bbb180256be0218a32c6c0b1a6",
+    "raw_summary_sha256": "d7147f24748c19895e4610f103803fc2f47da0d05ba112084a54dfb5d35047f2",
+    "recorded_tests": {
+      "failed": 2,
+      "ignored": 10,
+      "passed": 1301
+    },
+    "recorded_wall_seconds": 15.109234809875488,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 14,
+    "cpu_sampled_lower_bound_seconds": 61.989999999999995,
+    "exec_wall_seconds": 11.699,
+    "exit": 0,
+    "fresh": 743,
+    "id": "20261014-095643747-43443915",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "2ae008d0f783a6ae79caf32854c5e52650344ad11b9850e7aed9ff0b5b0f8aa2",
+    "raw_output_sha256": "bd79f89eb5b0689497affeb0694785427ebd4c3789a732e8a662a593ee4bd90f",
+    "raw_summary_sha256": "6ba966d62329cda1c1d3625274cbf6cc584ec7e8d691d09247fde57a3522dcee",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 11.667235612869263,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "--",
+      "reload_config"
+    ],
+    "compile_failed": false,
+    "compiled": 9,
+    "cpu_sampled_lower_bound_seconds": 42.4,
+    "exec_wall_seconds": 10.952,
+    "exit": 0,
+    "fresh": 746,
+    "id": "20261014-095658143-43443986",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "738d50e3a6a6d367f121a96d640889fcef4249e89d17f7def33324f335c817c1",
+    "raw_output_sha256": "0b0a1b2a645cffa6893be1fa98b704458e177ee351e1f98e142c700dc9f015cf",
+    "raw_summary_sha256": "ba44a63e11531d0167e98796ac9b82d89b04bbc70232fbc0537130839a82f1da",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 5
+    },
+    "recorded_wall_seconds": 10.917504787445068,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 61,
+    "cpu_sampled_lower_bound_seconds": 48.385485,
+    "exec_wall_seconds": 10.64,
+    "exit": 0,
+    "fresh": 0,
+    "id": "20261014-095739182-43443506",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "f8c7f95f4ca50d64efe7e98838a2d3a1471cfb4b09f915f10bff143b334bc808",
+    "raw_output_sha256": "c60236c36e093f9f79a95be50bc0eb8d51590c9dfa4154332662f5fe510c0072",
+    "raw_summary_sha256": "c694e5810adea955bc6c94ccc47da18412578f5a007e51d87255f70c5c9871d1",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 10.617372989654541,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "--",
+      "remote_watch"
+    ],
+    "compile_failed": false,
+    "compiled": 5,
+    "cpu_sampled_lower_bound_seconds": 4.397816,
+    "exec_wall_seconds": 1.674,
+    "exit": 0,
+    "fresh": 47,
+    "id": "20261014-095750395-43443865",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "83f75c36cf4d8a4d8b5c57b76daba85fe8f23d625d038786bfdb660944d1a9d9",
+    "raw_output_sha256": "d37c8d5ea223ca614e9bdf47178063644e2499841a646f861491838f8900d361",
+    "raw_summary_sha256": "eb8820f3fa205bf2f490ddf0895743c4dbe5f62d75c6896d7ffbafcc2120b955",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 1
+    },
+    "recorded_wall_seconds": 1.6447327136993408,
+    "recorder_cpu_note": null,
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-tui",
+      "--lib",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 648,
+    "cpu_sampled_lower_bound_seconds": 630.604292,
+    "exec_wall_seconds": 74.22,
+    "exit": 0,
+    "fresh": 0,
+    "id": "20261014-095817164-43443451",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "7ace677745689a7e6ad0563166e835ab8a2ae6eaae0478b179523ff8cced5f0a",
+    "raw_output_sha256": "e6b623de8bd1656698732f4d5d5caf50eeffbadeb1e84531418284a7736c5dce",
+    "raw_summary_sha256": "ca03ed9164f79c554252b9f90e00ab5b4db0a197cde8f4e226c2b76095d542a2",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 74.17576670646667,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-tui",
+      "--lib",
+      "--",
+      "backend"
+    ],
+    "compile_failed": false,
+    "compiled": 4,
+    "cpu_sampled_lower_bound_seconds": 28.881714,
+    "exec_wall_seconds": 15.871,
+    "exit": 0,
+    "fresh": 576,
+    "id": "20261014-095934230-43443420",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "91bdaf25250215a16078675241112761a3ddd6b4efb15494da18632239a7b1d7",
+    "raw_output_sha256": "b7968dd3d3c7b13445024f31f3f1183b5589f5eecd8eeddc3697566f051af8bf",
+    "raw_summary_sha256": "a7b8151a65fa735fd396ecc6f486ac9069ed06626d2e62aa05dff44ef4690989",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 17
+    },
+    "recorded_wall_seconds": 15.83278489112854,
+    "recorder_cpu_note": null,
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "-p",
+      "jcode-desktop-ui"
+    ],
+    "compile_failed": false,
+    "compiled": 455,
+    "cpu_sampled_lower_bound_seconds": 484.19142,
+    "exec_wall_seconds": 40.612,
+    "exit": 0,
+    "fresh": 313,
+    "id": "20261014-100020204-43443332",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "37a6a4e8c19883c7981e4f1bde66d9267b7ddb9affd06f9e3c937c80384beea3",
+    "raw_output_sha256": "1d9dc69e99d17293c12aa60267a2ceef0fee709d078e137f52949c086c566e8a",
+    "raw_summary_sha256": "83d8b79c6bfb0aa2f99ffa83974e839cc5f86ad18581912710e7271930dd151e",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 40.57691669464111,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "-p",
+      "jcode-desktop-ui"
+    ],
+    "compile_failed": false,
+    "compiled": 1,
+    "cpu_sampled_lower_bound_seconds": 15.49,
+    "exec_wall_seconds": 5.445,
+    "exit": 0,
+    "fresh": 743,
+    "id": "20261014-100103284-43443766",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "314da20204b72e5768cae106659bf460af988756cce8292a9c52e5763605eb10",
+    "raw_output_sha256": "0b1d83f1ef097355796a231ca876c8f813314bc0decd79617a5fb94aea109ec4",
+    "raw_summary_sha256": "6679fe6b58ad155ccaca18e7130cfbab4bec51af33c132a5dede0ecf8d9ed587",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 5.406872034072876,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-ui",
+      "--lib",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 84,
+    "cpu_sampled_lower_bound_seconds": 22.59,
+    "exec_wall_seconds": 10.095,
+    "exit": 0,
+    "fresh": 660,
+    "id": "20261014-100138828-43443825",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "8c43e0b89b1dae6fdfd98e16e746c72d7eb74b6a3e85bc1952b6d2113d004ee8",
+    "raw_output_sha256": "1c40eff1c3c0177a87c2b5146b72a40e64cd3970cf3165ee9ce6883c08b209db",
+    "raw_summary_sha256": "490ee95353f3b7c6ff7ce2a56c95c3d7e78f199696515359481a95c2b13d36b3",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 10.064636707305908,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-ui",
+      "--lib"
+    ],
+    "compile_failed": false,
+    "compiled": 1,
+    "cpu_sampled_lower_bound_seconds": 79.93000000000002,
+    "exec_wall_seconds": 13.996,
+    "exit": 0,
+    "fresh": 743,
+    "id": "20261014-100149369-43443169",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "439892c075fd58715eea07331f34791fa6d63facbca924048a14ede69cba21f3",
+    "raw_output_sha256": "be3e34aa641ae88958b9485f604a43248c3c869a133f0294fc2f23b05c6b9a8a",
+    "raw_summary_sha256": "f3d11bbbb380b113985a5779c76ade468397eff33a892abb1b37befb94868ac7",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 10,
+      "passed": 1303
+    },
+    "recorded_wall_seconds": 13.96861457824707,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build"
+    ],
+    "compile_failed": false,
+    "compiled": 5,
+    "cpu_sampled_lower_bound_seconds": 26.489999999999995,
+    "exec_wall_seconds": 7.262,
+    "exit": 0,
+    "fresh": 745,
+    "id": "20261014-100228464-43443193",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "470d7c3eec837687d38e597e85aa678e51c6f00a9a0909fb647d0f1809bfde58",
+    "raw_output_sha256": "c39114b9f6e890d79a5791a80ce42dc9453a3995a12914b42cc2068c329f9383",
+    "raw_summary_sha256": "4d342148d2f29c56941e95742f4e6fd4afa3367a3ad535089e681d1ab329d960",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 7.234471559524536,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build"
+    ],
+    "compile_failed": false,
+    "compiled": 0,
+    "cpu_sampled_lower_bound_seconds": 0.352276,
+    "exec_wall_seconds": 0.246,
+    "exit": 0,
+    "fresh": 750,
+    "id": "20261014-100237198-43443200",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "22ae2ec59d8dc20fce0476c45e6b45ac6a1262e07b1102bfd0cfefbe60c71f30",
+    "raw_output_sha256": "be10f0683d920dbebb49e7bc52f91b42fd18fa68756b1d4bc6ac2307ef9ab6be",
+    "raw_summary_sha256": "9c73aa7ed5ae9c5e5ecfc2008b714448d2c6b214cc689b236325a119a5c62c0d",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 0.22078585624694824,
+    "recorder_cpu_note": null,
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "check",
+      "-p",
+      "jcode-desktop-motion"
+    ],
+    "compile_failed": false,
+    "compiled": 1,
+    "cpu_sampled_lower_bound_seconds": 0.340775,
+    "exec_wall_seconds": 0.228,
+    "exit": 0,
+    "fresh": 0,
+    "id": "20261014-100237479-43443143",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "b6c022ae30548cdb3db63eb6a019d5f1c5040b18fb7221d6c2725c1ba277abb3",
+    "raw_output_sha256": "60af945a7fa7d63c439c68cf522ea1f05615a3acf6fe12e07f3782fa17ff6e96",
+    "raw_summary_sha256": "d2d451def7389ab8c7cb14c97ea3fb74489d6bf7b1b2d00b001fcd40f6f19c5b",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 0.20748448371887207,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "check",
+      "-p",
+      "jcode-desktop"
+    ],
+    "compile_failed": false,
+    "compiled": 667,
+    "cpu_sampled_lower_bound_seconds": 313.28474900000003,
+    "exec_wall_seconds": 31.319,
+    "exit": 0,
+    "fresh": 83,
+    "id": "20261014-100237719-43443287",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "3a1d9f1a23f3ab4b004a10103a3b51c68d78463d5ab725fdb29dc0ad93861680",
+    "raw_output_sha256": "70e4234135724cfa91cc9b7d6285ca32fbbbaca9460d12ca09a15cea579c7868",
+    "raw_summary_sha256": "8707d1056f3fcc18739af9406f5d4d1076b9cd3e79bd0434e24d72eb297d3371",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 31.28770136833191,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "check",
+      "-p",
+      "jcode-desktop-motion"
+    ],
+    "compile_failed": false,
+    "compiled": 0,
+    "cpu_sampled_lower_bound_seconds": 0.292119,
+    "exec_wall_seconds": 0.189,
+    "exit": 0,
+    "fresh": 1,
+    "id": "20261014-100310027-43443256",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "b55cb9131c81ad62538db23214e3c257ab4df8ea82e59622cc271d4b2afc9cfe",
+    "raw_output_sha256": "fd9e95d16d932443e63380146d86b12284d5c6e20b4fb3e4a9b4c2b01802dd16",
+    "raw_summary_sha256": "a7d7e7bac602cc583c105432af4da677ccb36acfe4a03156aeb4062decb9d735",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 0.16285037994384766,
+    "recorder_cpu_note": null,
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-ui",
+      "--lib",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 1,
+    "cpu_sampled_lower_bound_seconds": 18.77,
+    "exec_wall_seconds": 8.205,
+    "exit": 0,
+    "fresh": 743,
+    "id": "20261014-100340317-43443572",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "4e5fc6e977ed1464da0bb9fd8c8a078df17ee795f278122c67c9cec96266f841",
+    "raw_output_sha256": "4bb5fee6f48c188565c95ec8b74fe3d7882cc9870ea8a3d496793ebd90e80426",
+    "raw_summary_sha256": "84b41058b8d1b91c959134f84a0d0fbb360ff906c724072e8a08ab54be146938",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 8.173955202102661,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 7,
+    "cpu_sampled_lower_bound_seconds": 30.71,
+    "exec_wall_seconds": 5.669,
+    "exit": 0,
+    "fresh": 748,
+    "id": "20261014-100348536-43443338",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "a24e6145f138ad3d7dcd9a2ecf19ae236277f03be928c57fd6543fa9bb53e0bd",
+    "raw_output_sha256": "c88b29e52ffcb24b74490c4132c315b8305dd31e813ef4dd32c27f57a3a97bfb",
+    "raw_summary_sha256": "336a4d37fd321cdfe9bb0dd0eaabc921ef4ab0a25ae4008a33668f2bb06bc737",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 5.639381170272827,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-ui",
+      "--lib"
+    ],
+    "compile_failed": false,
+    "compiled": 1,
+    "cpu_sampled_lower_bound_seconds": 79.62,
+    "exec_wall_seconds": 13.674,
+    "exit": 0,
+    "fresh": 743,
+    "id": "20261014-100358074-43443906",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "5de4b0b60f192d42231c37ffd54b1810a589d0777362b9b05c2fac6122829ec4",
+    "raw_output_sha256": "94868a532b507d1d0b4ea3c072135c781ae63aec5f2e6438c4e511b5a8b895bc",
+    "raw_summary_sha256": "65396cea782fd3c80a74343bd8ce27ce0b27874b40e15092c7e85a9ef865ed0a",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 10,
+      "passed": 1303
+    },
+    "recorded_wall_seconds": 13.646725416183472,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "-p",
+      "jcode-desktop"
+    ],
+    "compile_failed": false,
+    "compiled": 2,
+    "cpu_sampled_lower_bound_seconds": 19.549999999999997,
+    "exec_wall_seconds": 4.861,
+    "exit": 0,
+    "fresh": 748,
+    "id": "20261014-100421810-43443288",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "1c57f7df2bed1aee2df1fe0b525a6c8e1f406a9a9e8e3b754da19df3a518f665",
+    "raw_output_sha256": "5909342f17f6a97d896e2a50e3de9b63f2e1c19ac0335d92ada74185b733d92f",
+    "raw_summary_sha256": "390a0772e761bcc5420d97194441f946f7ac7fc00ff3018a0d5af5f760174de6",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 4.831223487854004,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "-p",
+      "jcode-desktop"
+    ],
+    "compile_failed": false,
+    "compiled": 0,
+    "cpu_sampled_lower_bound_seconds": 0.353219,
+    "exec_wall_seconds": 0.251,
+    "exit": 0,
+    "fresh": 750,
+    "id": "20261014-100429384-43443423",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "514a6986b20fe0d20e7aadbe2b657b3b7971a370a9783130eaffcd893c383751",
+    "raw_output_sha256": "0fd92eb688dfd7693b10c981dfb8d2ca91b671ed20e5cfa14ad65d275f14a754",
+    "raw_summary_sha256": "554fe1e1b19c3b8947d19bb68d05a23497150882170cc9fbcfb8288b1d3017e8",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 0.22577238082885742,
+    "recorder_cpu_note": null,
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "--workspace",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 636,
+    "cpu_sampled_lower_bound_seconds": 1102.11754,
+    "exec_wall_seconds": 61.485,
+    "exit": 0,
+    "fresh": 201,
+    "id": "20261014-100429672-43443214",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "f3242e864cb4b532e0e4dd2a328b4d3674bf643ae721b010a85e62f6c1b3c436",
+    "raw_output_sha256": "046ccf01db2319d356b497c331a49b83bd424af8c096b89fecb094dc2016c0fb",
+    "raw_summary_sha256": "bb7517cf4607b6a8972699a480cdc738e7aef9da9eb1532ab4f2ac11e5cf3c5c",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 61.41055488586426,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "check"
+    ],
+    "compile_failed": false,
+    "compiled": 534,
+    "cpu_sampled_lower_bound_seconds": 251.550914,
+    "exec_wall_seconds": 34.764,
+    "exit": 0,
+    "fresh": 62,
+    "id": "20261014-100531169-43443822",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "7c314c11d18ada0b4d167842b302906f531fa779db8ec18efd96339c13600cbb",
+    "raw_output_sha256": "831f24555cf9ad2937d3d9be8be82f7f509eb6e4a649213f11ddb53074d7a11a",
+    "raw_summary_sha256": "3adb9da84de267984f4afebd1df6044ea25cdfe1862cd4fe60ee6136e51c639e",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 34.72306990623474,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "--workspace"
+    ],
+    "compile_failed": false,
+    "compiled": 29,
+    "cpu_sampled_lower_bound_seconds": 135.301068,
+    "exec_wall_seconds": 60.162,
+    "exit": 101,
+    "fresh": 672,
+    "id": "20261014-100607224-43443644",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "906a82a187afc443f754f1ccbd05147794e3536a8a941125e3edf7888739da18",
+    "raw_output_sha256": "1f2832605d519ffc4df70e62ebd6d8b4b1f8040d34b791e6ba5bc17aa9bccd9d",
+    "raw_summary_sha256": "92a33856f6bdb0eb7b3509258e442a7e031774ad0f05c49e7d449bdc68385c42",
+    "recorded_tests": {
+      "failed": 14,
+      "ignored": 43,
+      "passed": 5581
+    },
+    "recorded_wall_seconds": 60.12519907951355,
+    "recorder_cpu_note": null,
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-model",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 106,
+    "cpu_sampled_lower_bound_seconds": 5.654236,
+    "exec_wall_seconds": 1.893,
+    "exit": 0,
+    "fresh": 88,
+    "id": "20261014-100737488-43443511",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "ef24e3694ecfda401fe6451bb491ae4f8ae8cf785d8b257d9b04a86aadd33218",
+    "raw_output_sha256": "3856899b8412cbed8ab49c1c33e6acdd2c5b90b5ec76a2b49d08c951f57927a5",
+    "raw_summary_sha256": "45bc9509127db8484f29418b23038855d6159ad1d18f94ddb1afd06ddfa38261",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 1.8690428733825684,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "check",
+      "-p",
+      "jcode-desktop-model"
+    ],
+    "compile_failed": false,
+    "compiled": 28,
+    "cpu_sampled_lower_bound_seconds": 0.953079,
+    "exec_wall_seconds": 0.562,
+    "exit": 0,
+    "fresh": 114,
+    "id": "20261014-100739396-43443509",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "f6726027561eb648153c07bdb59ccd0f052c5424a78c13acc7d56dc53255c4c7",
+    "raw_output_sha256": "91a2bbb15cf7165a80ac1bc2ae50879d140edf22dcad9843271a8af874cd99f9",
+    "raw_summary_sha256": "201a9a4723e490de4843ed125998d2ab11d83e0694cdf233fc2d246b06fcc67c",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 0.5280418395996094,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-desktop-model",
+      "--",
+      "diff"
+    ],
+    "compile_failed": false,
+    "compiled": 2,
+    "cpu_sampled_lower_bound_seconds": 2.11,
+    "exec_wall_seconds": 0.91,
+    "exit": 0,
+    "fresh": 182,
+    "id": "20261014-100740053-43443243",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "d4b85208065c6e3f790cd1485e7e99d6103dce190622d1c812a8c2d5cab4d033",
+    "raw_output_sha256": "10051b5fdfbcba297cb75fbd91ae2f1d0d617d9a952af86dc76393833c89c941",
+    "raw_summary_sha256": "2e0ab92193e3fad1aa99dec09ad15a53462802b50ffe523d4aee331bd57499b6",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 94
+    },
+    "recorded_wall_seconds": 0.8831031322479248,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-base",
+      "--lib",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 176,
+    "cpu_sampled_lower_bound_seconds": 12.901765999999999,
+    "exec_wall_seconds": 7.541,
+    "exit": 0,
+    "fresh": 207,
+    "id": "20261014-100801051-43443575",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "e8ce237de59fc65566f3da15629471d2353b300714fe2036aca917c81b383f4a",
+    "raw_output_sha256": "97c069f3fccc3b489e08c3e1970bdecb915e1aee637b6be511eb4c2db4acb910",
+    "raw_summary_sha256": "911b97c1c8fd3395a4b0aef1a7aefa047265ba3b96bb1cfac76b4a0724029cca",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 7.5103278160095215,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-base",
+      "--lib",
+      "--",
+      "tests"
+    ],
+    "compile_failed": false,
+    "compiled": 4,
+    "cpu_sampled_lower_bound_seconds": 51.814518,
+    "exec_wall_seconds": 22.646,
+    "exit": 101,
+    "fresh": 372,
+    "id": "20261014-100809183-43443833",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "21ef97c3d06962bca681e890a305c8fe6ac6f3ab644321c0a0994fdc98f03188",
+    "raw_output_sha256": "33863fa94056b80b42ba2a02c908d71c70ddbd88f4524b3b03cc87fcb596d80c",
+    "raw_summary_sha256": "f10cc8db065c99aba97dd32cc971f22c3408575ff410b80a9c6cac8ea868ea75",
+    "recorded_tests": {
+      "failed": 7,
+      "ignored": 5,
+      "passed": 1767
+    },
+    "recorded_wall_seconds": 22.612107276916504,
+    "recorder_cpu_note": null,
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "--release"
+    ],
+    "compile_failed": false,
+    "compiled": 0,
+    "cpu_sampled_lower_bound_seconds": 0.364073,
+    "exec_wall_seconds": 0.267,
+    "exit": 0,
+    "fresh": 750,
+    "id": "20261014-100831869-43443327",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "fc0ab1432e6d768fe6b252a1403d33432066574534ed5f72edce5e6f396b2f8f",
+    "raw_output_sha256": "1f06409cbd2bd15eca5f9c1b6970c6707274c4738c817344bdf95732fa2defe1",
+    "raw_summary_sha256": "fc8c570a9ebade63b933b145b696c8c3cf3a2bd609d3f7048414b658377c9db7",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 0.2453601360321045,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "build",
+      "--release"
+    ],
+    "compile_failed": false,
+    "compiled": 7,
+    "cpu_sampled_lower_bound_seconds": 380.0700000000001,
+    "exec_wall_seconds": 64.853,
+    "exit": 0,
+    "fresh": 743,
+    "id": "20261014-100833218-43443639",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "09a945175ecc8207bc0b4c0fa2add0a3f2ea7b6c7cc073b292d13dda97095c3b",
+    "raw_output_sha256": "326a52e8984a332d15be34323b09790c950283e369b45eed29c514f58cd36654",
+    "raw_summary_sha256": "57705e124b7b89b55b6cc94e1bd00b74a976ec7d0f402dccb2359ec9f2121480",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 64.81637024879456,
+    "recorder_cpu_note": "sampled process lower bound",
+    "role": "measured"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-tui",
+      "--lib",
+      "--no-run"
+    ],
+    "compile_failed": false,
+    "compiled": 82,
+    "cpu_sampled_lower_bound_seconds": 20.01866,
+    "exec_wall_seconds": 12.854,
+    "exit": 0,
+    "fresh": 502,
+    "id": "20261014-101008177-43443605",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "4a807dcfd612109d562bcc1fe9b96533f3fe3986639f788d92dabd12e2a45de3",
+    "raw_output_sha256": "507e1f165a153e3d6ee6a3da2b0637da7f8d51d49cd6fe3b7c4f0496c4f6e05a",
+    "raw_summary_sha256": "1a9d836bc5d8b977afe4e3a405a4af51fee33030bda4793d2e9d65ba0d938550",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 12.822014570236206,
+    "recorder_cpu_note": null,
+    "role": "preparation-or-previous"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-tui",
+      "--lib"
+    ],
+    "compile_failed": false,
+    "compiled": 0,
+    "cpu_sampled_lower_bound_seconds": 10.148166999999999,
+    "exec_wall_seconds": null,
+    "exit": 101,
+    "fresh": 580,
+    "id": "20261014-101022743-43443971",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "07f499591425e349a6e1ed3ceda076d0f90f54cf43d3c9c9c74dc94c215568e1",
+    "raw_output_sha256": "b4a74ebe53a69f12cf79d44d18966c9417d89aee6202d3093ef242dc26d6c191",
+    "raw_summary_sha256": "a6b55beb17f260191467ee8dfef95e67e04d4beeb63ba9ac22204f6ac6252219",
+    "recorded_tests": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 0
+    },
+    "recorded_wall_seconds": 784.9333112239838,
+    "recorder_cpu_note": null,
+    "role": "interrupted-unfinished-point16"
+  },
+  {
+    "actual_candidate_cargo": true,
+    "actual_pinned_rustc": true,
+    "args": [
+      "test",
+      "-p",
+      "jcode-tui",
+      "--lib"
+    ],
+    "compile_failed": false,
+    "compiled": 0,
+    "cpu_sampled_lower_bound_seconds": 29.779498999999998,
+    "exec_wall_seconds": null,
+    "exit": 101,
+    "fresh": 580,
+    "id": "20261014-102329731-294199",
+    "jobs": 24,
+    "machine_vcpu": 32,
+    "place": "local developer host",
+    "raw_meta_sha256": "eb57b0cb158cf753e4836cd410023a7ef299e5d408d74c547854d9b484501d54",
+    "raw_output_sha256": "dbbbda89cd9b4db91e6b96a38372de5117e9866ae6d9f3c26ea0fe093f1485ca",
+    "raw_summary_sha256": "e6cab0ef5123937c84a135bfce210f3206e4a04c89db086732f617fd2a045f3f",
+    "recorded_tests": {
+      "failed": 4,
+      "ignored": 18,
+      "passed": 2484
+    },
+    "recorded_wall_seconds": 19.917799711227417,
+    "recorder_cpu_note": null,
+    "role": "separate-headless-diagnostic"
+  }
+]

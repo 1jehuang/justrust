@@ -6615,3 +6615,39 @@ Reinstalled with `cargo install --path . --locked` and exercised the repaired
 installed recorder on this repository's `justrust check --local`: successful
 report, 62 fresh units, zero recompilation. The five cited validation summaries
 are in `data/runs/xps14/windows-sampler-20261014.jsonl`.
+
+## 2026-10-14: larger legacy-host scheduler gate, OFF-only and blocked
+
+The separate existing developer-owned c7i.8xlarge (32 vCPUs) with an existing
+500 GiB volume removed the prior storage entry refusal. Effective initial
+free space was 229,541,593,088 bytes. Fresh-prefix source/toolchain hashes,
+150 GiB entry reserve, 8 GiB per-command reserve and 24 Cargo jobs were checked.
+The ordinary tenant host, D1 row, defaults, IAM and service caches were unchanged.
+
+Actual seed-1/40-point OFF execution reached 15 points with 35 completed commands.
+Seven measured samples are noisy and three unexpectedly fail tests. ON never
+started, so there is no broad comparison, speedup, promotion or core ceiling.
+UI `20261014-095558516-43443865`, workspace `20261014-100607224-43443644` and
+base `20261014-100809183-43443833` retain exit101 and complete failing output.
+The UI failures are panel-cache assertions, not the historical viewport failure.
+
+Point 16 `20261014-101022743-43443971` stopped with its observer/CLI/test group
+behind the controlling PTY foreground group. A verified owned-only SIGCONT
+immediately restopped. The exact signal/source is unproven. The owned group
+was terminated at 10:23:27 UTC, with its 784.933s recorder finalization retained but
+NOT counted as a benchmark outcome. Separate headless diagnostic
+`20261014-102329731-294199` completed/101, not a pure stdin or compiler gain.
+
+Closing frozen CLI/Cargo/rustc/hint hashes and zero owned commands were verified.
+The exact originally stopped legacy instance was restored stopped at 10:27:09 UTC,
+with its 500 GiB volume preserved. No termination/deletion or permission changes.
+The 11:00 cleanup backstop was canceled only after that observed restoration.
+
+Frozen public show refuses 15/40/noise/outcome aggregation; self-comparison
+refuses absent environment provenance, not a fabricated ON result. 199 frozen
+Python tests pass. 37 exact exported records include the interrupted recorder
+and diagnostic, not 37 samples. Full failure JSONL is compressed and redacted
+only for explicit paths/resources/addresses/long bearer tokens. Requirement
+mapping and limitations: `docs/scheduler-legacy-attempt-20261014.md`; artifacts:
+`bench/results/scheduler-legacy-3f47-20261014/`. All 37 cited exports are in
+`data/runs/scheduler-legacy-c7i-20261014/2026-10.jsonl`.

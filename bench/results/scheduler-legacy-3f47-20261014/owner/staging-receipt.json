@@ -1,0 +1,20 @@
+{
+  "schema": "isolated-legacy-staging-v1",
+  "time": 1791970572.7037597,
+  "harness_source_commit": "3f47eadb35019943dd506d8d2f6ab69ea4cadd96",
+  "local_expected_hashes": {
+    "<operator-home>/.jcode/scratch/sharing/client-native-target-059674bf76fa218ba7e475279a86b4b6caf32aac/release/justrust": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+    "<operator-home>/jr-cargo/target/release/cargo": "c38c3d63e82c74fc4ba9e2978ad74ccad7f74aa21dec6d2bf978e0c4dcf1e13d",
+    "<operator-home>/.justrust/toolchains/nightly-2026-10-08/bin/rustc": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+    "<operator-home>/justrust/bench/results/scheduler-comprehensive-2172-20261014/costs-offline-v2.json": "29bb6618b1ca614cfed13c3bd77777954f2380f757aeeb2fd799abe2040e44d8"
+  },
+  "snapshot_archives": {
+    "jcode-desktop@7d38fb7.tar": "1b4700a6aeb8ca4e0cd771bd75da61e18fe21ead03fd7a912129b878d5da9cf1",
+    "jcode@abff94eeb.tar": "b47871a3e6ad36a1c6c86fb1c6bff4bf1f3c5a2d8a32c7e022fdea0d700f5f3a",
+    "justrust@f97fcc2.tar": "059b73951c6cddf48286ff498fb36166e703c6467cb119011a5af0530bcdac80"
+  },
+  "remote_prefix": "<trial>",
+  "source_mode": "fresh archive, no service cache copy",
+  "deadline": "2026-10-14T10:59:00Z",
+  "cleanup_backstop": "2026-10-14T11:00:00Z"
+}

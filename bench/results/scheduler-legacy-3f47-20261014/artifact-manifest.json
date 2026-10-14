@@ -1,0 +1,197 @@
+[
+  {
+    "bytes": 2173,
+    "path": "acceptance.json",
+    "sha256": "053c34c0f60a365f117eb73a39edd82bd97cbff1407a5ba97698cbc6e7653993"
+  },
+  {
+    "bytes": 34323,
+    "path": "commands.json",
+    "sha256": "47b85c02c9112b0560d6a4e77c4a5e91eb21c917ac86b8565f6ebe1de559a8c3"
+  },
+  {
+    "bytes": 67695,
+    "path": "failed-output/20261014-095558516-43443865.jsonl.gz",
+    "sha256": "c7cd4e8350036b38ec6fdd2b5cb037421f806b1d5dc7ad06c971c5d3261f9f1c"
+  },
+  {
+    "bytes": 617245,
+    "path": "failed-output/20261014-100607224-43443644.jsonl.gz",
+    "sha256": "188cb80ca5ccb57ffb3ae46a1024f464aafa0dee79f1e09afb0f7e3ad8bd7c5f"
+  },
+  {
+    "bytes": 76996,
+    "path": "failed-output/20261014-100809183-43443833.jsonl.gz",
+    "sha256": "12e79b31f069d34206df9428334b0a602adab185036d9ad9fa0f9bbde3e7eeee"
+  },
+  {
+    "bytes": 26680,
+    "path": "failed-output/20261014-101022743-43443971.jsonl.gz",
+    "sha256": "994faaa68e842a34b37723427e07e56c92bd6803693267e3573b8f6d8822906e"
+  },
+  {
+    "bytes": 76017,
+    "path": "failed-output/20261014-102329731-294199.jsonl.gz",
+    "sha256": "e784760444d2a329b22e0551502cfa3542cab1cdd8a57a894d267e1d7b834703"
+  },
+  {
+    "bytes": 330,
+    "path": "frozen-tests.txt",
+    "sha256": "875df029d4a2612ab1caed5187eeb4b163ca498861e63f351998e0888e7daa6d"
+  },
+  {
+    "bytes": 2001,
+    "path": "harness/continue-owned-group.py",
+    "sha256": "7dd076e8460ad51cc66b881906e8c75cea65b1f402c858d1f8aa8ece19638dc4"
+  },
+  {
+    "bytes": 2029,
+    "path": "harness/monitor-progress.py",
+    "sha256": "26128549589599341f3ea2b3783b2986897e502dcd511015eac806b972f88bfa"
+  },
+  {
+    "bytes": 2630,
+    "path": "harness/run-legacy-comprehensive.sh",
+    "sha256": "1204d9defe7d3e27887e0684e162c46599293de71576f962eb0e6b44cfff3a31"
+  },
+  {
+    "bytes": 3915,
+    "path": "harness/stop-owned-and-diagnose.py",
+    "sha256": "1c47bb06924e1230c581d41864014c8b280f63813053a14b476ac1c622545f11"
+  },
+  {
+    "bytes": 0,
+    "path": "logs/0-exec-preparation-timeout.jsonl",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "bytes": 33375,
+    "path": "logs/0-exec.jsonl",
+    "sha256": "875c61c5f585fff565454f6f9ae06247be63fdc157c426a6748f6b453f482294"
+  },
+  {
+    "bytes": 4361,
+    "path": "logs/0-output.log",
+    "sha256": "a3b132d4d27ef0515f23ae0d0616cd6e171b265e608d075969023786844783ba"
+  },
+  {
+    "bytes": 11637,
+    "path": "logs/0-preparation-timeout.log",
+    "sha256": "f07d42b1dcc47be6668ca354238cf1d84e38302966301dbbb4ad632aead0219b"
+  },
+  {
+    "bytes": 1169,
+    "path": "logs/early-stop.json",
+    "sha256": "3b4d3fe58dd6eedcfae1c22ab56ddf085fd255feb630f32740070e82cd6c2726"
+  },
+  {
+    "bytes": 5697,
+    "path": "logs/full-stream-r1.log",
+    "sha256": "e21743c13053ed16d2ef3b4c237cf4df1815590a28bc48114586c809d8f60bea"
+  },
+  {
+    "bytes": 489,
+    "path": "logs/headless-diagnostic.json",
+    "sha256": "eb2334fc552e67ca8cb54f63458f36b191efaeb75f4cce698486ce48e20e598d"
+  },
+  {
+    "bytes": 12617,
+    "path": "logs/headless-diagnostic.log",
+    "sha256": "a2e11d682a2252cbbc57c23c85867f99fd524b82f18201e8c8e41c9a1df4fe16"
+  },
+  {
+    "bytes": 752,
+    "path": "logs/identity-preparation-start.txt",
+    "sha256": "c8fd53175917c87984ce934ef27753556590a09366337922464e9cd03ec52d27"
+  },
+  {
+    "bytes": 752,
+    "path": "logs/identity-start.txt",
+    "sha256": "c8fd53175917c87984ce934ef27753556590a09366337922464e9cd03ec52d27"
+  },
+  {
+    "bytes": 1518,
+    "path": "logs/nonfatal-continue.json",
+    "sha256": "fee99afac5694fa0e38fec602a50aee3ad4327860fc31e8e2fb46fb6094f3e5b"
+  },
+  {
+    "bytes": 28263,
+    "path": "off-report-envelope.json",
+    "sha256": "15ad0abc44534268c061138b45f8080624d32da9c185053db21e9a714bc1669e"
+  },
+  {
+    "bytes": 479,
+    "path": "owner/closing-guest-identity.json",
+    "sha256": "16879af259b5dffe9084059e1f07eeffad97e881fc7a4f5c41f7559fb3d54c2d"
+  },
+  {
+    "bytes": 387,
+    "path": "owner/detached-resume-receipt.json",
+    "sha256": "c28ab0ff4ae3bff118e3e44154f62a1e581cdd5e245d352953abc8ad7f5ff989"
+  },
+  {
+    "bytes": 648,
+    "path": "owner/guest-capacity.txt",
+    "sha256": "e9a02bcde4ac968036246f0642eab20fb31eb4e0ff724bc0201e06c326fc21c4"
+  },
+  {
+    "bytes": 1894,
+    "path": "owner/inflight-command-observation.txt",
+    "sha256": "4ef357fcf5706c25f04544884855dc405942c9863cf5ea8f91dbe91465d918d2"
+  },
+  {
+    "bytes": 114,
+    "path": "owner/launcher-identity.json",
+    "sha256": "640e6abcbce38e787e56c095bb87038ee39dd429a9c94174e65577f17676970b"
+  },
+  {
+    "bytes": 1459,
+    "path": "owner/nonfatal-continue.json",
+    "sha256": "0634e51ff317e849e13a5c77a8220870e64d5ac74c38e719bee61cf39bc51cef"
+  },
+  {
+    "bytes": 3869,
+    "path": "owner/progress-observations.jsonl",
+    "sha256": "0cb16ea570efdf422f9b827037ac41c09a43340a8e4e2a28e31a1e474e4f96d8"
+  },
+  {
+    "bytes": 1396,
+    "path": "owner/staged-guest.txt",
+    "sha256": "e0e6ea4b03ade49bed1ebffaabc1dc486658bc00e9c54347a656f4caa55d5298"
+  },
+  {
+    "bytes": 1299,
+    "path": "owner/staging-receipt.json",
+    "sha256": "1b986d3ad70f2f2c2b0b5c3db3adfc247c64024b6662625bef8a19e904fe7fe0"
+  },
+  {
+    "bytes": 1194,
+    "path": "owner/stock-probe-runtime.txt",
+    "sha256": "6ca12052047b0a0bdeebd0576cd905ebc1f9dc5731d1b14691a5726c7adfb687"
+  },
+  {
+    "bytes": 718,
+    "path": "owner/stop-restoration.json",
+    "sha256": "f13b653beb4589eab3b4d1e306b93580116d89cd684421d73d562358a6d4a3b6"
+  },
+  {
+    "bytes": 16548,
+    "path": "partial-off.json",
+    "sha256": "578a2dafbe25cd61f7d7c98be2ee65eb2cace348b85a3aa0efa8d439648d4289"
+  },
+  {
+    "bytes": 102,
+    "path": "public-self-compare.txt",
+    "sha256": "2e58b77f693b0fa4dd602b5c9410c05ccf71283cc13931b202fd784f6388d4bf"
+  },
+  {
+    "bytes": 2365,
+    "path": "public-show.txt",
+    "sha256": "8618605edf4721aa7bee161f450fe979be594a600c72773a193bd39cd807ccc8"
+  },
+  {
+    "bytes": 10415,
+    "path": "raw-source-manifest.json",
+    "sha256": "eceea6781646a68e04c6cc5333f497403c93bcfc2b62b6484ef3ce46b393628a"
+  }
+]

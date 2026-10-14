@@ -1,0 +1,16 @@
+Wed Oct 14 09:29:48 UTC 2026
+Filesystem        1B-blocks         Used    Available Use% Mounted on
+/dev/root      518933680128 289375309824 229541593088  56% /
+/dev/root      518933680128 289375309824 229541593088  56% /
+NAME                 SIZE TYPE MOUNTPOINTS
+loop0            29777920 loop /snap/amazon-ssm-agent/13349
+loop1            77574144 loop /snap/core22/2955
+loop2            46882816 loop /snap/snapd/28254
+nvme0n1      536870912000 disk 
+├─nvme0n1p1  535796104704 part /
+├─nvme0n1p14      4194304 part 
+├─nvme0n1p15    111149056 part /boot/efi
+└─nvme0n1p16    957350400 part /boot
+32
+0.31 0.07 0.02 1/458 1407
+READY

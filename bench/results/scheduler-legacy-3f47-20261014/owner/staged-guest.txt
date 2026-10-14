@@ -1,0 +1,28 @@
+0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d  <trial>/bin/justrust
+66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56  <trial>/home/toolchains/nightly-2026-10-08/bin/rustc
+c38c3d63e82c74fc4ba9e2978ad74ccad7f74aa21dec6d2bf978e0c4dcf1e13d  <trial>/home/toolchains/nightly-2026-10-08/bin/jr-cargo
+29bb6618b1ca614cfed13c3bd77777954f2380f757aeeb2fd799abe2040e44d8  <trial>/costs.json
+Filesystem        1B-blocks         Used    Available Use% Mounted on
+/dev/root      518933680128 291383488512 227533414400  57% /
+Wed Oct 14 09:36:12 UTC 2026
+0.05 0.03 0.00 1/447 1566
+cargo 1.101.0-nightly (f3865b2a4 2026-09-29)
+release: 1.101.0-nightly
+commit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928
+commit-date: 2026-09-29
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.6 (sys:0.21.0 vendored)
+libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3)
+ssl: OpenSSL 3.6.3 9 Jun 2026
+os: Ubuntu 24.4.0 (noble) [64-bit]
+rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+binary: rustc
+commit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+commit-date: 2026-10-07
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+	linux-vdso.so.1 (0x00007747c9c85000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007747c93ca000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007747c9000000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007747c9c87000)

@@ -1,0 +1,24 @@
+{
+  "schema": "owned-suspended-trial-stop-v1",
+  "time_before": 1791973407.6987936,
+  "unfinished_run_id": "20261014-101022743-43443971",
+  "members_before": [
+    "  43441   43350   43441   43348   43348 pts/0    S    timeout --signal=TERM --kill-after=15s 4089 python3 <trial>/observer.py",
+    "  43443   43441   43441   43348   43348 pts/0    T    python3 <trial>/observer.py",
+    " 275015   43443   43441   43348   43348 pts/0    Tl   <trial>/bin/justrust test -p jcode-tui --lib",
+    " 275048  275015   43441   43348   43348 pts/0    Tl   <trial>/home/bench/versus/target/desktop/suite-nightly-2026-10-08/debug/build/jcode-tui/fc4cea1f23d3a710/out/jcode_tui-fc4cea1f23d3a710 -Z unstable-options --report-time"
+  ],
+  "reason": "owned process group repeatedly stops; preserve partial, no full OFF/ON comparison",
+  "unfinished_files": {
+    "live.json": {
+      "bytes": 213,
+      "sha256": "50fae9ee120c81651d6cfaf9dbb74758a29c2dae583f46540c9ff541f545661b"
+    },
+    "meta.json": {
+      "bytes": 900,
+      "sha256": "07f499591425e349a6e1ed3ceda076d0f90f54cf43d3c9c9c74dc94c215568e1"
+    }
+  },
+  "time_after": 1791973409.6990798,
+  "members_remaining": []
+}

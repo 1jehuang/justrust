@@ -1,0 +1,9 @@
+{
+  "time": 1791971446.514892,
+  "exit": 0,
+  "stdout": "Wed Oct 14 09:50:46 UTC 2026\n",
+  "stderr": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+  "scope": "same frozen preparation continuation, no measured record removed or cache deletion",
+  "local_tool_timeout_seconds": 600,
+  "hard_remote_deadline": "2026-10-14T10:59:00Z"
+}

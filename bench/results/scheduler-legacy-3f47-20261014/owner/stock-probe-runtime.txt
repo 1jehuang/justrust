@@ -1,0 +1,26 @@
+Wed Oct 14 09:45:41 UTC 2026
+STOCK_CARGO=<guest-home>/.cargo/bin/cargo
+<guest-home>/.cargo/bin/rustup
+cargo 1.99.0 (5f94df478 2026-08-27)
+release: 1.99.0
+commit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e
+commit-date: 2026-08-27
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.6 (sys:0.21.0 vendored)
+libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3)
+ssl: OpenSSL 3.6.3 9 Jun 2026
+os: Ubuntu 24.4.0 (noble) [64-bit]
+rustc 1.99.0 (b940084d7 2026-09-28)
+binary: rustc
+commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+commit-date: 2026-09-28
+host: x86_64-unknown-linux-gnu
+release: 1.99.0
+LLVM version: 23.1.1
+<guest-home>/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo
+<guest-home>/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc
+e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14  <guest-home>/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo
+f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f  <guest-home>/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc
+4
+Filesystem        1B-blocks         Used    Available Use% Mounted on
+/dev/root      518933680128 300581433344 218335469568  58% /

@@ -1,0 +1,182 @@
+bench: extracting <guest-home>/jcode-desktop@7d38fb7 -> <trial>/home/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop
+bench: extracting <guest-home>/jcode@abff94eeb -> <trial>/home/bench/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode
+bench: extracting <trial>/harness@f97fcc2 -> <trial>/home/bench/work/justrust/justrust@f97fcc2/justrust
+synth: probing jcode-desktop-ui (300 locations)
+synth: jcode-desktop-ui: 136 live body, 161 live test locations in 124 files
+synth: probing jcode-base (300 locations)
+synth: jcode-base: 173 live body, 0 live test locations in 85 files
+synth: probing jcode-desktop (142 locations)
+synth: jcode-desktop: 64 live body, 73 live test locations in 12 files
+synth: probing justrust (300 locations)
+synth: justrust: 220 live body, 73 live test locations in 31 files
+synth: probing jcode-app-core (300 locations)
+synth: jcode-app-core: 133 live body, 142 live test locations in 132 files
+synth: probing jcode-tui (300 locations)
+synth: jcode-tui: 139 live body, 157 live test locations in 139 files
+synth: probing jcode-desktop-motion (15 locations)
+synth: jcode-desktop-motion: 9 live body, 6 live test locations in 1 files
+synth: probing jcode-applet-types (44 locations)
+synth: jcode-applet-types: 32 live body, 2 live test locations in 7 files
+synth: probing jcode-config-types (94 locations)
+synth: jcode-config-types: 73 live body, 21 live test locations in 4 files
+synth: probing jcode-core (98 locations)
+synth: jcode-core: 41 live body, 52 live test locations in 9 files
+synth: probing jcode-desktop-accounts-ui (44 locations)
+synth: jcode-desktop-accounts-ui: 33 live body, 11 live test locations in 3 files
+synth: probing jcode-desktop-api (47 locations)
+synth: jcode-desktop-api: 31 live body, 16 live test locations in 4 files
+synth: probing jcode-desktop-harness (276 locations)
+synth: jcode-desktop-harness: 129 live body, 145 live test locations in 18 files
+synth: probing jcode-desktop-model (274 locations)
+synth: jcode-desktop-model: 125 live body, 149 live test locations in 6 files
+synth: probing jcode-desktop-ui-core (222 locations)
+synth: jcode-desktop-ui-core: 132 live body, 90 live test locations in 11 files
+synth: probing jcode-desktop-voice (100 locations)
+synth: jcode-desktop-voice: 64 live body, 33 live test locations in 5 files
+synth: probing jcode-harness-api (95 locations)
+synth: jcode-harness-api: 28 live body, 66 live test locations in 9 files
+synth: probing jcode-protocol (131 locations)
+synth: jcode-protocol: 38 live body, 93 live test locations in 11 files
+synth: probing jcode-provider-core (300 locations)
+synth: jcode-provider-core: 173 live body, 127 live test locations in 18 files
+synth: probing jcode-provider-metadata (34 locations)
+synth: jcode-provider-metadata: 16 live body, 18 live test locations in 1 files
+synth: probing jcode-sdk (300 locations)
+synth: jcode-sdk: 174 live body, 72 live test locations in 15 files
+synth: probing jcode-session-types (42 locations)
+synth: jcode-session-types: 29 live body, 13 live test locations in 3 files
+synth: probing jcode-storage (75 locations)
+synth: jcode-storage: 51 live body, 14 live test locations in 3 files
+synth: probing jcode-telemetry-core (238 locations)
+synth: jcode-telemetry-core: 154 live body, 83 live test locations in 6 files
+synth: probing jcode-tool-types (8 locations)
+synth: jcode-tool-types: 5 live body, 3 live test locations in 1 files
+synth: probing jcode-usage-types (21 locations)
+synth: jcode-usage-types: 10 live body, 11 live test locations in 1 files
+synth: probing jcode (300 locations)
+synth: jcode: 108 live body, 84 live test locations in 38 files
+synth: probing jcode-agent-runtime (17 locations)
+synth: jcode-agent-runtime: 11 live body, 6 live test locations in 1 files
+synth: probing jcode-ambient-types (1 locations)
+synth: jcode-ambient-types: 1 live body, 0 live test locations in 1 files
+synth: probing jcode-auth-types (6 locations)
+synth: jcode-auth-types: 6 live body, 0 live test locations in 1 files
+synth: probing jcode-azure-auth (1 locations)
+synth: jcode-azure-auth: 1 live body, 0 live test locations in 1 files
+synth: probing jcode-background-types (6 locations)
+synth: jcode-background-types: 5 live body, 1 live test locations in 1 files
+synth: probing jcode-batch-types (0 locations)
+synth: jcode-batch-types: 0 live body, 0 live test locations in 0 files
+synth: probing jcode-build-meta (13 locations)
+synth: jcode-build-meta: 12 live body, 1 live test locations in 1 files
+synth: probing jcode-build-support (189 locations)
+synth: jcode-build-support: 123 live body, 63 live test locations in 7 files
+synth: probing jcode-codemode (32 locations)
+synth: jcode-codemode: 9 live body, 23 live test locations in 3 files
+synth: probing jcode-command-risk (120 locations)
+synth: jcode-command-risk: 33 live body, 87 live test locations in 8 files
+synth: probing jcode-compaction-core (44 locations)
+synth: jcode-compaction-core: 23 live body, 21 live test locations in 1 files
+synth: probing jcode-fuzzy (34 locations)
+synth: jcode-fuzzy: 22 live body, 12 live test locations in 1 files
+synth: probing jcode-gateway-types (0 locations)
+synth: jcode-gateway-types: 0 live body, 0 live test locations in 0 files
+synth: probing jcode-harness-api-server (261 locations)
+synth: jcode-harness-api-server: 74 live body, 0 live test locations in 4 files
+synth: probing jcode-import-core (112 locations)
+synth: jcode-import-core: 38 live body, 45 live test locations in 2 files
+synth: probing jcode-logging (68 locations)
+synth: jcode-logging: 55 live body, 11 live test locations in 2 files
+synth: probing jcode-memory-types (112 locations)
+synth: jcode-memory-types: 92 live body, 20 live test locations in 3 files
+synth: probing jcode-message-types (72 locations)
+synth: jcode-message-types: 52 live body, 20 live test locations in 2 files
+synth: probing jcode-notify-email (15 locations)
+synth: jcode-notify-email: 6 live body, 9 live test locations in 1 files
+synth: probing jcode-overnight-core (40 locations)
+synth: jcode-overnight-core: 30 live body, 10 live test locations in 3 files
+synth: probing jcode-pdf (3 locations)
+synth: jcode-pdf: 2 live body, 1 live test locations in 1 files
+synth: probing jcode-plan (190 locations)
+synth: jcode-plan: 107 live body, 83 live test locations in 8 files
+synth: probing jcode-productivity-core (54 locations)
+synth: jcode-productivity-core: 47 live body, 6 live test locations in 7 files
+synth: probing jcode-provider-anthropic (71 locations)
+synth: jcode-provider-anthropic: 19 live body, 52 live test locations in 8 files
+synth: probing jcode-provider-anthropic-runtime (198 locations)
+synth: jcode-provider-anthropic-runtime: 92 live body, 106 live test locations in 7 files
+synth: probing jcode-provider-antigravity (34 locations)
+synth: jcode-provider-antigravity: 23 live body, 11 live test locations in 1 files
+synth: probing jcode-provider-antigravity-runtime (49 locations)
+synth: jcode-provider-antigravity-runtime: 24 live body, 25 live test locations in 2 files
+synth: probing jcode-provider-bedrock (82 locations)
+synth: jcode-provider-bedrock: 53 live body, 27 live test locations in 1 files
+synth: probing jcode-provider-copilot (8 locations)
+synth: jcode-provider-copilot: 5 live body, 3 live test locations in 1 files
+synth: probing jcode-provider-copilot-runtime (86 locations)
+synth: jcode-provider-copilot-runtime: 47 live body, 39 live test locations in 3 files
+synth: probing jcode-provider-cursor-runtime (155 locations)
+synth: jcode-provider-cursor-runtime: 102 live body, 53 live test locations in 4 files
+synth: probing jcode-provider-doctor (99 locations)
+synth: jcode-provider-doctor: 42 live body, 57 live test locations in 3 files
+synth: probing jcode-provider-env (19 locations)
+synth: jcode-provider-env: 9 live body, 10 live test locations in 1 files
+synth: probing jcode-provider-gemini (21 locations)
+synth: jcode-provider-gemini: 16 live body, 5 live test locations in 1 files
+synth: probing jcode-provider-gemini-runtime (101 locations)
+synth: jcode-provider-gemini-runtime: 33 live body, 46 live test locations in 2 files
+synth: probing jcode-provider-grok-build-runtime (30 locations)
+synth: jcode-provider-grok-build-runtime: 24 live body, 6 live test locations in 1 files
+synth: probing jcode-provider-openai (91 locations)
+synth: jcode-provider-openai: 37 live body, 54 live test locations in 4 files
+synth: probing jcode-provider-openai-runtime (300 locations)
+synth: jcode-provider-openai-runtime: 118 live body, 182 live test locations in 18 files
+synth: probing jcode-provider-openrouter (85 locations)
+synth: jcode-provider-openrouter: 43 live body, 42 live test locations in 4 files
+synth: probing jcode-provider-openrouter-runtime (300 locations)
+synth: jcode-provider-openrouter-runtime: 135 live body, 165 live test locations in 15 files
+synth: probing jcode-render-core (167 locations)
+synth: jcode-render-core: 95 live body, 41 live test locations in 7 files
+synth: probing jcode-schema-dialect (94 locations)
+synth: jcode-schema-dialect: 47 live body, 2 live test locations in 7 files
+synth: probing jcode-selfdev-types (9 locations)
+synth: jcode-selfdev-types: 4 live body, 5 live test locations in 2 files
+synth: probing jcode-setup-hints (300 locations)
+synth: jcode-setup-hints: 114 live body, 149 live test locations in 18 files
+synth: probing jcode-side-panel-types (5 locations)
+synth: jcode-side-panel-types: 5 live body, 0 live test locations in 1 files
+synth: probing jcode-swarm-core (39 locations)
+synth: jcode-swarm-core: 17 live body, 22 live test locations in 1 files
+synth: probing jcode-task-types (24 locations)
+synth: jcode-task-types: 17 live body, 7 live test locations in 1 files
+synth: probing jcode-terminal-image (33 locations)
+synth: jcode-terminal-image: 20 live body, 13 live test locations in 2 files
+synth: probing jcode-terminal-launch (65 locations)
+synth: jcode-terminal-launch: 20 live body, 38 live test locations in 2 files
+synth: probing jcode-tool-core (15 locations)
+synth: jcode-tool-core: 7 live body, 8 live test locations in 1 files
+synth: probing jcode-transport (33 locations)
+synth: jcode-transport: 3 live body, 4 live test locations in 1 files
+synth: probing jcode-tui-account-picker (48 locations)
+synth: jcode-tui-account-picker: 41 live body, 7 live test locations in 3 files
+synth: probing jcode-tui-anim (9 locations)
+synth: jcode-tui-anim: 4 live body, 5 live test locations in 1 files
+synth: probing jcode-tui-core (129 locations)
+synth: jcode-tui-core: 59 live body, 70 live test locations in 5 files
+synth: probing jcode-tui-markdown (300 locations)
+synth: jcode-tui-markdown: 139 live body, 144 live test locations in 18 files
+synth: probing jcode-tui-mermaid (300 locations)
+synth: jcode-tui-mermaid: 209 live body, 70 live test locations in 13 files
+synth: probing jcode-tui-messages (73 locations)
+synth: jcode-tui-messages: 50 live body, 23 live test locations in 5 files
+synth: probing jcode-tui-permissions (25 locations)
+synth: jcode-tui-permissions: 25 live body, 0 live test locations in 1 files
+synth: probing jcode-tui-render (133 locations)
+synth: jcode-tui-render: 55 live body, 69 live test locations in 6 files
+synth: probing jcode-tui-session-picker (10 locations)
+synth: jcode-tui-session-picker: 8 live body, 2 live test locations in 1 files
+synth: probing jcode-tui-style (228 locations)
+synth: jcode-tui-style: 124 live body, 103 live test locations in 9 files
+synth: probing jcode-tui-tool-display (14 locations)
+synth: jcode-tui-tool-display: 11 live body, 3 live test locations in 1 files
+synth: probing jcode-tui-usage-overlay (33 locations)

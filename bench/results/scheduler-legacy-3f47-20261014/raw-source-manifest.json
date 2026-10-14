@@ -1,0 +1,226 @@
+[
+  {
+    "published": "failed-output/20261014-095558516-43443865.jsonl.gz",
+    "raw_bytes": 405079,
+    "raw_sha256": "8d2c0fefb7a5982ed44972b3b8de816fcca8d6bbb180256be0218a32c6c0b1a6",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "records/20261014-095558516-43443865/output.jsonl"
+  },
+  {
+    "published": "failed-output/20261014-100607224-43443644.jsonl.gz",
+    "raw_bytes": 5779108,
+    "raw_sha256": "1f2832605d519ffc4df70e62ebd6d8b4b1f8040d34b791e6ba5bc17aa9bccd9d",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "records/20261014-100607224-43443644/output.jsonl"
+  },
+  {
+    "published": "failed-output/20261014-100809183-43443833.jsonl.gz",
+    "raw_bytes": 530741,
+    "raw_sha256": "33863fa94056b80b42ba2a02c908d71c70ddbd88f4524b3b03cc87fcb596d80c",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "records/20261014-100809183-43443833/output.jsonl"
+  },
+  {
+    "published": "failed-output/20261014-101022743-43443971.jsonl.gz",
+    "raw_bytes": 146603,
+    "raw_sha256": "b4a74ebe53a69f12cf79d44d18966c9417d89aee6202d3093ef242dc26d6c191",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "records/20261014-101022743-43443971/output.jsonl"
+  },
+  {
+    "published": "failed-output/20261014-102329731-294199.jsonl.gz",
+    "raw_bytes": 414461,
+    "raw_sha256": "dbbbda89cd9b4db91e6b96a38372de5117e9866ae6d9f3c26ea0fe093f1485ca",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "records/20261014-102329731-294199/output.jsonl"
+  },
+  {
+    "published": "logs/0-exec-preparation-timeout.jsonl",
+    "raw_bytes": 0,
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/0-exec-preparation-timeout.jsonl"
+  },
+  {
+    "published": "logs/0-preparation-timeout.log",
+    "raw_bytes": 11805,
+    "raw_sha256": "020ff22110647d32466b004c4086ec10ed0a705510d4fd94702eec26060604c7",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/0-preparation-timeout.log"
+  },
+  {
+    "published": "logs/identity-preparation-start.txt",
+    "raw_bytes": 920,
+    "raw_sha256": "fd6680b53f62607616185c02715ccd245383c3810dde88acf09717cca556ced3",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/identity-preparation-start.txt"
+  },
+  {
+    "published": "logs/identity-start.txt",
+    "raw_bytes": 920,
+    "raw_sha256": "fd6680b53f62607616185c02715ccd245383c3810dde88acf09717cca556ced3",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/identity-start.txt"
+  },
+  {
+    "published": "logs/0-exec.jsonl",
+    "raw_bytes": 33375,
+    "raw_sha256": "875c61c5f585fff565454f6f9ae06247be63fdc157c426a6748f6b453f482294",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/0-exec.jsonl"
+  },
+  {
+    "published": "logs/0-output.log",
+    "raw_bytes": 4781,
+    "raw_sha256": "3aca4f5dc0202a229fb4fcfebde028dfbeff6a6109d1156fabd3e76649e3935e",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/0-output.log"
+  },
+  {
+    "published": "logs/early-stop.json",
+    "raw_bytes": 1337,
+    "raw_sha256": "607cd2682e507fc86c18adf6d02b6f5a2a8a566ec68837c4107c199538e011d6",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/early-stop.json"
+  },
+  {
+    "published": "logs/full-stream-r1.log",
+    "raw_bytes": 6285,
+    "raw_sha256": "048fc50b1a79c2bbda4639512988effc916304d03a09e838f53f96996c01d9fb",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/full-stream-r1.log"
+  },
+  {
+    "published": "logs/headless-diagnostic.json",
+    "raw_bytes": 489,
+    "raw_sha256": "eb2334fc552e67ca8cb54f63458f36b191efaeb75f4cce698486ce48e20e598d",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/headless-diagnostic.json"
+  },
+  {
+    "published": "logs/headless-diagnostic.log",
+    "raw_bytes": 12617,
+    "raw_sha256": "a2e11d682a2252cbbc57c23c85867f99fd524b82f18201e8c8e41c9a1df4fe16",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/headless-diagnostic.log"
+  },
+  {
+    "published": "logs/nonfatal-continue.json",
+    "raw_bytes": 1854,
+    "raw_sha256": "5e2780e9a3f436ac9f06a77f76ef24d183df7c3e9c2afb043b35480ac851edc0",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "results/nonfatal-continue.json"
+  },
+  {
+    "published": "partial-off.json",
+    "raw_bytes": 16548,
+    "raw_sha256": "578a2dafbe25cd61f7d7c98be2ee65eb2cace348b85a3aa0efa8d439648d4289",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "partial/synth1.json"
+  },
+  {
+    "published": "owner/staging-receipt.json",
+    "raw_bytes": 1329,
+    "raw_sha256": "958184195b46b8fb4f2ea77bbf01d55d25dcb054676a7bf49423d2d46abdda08",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/staging-receipt.json"
+  },
+  {
+    "published": "owner/closing-guest-identity.json",
+    "raw_bytes": 479,
+    "raw_sha256": "16879af259b5dffe9084059e1f07eeffad97e881fc7a4f5c41f7559fb3d54c2d",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/closing-guest-identity.json"
+  },
+  {
+    "published": "owner/stop-restoration.json",
+    "raw_bytes": 725,
+    "raw_sha256": "97b05e98e708e60ed4a2667a3f892a069d87000a948073f834a4dadac37fa494",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/stop-restoration.json"
+  },
+  {
+    "published": "owner/nonfatal-continue.json",
+    "raw_bytes": 1795,
+    "raw_sha256": "c0ffa7b3fbaf702a074ea2e0310b4490dd7b10b26af46bdb5ec6e4cb9de57ca9",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/nonfatal-continue.json"
+  },
+  {
+    "published": "owner/detached-resume-receipt.json",
+    "raw_bytes": 387,
+    "raw_sha256": "c28ab0ff4ae3bff118e3e44154f62a1e581cdd5e245d352953abc8ad7f5ff989",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/detached-resume-receipt.json"
+  },
+  {
+    "published": "owner/progress-observations.jsonl",
+    "raw_bytes": 3869,
+    "raw_sha256": "0cb16ea570efdf422f9b827037ac41c09a43340a8e4e2a28e31a1e474e4f96d8",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/progress-observations.jsonl"
+  },
+  {
+    "published": "owner/inflight-command-observation.txt",
+    "raw_bytes": 2356,
+    "raw_sha256": "ba0624e8dcf41ab912a0c16d25d473a60657ba03b662b651451258b3a230bf91",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/inflight-command-observation.txt"
+  },
+  {
+    "published": "owner/guest-capacity.txt",
+    "raw_bytes": 648,
+    "raw_sha256": "e9a02bcde4ac968036246f0642eab20fb31eb4e0ff724bc0201e06c326fc21c4",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/guest-capacity.txt"
+  },
+  {
+    "published": "owner/staged-guest.txt",
+    "raw_bytes": 1564,
+    "raw_sha256": "4d03b2d855c26c56208ca14c805c16f25bef8a36be6b818ced7808d4a19c2a8a",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/staged-guest.txt"
+  },
+  {
+    "published": "owner/stock-probe-runtime.txt",
+    "raw_bytes": 1194,
+    "raw_sha256": "92fa6eaeced36ffaba575e6233e536c24f55dc6cf67cf8bb64d49fdeb71b0cfe",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/stock-probe-runtime.txt"
+  },
+  {
+    "published": "owner/launcher-identity.json",
+    "raw_bytes": 114,
+    "raw_sha256": "640e6abcbce38e787e56c095bb87038ee39dd429a9c94174e65577f17676970b",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "owner/launcher-identity.json"
+  },
+  {
+    "published": "harness/run-legacy-comprehensive.sh",
+    "raw_bytes": 2630,
+    "raw_sha256": "1204d9defe7d3e27887e0684e162c46599293de71576f962eb0e6b44cfff3a31",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "harness/run-legacy-comprehensive.sh"
+  },
+  {
+    "published": "harness/monitor-progress.py",
+    "raw_bytes": 2115,
+    "raw_sha256": "0bea12e2a9f8c4e5570ac14ff29c95e71e9b617ed15ed56ca4026ee945b55e2f",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "harness/monitor-progress.py"
+  },
+  {
+    "published": "harness/continue-owned-group.py",
+    "raw_bytes": 2087,
+    "raw_sha256": "1eef2e72959fe0571a54baf77e520a16f4c3a20af741d9071a3140603d73de08",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "harness/continue-owned-group.py"
+  },
+  {
+    "published": "harness/stop-owned-and-diagnose.py",
+    "raw_bytes": 4001,
+    "raw_sha256": "bdde8413bb077e15d2b84c5163a01c83542462db0e5d9a02111034a53d348ca6",
+    "redaction": "explicit paths, resource IDs, non-loopback host addresses and long bearer tokens only",
+    "source": "harness/stop-owned-and-diagnose.py"
+  }
+]

@@ -1,0 +1,53 @@
+{
+  "actual_records_exported": 37,
+  "broad_comparison": null,
+  "compiler_work_span": null,
+  "completed_commands": 35,
+  "diagnostic_id": "20261014-102329731-294199",
+  "diagnostic_scope": "NoPTY+DEVNULL compound context difference, exit101, not a benchmark sample or causal fix proof",
+  "execution": "local mode on separate billed developer EC2, not ordinary hosted tenant route",
+  "failed_measured_samples": 3,
+  "hardware_core_ceiling": null,
+  "limitations": [
+    "OFF only and incomplete",
+    "7noisy measured points",
+    "3unexpected runtime failure samples",
+    "36th command stopped and externally continued/terminated",
+    "ControllingTTY signal cause not proven",
+    "Sequential OFF/ON cachewarming would remain even if completed",
+    "Stock-probe runtime differs from prior m8azn host, epochs not comparable",
+    "CPU recording is sampled lower bound, not compiler DAG work/span",
+    "Legacy sudo keeper and historical unencrypted volume, not normal hosted security bootstrap",
+    "37 exports include interrupted recorder finalization and diagnostic, not37benchmark samples"
+  ],
+  "noisy_measured_samples": 7,
+  "normal_host_or_defaults_changed": false,
+  "off_points": 15,
+  "on_points": 0,
+  "planned_points_per_epoch": 40,
+  "preserved_volume_gib": 500,
+  "restored_state": "stopped",
+  "schema": "legacy-scheduler-attempt-acceptance-v1",
+  "scope": "attempted full unchanged paired workload, NOT successful comparison",
+  "speedup": null,
+  "started_commands": 36,
+  "tests_and_public_checks": [
+    {
+      "exit": 0,
+      "name": "public-show",
+      "observation": "refused invalid aggregate; self-compare is refusal-only, NOT an OFF/ON comparison"
+    },
+    {
+      "exit": 0,
+      "name": "public-self-compare",
+      "observation": "refused invalid aggregate; self-compare is refusal-only, NOT an OFF/ON comparison"
+    },
+    {
+      "exit": 0,
+      "name": "frozen-bench-tests",
+      "tests": 199
+    }
+  ],
+  "unfinished_point16_id": "20261014-101022743-43443971",
+  "unfinished_summary_note": "Recorder finalized on controlled termination. No after-exec receipt or measured outcome, do not use its784.933s as benchmark time."
+}
