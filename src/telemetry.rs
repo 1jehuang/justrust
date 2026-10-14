@@ -186,6 +186,7 @@ pub(crate) struct BuildLifecycle {
     route: &'static str,
     terminal: bool,
     scope: Option<String>,
+    logs: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 const HEARTBEAT_S: u64 = 30;
 
@@ -253,6 +254,7 @@ impl BuildLifecycle {
             route,
             terminal: false,
             scope: telemetry_creds().as_ref().map(auth_scope),
+            logs: Default::default(),
         };
         if enabled() && observer.scope.is_some() && valid_run_id(id) {
             emit_lifecycle(
@@ -266,6 +268,7 @@ impl BuildLifecycle {
             );
             let scope = observer.scope.clone();
             let shared = observer.shared.clone();
+            let logs = observer.logs.clone();
             let id = id.to_owned();
             let sub = sub.to_owned();
             observer.worker = std::thread::Builder::new()
@@ -288,7 +291,7 @@ impl BuildLifecycle {
                                 route,
                                 if state.0 { "running" } else { "queued" },
                                 None,
-                                false,
+                                logs.load(std::sync::atomic::Ordering::Relaxed),
                                 scope.as_deref(),
                             );
                         }
@@ -298,6 +301,9 @@ impl BuildLifecycle {
         }
         observer
     }
+    pub(crate) fn log_availability(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.logs.clone()
+    }
     pub(crate) fn running(&self) {
         self.shared.0.lock().unwrap_or_else(|e| e.into_inner()).0 = true;
         emit_lifecycle(
@@ -306,7 +312,7 @@ impl BuildLifecycle {
             self.route,
             "running",
             None,
-            false,
+            self.logs.load(std::sync::atomic::Ordering::Relaxed),
             self.scope.as_deref(),
         );
     }
@@ -340,7 +346,7 @@ impl Drop for BuildLifecycle {
                 self.route,
                 "abandoned",
                 None,
-                false,
+                self.logs.load(std::sync::atomic::Ordering::Relaxed),
                 self.scope.as_deref(),
             );
         }

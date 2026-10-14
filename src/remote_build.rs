@@ -650,18 +650,18 @@ fn run_remote_inner(
         .map(str::to_string);
     mark("roots");
     diagnostic.stage = "remote_admission";
-    let hosted = match charge_hosted(&run_id, &label.join(" "), project.as_deref()) {
+    let hosted = match charge_hosted(run_id, &label.join(" "), project.as_deref()) {
         Ok(h) => h,
         Err(m) => return infra(m),
     };
     mark("charged");
     // Visible to `justrust status` (and the status bar) while it runs.
-    let mut live = LiveRun::start(&run_id, &cwd, &label, started_at);
+    let mut live = LiveRun::start(run_id, &cwd, &label, started_at);
     // Lifecycle events for the hosted operator dashboard (fire and forget).
     let report = |event: &str, code: Option<i32>| {
         if hosted {
             crate::remote_hosted::report_run_event(
-                &run_id,
+                run_id,
                 event,
                 code,
                 Some(total.elapsed().as_secs_f64()),
@@ -813,7 +813,7 @@ fn run_remote_inner(
                 mark("recording");
                 diagnostic.stage = "remote_summary";
                 if !record_remote(
-                    &run_id,
+                    run_id,
                     &summary,
                     &run_files,
                     &machine,
