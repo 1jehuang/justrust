@@ -1,0 +1,13 @@
+$ /usr/bin/python3 <operator-home>/justrust/bench/suite.py show <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json
+Synthetic agent workload: seed 1, 1/40 points observed.
+Expected-session report blocked (raw observations remain in detail):
+- partial run: finish the full workload
+- incomplete coverage: 1/40 points; measure every point
+- point 0 suite-nightly-2026-10-08: noisy or missing noise provenance; rerun under controlled conditions
+| # | command | change | edits | suite-nightly-2026-10-08 |
+|---:|---|---|---|---:|
+| 0 | `build --release -p jcode-desktop` | first | 6 | 20.53s (noisy/unknown) |
+
+[stderr]
+
+exit=0

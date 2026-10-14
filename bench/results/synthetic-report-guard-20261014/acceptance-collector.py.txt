@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Collect report-only acceptance with immutable inputs and exclusive private logs."""
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+root = Path('<operator-home>/justrust')
+scratch = Path(os.environ.get('JCODE_SCRATCH_DIR', '<operator-home>/.jcode/scratch'))
+out = scratch / 'synthetic-report-guard-acceptance-20261014-final'
+out.mkdir(mode=0o700, exist_ok=False)
+source_names = ['bench/suite.py', 'bench/synth/run.py', 'bench/test_synth_reporting.py']
+sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+sources = {p: sha(root / p) for p in source_names}
+partial_path = root / 'bench/results/scheduler-comprehensive-2172-20261014/partial-off.json'
+export_path = root / 'data/runs/broad-scheduler-2172/2026-10.jsonl'
+originals = {str(p.relative_to(root)): sha(p) for p in (partial_path, export_path)}
+actual = json.loads(partial_path.read_text())
+sys.path.insert(0, str(root / 'bench'))
+spec = importlib.util.spec_from_file_location('reporting_acceptance_fixtures', root / source_names[2])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+def save(name, data):
+    p = out / name
+    with p.open('x') as f:
+        json.dump(data, f, indent=2)
+        f.write('\n')
+    p.chmod(0o600)
+    return p
+
+def envelope(data):
+    return {'env': {'justrust_rev': 'synthetic-control-not-a-build',
+                    'snapshots': {'fixture': {'repo': 'fixed-fixture-revision'}},
+                    'host': 'synthetic-fixture-host', 'cpu': 'synthetic-fixture-cpu',
+                    'ncpu': 24, 'execution': 'local'}, 'synth': data}
+
+actual_path = save('actual-envelope.json', {'env': {'justrust_rev': '2172a45'}, 'synth': actual})
+a = module.fixture()
+b = module.fixture(('renamed',))
+a_path = save('clean-control-a.json', envelope(a))
+b_path = save('clean-control-b.json', envelope(b))
+fast = module.fixture(('renamed',))
+for p in fast['results']:
+    p['stats']['renamed']['median'] = 1.0
+    for sample in p['samples']['renamed']:
+        sample['wall'] = 1.0
+fast_path = save('faster-synthetic-control.json', envelope(fast))
+malformed_path = save('malformed-synthetic-control.json', envelope(None))
+missing_counter = module.fixture(reps=2)
+full_counter = module.fixture(reps=2)
+for data, second in ((missing_counter, None), (full_counter, 100)):
+    for point in data['results']:
+        point['stats']['old']['instructions'] = 100
+        point['samples']['old'][0]['instructions'] = 100
+        point['samples']['old'][1]['instructions'] = second
+missing_counter_path = save('partial-counter-synthetic-control.json', envelope(missing_counter))
+full_counter_path = save('complete-counter-synthetic-control.json', envelope(full_counter))
+checks = []
+
+def run(name, command, required=(), forbidden=()):
+    result = subprocess.run(command, cwd=root, text=True, capture_output=True, timeout=60)
+    raw = '$ ' + ' '.join(map(str, command)) + '\n' + result.stdout + '\n[stderr]\n' + result.stderr + '\nexit=' + str(result.returncode) + '\n'
+    log = out / (name + '.log')
+    with log.open('x') as f:
+        f.write(raw)
+    log.chmod(0o600)
+    assert result.returncode == 0, (name, result.returncode, result.stderr)
+    for text in required:
+        assert text in result.stdout + result.stderr, (name, 'missing', text)
+    for text in forbidden:
+        assert text not in result.stdout + result.stderr, (name, 'unexpected', text)
+    checks.append({'name': name, 'exit': result.returncode, 'raw_log_sha256': sha(log)})
+    print(json.dumps({'check': name, 'exit': result.returncode}), flush=True)
+
+py = sys.executable
+baseline = scratch / 'synthetic-report-baseline-20261014/bench/suite.py'
+current = root / 'bench/suite.py'
+run('baseline-actual-show', [py, str(baseline), 'show', str(actual_path)], ['**expected wait per call**', '20.53s'])
+run('baseline-actual-compare', [py, str(baseline), 'compare', str(actual_path), str(actual_path)], ['+0%'])
+run('fixed-actual-show', [py, str(current), 'show', str(actual_path)], ['blocked', '20.53s', 'noisy/unknown'], ['**expected wait per call**'])
+run('fixed-actual-compare', [py, str(current), 'compare', str(actual_path), str(actual_path)], ['blocked'], ['+0%', 'Traceback'])
+run('clean-synthetic-show', [py, str(current), 'show', str(a_path)], ['**expected wait per call**', '2.00s'], ['blocked'])
+run('clean-renamed-synthetic-compare', [py, str(current), 'compare', str(a_path), str(b_path)], ['+0%'], ['blocked'])
+run('faster-synthetic-control-compare', [py, str(current), 'compare', str(a_path), str(fast_path)], ['-50%'], ['blocked'])
+run('malformed-public-compare', [py, str(current), 'compare', str(a_path), str(malformed_path)], ['blocked'], ['Traceback'])
+run('partial-counter-public-compare', [py, str(current), 'compare', str(missing_counter_path), str(missing_counter_path)], ['+0%'], ['+0.0%', 'blocked', 'Traceback'])
+run('complete-counter-public-compare', [py, str(current), 'compare', str(full_counter_path), str(full_counter_path)], ['+0%', '+0.0%'], ['blocked', 'Traceback'])
+run('focused-report-tests', [py, '-m', 'unittest', 'discover', '-s', 'bench', '-p', 'test_synth_reporting.py'], ['OK'], ['FAILED'])
+run('whole-benchmark-tests', [py, '-m', 'unittest', 'discover', '-s', 'bench', '-p', 'test_*.py'], ['OK'], ['FAILED'])
+run('suite-help', [py, str(current), '--help'], ['usage:'])
+run('versus-help', [py, str(root / 'bench/versus.py'), '--help'], ['usage:'])
+assert sources == {p: sha(root / p) for p in source_names}, 'source changed during acceptance'
+assert originals == {str(p.relative_to(root)): sha(p) for p in (partial_path, export_path)}, 'actual measurement artifacts changed'
+save('acceptance.json', {'schema': 'report-only-acceptance-v1', 'source_sha256': sources,
+                       'unchanged_measurement_artifacts': originals, 'checks': checks,
+                       'compiler_jobs_entered': False, 'account_host_calls': False,
+                       'new_speedup_result': None, 'full_parallelism_gate': 'BLOCKED_STORAGE',
+                       'synthetic_positive_controls_are_not_benchmarks': True})
+print(json.dumps({'acceptance': 'PASS', 'checks': len(checks), 'private_output': str(out)}), flush=True)

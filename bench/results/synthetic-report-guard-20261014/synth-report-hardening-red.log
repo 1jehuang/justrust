@@ -1,0 +1,207 @@
+FFFFFFFFF
+======================================================================
+FAIL: test_exit_outcome_provenance (bench.test_synth_reporting.ReportingTests.test_exit_outcome_provenance) (changes={'exit': 101})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 152, in test_exit_outcome_provenance
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 33, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[679 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'pre': ['check'], 'prev': None, 'snap': 'fixture', 'cwd': '.', 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 101, 'tests_failed': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 1025 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_exit_outcome_provenance (bench.test_synth_reporting.ReportingTests.test_exit_outcome_provenance) (changes={'exit': None})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 152, in test_exit_outcome_provenance
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 33, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[680 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'pre': ['check'], 'prev': None, 'snap': 'fixture', 'cwd': '.', 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': None, 'tests_failed': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 1026 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_exit_outcome_provenance (bench.test_synth_reporting.ReportingTests.test_exit_outcome_provenance) (changes={'tests_failed': 1})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 152, in test_exit_outcome_provenance
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 33, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[677 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'pre': ['check'], 'prev': None, 'snap': 'fixture', 'cwd': '.', 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0, 'tests_failed': 1}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 1023 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_exit_outcome_provenance (bench.test_synth_reporting.ReportingTests.test_exit_outcome_provenance) (changes={'tests_failed': None})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 152, in test_exit_outcome_provenance
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 33, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[680 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'pre': ['check'], 'prev': None, 'snap': 'fixture', 'cwd': '.', 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0, 'tests_failed': None}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 1026 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_exit_outcome_provenance (bench.test_synth_reporting.ReportingTests.test_exit_outcome_provenance)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 156, in test_exit_outcome_provenance
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 33, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[675 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'pre': ['check'], 'prev': None, 'snap': 'fixture', 'cwd': '.', 'edits': [], 'expect_fail': True, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': True, 'exit': 0, 'tests_failed': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 1021 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_malformed_public_payloads (bench.test_synth_reporting.ReportingTests.test_malformed_public_payloads) (key='stack_names', value=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 164, in test_malformed_public_payloads
+    self.assertIn("blocked", self.cli("show", d).lower())
+                             ~~~~~~~~^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 91, in cli
+    self.assertEqual(result.returncode, 0, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/suite.py", line 1287, in <module>
+    main()
+    ~~~~^^
+  File "<operator-home>/justrust/bench/suite.py", line 1283, in main
+    args.fn(args)
+    ~~~~~~~^^^^^^
+  File "<operator-home>/justrust/bench/suite.py", line 1163, in cmd_show
+    print(synth_run.table(r["synth"]))
+          ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/synth/run.py", line 286, in table
+    reasons = _blocked(synth)
+  File "<operator-home>/justrust/bench/synth/run.py", line 228, in _blocked
+    for s in names:
+             ^^^^^
+TypeError: 'NoneType' object is not iterable
+
+
+======================================================================
+FAIL: test_malformed_public_payloads (bench.test_synth_reporting.ReportingTests.test_malformed_public_payloads) (key='results', value=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 164, in test_malformed_public_payloads
+    self.assertIn("blocked", self.cli("show", d).lower())
+                             ~~~~~~~~^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 91, in cli
+    self.assertEqual(result.returncode, 0, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/suite.py", line 1287, in <module>
+    main()
+    ~~~~^^
+  File "<operator-home>/justrust/bench/suite.py", line 1283, in main
+    args.fn(args)
+    ~~~~~~~^^^^^^
+  File "<operator-home>/justrust/bench/suite.py", line 1163, in cmd_show
+    print(synth_run.table(r["synth"]))
+          ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/synth/run.py", line 286, in table
+    reasons = _blocked(synth)
+  File "<operator-home>/justrust/bench/synth/run.py", line 218, in _blocked
+    ids = [p.get("i") for p in pts]
+                               ^^^
+TypeError: 'NoneType' object is not iterable
+
+
+======================================================================
+FAIL: test_malformed_public_payloads (bench.test_synth_reporting.ReportingTests.test_malformed_public_payloads) (key='results', value=[None])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 164, in test_malformed_public_payloads
+    self.assertIn("blocked", self.cli("show", d).lower())
+                             ~~~~~~~~^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 91, in cli
+    self.assertEqual(result.returncode, 0, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/suite.py", line 1287, in <module>
+    main()
+    ~~~~^^
+  File "<operator-home>/justrust/bench/suite.py", line 1283, in main
+    args.fn(args)
+    ~~~~~~~^^^^^^
+  File "<operator-home>/justrust/bench/suite.py", line 1163, in cmd_show
+    print(synth_run.table(r["synth"]))
+          ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/synth/run.py", line 286, in table
+    reasons = _blocked(synth)
+  File "<operator-home>/justrust/bench/synth/run.py", line 218, in _blocked
+    ids = [p.get("i") for p in pts]
+           ^^^^^
+AttributeError: 'NoneType' object has no attribute 'get'
+
+
+======================================================================
+FAIL: test_malformed_public_payloads (bench.test_synth_reporting.ReportingTests.test_malformed_public_payloads)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 170, in test_malformed_public_payloads
+    self.assertIn("blocked", self.cli("show", d).lower())
+                             ~~~~~~~~^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 91, in cli
+    self.assertEqual(result.returncode, 0, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/suite.py", line 1287, in <module>
+    main()
+    ~~~~^^
+  File "<operator-home>/justrust/bench/suite.py", line 1283, in main
+    args.fn(args)
+    ~~~~~~~^^^^^^
+  File "<operator-home>/justrust/bench/suite.py", line 1163, in cmd_show
+    print(synth_run.table(r["synth"]))
+          ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/synth/run.py", line 286, in table
+    reasons = _blocked(synth)
+  File "<operator-home>/justrust/bench/synth/run.py", line 229, in _blocked
+    samples = p.get("samples", {}).get(s, [])
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'get'
+
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.521s
+
+FAILED (failures=9)

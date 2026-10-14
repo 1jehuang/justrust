@@ -1,0 +1,15 @@
+$ /usr/bin/python3 <operator-home>/.jcode/scratch/synthetic-report-baseline-20261014/bench/suite.py show <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json
+Synthetic agent workload: seed 1, 1/40 points measured on every stack, sampled from 4711 real calls (96% mappable to the snapshots). Mean wall per point = expected wait per agent call.
+
+|  | points | suite-nightly-2026-10-08 |
+|---|---:|---:|
+| **expected wait per call** | 1 | 20.53s |
+| command: build-release | 1 | 20.53s |
+| change: first | 1 | 20.53s |
+| # | command | change | edits | suite-nightly-2026-10-08 |
+|---:|---|---|---|---:|
+| 0 | `build --release -p jcode-desktop` | first | 6 | 20.53s |
+
+[stderr]
+
+exit=0

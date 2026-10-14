@@ -1,0 +1,89 @@
+{
+  "schema": "report-only-acceptance-v1",
+  "source_sha256": {
+    "bench/suite.py": "db89fc7f5eceaa0e10b630b6ee38f336bb9322ab4275daf6b8f0193d7ebcb68f",
+    "bench/synth/run.py": "d4d7234429c7d2d6cd444bf20b38930ef15552fc0e53c3bf0e96d7a5574dfbc0",
+    "bench/test_synth_reporting.py": "e986c4a33cf39a29a51792d9da17950e904da126e32ce0a0077d68c232aafa62"
+  },
+  "unchanged_measurement_artifacts": {
+    "bench/results/scheduler-comprehensive-2172-20261014/partial-off.json": "b8fffd46969c3e445b254d04181a8c8826a9c7f6c3938051cfc836fc406ac0ff",
+    "data/runs/broad-scheduler-2172/2026-10.jsonl": "074ed9d30aee96ae5793f133a7947c02618265b0ef6b23e465935c25e4c853a9"
+  },
+  "checks": [
+    {
+      "name": "baseline-actual-show",
+      "exit": 0,
+      "raw_log_sha256": "10de161c42a96288c59a340a94eb88460e54511d646e6d4ceb46526c0a7b113a"
+    },
+    {
+      "name": "baseline-actual-compare",
+      "exit": 0,
+      "raw_log_sha256": "6d9d62f0e44c323c53096ed74dfdf945945df7d0193452ce0ce2d4f99e8770d9"
+    },
+    {
+      "name": "fixed-actual-show",
+      "exit": 0,
+      "raw_log_sha256": "f4f5ce13a94a62e81643215e653c20e590bf39a7af048c81beab9c32afdfb90e"
+    },
+    {
+      "name": "fixed-actual-compare",
+      "exit": 0,
+      "raw_log_sha256": "d7a17b442402993e503d7213588ff52392da76d4d9b32a2dc26ceff6b620ff6d"
+    },
+    {
+      "name": "clean-synthetic-show",
+      "exit": 0,
+      "raw_log_sha256": "12040160010e5bb66986c411b7764c921a6c1a8ddf86336e2c21734105f95938"
+    },
+    {
+      "name": "clean-renamed-synthetic-compare",
+      "exit": 0,
+      "raw_log_sha256": "bc27cf721452e8bda080a80c315351a9d3bdcd2fad1e55395b7af9f915fcd517"
+    },
+    {
+      "name": "faster-synthetic-control-compare",
+      "exit": 0,
+      "raw_log_sha256": "feeb9431f2d898deba8812b55d3908d2ae044292b61c288f18b0a502e400f8cf"
+    },
+    {
+      "name": "malformed-public-compare",
+      "exit": 0,
+      "raw_log_sha256": "042dc496234b0616f79781e55df544da4da127a77af28379712aed20a734b68a"
+    },
+    {
+      "name": "partial-counter-public-compare",
+      "exit": 0,
+      "raw_log_sha256": "f4c616412ce888f23df78a5c48b025e62c08de3f7a2c74c262f8b0498a4b2635"
+    },
+    {
+      "name": "complete-counter-public-compare",
+      "exit": 0,
+      "raw_log_sha256": "ea8378e71425eb2153b5eb3e39217b8c7db565e932c48b20e9f2dedadbe479b0"
+    },
+    {
+      "name": "focused-report-tests",
+      "exit": 0,
+      "raw_log_sha256": "f2659aa5b467a87f6047e7190c3dbd1abf51b7ee4f1400b9b9e2e680704c7cf4"
+    },
+    {
+      "name": "whole-benchmark-tests",
+      "exit": 0,
+      "raw_log_sha256": "629b7aa830c7acd0b7c25f8880585ca0301c0376d52386b88fe6731263a42723"
+    },
+    {
+      "name": "suite-help",
+      "exit": 0,
+      "raw_log_sha256": "1f5ecd3ca6bf39075bf4958a38a17f0be13ca6f274d051d13a15dcf76b6f7008"
+    },
+    {
+      "name": "versus-help",
+      "exit": 0,
+      "raw_log_sha256": "61f0a77c1423a16c7d5953c9f329f8d5092a63f0d3ae50592712648607468e6f"
+    }
+  ],
+  "compiler_jobs_entered": false,
+  "account_host_calls": false,
+  "new_speedup_result": null,
+  "full_parallelism_gate": "BLOCKED_STORAGE",
+  "synthetic_positive_controls_are_not_benchmarks": true
+}

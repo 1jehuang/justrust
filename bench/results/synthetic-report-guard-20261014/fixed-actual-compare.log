@@ -1,0 +1,14 @@
+$ /usr/bin/python3 <operator-home>/justrust/bench/suite.py compare <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json
+Synthetic comparison blocked:
+- A: missing or malformed host environment provenance
+- A: missing or malformed cpu environment provenance
+- A: missing or malformed snapshots environment provenance
+- A: missing or malformed ncpu environment provenance
+- B: missing or malformed host environment provenance
+- B: missing or malformed cpu environment provenance
+- B: missing or malformed snapshots environment provenance
+- B: missing or malformed ncpu environment provenance
+
+[stderr]
+
+exit=0

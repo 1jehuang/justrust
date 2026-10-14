@@ -1,0 +1,9 @@
+$ /usr/bin/python3 <operator-home>/.jcode/scratch/synthetic-report-baseline-20261014/bench/suite.py compare <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json
+A <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json (justrust 2172a45)
+B <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/actual-envelope.json (justrust 2172a45)
+stack            A mean   B mean      %  instr %  points 1
+suite-nightly-2026-10-08    20.53    20.53    +0%        -
+
+[stderr]
+
+exit=0

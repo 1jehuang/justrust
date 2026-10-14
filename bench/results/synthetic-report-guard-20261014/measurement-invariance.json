@@ -1,0 +1,18 @@
+{
+  "schema": "measurement-source-invariance-v1",
+  "baseline_commit": "e1f772d",
+  "functions": {
+    "bench/synth/run.py:_target": "60562ab82b3efb098bef606a689816fdd3f302a7938e1d059c39481d920c5869",
+    "bench/synth/run.py:_run": "59b2a225a1d2928a5ce309ae6d5af8e6c05e5549838c0aa38e61ce56a28731f5",
+    "bench/synth/run.py:run_point": "cf3be6d4cf78663c489eba72747640ae330ef110e8ab2973400621973c00e67a",
+    "bench/synth/run.py:run": "941a06e8d0adbb00cf56a657ffcd78e1891ae6010424e87d32d3739f3607c554",
+    "bench/suite.py:cmd_run_synth": "b6b2a558f6735abd5bc7007922e577d2c6bb53e9e646d63c980fd97296c73309",
+    "bench/suite.py:run_once": "7328448421c9511afe279e5c1b22f020023cb1b1d40a54d2e232fec833f399b7",
+    "bench/suite.py:cmd_run": "38cff8e4792f905c4c64dcc98b36b0bde159786c73b77fa8f9f385524e44d157"
+  },
+  "unchanged_files": {
+    "bench/synth/gen.py": "6c05a4a0242b3713afaa05a317d9fc11cc0df0eb9f399815f2dc856973872d29",
+    "bench/synth/weights.json": "58d891419f07129b2c4b34d2b88f0dd032e3ad0512c8e5cfc96604a15aaa03af",
+    "bench/versus.py": "80d7b3a42b55ab9196e6f64af7d10570b0fee6970d8fb6a98a7e0bf95101bc29"
+  }
+}

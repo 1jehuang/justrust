@@ -6530,3 +6530,29 @@ failure logs and execution receipts under
 `bench/results/scheduler-comprehensive-2172-20261014/`. Public log redactions
 cover operator/home paths and the private SSH address, retaining raw hashes.
 Completion of the broad performance gate remains blocked on scratch capacity.
+
+## 2026-10-14: synthetic reports must not turn a noisy partial into a session mean
+
+The unchanged actual one-of-40 noisy OFF payload exposed a second measurement
+defect: immutable pre-fix `e1f772d` public `show` printed a bold 20.53 s
+expected wait per call, and `compare` printed +0% from that single point.
+The report now requires complete point/replicate coverage, explicit quiet
+provenance, consistent planned outcomes and compatible workload/source/machine
+identities before emitting comprehensive aggregates or comparative ratios.
+Raw timings remain visible with noisy/unknown annotations. Missing instruction
+counters no longer disappear into a subset median: valid wall reports survive,
+but instruction ratios require every replicate's valid counter evidence.
+
+Four tests-first red phases were retained. All 13 reporting regressions and
+all 199 benchmark tests pass. Fourteen independent public commands reproduce
+the old defect and verify the repaired actual payload, positive clean/renamed
+controls, malformed inputs and partial/full counters. Independent review
+reproduced the counter fix. Seven measurement functions and the generator,
+weights and versus engine are source-audited unchanged. The three actual
+compile records and original partial/export hashes are also unchanged.
+
+See `docs/synthetic-report-eligibility-20261014.md` and hash-audited acceptance
+under `bench/results/synthetic-report-guard-20261014/`. Positive fixtures are
+report controls, not benchmarks. No compiler, account-host, install, storage or
+security operation was entered. The complete OFF/ON performance comparison,
+CPU work/span and hardware ceiling remain blocked or unknown.

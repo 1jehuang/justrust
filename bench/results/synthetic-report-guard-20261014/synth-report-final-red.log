@@ -1,0 +1,54 @@
+FFE
+======================================================================
+ERROR: test_public_environment_identity (bench.test_synth_reporting.ReportingTests.test_public_environment_identity)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 210, in test_public_environment_identity
+    self.assertIn("blocked", self.cli("compare", d, d).lower())
+                                                 ^
+UnboundLocalError: cannot access local variable 'd' where it is not associated with a value
+
+======================================================================
+FAIL: test_remaining_schema (bench.test_synth_reporting.ReportingTests.test_remaining_schema)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 190, in test_remaining_schema
+    self.assertIn("blocked", self.cli("show", d).lower())
+                             ~~~~~~~~^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 93, in cli
+    self.assertEqual(result.returncode, 0, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/suite.py", line 1289, in <module>
+    main()
+    ~~~~^^
+  File "<operator-home>/justrust/bench/suite.py", line 1285, in main
+    args.fn(args)
+    ~~~~~~~^^^^^^
+  File "<operator-home>/justrust/bench/suite.py", line 1163, in cmd_show
+    print(synth_run.table(r["synth"]))
+          ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "<operator-home>/justrust/bench/synth/run.py", line 335, in table
+    sm = summarize(synth)
+  File "<operator-home>/justrust/bench/synth/run.py", line 320, in summarize
+    by[axis] = {k: agg(v) for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))}
+                   ~~~^^^
+  File "<operator-home>/justrust/bench/synth/run.py", line 309, in agg
+    ins = [p["stats"][s]["instructions"] for p in group if p["stats"][s]["instructions"]]
+                                                           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+KeyError: 'instructions'
+
+
+======================================================================
+FAIL: test_public_environment_identity (bench.test_synth_reporting.ReportingTests.test_public_environment_identity) (key='snapshots')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 209, in test_public_environment_identity
+    self.assertIn("blocked", r.stdout.lower())
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'blocked' not found in 'a <operator-home>/.jcode/scratch/tmptfrcvvqk/a.json (justrust fixture)\nb <operator-home>/.jcode/scratch/tmptfrcvvqk/b.json (justrust fixture)\nstack            a mean   b mean      %  instr %  points 2\nold                2.00     2.00    +0%        -\n'
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.167s
+
+FAILED (failures=2, errors=1)

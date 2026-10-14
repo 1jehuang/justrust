@@ -1,0 +1,291 @@
+test_clean_and_expected_compile_error (bench.test_synth_reporting.ReportingTests.test_clean_and_expected_compile_error) ... ok
+test_empty_results_blocked (bench.test_synth_reporting.ReportingTests.test_empty_results_blocked) ... ERROR
+test_incompatible_identity (bench.test_synth_reporting.ReportingTests.test_incompatible_identity) ... WARNING: different seed, size or generator: not the same work
+FAIL
+test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) ... 
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae2690930>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae34dc250>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c040>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c0f0>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c1a0>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c250>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c300>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c3b0>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c460>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c510>) ... FAIL
+  test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c5c0>) ... FAIL
+test_public_positional_remap_noise_and_clean (bench.test_synth_reporting.ReportingTests.test_public_positional_remap_noise_and_clean) ... FAIL
+test_published_partial_public_show_compare (bench.test_synth_reporting.ReportingTests.test_published_partial_public_show_compare) ... FAIL
+
+======================================================================
+ERROR: test_empty_results_blocked (bench.test_synth_reporting.ReportingTests.test_empty_results_blocked)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 111, in test_empty_results_blocked
+    self.assertIn("blocked", run.compare(d, d).lower())
+                             ~~~~~~~~~~~^^^^^^
+  File "<operator-home>/justrust/bench/synth/run.py", line 291, in compare
+    wa = statistics.fmean(p["stats"][s]["median"] for p in pa)
+  File "/usr/lib/python3.14/statistics.py", line 204, in fmean
+    raise StatisticsError('fmean requires at least one data point')
+statistics.StatisticsError: fmean requires at least one data point
+
+======================================================================
+FAIL: test_incompatible_identity (bench.test_synth_reporting.ReportingTests.test_incompatible_identity)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 62, in test_incompatible_identity
+    self.assertIn("blocked", run.compare(a, b).lower())
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'blocked' not found in 'stack            a mean   b mean      %  instr %  points 2\nold                2.00     2.00    +0%        -'
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae2690930>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[233 chars]e}}}] != []
+
+First list contains 1 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
++ []
+- [{'cmd': ['check'],
+-   'edits': [],
+-   'errors': {},
+-   'expect_fail': False,
+-   'i': 0,
+-   'samples': {'old': [{'compile_failed': False,
+-                        'exit': 0,
+-                        'noisy': False,
+-                        'wall': 2.0}]},
+-   'shape': {'change': 'body', 'command': 'check'},
+-   'stats': {'old': {'instructions': None, 'median': 2.0, 'n': 1}}}]
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae34dc250>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[513 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 777 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c040>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[512 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': True, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 776 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c0f0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[497 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 686 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c1a0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[439 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
++ []
+- [{'cmd': ['check'],
+-   'edits': [],
+-   'errors': {},
+-   'expect_fail': False,
+-   'i': 0,
+-   'samples': {},
+-   'shape': {'change': 'body', 'command': 'check'},
+-   'stats': {'old': {'instructions': None, 'median': 2.0, 'n': 1}}},
+-  {'cmd': ['check'],
+-   'edits': [],
+-   'errors': {},
+-   'expect_fail': False,
+-   'i': 1,
+-   'samples': {'old': [{'compile_failed': False,
+-                        'exit': 0,
+-                        'noisy': False,
+-                        'wall': 2.0}]},
+-   'shape': {'change': 'body', 'command': 'check'},
+-   'stats': {'old': {'instructions': None, 'median': 2.0, 'n': 1}}}]
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c250>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[513 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 777 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c300>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[513 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 777 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c3b0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': -1, 'shape': {'command': 'check', '[514 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': -1, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 778 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c460>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': '0', 'shape': {'command': 'check', [515 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': '0', 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 779 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c510>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 2, 'shape': {'command': 'check', 'c[513 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 2, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 777 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_invalid_coverage_and_noise (bench.test_synth_reporting.ReportingTests.test_invalid_coverage_and_noise) (change=<function ReportingTests.test_invalid_coverage_and_noise.<locals>.<lambda> at 0x7f1ae246c5c0>)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 55, in test_invalid_coverage_and_noise
+    self.blocked(d)
+    ~~~~~~~~~~~~^^^
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 32, in blocked
+    self.assertEqual(run._complete(data), [])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [{'i': 0, 'shape': {'command': 'check', 'c[528 chars]e}}}] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+{'i': 0, 'shape': {'command': 'check', 'change': 'body'}, 'cmd': ['check'], 'edits': [], 'expect_fail': False, 'errors': {'old': 'failed'}, 'samples': {'old': [{'wall': 2.0, 'noisy': False, 'compile_failed': False, 'exit': 0}]}, 'stats': {'old': {'n': 1, 'median': 2.0, 'instructions': None}}}
+
+Diff is 792 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_public_positional_remap_noise_and_clean (bench.test_synth_reporting.ReportingTests.test_public_positional_remap_noise_and_clean)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 99, in test_public_positional_remap_noise_and_clean
+    self.assertIn("blocked", self.cli("compare", a, b).lower())
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'blocked' not found in 'a <operator-home>/.jcode/scratch/tmp0o4ssc0r/0.json (justrust fixture)\nb <operator-home>/.jcode/scratch/tmp0o4ssc0r/1.json (justrust fixture)\nstack            a mean   b mean      %  instr %  points 2\nold                2.00     2.00    +0%        -\n'
+
+======================================================================
+FAIL: test_published_partial_public_show_compare (bench.test_synth_reporting.ReportingTests.test_published_partial_public_show_compare)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 90, in test_published_partial_public_show_compare
+    self.assertIn("blocked", text.lower())
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'blocked' not found in 'synthetic agent workload: seed 1, 1/40 points measured on every stack, sampled from 4711 real calls (96% mappable to the snapshots). mean wall per point = expected wait per agent call.\n\n|  | points | suite-nightly-2026-10-08 |\n|---|---:|---:|\n| **expected wait per call** | 1 | 20.53s |\n| command: build-release | 1 | 20.53s |\n| change: first | 1 | 20.53s |\n| # | command | change | edits | suite-nightly-2026-10-08 |\n|---:|---|---|---|---:|\n| 0 | `build --release -p jcode-desktop` | first | 6 | 20.53s |\n'
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.656s
+
+FAILED (failures=14, errors=1)

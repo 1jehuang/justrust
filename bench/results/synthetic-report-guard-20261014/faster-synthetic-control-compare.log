@@ -1,0 +1,11 @@
+$ /usr/bin/python3 <operator-home>/justrust/bench/suite.py compare <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/clean-control-a.json <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/faster-synthetic-control.json
+A <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/clean-control-a.json (justrust synthetic-control-not-a-build)
+B <operator-home>/.jcode/scratch/synthetic-report-guard-acceptance-20261014-final/faster-synthetic-control.json (justrust synthetic-control-not-a-build)
+stack            A mean   B mean      %  instr %  points 2
+old                2.00     1.00   -50%        -
+A: Instructions unavailable for old: missing or partial counter coverage; no instruction ratio claimed.
+B: Instructions unavailable for old: missing or partial counter coverage; no instruction ratio claimed.
+
+[stderr]
+
+exit=0

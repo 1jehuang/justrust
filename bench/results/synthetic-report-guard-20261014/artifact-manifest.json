@@ -1,0 +1,154 @@
+{
+  "schema": "report-evidence-manifest-v1",
+  "baseline_source_commit": "e1f772d",
+  "scope": "report-only, no new benchmark or compiler job",
+  "files": [
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/baseline-actual-compare.log",
+      "bytes": 690,
+      "raw_sha256": "6d9d62f0e44c323c53096ed74dfdf945945df7d0193452ce0ce2d4f99e8770d9",
+      "published_sha256": "c505fe0a9f369b1a1888004beb4e0e8034c83496fd377f39b413fc8af246aafd",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/baseline-actual-show.log",
+      "bytes": 730,
+      "raw_sha256": "10de161c42a96288c59a340a94eb88460e54511d646e6d4ceb46526c0a7b113a",
+      "published_sha256": "3af1f1509c7f892825c88bcd3c0e46984d92eaf7f89761dabfde5c433ea008ca",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/clean-renamed-synthetic-compare.log",
+      "bytes": 891,
+      "raw_sha256": "bc27cf721452e8bda080a80c315351a9d3bdcd2fad1e55395b7af9f915fcd517",
+      "published_sha256": "2a22b430e383d8edb69fe44dc312ea9fe10227ab3d1b20dca20950f5756d7ae2",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/clean-synthetic-show.log",
+      "bytes": 742,
+      "raw_sha256": "12040160010e5bb66986c411b7764c921a6c1a8ddf86336e2c21734105f95938",
+      "published_sha256": "afda21ce803975ebb06619b03268068a4acfa9376f92d2b9d5f4040529d103cd",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/complete-counter-public-compare.log",
+      "bytes": 759,
+      "raw_sha256": "ea8378e71425eb2153b5eb3e39217b8c7db565e932c48b20e9f2dedadbe479b0",
+      "published_sha256": "ea0a17dcd6a616693d59690f6ac233e6ce86714c81e8b2f31d75a77b180b88bb",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/faster-synthetic-control-compare.log",
+      "bytes": 909,
+      "raw_sha256": "feeb9431f2d898deba8812b55d3908d2ae044292b61c288f18b0a502e400f8cf",
+      "published_sha256": "af83971cb68c5cf0da85306223d84fc03605fede528f4f02068e6d2f49a5e91d",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/fixed-actual-compare.log",
+      "bytes": 757,
+      "raw_sha256": "d7a17b442402993e503d7213588ff52392da76d4d9b32a2dc26ceff6b620ff6d",
+      "published_sha256": "85b78e464022166209d1f0d27646582b8caece483ff9842f9b2fd1655b8e5722",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/fixed-actual-show.log",
+      "bytes": 673,
+      "raw_sha256": "f4f5ce13a94a62e81643215e653c20e590bf39a7af048c81beab9c32afdfb90e",
+      "published_sha256": "2b4c13285dcd185667104c5c4360c838a4f2a7de7ed705ad57e0df94a0e39514",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/focused-report-tests.log",
+      "bytes": 207,
+      "raw_sha256": "f2659aa5b467a87f6047e7190c3dbd1abf51b7ee4f1400b9b9e2e680704c7cf4",
+      "published_sha256": "f2659aa5b467a87f6047e7190c3dbd1abf51b7ee4f1400b9b9e2e680704c7cf4",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/malformed-public-compare.log",
+      "bytes": 712,
+      "raw_sha256": "042dc496234b0616f79781e55df544da4da127a77af28379712aed20a734b68a",
+      "published_sha256": "203948374ac8b6c32785172ff3d993f1cc88c038255dec32ab187d8b62476720",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/partial-counter-public-compare.log",
+      "bytes": 963,
+      "raw_sha256": "f4c616412ce888f23df78a5c48b025e62c08de3f7a2c74c262f8b0498a4b2635",
+      "published_sha256": "dd62972e4a1e62a845537487d807bed7154f417858e8fb639b229f3c337fe350",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/suite-help.log",
+      "bytes": 1435,
+      "raw_sha256": "1f5ecd3ca6bf39075bf4958a38a17f0be13ca6f274d051d13a15dcf76b6f7008",
+      "published_sha256": "8786db0df3ec60f557743330835d65b31f18a019eff82d17cc1509f1eb746728",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/versus-help.log",
+      "bytes": 2232,
+      "raw_sha256": "61f0a77c1423a16c7d5953c9f329f8d5092a63f0d3ae50592712648607468e6f",
+      "published_sha256": "3951e689789e9370dfaa023aa7b4db3acb36008d3763a20f0ca82bec3ff721ad",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/whole-benchmark-tests.log",
+      "bytes": 411,
+      "raw_sha256": "629b7aa830c7acd0b7c25f8880585ca0301c0376d52386b88fe6731263a42723",
+      "published_sha256": "629b7aa830c7acd0b7c25f8880585ca0301c0376d52386b88fe6731263a42723",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/synth-report-red.log",
+      "bytes": 21108,
+      "raw_sha256": "abc33fa60f86fa800a34a6f2838c1a4236a50d49939ee322e42a9df8d9a9e328",
+      "published_sha256": "c8c5d981f6ac3894cde0f1793c2e9541edea1de7a84cdd3dae40ba188e0fc4b5",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/synth-report-hardening-red.log",
+      "bytes": 11956,
+      "raw_sha256": "1a0c9a1e78c6581b14731c703bcf6a444aa31b7d177bc9b4dc1a4f55763a76eb",
+      "published_sha256": "043dc771a8700c60602d454c9e37aabb62af68a3f81864f9b4ee50f4e57892e9",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/synth-report-final-red.log",
+      "bytes": 3208,
+      "raw_sha256": "7cf79ff9a038e505e5c3016268c0df665560539df603237ed7f54b8d1fcecdc7",
+      "published_sha256": "a0533320fbd641fbbf22c15aab939bf0ecd962b3671c1ac6bc6fb382359da108",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/synth-report-instructions-red.log",
+      "bytes": 707,
+      "raw_sha256": "7e3638259251ae48dfec3aa6e3f5e7ad47d792f4429155c805f7ed2612eea04d",
+      "published_sha256": "761298f5dd614ab4d26166151be8ab419bee6905c77082fbc3178318a3bd5d36",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/acceptance.json",
+      "bytes": 3138,
+      "raw_sha256": "f451f3ed7a8989d073eb959f059a58491e64517bbabb7bcc7803a99b5a600e12",
+      "published_sha256": "f451f3ed7a8989d073eb959f059a58491e64517bbabb7bcc7803a99b5a600e12",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/acceptance-collector.py.txt",
+      "bytes": 6244,
+      "raw_sha256": "8be5c31f684424f6abd4d5d4c55e1a9919e0045b5921c95865aa5677e0e330d3",
+      "published_sha256": "277a631e01bc654804a3704fcc191b31bcdbb5b769045a39be3e87d86f183407",
+      "lossless_except_explicit_private_path_redaction": true
+    },
+    {
+      "path": "bench/results/synthetic-report-guard-20261014/measurement-invariance.json",
+      "bytes": 1120,
+      "raw_sha256": "92ed46fa0c267d75f9f1af79b9dd5916430be7a61ff693d78e8dde7909758c26",
+      "published_sha256": "92ed46fa0c267d75f9f1af79b9dd5916430be7a61ff693d78e8dde7909758c26",
+      "lossless_except_explicit_private_path_redaction": true
+    }
+  ]
+}

@@ -1174,12 +1174,41 @@ def cmd_compare(args) -> None:
         if not ("synth" in a and "synth" in b):
             sys.exit("bench: compare a synthetic result with another synthetic result")
         synth_run, _ = _synth()
-        print(f"A {args.a} (justrust {a['env']['justrust_rev']})\nB {args.b} (justrust {b['env']['justrust_rev']})")
+        reasons = []
+        ea, eb = a.get("env"), b.get("env")
+        for label, env in (("A", ea), ("B", eb)):
+            if not isinstance(env, dict):
+                reasons.append(f"{label}: missing environment provenance")
+                continue
+            for key in ("justrust_rev", "host", "cpu"):
+                if not isinstance(env.get(key), str) or not env[key]:
+                    reasons.append(f"{label}: missing or malformed {key} environment provenance")
+            if not isinstance(env.get("snapshots"), dict) or not env["snapshots"]:
+                reasons.append(f"{label}: missing or malformed snapshots environment provenance")
+            if type(env.get("ncpu")) is not int or env["ncpu"] < 1:
+                reasons.append(f"{label}: missing or malformed ncpu environment provenance")
+            if not isinstance(env.get("execution", "local"), str) or not env.get("execution", "local"):
+                reasons.append(f"{label}: malformed execution environment provenance")
+        if isinstance(ea, dict) and isinstance(eb, dict):
+            for key in ("snapshots", "host", "cpu", "ncpu", "execution"):
+                if ea.get(key, "local" if key == "execution" else None) != eb.get(key, "local" if key == "execution" else None):
+                    reasons.append(f"different {key}: compare the same pinned workload, machine and execution mode")
+        if reasons:
+            print("Synthetic comparison blocked:\n" + "\n".join(f"- {why}" for why in reasons))
+            return
+        print(f"A {args.a} (justrust {ea['justrust_rev']})\nB {args.b} (justrust {eb['justrust_rev']})")
         # Stack names can differ (toolchain suffix): compare position by position.
-        b["synth"]["stack_names"] = list(a["synth"]["stack_names"])
-        for p in b["synth"]["results"]:
-            p["stats"] = dict(zip(a["synth"]["stack_names"], p["stats"].values()))
-        print(synth_run.compare(a["synth"], b["synth"]))
+        sa, sb = a["synth"], b["synth"]
+        old = sb.get("stack_names") if isinstance(sb, dict) else None
+        new = sa.get("stack_names") if isinstance(sa, dict) else None
+        if (not synth_run._structure(sa) and not synth_run._structure(sb)
+                and len(old) == len(new) and len(set(old)) == len(old)):
+            mapping = dict(zip(old, new))
+            sb = {**sb, "stack_names": list(new), "results": [
+                {**p, **{key: {mapping.get(s, s): value for s, value in p.get(key, {}).items()}
+                         for key in ("stats", "samples", "errors")}}
+                for p in sb["results"]]}
+        print(synth_run.compare(sa, sb))
         return
     if a["env"]["snapshots"] != b["env"]["snapshots"]:
         sys.exit("bench: different pinned snapshots, numbers are not comparable")

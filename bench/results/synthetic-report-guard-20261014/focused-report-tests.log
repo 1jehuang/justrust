@@ -1,0 +1,10 @@
+$ /usr/bin/python3 -m unittest discover -s bench -p test_synth_reporting.py
+
+[stderr]
+.............
+----------------------------------------------------------------------
+Ran 13 tests in 13.971s
+
+OK
+
+exit=0

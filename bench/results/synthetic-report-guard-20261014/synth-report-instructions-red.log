@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_instruction_counter_coverage (bench.test_synth_reporting.ReportingTests.test_instruction_counter_coverage)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<operator-home>/justrust/bench/test_synth_reporting.py", line 231, in test_instruction_counter_coverage
+    self.assertIsNone(run.summarize(d)["overall"]["other"]["instructions"])
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 200 is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)
