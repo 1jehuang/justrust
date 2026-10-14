@@ -1,0 +1,1480 @@
+{
+  "boundary_suite": {
+    "fail": 0,
+    "pass": 91,
+    "raw_sha256": "04bfb179ed279e635e30122aa746f9200bee8d365c985285799633c1ba7e588e",
+    "subtests": [
+      "machine-cost transparency uses configured c8a.8xlarge without changing admission",
+      "machine-cost transparency uses configured m8azn.6xlarge without changing admission",
+      "machine-cost transparency uses configured unknown.8xlarge without changing admission",
+      "connect launches one tagged build host, then authorizes the client key once ready, carrying builds",
+      "trial: a new account with 0 builds charged can connect",
+      "POST /v1/build/runs forwards to /internal/builds/charge and passes status, body and next_step through",
+      "fail closed: missing API binding or internal token, backend down, or no bearer -> no launch",
+      "402 next_step passthrough: no builds and no machine time refuses launch with next_step",
+      "no time cap: hours of machine time used this month never refuse or stop a host",
+      "the cron stops a running host only when the account has no builds at all",
+      "time from a previous UTC month does not count",
+      "just-spent last build: can_build false but paid-for time remains still connects",
+      "a stopped host is woken, and a stale readiness marker from the previous boot is not trusted",
+      "host keys are pinned at first observation and never replaced by later console output",
+      "isolation: a row pointing at an instance tagged for another account or kind fails closed",
+      "unconfigured and malformed requests launch nothing",
+      "Instance Connect ServiceException after a wake is retried, then reported as booting, never 503",
+      "provider failures surface as 503 build_unavailable and release the launch claim",
+      "accrual: ledger rows per interval, bounded steps, idempotent",
+      "accrual stops at the EC2-reported stop time and resumes on wake",
+      "cron: never calls the backend, keeps hosts with builds running, and stops entitlement loss with 0 charged",
+      "a failed first boot is terminated and replaced, and a lost machine is recreated",
+      "orphan sweep: unrecorded build instances are terminated after a grace period, recorded ones never",
+      "stop follows the contract",
+      "connect attempts are rate limited per account",
+      "pure helpers: console parsing, accrual math, stop time, instance list",
+      "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR",
+      "toolchain sharing rejects malformed deployment configuration before a launch",
+      "bootstrap contract: ubuntu user, hardened sshd, no general sudo, idle stop, toolchain, per-boot readiness",
+      "jcode-mkdir wrapper creates only normalized /home and /Users paths, mode 755, no symlinks",
+      "admission timing is opt-in, fixed numeric and secret-free with no extra charges",
+      "admission timing never releases success before the authoritative queued batch",
+      "admission timing preserves refusals, validation and fail-closed missing bindings",
+      "a charged run is recorded queued with its labels, then running, then done",
+      "charge and identity lookup overlap, but queued visibility still precedes the response",
+      "an overlapped lookup cannot record a run whose charge was refused",
+      "failed overlapped identity bookkeeping never changes successful billing",
+      "without a bookkeeping database, billing does not make an identity request",
+      "run events only touch the caller's own runs and are validated",
+      "a refused charge records nothing; labels are bounded and printable",
+      "the sweep marks silent runs lost and a late done still lands",
+      "local builds are counted per account, day, reason, and client, and validated",
+      "install events: anonymous, validated, bounded, and joined to the device flow",
+      "install events are rate limited per client address",
+      "warm connect: one AWS call (the key push) once this boot was seen ready; a stale state falls back to the full path",
+      "202 answers carry a poll hint; provisioning polls slowly",
+      "cron idle stop: a host with no activity for BUILD_IDLE_STOP_MINUTES is stopped, unless a run is in flight",
+      "a charged run and its events count as activity",
+      "cron: one DescribeInstances page per 1000 hosts, not one call per host",
+      "describeFleet follows nextToken and parses the real EC2 response shape",
+      "capacity: launch falls back across zones and types; all full answers 503 build_capacity with retry_after",
+      "capacity: a vCPU quota error skips the remaining zones of that type",
+      "fleet cap: BUILD_MAX_HOSTS reclaims the longest-idle host of another account, never a busy one",
+      "a wake with no EC2 capacity answers build_capacity and keeps the host",
+      "fleet cap holds under a burst of concurrent first connects, and a stale reservation is released by the cron",
+      "region move: an existing host stays managed in its own region, new launches go to BUILD_REGION",
+      "region: an invalid recorded region fails closed",
+      "region move: a west newcomer at the fleet cap reclaims an idle EAST host through the east client",
+      "cost estimate is region scoped: east and west verified rates, unknown region null",
+      "reclaim: a failed stop of the victim keeps it counted, so the cap is never bypassed",
+      "reclaim: AWS stop and the D1 compensation both fail, the victim still counts (reclaiming)",
+      "reclaim: a confirmed stop moves the victim to stopping and frees exactly one slot",
+      "cron idle stop: a fresh JCODE_BUILD_BUSY console marker keeps a host up, within a cap",
+      "cron idle stop: busy markers stop counting 3 h after the last client activity",
+      "parseBuildConsole reads the newest busy marker and ignores malformed ones",
+      "private tier: upload object then manifest, read back, isolated from other accounts",
+      "shared tier: only the publish token writes it, every account reads it",
+      "validation: keys, entries, sizes, quota",
+      "fail closed: disabled, no R2, or backend down",
+      "cron expires private objects unused for the TTL",
+      "native rootfs candidate builder rejects false trust and pins image bytes",
+      "fleet status: sanitized exact pin, profile transitions and bounded call count",
+      "fleet status: observer failures never change results or artifact operation ordering",
+      "fleet status: legacy/unselected pins and hostile status ids emit no receipts",
+      "fleet status: matrix receipts carry selected compiler and never workspace identity",
+      "prebuild shell: explicit exact SHA executes downloaded client, not installed release",
+      "prebuild shell: empty pin logs installed fallback and never discovers a mutable S3 pin",
+      "prebuild shell: malformed pin rejects before downloading or building",
+      "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+      "prebuild shell: explicit nightly/JR matrix runs default and manifest debug0 in separate compiler targets",
+      "prebuild shell: optional seed failure continues and uploads objects before manifests before index",
+      "prebuild shell: failed locked workspace retries without the lock and still publishes",
+      "prebuild shell: invalid explicit compiler matrix fails before store access or builds",
+      "fleet template pins full client digest and explicit compiler matrix without shell injection",
+      "fleet status opt-in is future-only, defaults off, and uses an opaque generated ID",
+      "store bucket: anonymous GetObject under v1/ only, no listing, TLS only",
+      "only the prebuild role writes, and only under v1/",
+      "publish uploads bundles, then manifests, then the index",
+      "index format matches the client's binary search",
+      "trusted public Cargo archive publication and restore security contracts",
+      "trusted toolchain publisher: deterministic archives, identity and immutable writes"
+    ]
+  },
+  "hosted": [
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230247223-2028894",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 0,
+      "place": "hosted",
+      "public_hits": 0,
+      "raw_output_sha256": "0f2d70f168bbddcd9b43b92cd9f6b22531a794b90bc5cc05551b1dbbc12a1c9d",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230247657-2029635",
+      "ignored": 3,
+      "misses": 0,
+      "passed": 410,
+      "place": "hosted",
+      "public_hits": 0,
+      "raw_output_sha256": "f3281c9a4715249f43c302a2eb516a5341571d8d140d287a4efb4a842720f765",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "clippy",
+      "exit": 0,
+      "id": "20261013-230258167-2038008",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 0,
+      "place": "hosted",
+      "public_hits": 0,
+      "raw_output_sha256": "20c73d369840cf76a4d76bdfb06b6354a726937d6a83ddcb8f20d3687f293e6a",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230258921-2038403",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 0,
+      "place": "hosted",
+      "public_hits": 0,
+      "raw_output_sha256": "e0fa6d2dceb6a4c7cdaa5ca3a22519b439ad6a94face585a7afcfe643b7bbcc9",
+      "toolchain": "nightly-2026-10-08"
+    }
+  ],
+  "named_actual_tests": {
+    "id": "20261013-230247657-2029635",
+    "named_sharing_checks": [
+      "bundled_native_rlib_change_invalidates_shim_depcache",
+      "host_native_and_response_file_flags_compile_without_cache_reuse",
+      "buildscript::tests::keys_toolchain_env_but_not_noise",
+      "buildscript::tests::native_list_is_vendored_c_only",
+      "buildscript::tests::parses_directives",
+      "buildscript::tests::system_stamp_is_stable",
+      "depcache::tests::cargo_home_is_not_keyed",
+      "depcache::tests::cargo_home_is_portable_across_machines",
+      "depcache::tests::base_key_ignores_target_dir_but_not_flags",
+      "depcache::tests::libc_family_is_the_hosts",
+      "buildscript::tests::wrapper_replaces_elf_and_falls_back",
+      "buildscript::tests::non_cacheable_runs_are_not_stored",
+      "depcache::tests::finds_build_script_profile_dir",
+      "buildscript::tests::script_bundle_round_trip_and_hermetic_only",
+      "depcache::tests::finds_profile_dir",
+      "buildscript::tests::directory_inputs_track_contents",
+      "depcache::tests::glibc_needs_are_read_from_the_dynamic_string_table",
+      "depcache::tests::new_layout_out_dir_normalizes",
+      "depcache::tests::only_plain_outputs_are_cacheable",
+      "depcache::tests::normalizes_profile_and_target_dirs",
+      "depcache::tests::parses_dep_info",
+      "buildscript::tests::script_bundle_rejects_hostile_input",
+      "depcache::tests::extern_keys_hash_dynamic_library_executable_bytes",
+      "buildscript::tests::historical_native_entries_are_not_public_even_with_hermetic_bit",
+      "buildscript::tests::round_trip_between_target_dirs",
+      "depcache::tests::target_paths_only_allowed_as_input_file_names",
+      "depcache::tests::remaps_make_keys_independent_of_cargo_home_and_symlinks",
+      "depcache_gc::tests::evicts_least_recently_used_first_and_spares_recent",
+      "depcache::tests::user_keyed_env_names_only_what_cargo_does_not_set",
+      "depcache_gc::tests::default_cap_follows_free_space",
+      "depcache_gc::tests::parses_plain_and_invalid_sizes",
+      "depcache_gc::tests::parses_sizes",
+      "depcache_prebuilt::tests::base_accepts_urls_and_absolute_paths_only",
+      "depcache_prebuilt::tests::breaker_needs_consecutive_failures",
+      "depcache_prebuilt::tests::index_lookup_sorted_and_fallback",
+      "depcache_remote::tests::breaker_trips_and_expires",
+      "depcache_remote::tests::bundle_round_trip_keeps_bytes_and_modes",
+      "buildscript::tests::wrapper_runs_real_script_when_justrust_is_missing",
+      "depcache_remote::tests::keys_are_lowercase_hex_128",
+      "depcache_remote::tests::bundle_budgets_reject_oversize_and_exhaustion",
+      "depcache::tests::round_trip_and_fail_open",
+      "depcache_remote::tests::unpack_rejects_tampered_or_hostile_bundles",
+      "depcache::tests::native_cpu_bypasses_dependency_and_local_plans",
+      "depcache_prebuilt::tests::publish_then_fetch_into_an_empty_cache",
+      "depcache::tests::response_files_bypass_dependency_and_local_plans",
+      "depcache_remote::tests::public_publish_rejects_unsafe_names_and_symlinks",
+      "depcache_remote::tests::public_unpack_rejects_hostile_record_structure",
+      "hotpatch::tests::splits_response_files_like_gcc",
+      "depcache::tests::extern_archive_keys_include_bundled_object_code",
+      "depcache_prebuilt::tests::fetches_only_units_that_cost_more_to_compile",
+      "buildscript::tests::native_header_change_changes_object_with_identical_compiler",
+      "depcache::tests::native_and_response_file_bypasses_compile_with_original_args",
+      "depcache::tests::nonnative_long_codegen_flags_remain_keyed",
+      "toolchain::bundle::tests::jr_install_process_child",
+      "toolchain::bundle::tests::manifest_rejects_wrong_target_id_commit_digest_sizes_and_schema",
+      "toolchain::bundle::tests::official_fallback_child",
+      "toolchain::bundle::tests::trusted_base_requires_https_no_credentials_queries_or_redirect_controls",
+      "toolchain::bundle::tests::extraction_rejects_traversal_absolute_links_devices_duplicates_and_extensions",
+      "toolchain::bundle::tests::extraction_rejects_truncation_corrupt_gzip_and_declared_size_mismatch",
+      "depcache::tests::explicit_cpu_and_inert_native_text_remain_cacheable",
+      "toolchain::bundle::tests::official_nightly_bundle_preserves_stock_rustc_and_shared_cargo_provenance",
+      "remote_sync::tests::seeds_an_empty_mirror_from_git_then_never_over_sources",
+      "toolchain::bundle::tests::downloaded_jr_install_lock_serializes_independent_processes",
+      "toolchain::bundle::tests::unavailable_shared_bundle_falls_back_to_verified_official_dist_offline",
+      "toolchain::bundle::tests::executable_with_missing_elf_loader_is_rejected_without_compiling",
+      "toolchain::bundle::tests::downloaded_jr_is_atomic_staged_inactive_idempotent_and_concurrent",
+      "toolchain::bundle::tests::install_rejects_tampered_hash_wrong_target_incomplete_and_wrong_binary_identities",
+      "toolchain::bundle::tests::mandatory_rustdoc_must_run_and_helper_timeout_is_bounded",
+      "depcache::tests::native_proc_macro_code_changes_hash_and_expansion",
+      "toolchain::bundle::tests::declared_helpers_must_run_before_atomic_install",
+      "depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap"
+    ],
+    "passed": 410,
+    "raw_output_sha256": "f3281c9a4715249f43c302a2eb516a5341571d8d140d287a4efb4a842720f765"
+  },
+  "native_cargo": {
+    "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+    "complete": true,
+    "observations": [
+      {
+        "case": 0,
+        "dependency_cache": "miss",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=x86-64"
+        ],
+        "id": "20261013-230247235-2028925",
+        "output_sha256": "2d30d86f5d3447a6ca7b346c4d1fe0b1e1d17fa33afc6b40071b9889003f98f7",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "local-miss",
+          "miss",
+          "local-miss"
+        ]
+      },
+      {
+        "case": 0,
+        "dependency_cache": "hit",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=x86-64"
+        ],
+        "id": "20261013-230247911-2029964",
+        "output_sha256": "9675d50281c30f3842206166eed3a1ff185d22928af42bbe9b04656f077d75fc",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "hit",
+          "local",
+          "local"
+        ]
+      },
+      {
+        "case": 1,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=native"
+        ],
+        "id": "20261013-230248073-2030185",
+        "output_sha256": "4dd8adb64073b91194d911faf83b307a05436b285d28c8ef4d919ea495104b56",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 1,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target-cpu=native"
+        ],
+        "id": "20261013-230248797-2030982",
+        "output_sha256": "e56ea23515c840f4b16c1267c9c2c37035d01374d87a064b4d8de5f7ec3a2ef8",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 2,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget-cpu=native"
+        ],
+        "id": "20261013-230249309-2031590",
+        "output_sha256": "693d08733d81c3642eae99c20bf34d777ff1e96e23fb794174b897f44eb43d0d",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 2,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget-cpu=native"
+        ],
+        "id": "20261013-230250026-2032382",
+        "output_sha256": "7e36fbf99ed16a508f7e42eaa019a4055f11ffba172a59695b4db0e2b91704b5",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 3,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target-cpu=native"
+        ],
+        "id": "20261013-230250581-2032969",
+        "output_sha256": "8b854498566a36366d817ec3f42bd140f0b580cca4a6416c9f1803e9f2848e12",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 3,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target-cpu=native"
+        ],
+        "id": "20261013-230251296-2033522",
+        "output_sha256": "d14c296531e48a968cf78543a2ed385a0a522ef90295dbfc1ef77f333ab5290a",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 4,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target-cpu=native"
+        ],
+        "id": "20261013-230251836-2033963",
+        "output_sha256": "18660fb86ab2509cf8f0e47b6dde513969dd1fefcb6ede12fb460304ba0459f6",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 4,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target-cpu=native"
+        ],
+        "id": "20261013-230252561-2034617",
+        "output_sha256": "b0d281706d63c73a163c845b6a21136f1271bc131d086af04248932c0f054ea8",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 5,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target_cpu=native"
+        ],
+        "id": "20261013-230253100-2035072",
+        "output_sha256": "359658b7e36c4888f9557a69aba56c2f0a6e3cc089e81a3af7dfd06515f4ce7e",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 5,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-C",
+          "target_cpu=native"
+        ],
+        "id": "20261013-230253768-2035613",
+        "output_sha256": "3145e7ba43720f7728b9b896dd6961a65db41cf351d1c520babf68c9067a910a",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 6,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget_cpu=native"
+        ],
+        "id": "20261013-230254270-2036053",
+        "output_sha256": "190094dbe064fa17678bb9943414bed6bd4fcaf760ff4731a69d2b91ac8dd232",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 6,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "-Ctarget_cpu=native"
+        ],
+        "id": "20261013-230255081-2036577",
+        "output_sha256": "a5b8b442951a0d2d03f9f37cc8e29850914e2eaafec945fbe8348d7aea6cde12",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 7,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target_cpu=native"
+        ],
+        "id": "20261013-230255602-2036902",
+        "output_sha256": "6f789f63e3651eeef1573a9f8637ce91c2023da3a5347145ffcb5e43046c3090",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 7,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen",
+          "target_cpu=native"
+        ],
+        "id": "20261013-230256298-2037184",
+        "output_sha256": "d0216e9a48d98c7eb6455bdeda13e4a0c3c34067cf59d97f0356dc2c011bd50d",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 8,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target_cpu=native"
+        ],
+        "id": "20261013-230256925-2037473",
+        "output_sha256": "708cb119a11d32f77cad2e7a98687a703c56007f0fce34198635beb954576fe9",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 8,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "--codegen=target_cpu=native"
+        ],
+        "id": "20261013-230257716-2037769",
+        "output_sha256": "9a4d5a7ba40b41795e1d47f4a04d3f33baef4000454ad607935b8d1bc6febd57",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 9,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "@trusted-task-response-file"
+        ],
+        "id": "20261013-230258214-2038035",
+        "output_sha256": "e12ea901311729affa15cc81170330274a7ef1052d6352de24b70884ba9f11f1",
+        "repeat": 0,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      },
+      {
+        "case": 9,
+        "dependency_cache": "",
+        "exit": 0,
+        "flags": [
+          "@trusted-task-response-file"
+        ],
+        "id": "20261013-230258988-2038451",
+        "output_sha256": "250afe5d11a8e1ae9836051b1d72c8fde32a09cc7c73d9805ef2de0a3ef4d360",
+        "repeat": 1,
+        "tests_passed": 2,
+        "unit_cache": [
+          "",
+          "",
+          ""
+        ]
+      }
+    ],
+    "schema_version": 1,
+    "scope": "actual ordinary Cargo public-crate test workflows, not compiler mocks or a speed benchmark"
+  },
+  "package": {
+    "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+    "failure_recovery": [
+      {
+        "cache_bypass": true,
+        "exit": 101,
+        "id": "20261013-230405478-2047282",
+        "output_sha256": "bc645b318fd0b18519c9df91368261dc002963bac11ba8220616893f1f055cd5",
+        "phase": "error",
+        "tests_passed": 0
+      },
+      {
+        "cache_bypass": true,
+        "exit": 0,
+        "id": "20261013-230406065-2047330",
+        "output_sha256": "cf180f0988130e07f039162148866419212965a9608d8f05b3e84d3bf12e1be8",
+        "phase": "recovered",
+        "tests_passed": 2
+      }
+    ],
+    "helpers": [
+      {
+        "binary_sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+        "exit": 0,
+        "helper": "rustc",
+        "output_sha256": "94977b0fd609a043051a3172a804c8ca41bf6d8c8fdabf1a92591f47405bfe17",
+        "toolchain": "nightly-2026-10-08"
+      },
+      {
+        "binary_sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+        "exit": 0,
+        "helper": "cargo",
+        "output_sha256": "71de2de1f7d9ecf66030112aa59bf05781d6210a550634db5eba3920af9d08de",
+        "toolchain": "nightly-2026-10-08"
+      },
+      {
+        "binary_sha256": "7a7f7f709c03c0f51d5a2570659906a64edaf35a18f86f39fc914516b5736295",
+        "exit": 0,
+        "helper": "rustdoc",
+        "output_sha256": "0efc8a5dc4a679ae067fb56ec42d8cdcec68e528272e0371a66a7cdf08e65b03",
+        "toolchain": "nightly-2026-10-08"
+      },
+      {
+        "binary_sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+        "exit": 0,
+        "helper": "rustfmt",
+        "output_sha256": "c708d345a6155c6e49dc0fe31c175b8989bf9809f9998394edd51d88fbf4e221",
+        "toolchain": "nightly-2026-10-08"
+      },
+      {
+        "binary_sha256": "ac45c14da48d052f15d24fca35b7e50105866e719caa5e3c9c314448fb7cbddc",
+        "exit": 0,
+        "helper": "clippy-driver",
+        "output_sha256": "f42cda6754eec5d6dd6e845202ad553e963f60c4e6afde977fe3ab0bc319fcfa",
+        "toolchain": "nightly-2026-10-08"
+      },
+      {
+        "binary_sha256": "40349ded078a045e7ea718fef317b73bf2b20c918a65ae1510fb1de989779fd5",
+        "exit": 0,
+        "helper": "jr-cargo",
+        "output_sha256": "3d1da04736e30532121b1e4f78f29ec1970f3a4663e67b987268613ca4fe66d3",
+        "toolchain": "nightly-2026-10-08"
+      },
+      {
+        "binary_sha256": "efd82c516ba2b499e4a617cb97fbcbb65b8b1088e64b9c2654e98f7281d64e8a",
+        "exit": 0,
+        "helper": "rustc",
+        "output_sha256": "3df2bc5c1db96ffd2fa914b8cdd78c2986965c87069222a1e621232197cd5df6",
+        "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+      },
+      {
+        "binary_sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+        "exit": 0,
+        "helper": "cargo",
+        "output_sha256": "71de2de1f7d9ecf66030112aa59bf05781d6210a550634db5eba3920af9d08de",
+        "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+      },
+      {
+        "binary_sha256": "37fbaaeb188472184c4af285745fab40ea2ad1558106f614c2dc0a5f19502f95",
+        "exit": 0,
+        "helper": "rustdoc",
+        "output_sha256": "a94de558afe4e76462b7b71a8b4d94c280480055f496c55c248bea5b4bfb274a",
+        "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+      },
+      {
+        "binary_sha256": "760aec58d57def05bc574bf13b91bdf0ec75a19e21493595c363fdb59f6b343e",
+        "exit": 0,
+        "helper": "rustfmt",
+        "output_sha256": "c708d345a6155c6e49dc0fe31c175b8989bf9809f9998394edd51d88fbf4e221",
+        "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+      },
+      {
+        "binary_sha256": "7419ee274d9ae2d9e345106fbe9fbf33c7c79593ffe95fc81f8afb46f229575c",
+        "exit": 0,
+        "helper": "clippy-driver",
+        "output_sha256": "dffe2fbee98a16ba5ac6af442ae053e3b7f9b586beda8f978e76c865542f3406",
+        "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+      },
+      {
+        "binary_sha256": "40349ded078a045e7ea718fef317b73bf2b20c918a65ae1510fb1de989779fd5",
+        "exit": 0,
+        "helper": "jr-cargo",
+        "output_sha256": "3d1da04736e30532121b1e4f78f29ec1970f3a4663e67b987268613ca4fe66d3",
+        "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+      }
+    ],
+    "reuse": [
+      {
+        "exit": 0,
+        "marker_unchanged": true,
+        "output_sha256": "b57b277be8690a5de2a95d74a4486e3d9336485325151c115a9cdb7c33ee0978",
+        "toolchain": "nightly-2026-10-08"
+      },
+      {
+        "exit": 0,
+        "marker_unchanged": true,
+        "output_sha256": "a9dc4f3aeec2aa677fc2d5546138c6257c97c1f7bef15d0c010e973d433e37bd",
+        "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+      }
+    ]
+  },
+  "public_runs": [
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230143882-2018034",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 0,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "ce0aff4b441ca490119ed713dcb02e7546c2905f40127808313b3825d1df74da",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230144909-2018143",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 2,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "7e86f12f39d9434446dea4f3154835e7cf290e3310e73d20542c02ca661aaaa5",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230145670-2018305",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 0,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "4444fb1d51403ae898045e2001dfb2138f5a95f72758ad14d8b42441768d449f",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230146448-2018458",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 2,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "88df1d30f60560c95aa66f2ad0a9d9a38b6a18ebbf3cd8864b077ad7470fe332",
+      "toolchain": "nightly-2026-10-08"
+    },
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230147089-2018665",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 0,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "92f73e6035c398232b8350417e3bb900eeb2f0d4704e0498a3cb12036219a54c",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230147995-2018818",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 2,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "aa8a87b731caa386ce35217b555f5677d14210e173cec5c23e819c4644445dc8",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    },
+    {
+      "command": "check",
+      "exit": 0,
+      "id": "20261013-230148688-2018981",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 0,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "cf6fe3e2d5975d08c51c920d66749402029dfcb0e7ea701538b06b72651a201c",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    },
+    {
+      "command": "test",
+      "exit": 0,
+      "id": "20261013-230149595-2019101",
+      "ignored": 0,
+      "misses": 0,
+      "passed": 2,
+      "place": "local",
+      "public_hits": 1,
+      "raw_output_sha256": "9d115ff0f56043fe5b1eaf3593ae015bacad32613a12381d382eb046539486ff",
+      "toolchain": "jr-b7907f1fe8f7b788dbace9ca649ce4729408f943"
+    }
+  ],
+  "requirements": [
+    {
+      "boundary_cases": [
+        "trusted toolchain publisher: deterministic archives, identity and immutable writes"
+      ],
+      "component": "toolchain",
+      "id": "S01",
+      "names": [
+        "toolchain::bundle::tests::declared_helpers_must_run_before_atomic_install"
+      ],
+      "observed": "nightly/fullJR load correctly; actual install reuse exits0 and markers unchanged",
+      "primary": "Actual fresh HTTPS downloads earlier, final real CLI existing-prefix reuse and12helper binary probes",
+      "requirement": "Share complete immutable public toolchains",
+      "scope": "real CLI/package runtime",
+      "followthrough": "fresh real helper executions and nonmutating existing-prefix CLI reuse",
+      "fresh_named_checks": [
+        {
+          "name": "toolchain::bundle::tests::declared_helpers_must_run_before_atomic_install",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [
+        {
+          "name": "trusted toolchain publisher: deterministic archives, identity and immutable writes",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [
+        "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR"
+      ],
+      "component": "toolchain",
+      "id": "S02",
+      "names": [
+        "toolchain::bundle::tests::downloaded_jr_is_atomic_staged_inactive_idempotent_and_concurrent"
+      ],
+      "observed": "inactive unchanged",
+      "primary": "Final real staged marker installed_at0/inode/hash guard",
+      "requirement": "Downloaded JR never automatically activated",
+      "scope": "actual prefix observation",
+      "followthrough": "fresh unchanged staged marker with installed_at=0",
+      "fresh_named_checks": [
+        {
+          "name": "toolchain::bundle::tests::downloaded_jr_is_atomic_staged_inactive_idempotent_and_concurrent",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [
+        {
+          "name": "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [
+        "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+        "prebuild shell: malformed pin rejects before downloading or building",
+        "trusted toolchain publisher: deterministic archives, identity and immutable writes"
+      ],
+      "id": "S03",
+      "names": [
+        "toolchain::bundle::tests::manifest_rejects_wrong_target_id_commit_digest_sizes_and_schema",
+        "toolchain::bundle::tests::extraction_rejects_traversal_absolute_links_devices_duplicates_and_extensions",
+        "toolchain::bundle::tests::extraction_rejects_truncation_corrupt_gzip_and_declared_size_mismatch",
+        "toolchain::bundle::tests::downloaded_jr_install_lock_serializes_independent_processes",
+        "toolchain::bundle::tests::unavailable_shared_bundle_falls_back_to_verified_official_dist_offline",
+        "toolchain::bundle::tests::executable_with_missing_elf_loader_is_rejected_without_compiling"
+      ],
+      "observed": "wrongschema/identity/digest/size/path/link/device/duplicate/truncatedgzip/helperloader rejection, atomic independentprocess locks and officialfallback all named PASS",
+      "primary": "Named actual frozen source suite and fresh publisher boundary rerun",
+      "requirement": "Reject corrupt identities, malicious archives and unavailable distribution safely",
+      "scope": "boundary tests plus previous real broken Ubuntu helper127, not malicious production upload",
+      "followthrough": "fresh named project failure/atomicity tests plus publisher boundaries",
+      "fresh_named_checks": [
+        {
+          "name": "toolchain::bundle::tests::manifest_rejects_wrong_target_id_commit_digest_sizes_and_schema",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "toolchain::bundle::tests::extraction_rejects_traversal_absolute_links_devices_duplicates_and_extensions",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "toolchain::bundle::tests::extraction_rejects_truncation_corrupt_gzip_and_declared_size_mismatch",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "toolchain::bundle::tests::downloaded_jr_install_lock_serializes_independent_processes",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "toolchain::bundle::tests::unavailable_shared_bundle_falls_back_to_verified_official_dist_offline",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "toolchain::bundle::tests::executable_with_missing_elf_loader_is_rejected_without_compiling",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [
+        {
+          "name": "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: malformed pin rejects before downloading or building",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "trusted toolchain publisher: deterministic archives, identity and immutable writes",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [
+        "validation: keys, entries, sizes, quota"
+      ],
+      "id": "S04",
+      "names": [
+        "depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap",
+        "depcache_remote::tests::bundle_budgets_reject_oversize_and_exhaustion",
+        "depcache_remote::tests::public_unpack_rejects_hostile_record_structure",
+        "depcache_remote::tests::public_publish_rejects_unsafe_names_and_symlinks"
+      ],
+      "observed": "96MiB incompressible public roundtrip above95MiB cap succeeds/private rejects; bedrock restored hash-identically but already fit oldgzip cap",
+      "primary": "Named installed whole-suite real static publish/fetch test; previous real bedrock129090240raw/25839023gzip roundtrip",
+      "requirement": "Larger public bundles without increasing private tier limits",
+      "scope": "synthetic large boundary plus actual compiled artifact roundtrip, no speed claim",
+      "followthrough": "fresh actual large public roundtrip and private-cap rejection in whole project test",
+      "fresh_named_checks": [
+        {
+          "name": "depcache_prebuilt::tests::public_publish_fetch_allows_bundle_above_worker_cap",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache_remote::tests::bundle_budgets_reject_oversize_and_exhaustion",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache_remote::tests::public_unpack_rejects_hostile_record_structure",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache_remote::tests::public_publish_rejects_unsafe_names_and_symlinks",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [
+        {
+          "name": "validation: keys, entries, sizes, quota",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [
+        "trusted public Cargo archive publication and restore security contracts"
+      ],
+      "id": "S05",
+      "observed": "103verified archives; fresh authoritative sparse index; tamper/private/git/redirect/symlink/overwrite reject",
+      "primary": "Previous actual HTTPS restore+fresh Cargo fetch and final trusted archive publication/restore security contracts",
+      "requirement": "Verified public registry archives without mutable index/config/credential sharing",
+      "scope": "real fetch plus offline transport edge tests; no private Cargo-home publish",
+      "followthrough": "fresh archive transport/security boundary tests; prior actual HTTPS restore retained",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": [
+        {
+          "name": "trusted public Cargo archive publication and restore security contracts",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [],
+      "id": "S06",
+      "observed": "seed1.697s median vs direct1.057s; default off",
+      "primary": "Previous three alternating actual full-network pairs",
+      "requirement": "Count complete network cost before seed default promotion",
+      "scope": "workload-specific measured negative result, no universal speed claim",
+      "followthrough": "retained full-network measured negative result, not rerun as an uncoordinated speed experiment",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": []
+    },
+    {
+      "boundary_cases": [],
+      "id": "S07",
+      "observed": "8publichits/0misses, four2test passes; historical producer9193newbundles/19917index and4newJRkeys separately observed",
+      "primary": "Final8fresh ordinary CLI check/test runs with two compilers/defaultdebug0, actual prebuilt units and tests",
+      "requirement": "Compatible prebuilt compiler/profile keys actually reused",
+      "scope": "real public CDN consumption, no account-cache attribution",
+      "followthrough": "fresh eight empty-cache ordinary CLI workflows",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": [],
+      "fresh_runs": [
+        "20261013-230143882-2018034",
+        "20261013-230144909-2018143",
+        "20261013-230145670-2018305",
+        "20261013-230146448-2018458",
+        "20261013-230147089-2018665",
+        "20261013-230147995-2018818",
+        "20261013-230148688-2018981",
+        "20261013-230149595-2019101"
+      ]
+    },
+    {
+      "boundary_cases": [
+        "private tier: upload object then manifest, read back, isolated from other accounts",
+        "shared tier: only the publish token writes it, every account reads it",
+        "fail closed: missing API binding or internal token, backend down, or no bearer -> no launch",
+        "fail closed: disabled, no R2, or backend down",
+        "isolation: a row pointing at an instance tagged for another account or kind fails closed",
+        "a refused charge records nothing; labels are bounded and printable",
+        "fleet cap: BUILD_MAX_HOSTS reclaims the longest-idle host of another account, never a busy one",
+        "fleet cap holds under a burst of concurrent first connects, and a stale reservation is released by the cron",
+        "region move: a west newcomer at the fleet cap reclaims an idle EAST host through the east client",
+        "reclaim: a failed stop of the victim keeps it counted, so the cap is never bypassed",
+        "reclaim: AWS stop and the D1 compensation both fail, the victim still counts (reclaiming)",
+        "reclaim: a confirmed stop moves the victim to stopping and frees exactly one slot"
+      ],
+      "id": "S08",
+      "observed": "normal existing-host authorization/charge workflows pass; named fixture tests privateotheraccount reject/trustedpublishtoken only/95MiBquota/failedreclaim cap preserved",
+      "primary": "Previous actual authenticated hosted workflows/newGitroot ignoredsentinel check plus final private/shared/cache/auth/no-launch/billing/cap regression cases",
+      "requirement": "Account-private source/cache, trusted-only public writes and normal authorization preserved",
+      "scope": "real existing-account accepted; cross-account live hostile attempts not performed, fixture boundary tests not misrepresented as live tenant proof",
+      "followthrough": "fresh real authorized hosted workflows plus fixture-based hostile/account/cap boundaries",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": [
+        {
+          "name": "private tier: upload object then manifest, read back, isolated from other accounts",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "shared tier: only the publish token writes it, every account reads it",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fail closed: missing API binding or internal token, backend down, or no bearer -> no launch",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fail closed: disabled, no R2, or backend down",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "isolation: a row pointing at an instance tagged for another account or kind fails closed",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "a refused charge records nothing; labels are bounded and printable",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fleet cap: BUILD_MAX_HOSTS reclaims the longest-idle host of another account, never a busy one",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fleet cap holds under a burst of concurrent first connects, and a stale reservation is released by the cron",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "region move: a west newcomer at the fleet cap reclaims an idle EAST host through the east client",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "reclaim: a failed stop of the victim keeps it counted, so the cap is never bypassed",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "reclaim: AWS stop and the D1 compensation both fail, the victim still counts (reclaiming)",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "reclaim: a confirmed stop moves the victim to stopping and frees exactly one slot",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [],
+      "id": "S09",
+      "observed": "test42; sentinel absent; source identity and later Desktop backup restoration verified",
+      "primary": "Earlier actual fresh Git source check/test/lint with trackedsrc/target/value and ignoredsentinel plus frozen69blob guard",
+      "requirement": "Source mirroring preserves tracked target modules but excludes private ignored files",
+      "scope": "actual hosted source interface, not a manual source copy",
+      "followthrough": "fresh actual real-rsync source-interface tests; original new-Git-root acceptance retained",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": []
+    },
+    {
+      "boundary_cases": [
+        "native rootfs candidate builder rejects false trust and pins image bytes"
+      ],
+      "id": "N01",
+      "names": [
+        "buildscript::tests::historical_native_entries_are_not_public_even_with_hermetic_bit",
+        "buildscript::tests::native_header_change_changes_object_with_identical_compiler",
+        "buildscript::tests::script_bundle_round_trip_and_hermetic_only",
+        "buildscript::tests::script_bundle_rejects_hostile_input"
+      ],
+      "observed": "historical native metadata and hermeticbit alone refused; sharing_authorized=false; header mutation withsamecompiler observed",
+      "primary": "Named historicalnative/publicbundle guard and realheader mutation test, final rootfs candidate boundary rerun",
+      "requirement": "Native script public replay must not trust compiler or filesystem hash alone",
+      "scope": "guard accepted; native sharing authorization remains BLOCKED on trusted mounted closure/kernelCPU/environment/ABI",
+      "followthrough": "fresh real header mutation and native-public refusal tests; authorization remains blocked",
+      "fresh_named_checks": [
+        {
+          "name": "buildscript::tests::historical_native_entries_are_not_public_even_with_hermetic_bit",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "buildscript::tests::native_header_change_changes_object_with_identical_compiler",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "buildscript::tests::script_bundle_round_trip_and_hermetic_only",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "buildscript::tests::script_bundle_rejects_hostile_input",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [
+        {
+          "name": "native rootfs candidate builder rejects false trust and pins image bytes",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [],
+      "id": "N02",
+      "names": [
+        "depcache::tests::extern_keys_hash_dynamic_library_executable_bytes",
+        "depcache::tests::native_proc_macro_code_changes_hash_and_expansion"
+      ],
+      "observed": "whole executable hash changes with expansion behavior; old metadata-only memo invalidated",
+      "primary": "Named actual macro execution with nativehelper1/2 and identicalRustmetadata",
+      "requirement": "Executed proc-macro code is fully keyed",
+      "scope": "actual compiler macro execution within real-project integration, not a cross-machine native closure proof",
+      "followthrough": "fresh actual compiler proc-macro native-helper execution test",
+      "fresh_named_checks": [
+        {
+          "name": "depcache::tests::extern_keys_hash_dynamic_library_executable_bytes",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache::tests::native_proc_macro_code_changes_hash_and_expansion",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": []
+    },
+    {
+      "boundary_cases": [],
+      "id": "N03",
+      "names": [
+        "bundled_native_rlib_change_invalidates_shim_depcache",
+        "depcache::tests::extern_archive_keys_include_bundled_object_code"
+      ],
+      "observed": "old staleoutput1 on helper2 repaired; current outputs1/2/2 and misses1/2 thenhit2",
+      "primary": "Actual installed shim C helper1/2 sameRustmetadata miss/miss/hit, retained old executable failure",
+      "requirement": "Bundled native rlib code must invalidate dependent artifacts",
+      "scope": "real compiler/link/runtime integration, no claim all native determinants solved",
+      "followthrough": "fresh actual native rlib shim/link/runtime test; original old-client failure retained",
+      "fresh_named_checks": [
+        {
+          "name": "bundled_native_rlib_change_invalidates_shim_depcache",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache::tests::extern_archive_keys_include_bundled_object_code",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": []
+    },
+    {
+      "boundary_cases": [],
+      "id": "N04",
+      "names": [
+        "depcache::tests::native_cpu_bypasses_dependency_and_local_plans",
+        "depcache::tests::native_and_response_file_bypasses_compile_with_original_args"
+      ],
+      "observed": "16native ordinaryCLI runs bypass dep/local caches and pass2runtime tests each",
+      "primary": "Final ordinary Cargo test runs all8validflag forms twice plus earlier actualshim40checks and red23plans",
+      "requirement": "Host native CPU flags cannot get portable/local cache eligibility without CPU determinant",
+      "scope": "actual Cargo/publiccrate/runtime; crossCPU staleexecution not demonstrated",
+      "followthrough": "fresh sixteen real native-flag Cargo/link/test workflows",
+      "fresh_named_checks": [
+        {
+          "name": "depcache::tests::native_cpu_bypasses_dependency_and_local_plans",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache::tests::native_and_response_file_bypasses_compile_with_original_args",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [],
+      "fresh_runs": [
+        "20261013-230248073-2030185",
+        "20261013-230248797-2030982",
+        "20261013-230249309-2031590",
+        "20261013-230250026-2032382",
+        "20261013-230250581-2032969",
+        "20261013-230251296-2033522",
+        "20261013-230251836-2033963",
+        "20261013-230252561-2034617",
+        "20261013-230253100-2035072",
+        "20261013-230253768-2035613",
+        "20261013-230254270-2036053",
+        "20261013-230255081-2036577",
+        "20261013-230255602-2036902",
+        "20261013-230256298-2037184",
+        "20261013-230256925-2037473",
+        "20261013-230257716-2037769"
+      ]
+    },
+    {
+      "boundary_cases": [],
+      "id": "N05",
+      "names": [
+        "depcache::tests::response_files_bypass_dependency_and_local_plans"
+      ],
+      "observed": "2ordinaryCLI runs bypass allartifactcaches/pass2tests each, no file reinterpretation by cache",
+      "primary": "Final ordinary Cargo test with actual@nativefile twice, plus realRustc red and namedmissing/@shell bypass tests",
+      "requirement": "Opaque response files cannot evade cache determinant review",
+      "scope": "actual rustc response consumption; opaque missing/@shell checks remain explicit conservative parser boundary",
+      "followthrough": "fresh two real response-file Cargo/link/test workflows",
+      "fresh_named_checks": [
+        {
+          "name": "depcache::tests::response_files_bypass_dependency_and_local_plans",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [],
+      "fresh_runs": [
+        "20261013-230258214-2038035",
+        "20261013-230258988-2038451"
+      ]
+    },
+    {
+      "boundary_cases": [],
+      "id": "N06",
+      "names": [
+        "depcache::tests::nonnative_long_codegen_flags_remain_keyed",
+        "depcache::tests::explicit_cpu_and_inert_native_text_remain_cacheable",
+        "depcache::tests::round_trip_and_fail_open"
+      ],
+      "observed": "genericdep miss/hit preserved; nativefailure101 diagnosticE0308 full retained; repairpasses2tests withcachebypass",
+      "primary": "Final ordinary Cargo generic miss/hit and realnativeE0308/101 then restored2tests",
+      "requirement": "Generic explicit CPU/flags remain cached and compiler errors are not masked",
+      "scope": "actual ordinary Cargo failure/recovery, not only mocked exit codes",
+      "followthrough": "fresh real generic miss/hit and actual E0308/101 plus recovery",
+      "fresh_named_checks": [
+        {
+          "name": "depcache::tests::nonnative_long_codegen_flags_remain_keyed",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache::tests::explicit_cpu_and_inert_native_text_remain_cacheable",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        },
+        {
+          "name": "depcache::tests::round_trip_and_fail_open",
+          "result": "passed",
+          "run": "20261013-230247657-2029635"
+        }
+      ],
+      "fresh_boundary_checks": [],
+      "fresh_runs": [
+        "20261013-230247235-2028925",
+        "20261013-230247911-2029964",
+        "20261013-230405478-2047282",
+        "20261013-230406065-2047330"
+      ]
+    },
+    {
+      "boundary_cases": [],
+      "id": "S10",
+      "observed": "all0; actual named outputs now audited, source restored exact; new independent fresh consumer/native workflows pass",
+      "primary": "Exact059/0a19 frozen hostedcheck410tests3ignored/strictlint/recheck,69sourceblobidentity, DesktopFPS edit/repeat/restore3pass each",
+      "requirement": "Final installed client works through ordinary complete project and end-user edit loops",
+      "scope": "actual hosted project acceptance; no new hosted rerun during peerexclusive graph lease",
+      "followthrough": "fresh exact-source whole hosted check/test/strict-lint/recheck; prior Desktop edit/restoration retained",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": [],
+      "fresh_runs": [
+        "20261013-230247223-2028894",
+        "20261013-230247657-2029635",
+        "20261013-230258167-2038008",
+        "20261013-230258921-2038403"
+      ]
+    },
+    {
+      "boundary_cases": [
+        "fleet status: sanitized exact pin, profile transitions and bounded call count",
+        "fleet status: observer failures never change results or artifact operation ordering",
+        "fleet status: legacy/unselected pins and hostile status ids emit no receipts",
+        "fleet status: matrix receipts carry selected compiler and never workspace identity",
+        "prebuild shell: explicit exact SHA executes downloaded client, not installed release",
+        "prebuild shell: empty pin logs installed fallback and never discovers a mutable S3 pin",
+        "prebuild shell: malformed pin rejects before downloading or building",
+        "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+        "prebuild shell: explicit nightly/JR matrix runs default and manifest debug0 in separate compiler targets",
+        "prebuild shell: optional seed failure continues and uploads objects before manifests before index",
+        "prebuild shell: failed locked workspace retries without the lock and still publishes",
+        "prebuild shell: invalid explicit compiler matrix fails before store access or builds",
+        "fleet template pins full client digest and explicit compiler matrix without shell injection",
+        "fleet status opt-in is future-only, defaults off, and uses an opaque generated ID"
+      ],
+      "id": "S11",
+      "observed": "onlyUserData changed; allnonUserDataequal; safe0a19/fullJR/opaqueUUID configured;3hlifetime and09UTC schedule same",
+      "primary": "Actual deployedLT3 UPDATE_COMPLETE and scheduler$Latest; exact actualbefore/after comparison; fresh91boundary cases include shell/status/template contracts",
+      "requirement": "Future fleet pin changes preserve infrastructure/security/lifetime and report sanitized status",
+      "scope": "actual configuration plus executablefake-AWS/status contracts; new version3producer runtime receipt UNOBSERVED until natural next schedule",
+      "followthrough": "fresh executable runner/status/template boundaries; immutable actual deployment receipt retained; next producer runtime still pending",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": [
+        {
+          "name": "fleet status: sanitized exact pin, profile transitions and bounded call count",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fleet status: observer failures never change results or artifact operation ordering",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fleet status: legacy/unselected pins and hostile status ids emit no receipts",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fleet status: matrix receipts carry selected compiler and never workspace identity",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: explicit exact SHA executes downloaded client, not installed release",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: empty pin logs installed fallback and never discovers a mutable S3 pin",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: malformed pin rejects before downloading or building",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: wrong SHA, tampered payload, and missing selected pin fail closed",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: explicit nightly/JR matrix runs default and manifest debug0 in separate compiler targets",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: optional seed failure continues and uploads objects before manifests before index",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: failed locked workspace retries without the lock and still publishes",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "prebuild shell: invalid explicit compiler matrix fails before store access or builds",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fleet template pins full client digest and explicit compiler matrix without shell injection",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "fleet status opt-in is future-only, defaults off, and uses an opaque generated ID",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    },
+    {
+      "boundary_cases": [
+        "bootstrap contract: ubuntu user, hardened sshd, no general sudo, idle stop, toolchain, per-boot readiness",
+        "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR"
+      ],
+      "id": "S12",
+      "observed": "BLOCKED/unobserved, never inferred from bootstrap source or existinghost reuse",
+      "primary": "Existing-host fresh-prefix package acceptance; no genuine newtenant event available",
+      "requirement": "Genuine new-tenant boot acceptance without destroying data",
+      "scope": "no account fabrication/host deletion/security weakening",
+      "followthrough": "blocked genuine new-tenant bootstrap, not replaced by a mock or destructive recreation",
+      "fresh_named_checks": [],
+      "fresh_boundary_checks": [
+        {
+          "name": "bootstrap contract: ubuntu user, hardened sshd, no general sudo, idle stop, toolchain, per-boot readiness",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        },
+        {
+          "name": "toolchain sharing bootstrap is opt-in, immutable-origin only and does not activate JR",
+          "result": "passed",
+          "scope": "offline edge fixture, not live adversarial tenant proof"
+        }
+      ]
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "059674bf76fa218ba7e475279a86b4b6caf32aac",
+  "client_sha256": "0a19acdd5be8fd2963cda9bb551db508fe9a7875db69575c09a8fe5bb294b56d",
+  "previous_evidence_commit": "647c126",
+  "performance_claim": false,
+  "native_public_sharing_authorized": false,
+  "new_tenant_boot_observed": false,
+  "next_fleet_runtime_observed": false,
+  "audit_harness_note": "All commands passed on first execution. Receipt audit initially called string split on tool output already parsed as JSON. Corrected only audit handling, re-audited same unmodified actual run records; no compiler result relabeled."
+}
