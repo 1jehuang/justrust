@@ -6010,3 +6010,39 @@ Actual CLI SHA remains recorded, binary revision is unknown. The provenance
 collector explicitly marks the old source label unverified without altering
 raw capture records. Fifty-nine Python regressions passed, including actual
 rsync retention, collector CLI and source/binary provenance boundaries.
+
+## 2026-10-14: safe sharing needs executable identity, not just metadata
+
+`docs/sharing-rollout-20261014.md` maps the sharing requirements to actual
+component observations and remaining rollout gates. The real native-helper
+proc-macro proof (`20261013-194627381-739511`) produced different expansions
+from byte-identical Rust metadata. Commit `0944f21` therefore hashes complete
+executable proc-macro libraries and invalidates the old metadata-only xattr
+memo. Check, mutation regressions and strict lint records are committed in
+`data/runs/sharing-20261014/2026-10.jsonl`. Transitive native rlib keys are a
+separate audit, not covered by this executable-only proof.
+
+Fresh actual shared JR and nightly HTTPS prefixes passed tiny check, tests,
+strict lint and expected failure, remained inactive when unpinned, and were
+idempotent on repeat installation. Full local consolidated tests passed 380
+with three ignored (`20261013-194746505-749789`), final strict lint passed
+(`20261013-194811157-758446`); initial invalid fixture failure is retained
+(`20261013-193744386-687523`). Local validation was necessary while the
+hosted profiling lease was held. These are not hosted acceptance or speed
+claims. An exact committed source packaging build is also retained as
+`20261013-195503383-785887`.
+
+Actual public registry archive sharing worked, but its complete network
+path lost to direct Cargo fetching for this frozen public workload: three
+alternating pairs had cold median 1.057 s versus seeded 1.697 s including
+download, verification, restore and fetch. The seed transferred 13,340,586
+bytes and kept the authoritative sparse index fresh. Bootstrap seeding stays
+off by default. Cloud transport evidence is committed in `6f29c51`.
+
+The earlier independent east fleet completed at 02:52 UTC: 211 new public
+bundles, zero script runs, index 10,513 to 10,724 lines. It used the older
+client/nightly and could read the default public store, so it is not new-key
+JR coverage or an independent cold-cache experiment. The new pinned runner
+explicitly disables public reads. Native script portability claims in
+`docs/c-sysroot.md` are corrected: compiler-only identity is insufficient,
+and the tested rootfs candidate remains non-authorizing.

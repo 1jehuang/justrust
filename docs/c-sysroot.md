@@ -85,14 +85,24 @@ Concretely, three layers, cheapest first:
 | 2. toolchain-keyed build-script entries + publish them | buildscript.rs key change, `publish` handles script entries, store layout `v1/s/` | per entry, aws-lc 20 MB | ~52 s of build-script time on the first cold build of a new machine (39 + 8.3 + 4.4) |
 | 3. pkg-config sysroot for wayland, xkbcommon, fontconfig, freetype, alsa, openssl | headers + .pc + stub .so per lib, built once per toolchain cut | ~20 MB | builds on hosts without -dev packages; no measurable time on this laptop |
 
-Status (FINDINGS 37): layer 2 shipped without layer 1, for the four
-vendored-C packages. Their runs are keyed by the host's C toolchain
-(`cc`/`ar` content and version) instead of the package database, so they
-are portable across machines with the same compiler (the pinned build
-fleet and hosted build hosts) and published to the prebuilt store. A cold
-Desktop check from an empty cache went 53.3 s -> 14.8 s (floor 12.7 s).
-Layer 1 (a vendored clang + glibc sysroot) is what extends the same
-sharing to machines with a different host compiler.
+Status (2026-10-14, `c00e638`): layer 2's earlier compiler-only
+portability assumption was incomplete. Matching `cc`/`ar` bytes and versions
+does not pin libc headers, compiler resources, helper programs, pkg-config
+libraries, kernel observations or CPU-dependent choices. The client now
+fails closed on public reuse and publication of host-dependent native
+build-script outputs, including historical metadata. Local host-scoped
+replay remains available. The earlier FINDINGS 37 timing is historical
+performance evidence, not proof that those outputs were portable or safe.
+
+The trusted cloud builder in `prebuild/native_sysroot.py` produces a
+non-authorizing rootfs candidate and explicitly sets
+`sharing_authorized=false`. Real filesystem tests verify reproducibility
+and header-sensitive digests, but a mount namespace still exposes the host
+kernel through `uname`. A production installer receipt, immutable mounted
+closure, complete sandbox input/environment key, audited crate policy and
+ABI/runtime acceptance are still required before enabling native public
+sharing. See `justrust-cloud/docs/native-closure-acceptance-20261014.md`.
+No existing native compiler-only cache entry is grandfathered in.
 
 Recommendation: do layer 1 and 2 together (they are useless apart: 1 makes
 outputs portable, 2 lets the store carry them). Defer layer 3 until a CI
