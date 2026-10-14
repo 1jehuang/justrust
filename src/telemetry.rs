@@ -1,4 +1,4 @@
-//! Anonymous usage telemetry, and the settings file it shares with
+//! Privacy-safe usage telemetry (account-linked for scoped hosted events), and the settings file it shares with
 //! auto-update (`update.rs`).
 //!
 //! What is sent: one event per recorded build (subcommand, flags without
@@ -166,6 +166,17 @@ fn dir() -> Option<PathBuf> {
     Some(paths::home().ok()?.join("telemetry"))
 }
 
+fn queue_lock(d: &std::path::Path) -> Option<std::fs::File> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(d.join("queue.lock"))
+        .ok()?;
+    f.try_lock().ok()?;
+    Some(f)
+}
+
 /// Append one event to the queue. Never fails, never blocks on the network.
 pub fn record(kind: &str, data: Value) {
     if !enabled() {
@@ -175,11 +186,16 @@ pub fn record(kind: &str, data: Value) {
     if std::fs::create_dir_all(&d).is_err() {
         return;
     }
+    let Some(_guard) = queue_lock(&d) else { return };
     let q = d.join("queue.jsonl");
     if std::fs::metadata(&q).is_ok_and(|m| m.len() > MAX_QUEUE_BYTES) {
         return;
     }
-    let line = json!({ "kind": kind, "at": paths::now() as i64, "data": data });
+    let mut line =
+        json!({ "event_id": random_uuid(), "kind": kind, "at": paths::now() as i64, "data": data });
+    if let Some(c) = telemetry_creds() {
+        line["_auth_scope"] = json!(auth_scope(&c));
+    }
     let _ = paths::append_line(&q, &line.to_string());
     notice_once(&d);
 }
@@ -191,7 +207,7 @@ fn notice_once(d: &std::path::Path) {
         return;
     }
     eprintln!(
-        "justrust: sends anonymous usage stats (timings, counts, no code, paths, or names) \
+        "justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) \
          to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1."
     );
 }
@@ -238,7 +254,45 @@ fn flag_names(args: &[String]) -> Vec<String> {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-')
             && name.len() > 1;
-        if ok && !out.contains(&name) {
+        let known = matches!(
+            name.as_str(),
+            "-p" | "-j"
+                | "-q"
+                | "-v"
+                | "-r"
+                | "--package"
+                | "--jobs"
+                | "--quiet"
+                | "--verbose"
+                | "--release"
+                | "--profile"
+                | "--features"
+                | "--all-features"
+                | "--no-default-features"
+                | "--target"
+                | "--target-dir"
+                | "--manifest-path"
+                | "--workspace"
+                | "--exclude"
+                | "--lib"
+                | "--bin"
+                | "--bins"
+                | "--test"
+                | "--tests"
+                | "--example"
+                | "--examples"
+                | "--bench"
+                | "--benches"
+                | "--all-targets"
+                | "--locked"
+                | "--offline"
+                | "--frozen"
+                | "--message-format"
+                | "--keep-going"
+                | "--no-run"
+                | "--doc"
+        );
+        if ok && known && !out.contains(&name) {
             out.push(name);
         }
         if out.len() >= 16 {
@@ -246,6 +300,50 @@ fn flag_names(args: &[String]) -> Vec<String> {
         }
     }
     out
+}
+
+fn valid_toolchain_pin(pin: &str) -> bool {
+    pin.strip_prefix("jr-").is_some_and(|h| {
+        h.len() == 12
+            && h.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+fn valid_run_id(id: &str) -> bool {
+    let parts: Vec<_> = id.split('-').collect();
+    parts.len() == 3
+        && parts[0].len() == 8
+        && parts[1].len() == 9
+        && !parts[2].is_empty()
+        && parts[2].len() <= 10
+        && parts.iter().all(|p| p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn safe_subcommand(sub: &str) -> &str {
+    match sub {
+        "check" | "build" | "test" | "clippy" | "run" | "bench" | "doc" | "rustc" => sub,
+        _ => "other",
+    }
+}
+
+fn route_label(s: &crate::summary::Summary) -> &'static str {
+    match s.route.as_deref() {
+        Some("JUSTRUST_REMOTE=off") => "remote_off",
+        Some("JUSTRUST_REMOTE=force") => "forced",
+        Some("remote failed in the last 10 minutes") => "recent_remote_failure",
+        Some("remote machines build for Linux, this host is not Linux") => "non_linux",
+        Some("no remote machine configured") => "not_configured",
+        Some("no history for this command") => "no_history",
+        Some("non-UTF-8 arguments") => "non_utf8_args",
+        Some(r) if r.starts_with("local ~") => "cost_comparison",
+        Some(r) if r.starts_with("remote ~") => "remote_cost_comparison",
+        Some(r) if r.starts_with("trying remote: local ~") => "explore_remote",
+        Some(r) if r.ends_with("always runs locally") => "local_only",
+        Some(_) => "other",
+        None if s.remote.is_some() => "remote",
+        None => "local_unrouted",
+    }
 }
 
 fn r2(x: f64) -> f64 {
@@ -276,7 +374,11 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
     let mut put = |k: &str, v: Value| {
         d.insert(k.to_string(), v);
     };
-    put("sub", json!(s.subcommand));
+    put("schema_version", json!(2));
+    if valid_run_id(&s.id) {
+        put("run_id", json!(s.id));
+    }
+    put("sub", json!(safe_subcommand(&s.subcommand)));
     put("flags", json!(flag_names(s.args.get(1..).unwrap_or(&[]))));
     put("agent_mode", json!(agent_mode));
     put("agent", json!(agent_name()));
@@ -284,6 +386,53 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
     put("wall_s", json!(r2(s.wall)));
     put("cpu_s", json!(r2(s.cpu_secs)));
     put("ncpu", json!(s.ncpu));
+    put("build_gaps_s", json!(r2(p.build_gaps)));
+    put(
+        "phase_total_s",
+        json!(r2(p.startup
+            + p.lock_wait
+            + p.compile
+            + p.build_gaps
+            + p.test_run
+            + p.tail)),
+    );
+    put(
+        "cpu_accounting",
+        json!(match s.cpu_secs_note.as_deref() {
+            None => "wait4",
+            Some("sampled process lower bound") => "sampled_lower_bound",
+            Some("compiler CPU lower bound") => "compiler_lower_bound",
+            Some(_) => "unknown_lower_bound",
+        }),
+    );
+    put("units_with_pass_timings", json!(u.with_pass_timings));
+    put(
+        "units_missing_pass_timings",
+        json!(u.compiled.saturating_sub(u.with_pass_timings)),
+    );
+    put("rustc_wall_sum_s", json!(r2(u.rustc_wall_sum)));
+    put("depcache_miss_s", json!(r2(u.depcache_miss_secs)));
+    put("localcache_saved_s", json!(r2(u.localcache_saved_secs)));
+    put("tests_filtered", json!(t.filtered_out));
+    put("tests_timed", json!(t.timed));
+    put("tests_timed_s", json!(r2(t.timed_secs)));
+    put("tests_libtest_s", json!(r2(t.libtest_secs)));
+    put("psi_unavailable", json!(r.psi_unavailable));
+    put("psi_cpu_s", json!(r2(r.psi_cpu_secs)));
+    put("psi_mem_s", json!(r2(r.psi_mem_secs)));
+    put("psi_io_s", json!(r2(r.psi_io_secs)));
+    put(
+        "failure_category",
+        json!(if s.exit == 0 {
+            "none"
+        } else if s.diagnostics.compile_failed {
+            "compile"
+        } else if t.failed > 0 {
+            "test"
+        } else {
+            "other"
+        }),
+    );
     put("startup_s", json!(r2(p.startup)));
     put("lock_wait_s", json!(r2(p.lock_wait)));
     put("compile_s", json!(r2(p.compile)));
@@ -316,6 +465,9 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
     put("avg_cores", json!(r2(r.avg_build_cores)));
     put("min_mem_avail_mb", json!(r.min_mem_available_mb));
     put("remote", json!(s.remote.is_some()));
+    if let Some(pin) = s.toolchain.as_deref().filter(|t| valid_toolchain_pin(t)) {
+        put("toolchain_pin", json!(pin));
+    }
     put("toolchain", json!(toolchain));
     put("slot", json!(s.slot.is_some()));
     put("early", json!(s.early.is_some()));
@@ -344,14 +496,7 @@ pub fn run_data(s: &crate::summary::Summary, agent_mode: bool) -> Value {
         put("remote_sync_ms", json!(rm.sync_ms.round()));
         put("remote_client_wall_s", json!(r2(rm.client_wall)));
     }
-    if let Some(why) = &s.route {
-        // The router's rule, without its measured numbers.
-        let rule: String = why
-            .chars()
-            .map(|c| if c.is_ascii_digit() { '#' } else { c })
-            .collect();
-        put("route", json!(rule));
-    }
+    put("route", json!(route_label(s)));
     Value::Object(d)
 }
 
@@ -362,21 +507,31 @@ pub fn record_run(s: &crate::summary::Summary, agent_mode: bool) {
 }
 
 /// Report panics (location only), then run the default hook.
+fn panic_module(file: &str) -> &str {
+    let basename = file
+        .rsplit([char::from(47), char::from(92)])
+        .next()
+        .unwrap_or("");
+    match basename {
+        "main.rs" | "record.rs" | "summary.rs" | "telemetry.rs" | "remote_hosted.rs"
+        | "remote_build.rs" | "depcache.rs" | "shim.rs" | "route.rs" | "update.rs"
+        | "procfs.rs" => basename,
+        _ => "other",
+    }
+}
+
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if enabled() {
-            let loc = info
-                .location()
-                .map(|l| format!("{}:{}", l.file(), l.line()))
-                .unwrap_or_default();
-            let argv1 = std::env::args().nth(1).unwrap_or_default();
-            let mode = if argv1.starts_with("__") || argv1.is_empty() {
-                argv1
-            } else {
-                "cli".into()
+            let mode = match std::env::args().nth(1).as_deref() {
+                Some(BG_ARG) => "background",
+                _ => "cli",
             };
-            record("crash", json!({ "location": loc, "mode": mode }));
+            record(
+                "crash",
+                json!({ "module": info.location().map(|l| panic_module(l.file())), "line": info.location().map(|l| l.line()), "mode": mode }),
+            );
         }
         prev(info);
     }));
@@ -399,6 +554,9 @@ fn mtime(p: &std::path::Path) -> Option<f64> {
 /// Is a flush due? Two `stat`s.
 pub(crate) fn flush_due() -> bool {
     let Some(d) = dir() else { return false };
+    if d.join("sending.jsonl").exists() {
+        return mtime(&d.join("last-flush")).is_none_or(|t| paths::now() - t >= flush_secs());
+    }
     let q = d.join("queue.jsonl");
     let Ok(m) = std::fs::metadata(&q) else {
         return d.join("sending.jsonl").exists();
@@ -417,9 +575,75 @@ fn telemetry_url() -> String {
         .unwrap_or_else(|| format!("{}/telemetry", crate::remote_hosted::build_base()))
 }
 
-/// POST one batch. `Ok(true)`: done with it (accepted, or rejected as
-/// invalid, which a retry would not fix). `Ok(false)`: retry later.
-fn post(body: &str) -> bool {
+/// Bounded delivery outcomes. Configuration/authentication failures retain data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    Accepted,
+    Retry,
+    Auth,
+    Rejected,
+}
+
+fn delivery(code: u16) -> Delivery {
+    match code {
+        200..=299 => Delivery::Accepted,
+        401 | 403 => Delivery::Auth,
+        400 | 422 => Delivery::Rejected,
+        _ => Delivery::Retry,
+    }
+}
+
+fn trusted_endpoint(url: &str, custom: bool) -> bool {
+    !custom && url == "https://build.jcode.sh/v1/telemetry"
+}
+
+fn telemetry_creds() -> Option<crate::remote_hosted::Creds> {
+    if !trusted_endpoint(
+        &telemetry_url(),
+        std::env::var_os("JUSTRUST_TELEMETRY_URL").is_some(),
+    ) {
+        return None;
+    }
+    let c = crate::remote_hosted::creds().ok()?;
+    (c.base == crate::remote_hosted::DEFAULT_API_BASE
+        && c.build_base == crate::remote_hosted::DEFAULT_BUILD_BASE)
+        .then_some(c)
+}
+
+fn auth_scope(c: &crate::remote_hosted::Creds) -> String {
+    // Local-only fingerprint, never wire data. Domain-separated 128-bit scope
+    // comparison fails anonymous on credential rotation or binary hash changes.
+    use std::hash::{Hash, Hasher};
+    let config = c.curl_auth_config();
+    (0..2u8)
+        .map(|domain| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            domain.hash(&mut h);
+            config.hash(&mut h);
+            format!("{:016x}", h.finish())
+        })
+        .collect()
+}
+
+fn scoped_batch(events: &[Value], scope: Option<&str>) -> (Vec<Value>, bool) {
+    let bound = events.first().and_then(|e| e["_auth_scope"].as_str());
+    let auth = bound.is_some() && bound == scope;
+    let wire = events
+        .iter()
+        .take(BATCH)
+        .take_while(|e| e["_auth_scope"].as_str() == bound)
+        .map(|e| {
+            let mut e = e.clone();
+            if let Some(o) = e.as_object_mut() {
+                o.remove("_auth_scope");
+            }
+            e
+        })
+        .collect();
+    (wire, auth)
+}
+
+fn post(body: &str, auth: Option<&crate::remote_hosted::Creds>) -> Delivery {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let Ok(mut child) = Command::new("curl")
@@ -437,8 +661,8 @@ fn post(body: &str) -> bool {
             "POST",
             "-H",
             "Content-Type: application/json",
-            "--data-binary",
-            "@-",
+            "--config",
+            "-",
             "-o",
             crate::sys::DEV_NULL,
             "-w",
@@ -450,19 +674,30 @@ fn post(body: &str) -> bool {
         .stderr(Stdio::null())
         .spawn()
     else {
-        return false;
+        return Delivery::Retry;
     };
     if let Some(mut i) = child.stdin.take() {
-        let _ = i.write_all(body.as_bytes());
+        let mut config = auth.map(|c| c.curl_auth_config()).unwrap_or_default();
+        let escaped = body
+            .replace(
+                char::from(92),
+                &String::from_iter([char::from(92), char::from(92)]),
+            )
+            .replace('"', &String::from_iter([char::from(92), '"']));
+        config.push_str(&format!("data-binary = \"{escaped}\"\n"));
+        let _ = i.write_all(config.as_bytes());
     }
     let Ok(out) = child.wait_with_output() else {
-        return false;
+        return Delivery::Retry;
     };
+    if !out.status.success() {
+        return Delivery::Retry;
+    }
     let code: u16 = String::from_utf8_lossy(&out.stdout)
         .trim()
         .parse()
         .unwrap_or(0);
-    (200..300).contains(&code) || (400..500).contains(&code) && code != 429 && code != 408
+    delivery(code)
 }
 
 /// Send everything queued. Runs in the background process.
@@ -477,16 +712,29 @@ pub(crate) fn flush() {
     let q = d.join("queue.jsonl");
     // A previous flush that failed left `sending.jsonl`: send it first.
     // Appenders keep writing to a fresh queue while this one is sent.
-    if !sending.exists() && std::fs::rename(&q, &sending).is_err() {
-        return;
+    {
+        let Some(_guard) = queue_lock(&d) else { return };
+        if !sending.exists() && std::fs::rename(&q, &sending).is_err() {
+            return;
+        }
     }
     let Some(id) = install_id() else { return };
-    let text = std::fs::read_to_string(&sending).unwrap_or_default();
+    let Ok(text) = std::fs::read_to_string(&sending) else {
+        return;
+    };
     let events: Vec<Value> = text
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
-    for chunk in events.chunks(BATCH) {
+    let creds = telemetry_creds();
+    let scope = creds.as_ref().map(auth_scope);
+    let mut offset = 0;
+    while offset < events.len() {
+        let (chunk, authenticate) = scoped_batch(&events[offset..], scope.as_deref());
+        if !enabled() {
+            discard();
+            return;
+        }
         let body = json!({
             "install_id": id,
             "client": concat!("justrust ", env!("CARGO_PKG_VERSION")),
@@ -495,15 +743,49 @@ pub(crate) fn flush() {
             "events": chunk,
         })
         .to_string();
-        if !post(&body) {
+        let outcome = post(&body, if authenticate { creds.as_ref() } else { None });
+        if !enabled() {
+            discard();
+            return;
+        }
+        let label = match outcome {
+            Delivery::Accepted => "accepted",
+            Delivery::Retry => "retry",
+            Delivery::Auth => "auth_required",
+            Delivery::Rejected => "invalid_batch",
+        };
+        let _ = std::fs::write(
+            d.join("delivery.json"),
+            json!({"status": label, "at": paths::now() as i64}).to_string(),
+        );
+        if matches!(outcome, Delivery::Retry | Delivery::Auth) {
             // Retry later, unless it has been failing for days.
             if mtime(&sending).is_some_and(|t| paths::now() - t > 7.0 * 86400.0) {
                 let _ = std::fs::remove_file(&sending);
             }
             return;
         }
+        // Persist only the unsent suffix after every acknowledged batch.
+        // A crash between the POST acknowledgement and this rename can still
+        // duplicate that batch: exact-once requires server idempotency.
+        offset += chunk.len();
+        let remaining = &events[offset..];
+        if checkpoint(&sending, remaining).is_err() {
+            return;
+        }
     }
     let _ = std::fs::remove_file(&sending);
+}
+
+fn checkpoint(path: &std::path::Path, events: &[Value]) -> std::io::Result<()> {
+    let tmp = path.with_extension("checkpoint");
+    let mut text = String::new();
+    for event in events {
+        text.push_str(&event.to_string());
+        text.push('\n');
+    }
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(tmp, path)
 }
 
 /// Delete everything not yet sent.
@@ -587,7 +869,7 @@ pub fn command(action: &str) -> anyhow::Result<()> {
         "status" => {
             match disabled_reason() {
                 None => println!(
-                    "telemetry: on (anonymous usage stats, `justrust telemetry off` to stop)"
+                    "telemetry: on (usage stats, account-linked when signed in; `justrust telemetry off` to stop)"
                 ),
                 Some(why) => println!("telemetry: off ({why})"),
             }
@@ -600,11 +882,24 @@ pub fn command(action: &str) -> anyhow::Result<()> {
                         .unwrap_or(0);
                 println!("  queued, not yet sent: {n} events ({})", d.display());
             }
+            if let Some(d) = dir() {
+                let health = std::fs::read(d.join("delivery.json"))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+                let status = match health.as_ref().and_then(|v| v["status"].as_str()) {
+                    Some("accepted") => "accepted",
+                    Some("retry") => "retry pending",
+                    Some("auth_required") => "authentication rejected, retained for retry",
+                    Some("invalid_batch") => "invalid batch discarded",
+                    _ => "not attempted",
+                };
+                println!("  delivery: {status}");
+            }
             println!("  endpoint: {}", telemetry_url());
             println!(
                 "  sends: per build the subcommand, flag names, exit code, timings, unit/cache/test \
                  counts, waste kinds, agent name; per command its name and time; update outcomes; \
-                 panic locations. With a random install id, version, OS, CPU arch."
+                 panic line numbers. With a random install id, version, OS, CPU arch."
             );
             println!("  never: source, paths, crate or package names, argument values, hostnames.");
         }
@@ -648,7 +943,162 @@ mod tests {
     }
 
     #[test]
+    fn hostile_summary_never_exports_text() {
+        let secret = "PRIVATE-secret-path-token";
+        let mut s = crate::summary::Summary {
+            id: secret.into(),
+            subcommand: secret.into(),
+            cwd: secret.into(),
+            route: Some(secret.into()),
+            toolchain: Some(secret.into()),
+            cpu_secs_note: Some(secret.into()),
+            agent_session: Some(secret.into()),
+            args: vec![
+                "test".into(),
+                format!("--{secret}"),
+                "--features=PRIVATE-secret-path-token".into(),
+            ],
+            ..Default::default()
+        };
+        s.diagnostics.first_error = Some(secret.into());
+        s.units.depcache_miss_env = vec![secret.into()];
+        s.remote = Some(crate::summary::RemoteInfo {
+            machine: secret.into(),
+            ..Default::default()
+        });
+        let d = run_data(&s, true);
+        assert!(!d.to_string().contains(secret), "{d}");
+        assert!(d.get("run_id").is_none());
+        assert_eq!(d["route"], "other");
+        assert_eq!(d["sub"], "other");
+        assert_eq!(d["cpu_accounting"], "unknown_lower_bound");
+    }
+
+    #[test]
+    fn structured_diagnostics_cover_summary_fields() {
+        let mut s = crate::summary::Summary {
+            id: "20261014-104956974-1234".into(),
+            subcommand: "test".into(),
+            ..Default::default()
+        };
+        s.phases.build_gaps = 1.25;
+        s.units.compiled = 5;
+        s.units.with_pass_timings = 2;
+        s.units.depcache_miss_secs = 4.5;
+        s.units.localcache_saved_secs = 3.25;
+        s.tests.filtered_out = 11;
+        s.tests.timed = 2;
+        s.tests.timed_secs = 0.75;
+        let d = run_data(&s, false);
+        for (key, value) in [
+            ("schema_version", json!(2)),
+            ("run_id", json!(s.id)),
+            ("build_gaps_s", json!(1.25)),
+            ("phase_total_s", json!(1.25)),
+            ("units_missing_pass_timings", json!(3)),
+            ("depcache_miss_s", json!(4.5)),
+            ("localcache_saved_s", json!(3.25)),
+            ("tests_filtered", json!(11)),
+            ("tests_timed", json!(2)),
+            ("tests_timed_s", json!(0.75)),
+        ] {
+            assert_eq!(d[key], value, "{key}");
+        }
+        assert!(!valid_run_id("20261014-104956974-private"));
+    }
+
+    #[test]
+    fn delivery_preserves_auth_and_configuration_failures() {
+        for code in [401, 403] {
+            assert_eq!(delivery(code), Delivery::Auth);
+        }
+        for code in [0, 301, 404, 408, 413, 429, 500, 503] {
+            assert_eq!(delivery(code), Delivery::Retry);
+        }
+        assert_eq!(delivery(200), Delivery::Accepted);
+        assert_eq!(delivery(400), Delivery::Rejected);
+    }
+
+    #[test]
+    fn checkpoint_does_not_replay_accepted_prefix() {
+        let d = std::env::temp_dir().join(format!("justrust-telemetry-{}", random_uuid()));
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("sending.jsonl");
+        let events: Vec<_> = (0..BATCH + 2).map(|i| json!({"n": i})).collect();
+        checkpoint(&path, &events).unwrap();
+        checkpoint(&path, &events[BATCH..]).unwrap();
+        let remaining: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(remaining, events[BATCH..]);
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn queue_identity_crossing_never_reattributes() {
+        let a = crate::remote_hosted::Creds::new(
+            crate::remote_hosted::DEFAULT_API_BASE.into(),
+            "token-a".into(),
+        )
+        .unwrap();
+        let b = crate::remote_hosted::Creds::new(
+            crate::remote_hosted::DEFAULT_API_BASE.into(),
+            "token-b".into(),
+        )
+        .unwrap();
+        let sa = auth_scope(&a);
+        let sb = auth_scope(&b);
+        assert_ne!(sa, sb);
+        let events = vec![
+            json!({"kind": "run"}),
+            json!({"kind": "run", "_auth_scope": sa}),
+            json!({"kind": "run", "_auth_scope": sb}),
+        ];
+        let (legacy, auth) = scoped_batch(&events, Some(&sb));
+        assert_eq!(legacy.len(), 1);
+        assert!(!auth);
+        let (old, auth) = scoped_batch(&events[1..], Some(&sb));
+        assert_eq!(old.len(), 1);
+        assert!(!auth);
+        assert!(old[0].get("_auth_scope").is_none());
+        let (current, auth) = scoped_batch(&events[2..], Some(&sb));
+        assert!(auth);
+        assert!(!current[0].to_string().contains(&sb));
+        assert!(!scoped_batch(&events[2..], None).1);
+    }
+
+    #[test]
+    fn only_default_hosted_endpoint_may_receive_credentials() {
+        assert_eq!(
+            panic_module("/private/workspace/src/telemetry.rs"),
+            "telemetry.rs"
+        );
+        assert_eq!(panic_module("/private/source/secret.rs"), "other");
+        assert!(trusted_endpoint(
+            "https://build.jcode.sh/v1/telemetry",
+            false
+        ));
+        for url in [
+            "http://build.jcode.sh/v1/telemetry",
+            "https://build.jcode.sh.evil/v1/telemetry",
+            "https://build.jcode.sh/v1/telemetry?x=1",
+            "https://custom.test/telemetry",
+        ] {
+            assert!(!trusted_endpoint(url, false));
+        }
+        assert!(!trusted_endpoint(
+            "https://build.jcode.sh/v1/telemetry",
+            true
+        ));
+    }
+
+    #[test]
     fn disabled_in_unit_tests() {
+        assert!(valid_toolchain_pin("jr-ac20de5e7921"));
+        assert!(!valid_toolchain_pin("jr-private-package"));
+        assert!(!valid_toolchain_pin("jr-AC20DE5E7921"));
         assert_eq!(disabled_reason(), Some("unit tests"));
     }
 }
