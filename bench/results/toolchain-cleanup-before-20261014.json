@@ -1,0 +1,2892 @@
+{
+ "started": "2026-10-14T09:37:55-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.3-arch1-2",
+  "justrust": "justrust 0.1.0-alpha.18",
+  "justrust_rev": "1e92a6a6afbd",
+  "benchmark_repo_rev": "1e92a6a6afbd",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "575813196c3029a0071c19d2e8e47709cc332da672efdbb5103d106b46691786",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (ac20de5e7 2026-10-11)",
+  "toolchain": "jr-ac20de5e7921",
+  "optimization_env": {},
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  }
+ },
+ "synth": {
+  "seed": 1,
+  "points": 40,
+  "reps": 1,
+  "generator": "86207da453da",
+  "sample_info": {
+   "shapes": 1689,
+   "calls": 4711,
+   "covered_calls": 4517,
+   "coverage": 0.9588,
+   "mined": {
+    "since": "2026-09-01",
+    "at": "2026-10-11",
+    "build_calls": 6717,
+    "skipped_background_or_bad": 1995,
+    "repos": {
+     "jcode-desktop": 3184,
+     "jcode": 1082,
+     "justrust": 317,
+     "jcode-website": 104,
+     "handterm": 14,
+     "mermaid-rs-renderer": 10
+    }
+   }
+  },
+  "stack_names": [
+   "suite-jr-ac20de5e7921"
+  ],
+  "results": [
+   {
+    "i": 0,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build-release",
+     "pkg": "jcode-desktop",
+     "flags": "",
+     "change": "first",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "pre": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:workspace_remotes.rs:8",
+     "item:jcode-desktop-ui:inline_image.rs",
+     "item:jcode-desktop-ui:effort.rs",
+     "item:jcode-desktop-ui:markdown.rs",
+     "body:jcode-desktop-ui:panel_composer.rs:433",
+     "body:jcode-desktop-ui:sounds.rs:220"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 66.034,
+       "exit": 0,
+       "cpu": 308.27,
+       "max_rss_mb": 2785.0,
+       "instructions": 775570965049,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-093757263-2242292135",
+       "tests_passed": 0,
+       "load_before": 16.22,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 0.349
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 66.034,
+      "min": 66.034,
+      "max": 66.034,
+      "quiet_median": 0,
+      "cpu": 308.27,
+      "max_rss_mb": 2785.0,
+      "instructions": 775570965049,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 1,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--lib",
+     "change": "body",
+     "spread": "one-file",
+     "relation": "target",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 45,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:workspace.rs:706"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 27.85,
+       "exit": 0,
+       "cpu": 113.95,
+       "max_rss_mb": 2341.9,
+       "instructions": 354250756515,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-093919361-2242292420",
+       "tests_passed": 1303,
+       "load_before": 26.26,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 13.833
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 27.85,
+      "min": 27.85,
+      "max": 27.85,
+      "quiet_median": 0,
+      "cpu": 113.95,
+      "max_rss_mb": 2341.9,
+      "instructions": 354250756515,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 2,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-filtered",
+     "pkg": "",
+     "flags": "",
+     "change": "new-file",
+     "spread": "multi-file",
+     "relation": "outside",
+     "files": 3,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 8,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "--",
+     "reload_config"
+    ],
+    "pre": [
+     "test",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "new-file:jcode-base:lib.rs",
+     "body:jcode-base:pool.rs:261",
+     "body:jcode-base:account_pool.rs:161"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 17.887,
+       "exit": 0,
+       "cpu": 25.26,
+       "max_rss_mb": 1515.6,
+       "instructions": 93154322874,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-093958477-2242292145",
+       "tests_passed": 5,
+       "load_before": 27.82,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 9.488
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 17.887,
+      "min": 17.887,
+      "max": 17.887,
+      "quiet_median": 0,
+      "cpu": 25.26,
+      "max_rss_mb": 1515.6,
+      "instructions": 93154322874,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 3,
+    "shape": {
+     "repo": "justrust",
+     "command": "test-filtered",
+     "pkg": "",
+     "flags": "",
+     "change": "item",
+     "spread": "one-file",
+     "relation": "target",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 12,
+    "repo": "justrust",
+    "snap": "justrust",
+    "cwd": "justrust",
+    "cmd": [
+     "test",
+     "--",
+     "remote_watch"
+    ],
+    "pre": [
+     "test",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "item:justrust:remote_watch.rs"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 3.275,
+       "exit": 0,
+       "cpu": 4.88,
+       "max_rss_mb": 423.6,
+       "instructions": 21794621354,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094018006-2242292507",
+       "tests_passed": 1,
+       "load_before": 28.22,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 0.164
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 3.275,
+      "min": 3.275,
+      "max": 3.275,
+      "quiet_median": 0,
+      "cpu": 4.88,
+      "max_rss_mb": 423.6,
+      "instructions": 21794621354,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 4,
+    "shape": {
+     "repo": "jcode",
+     "command": "test-filtered",
+     "pkg": "jcode-tui",
+     "flags": "--lib",
+     "change": "body",
+     "spread": "multi-crate",
+     "relation": "target",
+     "files": 9,
+     "crates": 2,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib",
+     "--",
+     "backend"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-base:claude.rs:659",
+     "body:jcode-app-core:session_effort.rs:43",
+     "body:jcode-base:codex.rs:82",
+     "body:jcode-app-core:invalid.rs:31",
+     "body:jcode-base:detected_emails.rs:138",
+     "body:jcode-app-core:await_members_state.rs:58",
+     "body:jcode-base:pending.rs:659",
+     "body:jcode-app-core:background_tasks.rs:558",
+     "body:jcode-base:live_tests.rs:2373"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 28.633,
+       "exit": 0,
+       "cpu": 45.05,
+       "max_rss_mb": 2011.4,
+       "instructions": 135080662821,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094027212-2242292283",
+       "tests_passed": 17,
+       "load_before": 25.2,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 4.263
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 28.633,
+      "min": 28.633,
+      "max": 28.633,
+      "quiet_median": 0,
+      "cpu": 45.05,
+      "max_rss_mb": 2011.4,
+      "instructions": 135080662821,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 5,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build",
+     "pkg": "jcode-desktop-ui",
+     "flags": "",
+     "change": "vcs",
+     "spread": "unknown",
+     "relation": "unknown",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 2,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "-p",
+     "jcode-desktop-ui"
+    ],
+    "pre": [
+     "build",
+     "-p",
+     "jcode-desktop-ui"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:workspace_remotes.rs:8",
+     "item:jcode-desktop-ui:panel_gmail_draft_card.rs",
+     "item:jcode-desktop-ui:panel_image_pane.rs",
+     "body:jcode-desktop-ui:panel.rs:205",
+     "body:jcode-desktop-ui:panel_composer.rs:433"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 10.639,
+       "exit": 0,
+       "cpu": 18.37,
+       "max_rss_mb": 1688.3,
+       "instructions": 53435488432,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094113630-2242292654",
+       "tests_passed": 0,
+       "load_before": 23.65,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 15.072
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 10.639,
+      "min": 10.639,
+      "max": 10.639,
+      "quiet_median": 0,
+      "cpu": 18.37,
+      "max_rss_mb": 1688.3,
+      "instructions": 53435488432,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 6,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--lib",
+     "change": "test",
+     "spread": "one-file",
+     "relation": "target",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 18,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "test:jcode-desktop-ui:updates.rs:550"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 31.894,
+       "exit": 0,
+       "cpu": 116.57,
+       "max_rss_mb": 3960.1,
+       "instructions": 335736391641,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094145309-2242292343",
+       "tests_passed": 1303,
+       "load_before": 21.61,
+       "foreign_rustc_before": 7,
+       "noisy": true,
+       "pre_wall": 17.848
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 31.894,
+      "min": 31.894,
+      "max": 31.894,
+      "quiet_median": 0,
+      "cpu": 116.57,
+      "max_rss_mb": 3960.1,
+      "instructions": 335736391641,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 7,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build",
+     "pkg": "",
+     "flags": "",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 116,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build"
+    ],
+    "pre": [
+     "build"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.9,
+       "exit": 0,
+       "cpu": 2.3,
+       "max_rss_mb": 250.1,
+       "instructions": 1478967895,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094250115-2242292905",
+       "tests_passed": 0,
+       "load_before": 35.87,
+       "foreign_rustc_before": 7,
+       "noisy": true,
+       "pre_wall": 28.622
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.9,
+      "min": 0.9,
+      "max": 0.9,
+      "quiet_median": 0,
+      "cpu": 2.3,
+      "max_rss_mb": 250.1,
+      "instructions": 1478967895,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 8,
+    "shape": {
+     "repo": "justrust",
+     "command": "check",
+     "pkg": "jcode-desktop-motion",
+     "flags": "",
+     "change": "switch",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": "check"
+    },
+    "calls": 1,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "check",
+     "-p",
+     "jcode-desktop-motion"
+    ],
+    "pre": [
+     "check",
+     "-p",
+     "jcode-desktop-motion"
+    ],
+    "prev": [
+     "check",
+     "-p",
+     "jcode-desktop"
+    ],
+    "edits": [
+     "body:jcode-desktop-motion:lib.rs:166"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.413,
+       "exit": 0,
+       "cpu": 0.49,
+       "max_rss_mb": 248.8,
+       "instructions": 1125237588,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094305474-2242292573",
+       "tests_passed": 0,
+       "load_before": 32.62,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 0.527
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.413,
+      "min": 0.413,
+      "max": 0.413,
+      "quiet_median": 0,
+      "cpu": 0.49,
+      "max_rss_mb": 248.8,
+      "instructions": 1125237588,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 9,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--lib",
+     "change": "switch",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": "test"
+    },
+    "calls": 3,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": [
+     "test",
+     "-p",
+     "jcode-desktop",
+     "--no-run"
+    ],
+    "edits": [
+     "body:jcode-desktop-ui:workspace_account_sign_in.rs:1778"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 28.731,
+       "exit": 0,
+       "cpu": 117.76,
+       "max_rss_mb": 3951.5,
+       "instructions": 335276396890,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094333457-2242292885",
+       "tests_passed": 1303,
+       "load_before": 26.66,
+       "foreign_rustc_before": 8,
+       "noisy": true,
+       "pre_wall": 14.405
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 28.731,
+      "min": 28.731,
+      "max": 28.731,
+      "quiet_median": 0,
+      "cpu": 117.76,
+      "max_rss_mb": 3951.5,
+      "instructions": 335276396890,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 10,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build",
+     "pkg": "jcode-desktop",
+     "flags": "",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 14,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "-p",
+     "jcode-desktop"
+    ],
+    "pre": [
+     "build",
+     "-p",
+     "jcode-desktop"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.38,
+       "exit": 0,
+       "cpu": 0.5,
+       "max_rss_mb": 246.5,
+       "instructions": 1435732785,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094412550-2242292541",
+       "tests_passed": 0,
+       "load_before": 31.44,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 7.617
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.38,
+      "min": 0.38,
+      "max": 0.38,
+      "quiet_median": 0,
+      "cpu": 0.5,
+      "max_rss_mb": 246.5,
+      "instructions": 1435732785,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 11,
+    "shape": {
+     "repo": "jcode",
+     "command": "test-workspace",
+     "pkg": "",
+     "flags": "",
+     "change": "switch",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": "check"
+    },
+    "calls": 2,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "--workspace"
+    ],
+    "pre": [
+     "test",
+     "--workspace",
+     "--no-run"
+    ],
+    "prev": [
+     "check"
+    ],
+    "edits": [
+     "body:jcode-provider-openrouter-runtime:lib.rs:2009"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 82.431,
+       "exit": 101,
+       "cpu": 158.1,
+       "max_rss_mb": 1726.2,
+       "instructions": 707072149393,
+       "compile_failed": false,
+       "tests_failed": 7,
+       "id": "20261014-094536977-2242292635",
+       "tests_passed": 3625,
+       "load_before": 25.0,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 66.129
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 82.431,
+      "min": 82.431,
+      "max": 82.431,
+      "quiet_median": 0,
+      "cpu": 158.1,
+      "max_rss_mb": 1726.2,
+      "instructions": 707072149393,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 12,
+    "shape": {
+     "repo": "justrust",
+     "command": "test-filtered",
+     "pkg": "jcode-desktop-model",
+     "flags": "",
+     "change": "switch",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": "check"
+    },
+    "calls": 1,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-model",
+     "--",
+     "diff"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-model",
+     "--no-run"
+    ],
+    "prev": [
+     "check",
+     "-p",
+     "jcode-desktop-model"
+    ],
+    "edits": [
+     "body:jcode-desktop-model:todoist.rs:137"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 1.907,
+       "exit": 0,
+       "cpu": 3.65,
+       "max_rss_mb": 286.0,
+       "instructions": 11857702912,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094706690-2242292440",
+       "tests_passed": 94,
+       "load_before": 21.91,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 2.829
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 1.907,
+      "min": 1.907,
+      "max": 1.907,
+      "quiet_median": 0,
+      "cpu": 3.65,
+      "max_rss_mb": 286.0,
+      "instructions": 11857702912,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 13,
+    "shape": {
+     "repo": "jcode",
+     "command": "test-filtered",
+     "pkg": "jcode-base",
+     "flags": "--lib",
+     "change": "vcs",
+     "spread": "unknown",
+     "relation": "unknown",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 16,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-base",
+     "--lib",
+     "--",
+     "tests"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-base",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "item:jcode-base:mod.rs",
+     "item:jcode-provider-openai:websocket_health.rs",
+     "body:jcode-base:gmail.rs:998",
+     "body:jcode-provider-openai:websocket_health.rs:38",
+     "body:jcode-base:registry.rs:103",
+     "body:jcode-provider-openai:stream.rs:634"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 41.822,
+       "exit": 101,
+       "cpu": 92.58,
+       "max_rss_mb": 2084.6,
+       "instructions": 409165089097,
+       "compile_failed": false,
+       "tests_failed": 2,
+       "id": "20261014-094722020-2242292546",
+       "tests_passed": 1772,
+       "load_before": 19.61,
+       "foreign_rustc_before": 8,
+       "noisy": true,
+       "pre_wall": 10.917
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 41.822,
+      "min": 41.822,
+      "max": 41.822,
+      "quiet_median": 0,
+      "cpu": 92.58,
+      "max_rss_mb": 2084.6,
+      "instructions": 409165089097,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 14,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build-release",
+     "pkg": "",
+     "flags": "",
+     "change": "body",
+     "spread": "multi-file",
+     "relation": "outside",
+     "files": 2,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 16,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "--release"
+    ],
+    "pre": [
+     "build",
+     "--release"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-base:safety.rs:516",
+     "body:jcode-base:models.rs:376"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 274.669,
+       "exit": 0,
+       "cpu": 798.09,
+       "max_rss_mb": 3034.7,
+       "instructions": 1757456139541,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-094807884-2242292199",
+       "tests_passed": 0,
+       "load_before": 26.88,
+       "foreign_rustc_before": 8,
+       "noisy": true,
+       "pre_wall": 1.154
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 274.669,
+      "min": 274.669,
+      "max": 274.669,
+      "quiet_median": 0,
+      "cpu": 798.09,
+      "max_rss_mb": 3034.7,
+      "instructions": 1757456139541,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 15,
+    "shape": {
+     "repo": "jcode",
+     "command": "test",
+     "pkg": "jcode-tui",
+     "flags": "--lib",
+     "change": "body",
+     "spread": "one-file",
+     "relation": "outside",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 2,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "edit outside this build's crates: no effect",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 26.694,
+       "exit": 101,
+       "cpu": 44.0,
+       "max_rss_mb": 482.4,
+       "instructions": 144406822725,
+       "compile_failed": false,
+       "tests_failed": 2,
+       "id": "20261014-095342124-2242292931",
+       "tests_passed": 2486,
+       "load_before": 37.89,
+       "foreign_rustc_before": 4,
+       "noisy": true,
+       "pre_wall": 54.208
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 26.694,
+      "min": 26.694,
+      "max": 26.694,
+      "quiet_median": 0,
+      "cpu": 44.0,
+      "max_rss_mb": 482.4,
+      "instructions": 144406822725,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 16,
+    "shape": {
+     "repo": "jcode",
+     "command": "check",
+     "pkg": "jcode-tui",
+     "flags": "--tests",
+     "change": "type-error",
+     "spread": "multi-crate",
+     "relation": "target",
+     "files": 9,
+     "crates": 3,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "check",
+     "-p",
+     "jcode-tui",
+     "--tests"
+    ],
+    "pre": [
+     "check",
+     "-p",
+     "jcode-tui",
+     "--tests"
+    ],
+    "prev": null,
+    "edits": [
+     "type-error:jcode-provider-antigravity:lib.rs:80",
+     "body:jcode-app-core:desktop_selfdev.rs:220",
+     "body:jcode-base:power_inhibit.rs:487",
+     "body:jcode-provider-antigravity:lib.rs:49",
+     "body:jcode-app-core:swarm.rs:331",
+     "body:jcode-base:claude.rs:299",
+     "body:jcode-provider-antigravity:lib.rs:192",
+     "body:jcode-app-core:browser.rs:180",
+     "body:jcode-base:lifecycle.rs:264"
+    ],
+    "expect_fail": true,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.714,
+       "exit": 101,
+       "cpu": 0.98,
+       "max_rss_mb": 235.3,
+       "instructions": 2011077957,
+       "compile_failed": true,
+       "tests_failed": 0,
+       "id": "20261014-095423268-2242292205",
+       "tests_passed": 0,
+       "load_before": 26.49,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 12.282
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.714,
+      "min": 0.714,
+      "max": 0.714,
+      "quiet_median": 0,
+      "cpu": 0.98,
+      "max_rss_mb": 235.3,
+      "instructions": 2011077957,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 17,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-filtered",
+     "pkg": "jcode-app-core",
+     "flags": "",
+     "change": "type-error",
+     "spread": "multi-crate",
+     "relation": "outside",
+     "files": 4,
+     "crates": 2,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-app-core",
+     "--",
+     "src"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-app-core",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "type-error:jcode-applet-types:view.rs:25",
+     "body:jcode-harness-api:client.rs:16",
+     "body:jcode-applet-types:validate.rs:213",
+     "body:jcode-harness-api:sockets.rs:67"
+    ],
+    "expect_fail": true,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.874,
+       "exit": 101,
+       "cpu": 1.61,
+       "max_rss_mb": 286.2,
+       "instructions": 4285010996,
+       "compile_failed": true,
+       "tests_failed": 0,
+       "id": "20261014-095438449-2242292980",
+       "tests_passed": 0,
+       "load_before": 25.23,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 12.792
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.874,
+      "min": 0.874,
+      "max": 0.874,
+      "quiet_median": 0,
+      "cpu": 1.61,
+      "max_rss_mb": 286.2,
+      "instructions": 4285010996,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 18,
+    "shape": {
+     "repo": "jcode",
+     "command": "clippy",
+     "pkg": "",
+     "flags": "--all-targets",
+     "change": "type-error",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 6,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "clippy",
+     "--all-targets"
+    ],
+    "pre": [
+     "clippy",
+     "--all-targets"
+    ],
+    "prev": null,
+    "edits": [
+     "type-error:jcode:terminal.rs:346"
+    ],
+    "expect_fail": true,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 3.238,
+       "exit": 101,
+       "cpu": 5.2,
+       "max_rss_mb": 578.6,
+       "instructions": 11412338457,
+       "compile_failed": true,
+       "tests_failed": 0,
+       "id": "20261014-095502766-2242292508",
+       "tests_passed": 0,
+       "load_before": 23.33,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 21.785
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 3.238,
+      "min": 3.238,
+      "max": 3.238,
+      "quiet_median": 0,
+      "cpu": 5.2,
+      "max_rss_mb": 578.6,
+      "instructions": 11412338457,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 19,
+    "shape": {
+     "repo": "justrust",
+     "command": "build-release",
+     "pkg": "",
+     "flags": "",
+     "change": "vcs",
+     "spread": "unknown",
+     "relation": "unknown",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "justrust",
+    "snap": "justrust",
+    "cwd": "justrust",
+    "cmd": [
+     "build",
+     "--release"
+    ],
+    "pre": [
+     "build",
+     "--release"
+    ],
+    "prev": null,
+    "edits": [
+     "body:justrust:remote.rs:736",
+     "body:justrust:lib.rs:320",
+     "item:justrust:remote_hosted.rs",
+     "body:justrust:remote.rs:156"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 53.067,
+       "exit": 0,
+       "cpu": 100.25,
+       "max_rss_mb": 886.3,
+       "instructions": 212757601053,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-095506554-2242292125",
+       "tests_passed": 0,
+       "load_before": 22.43,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 0.148
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 53.067,
+      "min": 53.067,
+      "max": 53.067,
+      "quiet_median": 0,
+      "cpu": 100.25,
+      "max_rss_mb": 886.3,
+      "instructions": 212757601053,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 20,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "check",
+     "pkg": "",
+     "flags": "",
+     "change": "vcs",
+     "spread": "unknown",
+     "relation": "unknown",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 6,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "check"
+    ],
+    "pre": [
+     "check"
+    ],
+    "prev": null,
+    "edits": [
+     "item:jcode-desktop-ui:input_paste_preview.rs",
+     "body:jcode-desktop:main.rs:151",
+     "body:jcode-base:models.rs:1076",
+     "body:jcode-desktop-ui:diff_view.rs:254"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 12.164,
+       "exit": 0,
+       "cpu": 13.17,
+       "max_rss_mb": 870.1,
+       "instructions": 30806852682,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-095621177-2242292279",
+       "tests_passed": 0,
+       "load_before": 41.56,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 18.985
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 12.164,
+      "min": 12.164,
+      "max": 12.164,
+      "quiet_median": 0,
+      "cpu": 13.17,
+      "max_rss_mb": 870.1,
+      "instructions": 30806852682,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 21,
+    "shape": {
+     "repo": "jcode",
+     "command": "test",
+     "pkg": "jcode-tui",
+     "flags": "--lib",
+     "change": "body",
+     "spread": "multi-file",
+     "relation": "target",
+     "files": 3,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 2,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-tui:ui.rs:1652",
+     "body:jcode-tui:shortcut_hints.rs:159",
+     "body:jcode-tui:video_export.rs:432"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 31.119,
+       "exit": 101,
+       "cpu": 52.04,
+       "max_rss_mb": 2208.3,
+       "instructions": 179993526193,
+       "compile_failed": false,
+       "tests_failed": 3,
+       "id": "20261014-095638089-2242292765",
+       "tests_passed": 2485,
+       "load_before": 37.06,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 3.178
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 31.119,
+      "min": 31.119,
+      "max": 31.119,
+      "quiet_median": 0,
+      "cpu": 52.04,
+      "max_rss_mb": 2208.3,
+      "instructions": 179993526193,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 22,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-filtered",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--lib",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 127,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--",
+     "panel_image_transcript_tests"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.476,
+       "exit": 0,
+       "cpu": 0.7,
+       "max_rss_mb": 251.3,
+       "instructions": 1444858478,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-095734800-2242292724",
+       "tests_passed": 0,
+       "load_before": 27.23,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 22.66
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.476,
+      "min": 0.476,
+      "max": 0.476,
+      "quiet_median": 0,
+      "cpu": 0.7,
+      "max_rss_mb": 251.3,
+      "instructions": 1444858478,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 23,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "check",
+     "pkg": "jcode-base",
+     "flags": "--tests",
+     "change": "type-error",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "check",
+     "-p",
+     "jcode-base",
+     "--tests"
+    ],
+    "pre": [
+     "check",
+     "-p",
+     "jcode-base",
+     "--tests"
+    ],
+    "prev": null,
+    "edits": [
+     "type-error:jcode-base:api_keys.rs:555"
+    ],
+    "expect_fail": true,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 6.129,
+       "exit": 101,
+       "cpu": 5.62,
+       "max_rss_mb": 763.6,
+       "instructions": 10033135261,
+       "compile_failed": true,
+       "tests_failed": 0,
+       "id": "20261014-095800803-2242292743",
+       "tests_passed": 0,
+       "load_before": 30.16,
+       "foreign_rustc_before": 10,
+       "noisy": true,
+       "pre_wall": 21.813
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 6.129,
+      "min": 6.129,
+      "max": 6.129,
+      "quiet_median": 0,
+      "cpu": 5.62,
+      "max_rss_mb": 763.6,
+      "instructions": 10033135261,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 24,
+    "shape": {
+     "repo": "jcode",
+     "command": "build",
+     "pkg": "jcode",
+     "flags": "",
+     "change": "item",
+     "spread": "multi-crate",
+     "relation": "target",
+     "files": 4,
+     "crates": 3,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "build",
+     "-p",
+     "jcode"
+    ],
+    "pre": [
+     "build",
+     "-p",
+     "jcode"
+    ],
+    "prev": null,
+    "edits": [
+     "item:jcode:menubar.rs",
+     "body:jcode-provider-cursor-runtime:wire.rs:62",
+     "body:jcode-usage-types:lib.rs:237",
+     "body:jcode:menubar.rs:33"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 20.585,
+       "exit": 0,
+       "cpu": 35.63,
+       "max_rss_mb": 1560.1,
+       "instructions": 135141939844,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-095845772-2242292577",
+       "tests_passed": 0,
+       "load_before": 36.83,
+       "foreign_rustc_before": 4,
+       "noisy": true,
+       "pre_wall": 33.405
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 20.585,
+      "min": 20.585,
+      "max": 20.585,
+      "quiet_median": 0,
+      "cpu": 35.63,
+      "max_rss_mb": 1560.1,
+      "instructions": 135141939844,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 25,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "check",
+     "pkg": "",
+     "flags": "",
+     "change": "switch",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": "clippy"
+    },
+    "calls": 9,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "check"
+    ],
+    "pre": [
+     "check"
+    ],
+    "prev": [
+     "clippy"
+    ],
+    "edits": [
+     "body:jcode-desktop:diagnostics.rs:90"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 3.043,
+       "exit": 0,
+       "cpu": 3.58,
+       "max_rss_mb": 637.1,
+       "instructions": 11071157089,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-095921445-2242292323",
+       "tests_passed": 0,
+       "load_before": 27.22,
+       "foreign_rustc_before": 6,
+       "noisy": true,
+       "pre_wall": 8.537
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 3.043,
+      "min": 3.043,
+      "max": 3.043,
+      "quiet_median": 0,
+      "cpu": 3.58,
+      "max_rss_mb": 637.1,
+      "instructions": 11071157089,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 26,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build",
+     "pkg": "",
+     "flags": "",
+     "change": "vcs",
+     "spread": "unknown",
+     "relation": "unknown",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 23,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build"
+    ],
+    "pre": [
+     "build"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:effort.rs:219",
+     "item:jcode-base:provider_activity.rs",
+     "body:jcode-desktop-ui:workspace_usage_reset.rs:202",
+     "body:jcode-base:mod.rs:973"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 12.067,
+       "exit": 0,
+       "cpu": 19.68,
+       "max_rss_mb": 1676.6,
+       "instructions": 84138375533,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-095944619-2242292560",
+       "tests_passed": 0,
+       "load_before": 26.21,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 17.092
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 12.067,
+      "min": 12.067,
+      "max": 12.067,
+      "quiet_median": 0,
+      "cpu": 19.68,
+      "max_rss_mb": 1676.6,
+      "instructions": 84138375533,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 27,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-filtered",
+     "pkg": "jcode-harness-api-server",
+     "flags": "",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-harness-api-server",
+     "--",
+     "tests"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-harness-api-server",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 1.023,
+       "exit": 0,
+       "cpu": 0.98,
+       "max_rss_mb": 232.6,
+       "instructions": 3181325334,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100005079-2242292663",
+       "tests_passed": 167,
+       "load_before": 24.5,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 7.028
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 1.023,
+      "min": 1.023,
+      "max": 1.023,
+      "quiet_median": 0,
+      "cpu": 0.98,
+      "max_rss_mb": 232.6,
+      "instructions": 3181325334,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 28,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-workspace",
+     "pkg": "",
+     "flags": "",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 14,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "--workspace"
+    ],
+    "pre": [
+     "test",
+     "--workspace",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 18.027,
+       "exit": 0,
+       "cpu": 104.92,
+       "max_rss_mb": 3973.8,
+       "instructions": 299257598130,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100025046-2242292424",
+       "tests_passed": 1754,
+       "load_before": 22.49,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 16.59,
+       "suspect": "rerun took 18.0s after a 16.6s pre-build (cache invalidated?)"
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 18.027,
+      "min": 18.027,
+      "max": 18.027,
+      "quiet_median": 0,
+      "cpu": 104.92,
+      "max_rss_mb": 3973.8,
+      "instructions": 299257598130,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 29,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--lib",
+     "change": "switch",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": "test-filtered"
+    },
+    "calls": 20,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": [
+     "test",
+     "-p",
+     "jcode-desktop",
+     "--no-run"
+    ],
+    "edits": [
+     "body:jcode-desktop-ui:terminal.rs:419"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 27.023,
+       "exit": 0,
+       "cpu": 115.04,
+       "max_rss_mb": 3940.9,
+       "instructions": 345058326144,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100054659-2242292210",
+       "tests_passed": 1303,
+       "load_before": 26.85,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 0.338
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 27.023,
+      "min": 27.023,
+      "max": 27.023,
+      "quiet_median": 0,
+      "cpu": 115.04,
+      "max_rss_mb": 3940.9,
+      "instructions": 345058326144,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 30,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "check",
+     "pkg": "jcode-desktop-ui",
+     "flags": "--tests",
+     "change": "item",
+     "spread": "multi-file",
+     "relation": "target",
+     "files": 3,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "check",
+     "-p",
+     "jcode-desktop-ui",
+     "--tests"
+    ],
+    "pre": [
+     "check",
+     "-p",
+     "jcode-desktop-ui",
+     "--tests"
+    ],
+    "prev": null,
+    "edits": [
+     "item:jcode-desktop-ui:bundled_applets.rs",
+     "body:jcode-desktop-ui:applet_view.rs:77",
+     "body:jcode-desktop-ui:workspace.rs:4059"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 4.46,
+       "exit": 0,
+       "cpu": 10.33,
+       "max_rss_mb": 1220.2,
+       "instructions": 36051737744,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100136031-2242292977",
+       "tests_passed": 0,
+       "load_before": 27.78,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 12.296
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 4.46,
+      "min": 4.46,
+      "max": 4.46,
+      "quiet_median": 0,
+      "cpu": 10.33,
+      "max_rss_mb": 1220.2,
+      "instructions": 36051737744,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 31,
+    "shape": {
+     "repo": "jcode",
+     "command": "check",
+     "pkg": "jcode-app-core",
+     "flags": "--tests",
+     "change": "type-error",
+     "spread": "multi-file",
+     "relation": "outside",
+     "files": 2,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 1,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "check",
+     "-p",
+     "jcode-app-core",
+     "--tests"
+    ],
+    "pre": [
+     "check",
+     "-p",
+     "jcode-app-core",
+     "--tests"
+    ],
+    "prev": null,
+    "edits": [
+     "type-error:jcode-app-core:await_members_state.rs:58",
+     "body:jcode-app-core:edit.rs:163"
+    ],
+    "expect_fail": true,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 3.308,
+       "exit": 101,
+       "cpu": 3.94,
+       "max_rss_mb": 1104.3,
+       "instructions": 17389686946,
+       "compile_failed": true,
+       "tests_failed": 0,
+       "id": "20261014-100151953-2242292662",
+       "tests_passed": 0,
+       "load_before": 22.94,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 10.138
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 3.308,
+      "min": 3.308,
+      "max": 3.308,
+      "quiet_median": 0,
+      "cpu": 3.94,
+      "max_rss_mb": 1104.3,
+      "instructions": 17389686946,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 32,
+    "shape": {
+     "repo": "jcode",
+     "command": "test-filtered",
+     "pkg": "jcode-tui",
+     "flags": "--lib",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 21,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib",
+     "--",
+     "account_picker"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 1.283,
+       "exit": 0,
+       "cpu": 0.98,
+       "max_rss_mb": 236.7,
+       "instructions": 2820073214,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100159820-2242292322",
+       "tests_passed": 11,
+       "load_before": 21.82,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 3.17
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 1.283,
+      "min": 1.283,
+      "max": 1.283,
+      "quiet_median": 0,
+      "cpu": 0.98,
+      "max_rss_mb": 236.7,
+      "instructions": 2820073214,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 33,
+    "shape": {
+     "repo": "justrust",
+     "command": "check",
+     "pkg": "jcode-base",
+     "flags": "",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 14,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "check",
+     "-p",
+     "jcode-base"
+    ],
+    "pre": [
+     "check",
+     "-p",
+     "jcode-base"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.223,
+       "exit": 0,
+       "cpu": 0.31,
+       "max_rss_mb": 227.2,
+       "instructions": 1104809484,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100207048-2242292924",
+       "tests_passed": 0,
+       "load_before": 20.86,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 4.195
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.223,
+      "min": 0.223,
+      "max": 0.223,
+      "quiet_median": 0,
+      "cpu": 0.31,
+      "max_rss_mb": 227.2,
+      "instructions": 1104809484,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 34,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "check",
+     "pkg": "jcode-base",
+     "flags": "",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 16,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "check",
+     "-p",
+     "jcode-base"
+    ],
+    "pre": [
+     "check",
+     "-p",
+     "jcode-base"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 0.228,
+       "exit": 0,
+       "cpu": 0.33,
+       "max_rss_mb": 227.0,
+       "instructions": 1105151261,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100208401-2242292577",
+       "tests_passed": 0,
+       "load_before": 20.86,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 0.229
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 0.228,
+      "min": 0.228,
+      "max": 0.228,
+      "quiet_median": 0,
+      "cpu": 0.33,
+      "max_rss_mb": 227.0,
+      "instructions": 1105151261,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 35,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-filtered",
+     "pkg": "jcode-desktop-ui",
+     "flags": "",
+     "change": "rerun",
+     "spread": "none",
+     "relation": "none",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 67,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--",
+     "native_mermaid"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 1.609,
+       "exit": 0,
+       "cpu": 3.37,
+       "max_rss_mb": 437.3,
+       "instructions": 13915001697,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100225896-2242292188",
+       "tests_passed": 13,
+       "load_before": 19.41,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 14.872
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 1.609,
+      "min": 1.609,
+      "max": 1.609,
+      "quiet_median": 0,
+      "cpu": 3.37,
+      "max_rss_mb": 437.3,
+      "instructions": 13915001697,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 36,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "test-filtered",
+     "pkg": "jcode-desktop-ui",
+     "flags": "",
+     "change": "vcs",
+     "spread": "multi-file",
+     "relation": "target",
+     "files": 5,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 3,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--",
+     "workspace"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-desktop-ui",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:workspace.rs:9308",
+     "item:jcode-desktop-ui:input_paste_preview.rs",
+     "body:jcode-desktop-ui:applet_view.rs:77",
+     "item:jcode-desktop-ui:workspace_remotes.rs"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 19.695,
+       "exit": 0,
+       "cpu": 70.54,
+       "max_rss_mb": 2182.0,
+       "instructions": 229324653352,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100228705-2242292624",
+       "tests_passed": 542,
+       "load_before": 19.38,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 0.273
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 19.695,
+      "min": 19.695,
+      "max": 19.695,
+      "quiet_median": 0,
+      "cpu": 70.54,
+      "max_rss_mb": 2182.0,
+      "instructions": 229324653352,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 37,
+    "shape": {
+     "repo": "jcode",
+     "command": "test",
+     "pkg": "jcode-tui",
+     "flags": "--lib",
+     "change": "vcs",
+     "spread": "unknown",
+     "relation": "unknown",
+     "files": 0,
+     "crates": 0,
+     "prev": ""
+    },
+    "calls": 13,
+    "repo": "jcode",
+    "snap": "desktop",
+    "cwd": "jcode",
+    "cmd": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib"
+    ],
+    "pre": [
+     "test",
+     "-p",
+     "jcode-tui",
+     "--lib",
+     "--no-run"
+    ],
+    "prev": null,
+    "edits": [
+     "item:jcode-base:google.rs",
+     "item:jcode-tui:reasoning_region.rs",
+     "body:jcode-base:browser_detect.rs:249",
+     "body:jcode-tui:commands.rs:2224",
+     "item:jcode-base:anthropic.rs"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 39.779,
+       "exit": 101,
+       "cpu": 69.98,
+       "max_rss_mb": 2188.5,
+       "instructions": 260869027644,
+       "compile_failed": false,
+       "tests_failed": 3,
+       "id": "20261014-100253130-2242292654",
+       "tests_passed": 2485,
+       "load_before": 17.36,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 3.452
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 39.779,
+      "min": 39.779,
+      "max": 39.779,
+      "quiet_median": 0,
+      "cpu": 69.98,
+      "max_rss_mb": 2188.5,
+      "instructions": 260869027644,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 38,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build-release",
+     "pkg": "jcode-desktop",
+     "flags": "",
+     "change": "body",
+     "spread": "one-file",
+     "relation": "outside",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 2,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "pre": [
+     "build",
+     "--release",
+     "-p",
+     "jcode-desktop"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-base:codex.rs:62"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 141.776,
+       "exit": 0,
+       "cpu": 684.1,
+       "max_rss_mb": 3041.9,
+       "instructions": 1745172167477,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100334811-2242292835",
+       "tests_passed": 0,
+       "load_before": 15.62,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 0.567
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 141.776,
+      "min": 141.776,
+      "max": 141.776,
+      "quiet_median": 0,
+      "cpu": 684.1,
+      "max_rss_mb": 3041.9,
+      "instructions": 1745172167477,
+      "instructions_spread": null
+     }
+    }
+   },
+   {
+    "i": 39,
+    "shape": {
+     "repo": "jcode-desktop",
+     "command": "build",
+     "pkg": "jcode-desktop-ui",
+     "flags": "",
+     "change": "body",
+     "spread": "one-file",
+     "relation": "target",
+     "files": 1,
+     "crates": 1,
+     "prev": ""
+    },
+    "calls": 7,
+    "repo": "jcode-desktop",
+    "snap": "desktop",
+    "cwd": "jcode-desktop",
+    "cmd": [
+     "build",
+     "-p",
+     "jcode-desktop-ui"
+    ],
+    "pre": [
+     "build",
+     "-p",
+     "jcode-desktop-ui"
+    ],
+    "prev": null,
+    "edits": [
+     "body:jcode-desktop-ui:tutorial.rs:14"
+    ],
+    "expect_fail": false,
+    "note": "",
+    "samples": {
+     "suite-jr-ac20de5e7921": [
+      {
+       "wall": 4.991,
+       "exit": 0,
+       "cpu": 6.39,
+       "max_rss_mb": 1450.8,
+       "instructions": 28155859762,
+       "compile_failed": false,
+       "tests_failed": 0,
+       "id": "20261014-100607272-2242292547",
+       "tests_passed": 0,
+       "load_before": 21.29,
+       "foreign_rustc_before": 2,
+       "noisy": true,
+       "pre_wall": 8.974
+      }
+     ]
+    },
+    "errors": {},
+    "stats": {
+     "suite-jr-ac20de5e7921": {
+      "n": 1,
+      "median": 4.991,
+      "min": 4.991,
+      "max": 4.991,
+      "quiet_median": 0,
+      "cpu": 6.39,
+      "max_rss_mb": 1450.8,
+      "instructions": 28155859762,
+      "instructions_spread": null
+     }
+    }
+   }
+  ]
+ },
+ "finished": "2026-10-14T10:06:13-0700"
+}
