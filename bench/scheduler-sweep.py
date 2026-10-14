@@ -51,8 +51,9 @@ def identities(toolchain):
 
 
 def verify_recorded_selection(result, toolchain, identity, jobs):
-    rustc = suite.toolchain_rustc(toolchain).resolve()
-    cargo = rustc.with_name("jr-cargo").resolve()
+    selected = suite.toolchain_rustc(toolchain)
+    rustc = selected.resolve()
+    cargo = selected.with_name("jr-cargo").resolve()
     if (suite.binary_sha256(cargo) != identity["cargo_sha256"]
             or suite.binary_sha256(rustc) != identity["rustc_sha256"]):
         raise ValueError("recorded selection binary identity changed")
@@ -142,6 +143,9 @@ def main():
         if identities(args.toolchain) != identity:
             raise ValueError("toolchain or justrust changed during scheduler sweep")
         result = json.loads(out.read_text())
+        expected_mode = "1" if mode == "on" else "0"
+        if result.get("env", {}).get("optimization_env", {}).get("JUSTRUST_CARGO_CRITICAL_PATH") != expected_mode:
+            raise ValueError("recorded segment mode does not match the scheduler experiment")
         verify_recorded_selection(result, args.toolchain, identity, args.jobs)
         segments.append({"mode": mode, "result": result})
         (args.out_dir / "partial.json").write_text(json.dumps({"segments": segments,

@@ -227,6 +227,48 @@ class SchedulerSweepTests(unittest.TestCase):
             self.assertFalse((out / 'on.json').exists())
             self.assertTrue((out / '0-off.json').exists())
 
+    def test_wrong_segment_mode_never_writes_completed_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'out'
+            argv = ['scheduler-sweep.py', '--toolchain', 'nightly-2026-10-08',
+                    '--out-dir', str(out), 'desktop-body-check']
+            def execute(cmd, **kwargs):
+                if cmd[2] == 'run':
+                    Path(cmd[cmd.index('--out')+1]).write_text(json.dumps(segment('on')['result']))
+            with patch.dict(os.environ, {'JUSTRUST_HOME': tmp}, clear=True), patch('sys.argv', argv), \
+                 patch.object(sweep, 'identities', return_value={'cargo_sha256': 'fixed'}), \
+                 patch.object(sweep, 'verify_recorded_selection'), \
+                 patch.object(sweep.subprocess, 'run', side_effect=execute), \
+                 self.assertRaisesRegex(ValueError, 'mode'):
+                sweep.main()
+            self.assertFalse((out / 'off.json').exists())
+            self.assertFalse((out / 'on.json').exists())
+            self.assertTrue((out / '0-off.json').exists())
+
+    def test_compiler_symlink_does_not_change_selected_cargo_sibling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            binaries = home / 'toolchains/nightly-2026-10-08/bin'
+            binaries.mkdir(parents=True)
+            driver = binaries.parent / 'driver'
+            driver.mkdir()
+            (driver / 'rustc').write_bytes(b'compiler')
+            (binaries / 'rustc').symlink_to(driver / 'rustc')
+            (binaries / 'jr-cargo').write_bytes(b'candidate')
+            run = home / 'runs/owned-run'
+            run.mkdir(parents=True)
+            (run / 'meta.json').write_text(json.dumps({
+                'id': 'owned-run', 'toolchain': 'nightly-2026-10-08', 'place': 'local',
+                'env': {'CARGO_BUILD_JOBS': '24'},
+                'real_cargo': str(binaries / 'jr-cargo'), 'real_rustc': str(binaries / 'rustc')}))
+            result = segment('off')['result']
+            result['scenarios']['desktop-body-check']['samples'][0]['id'] = 'owned-run'
+            identity = {'cargo_sha256': suite.binary_sha256(binaries / 'jr-cargo'),
+                        'rustc_sha256': suite.binary_sha256(binaries / 'rustc')}
+            with patch.object(suite, 'JR_HOME', home), \
+                 patch.object(suite, 'toolchain_rustc', return_value=binaries / 'rustc'):
+                sweep.verify_recorded_selection(result, 'nightly-2026-10-08', identity, 24)
+
     def test_replaced_toolchain_never_produces_completed_comparison(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / 'out'
