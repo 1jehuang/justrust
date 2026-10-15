@@ -1,5 +1,48 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: First clean-room graph engine correctness and M8a baseline
+
+New implementation revision `6c8d80e9050b3f9e30774bc5c22c0cda87b29768`.
+This section concerns synthetic engine fixtures, not Rust compiler speed.
+
+Hosted acceptance run `20261015-153629734-288186` passed 30 tests, including
+canonical-key collisions, shared demands, early multi-output publication,
+branch failure, cycle diagnosis, trace overflow, CLI behavior, and private
+worker-fault/abort cleanup. All-target clippy with warnings denied passed run
+`20261015-153630845-288150`. These are the standard Rust bootstrap toolchain
+through the existing stable service, not embedding the old compiler in the
+new engine. Relevant slim exports are in `data/runs/prototype-bootstrap/`.
+
+Review reproduced a missed-wakeup defect in run `20261015-153138017-249244`:
+two reads of the same output in one continuation registered under one task ID;
+dropping one removed both wakeups. Unique read-registration IDs now preserve
+each live read, while semantic edges still deduplicate by task/producer/slot.
+Focused regression passed `20261015-153217676-254560` and remains in the suite.
+
+Tracked experiment `engine-baseline-20261015-2237` ran 72 combinations on the
+96-core m8a.24xlarge, with always-on accounting. Every sample matched the
+sequential reference, completed its capture, and reported zero event overflow.
+Raw environment, binary digest, toolchain and samples:
+`experiments/results/20261015-m8a-baseline.jsonl`.
+
+For wide fan-out of 4,096 nodes, observed engine wall time (one diagnostic
+sample per point, shared host, contended/uncontrolled):
+
+| Work rounds/node | 1 worker | 96 workers |
+|---|---:|---:|
+| 0 | 9.084 ms | 168.501 ms |
+| 1,000 | 15.512 ms | 172.103 ms |
+| 100,000 | 653.824 ms | 149.188 ms |
+
+The cheap-node 96-worker process consumed 13.472 CPU seconds versus 0.016 at
+one worker. Process CPU includes reference evaluation and setup, not just the
+engine. The wide zero-work reference is tiny. This is clear motivation to
+investigate coordination overhead, not proof of one specific cause. A candidate
+is waking every sleeping worker after every poll, in addition to the existing
+new-task/dependency notifications. The global runnable queue and accounting
+mutex remain explicit baseline bottleneck candidates. No optimal scheduling,
+free profiling, compiler speedup, or default promotion is claimed.
+
 ## 2026-10-15: Desktop diagram verification still pays shared-crate rebuild costs
 
 Desktop diagram and macOS input fixes used hosted workspace test run
