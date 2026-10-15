@@ -82,14 +82,17 @@ def _keep_log(r: dict) -> None:
 
 def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
     """Steps 1-4 for one stack. Returns the measured sample or an error."""
+    # Restoration mutates the shared snapshot too, even on a rerun with no edits.
+    gen._locked()
     gen.restore_all(plan.snap)
     options = {"identity": identity} if identity is not None else {}
     pre = _run(st, plan, plan.pre, "pre", **options)
     if pre["exit"] != 0:
         return {"error": f"pre-build failed (exit {pre['exit']}), log {pre['log']}"}
     _keep_log(pre)
-    created = gen.apply(plan, n)
+    created = None
     try:
+        created = gen.apply(plan, n)
         if plan.prev:
             prev = _run(st, plan, plan.prev, "prev", **options)
             _keep_log(prev)
@@ -102,10 +105,15 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
         os.sync()
         r = _run(st, plan, plan.cmd, "run", **options)
     finally:
-        gen.restore(plan, created)
+        if created is None:
+            # apply can fail after writing a source or creating a module. Its
+            # journal exists before the first edit, so recover partial edits.
+            gen._recover_journal()
+        else:
+            gen.restore(plan, created)
     if r.get("fell_back_local"):
         return {"error": f"forced remote fell back to a local build, log {r['log']}", "wall": r["wall"]}
-    if r["compile_failed"] != plan.expect_fail or (r["exit"] != 0 and not r["compile_failed"] and not r["tests_failed"]):
+    if r["tests_failed"] or r["compile_failed"] != plan.expect_fail or (r["exit"] != 0 and not r["compile_failed"]):
         return {"error": f"exit {r['exit']}, expected {'a compile error' if plan.expect_fail else 'success'}, "
                          f"log {r['log']}", "wall": r["wall"]}
     _keep_log(r)
@@ -129,6 +137,7 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
     generator and stacks (a spot interruption killed the run), run the rest."""
     if identity is not None and resume:
         raise ValueError("bench: identity demand cannot reuse unaudited resumed samples")
+    gen._locked()
     pts, info = gen.sample(seed, points)
     plans = [gen.plan(p, seed) for p in pts]
     if only:
