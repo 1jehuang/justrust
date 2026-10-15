@@ -259,8 +259,8 @@ fn checked_ir_inference_is_concrete_and_divergence_is_not_unit_flow() {
             assert_eq!(divergent[0].completion, Completion::Never);
             assert_eq!(
                 divergent[0].ty,
-                Ty::Unit,
-                "canonical unreachable placeholder"
+                Ty::Never,
+                "pure divergence has actual Never type"
             );
             assert_eq!(divergent[0].flow(), None);
             assert_eq!(function.result, Ty::I32);
@@ -424,11 +424,16 @@ fn checked_ir_divergence_discards_pending_temporaries_and_preserves_short_circui
         "checked_ir_divergence_discards_pending_temporaries_and_preserves_short_circuit",
         || {
             use std::os::unix::fs::PermissionsExt;
-            let source = "fn add(a:i32,b:i32)->i32 { a+b } fn binary()->i32 { 10+{return 7;} } fn argument()->i32 { add(3,{return 9;}) } fn condition()->i32 { while {return 11;} {} 0 } fn short()->bool { false && {return true;} } fn short_return()->bool { true && {return true;} } fn main() { if binary()+argument()+condition()==27 && !short() && short_return() { println!(\"divergence ok\"); } }";
+            let source = "fn add(a:i32,b:i32)->i32 { a+b } fn binary()->i32 { 10+{return 7; 0} } fn argument()->i32 { add(3,{return 9;}) } fn condition()->i32 { while {return 11;} {} 0 } fn short()->bool { false && {return true;} } fn short_return()->bool { true && {return true;} } fn main() { if binary()+argument()+condition()==27 && !short() && short_return() { println!(\"divergence ok\"); } }";
             for name in ["binary", "argument"] {
                 let function = typed(source, name);
                 let tail = &function.exprs[function.body.tail.unwrap().0];
                 assert_eq!(tail.completion, Completion::Never);
+                assert_eq!(
+                    tail.ty,
+                    Ty::I32,
+                    "actual operator/call result type survives divergence"
+                );
                 assert_eq!(tail.flow(), None);
             }
             for name in ["short", "short_return"] {
@@ -446,6 +451,43 @@ fn checked_ir_divergence_discards_pending_temporaries_and_preserves_short_circui
                 capture(&mut Command::new(path), &scratch, 5),
                 b"divergence ok\n"
             );
+        },
+    );
+}
+
+#[test]
+fn checked_ir_unreachable_tail_retains_its_actual_type_not_unit_placeholder() {
+    bounded(
+        "checked_ir_unreachable_tail_retains_its_actual_type_not_unit_placeholder",
+        || {
+            for (source, expected) in [
+                ("fn f()->i32 {{return 3; 0}} fn main(){}", Ty::I32),
+                ("fn f()->bool {{return true; false}} fn main(){}", Ty::Bool),
+                ("fn f()->i32 {{return 3;}} fn main(){}", Ty::Never),
+            ] {
+                let function = typed(source, "f");
+                let tail = &function.exprs[function.body.tail.unwrap().0];
+                assert_eq!(tail.ty, expected);
+                assert_eq!(tail.completion, Completion::Never);
+                assert_eq!(tail.flow(), None);
+            }
+            for source in [
+                "fn f()->i32 {return 3; ()} fn main(){}",
+                "fn f()->i32 {1+{return 3;}} fn main(){}",
+                "fn f(){let x=1=={return;};} fn main(){}",
+            ] {
+                let program = frontend::parse(source).unwrap();
+                let signatures = frontend::signature_table(&program).unwrap();
+                let index = program
+                    .functions
+                    .iter()
+                    .position(|f| f.name == "f")
+                    .unwrap();
+                assert!(
+                    frontend::type_function_with_signatures(&program, index, &signatures).is_err(),
+                    "invalid actual type accepted: {source}"
+                );
+            }
         },
     );
 }

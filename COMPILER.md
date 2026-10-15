@@ -24,7 +24,8 @@ published until every required check and code generation operation succeeds.
 Initial supported syntax: free functions with `i32`, `bool`, and unit parameters
 and results, local bindings and shadowing, `mut` and assignment, integer
 arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
-`while`, `return`, calls including recursion, and `println!("literal")`.
+`while`, unlabelled `loop` expressions, `break` with scalar loop values,
+`continue`, `return`, calls including recursion, and `println!("literal")`.
 `main` takes no arguments and returns unit. Arithmetic has overflow checks,
 matching Rust debug behavior. Runtime arithmetic failure exits 101. This first
 runtime does not yet reproduce Rust panic text or unwind behavior.
@@ -48,7 +49,8 @@ Not supported: crates/manifests, grouped or
 glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
 standard-library APIs beyond the documented print form, general macros, traits,
 generics, structs/enums, references/borrowing, strings as values, closures, async,
-FFI, or other targets.
+FFI, labels/labeled blocks, `for` loops, while expressions in general value
+positions, or other targets.
 This list does not turn unsupported syntax into permission to accept programs
 with incorrect semantics. Diagnostics and acceptance tests must police the
 implemented boundary. Semantic coverage must be expanded explicitly.
@@ -81,9 +83,16 @@ divergence information. Every shadowed binding has its own LocalId. The native
 emitter consumes these facts directly, without source-name lookup or inference.
 This structured typed IR is groundwork for general types and ownership analysis,
 not a completed layout, CFG, borrow checker or public cross-version IR format.
-String names remain temporary canonical call symbols. The optional structural
-IR validator is a debugging helper, not a proof of semantic validity and not a
-second checker on the normal compilation path.
+In the checked IR, semantic `Ty::Never` is distinct from runtime non-completion.
+Explicit unreachable tails retain their actual type and are still checked. Pure
+never operands to nonlogical binary operators currently receive an explicit
+unsupported diagnostic. This deliberately includes some legal stock comparisons
+pending integer/operator inference, rather than accepting invalid programs.
+`break`/`continue` targets are resolved loop IDs. Native abrupt edges restore the
+exact temporary-stack depth for the target, preserving enclosing expression
+values and discarding abandoned operands/arguments. A direct break/continue in
+its own while condition is rejected, while a nested loop has its own target.
+
 
 Source-tree loading and text expansion currently form one coarse operation.
 String-input library calls retain their original parse-first graph.
@@ -128,8 +137,8 @@ not the exact expression span. There is no stable structured diagnostic format
 yet. Native arithmetic/write failures terminate with 101 without unwinding,
 Rust panic messages, or stdio buffering. Stack exhaustion is not yet guarded
 by the generated runtime. The compiler does not implement stock rustc's lint
-passes, including constant arithmetic lint propagation. Non-unit block/if
-expressions used as discarded statements are currently conservatively rejected.
+passes, including constant arithmetic lint propagation. Explicit semicolons discard
+non-unit block/if/loop values. Omitted-semicolon block-like statements require unit.
 The private function-call ABI is not an FFI ABI. The ELF is fixed-address,
 not PIE, and requests separate non-writable executable code and read-only data.
 

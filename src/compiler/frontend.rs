@@ -2,8 +2,8 @@
 //!
 //! Syntax diagnostics have one-based line/column positions. The span-free public
 //! AST means semantic diagnostics identify functions and names instead of spans.
-//! Block/if expression statements conservatively require unit even with a
-//! semicolon, and while loops do not establish that a function always returns.
+//! Explicit semicolons discard expression values, while omitted-semicolon
+//! blocklike statements require unit. While loops do not establish return flow.
 //! Numeric literals are decimal i32 only. Unsupported syntax is rejected.
 //! Inline modules, public/private functions/modules, and simple module-level
 //! imports have separate module/value namespaces. External modules, restricted
@@ -56,6 +56,8 @@ pub enum Type {
     I32,
     Bool,
     Unit,
+    /// Semantic-only never type, not an admitted source type annotation.
+    Never,
     /// Unannotated locals only, resolved independently during function checking.
     Infer,
 }
@@ -77,6 +79,8 @@ pub enum Stmt {
         value: Expr,
     },
     Expr(Expr),
+    /// A blocklike statement without an explicit value-discarding semicolon.
+    ImplicitExpr(Expr),
     Return(Option<Expr>),
     While {
         condition: Expr,
@@ -107,6 +111,13 @@ pub enum Expr {
         else_block: Block,
     },
     Block(Block),
+    Loop {
+        body: Block,
+    },
+    Break {
+        value: Option<Box<Expr>>,
+    },
+    Continue,
     Println(String),
 }
 #[derive(Clone, Copy, Debug)]
@@ -292,6 +303,11 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 advance(&chars, &mut i, &mut line, &mut column);
             }
         } else {
+            if c == '\'' {
+                return Err(format!(
+                    "{line}:{column}: labels, lifetimes and character literals are unsupported"
+                ));
+            }
             if !c.is_ascii() {
                 return Err(format!(
                     "{line}:{column}: non-ASCII identifiers are unsupported"
@@ -630,8 +646,8 @@ impl Parser {
                 } else if self.is("}") {
                     tail = Some(Box::new(expr));
                     break;
-                } else if matches!(expr, Expr::If { .. } | Expr::Block(_)) {
-                    statements.push(Stmt::Expr(expr));
+                } else if matches!(expr, Expr::If { .. } | Expr::Block(_) | Expr::Loop { .. }) {
+                    statements.push(Stmt::ImplicitExpr(expr));
                 } else {
                     return Err(self.error("expected semicolon or block end"));
                 }
@@ -669,6 +685,19 @@ impl Parser {
             Expr::Bool(true)
         } else if self.eat("false") {
             Expr::Bool(false)
+        } else if self.eat("loop") {
+            Expr::Loop {
+                body: self.block()?,
+            }
+        } else if self.eat("break") {
+            let value = if matches!(self.token().text.as_str(), ";" | "}" | ")" | "," | "") {
+                None
+            } else {
+                Some(Box::new(self.expr(0)?))
+            };
+            Expr::Break { value }
+        } else if self.eat("continue") {
+            Expr::Continue
         } else if self.eat("if") {
             let condition = Box::new(self.expr(0)?);
             let then_block = self.block()?;
@@ -1002,7 +1031,10 @@ impl Resolver<'_> {
                     self.expr(value, module, locals)?;
                     locals.last_mut().unwrap().insert(name.clone());
                 }
-                Stmt::Assign { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value)) => {
+                Stmt::Assign { value, .. }
+                | Stmt::Expr(value)
+                | Stmt::ImplicitExpr(value)
+                | Stmt::Return(Some(value)) => {
                     self.expr(value, module, locals)?;
                 }
                 Stmt::While { condition, body } => {
@@ -1053,7 +1085,8 @@ impl Resolver<'_> {
                 self.block(then_block, module, locals)?;
                 self.block(else_block, module, locals)?;
             }
-            Expr::Block(block) => self.block(block, module, locals)?,
+            Expr::Block(block) | Expr::Loop { body: block } => self.block(block, module, locals)?,
+            Expr::Break { value: Some(value) } => self.expr(value, module, locals)?,
             _ => {}
         }
         Ok(())
@@ -1129,7 +1162,8 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                     push(DepthNode::Block(then_block));
                     push(DepthNode::Block(else_block));
                 }
-                Expr::Block(block) => push(DepthNode::Block(block)),
+                Expr::Block(block) | Expr::Loop { body: block } => push(DepthNode::Block(block)),
+                Expr::Break { value: Some(value) } => push(DepthNode::Expr(value)),
                 _ => {}
             },
             DepthNode::Block(block) => {
@@ -1138,6 +1172,7 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                         Stmt::Let { value, .. }
                         | Stmt::Assign { value, .. }
                         | Stmt::Expr(value)
+                        | Stmt::ImplicitExpr(value)
                         | Stmt::Return(Some(value)) => push(DepthNode::Expr(value)),
                         Stmt::While { condition, body } => {
                             push(DepthNode::Expr(condition));
@@ -1180,20 +1215,50 @@ fn signatures(program: &Program) -> Result<Signatures, String> {
     }
     Ok(signatures)
 }
+struct LoopFrame {
+    id: ir::LoopId,
+    accepts_value: bool,
+    checking_condition: bool,
+    break_ty: Option<Type>,
+    can_exit: bool,
+}
 struct Checker<'a> {
     signatures: &'a Signatures,
     scopes: Vec<HashMap<String, ir::LocalId>>,
     locals: Vec<ir::LocalDecl>,
     exprs: Vec<ir::TypedExpr>,
+    loops: Vec<LoopFrame>,
+    next_loop: usize,
+    reachable: bool,
     result: Type,
 }
-// None means the expression cannot complete normally (the subset's never type).
-type Flow = Option<Type>;
+// Semantic type and possible normal completion are independent. In particular,
+// an unreachable explicit block tail retains its type, unlike a pure never value.
+#[derive(Clone, Copy)]
+struct Flow {
+    ty: Type,
+    completes: bool,
+}
+impl Flow {
+    fn value(ty: Type) -> Self {
+        Self {
+            ty,
+            completes: true,
+        }
+    }
+    fn never() -> Self {
+        Self {
+            ty: Type::Never,
+            completes: false,
+        }
+    }
+}
 fn checked_ty(ty: Type) -> Result<ir::Ty, String> {
     match ty {
         Type::I32 => Ok(ir::Ty::I32),
         Type::Bool => Ok(ir::Ty::Bool),
         Type::Unit => Ok(ir::Ty::Unit),
+        Type::Never => Ok(ir::Ty::Never),
         Type::Infer => Err("signature types cannot be inferred".into()),
     }
 }
@@ -1202,6 +1267,7 @@ fn syntax_ty(ty: ir::Ty) -> Type {
         ir::Ty::I32 => Type::I32,
         ir::Ty::Bool => Type::Bool,
         ir::Ty::Unit => Type::Unit,
+        ir::Ty::Never => Type::Never,
     }
 }
 impl<'a> Checker<'a> {
@@ -1211,8 +1277,35 @@ impl<'a> Checker<'a> {
             scopes: vec![HashMap::new()],
             locals: Vec::new(),
             exprs: Vec::new(),
+            loops: Vec::new(),
+            next_loop: 0,
+            reachable: true,
             result,
         }
+    }
+    fn enter_loop(&mut self, accepts_value: bool) -> ir::LoopId {
+        let id = ir::LoopId(self.next_loop);
+        self.next_loop += 1;
+        self.loops.push(LoopFrame {
+            id,
+            accepts_value,
+            checking_condition: !accepts_value,
+            break_ty: None,
+            can_exit: false,
+        });
+        id
+    }
+    fn loop_target(&self, operation: &str) -> Result<ir::LoopId, String> {
+        let frame = self
+            .loops
+            .last()
+            .ok_or_else(|| format!("{operation} outside a loop"))?;
+        if frame.checking_condition {
+            return Err(format!(
+                "{operation} in a while condition is unsupported (E0590)"
+            ));
+        }
+        Ok(frame.id)
     }
     fn local(&mut self, name: &str, ty: Type, mutable: bool) -> Result<ir::LocalId, String> {
         let local = ir::LocalId(self.locals.len());
@@ -1241,21 +1334,50 @@ impl<'a> Checker<'a> {
             .ok_or_else(|| format!("unresolved local {n}"))
     }
     fn flow(&self, id: ir::ExprId) -> Flow {
-        self.exprs[id.0].flow().map(syntax_ty)
+        let e = &self.exprs[id.0];
+        Flow {
+            ty: syntax_ty(e.ty),
+            completes: e.completion == ir::Completion::Returns,
+        }
     }
     fn require(&self, got: Flow, want: Type) -> Result<(), String> {
-        if got.is_some_and(|t| t != want) {
-            Err(format!("expected {want:?}, got {got:?}"))
+        if got.ty != Type::Never && got.ty != want {
+            Err(format!("expected {want:?}, got {:?}", got.ty))
         } else {
             Ok(())
         }
     }
+    fn join(&self, a: Type, b: Type, context: &str) -> Result<Type, String> {
+        if a == Type::Never {
+            Ok(b)
+        } else if b == Type::Never || a == b {
+            Ok(a)
+        } else {
+            Err(format!("{context} differ: {a:?} and {b:?}"))
+        }
+    }
+    fn expr_when(&mut self, e: &Expr, reachable: bool) -> Result<ir::ExprId, String> {
+        let previous = self.reachable;
+        self.reachable = reachable;
+        let result = self.expr(e);
+        self.reachable = previous;
+        result
+    }
+    fn block_when(&mut self, b: &Block, reachable: bool) -> Result<(ir::Block, Flow), String> {
+        let previous = self.reachable;
+        self.reachable = reachable;
+        let result = self.block(b);
+        self.reachable = previous;
+        result
+    }
     fn block(&mut self, b: &Block) -> Result<(ir::Block, Flow), String> {
+        let entered_reachable = self.reachable;
         self.scopes.push(HashMap::new());
         let mut live = true;
         let mut statements = Vec::with_capacity(b.statements.len());
         for s in &b.statements {
-            let (statement, flow) = match s {
+            self.reachable = entered_reachable && live;
+            let (statement, completes) = match s {
                 Stmt::Let {
                     name,
                     mutable,
@@ -1265,13 +1387,13 @@ impl<'a> Checker<'a> {
                     let value = self.expr(value)?;
                     let f = self.flow(value);
                     let t = if *ty == Type::Infer {
-                        f.unwrap_or(Type::Unit)
+                        f.ty
                     } else {
                         self.require(f, *ty)?;
                         *ty
                     };
                     let local = self.local(name, t, *mutable)?;
-                    (ir::Stmt::Let { local, value }, f.map(|_| Type::Unit))
+                    (ir::Stmt::Let { local, value }, f.completes)
                 }
                 Stmt::Assign { name, value } => {
                     let local = self.lookup(name)?;
@@ -1283,54 +1405,78 @@ impl<'a> Checker<'a> {
                     let value = self.expr(value)?;
                     let f = self.flow(value);
                     self.require(f, t)?;
-                    (ir::Stmt::Assign { local, value }, f.map(|_| Type::Unit))
+                    (ir::Stmt::Assign { local, value }, f.completes)
                 }
-                Stmt::Expr(e) => {
+                Stmt::Expr(e) | Stmt::ImplicitExpr(e) => {
                     let value = self.expr(e)?;
                     let f = self.flow(value);
-                    if matches!(e, Expr::If { .. } | Expr::Block(_)) {
+                    if matches!(s, Stmt::ImplicitExpr(_)) {
                         self.require(f, Type::Unit)?;
                     }
-                    (ir::Stmt::Expr(value), f.map(|_| Type::Unit))
+                    (ir::Stmt::Expr(value), f.completes)
                 }
                 Stmt::Return(e) => {
                     let value = e.as_ref().map(|e| self.expr(e)).transpose()?;
-                    let f = value.map_or(Some(Type::Unit), |e| self.flow(e));
+                    let f = value.map_or(Flow::value(Type::Unit), |e| self.flow(e));
                     self.require(f, self.result)?;
-                    (ir::Stmt::Return(value), None)
+                    (ir::Stmt::Return(value), false)
                 }
                 Stmt::While { condition, body } => {
+                    // Never skip a condition's target barrier to an outer loop.
+                    let id = self.enter_loop(false);
                     let condition = self.expr(condition)?;
                     let f = self.flow(condition);
                     self.require(f, Type::Bool)?;
+                    self.loops.last_mut().unwrap().checking_condition = false;
                     let (body, bf) = self.block(body)?;
                     self.require(bf, Type::Unit)?;
-                    (ir::Stmt::While { condition, body }, f.map(|_| Type::Unit))
+                    self.loops.pop();
+                    (
+                        ir::Stmt::While {
+                            id,
+                            condition,
+                            body,
+                        },
+                        f.completes,
+                    )
                 }
             };
             statements.push(statement);
-            live &= flow.is_some();
+            live &= completes;
         }
+        self.reachable = entered_reachable && live;
         let tail = b.tail.as_ref().map(|e| self.expr(e)).transpose()?;
-        let flow = tail.map_or(Some(Type::Unit), |e| self.flow(e));
+        self.reachable = entered_reachable;
+        let mut flow = tail.map_or_else(
+            || {
+                if live {
+                    Flow::value(Type::Unit)
+                } else {
+                    Flow::never()
+                }
+            },
+            |e| self.flow(e),
+        );
+        flow.completes &= live;
         self.scopes.pop();
-        Ok((
-            ir::Block { statements, tail },
-            if live { flow } else { None },
-        ))
+        Ok((ir::Block { statements, tail }, flow))
     }
     fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
         let (kind, flow) = match e {
-            Expr::Int(value) => (ir::ExprKind::Int(*value), Some(Type::I32)),
-            Expr::Bool(value) => (ir::ExprKind::Bool(*value), Some(Type::Bool)),
+            Expr::Int(value) => (ir::ExprKind::Int(*value), Flow::value(Type::I32)),
+            Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(Type::Bool)),
             Expr::Var(n) => {
                 let local = self.lookup(n)?;
+                let ty = syntax_ty(self.locals[local.0].ty);
                 (
                     ir::ExprKind::Local(local),
-                    Some(syntax_ty(self.locals[local.0].ty)),
+                    Flow {
+                        ty,
+                        completes: ty != Type::Never,
+                    },
                 )
             }
-            Expr::Println(text) => (ir::ExprKind::Println(text.clone()), Some(Type::Unit)),
+            Expr::Println(text) => (ir::ExprKind::Println(text.clone()), Flow::value(Type::Unit)),
             Expr::Unary { op, value } => {
                 let value = self.expr(value)?;
                 let f = self.flow(value);
@@ -1339,16 +1485,29 @@ impl<'a> Checker<'a> {
                     UnaryOp::Not => Type::Bool,
                 };
                 self.require(f, t)?;
-                (ir::ExprKind::Unary { op: *op, value }, f.map(|_| t))
+                if matches!(op, UnaryOp::Neg) && f.ty == Type::Never {
+                    return Err("unary negation of never is unsupported".into());
+                }
+                let ty = if f.ty == Type::Never { Type::Never } else { t };
+                (
+                    ir::ExprKind::Unary { op: *op, value },
+                    Flow {
+                        ty,
+                        completes: f.completes,
+                    },
+                )
             }
             Expr::Binary { op, left, right } => {
                 let left = self.expr(left)?;
-                let right = self.expr(right)?;
+                let right = self.expr_when(right, self.reachable && self.flow(left).completes)?;
                 let l = self.flow(left);
                 let r = self.flow(right);
+                let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
                 let (operand, result) = match op {
                     BinaryOp::And | BinaryOp::Or => (Type::Bool, Type::Bool),
-                    BinaryOp::Eq | BinaryOp::Ne => (l.or(r).unwrap_or(Type::Unit), Type::Bool),
+                    BinaryOp::Eq | BinaryOp::Ne => {
+                        (self.join(l.ty, r.ty, "equality operands")?, Type::Bool)
+                    }
                     BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                         (Type::I32, Type::Bool)
                     }
@@ -1356,24 +1515,25 @@ impl<'a> Checker<'a> {
                 };
                 self.require(l, operand)?;
                 self.require(r, operand)?;
-                let flow = if l.is_none()
-                    || (r.is_none() && !matches!(op, BinaryOp::And | BinaryOp::Or))
-                {
-                    None
-                } else {
-                    Some(result)
-                };
+                // Trait-based scalar operators do not gain a never coercion
+                // merely because evaluating an operand cannot complete.
+                if !logical && (l.ty == Type::Never || r.ty == Type::Never) {
+                    return Err("binary operator on never is unsupported".into());
+                }
+                let completes = l.completes && (logical || r.completes);
                 (
                     ir::ExprKind::Binary {
                         op: *op,
                         left,
                         right,
                     },
-                    flow,
+                    Flow {
+                        ty: result,
+                        completes,
+                    },
                 )
             }
             Expr::Call { name, args } => {
-                // Source-level shadowing is checked before canonicalization.
                 let (params, result) = self
                     .signatures
                     .get(name)
@@ -1393,13 +1553,13 @@ impl<'a> Checker<'a> {
                         .collect::<Result<_, _>>()?,
                     result: checked_ty(*result)?,
                 };
-                let mut live = true;
+                let mut completes = true;
                 let mut arguments = Vec::with_capacity(args.len());
                 for (a, t) in args.iter().zip(params) {
-                    let value = self.expr(a)?;
+                    let value = self.expr_when(a, self.reachable && completes)?;
                     let f = self.flow(value);
                     self.require(f, *t)?;
-                    live &= f.is_some();
+                    completes &= f.completes;
                     arguments.push(value);
                 }
                 (
@@ -1408,7 +1568,10 @@ impl<'a> Checker<'a> {
                         args: arguments,
                         signature,
                     },
-                    if live { Some(*result) } else { None },
+                    Flow {
+                        ty: *result,
+                        completes,
+                    },
                 )
             }
             Expr::If {
@@ -1419,21 +1582,58 @@ impl<'a> Checker<'a> {
                 let condition = self.expr(condition)?;
                 let c = self.flow(condition);
                 self.require(c, Type::Bool)?;
-                let (then_block, t) = self.block(then_block)?;
-                let (else_block, e) = self.block(else_block)?;
-                if let (Some(a), Some(b)) = (t, e)
-                    && a != b
-                {
-                    return Err(format!("if branches differ: {a:?} and {b:?}"));
-                }
+                let reachable = self.reachable && c.completes;
+                let (then_block, t) = self.block_when(then_block, reachable)?;
+                let (else_block, e) = self.block_when(else_block, reachable)?;
+                let ty = self.join(t.ty, e.ty, "if branches")?;
+                let completes = c.completes && (t.completes || e.completes);
                 (
                     ir::ExprKind::If {
                         condition,
                         then_block,
                         else_block,
                     },
-                    if c.is_none() { None } else { t.or(e) },
+                    Flow { ty, completes },
                 )
+            }
+            Expr::Loop { body } => {
+                let id = self.enter_loop(true);
+                // A loop has its own intrinsic completion facts even when the
+                // enclosing expression is unreachable. Only its own body paths
+                // determine whether one of its breaks can complete.
+                let (body, body_flow) = self.block_when(body, true)?;
+                self.require(body_flow, Type::Unit)?;
+                let frame = self.loops.pop().unwrap();
+                let flow = Flow {
+                    ty: frame.break_ty.unwrap_or(Type::Never),
+                    completes: frame.can_exit,
+                };
+                (ir::ExprKind::Loop { id, body }, flow)
+            }
+            Expr::Break { value } => {
+                let target = self.loop_target("break")?;
+                let value = value.as_ref().map(|e| self.expr(e)).transpose()?;
+                let flow = value.map_or(Flow::value(Type::Unit), |e| self.flow(e));
+                let frame = self.loops.last().unwrap();
+                let previous_break_ty = frame.break_ty;
+                if !frame.accepts_value && value.is_some() {
+                    return Err("break with a value is only allowed in loop, not while".into());
+                }
+                // Check every lexical break and the operand before contributing.
+                // A typed but unreachable tail is not the never type.
+                if self.reachable && flow.completes {
+                    self.loops.last_mut().unwrap().can_exit = true;
+                }
+                if flow.ty != Type::Never {
+                    let previous = previous_break_ty.unwrap_or(Type::Never);
+                    let ty = self.join(previous, flow.ty, "break values")?;
+                    self.loops.last_mut().unwrap().break_ty = Some(ty);
+                }
+                (ir::ExprKind::Break { target, value }, Flow::never())
+            }
+            Expr::Continue => {
+                let target = self.loop_target("continue")?;
+                (ir::ExprKind::Continue { target }, Flow::never())
             }
             Expr::Block(b) => {
                 let (block, flow) = self.block(b)?;
@@ -1442,8 +1642,8 @@ impl<'a> Checker<'a> {
         };
         let id = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {
-            ty: checked_ty(flow.unwrap_or(Type::Unit))?,
-            completion: if flow.is_some() {
+            ty: checked_ty(flow.ty)?,
+            completion: if flow.completes {
                 ir::Completion::Returns
             } else {
                 ir::Completion::Never
@@ -1539,6 +1739,175 @@ mod typed_tests {
     }
 
     #[test]
+    fn loop_control_has_distinct_resolved_targets_and_scalar_types() {
+        let f = typed(
+            "fn main(){ let x=loop { while true { continue; break; } loop { break; } break 3; }; let y=loop { break true; }; }",
+            0,
+        );
+        assert_eq!(
+            f.locals.iter().map(|l| l.ty).collect::<Vec<_>>(),
+            vec![ir::Ty::I32, ir::Ty::Bool]
+        );
+        let breaks = f
+            .exprs
+            .iter()
+            .filter_map(|e| match e.kind {
+                ir::ExprKind::Break { target, .. } => {
+                    assert_eq!(e.flow(), None);
+                    Some(target)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            breaks,
+            vec![ir::LoopId(1), ir::LoopId(2), ir::LoopId(0), ir::LoopId(3)]
+        );
+        assert!(f.exprs.iter().any(|e| matches!(
+            e.kind,
+            ir::ExprKind::Continue {
+                target: ir::LoopId(1)
+            }
+        )));
+    }
+
+    #[test]
+    fn divergent_break_operand_contributes_only_its_nested_breaks() {
+        let f = typed(
+            "fn f()->i32 { loop { break { break 3; }; } } fn main(){}",
+            0,
+        );
+        let root = &f.exprs[f.body.tail.unwrap().0];
+        assert!(matches!(root.kind, ir::ExprKind::Loop { .. }));
+        assert_eq!(root.flow(), Some(ir::Ty::I32));
+        let f = typed(
+            "fn f()->i32 { loop { break { return 3; }; } } fn main(){}",
+            0,
+        );
+        assert_eq!(f.exprs[f.body.tail.unwrap().0].flow(), None);
+        let f = typed("fn f()->i32 { loop { continue; break 3; } } fn main(){}", 0);
+        assert_eq!(f.exprs[f.body.tail.unwrap().0].ty, ir::Ty::I32);
+        assert_eq!(f.exprs[f.body.tail.unwrap().0].flow(), None);
+        let f = typed("fn f()->i32 { loop { continue; } } fn main(){}", 0);
+        assert_eq!(f.exprs[f.body.tail.unwrap().0].flow(), None);
+    }
+
+    #[test]
+    fn typed_unreachable_tails_preserve_types_without_creating_loop_exits() {
+        let f = typed(
+            "fn f()->i32 { loop { break {return 3; 0}; } } fn main(){}",
+            0,
+        );
+        let value = &f.exprs[f.body.tail.unwrap().0];
+        assert_eq!(value.ty, ir::Ty::I32);
+        assert_eq!(value.completion, ir::Completion::Never);
+        let f = typed("fn f()->i32 { !{return 3;} } fn main(){}", 0);
+        let value = &f.exprs[f.body.tail.unwrap().0];
+        assert_eq!(value.ty, ir::Ty::Never);
+        assert_eq!(value.completion, ir::Completion::Never);
+        let f = typed("fn main(){ let x={return; true}; }", 0);
+        assert_eq!(f.locals[0].ty, ir::Ty::Bool);
+        for source in [
+            "fn f()->i32 {return 3; ()} fn main(){}",
+            "fn main(){loop {break 1; false}}",
+            "fn main(){let x:bool=loop {break {return; 0};};}",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn explicit_semicolons_discard_blocklike_values() {
+        let program = parse("fn main(){ {1}; if true {1} else {2}; loop {break 3;}; }").unwrap();
+        check(&program).unwrap();
+        assert!(
+            program.functions[0]
+                .body
+                .statements
+                .iter()
+                .all(|s| matches!(s, Stmt::Expr(_)))
+        );
+        let program = parse("fn main(){ loop {break;} let x=1; }").unwrap();
+        assert!(matches!(
+            program.functions[0].body.statements[0],
+            Stmt::ImplicitExpr(Expr::Loop { .. })
+        ));
+        check(&program).unwrap();
+        for source in [
+            "fn main(){ {1} let x=1; }",
+            "fn main(){ if true {1} else {2} let x=1; }",
+            "fn main(){ loop {break 3;} let x=1; }",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn loop_obligations_reject_unreachable_conflicts_and_while_values() {
+        for source in [
+            "fn main(){ loop {break 3; break true;} }",
+            "fn main(){ loop {break; break 3;} }",
+            "fn main(){ loop {continue; break 3; break true;} }",
+            "fn main(){ while true {break ();} }",
+            "fn main(){ while true {break {return;};} }",
+            "fn main(){ break; }",
+            "fn main(){ continue; }",
+            "fn main(){ loop {1} }",
+        ] {
+            let p = parse(source).unwrap();
+            assert!(check(&p).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn while_conditions_are_control_target_barriers() {
+        for source in [
+            "fn main(){ while {break;} {} }",
+            "fn main(){ while {continue;} {} }",
+            "fn main(){ loop {while {break;} {}} }",
+            "fn main(){ loop {while {continue;} {}} }",
+        ] {
+            let error = check(&parse(source).unwrap()).unwrap_err();
+            assert!(error.contains("E0590"), "{error}");
+        }
+        let f = typed("fn main(){ while {loop {break true;}} {break;} }", 0);
+        let ir::Stmt::While { id, .. } = f.body.statements[0] else {
+            panic!("expected while")
+        };
+        assert_eq!(id, ir::LoopId(0));
+        let breaks = f
+            .exprs
+            .iter()
+            .filter_map(|e| match e.kind {
+                ir::ExprKind::Break { target, .. } => Some(target),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(breaks, vec![ir::LoopId(1), ir::LoopId(0)]);
+    }
+
+    #[test]
+    fn loop_walkers_resolve_break_value_calls_and_bound_depth() {
+        let f = typed(
+            "mod m {pub fn f()->i32{3}} fn main(){let x=loop {break m::f();};}",
+            1,
+        );
+        assert!(
+            f.exprs
+                .iter()
+                .any(|e| matches!(&e.kind, ir::ExprKind::Call { name, .. } if name == "m::f"))
+        );
+        let nested_breaks = "break ".repeat(140);
+        let source = format!("fn main(){{{nested_breaks}0;}}");
+        assert!(parse(&source).unwrap_err().contains("nesting"));
+        assert!(
+            parse("fn main(){'outer: loop {break 'outer;}}")
+                .unwrap_err()
+                .contains("unsupported")
+        );
+    }
+
+    #[test]
     fn inferred_shadowing_allocates_distinct_typed_locals() {
         let f = typed(
             "fn f(x:i32)->i32 { let x=x+1; let x=true; { let x=3; x; }; if x { 4 } else { 5 } } fn main(){}",
@@ -1620,7 +1989,7 @@ mod typed_tests {
         );
         assert_eq!(
             f.locals.iter().map(|l| l.ty).collect::<Vec<_>>(),
-            vec![ir::Ty::Bool, ir::Ty::Bool, ir::Ty::Unit]
+            vec![ir::Ty::Bool, ir::Ty::Bool, ir::Ty::Never]
         );
         let binaries = f
             .exprs
@@ -1637,7 +2006,7 @@ mod typed_tests {
         assert!(
             never
                 .iter()
-                .all(|e| e.ty == ir::Ty::Unit && e.flow().is_none())
+                .all(|e| e.ty == ir::Ty::Never && e.flow().is_none())
         );
     }
 
@@ -1647,7 +2016,7 @@ mod typed_tests {
             "fn main(){ return; let x=true+1; }",
             "fn main(){ return; let x:bool=1; }",
             "fn main(){ return; let x=1; x=2; }",
-            "fn main(){ if true { 1 } else { 2 }; }",
+            "fn main(){ if true { 1 } else { 2 } let x=0; }",
             "fn f()->i32 { while true { return 1; } } fn main(){}",
         ] {
             let program = parse(source).unwrap();

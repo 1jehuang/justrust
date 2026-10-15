@@ -46,6 +46,37 @@ fn main() {{
 }}'''
 
 
+def loop_source(rng):
+    bound = rng.randint(2, 12)
+    expected = sum(i for i in range(1, bound) if i % 2)
+    a, b = rng.randint(1, 50), rng.randint(1, 50)
+    return f'''fn pair(a:i32,b:i32)->i32 {{ a*100+b }}
+fn sum(n:i32)->i32 {{
+ let mut i=0; let mut total=0;
+ loop {{
+  i=i+1;
+  if i==n {{ break total; }}
+  if i%2==0 {{ continue; }}
+  total=total+i;
+ }}
+}}
+fn main() {{
+ if sum({bound})=={expected} {{ println!("sum ok"); }}
+ let x = loop {{ let unused = pair({a}, {{ break {b}; }}); }};
+ if x=={b} {{ println!("call unwind ok"); }}
+ let y = {a} + (loop {{ break {b}; }});
+ if y=={a+b} {{ println!("outer temporary ok"); }}
+ let mut i=0;
+ while i<{bound} {{ i=i+1; let unused={a}+{{continue;0}}; }}
+ if i=={bound} {{ println!("continue unwind ok"); }}
+ let z=loop {{ loop {{ break; }} break true; }};
+ if z {{ println!("nested targets ok"); }}
+ if true {{ {a} }} else {{ {b} }};
+ {{ {a} }};
+ println!("discard ok");
+}}'''
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--binary", required=True, type=Path)
@@ -53,6 +84,7 @@ def main():
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--cases", type=int, default=64)
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--loops", action="store_true", help="generate loop and temporary-stack control-transfer cases")
     args = p.parse_args()
     if not 1 <= args.cases <= 10000:
         p.error("cases must be 1..10000")
@@ -67,11 +99,12 @@ def main():
         version = process([str(rustc), "-Vv"])
         assert version.returncode == 0, version.stderr
         record({"record":"environment", "seed":args.seed, "cases":args.cases,
+                "fixture_family":"loops" if args.loops else "scalar",
                 "reference":version.stdout.decode(),
                 "revision":process(["git","rev-parse","HEAD"]).stdout.decode().strip(),
                 "binary_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()})
         for index in range(args.cases):
-            text = source(rng)
+            text = loop_source(rng) if args.loops else source(rng)
             input_path = directory / f"input{index}.rs"
             input_path.write_text(text)
             ours, reference = directory / f"ours{index}", directory / f"stock{index}"

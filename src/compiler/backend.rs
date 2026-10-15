@@ -6,7 +6,7 @@
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
 use super::frontend::{self, BinaryOp, Program, UnaryOp};
-use super::ir::{self, ExprKind, LocalId};
+use super::ir::{self, ExprKind, LocalId, LoopId};
 use std::collections::HashMap;
 
 const MAX_ARGS: usize = 4096;
@@ -22,11 +22,20 @@ pub struct Object {
     pub strings: Vec<(usize, Vec<u8>)>,
 }
 
+struct LoopFrame {
+    id: LoopId,
+    head: usize,
+    temporary_depth: usize,
+    breaks: Vec<usize>,
+}
+
 struct Emitter<'a> {
     object: Object,
     function: &'a ir::CheckedFunction,
     returns: Vec<usize>,
     traps: Vec<usize>,
+    loops: Vec<LoopFrame>,
+    temporary_depth: usize,
 }
 impl Emitter<'_> {
     fn bytes(&mut self, bytes: &[u8]) {
@@ -73,6 +82,60 @@ impl Emitter<'_> {
         self.bytes(&[0x89, 0x85]);
         self.i32(offset);
     }
+    fn push_temporary(&mut self) -> Result<(), String> {
+        self.temporary_depth = self
+            .temporary_depth
+            .checked_add(8)
+            .ok_or("temporary stack too large")?;
+        self.bytes(&[0x50]);
+        Ok(())
+    }
+    fn discard_stack_bytes(&mut self, bytes: usize) -> Result<(), String> {
+        if bytes != 0 {
+            let bytes = i32::try_from(bytes).map_err(|_| "temporary stack too large")?;
+            self.bytes(&[0x48, 0x81, 0xc4]);
+            self.i32(bytes);
+        }
+        Ok(())
+    }
+    fn enter_loop(&mut self, id: LoopId) {
+        self.loops.push(LoopFrame {
+            id,
+            head: self.position(),
+            temporary_depth: self.temporary_depth,
+            breaks: Vec::new(),
+        });
+    }
+    fn exit_loop(&mut self) -> Result<(), String> {
+        let frame = self.loops.pop().ok_or("missing backend loop frame")?;
+        for at in frame.breaks {
+            self.patch(at, self.position())?;
+        }
+        Ok(())
+    }
+    fn loop_jump(&mut self, target: LoopId, is_break: bool) -> Result<(), String> {
+        let index = self
+            .loops
+            .iter()
+            .rposition(|frame| frame.id == target)
+            .ok_or("missing backend loop target")?;
+        let depth = self.loops[index].temporary_depth;
+        let bytes = self
+            .temporary_depth
+            .checked_sub(depth)
+            .ok_or("invalid backend temporary depth")?;
+        // This cleanup belongs only to the abrupt runtime edge. Keep lexical
+        // accounting unchanged so unreachable code and sibling branches compile
+        // with their own pending operands/arguments intact. eax holds break's value.
+        self.discard_stack_bytes(bytes)?;
+        let at = self.jump(&[0xe9]);
+        if is_break {
+            self.loops[index].breaks.push(at);
+        } else {
+            self.patch(at, self.loops[index].head)?;
+        }
+        Ok(())
+    }
     fn block(&mut self, block: &ir::Block) -> Result<(), String> {
         for statement in &block.statements {
             match statement {
@@ -90,8 +153,13 @@ impl Emitter<'_> {
                     let at = self.jump(&[0xe9]);
                     self.returns.push(at);
                 }
-                ir::Stmt::While { condition, body } => {
+                ir::Stmt::While {
+                    id,
+                    condition,
+                    body,
+                } => {
                     let start = self.position();
+                    self.enter_loop(*id);
                     self.expr(*condition)?;
                     self.bytes(&[0x85, 0xc0]);
                     let end = self.jump(&[0x0f, 0x84]);
@@ -99,6 +167,8 @@ impl Emitter<'_> {
                     let back = self.jump(&[0xe9]);
                     self.patch(back, start)?;
                     self.patch(end, self.position())?;
+                    self.exit_loop()?;
+                    self.immediate(0);
                 }
             }
         }
@@ -140,9 +210,13 @@ impl Emitter<'_> {
                     self.patch(done, self.position())?;
                     return Ok(());
                 }
-                self.bytes(&[0x50]); // push rax
+                self.push_temporary()?;
                 self.expr(*right)?;
                 self.bytes(&[0x89, 0xc1, 0x58]); // ecx = right, pop left
+                self.temporary_depth = self
+                    .temporary_depth
+                    .checked_sub(8)
+                    .ok_or("invalid backend temporary depth")?;
                 match op {
                     BinaryOp::Add => {
                         self.bytes(&[0x01, 0xc8]);
@@ -195,14 +269,16 @@ impl Emitter<'_> {
                 }
                 for arg in args {
                     self.expr(*arg)?;
-                    self.bytes(&[0x50]);
+                    self.push_temporary()?;
                 }
                 let at = self.jump(&[0xe8]);
                 self.object.calls.push((at, name.clone()));
-                if !args.is_empty() {
-                    self.bytes(&[0x48, 0x81, 0xc4]);
-                    self.i32((args.len() * 8) as i32);
-                }
+                let bytes = args.len() * 8;
+                self.discard_stack_bytes(bytes)?;
+                self.temporary_depth = self
+                    .temporary_depth
+                    .checked_sub(bytes)
+                    .ok_or("invalid backend temporary depth")?;
             }
             ExprKind::If {
                 condition,
@@ -219,6 +295,23 @@ impl Emitter<'_> {
                 self.patch(done, self.position())?;
             }
             ExprKind::Block(block) => self.block(block)?,
+            ExprKind::Loop { id, body } => {
+                let head = self.position();
+                self.enter_loop(*id);
+                self.block(body)?;
+                let back = self.jump(&[0xe9]);
+                self.patch(back, head)?;
+                self.exit_loop()?;
+            }
+            ExprKind::Break { target, value } => {
+                if let Some(value) = value {
+                    self.expr(*value)?;
+                } else {
+                    self.immediate(0);
+                }
+                self.loop_jump(*target, true)?;
+            }
+            ExprKind::Continue { target } => self.loop_jump(*target, false)?,
             ExprKind::Println(text) => {
                 let mut bytes = text.as_bytes().to_vec();
                 bytes.push(b'\n');
@@ -263,6 +356,8 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
         function,
         returns: Vec::new(),
         traps: Vec::new(),
+        loops: Vec::new(),
+        temporary_depth: 0,
     };
     emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
     let frame = emitter.position();
@@ -741,7 +836,10 @@ mod tests {
                 Some(binary(
                     BinaryOp::Add,
                     Expr::Int(99),
-                    Expr::Block(block(vec![Stmt::Return(Some(Expr::Int(7)))], None)),
+                    Expr::Block(block(
+                        vec![Stmt::Return(Some(Expr::Int(7)))],
+                        Some(Expr::Int(0)),
+                    )),
                 )),
             ),
         );
@@ -936,5 +1034,121 @@ mod tests {
                 .windows(6)
                 .any(|bytes| bytes == [0x89, 0x85, 0xf0, 0xff, 0xff, 0xff])
         );
+    }
+
+    #[test]
+    fn loop_values_preserve_outer_operands_and_prior_call_arguments() {
+        let p = frontend::parse(
+            r#"
+            fn pair(a: i32, b: i32) -> i32 { a * 10 + b }
+            fn with_unit(a: (), b: i32) -> i32 { b }
+            fn main() {
+                let x = 100 + loop { break 7 + loop { break 2; }; };
+                if x != 109 { 1 / 0; }
+                let y = pair(3, loop { break pair(4, loop { break 5; }); });
+                if y != 75 { 1 / 0; }
+                let z = loop { break { break 11; }; };
+                if z != 11 { 1 / 0; }
+                let b = loop { break true; };
+                if !b { 1 / 0; }
+                loop { break; }
+                let u = with_unit(loop { break println!("unit"); }, 8);
+                if u != 8 { 1 / 0; }
+                println!("values");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"unit\nvalues\n");
+    }
+
+    #[test]
+    fn loop_jumps_discard_only_target_pending_temporaries() {
+        let p = frontend::parse(
+            r#"
+            fn pair(a: i32, b: i32) -> i32 { a * 10 + b }
+            fn work() -> i32 {
+                let mut n = 0;
+                let value = 50 + loop {
+                    n = n + 1;
+                    if n < 3 { pair(100, { continue; }); }
+                    pair(200, { break 4; });
+                };
+                if n != 3 { 1 / 0; }
+                value
+            }
+            fn main() {
+                if work() != 54 { 1 / 0; }
+                let mut n = 0;
+                let value = loop {
+                    n = n + 1;
+                    if n < 3 { 90 + { continue; 0 }; }
+                    80 + { break 6; 0 };
+                };
+                if value != 6 { 1 / 0; }
+                if n != 3 { 1 / 0; }
+                let mut turns = 0;
+                let nested = loop {
+                    turns = turns + 1;
+                    let inner = 10 + loop { break 2; };
+                    if inner != 12 { 1 / 0; }
+                    if turns == 2 { break inner; }
+                    continue;
+                };
+                if nested != 12 { 1 / 0; }
+                println!("cleanup");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"cleanup\n");
+    }
+
+    #[test]
+    fn while_nested_condition_loops_and_body_jumps_preserve_temporaries() {
+        let p = frontend::parse(
+            r#"
+            fn pair(a: i32, b: i32) -> i32 { a + b }
+            fn main() {
+                let mut n = 0;
+                let mut bodies = 0;
+                let result = 100 + {
+                    while {
+                        n = n + 1;
+                        let ready = loop {
+                            if n < 3 {
+                                n = n + 1;
+                                pair(30, { continue; });
+                            }
+                            99 + { break n < 5; 0 };
+                        };
+                        ready
+                    } {
+                        bodies = bodies + 1;
+                    }
+                    7
+                };
+                if result != 107 { 1 / 0; }
+                if n != 5 { 1 / 0; }
+                if bodies != 2 { 1 / 0; }
+                let mut k = 0;
+                while k < 4 {
+                    k = k + 1;
+                    if k < 4 { pair(10, { continue; }); }
+                    20 + { break; 0 };
+                }
+                if k != 4 { 1 / 0; }
+                println!("while");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"while\n");
     }
 }

@@ -10,6 +10,10 @@ use super::frontend::{BinaryOp, UnaryOp};
 pub struct LocalId(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExprId(pub usize);
+/// Resolved control-flow target, allocated monotonically within one function.
+/// Labels are not represented by this milestone's source language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LoopId(pub usize);
 
 /// Resolved semantic types. Inference variables never cross this boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -17,9 +21,13 @@ pub enum Ty {
     I32,
     Bool,
     Unit,
+    /// The semantic never type, distinct from runtime completion information.
+    Never,
 }
 
-/// Whether evaluation can complete normally, independent of its stored type.
+/// Static normal-completion summary, independent of semantic value type.
+/// Returns is conservative: it does not prove an exit is dynamically reachable
+/// or that evaluation terminates. Never does not erase an explicit tail's type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Completion {
     Returns,
@@ -52,13 +60,18 @@ pub struct CheckedFunction {
 
 #[derive(Clone, Debug)]
 pub struct TypedExpr {
-    /// Meaningful as a value type only when completion is Returns. For Never,
-    /// Unit is the canonical placeholder, not a claim that evaluation yields ().
+    /// Actual semantic type, independent of whether evaluation completes.
+    /// For example, `{ return; 0 }` has type I32 and completion Never, while
+    /// `{ return; }` has type Never and completion Never. Never is not a
+    /// placeholder for every expression that cannot complete normally.
     pub ty: Ty,
     pub completion: Completion,
     pub kind: ExprKind,
 }
 impl TypedExpr {
+    /// Normal-completion summary only, not a semantic type query. In particular,
+    /// None discards the actual type of an unreachable but explicitly typed tail.
+    /// Operator selection, coercion and inference must inspect `ty` separately.
     pub fn flow(&self) -> Option<Ty> {
         match self.completion {
             Completion::Returns => Some(self.ty),
@@ -75,11 +88,21 @@ pub struct Block {
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
-    Let { local: LocalId, value: ExprId },
-    Assign { local: LocalId, value: ExprId },
+    Let {
+        local: LocalId,
+        value: ExprId,
+    },
+    Assign {
+        local: LocalId,
+        value: ExprId,
+    },
     Expr(ExprId),
     Return(Option<ExprId>),
-    While { condition: ExprId, body: Block },
+    While {
+        id: LoopId,
+        condition: ExprId,
+        body: Block,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +132,21 @@ pub enum ExprKind {
         else_block: Block,
     },
     Block(Block),
+    /// Repeats the body until an associated break produces a value.
+    Loop {
+        id: LoopId,
+        body: Block,
+    },
+    /// Evaluates the operand before transferring to the resolved target's exit.
+    /// This expression itself never completes normally, even for a unit break.
+    Break {
+        target: LoopId,
+        value: Option<ExprId>,
+    },
+    /// Transfers to the target's head, including condition evaluation for while.
+    Continue {
+        target: LoopId,
+    },
     Println(String),
 }
 
@@ -118,7 +156,8 @@ impl CheckedFunction {
     /// the immutable result produced by the checker without revalidating it.
     ///
     /// Checks reference bounds, distinct parameters, and call arity. Deliberately
-    /// does not establish lexical scope, reachability, or expression flow.
+    /// does not establish lexical scope, reachability, expression flow, or loop
+    /// target validity. Those are established once by semantic analysis.
     pub fn validate(&self) -> Result<(), String> {
         let local = |id: LocalId| {
             if id.0 < self.locals.len() {
@@ -176,7 +215,11 @@ impl CheckedFunction {
                     blocks.push(then_block);
                     blocks.push(else_block);
                 }
-                ExprKind::Block(block) => blocks.push(block),
+                ExprKind::Block(block) | ExprKind::Loop { body: block, .. } => blocks.push(block),
+                ExprKind::Break {
+                    value: Some(value), ..
+                } => expr(*value)?,
+                ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
                 ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Println(_) => {}
             }
         }
@@ -192,7 +235,9 @@ impl CheckedFunction {
                     }
                     Stmt::Expr(id) | Stmt::Return(Some(id)) => expr(*id)?,
                     Stmt::Return(None) => {}
-                    Stmt::While { condition, body } => {
+                    Stmt::While {
+                        condition, body, ..
+                    } => {
                         expr(*condition)?;
                         blocks.push(body);
                     }
@@ -239,7 +284,7 @@ mod tests {
     #[test]
     fn divergence_is_not_unit_flow() {
         let value = TypedExpr {
-            ty: Ty::Unit,
+            ty: Ty::Never,
             completion: Completion::Never,
             kind: ExprKind::Block(Block {
                 statements: vec![Stmt::Return(None)],
@@ -247,11 +292,55 @@ mod tests {
             }),
         };
         assert_eq!(value.flow(), None);
+        assert_eq!(value.ty, Ty::Never);
         let value = TypedExpr {
+            ty: Ty::Unit,
             completion: Completion::Returns,
             ..value
         };
         assert_eq!(value.flow(), Some(Ty::Unit));
+    }
+
+    #[test]
+    fn unreachable_typed_tail_retains_its_semantic_type() {
+        let mut value = fixture();
+        value.exprs.push(TypedExpr {
+            ty: Ty::I32,
+            completion: Completion::Never,
+            kind: ExprKind::Block(Block {
+                statements: vec![Stmt::Return(None)],
+                tail: Some(ExprId(0)),
+            }),
+        });
+        assert_eq!(value.exprs[1].ty, Ty::I32);
+        assert_eq!(value.exprs[1].flow(), None);
+        assert_ne!(value.exprs[1].ty, Ty::Never);
+        value.validate().unwrap();
+
+        // A loop's break operand can have a concrete type without completing.
+        // Its semantic result type must not be overwritten by its completion.
+        value.exprs.push(TypedExpr {
+            ty: Ty::Never,
+            completion: Completion::Never,
+            kind: ExprKind::Break {
+                target: LoopId(0),
+                value: Some(ExprId(1)),
+            },
+        });
+        value.exprs.push(TypedExpr {
+            ty: Ty::I32,
+            completion: Completion::Never,
+            kind: ExprKind::Loop {
+                id: LoopId(0),
+                body: Block {
+                    statements: vec![Stmt::Expr(ExprId(2))],
+                    tail: None,
+                },
+            },
+        });
+        assert_eq!(value.exprs[3].ty, Ty::I32);
+        assert_eq!(value.exprs[3].flow(), None);
+        value.validate().unwrap();
     }
 
     #[test]
@@ -295,5 +384,65 @@ mod tests {
             },
         });
         assert!(value.validate().unwrap_err().contains("invalid call arity"));
+    }
+
+    #[test]
+    fn loop_body_and_break_operand_references_are_checked() {
+        let mut value = fixture();
+        value.exprs.push(TypedExpr {
+            ty: Ty::Never,
+            completion: Completion::Never,
+            kind: ExprKind::Loop {
+                id: LoopId(0),
+                body: Block {
+                    statements: vec![],
+                    tail: Some(ExprId(99)),
+                },
+            },
+        });
+        assert!(
+            value
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
+        value.exprs[1].kind = ExprKind::Break {
+            target: LoopId(0),
+            value: Some(ExprId(99)),
+        };
+        assert!(
+            value
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
+        value.exprs[1].kind = ExprKind::Break {
+            target: LoopId(0),
+            value: Some(ExprId(0)),
+        };
+        assert_eq!(value.exprs[1].flow(), None);
+        value.validate().unwrap();
+        value.exprs[1].kind = ExprKind::Continue { target: LoopId(0) };
+        assert_eq!(value.exprs[1].flow(), None);
+        value.validate().unwrap();
+    }
+
+    #[test]
+    fn while_body_references_are_checked() {
+        let mut value = fixture();
+        value.body.statements.push(Stmt::While {
+            id: LoopId(0),
+            condition: ExprId(0),
+            body: Block {
+                statements: vec![Stmt::Expr(ExprId(99))],
+                tail: None,
+            },
+        });
+        assert!(
+            value
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
     }
 }
