@@ -780,6 +780,19 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
             ),
         }
     }
+    if capture.records_complete && nodes_complete && edges_complete && scopes_complete {
+        for scope in callers.keys() {
+            if scopes
+                .get(scope)
+                .is_some_and(|scope| scope.outcome != ScopeOutcome::Active)
+            {
+                ensure!(
+                    returns.contains_key(scope),
+                    "complete called execution scope omits reciprocal return"
+                );
+            }
+        }
+    }
     if capture.tls_failed || capture.identity_exhausted {
         for cost in costs.values_mut() {
             *cost = Cost::Unknown;
@@ -1404,6 +1417,26 @@ pub(crate) mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("different caller"), "{error}");
+    }
+
+    #[test]
+    fn complete_called_scope_requires_return_but_honest_edge_loss_is_partial() {
+        let (mut v, t) = two_scopes(true);
+        let q = authority(&t);
+        v["edges"].as_array_mut().unwrap().pop();
+        v["edge_allocator_high_water"] = json!(5);
+        v["expected_edges"] = json!(4);
+        assert!(
+            collect(v.clone(), &t, Some(&q))
+                .unwrap_err()
+                .to_string()
+                .contains("omits reciprocal return")
+        );
+        v["edge_allocator_high_water"] = json!(6);
+        v["expected_edges"] = json!(5);
+        v["lost_edges"] = json!(1);
+        v["records_complete"] = json!(false);
+        assert!(!collect(v, &t, Some(&q)).unwrap().records_complete);
     }
 
     #[test]
