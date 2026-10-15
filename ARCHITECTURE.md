@@ -630,6 +630,16 @@ not a proof of globally optimal or near-optimal caching. Validate deduplication,
 identity correctness, retained memory, and overhead before making stronger
 claims. Extend this model to cross-build validation separately.
 
+## First-prototype contract
+
+[PROTOTYPE.md](PROTOTYPE.md) scopes the first in-memory engine, canonical
+hash-based node interning, semantic API, publication rules, accounting
+invariants, acceptance fixtures, and measurement plan. It is the actionable
+prototype companion to these broader architecture requirements. Parallelism and
+within-build memoization are strong initial designs to validate, not claims of
+proven optimality. Bootstrap tooling remains an explicit pre-implementation
+decision; hosted machine provisioning is a separate operational task.
+
 ## Open architectural decisions
 
 These requirements do not yet choose the mechanisms below:
