@@ -81,6 +81,10 @@ struct Assessment {
     query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_cpu: Option<crate::execution_graph_timing::ObservedCpuAssessment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clock_alignment: Option<crate::execution_graph_query::ClockAlignmentAssessment>,
     /// Strict native prefix/endorsement assessment, never compiler-launch authority.
     #[serde(skip_serializing_if = "Option::is_none")]
     resource: Option<serde_json::Value>,
@@ -300,6 +304,8 @@ fn assess(r: Receipt) -> Result<Assessment> {
         task_bindings: None,
         resource: None,
         resource_attachments: None,
+        observed_cpu: None,
+        clock_alignment: None,
         issues,
         opaque_boundaries: r.opaque_boundaries,
         cpu_work_ns: None,
@@ -392,6 +398,7 @@ fn collect_query_with_policy(
                 pools,
             ));
     }
+    query.reconcile_clock_alignment(pools);
     Ok(query.assessment)
 }
 
@@ -441,6 +448,8 @@ fn assess_receipt_bytes_with_policy(
                 task_bindings: None,
                 resource: None,
                 resource_attachments: None,
+                observed_cpu: None,
+                clock_alignment: None,
                 issues: vec!["requires explicit --compiler-manifest reconciliation".into()],
                 opaque_boundaries: vec!["compiler-launch-authority".into()],
                 cpu_work_ns: None,
@@ -466,6 +475,8 @@ fn assess_receipt_bytes_with_policy(
                 task_bindings: query.task_bindings,
                 resource: None,
                 resource_attachments: None,
+                observed_cpu: None,
+                clock_alignment: query.clock_alignment,
                 issues: query.issues,
                 opaque_boundaries: query.opaque_boundaries,
                 cpu_work_ns: query.cpu_work_ns,
@@ -491,6 +502,8 @@ fn assess_receipt_bytes_with_policy(
                 task_bindings: None,
                 resource: None,
                 resource_attachments: None,
+                observed_cpu: join.observed_cpu,
+                clock_alignment: None,
                 issues: join.issues,
                 opaque_boundaries: join.opaque_boundaries,
                 cpu_work_ns: join.cpu_work_ns,
@@ -580,6 +593,8 @@ fn assess_resource_document(bytes: &[u8], producer: &str) -> Result<Assessment> 
         task_bindings: None,
         resource: Some(resource),
         resource_attachments: None,
+        observed_cpu: None,
+        clock_alignment: None,
         issues,
         opaque_boundaries: vec!["bounded-resource-prefix-not-full-lifecycle".into()],
         cpu_work_ns: None,
@@ -1140,6 +1155,127 @@ mod tests {
 
     fn write_json(directory: &Path, name: &str, value: &serde_json::Value) {
         std::fs::write(directory.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn pool3_query5_original_bytes_reconcile_clock_without_full_work_claims() {
+        let directory = resource_test_directory("timing-clock");
+        let docs = crate::execution_graph_resource_attachment::tests::documents();
+        let mut query = docs[0].clone();
+        let mut pool = docs[1].clone();
+        let mut timing = crate::execution_graph_timing::tests::fixture();
+        timing["clock_bridge"]["pool_capture_id"] = pool["capture_id"].clone();
+        pool["schema"] = json!(3);
+        pool["timing"] = timing;
+        query["schema"] = json!(5);
+        query["execution_clock"] = pool["timing"]["clock_bridge"].clone();
+        write_json(&directory, "query.json", &query);
+        write_json(&directory, "pool.json", &pool);
+        let a = collect_path(&directory).unwrap();
+        let q = a.iter().find(|r| r.schema == 5).unwrap();
+        assert!(q.clock_alignment.as_ref().unwrap().aligned);
+        assert!(q.task_bindings.as_ref().unwrap().graph_binding_complete);
+        let p = a.iter().find(|r| r.schema == 3).unwrap();
+        let cpu = p.observed_cpu.as_ref().unwrap();
+        assert_eq!(cpu.observed_cpu_ns, Some(9));
+        assert!(cpu.records_complete);
+        assert!(!cpu.query_clock_aligned);
+        assert!(a.iter().all(|r| r.cpu_work_ns.is_none()
+            && r.execution_span_ns.is_none()
+            && !r.full_pipeline_complete));
+        // A unilateral descriptor edit cannot borrow an otherwise valid pool CPU observation.
+        query["execution_clock"]["pool_observer"] = json!(2);
+        write_json(&directory, "query.json", &query);
+        let a = collect_path(&directory).unwrap();
+        assert!(
+            !a.iter()
+                .find(|r| r.schema == 5)
+                .unwrap()
+                .clock_alignment
+                .as_ref()
+                .unwrap()
+                .aligned
+        );
+        assert_eq!(
+            a.iter()
+                .find(|r| r.schema == 3)
+                .unwrap()
+                .observed_cpu
+                .as_ref()
+                .unwrap()
+                .observed_cpu_ns,
+            Some(9)
+        );
+        query["execution_clock"] = pool["timing"]["clock_bridge"].clone();
+        // Honest timing loss preserves lifecycle/clock authority, never CPU completeness.
+        pool["timing"]["records_complete"] = json!(false);
+        pool["timing"]["lost_segments"] = json!(1);
+        pool["timing"]["segment_allocator_high_water"] = json!(4);
+        pool["timing"]["expected_segments"] = json!(3);
+        write_json(&directory, "query.json", &query);
+        write_json(&directory, "pool.json", &pool);
+        let a = collect_path(&directory).unwrap();
+        assert!(
+            a.iter()
+                .find(|r| r.schema == 5)
+                .unwrap()
+                .clock_alignment
+                .as_ref()
+                .unwrap()
+                .aligned
+        );
+        assert!(
+            !a.iter()
+                .find(|r| r.schema == 3)
+                .unwrap()
+                .observed_cpu
+                .as_ref()
+                .unwrap()
+                .records_complete
+        );
+        // A schema4 query has no reciprocal execution clock, even beside a valid pool3.
+        query["schema"] = json!(4);
+        query.as_object_mut().unwrap().remove("execution_clock");
+        write_json(&directory, "query.json", &query);
+        let a = collect_path(&directory).unwrap();
+        assert!(
+            a.iter()
+                .find(|r| r.schema == 4)
+                .unwrap()
+                .clock_alignment
+                .is_none()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn pool3_duplicate_bytes_and_duplicate_capture_authority_fail_closed() {
+        let directory = resource_test_directory("timing-duplicates");
+        let docs = crate::execution_graph_resource_attachment::tests::documents();
+        let mut query = docs[0].clone();
+        let mut pool = docs[1].clone();
+        let mut timing = crate::execution_graph_timing::tests::fixture();
+        timing["clock_bridge"]["pool_capture_id"] = pool["capture_id"].clone();
+        query["schema"] = json!(5);
+        query["execution_clock"] = timing["clock_bridge"].clone();
+        pool["schema"] = json!(3);
+        pool["timing"] = timing;
+        write_json(&directory, "query.json", &query);
+        write_json(&directory, "pool.json", &pool);
+        write_json(&directory, "duplicate.json", &query);
+        let a = collect_path(&directory).unwrap();
+        assert!(
+            a.iter()
+                .filter(|r| r.schema == 5)
+                .all(|r| !r.structural_complete && !r.clock_alignment.as_ref().unwrap().aligned)
+        );
+        std::fs::remove_file(directory.join("duplicate.json")).unwrap();
+        let raw = serde_json::to_string(&pool).unwrap();
+        let duplicate = raw.replacen("\"cpu_ns\":6", "\"cpu_ns\":6,\"cpu_ns\":6", 1);
+        assert_ne!(raw, duplicate);
+        std::fs::write(directory.join("pool.json"), duplicate).unwrap();
+        assert!(collect_path(&directory).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

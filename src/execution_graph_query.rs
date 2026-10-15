@@ -159,14 +159,161 @@ struct ReceiptV4 {
     task_bindings: crate::execution_graph_task_bindings::BindingCapture,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptV5 {
+    schema: u32,
+    producer: String,
+    scope: String,
+    capture_id: String,
+    full_pipeline_complete: bool,
+    #[serde(deserialize_with = "nullable")]
+    cpu_work_ns: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    execution_span_ns: Option<u64>,
+    interface_outcome: InterfaceOutcome,
+    capture_complete: bool,
+    lost_events: u64,
+    opaque_boundaries: Vec<String>,
+    expected_contexts: u64,
+    contexts: Vec<QueryContext>,
+    events: Vec<Event>,
+    wait_allocator_baseline: u64,
+    #[serde(deserialize_with = "nullable")]
+    wait_allocator_high_water: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    expected_waits: Option<u64>,
+    wait_capture_complete: bool,
+    wait_events: Vec<WaitEvent>,
+    query_reads: crate::execution_graph_reads::ReadCapture,
+    task_bindings: crate::execution_graph_task_bindings::BindingCapture,
+    #[serde(deserialize_with = "nullable_clock")]
+    execution_clock: Option<crate::execution_graph_timing::ClockBridge>,
+}
+
+fn nullable_clock<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<crate::execution_graph_timing::ClockBridge>, D::Error> {
+    Option::deserialize(d)
+}
+
+impl ReceiptV5 {
+    /// Typed conversion only, after the original-byte v5 parser rejects unknown
+    /// and duplicate fields. No serialization can erase malformed input.
+    fn into_base(
+        self,
+    ) -> (
+        ReceiptV4,
+        Option<crate::execution_graph_timing::ClockBridge>,
+    ) {
+        let clock = self.execution_clock;
+        let base = ReceiptV4 {
+            schema: 4,
+            producer: self.producer,
+            scope: self.scope,
+            capture_id: self.capture_id,
+            full_pipeline_complete: self.full_pipeline_complete,
+            cpu_work_ns: self.cpu_work_ns,
+            execution_span_ns: self.execution_span_ns,
+            interface_outcome: self.interface_outcome,
+            capture_complete: self.capture_complete,
+            lost_events: self.lost_events,
+            opaque_boundaries: self.opaque_boundaries,
+            expected_contexts: self.expected_contexts,
+            contexts: self.contexts,
+            events: self.events,
+            wait_allocator_baseline: self.wait_allocator_baseline,
+            wait_allocator_high_water: self.wait_allocator_high_water,
+            expected_waits: self.expected_waits,
+            wait_capture_complete: self.wait_capture_complete,
+            wait_events: self.wait_events,
+            query_reads: self.query_reads,
+            task_bindings: self.task_bindings,
+        };
+        (base, clock)
+    }
+}
+
 /// Typed captures are retained until the caller's second, reciprocal-authority pass.
 pub struct CollectedQuery {
     pub assessment: QueryAssessment,
     pub bindings: Option<crate::execution_graph_task_bindings::ValidatedBindingCapture>,
     pub(crate) wait_inventory: Option<ValidatedQueryWaitInventory>,
+    execution_clock: Option<crate::execution_graph_timing::ClockBridge>,
+    clock_binding: Option<ClockBinding>,
 }
 
-/// Schema4-only facts retained from the original strict receipt. No clock crosses producers.
+/// Clock authority only. Valid alignment does not attest CPU coverage, query
+/// semantic completeness, full-pipeline work, or an execution span.
+#[derive(Clone, Debug, Serialize)]
+pub struct ClockAlignmentAssessment {
+    pub aligned: bool,
+    pub issues: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ClockBinding {
+    capture_id: String,
+    observer: u64,
+}
+
+impl CollectedQuery {
+    /// Run after the independent task-binding reconciliation. Only a reciprocal
+    /// validated pool3 descriptor can authorize crossing query/pool clocks.
+    pub(crate) fn reconcile_clock_alignment(
+        &mut self,
+        pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+    ) {
+        if self.assessment.schema != 5 {
+            return;
+        }
+        let mut issues = Vec::new();
+        match (&self.execution_clock, &self.clock_binding) {
+            (None, _) => issues.push("query execution clock unavailable".into()),
+            (Some(_), None) => issues.push("query clock has no task-binding pool identity".into()),
+            (Some(clock), Some(binding)) => {
+                if clock.query_capture_id != self.assessment.capture_id
+                    || clock.pool_capture_id == self.assessment.capture_id
+                    || clock.pool_capture_id != binding.capture_id
+                    || clock.pool_observer != binding.observer
+                    || clock.pool_observer == 0
+                    || clock.pool_capture_id.is_empty()
+                    || clock.pool_capture_id.len() > 128
+                    || clock.pool_epoch_in_query_ns != 0
+                {
+                    issues.push("query execution clock identity or origin mismatch".into());
+                }
+                match pools.get(&clock.pool_capture_id) {
+                    Some(pool)
+                        if pool.schema == 3
+                            && pool.structural_complete
+                            && pool.capture_id == clock.pool_capture_id
+                            && pool.observer == clock.pool_observer
+                            && pool.query_capture_id.as_deref()
+                                == Some(self.assessment.capture_id.as_str())
+                            && pool.timing_bridge.as_ref() == Some(clock) => {}
+                    _ => issues
+                        .push("reciprocal pool execution clock unavailable or mismatched".into()),
+                }
+                if !self
+                    .assessment
+                    .task_bindings
+                    .as_ref()
+                    .is_some_and(|binding| binding.graph_binding_valid)
+                {
+                    issues.push("query clock task-binding authority is not valid".into());
+                }
+            }
+        }
+        self.assessment.clock_alignment = Some(ClockAlignmentAssessment {
+            aligned: issues.is_empty(),
+            issues,
+        });
+    }
+}
+
+/// Schema4/5 facts retained from the original strict receipt. Cross-clock
+/// authorization, when present in schema5, is reconciled independently.
 pub(crate) struct ValidatedQueryWaitInventory {
     capture_id: String,
     complete: bool,
@@ -375,6 +522,8 @@ pub struct QueryAssessment {
     pub(crate) query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
     /// None for schemas 1/2/3: legacy absence is unknown, never zero lineage.
     pub task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clock_alignment: Option<ClockAlignmentAssessment>,
     pub issues: Vec<String>,
     pub opaque_boundaries: Vec<String>,
     pub cpu_work_ns: Option<u64>,
@@ -416,20 +565,29 @@ pub(crate) fn collect_bytes_with_policy(
         2 => assess_waits(serde_json::from_slice(bytes).context("invalid query wait receipt")?),
         3 => assess_reads(serde_json::from_slice(bytes).context("invalid query read receipt")?),
         4 => return collect_bindings(bytes, policy),
+        5 => return collect_clock_bindings(bytes, policy),
         _ => bail!("unsupported query receipt schema"),
     }?;
     Ok(CollectedQuery {
         assessment,
         bindings: None,
         wait_inventory: None,
+        execution_clock: None,
+        clock_binding: None,
     })
 }
 
 // This projection is read only AFTER the strict, duplicate-preserving ReceiptV4
-// parser accepted the original bytes. It does not replace the read schema parser.
+// or ReceiptV5 parser accepted the original bytes. It does not replace either
+// receipt parser or the nested read schema parser.
 #[derive(Deserialize)]
 struct ReadInventoryProjection {
     query_reads: ReadPointInventory,
+    task_bindings: BindingIdentityProjection,
+}
+#[derive(Deserialize)]
+struct BindingIdentityProjection {
+    pool: Option<ClockBinding>,
 }
 #[derive(Deserialize)]
 struct ReadPointInventory {
@@ -447,13 +605,37 @@ struct ReadPointEvent {
 }
 
 fn collect_bindings(bytes: &[u8], policy: CapturePolicy) -> Result<CollectedQuery> {
-    use crate::execution_graph_task_bindings::{QuerySourceInventory, Source};
     let r: ReceiptV4 =
         serde_json::from_slice(bytes).context("invalid query task-binding receipt")?;
+    collect_bindings_base(r, bytes, policy)
+}
+
+fn collect_clock_bindings(bytes: &[u8], policy: CapturePolicy) -> Result<CollectedQuery> {
+    let r: ReceiptV5 = serde_json::from_slice(bytes).context("invalid query clock receipt")?;
+    if r.schema != 5 {
+        bail!("unsupported query clock receipt schema");
+    }
+    let (base, clock) = r.into_base();
+    let mut query = collect_bindings_base(base, bytes, policy)?;
+    query.assessment.schema = 5;
+    query.execution_clock = clock;
+    // Standalone collection has no validated reciprocal pool authority. Never
+    // upgrade alignment based on a one-sided descriptor.
+    query.reconcile_clock_alignment(&BTreeMap::new());
+    Ok(query)
+}
+
+fn collect_bindings_base(
+    r: ReceiptV4,
+    bytes: &[u8],
+    policy: CapturePolicy,
+) -> Result<CollectedQuery> {
+    use crate::execution_graph_task_bindings::{QuerySourceInventory, Source};
     if r.schema != 4 {
         bail!("unsupported query task-binding receipt schema");
     }
     let reads: ReadInventoryProjection = serde_json::from_slice(bytes)?;
+    let clock_binding = reads.task_bindings.pool;
     let reads = reads.query_reads;
     if r.contexts.len() > MAX_CONTEXTS {
         bail!("task-binding context budget exceeded");
@@ -598,6 +780,8 @@ fn collect_bindings(bytes: &[u8], policy: CapturePolicy) -> Result<CollectedQuer
             complete: assessment_wait_complete,
             ..wait_inventory
         }),
+        execution_clock: None,
+        clock_binding,
     })
 }
 
@@ -809,6 +993,7 @@ fn assess_admissions_policy(r: Receipt, large_inventory: bool) -> Result<QueryAs
         full_pipeline_complete: false,
         nodes: admitted.len(),
         task_bindings: None,
+        clock_alignment: None,
         edges,
         descriptive_parent_edges: edges,
         control_causal_edges: 0,
@@ -1718,6 +1903,240 @@ pub(crate) mod tests {
             "pool":{"capture_id":"pool-1","observer":1},"unavailable_reason":null,
             "events":sources.into_iter().map(|source| json!({"source":source,"target":{"task":1,"at_pool_ns":10},"unbound_reason":null})).collect::<Vec<_>>()});
         v
+    }
+
+    fn clock_fixture() -> Value {
+        let mut v = task_binding_fixture();
+        v["schema"] = json!(5);
+        v["execution_clock"] = json!({
+            "query_capture_id":v["capture_id"],"pool_capture_id":"pool-1",
+            "pool_observer":1,"pool_epoch_in_query_ns":0
+        });
+        v
+    }
+
+    fn clock_pools(
+        v: &Value,
+    ) -> BTreeMap<String, crate::execution_graph_continuation::PoolInventory> {
+        use crate::execution_graph_continuation::{PoolInventory, TaskInterval};
+        let clock: crate::execution_graph_timing::ClockBridge =
+            serde_json::from_value(clock_fixture()["execution_clock"].clone()).unwrap();
+        BTreeMap::from([(
+            "pool-1".into(),
+            PoolInventory {
+                schema: 3,
+                capture_id: "pool-1".into(),
+                observer: 1,
+                query_capture_id: Some(v["capture_id"].as_str().unwrap().into()),
+                structural_complete: true,
+                task_intervals: BTreeMap::from([(
+                    1,
+                    TaskInterval {
+                        start_ns: 0,
+                        finish_ns: 20,
+                    },
+                )]),
+                timing_bridge: Some(clock),
+            },
+        )])
+    }
+
+    fn reconcile_clock(
+        v: &Value,
+        pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+    ) -> QueryAssessment {
+        let mut query = collect_bytes(&serde_json::to_vec(v).unwrap()).unwrap();
+        if let Some(bindings) = &query.bindings {
+            query.assessment.task_bindings =
+                Some(crate::execution_graph_task_bindings::reconcile_bindings(
+                    &query.assessment.capture_id,
+                    bindings,
+                    pools,
+                ));
+        }
+        query.reconcile_clock_alignment(pools);
+        query.assessment
+    }
+
+    #[test]
+    fn schema5_requires_reciprocal_clock_without_promoting_global_metrics() {
+        let v = clock_fixture();
+        let query = collect_bytes(&serde_json::to_vec(&v).unwrap()).unwrap();
+        assert_eq!(query.assessment.schema, 5);
+        assert!(query.assessment.structural_complete);
+        assert!(!query.assessment.clock_alignment.unwrap().aligned);
+        let a = reconcile_clock(&v, &clock_pools(&v));
+        assert!(a.clock_alignment.as_ref().unwrap().aligned, "{a:?}");
+        assert!(a.task_bindings.as_ref().unwrap().graph_binding_valid);
+        assert!(!a.full_pipeline_complete);
+        assert_eq!((a.cpu_work_ns, a.execution_span_ns), (None, None));
+        let legacy = task_binding_fixture();
+        let a = reconcile_clock(&legacy, &clock_pools(&legacy));
+        assert!(a.clock_alignment.is_none());
+        assert!(
+            serde_json::to_value(a)
+                .unwrap()
+                .get("clock_alignment")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn schema5_null_missing_and_mismatched_clocks_never_align() {
+        let mut v = clock_fixture();
+        v["execution_clock"] = Value::Null;
+        let a = reconcile_clock(&v, &clock_pools(&v));
+        assert!(a.structural_complete);
+        assert!(!a.clock_alignment.unwrap().aligned);
+        v.as_object_mut().unwrap().remove("execution_clock");
+        assert!(collect_bytes(&serde_json::to_vec(&v).unwrap()).is_err());
+        for (field, value) in [
+            ("query_capture_id", json!("foreign-query")),
+            ("pool_capture_id", json!("foreign-pool")),
+            ("pool_capture_id", json!("synthetic-1")),
+            ("pool_observer", json!(2)),
+            ("pool_observer", json!(0)),
+            ("pool_epoch_in_query_ns", json!(1)),
+        ] {
+            let mut v = clock_fixture();
+            v["execution_clock"][field] = value;
+            let a = reconcile_clock(&v, &clock_pools(&v));
+            assert!(!a.clock_alignment.unwrap().aligned, "{field}");
+        }
+        for mutation in 0..7 {
+            let v = clock_fixture();
+            let mut pools = clock_pools(&v);
+            let pool = pools.get_mut("pool-1").unwrap();
+            match mutation {
+                0 => pool.schema = 2,
+                1 => pool.structural_complete = false,
+                2 => pool.query_capture_id = Some("foreign-query".into()),
+                3 => pool.observer = 2,
+                4 => pool.timing_bridge = None,
+                5 => pool.timing_bridge.as_mut().unwrap().pool_epoch_in_query_ns = 1,
+                6 => pool.capture_id = "foreign-pool".into(),
+                _ => unreachable!(),
+            }
+            assert!(!reconcile_clock(&v, &pools).clock_alignment.unwrap().aligned);
+        }
+    }
+
+    #[test]
+    fn schema5_clock_requires_binding_identity_and_valid_recorded_targets() {
+        for mutation in 0..3 {
+            let mut v = clock_fixture();
+            match mutation {
+                0 => v["task_bindings"]["pool"]["observer"] = json!(2),
+                1 => v["task_bindings"]["pool"]["capture_id"] = json!("other-pool"),
+                2 => v["task_bindings"]["events"][0]["target"]["at_pool_ns"] = json!(21),
+                _ => unreachable!(),
+            }
+            assert!(
+                !reconcile_clock(&v, &clock_pools(&v))
+                    .clock_alignment
+                    .unwrap()
+                    .aligned
+            );
+        }
+        // Incomplete target coverage is not a different clock epoch. Valid
+        // remaining lineage may align, while completeness stays false.
+        let mut v = clock_fixture();
+        v["task_bindings"]["all_targets_bound"] = json!(false);
+        v["task_bindings"]["events"][0]["target"] = Value::Null;
+        v["task_bindings"]["events"][0]["unbound_reason"] = json!("no_active");
+        let a = reconcile_clock(&v, &clock_pools(&v));
+        assert!(a.clock_alignment.unwrap().aligned);
+        assert!(!a.task_bindings.unwrap().graph_binding_complete);
+    }
+
+    #[test]
+    fn schema5_original_bytes_reject_duplicate_unknown_and_missing_fields() {
+        let raw = serde_json::to_string(&clock_fixture()).unwrap();
+        for (old, new) in [
+            ("\"schema\":5", "\"schema\":5,\"schema\":5"),
+            (
+                "\"pool_observer\":1",
+                "\"pool_observer\":1,\"pool_observer\":1",
+            ),
+            (
+                "\"execution_clock\":{",
+                "\"execution_clock\":null,\"execution_clock\":{",
+            ),
+            ("\"read_id\":1", "\"read_id\":1,\"read_id\":1"),
+        ] {
+            let duplicate = raw.replacen(old, new, 1);
+            assert_ne!(duplicate, raw);
+            assert!(
+                collect_bytes_with_policy(duplicate.as_bytes(), CapturePolicy::large()).is_err()
+            );
+        }
+        for field in [
+            "query_capture_id",
+            "pool_capture_id",
+            "pool_observer",
+            "pool_epoch_in_query_ns",
+        ] {
+            let mut v = clock_fixture();
+            v["execution_clock"].as_object_mut().unwrap().remove(field);
+            assert!(collect_bytes(&serde_json::to_vec(&v).unwrap()).is_err());
+        }
+        for path in [
+            vec![],
+            vec!["execution_clock"],
+            vec!["query_reads"],
+            vec!["task_bindings"],
+        ] {
+            let mut v = clock_fixture();
+            let mut object = &mut v;
+            for field in path {
+                object = &mut object[field];
+            }
+            object["unknown"] = json!(true);
+            assert!(
+                collect_bytes_with_policy(&serde_json::to_vec(&v).unwrap(), CapturePolicy::large())
+                    .is_err()
+            );
+        }
+        let mut legacy = task_binding_fixture();
+        legacy["execution_clock"] = Value::Null;
+        assert!(collect_bytes(&serde_json::to_vec(&legacy).unwrap()).is_err());
+    }
+
+    #[test]
+    fn schema5_typed_conversion_preserves_base_policy_and_inventory_gates() {
+        let v = clock_fixture();
+        let bytes = serde_json::to_vec(&v).unwrap();
+        let policy = CapturePolicy {
+            max_bytes: bytes.len(),
+            max_points: 7,
+        };
+        let a = collect_bytes_with_policy(&bytes, policy)
+            .unwrap()
+            .assessment;
+        assert_eq!(a.schema, 5);
+        assert_eq!(a.query_reads.unwrap().resolved_reads, 1);
+        assert_eq!(a.task_bindings.unwrap().expected_points, Some(7));
+        for policy in [
+            CapturePolicy {
+                max_bytes: bytes.len() - 1,
+                ..policy
+            },
+            CapturePolicy {
+                max_points: 6,
+                ..policy
+            },
+        ] {
+            assert!(collect_bytes_with_policy(&bytes, policy).is_err());
+        }
+        let mut invalid = v;
+        invalid["query_reads"]["events"][1]["producer_job_id"] = json!(99);
+        assert!(
+            collect_bytes_with_policy(
+                &serde_json::to_vec(&invalid).unwrap(),
+                CapturePolicy::large()
+            )
+            .is_err()
+        );
     }
 
     #[test]

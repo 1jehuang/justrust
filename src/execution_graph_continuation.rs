@@ -34,6 +34,13 @@ struct Receipt {
     expected_tasks: u64,
     dropped_events: u64,
     events: Vec<Event>,
+    #[serde(default, deserialize_with = "optional_timing")]
+    timing: Option<crate::execution_graph_timing::TimingCapture>,
+}
+fn optional_timing<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<crate::execution_graph_timing::TimingCapture>, D::Error> {
+    crate::execution_graph_timing::TimingCapture::deserialize(d).map(Some)
 }
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +122,8 @@ pub(crate) struct Assessment {
     pub opaque_boundaries: Vec<String>,
     pub cpu_work_ns: Option<u64>,
     pub execution_span_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_cpu: Option<crate::execution_graph_timing::ObservedCpuAssessment>,
 }
 fn define(tasks: &mut BTreeMap<u64, Task>, id: u64, definition: Definition, at: u64) -> Result<()> {
     let task = tasks.entry(id).or_default();
@@ -187,6 +196,7 @@ pub(crate) struct PoolInventory {
     pub query_capture_id: Option<String>,
     pub structural_complete: bool,
     pub task_intervals: BTreeMap<u64, TaskInterval>,
+    pub timing_bridge: Option<crate::execution_graph_timing::ClockBridge>,
 }
 impl PoolInventory {
     pub fn validate_point(&self, task: u64, at_ns: u64) -> Result<()> {
@@ -206,7 +216,7 @@ pub(crate) fn assess_bytes(bytes: &[u8]) -> Result<Assessment> {
 }
 pub(crate) fn collect_bytes(bytes: &[u8]) -> Result<CollectedPool> {
     let (assessment, inventory) = validate_bytes(bytes)?;
-    let inventory = (inventory.schema == 2).then_some(inventory);
+    let inventory = matches!(inventory.schema, 2 | 3).then_some(inventory);
     Ok(CollectedPool {
         assessment,
         inventory,
@@ -217,7 +227,7 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
         bail!("join receipt byte budget exceeded");
     }
     let r: Receipt = serde_json::from_slice(bytes)?;
-    if !matches!(r.schema, 1 | 2)
+    if !matches!(r.schema, 1..=3)
         || r.producer != "rustc-thread-pool-join"
         || r.scope != "native-join-continuations"
     {
@@ -235,7 +245,7 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
     }
     match (r.schema, r.query_capture_id.as_deref()) {
         (1, None) => {}
-        (2, Some(id))
+        (2 | 3, Some(id))
             if !id.is_empty()
                 && id.len() <= 128
                 && id != r.capture_id
@@ -243,6 +253,9 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)) => {}
         _ => bail!("invalid or unsupported query capture identity"),
+    }
+    if (r.schema == 3) != r.timing.is_some() {
+        bail!("timing requires explicit pool schema3 and is mandatory for schema3");
     }
     if r.full_pipeline_complete
         || r.cpu_work_ns.is_some()
@@ -484,12 +497,13 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
     if !r.sealed || r.interface_outcome != Outcome::Returned {
         issues.push("join owner is not sealed after normal interface return".into());
     }
-    let inventory = PoolInventory {
+    let mut inventory = PoolInventory {
         schema: r.schema,
         capture_id: r.capture_id.clone(),
         observer: r.observer,
         query_capture_id: r.query_capture_id,
         structural_complete: issues.is_empty(),
+        timing_bridge: None,
         task_intervals: tasks
             .iter()
             .filter_map(|(&id, task)| {
@@ -503,6 +517,29 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
             })
             .collect(),
     };
+    let observed_cpu = r
+        .timing
+        .map(|timing| {
+            crate::execution_graph_timing::assess(
+                timing,
+                crate::execution_graph_timing::TimingContext {
+                    pool_capture_id: &inventory.capture_id,
+                    query_capture_id: inventory
+                        .query_capture_id
+                        .as_deref()
+                        .expect("schema3 query identity validated"),
+                    observer: inventory.observer,
+                    pool_sealed: r.sealed,
+                    structural_complete: inventory.structural_complete,
+                    task_high_water: r.task_allocator_high_water,
+                    task_intervals: &inventory.task_intervals,
+                },
+            )
+        })
+        .transpose()?;
+    if let Some(timing) = &observed_cpu {
+        inventory.timing_bridge = Some(timing.clock_bridge.clone());
+    }
     Ok((
         Assessment {
             schema: r.schema,
@@ -524,6 +561,7 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
             ],
             cpu_work_ns: None,
             execution_span_ns: None,
+            observed_cpu,
         },
         inventory,
     ))
@@ -546,6 +584,90 @@ mod tests {
         v["query_capture_id"] = json!("query_123-safe");
         v
     }
+    fn schema3() -> Value {
+        let mut v = schema2();
+        v["schema"] = json!(3);
+        let mut timing = crate::execution_graph_timing::tests::fixture();
+        timing["segments"][0]["start_ns"] = json!(1);
+        timing["segments"][0]["end_ns"] = json!(2);
+        timing["segments"][0]["cpu_end_ns"] = json!(101);
+        timing["segments"][0]["cpu_ns"] = json!(1);
+        timing["segments"][1]["start_ns"] = json!(2);
+        timing["segments"][1]["end_ns"] = json!(3);
+        timing["segments"][1]["cpu_start_ns"] = json!(101);
+        timing["segments"][1]["cpu_end_ns"] = json!(102);
+        timing["segments"][1]["cpu_ns"] = json!(1);
+        v["timing"] = timing;
+        v
+    }
+
+    #[test]
+    fn pool3_scoped_cpu_has_valid_lifecycles_but_no_full_work_or_clock_alignment() {
+        let c = collect(&schema3()).unwrap();
+        assert!(c.assessment.structural_complete);
+        assert!(!c.assessment.full_pipeline_complete);
+        assert!(c.assessment.cpu_work_ns.is_none() && c.assessment.execution_span_ns.is_none());
+        let timing = c.assessment.observed_cpu.unwrap();
+        assert!(timing.records_complete);
+        assert_eq!(timing.observed_cpu_ns, Some(2));
+        assert!(!timing.query_clock_aligned);
+        let pool = c.inventory.unwrap();
+        assert_eq!(pool.schema, 3);
+        assert_eq!(pool.timing_bridge, Some(timing.clock_bridge));
+        pool.validate_point(1, 2).unwrap();
+    }
+
+    #[test]
+    fn pool3_timing_is_explicit_mandatory_and_original_bytes_remain_strict() {
+        for schema in [1, 2] {
+            let mut v = schema3();
+            v["schema"] = json!(schema);
+            if schema == 1 {
+                v.as_object_mut().unwrap().remove("query_capture_id");
+            }
+            assert!(collect(&v).is_err());
+            v["timing"] = Value::Null;
+            assert!(collect(&v).is_err());
+        }
+        let mut v = schema3();
+        v.as_object_mut().unwrap().remove("timing");
+        assert!(collect(&v).is_err());
+        v["timing"] = Value::Null;
+        assert!(collect(&v).is_err());
+        let raw = serde_json::to_string(&schema3()).unwrap();
+        let duplicate = raw.replacen("\"cpu_ns\":1", "\"cpu_ns\":1,\"cpu_ns\":1", 1);
+        assert_ne!(raw, duplicate);
+        assert!(collect_bytes(duplicate.as_bytes()).is_err());
+        for mut legacy in [fixture(), schema2()] {
+            let original = serde_json::to_value(collect(&legacy).unwrap().assessment).unwrap();
+            assert!(original.get("observed_cpu").is_none());
+            legacy["cpu_work_ns"] = json!(1);
+            assert!(collect(&legacy).is_err());
+        }
+    }
+
+    #[test]
+    fn pool3_timing_loss_does_not_destroy_independent_binding_lifecycles() {
+        let mut v = schema3();
+        v["timing"]["records_complete"] = json!(false);
+        v["timing"]["lost_segments"] = json!(1);
+        v["timing"]["segment_allocator_high_water"] = json!(4);
+        v["timing"]["expected_segments"] = json!(3);
+        let c = collect(&v).unwrap();
+        assert!(c.assessment.structural_complete);
+        assert!(!c.assessment.observed_cpu.unwrap().records_complete);
+        c.inventory.unwrap().validate_point(1, 2).unwrap();
+        v["dropped_events"] = json!(1);
+        v["timing"]["records_complete"] = json!(true);
+        v["timing"]["lost_segments"] = json!(0);
+        v["timing"]["segment_allocator_high_water"] = json!(3);
+        v["timing"]["expected_segments"] = json!(2);
+        let c = collect(&v).unwrap();
+        assert!(!c.assessment.structural_complete);
+        assert!(c.assessment.observed_cpu.unwrap().observed_cpu_ns.is_none());
+        assert!(c.inventory.unwrap().validate_point(1, 2).is_err());
+    }
+
     fn collect(v: &Value) -> Result<CollectedPool> {
         collect_bytes(&serde_json::to_vec(v).unwrap())
     }

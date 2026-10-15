@@ -29,6 +29,7 @@ mod execution_graph_reads;
 mod execution_graph_resource;
 mod execution_graph_resource_attachment;
 mod execution_graph_task_bindings;
+mod execution_graph_timing;
 mod export;
 mod findings;
 mod history;
