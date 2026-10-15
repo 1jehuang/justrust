@@ -1,0 +1,181 @@
+{
+  "all_checks_passed": true,
+  "cases": [
+    {
+      "case": "root6-default-refusal",
+      "checks": [
+        "public CLI refused unsupported/default analysis"
+      ],
+      "exit": 1,
+      "flags": [],
+      "stderr": "Error: unsupported query receipt schema",
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "case": "cold-strict-budget-refusal",
+      "checks": [
+        "public CLI refused unsupported/default analysis"
+      ],
+      "exit": 1,
+      "flags": [
+        "--dispatch-result-provenance"
+      ],
+      "stderr": "Error: receipt is not a regular file within the byte budget",
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "cache_resolved": 153723,
+      "case": "cold-both",
+      "checks": [
+        "full pipeline remains incomplete and CPU work/span unknown",
+        "18297 actual dispatch indices produce 17669 certified availability relations",
+        "153723 independent cache relations",
+        "semantic and resource authority are not promoted"
+      ],
+      "dispatch_resolved": 17669,
+      "exit": 0,
+      "flags": [
+        "--large-capture",
+        "--dispatch-result-provenance",
+        "--cache-call-provenance"
+      ],
+      "stdout_bytes": 66930628,
+      "stdout_sha256": "e2d604b7918774f99aa1b30332ee9e3d564690433ef10716faf168b35ce9553f"
+    },
+    {
+      "case": "warm-dispatch-only",
+      "checks": [
+        "full pipeline remains incomplete and CPU work/span unknown"
+      ],
+      "exit": 0,
+      "flags": [
+        "--dispatch-result-provenance"
+      ],
+      "stdout_bytes": 4048,
+      "stdout_sha256": "2d8687ed16f3d6afba67b0802a495999a4931cf84ae7353e633394db7e65a994"
+    },
+    {
+      "case": "warm-both",
+      "checks": [
+        "full pipeline remains incomplete and CPU work/span unknown",
+        "incremental dispatch stays explicitly unobserved",
+        "3580 cache relations remain separate",
+        "removing optional cache field exactly restores dispatch-only public output"
+      ],
+      "exit": 0,
+      "flags": [
+        "--dispatch-result-provenance",
+        "--cache-call-provenance"
+      ],
+      "stdout_bytes": 1384117,
+      "stdout_sha256": "b79ee51bb8aba31d98571970e6d2c08032d978318f31792df13ed58c3df51917"
+    },
+    {
+      "case": "mixed-timing",
+      "checks": [
+        "full pipeline remains incomplete and CPU work/span unknown",
+        "reciprocal timing clock aligned",
+        "complete retained exclusive CPU segments coexist with 17603 dispatch relations"
+      ],
+      "exit": 0,
+      "flags": [
+        "--large-capture",
+        "--dispatch-result-provenance",
+        "--cache-call-provenance"
+      ],
+      "stdout_bytes": 66950338,
+      "stdout_sha256": "86fe3900fd1ff0f293fcd15e7e43084c9333250ea58c51c86c863686e38c1ad9"
+    },
+    {
+      "case": "legacy-root4",
+      "checks": [
+        "exact frozen legacy stdout bytes",
+        "full pipeline remains incomplete and CPU work/span unknown"
+      ],
+      "exit": 0,
+      "flags": [
+        "--large-capture"
+      ],
+      "stdout_bytes": 3061,
+      "stdout_sha256": "d30164346445684d91d0308a4a4d7485ef11bbb2c592348b6bca3eaca45e04c3"
+    },
+    {
+      "case": "legacy-root5",
+      "checks": [
+        "exact frozen legacy stdout bytes",
+        "full pipeline remains incomplete and CPU work/span unknown"
+      ],
+      "exit": 0,
+      "flags": [
+        "--large-capture"
+      ],
+      "stdout_bytes": 3857,
+      "stdout_sha256": "b0f8d24004464489f5833cc393148d8d59c0f8212b257c1b96ad291107110391"
+    }
+  ],
+  "consumer_sha256": "e346c429d0373a4341314e375cd403611755a8c1f43cee61ad3f674ffa1d9666",
+  "limitations": [
+    "Replays actual untouched real-build receipts, does not rerun compilation.",
+    "Artifact neutrality and lexical row oracles are recorded in the original real-source acceptance.",
+    "Availability relations are not a complete execution DAG or a thread ceiling.",
+    "Comprehensive performance remains blocked by the separately audited baseline."
+  ],
+  "original_input_inventory_sha256": "a750635a914b179fe2b673e817755eb2644e04c2edc628ae6dfce6601afb10da",
+  "original_inputs": [
+    {
+      "bytes": 2799,
+      "name": "1792030182029295511-419826-1-pool.json",
+      "sha256": "595199da7471f6a83beaca3887f65ac6491fc5ff9251497371560974b404b7a7"
+    },
+    {
+      "bytes": 241266883,
+      "name": "1792030182029295511-419826-1.json",
+      "sha256": "d501a242a6f8cda82baaa4b0b1905812a77866cfa4394f8600a14dfaf56966f6"
+    },
+    {
+      "bytes": 3433,
+      "name": "1792030212354598513-427883-1-pool.json",
+      "sha256": "93aa0374a1fcd31a00a121b2183da0a3d8847e1f4a94a882ab6f9ed2f6a1beda"
+    },
+    {
+      "bytes": 8955073,
+      "name": "1792030212354598513-427883-1.json",
+      "sha256": "c9afc8d1b53dad88c7e19e29eda14b71dcae406d3e5c9883a4d835acb78693c2"
+    },
+    {
+      "bytes": 73876,
+      "name": "1792030214307359391-428588-1-pool.json",
+      "sha256": "021ba85299277c9740cd4a2978e02ee4fddec32d3d6b04936120ae19a1e0a3ab"
+    },
+    {
+      "bytes": 241288898,
+      "name": "1792030214307359391-428588-1.json",
+      "sha256": "8c8412aefdde012e6b29e9cfdd9ffd4f0a301802eeaab419825cde28324664f5"
+    },
+    {
+      "bytes": 3435,
+      "name": "1792026019450732077-4085765-1-pool.json",
+      "sha256": "661f1617c20a38598ef6b84ca94cde6533b4fce6b09ee686c83e74689a3a0b18"
+    },
+    {
+      "bytes": 8387104,
+      "name": "1792026019450732077-4085765-1.json",
+      "sha256": "ec1bcdc0ab4ee9fcc7406d9e64105c6dcd5d439bf2f768d37d8f89f3ebbe82e7"
+    },
+    {
+      "bytes": 27782,
+      "name": "1792027802865176084-112794-1-pool.json",
+      "sha256": "2e937130c695f17d633acd05df47a60509d2052014bcef41cca5a232e4622923"
+    },
+    {
+      "bytes": 8388090,
+      "name": "1792027802865176084-112794-1.json",
+      "sha256": "2041bd30c16bcb2d259068841193521c8eabf1426f2bf88036d3bbc70447ad3d"
+    }
+  ],
+  "schema": 1,
+  "scope": "installed-public-cli-retained-real-source-acceptance-not-a-benchmark",
+  "unchanged_original_input_files": 10
+}

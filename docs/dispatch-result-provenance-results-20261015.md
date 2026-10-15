@@ -2,7 +2,9 @@
 
 ## Status and scope
 
-Implemented and correctness-validated on actual Rust source. The comprehensive default-disabled performance comparison is still pending. This is **not** a complete semantic dependency graph, an execution DAG, a critical path, or a useful-thread ceiling.
+Implemented and correctness-validated on actual Rust source. The comprehensive default-disabled performance comparison is **blocked**: the completed 40-point A2 baseline failed eligibility because 39 points were noisy and seven had unexpected failing-test outcomes. B2 was not run. This is **not** a complete semantic dependency graph, an execution DAG, a critical path, or a useful-thread ceiling.
+
+The per-requirement checks, observed information gain and explicit acceptance boundaries are mapped in `dispatch-acceptance-trace-20261015.md`. An independent recheck of the installed public CLI passed eight cases on unchanged original real-build inputs; its compact output is `bench/results/dispatch-result-provenance-20261015/public-cli-acceptance.json`. This is a consumer replay, not a new compiler benchmark.
 
 The design and measurement requirements are in `dispatch-result-provenance-plan-20261015.md`. Consumer commits are `f11a53fb5` and `1cf98db01`; native implementation and real-source acceptance are `8b7398717`. The installed client SHA-256 is `e346c429d0373a4341314e375cd403611755a8c1f43cee61ad3f674ffa1d9666`.
 
