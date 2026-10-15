@@ -654,8 +654,10 @@ class FrontendMappingNative(unittest.TestCase):
         compact = summary['query_cpu_ownership']
         self.assertTrue(compact['records_complete'], compact['issues'])
         self.assertEqual(compact['query_execution_cpu_ns'], costs['query_execution_cpu_ns'])
+        self.assertEqual(compact['measured_segments'], costs['measured_segments'])
         self.assertEqual(compact['observed_query_owners'], len(costs['queries']))
         self.assertEqual(compact['top_queries'], costs['queries'][:20])
+        self.assertEqual(compact['omitted_query_owners'], max(0, len(costs['queries']) - 20))
         kinds = collections.Counter()
         for row in costs['queries']:
             kinds[row['query_name']] += row['cpu_ns']
@@ -663,6 +665,7 @@ class FrontendMappingNative(unittest.TestCase):
                   for name, cost in sorted(kinds.items(), key=lambda row: (-row[1], row[0]))]
         self.assertEqual(compact['observed_query_kinds'], len(kinds))
         self.assertEqual(compact['top_query_kinds'], ranked[:20])
+        self.assertEqual(compact['omitted_query_kinds'], max(0, len(ranked) - 20))
         self.assertEqual(sum(kinds.values()), costs['query_execution_cpu_ns'])
         for scope in (report, summary):
             self.assertFalse(scope['full_pipeline_complete'])

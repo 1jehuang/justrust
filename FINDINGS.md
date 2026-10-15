@@ -1,5 +1,22 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: named query execution CPU now has native authority
+
+Explicit admitted query execution ownership is independent of pool-task identity.
+Real cold/warm itoa captures reconciled 532.930074/19.811304 ms of named query
+CPU against original admissions, with complete retained timing and reciprocal
+clocks. Cold `typeck_root` accounted for 206.496525 ms, warm
+`resolver_for_lowering_raw` for 6.106205 ms. These diagnostic costs are not a
+critical path or a matched performance comparison. Full work/span remain unknown.
+
+Native tests passed 235 with 28 ignored. All eight actual-source compile/link/
+execute/analyzer tests passed. Hosted client run `20261015-052358578-808947`
+passed 655 tests with 3 ignored, and check/strict clippy passed. Exported runs
+are in `data/runs/query-cpu-20261015/2026-10.jsonl`. See
+`docs/query-cpu-ownership-20261015.md` and its committed compact reports.
+The comprehensive performance gate remains blocked by the ineligible A2 series,
+not silently replaced by these successful correctness diagnostics.
+
 ## 2026-10-15: real frontend ownership coverage, not a threading ceiling
 
 On unchanged itoa 1.0.18 incremental compilation, actual task ownership increased
