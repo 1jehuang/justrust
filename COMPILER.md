@@ -86,6 +86,28 @@ expressions used as discarded statements are currently conservatively rejected.
 The private function-call ABI is not an FFI ABI. The ELF is fixed-address,
 not PIE, and requests separate non-writable executable code and read-only data.
 
+Small-source and 258-function measurements, along with raw receipts, are in
+`FINDINGS.md`. On the first M8a run all 66 tests passed, 64 generated execution
+comparisons matched stock Rust, and all 36 repeated check/build samples passed.
+These establish this bounded milestone, not full Rust conformance.
+
+```sh
+python3 experiments/compiler_correctness.py --binary /path/to/jr-rust \
+  --rustc /path/to/reference/rustc --output /new/path/differential.jsonl
+python3 experiments/compiler.py --binary /path/to/jr-rust \
+  --revision "$(git rev-parse HEAD)" --reference-rustc /path/to/reference/rustc \
+  --output /new/path/matrix.jsonl
+```
+
+The stock compiler is used only by these external validation tools. Compiler
+implementation modules never spawn it. Use the charged hosted experiment wrapper
+for remote runs, with source revision, guest timeout and lifecycle receipts.
+The initial frontend rejects syntax/AST nesting beyond 128, and the private
+backend supports at most 4,096 function arguments. Neither is a Rust language
+limit. Numeric syntax is currently unsuffixed decimal i32, and `!` accepts bool
+only. Runtime signals, stack exhaustion and stdio buffering do not yet match
+all Rust standard-runtime behavior.
+
 ## Acceptance and measurement
 
 Execute generated binaries and compare stdout and exit status with expected

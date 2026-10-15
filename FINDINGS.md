@@ -1,5 +1,65 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: First actual Rust-subset source-to-native compiler
+
+Revision `4056118081a547d39c2361f20b7aaca0f959bf8c` implements an independent
+Rust-subset lexer/parser, signatures and body checking, per-function x86-64
+code emission, relocations and ELF generation inside the fact graph. Compiling
+user source does not invoke another compiler, assembler or linker. The standard
+Rust toolchain only builds the implementation and serves as a separate semantic
+reference. See `COMPILER.md` for supported syntax and important limitations.
+
+Hosted check `20261015-155254058-417828`, 66 passing tests
+`20261015-155255154-417930`, and all-target clippy with warnings denied
+`20261015-155256605-417826` passed. Tests execute native binaries, including
+96-worker compilation, recursion, arithmetic traps, loops, shadowing, argument
+order, Unicode printing, overwrite protection and failure graph retention.
+Graph tests verify check/build roots share body checks exactly once and that
+check-only requests no codegen. Signature tables are retained once rather than
+rebuilt independently in every function body check. Parsing remains whole-file.
+
+Charged, dashboard-visible experiment `compiler-native-20261015-2253` completed
+successfully on the shared 96-core m8a.24xlarge. The release bootstrap used guest
+stable Rust 1.99.0, while hosted acceptance used pinned nightly-2026-10-08.
+64 seeded generated programs compiled with both implementations and matched
+stdout, stderr and exit status at worker counts 1, 8 and 96. This is bounded
+semantic coverage, not a conformance proof. Raw source and outcomes:
+`experiments/results/20261015-m8a-compiler-differential.jsonl`.
+
+A separate repeated matrix contains 36 compile/check samples: two source sizes,
+three worker counts, two modes and three repeats with alternating worker order.
+Every build emitted ELF and ran successfully with the expected output. A stock
+Rust reference also compiled and executed each source fixture, outside timings.
+Raw samples: `experiments/results/20261015-m8a-compiler-matrix.jsonl`.
+
+Median in-process source-to-result times, including source reading, graph setup,
+semantic checks and executable writing for builds (milliseconds):
+
+| Source | Workers | Check | Native executable |
+|---|---:|---:|---:|
+| 6 functions, 391 bytes | 1 | 0.218 | 0.323 |
+| 6 functions, 391 bytes | 8 | 0.496 | 0.614 |
+| 6 functions, 391 bytes | 96 | 2.624 | 2.773 |
+| 258 functions, 22,163 bytes | 1 | 2.680 | 4.215 |
+| 258 functions, 22,163 bytes | 8 | 5.446 | 9.844 |
+| 258 functions, 22,163 bytes | 96 | 8.872 | 13.833 |
+
+Whole-process median latency at one worker was 0.825 ms for the six-function
+build and 4.967 ms for the 258-function build. Executables were 8,211 and 53,267
+bytes. Process startup/output collection is excluded from the table but retained
+separately in the raw receipts. Check and build samples are separate snapshots,
+not cross-build cache hits. Three shared-host samples per point remain
+contended/uncontrolled, not a stable tail-latency distribution. No stock-versus-
+justrust speed claim follows from this matrix.
+
+These intentionally simple function bodies are too cheap to amortize 96-worker
+coordination, worker startup and existing global locks. More workers currently
+make these real-source fixtures slower. This is a baseline for the next work,
+not evidence of optimal granularity, broad Rust support or a faster general Rust
+compiler. Traits, borrowing, modules, generic types, standard-library linkage,
+optimization and project builds remain unimplemented. Runtime panic diagnostics
+and compiler expression spans also need substantial development.
+
 ## 2026-10-15: Avoid redundant worker-wide notifications
 
 Revision `20c3b51e4e20a09197b28da47f4a14672c9802f7` removes the unconditional
