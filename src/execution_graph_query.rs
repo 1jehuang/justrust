@@ -161,7 +161,7 @@ struct ReceiptV4 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ReceiptV5 {
+struct ReceiptV5<R = crate::execution_graph_reads::ReadCapture> {
     schema: u32,
     producer: String,
     scope: String,
@@ -185,11 +185,14 @@ struct ReceiptV5 {
     expected_waits: Option<u64>,
     wait_capture_complete: bool,
     wait_events: Vec<WaitEvent>,
-    query_reads: crate::execution_graph_reads::ReadCapture,
+    query_reads: R,
     task_bindings: crate::execution_graph_task_bindings::BindingCapture,
     #[serde(deserialize_with = "nullable_clock")]
     execution_clock: Option<crate::execution_graph_timing::ClockBridge>,
 }
+
+/// Root6 has the root5 envelope, but requires the independently strict read2 wire type.
+type ReceiptV6 = ReceiptV5<crate::execution_graph_reads::ReadCaptureV2>;
 
 fn nullable_clock<'de, D: Deserializer<'de>>(
     d: D,
@@ -264,7 +267,7 @@ impl CollectedQuery {
         &mut self,
         pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
     ) {
-        if self.assessment.schema != 5 {
+        if !matches!(self.assessment.schema, 5 | 6) {
             return;
         }
         let mut issues = Vec::new();
@@ -523,6 +526,10 @@ pub struct QueryAssessment {
     /// Explicitly requested first-cache availability observations, never execution DAG edges.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cache_call_provenance: Option<crate::execution_graph_reads::CacheCallAssessment>,
+    /// Only explicitly validated root6 dispatch availability, never execution DAG edges.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dispatch_result_provenance:
+        Option<crate::execution_graph_reads::DispatchResultAssessment>,
     /// None for schemas 1/2/3: legacy absence is unknown, never zero lineage.
     pub task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -558,6 +565,24 @@ pub(crate) fn collect_bytes_with_analysis(
     policy: CapturePolicy,
     cache_call_provenance: bool,
 ) -> Result<CollectedQuery> {
+    collect_bytes_with_options(bytes, policy, cache_call_provenance, false)
+}
+
+/// Root6 is accepted only through this explicit dispatch-analysis entrypoint.
+pub(crate) fn collect_bytes_with_dispatch_analysis(
+    bytes: &[u8],
+    policy: CapturePolicy,
+    cache_call_provenance: bool,
+) -> Result<CollectedQuery> {
+    collect_bytes_with_options(bytes, policy, cache_call_provenance, true)
+}
+
+fn collect_bytes_with_options(
+    bytes: &[u8],
+    policy: CapturePolicy,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+) -> Result<CollectedQuery> {
     if policy.max_bytes > 512 * 1024 * 1024 || policy.max_points > 1_000_000 {
         bail!("query capture policy exceeds hard bounds");
     }
@@ -570,6 +595,12 @@ pub(crate) fn collect_bytes_with_analysis(
     }
     let version: Version =
         serde_json::from_slice(bytes).context("invalid query receipt version")?;
+    if dispatch_result_provenance {
+        if version.schema != 6 {
+            bail!("--dispatch-result-provenance requires query schema6 with read schema2");
+        }
+        return collect_dispatch_bindings(bytes, policy, cache_call_provenance);
+    }
     if cache_call_provenance && !matches!(version.schema, 4 | 5) {
         bail!(
             "--cache-call-provenance requires query schema4 or schema5 with independent endpoint inventory"
@@ -646,6 +677,78 @@ fn collect_clock_bindings(
     query.execution_clock = clock;
     // Standalone collection has no validated reciprocal pool authority. Never
     // upgrade alignment based on a one-sided descriptor.
+    query.reconcile_clock_alignment(&BTreeMap::new());
+    Ok(query)
+}
+
+fn collect_dispatch_bindings(
+    bytes: &[u8],
+    policy: CapturePolicy,
+    cache_call_provenance: bool,
+) -> Result<CollectedQuery> {
+    let r: ReceiptV6 = serde_json::from_slice(bytes).context("invalid dispatch-result receipt")?;
+    if r.schema != 6 {
+        bail!("unsupported dispatch-result receipt schema");
+    }
+    // Bound derived endpoint maps before constructing them. Root admission,
+    // context and wait budgets remain independent of the read/point policy.
+    if r.contexts.len() > MAX_CONTEXTS || r.events.len() > MAX_EVENTS {
+        bail!("dispatch-result admission inventory exceeds budget");
+    }
+    let admitted = r
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Admitted {
+                context_id, job_id, ..
+            } => Some((*context_id, *job_id)),
+            _ => None,
+        })
+        .collect();
+    let context_high_water = r
+        .contexts
+        .iter()
+        .map(|context| (context.context_id, context.allocator_high_water))
+        .collect();
+    let (reads, mut dispatch) = r.query_reads.into_base_and_assess(
+        &admitted,
+        r.expected_contexts,
+        &context_high_water,
+        policy.max_points,
+    )?;
+    let clock = r.execution_clock;
+    // Only typed moves follow the complete original-byte schema6/read2 parse.
+    // The explicit read2 projection preserves every row and its stream ordinal.
+    let base = ReceiptV4 {
+        schema: 4,
+        producer: r.producer,
+        scope: r.scope,
+        capture_id: r.capture_id,
+        full_pipeline_complete: r.full_pipeline_complete,
+        cpu_work_ns: r.cpu_work_ns,
+        execution_span_ns: r.execution_span_ns,
+        interface_outcome: r.interface_outcome,
+        capture_complete: r.capture_complete,
+        lost_events: r.lost_events,
+        opaque_boundaries: r.opaque_boundaries,
+        expected_contexts: r.expected_contexts,
+        contexts: r.contexts,
+        events: r.events,
+        wait_allocator_baseline: r.wait_allocator_baseline,
+        wait_allocator_high_water: r.wait_allocator_high_water,
+        expected_waits: r.expected_waits,
+        wait_capture_complete: r.wait_capture_complete,
+        wait_events: r.wait_events,
+        query_reads: reads,
+        task_bindings: r.task_bindings,
+    };
+    let mut query = collect_bindings_base(base, bytes, policy, cache_call_provenance)?;
+    if !query.assessment.structural_complete {
+        dispatch.suppress_incomplete_admission_authority();
+    }
+    query.assessment.schema = 6;
+    query.assessment.dispatch_result_provenance = Some(dispatch);
+    query.execution_clock = clock;
     query.reconcile_clock_alignment(&BTreeMap::new());
     Ok(query)
 }
@@ -1028,6 +1131,7 @@ fn assess_admissions_policy(r: Receipt, large_inventory: bool) -> Result<QueryAs
         waits: None,
         query_reads: None,
         cache_call_provenance: None,
+        dispatch_result_provenance: None,
         issues: issues.into_iter().collect(),
         opaque_boundaries: r.opaque_boundaries,
         cpu_work_ns: None,
@@ -2078,6 +2182,234 @@ pub(crate) mod tests {
                 true
             )
             .is_err()
+        );
+    }
+
+    pub(crate) fn dispatch_fixture() -> Value {
+        let mut v = task_binding_fixture();
+        v["schema"] = json!(6);
+        v["execution_clock"] = Value::Null;
+        v["query_reads"]["schema"] = json!(2);
+        for event in v["query_reads"]["events"].as_array_mut().unwrap() {
+            event["resolution"] = Value::Null;
+        }
+        v["query_reads"]["events"][3]["resolution"] =
+            json!({"source":"resolved_dispatch", "dep_node_index":42});
+        v
+    }
+
+    fn dispatch_assess(v: &Value, cache: bool) -> QueryAssessment {
+        collect_bytes_with_dispatch_analysis(
+            &serde_json::to_vec(v).unwrap(),
+            CapturePolicy::strict(),
+            cache,
+        )
+        .unwrap()
+        .assessment
+    }
+
+    #[test]
+    fn dispatch_result_provenance_version_matrix_and_legacy_metrics_are_strict() {
+        let v = dispatch_fixture();
+        let bytes = serde_json::to_vec(&v).unwrap();
+        assert!(collect_bytes(&bytes).is_err());
+        assert!(collect_bytes_with_analysis(&bytes, CapturePolicy::large(), true).is_err());
+        let mut legacy = task_binding_fixture();
+        legacy["schema"] = json!(5);
+        legacy["execution_clock"] = Value::Null;
+        for cache in [false, true] {
+            let old = collect_bytes_with_analysis(
+                &serde_json::to_vec(&legacy).unwrap(),
+                CapturePolicy::strict(),
+                cache,
+            )
+            .unwrap()
+            .assessment;
+            let mut result = serde_json::to_value(dispatch_assess(&v, cache)).unwrap();
+            let dispatch = result
+                .as_object_mut()
+                .unwrap()
+                .remove("dispatch_result_provenance")
+                .unwrap();
+            assert_eq!(dispatch["resolved_requests"], 1);
+            assert_eq!(dispatch["relations"][0]["publication_event_index"], 1);
+            assert_eq!(dispatch["relations"][0]["request_terminal_event_index"], 3);
+            assert!(
+                dispatch["relations"][0]
+                    .get("cache_hit_event_index")
+                    .is_none()
+            );
+            result["schema"] = json!(5);
+            assert_eq!(result, serde_json::to_value(old).unwrap());
+            if cache {
+                assert_eq!(result["cache_call_provenance"]["resolved_requests"], 0);
+            } else {
+                assert!(result.get("cache_call_provenance").is_none());
+            }
+            assert_eq!(result["cpu_work_ns"], Value::Null);
+            assert_eq!(result["execution_span_ns"], Value::Null);
+        }
+        for root in [4, 5, 6] {
+            for reads in [1, 2] {
+                let mut wire = v.clone();
+                wire["schema"] = json!(root);
+                wire["query_reads"]["schema"] = json!(reads);
+                if reads == 1 {
+                    for e in wire["query_reads"]["events"].as_array_mut().unwrap() {
+                        e.as_object_mut().unwrap().remove("resolution");
+                    }
+                }
+                if root == 4 {
+                    wire.as_object_mut().unwrap().remove("execution_clock");
+                }
+                let bytes = serde_json::to_vec(&wire).unwrap();
+                assert_eq!(collect_bytes(&bytes).is_ok(), root != 6 && reads == 1);
+                assert_eq!(
+                    collect_bytes_with_dispatch_analysis(&bytes, CapturePolicy::strict(), false)
+                        .is_ok(),
+                    root == 6 && reads == 2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dispatch_result_provenance_preserves_original_byte_and_policy_gates() {
+        let v = dispatch_fixture();
+        let text = serde_json::to_string(&v).unwrap();
+        for duplicate in [
+            text.replacen("\"schema\":6", "\"schema\":6,\"schema\":6", 1),
+            text.replacen(
+                "\"resolution\":null",
+                "\"resolution\":null,\"resolution\":null",
+                1,
+            ),
+            text.replacen(
+                "\"source\":\"resolved_dispatch\"",
+                "\"source\":\"resolved_dispatch\",\"source\":\"resolved_dispatch\"",
+                1,
+            ),
+        ] {
+            assert_ne!(duplicate, text);
+            assert!(
+                collect_bytes_with_dispatch_analysis(
+                    duplicate.as_bytes(),
+                    CapturePolicy::large(),
+                    false
+                )
+                .is_err()
+            );
+        }
+        for missing in ["execution_clock", "resolution", "dep_node_index"] {
+            let mut wire = v.clone();
+            match missing {
+                "execution_clock" => {
+                    wire.as_object_mut().unwrap().remove("execution_clock");
+                }
+                "resolution" => {
+                    wire["query_reads"]["events"][3]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("resolution");
+                }
+                _ => {
+                    wire["query_reads"]["events"][3]["resolution"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("dep_node_index");
+                }
+            }
+            assert!(
+                collect_bytes_with_dispatch_analysis(
+                    &serde_json::to_vec(&wire).unwrap(),
+                    CapturePolicy::strict(),
+                    false
+                )
+                .is_err()
+            );
+        }
+        for policy in [
+            CapturePolicy {
+                max_bytes: text.len() - 1,
+                max_points: 7,
+            },
+            CapturePolicy {
+                max_bytes: text.len(),
+                max_points: 3,
+            },
+            CapturePolicy {
+                max_bytes: text.len(),
+                max_points: 1_000_001,
+            },
+        ] {
+            assert!(collect_bytes_with_dispatch_analysis(text.as_bytes(), policy, false).is_err());
+        }
+        assert!(
+            collect_bytes_with_dispatch_analysis(
+                text.as_bytes(),
+                CapturePolicy {
+                    max_bytes: text.len(),
+                    max_points: 7
+                },
+                true
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn dispatch_result_provenance_loss_namespace_and_clock_authority_stay_separate() {
+        let mut v = dispatch_fixture();
+        v["query_reads"]["events"][3]["resolution"]["dep_node_index"] = Value::Null;
+        let calls = dispatch_assess(&v, false)
+            .dispatch_result_provenance
+            .unwrap();
+        let calls = serde_json::to_value(calls).unwrap();
+        assert_eq!(calls["resolved_requests"], 0);
+        assert_eq!(calls["unresolved_reasons"]["null_dep_node_index"], 1);
+        for source_loss in [false, true] {
+            let mut v = dispatch_fixture();
+            if source_loss {
+                v["query_reads"]["records_complete"] = json!(false);
+                v["query_reads"]["lost_events"] = json!(1);
+            } else {
+                v["capture_complete"] = json!(false);
+                v["lost_events"] = json!(1);
+            }
+            let result = dispatch_assess(&v, true);
+            assert!(!result.structural_complete);
+            let calls = serde_json::to_value(result.dispatch_result_provenance.unwrap()).unwrap();
+            assert_eq!(calls["resolved_requests"], 0);
+            assert_eq!(calls["relations"], json!([]));
+            let reason = if source_loss {
+                "capture_incomplete"
+            } else {
+                "admission_authority_incomplete"
+            };
+            assert_eq!(calls["unresolved_reasons"][reason], 1);
+        }
+        let mut v = dispatch_fixture();
+        v["execution_clock"] = clock_fixture()["execution_clock"].clone();
+        let pools = clock_pools(&v);
+        let mut query = collect_bytes_with_dispatch_analysis(
+            &serde_json::to_vec(&v).unwrap(),
+            CapturePolicy::strict(),
+            false,
+        )
+        .unwrap();
+        query.assessment.task_bindings =
+            Some(crate::execution_graph_task_bindings::reconcile_bindings(
+                &query.assessment.capture_id,
+                query.bindings.as_ref().unwrap(),
+                &pools,
+            ));
+        query.reconcile_clock_alignment(&pools);
+        assert!(query.assessment.clock_alignment.as_ref().unwrap().aligned);
+        query.reconcile_clock_alignment(&BTreeMap::new());
+        assert!(!query.assessment.clock_alignment.as_ref().unwrap().aligned);
+        assert_eq!(
+            serde_json::to_value(query.assessment.dispatch_result_provenance.unwrap()).unwrap()["resolved_requests"],
+            1
         );
     }
 

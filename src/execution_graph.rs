@@ -82,6 +82,8 @@ struct Assessment {
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_call_provenance: Option<crate::execution_graph_reads::CacheCallAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    dispatch_result_provenance: Option<crate::execution_graph_reads::DispatchResultAssessment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     observed_cpu: Option<crate::execution_graph_timing::ObservedCpuAssessment>,
@@ -304,6 +306,7 @@ fn assess(r: Receipt) -> Result<Assessment> {
         waits: None,
         query_reads: None,
         cache_call_provenance: None,
+        dispatch_result_provenance: None,
         task_bindings: None,
         resource: None,
         resource_attachments: None,
@@ -401,11 +404,29 @@ fn collect_query_with_analysis(
     policy: crate::execution_graph_query::CapturePolicy,
     cache_call_provenance: bool,
 ) -> Result<crate::execution_graph_query::QueryAssessment> {
-    let mut query = crate::execution_graph_query::collect_bytes_with_analysis(
-        bytes,
-        policy,
-        cache_call_provenance,
-    )?;
+    collect_query_with_options(bytes, pools, policy, cache_call_provenance, false)
+}
+
+fn collect_query_with_options(
+    bytes: &[u8],
+    pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+    policy: crate::execution_graph_query::CapturePolicy,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+) -> Result<crate::execution_graph_query::QueryAssessment> {
+    let mut query = if dispatch_result_provenance {
+        crate::execution_graph_query::collect_bytes_with_dispatch_analysis(
+            bytes,
+            policy,
+            cache_call_provenance,
+        )?
+    } else {
+        crate::execution_graph_query::collect_bytes_with_analysis(
+            bytes,
+            policy,
+            cache_call_provenance,
+        )?
+    };
     if let Some(bindings) = &query.bindings {
         query.assessment.task_bindings =
             Some(crate::execution_graph_task_bindings::reconcile_bindings(
@@ -443,6 +464,16 @@ fn assess_receipt_bytes_with_analysis(
     policy: crate::execution_graph_query::CapturePolicy,
     cache_call_provenance: bool,
 ) -> Result<Assessment> {
+    assess_receipt_bytes_with_options(bytes, pools, policy, cache_call_provenance, false)
+}
+
+fn assess_receipt_bytes_with_options(
+    bytes: &[u8],
+    pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+    policy: crate::execution_graph_query::CapturePolicy,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+) -> Result<Assessment> {
     if let Some(producer) = resource_producer(bytes)? {
         return assess_resource_document(bytes, &producer);
     }
@@ -471,6 +502,7 @@ fn assess_receipt_bytes_with_analysis(
                 waits: None,
                 query_reads: None,
                 cache_call_provenance: None,
+                dispatch_result_provenance: None,
                 task_bindings: None,
                 resource: None,
                 resource_attachments: None,
@@ -483,7 +515,13 @@ fn assess_receipt_bytes_with_analysis(
             })
         }
         "rustc-query-admission" => {
-            let query = collect_query_with_analysis(bytes, pools, policy, cache_call_provenance)?;
+            let query = collect_query_with_options(
+                bytes,
+                pools,
+                policy,
+                cache_call_provenance,
+                dispatch_result_provenance,
+            )?;
             Ok(Assessment {
                 schema: query.schema,
                 producer: query.producer,
@@ -499,6 +537,7 @@ fn assess_receipt_bytes_with_analysis(
                 waits: query.waits,
                 query_reads: query.query_reads,
                 cache_call_provenance: query.cache_call_provenance,
+                dispatch_result_provenance: query.dispatch_result_provenance,
                 task_bindings: query.task_bindings,
                 resource: None,
                 resource_attachments: None,
@@ -527,6 +566,7 @@ fn assess_receipt_bytes_with_analysis(
                 waits: None,
                 query_reads: None,
                 cache_call_provenance: None,
+                dispatch_result_provenance: None,
                 task_bindings: None,
                 resource: None,
                 resource_attachments: None,
@@ -619,6 +659,7 @@ fn assess_resource_document(bytes: &[u8], producer: &str) -> Result<Assessment> 
         waits: None,
         query_reads: None,
         cache_call_provenance: None,
+        dispatch_result_provenance: None,
         task_bindings: None,
         resource: Some(resource),
         resource_attachments: None,
@@ -973,6 +1014,27 @@ pub(crate) fn command_with_analysis(
     large_capture: bool,
     cache_call_provenance: bool,
 ) -> Result<()> {
+    command_with_options(
+        path,
+        json,
+        manifest,
+        large_capture,
+        cache_call_provenance,
+        false,
+    )
+}
+
+pub(crate) fn command_with_options(
+    path: &Path,
+    json: bool,
+    manifest: Option<&Path>,
+    large_capture: bool,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+) -> Result<()> {
+    if dispatch_result_provenance && manifest.is_some() {
+        bail!("--dispatch-result-provenance is not supported with --manifest");
+    }
     if cache_call_provenance && manifest.is_some() {
         bail!("--cache-call-provenance is not supported with --manifest");
     }
@@ -987,7 +1049,12 @@ pub(crate) fn command_with_analysis(
     } else {
         crate::execution_graph_query::CapturePolicy::strict()
     };
-    let assessments = collect_path_with_analysis(path, policy, cache_call_provenance)?;
+    let assessments = collect_path_with_options(
+        path,
+        policy,
+        cache_call_provenance,
+        dispatch_result_provenance,
+    )?;
     render_assessments(assessments, json)
 }
 
@@ -1004,10 +1071,20 @@ fn collect_path_with_policy(
     collect_path_with_analysis(path, policy, false)
 }
 
+#[cfg(test)]
 fn collect_path_with_analysis(
     path: &Path,
     policy: crate::execution_graph_query::CapturePolicy,
     cache_call_provenance: bool,
+) -> Result<Vec<Assessment>> {
+    collect_path_with_options(path, policy, cache_call_provenance, false)
+}
+
+fn collect_path_with_options(
+    path: &Path,
+    policy: crate::execution_graph_query::CapturePolicy,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
 ) -> Result<Vec<Assessment>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
@@ -1078,8 +1155,13 @@ fn collect_path_with_analysis(
         )?;
     let pools = collect_pool_inventories(&documents)?;
     for bytes in &documents {
-        let mut assessment =
-            assess_receipt_bytes_with_analysis(bytes, &pools, policy, cache_call_provenance)?;
+        let mut assessment = assess_receipt_bytes_with_options(
+            bytes,
+            &pools,
+            policy,
+            cache_call_provenance,
+            dispatch_result_provenance,
+        )?;
         if let Some(&previous) = identities.get(&assessment.capture_id) {
             let previous: &mut Assessment = &mut assessments[previous];
             poison_duplicate_capture(previous);
@@ -1100,6 +1182,9 @@ fn poison_duplicate_capture(assessment: &mut Assessment) {
     assessment.issues.push("duplicate capture identity".into());
     if let Some(calls) = &mut assessment.cache_call_provenance {
         calls.suppress_incomplete_admission_authority();
+    }
+    if let Some(dispatch) = &mut assessment.dispatch_result_provenance {
+        dispatch.suppress_incomplete_admission_authority();
     }
     if let Some(resource) = &mut assessment.resource {
         resource["capture_authority_valid"] = serde_json::json!(false);
@@ -1156,6 +1241,14 @@ fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
                 println!(
                     "  cache-call provenance: {} resolved of {} requests, {} unresolved (availability only, not an execution DAG)",
                     calls.resolved_requests, calls.observed_requests, calls.unresolved_requests
+                );
+            }
+            if let Some(dispatch) = &a.dispatch_result_provenance {
+                println!(
+                    "  dispatch-result provenance: {} resolved of {} requests, {} unresolved (availability only, not an execution DAG)",
+                    dispatch.resolved_requests,
+                    dispatch.observed_requests,
+                    dispatch.unresolved_requests
                 );
             }
             if let Some(bindings) = &a.task_bindings {
@@ -1267,6 +1360,119 @@ mod tests {
             )
             .is_err()
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn dispatch_result_provenance_path_is_explicit_and_duplicate_safe() {
+        use crate::execution_graph_query::{CapturePolicy, tests::dispatch_fixture};
+        let directory = resource_test_directory("dispatch-result-provenance");
+        let file = directory.join("a.json");
+        let bytes = serde_json::to_vec(&dispatch_fixture()).unwrap();
+        std::fs::write(&file, &bytes).unwrap();
+        assert!(collect_path(&file).is_err());
+        assert!(collect_path_with_analysis(&file, CapturePolicy::large(), true).is_err());
+        assert!(collect_query(&bytes, &BTreeMap::new()).is_err());
+        for policy in [CapturePolicy::strict(), CapturePolicy::large()] {
+            for cache in [false, true] {
+                let result = collect_path_with_options(&file, policy, cache, true).unwrap();
+                let a = &result[0];
+                assert_eq!(a.schema, 6);
+                assert!(a.structural_complete);
+                assert_eq!(a.cache_call_provenance.is_some(), cache);
+                assert_eq!(
+                    serde_json::to_value(a).unwrap()["dispatch_result_provenance"]["resolved_requests"],
+                    1
+                );
+                assert!(!a.clock_alignment.as_ref().unwrap().aligned);
+                assert_eq!(a.cpu_work_ns, None);
+                assert_eq!(a.execution_span_ns, None);
+            }
+        }
+        assert!(command_with_options(&file, true, Some(&file), false, false, true).is_err());
+        assert!(
+            collect_path_with_options(
+                &file,
+                CapturePolicy {
+                    max_bytes: bytes.len() - 1,
+                    max_points: 7
+                },
+                false,
+                true
+            )
+            .is_err()
+        );
+        std::fs::write(directory.join("b.json"), &bytes).unwrap();
+        let duplicates =
+            collect_path_with_options(&directory, CapturePolicy::strict(), true, true).unwrap();
+        assert_eq!(duplicates.len(), 2);
+        for a in duplicates {
+            assert!(!a.structural_complete);
+            let dispatch = serde_json::to_value(a.dispatch_result_provenance.unwrap()).unwrap();
+            assert_eq!(dispatch["resolved_requests"], 0);
+            assert_eq!(dispatch["relations"], json!([]));
+            assert_eq!(
+                dispatch["unresolved_reasons"]["admission_authority_incomplete"],
+                1
+            );
+        }
+        assert!(
+            collect_path_with_options(
+                &directory,
+                CapturePolicy {
+                    max_bytes: bytes.len(),
+                    max_points: 7
+                },
+                false,
+                true
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn dispatch_result_provenance_graph_does_not_promote_resource_authority() {
+        use crate::execution_graph_query::{CapturePolicy, tests::dispatch_fixture};
+        let mut documents = crate::execution_graph_resource_attachment::tests::documents();
+        let baseline = documents
+            .iter()
+            .map(|v| serde_json::to_vec(v).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            crate::execution_graph_resource_attachment::collect_documents(&baseline, None)
+                .unwrap()
+                .state,
+            "validated"
+        );
+        let query_id = documents[0]["capture_id"].clone();
+        documents[0] = dispatch_fixture();
+        documents[0]["capture_id"] = query_id;
+        let directory = resource_test_directory("dispatch-resource-nonpromotion");
+        for (i, document) in documents.iter().enumerate() {
+            write_json(&directory, &format!("{i}.json"), document);
+        }
+        let assessments =
+            collect_path_with_options(&directory, CapturePolicy::strict(), true, true).unwrap();
+        let query = assessments.iter().find(|a| a.schema == 6).unwrap();
+        assert!(query.structural_complete);
+        assert!(query.task_bindings.as_ref().unwrap().graph_binding_valid);
+        assert_eq!(
+            serde_json::to_value(query).unwrap()["dispatch_result_provenance"]["resolved_requests"],
+            1
+        );
+        let resources = assessments[0].resource_attachments.as_ref().unwrap();
+        assert_ne!(resources.state, "validated");
+        assert_eq!(resources.attachments.len(), 1);
+        assert!(resources.attachments.iter().all(|a| {
+            !a.context_links_valid
+                && !a.context_links_complete
+                && a.cross_wait_edges.is_empty()
+                && a.issues
+                    .iter()
+                    .any(|s| s == "missing reciprocal query4/pool2 authority")
+        }));
+        assert!(!resources.full_pipeline_complete && !resources.resource_full_complete);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -219,6 +219,9 @@ enum Command {
         /// Derive bounded first-cache call provenance, not an execution dependency graph.
         #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
         cache_call_provenance: bool,
+        /// Validate explicit nonincremental dispatch-result availability, not execution DAG edges.
+        #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
+        dispatch_result_provenance: bool,
         #[arg(long)]
         json: bool,
     },
@@ -780,17 +783,19 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             compiler_manifest,
             large_capture,
             cache_call_provenance,
+            dispatch_result_provenance,
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
                 execution_graph_compiler_cli::command(&path, &manifest, json)?;
             } else {
-                execution_graph::command_with_analysis(
+                execution_graph::command_with_options(
                     &path,
                     json,
                     manifest.as_deref(),
                     large_capture,
                     cache_call_provenance,
+                    dispatch_result_provenance,
                 )?;
             }
         }
@@ -991,6 +996,44 @@ mod passthrough_tests {
                     "graph",
                     "captures",
                     "--cache-call-provenance",
+                    manifest,
+                    "owner.json",
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn graph_dispatch_result_provenance_is_explicit_and_manifest_exclusive() {
+        for (extra, enabled, cache, large) in [
+            (vec![], false, false, false),
+            (vec!["--dispatch-result-provenance"], true, false, false),
+            (
+                vec![
+                    "--dispatch-result-provenance",
+                    "--cache-call-provenance",
+                    "--large-capture",
+                ],
+                true,
+                true,
+                true,
+            ),
+        ] {
+            let mut args = vec!["justrust", "graph", "captures"];
+            args.extend(extra);
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.command, Command::Graph {
+                dispatch_result_provenance, cache_call_provenance, large_capture, ..
+            } if dispatch_result_provenance == enabled && cache_call_provenance == cache && large_capture == large));
+        }
+        for manifest in ["--manifest", "--compiler-manifest"] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--dispatch-result-provenance",
                     manifest,
                     "owner.json",
                 ])
