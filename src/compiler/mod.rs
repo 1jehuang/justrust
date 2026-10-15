@@ -11,9 +11,11 @@ const BODY: u32 = 102;
 const OBJECT: u32 = 103;
 const CHECK: u32 = 104;
 const BUILD: u32 = 105;
+const RESOLVE: u32 = 106;
 
 struct Snapshot {
     source: String,
+    parsed: OnceLock<frontend::ParsedProgram>,
     program: OnceLock<frontend::Program>,
     signatures: OnceLock<frontend::Signatures>,
     objects: OnceLock<Vec<OnceLock<backend::Object>>>,
@@ -44,8 +46,8 @@ impl Provider for CompilerProvider {
             let function = |kind, index| Key::new(kind, vec![index as u64]);
             match key.kind {
                 PARSE => {
-                    let program = frontend::parse(&this.0.source).map_err(Error::new)?;
-                    let objects = (0..program.functions.len())
+                    let parsed = frontend::parse_unresolved(&this.0.source).map_err(Error::new)?;
+                    let objects = (0..parsed.program.functions.len())
                         .map(|_| OnceLock::new())
                         .collect();
                     this.0
@@ -53,12 +55,25 @@ impl Provider for CompilerProvider {
                         .set(objects)
                         .map_err(|_| Error::new("duplicate object arena"))?;
                     this.0
+                        .parsed
+                        .set(parsed)
+                        .map_err(|_| Error::new("duplicate parsed snapshot"))?;
+                }
+                RESOLVE => {
+                    cx.read(cx.request(root(PARSE)).get(0)).await?;
+                    let parsed = this
+                        .0
+                        .parsed
+                        .get()
+                        .ok_or_else(|| Error::new("missing parsed snapshot"))?;
+                    let program = frontend::resolve(parsed).map_err(Error::new)?;
+                    this.0
                         .program
                         .set(program)
-                        .map_err(|_| Error::new("duplicate program"))?;
+                        .map_err(|_| Error::new("duplicate resolved program"))?;
                 }
                 SIGNATURES => {
-                    cx.read(cx.request(root(PARSE)).get(0)).await?;
+                    cx.read(cx.request(root(RESOLVE)).get(0)).await?;
                     let signatures =
                         frontend::signature_table(this.program()?).map_err(Error::new)?;
                     this.0
@@ -177,6 +192,7 @@ pub fn compile_observed(
 ) -> Result<Compilation, Failure> {
     let snapshot = Arc::new(Snapshot {
         source,
+        parsed: OnceLock::new(),
         program: OnceLock::new(),
         signatures: OnceLock::new(),
         objects: OnceLock::new(),

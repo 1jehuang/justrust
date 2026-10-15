@@ -1,6 +1,8 @@
-# First native Rust compiler milestone
+# Native Rust compiler implementation
 
-Status: first executable Rust-subset implementation, 2026-10-15.
+Status: executable Rust-subset implementation with inline modules, 2026-10-15.
+The target is the entire Rust language and existing-project compatibility.
+See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
 
 This extends the synthetic runtime prototype with actual Rust source input and
 Linux x86-64 ELF executable output. Standard Rust tools build this compiler,
@@ -24,16 +26,27 @@ arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
 matching Rust debug behavior. Runtime arithmetic failure exits 101. This first
 runtime does not yet reproduce Rust panic text or unwind behavior.
 
-Not supported: crates/manifests, modules/imports, standard-library APIs beyond
-the documented print form, general macros, traits, generics, structs/enums,
-references/borrowing, strings as values, closures, async, FFI, or other targets.
+Inline modules now support nested `mod name { ... }`, ordinary `pub` visibility,
+qualified function paths (`crate`, `self`, `super` and relative paths), and simple
+module-level `use path;` / `use path as alias;` imports of modules and functions.
+Module/type and function/value namespaces remain separate. Resolution validates
+unused imports and call privacy, and canonical function names reach the native
+emitter without external compilation. The entry point currently must be a
+function declared as `main` in the root, not a function imported under that name.
+
+Not supported: crates/manifests, external module files (`mod name;`), grouped or
+glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
+standard-library APIs beyond the documented print form, general macros, traits,
+generics, structs/enums, references/borrowing, strings as values, closures, async,
+FFI, or other targets.
 This list does not turn unsupported syntax into permission to accept programs
 with incorrect semantics. Diagnostics and acceptance tests must police the
 implemented boundary. Semantic coverage must be expanded explicitly.
 
 ## Graph operations
 
-- Parse immutable source into a retained program arena.
+- Parse immutable source into a retained unresolved module/declaration arena.
+- Resolve paths, imports and visibility once, publishing canonical item identities.
 - Validate declarations and publish the callable signatures.
 - Check each function body independently against those signatures.
 - Emit each function after its own body check, without waiting for other bodies.
@@ -43,14 +56,15 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 
 Recursive calls depend on declarations, not completion of the callee body.
 All independent function prerequisites are demanded before awaiting results.
-Within one graph, concurrent check and build requests share parsing,
+Within one graph, concurrent check and build requests share parsing, resolution,
 declarations and body checks. Output facts contain typed-arena handles because
 the prototype runtime currently stores u64 slots. Arenas remain owned by the
 compilation snapshot and are not persistent cache keys.
 
-The first parser consumes the source file as one operation. Declaration
-validation and executable linking are also initially single operations. These
-are explicit implementation limitations, not architectural claims that all
+The parser consumes the source file as one operation. Name resolution,
+declaration validation and executable linking are also initially single
+operations. These are explicit implementation limitations, not architectural
+claims that all
 Rust parsing or linking must be serialized. Per-function checking/codegen is a
 starting granularity, not proof of optimal units. No cross-build cache exists.
 
@@ -71,6 +85,8 @@ Use the resulting binary on the machine holding that build artifact:
 /path/to/jr-rust examples/compiler/hello.rs -o /new/path/hello --workers 1
 /new/path/hello
 /path/to/jr-rust examples/compiler/arithmetic.rs --check --workers 8
+/path/to/jr-rust examples/compiler/modules.rs -o /new/path/modules --workers 8
+/new/path/modules
 ```
 
 The compiler prints a JSON accounting summary, not the program's output.

@@ -632,6 +632,7 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 // These operation IDs are the compiler graph schema, not fixtures.
                 let mut expected = vec![
                     Key::new(100, vec![]),
+                    Key::new(106, vec![]),
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                 ];

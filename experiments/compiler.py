@@ -24,6 +24,20 @@ def source_for(count):
     return "\n".join(functions + ["fn fail(x:i32) { let y=1/x; }", "fn main(){" + "\n".join(calls) + 'println!("compiled correctly");}'])
 
 
+def module_source_for(count):
+    """Same arithmetic bodies and checks, partitioned over inline modules."""
+    modules = min(count, 8)
+    items = []
+    for module in range(modules):
+        functions = [f"pub fn f{i}(x:i32)->i32 {{ if x < 0 {{ -x }} else {{ x + {i} }} }}"
+                     for i in range(module, count, modules)]
+        items.append(f"mod group{module} {{" + "\n".join(functions) + "}")
+        items.append(f"use crate::group{module} as m{module};")
+    calls = [f"if m{i % modules}::f{i}(2) != {i + 2} {{ fail(0); }}" for i in range(count)]
+    return "\n".join(items + ["fn fail(x:i32) { let y=1/x; }",
+                              "fn main(){" + "\n".join(calls) + 'println!("compiled correctly");}'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
@@ -32,6 +46,7 @@ def main():
     parser.add_argument("--workers", default="1,8,96")
     parser.add_argument("--repeats", default=3, type=int)
     parser.add_argument("--reference-rustc", type=Path)
+    parser.add_argument("--modules", action="store_true", help="partition functions into inline modules with aliases")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     revision = run(["git", "rev-parse", "HEAD"]).stdout.decode().strip()
@@ -51,10 +66,11 @@ def main():
                 "topology": run(["lscpu"]).stdout.decode(),
                 "measurement": "contended/uncontrolled", "repeats": args.repeats,
                 "bootstrap_rustc": run(["rustc", "-Vv"]).stdout.decode(),
-                "reference_rustc": str(args.reference_rustc) if args.reference_rustc else None})
+                "reference_rustc": str(args.reference_rustc) if args.reference_rustc else None,
+                "fixture": "inline-modules" if args.modules else "flat-functions"})
         for count in (4, 256):
             source = directory / f"functions-{count}.rs"
-            source.write_text(source_for(count))
+            source.write_text(module_source_for(count) if args.modules else source_for(count))
             if args.reference_rustc:
                 reference = directory / f"reference-{count}"
                 run([str(args.reference_rustc), "--edition=2024", "--crate-name", "reference", "-C", "overflow-checks=yes", "-o", str(reference), str(source)])
@@ -78,6 +94,7 @@ def main():
                             assert run([str(executable)]).stdout == b"compiled correctly\n"
                             execute_ns = time.perf_counter_ns() - started
                         row.update(record="sample", repeat=repeat, independent_functions=count,
+                                   inline_modules=min(count, 8) if args.modules else 0,
                                    process_wall_ns=wall, execute_process_ns=execute_ns,
                                    source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                                    reference_checked=bool(args.reference_rustc), executable_checked=mode == "build")

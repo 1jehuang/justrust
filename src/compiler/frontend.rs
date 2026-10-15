@@ -5,11 +5,43 @@
 //! Block/if expression statements conservatively require unit even with a
 //! semicolon, and while loops do not establish that a function always returns.
 //! Numeric literals are decimal i32 only. Unsupported syntax is rejected.
+//! Inline modules, public/private functions/modules, and simple module-level
+//! imports have separate module/value namespaces. External modules, restricted
+//! visibility, reexports, grouped/glob imports, and block-local items are not
+//! supported. An executable requires a declared root main, not an imported alias.
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct Program {
     pub functions: Vec<Function>,
+}
+/// Syntax-only result. Resolve this once before publishing callable signatures.
+#[derive(Clone, Debug)]
+pub struct ParsedProgram {
+    pub program: Program,
+    items: HashMap<String, Vec<Item>>,
+}
+#[derive(Clone, Debug)]
+struct Item {
+    public: bool,
+    kind: ItemKind,
+}
+#[derive(Clone, Debug)]
+enum ItemKind {
+    Module,
+    Function,
+    Import(String),
+}
+
+fn qualify(module: &str, name: &str) -> String {
+    if module.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{module}::{name}")
+    }
+}
+fn parent(path: &str) -> &str {
+    path.rsplit_once("::").map_or("", |(p, _)| p)
 }
 #[derive(Clone, Debug)]
 pub struct Function {
@@ -270,6 +302,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 && matches!(
                     (c, next),
                     ('-', '>')
+                        | (':', ':')
                         | ('=', '=')
                         | ('!', '=')
                         | ('<', '=')
@@ -287,6 +320,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | "{"
                     | "}"
                     | ":"
+                    | "::"
                     | ";"
                     | ","
                     | "->"
@@ -396,6 +430,105 @@ impl Parser {
             Err(self.error("expected i32, bool or ()"))
         }
     }
+    fn path(&mut self) -> Result<String, String> {
+        let mut parts = Vec::new();
+        if self.is("crate") || self.is("self") || self.is("super") {
+            let first = self.token().text.clone();
+            self.at += 1;
+            parts.push(first.clone());
+            if first == "super" {
+                while self.is("::")
+                    && self
+                        .tokens
+                        .get(self.at + 1)
+                        .is_some_and(|t| !t.string && t.text == "super")
+                {
+                    self.at += 2;
+                    parts.push("super".into());
+                }
+            }
+        } else {
+            parts.push(self.ident()?);
+        }
+        while self.eat("::") {
+            if self.is("*") || self.is("{") {
+                return Err(self.error("glob and grouped paths are unsupported"));
+            }
+            parts.push(self.ident()?);
+        }
+        Ok(parts.join("::"))
+    }
+    fn items(&mut self, module: &str, parsed: &mut ParsedProgram) -> Result<(), String> {
+        if self.nesting >= 128 {
+            return Err(self.error("module nesting exceeds limit 128"));
+        }
+        self.nesting += 1;
+        while !self.is("") && !self.is("}") {
+            let public = self.eat("pub");
+            if public && self.is("(") {
+                return Err(self.error("restricted pub visibility is unsupported"));
+            }
+            let (name, kind) = if self.eat("mod") {
+                let name = self.ident()?;
+                let full = qualify(module, &name);
+                if self.eat(";") {
+                    return Err(self.error("external module files are unsupported; use inline mod"));
+                }
+                self.expect("{")?;
+                // Register before parsing descendants, including empty modules.
+                self.insert_item(parsed, &full, public, ItemKind::Module)?;
+                self.items(&full, parsed)?;
+                self.expect("}")?;
+                continue;
+            } else if self.eat("use") {
+                if public {
+                    return Err(self.error("pub use reexports are unsupported"));
+                }
+                let path = self.path()?;
+                let name = if self.eat("as") {
+                    self.ident()?
+                } else {
+                    let name = path.rsplit("::").next().unwrap();
+                    if matches!(name, "crate" | "self" | "super") {
+                        return Err(self.error("module keyword imports require an explicit alias"));
+                    }
+                    name.to_owned()
+                };
+                self.expect(";")?;
+                (name, ItemKind::Import(path))
+            } else if self.is("fn") {
+                let mut function = self.function()?;
+                let name = function.name.clone();
+                function.name = qualify(module, &name);
+                parsed.program.functions.push(function);
+                (name, ItemKind::Function)
+            } else {
+                return Err(self.error("expected fn, inline mod or simple use item"));
+            };
+            self.insert_item(parsed, &qualify(module, &name), public, kind)?;
+        }
+        self.nesting -= 1;
+        Ok(())
+    }
+    fn insert_item(
+        &self,
+        parsed: &mut ParsedProgram,
+        path: &str,
+        public: bool,
+        kind: ItemKind,
+    ) -> Result<(), String> {
+        let bindings = parsed.items.entry(path.to_owned()).or_default();
+        if bindings.iter().any(|item| {
+            matches!(
+                (&item.kind, &kind),
+                (ItemKind::Module, ItemKind::Module) | (ItemKind::Function, ItemKind::Function)
+            )
+        }) {
+            return Err(self.error(&format!("duplicate item {path}")));
+        }
+        bindings.push(Item { public, kind });
+        Ok(())
+    }
     fn function(&mut self) -> Result<Function, String> {
         self.expect("fn")?;
         let name = self.ident()?;
@@ -443,6 +576,9 @@ impl Parser {
             }
             if self.eat(";") {
                 continue;
+            }
+            if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {
+                return Err(self.error("block-local items are unsupported"));
             }
             if self.eat("let") {
                 let mutable = self.eat("mut");
@@ -579,7 +715,7 @@ impl Parser {
             self.at += 1;
             Expr::Int(n)
         } else {
-            let name = self.ident()?;
+            let name = self.path()?;
             if self.eat("!") {
                 if name != "println" {
                     return Err(self.error("only println! is supported"));
@@ -607,6 +743,9 @@ impl Parser {
                 self.expect(")")?;
                 Expr::Call { name, args }
             } else {
+                if name.contains("::") || matches!(name.as_str(), "crate" | "self" | "super") {
+                    return Err(self.error("qualified paths are supported only as function calls"));
+                }
                 Expr::Var(name)
             }
         };
@@ -663,21 +802,297 @@ fn literal_format(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Parse the supported syntax without performing semantic body checks.
-pub fn parse(source: &str) -> Result<Program, String> {
+/// Parse syntax only, retaining imports and visibility for the signatures phase.
+pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
     let mut parser = Parser {
         tokens: lex(source)?,
         at: 0,
         nesting: 0,
     };
-    let mut functions = Vec::new();
-    while !parser.is("") {
-        functions.push(parser.function()?);
+    let mut parsed = ParsedProgram {
+        program: Program {
+            functions: Vec::new(),
+        },
+        items: HashMap::new(),
+    };
+    parser.items("", &mut parsed)?;
+    if !parser.is("") {
+        return Err(parser.error("unexpected module closing brace"));
     }
-    let program = Program { functions };
-    for function in &program.functions {
+    for function in &parsed.program.functions {
         validate_depth(DepthNode::Block(&function.body))
             .map_err(|e| format!("1:1: in function {}: {e}", function.name))?;
+    }
+    Ok(parsed)
+}
+/// Convenience frontend for callers without separate parse/signatures phases.
+/// Performs name resolution, but not function body type checks.
+pub fn parse(source: &str) -> Result<Program, String> {
+    resolve(&parse_unresolved(source)?)
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedItem {
+    path: String,
+    module: bool,
+}
+struct Resolver<'a> {
+    items: &'a HashMap<String, Vec<Item>>,
+    imports: HashMap<(String, usize, bool), Option<ResolvedItem>>,
+    active: std::collections::HashSet<(String, usize, bool)>,
+}
+impl Resolver<'_> {
+    fn item(
+        &mut self,
+        path: &str,
+        requester: &str,
+        module: bool,
+        visible_only: bool,
+    ) -> Result<Option<ResolvedItem>, String> {
+        let Some(bindings) = self.items.get(path) else {
+            return Ok(None);
+        };
+        let owner = parent(path);
+        let descendant = owner.is_empty()
+            || requester == owner
+            || requester
+                .strip_prefix(owner)
+                .is_some_and(|s| s.starts_with("::"));
+        let mut result = None;
+        for (index, item) in bindings.iter().enumerate() {
+            let resolved = match &item.kind {
+                ItemKind::Module if module => Some(ResolvedItem {
+                    path: path.into(),
+                    module: true,
+                }),
+                ItemKind::Function if !module => Some(ResolvedItem {
+                    path: path.into(),
+                    module: false,
+                }),
+                ItemKind::Import(_) => self.import(path, index, module)?,
+                _ => None,
+            };
+            if let Some(resolved) = resolved {
+                if !item.public && !descendant {
+                    if visible_only {
+                        continue;
+                    }
+                    return Err(format!(
+                        "private item {path} is inaccessible from module {requester}"
+                    ));
+                }
+                if result.replace(resolved).is_some() {
+                    return Err(format!(
+                        "duplicate item {path} in {} namespace",
+                        if module { "module" } else { "function" }
+                    ));
+                }
+            }
+        }
+        Ok(result)
+    }
+    fn import(
+        &mut self,
+        path: &str,
+        index: usize,
+        module: bool,
+    ) -> Result<Option<ResolvedItem>, String> {
+        let key = (path.to_owned(), index, module);
+        if let Some(resolved) = self.imports.get(&key) {
+            return Ok(resolved.clone());
+        }
+        if self.active.len() >= 128 {
+            return Err("import resolution nesting exceeds limit 128".into());
+        }
+        if !self.active.insert(key.clone()) {
+            // This import may bind only the other namespace. Treat an active
+            // edge as absent until its concrete namespace is established. A
+            // cycle without a concrete item remains unresolved and is rejected.
+            return Ok(None);
+        }
+        let ItemKind::Import(target) = &self.items[path][index].kind else {
+            unreachable!()
+        };
+        let resolved = self.path(&target.clone(), parent(path), module, true)?;
+        self.active.remove(&key);
+        self.imports.insert(key, resolved.clone());
+        Ok(resolved)
+    }
+    fn path(
+        &mut self,
+        path: &str,
+        from: &str,
+        module: bool,
+        importing: bool,
+    ) -> Result<Option<ResolvedItem>, String> {
+        let parts: Vec<_> = path.split("::").collect();
+        let mut at = 0;
+        let mut current = match parts[0] {
+            "crate" => {
+                at = 1;
+                ResolvedItem {
+                    path: String::new(),
+                    module: true,
+                }
+            }
+            "self" => {
+                at = 1;
+                ResolvedItem {
+                    path: from.into(),
+                    module: true,
+                }
+            }
+            "super" => {
+                let mut module = from;
+                while parts.get(at) == Some(&"super") {
+                    if module.is_empty() {
+                        return Err(format!("super path {path} escapes crate root"));
+                    }
+                    module = parent(module);
+                    at += 1;
+                }
+                ResolvedItem {
+                    path: module.into(),
+                    module: true,
+                }
+            }
+            name => {
+                at += 1;
+                let Some(item) = self.item(
+                    &qualify(from, name),
+                    from,
+                    if parts.len() == 1 { module } else { true },
+                    importing && parts.len() == 1,
+                )?
+                else {
+                    return Ok(None);
+                };
+                item
+            }
+        };
+        while let Some(name) = parts.get(at) {
+            if !current.module {
+                return Err(format!("{} is not a module in path {path}", current.path));
+            }
+            let Some(item) = self.item(
+                &qualify(&current.path, name),
+                from,
+                if at + 1 == parts.len() { module } else { true },
+                importing && at + 1 == parts.len(),
+            )?
+            else {
+                return Ok(None);
+            };
+            current = item;
+            at += 1;
+        }
+        Ok((current.module == module).then_some(current))
+    }
+    fn block(
+        &mut self,
+        block: &mut Block,
+        module: &str,
+        locals: &mut Vec<std::collections::HashSet<String>>,
+    ) -> Result<(), String> {
+        locals.push(std::collections::HashSet::new());
+        for stmt in &mut block.statements {
+            match stmt {
+                Stmt::Let { name, value, .. } => {
+                    self.expr(value, module, locals)?;
+                    locals.last_mut().unwrap().insert(name.clone());
+                }
+                Stmt::Assign { value, .. } | Stmt::Expr(value) | Stmt::Return(Some(value)) => {
+                    self.expr(value, module, locals)?;
+                }
+                Stmt::While { condition, body } => {
+                    self.expr(condition, module, locals)?;
+                    self.block(body, module, locals)?;
+                }
+                Stmt::Return(None) => {}
+            }
+        }
+        if let Some(tail) = &mut block.tail {
+            self.expr(tail, module, locals)?;
+        }
+        locals.pop();
+        Ok(())
+    }
+    fn expr(
+        &mut self,
+        expr: &mut Expr,
+        module: &str,
+        locals: &mut Vec<std::collections::HashSet<String>>,
+    ) -> Result<(), String> {
+        match expr {
+            Expr::Call { name, args } => {
+                // Check the source spelling, not its eventual canonical name:
+                // `let f=1; crate::f()` must not be shadowed by the local f.
+                if !name.contains("::") && locals.iter().rev().any(|s| s.contains(name)) {
+                    return Err(format!("local {name} is not callable"));
+                }
+                let resolved = self
+                    .path(name, module, false, false)?
+                    .ok_or_else(|| format!("unresolved function {name}"))?;
+                *name = resolved.path;
+                for arg in args {
+                    self.expr(arg, module, locals)?;
+                }
+            }
+            Expr::Unary { value, .. } => self.expr(value, module, locals)?,
+            Expr::Binary { left, right, .. } => {
+                self.expr(left, module, locals)?;
+                self.expr(right, module, locals)?;
+            }
+            Expr::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.expr(condition, module, locals)?;
+                self.block(then_block, module, locals)?;
+                self.block(else_block, module, locals)?;
+            }
+            Expr::Block(block) => self.block(block, module, locals)?,
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Resolve imports, visibility and all call paths once in the name-resolution
+/// graph operation, before publishing signatures.
+/// The result is backend-ready: flattened canonical function names, with root
+/// `main` unchanged. Public AST construction remains supported as resolved IR.
+/// Unqualified names belong to the current module only, not parent modules.
+pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
+    let mut resolver = Resolver {
+        items: &parsed.items,
+        imports: HashMap::new(),
+        active: std::collections::HashSet::new(),
+    };
+    // Validate unused imports too, deterministically, including cycles/privacy.
+    let mut paths: Vec<_> = parsed.items.keys().cloned().collect();
+    paths.sort();
+    for path in paths {
+        for (index, item) in parsed.items[&path].iter().enumerate() {
+            if matches!(item.kind, ItemKind::Import(_)) {
+                let m = resolver.import(&path, index, true)?;
+                let f = resolver.import(&path, index, false)?;
+                if m.is_none() && f.is_none() {
+                    return Err(format!("unresolved or cyclic import {path}"));
+                }
+            }
+        }
+        resolver.item(&path, parent(&path), true, false)?;
+        resolver.item(&path, parent(&path), false, false)?;
+    }
+    let mut program = parsed.program.clone();
+    for function in &mut program.functions {
+        validate_depth(DepthNode::Block(&function.body))?;
+        let mut locals = vec![function.params.iter().map(|(n, _)| n.clone()).collect()];
+        resolver
+            .block(&mut function.body, parent(&function.name), &mut locals)
+            .map_err(|e| format!("in function {}: {e}", function.name))?;
     }
     Ok(program)
 }
@@ -902,9 +1317,7 @@ impl<'a> Checker<'a> {
                 }
             }
             Expr::Call { name, args } => {
-                if self.scopes.iter().rev().any(|s| s.contains_key(name)) {
-                    return Err(format!("local {name} is not callable"));
-                }
+                // Source-level shadowing is checked before canonicalization.
                 let (params, result) = self
                     .signatures
                     .get(name)
@@ -1000,6 +1413,122 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn module_paths_are_canonical_and_main_stays_root() {
+        let p = parse(
+            "mod a { fn hidden()->i32{1} pub mod b { pub fn run()->i32 {super::hidden()+super::super::root()} } pub fn run()->i32{self::b::run()} } fn root()->i32{2} fn main(){let x=crate::a::run(); let y=a::b::run();}",
+        ).unwrap();
+        check(&p).unwrap();
+        let names: Vec<_> = p.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["a::hidden", "a::b::run", "a::run", "root", "main"]);
+        let Expr::Binary { left, right, .. } = p.functions[1].body.tail.as_deref().unwrap() else {
+            panic!()
+        };
+        assert!(matches!(left.as_ref(), Expr::Call { name, .. } if name == "a::hidden"));
+        assert!(matches!(right.as_ref(), Expr::Call { name, .. } if name == "root"));
+    }
+    #[test]
+    fn syntax_and_resolution_are_separate() {
+        let parsed = parse_unresolved("use crate::missing as alias; fn main(){nope();}").unwrap();
+        assert_eq!(parsed.program.functions[0].name, "main");
+        assert!(resolve(&parsed).unwrap_err().contains("unresolved"));
+        let parsed = parse_unresolved("mod a{fn f(){}} fn main(){a::f();}").unwrap();
+        assert!(resolve(&parsed).unwrap_err().contains("private"));
+        // Body type errors remain independent of declaration/name preparation.
+        let parsed = parse_unresolved("fn bad()->i32{true} fn main(){}").unwrap();
+        let p = resolve(&parsed).unwrap();
+        let signatures = signature_table(&p).unwrap();
+        assert!(check_function_with_signatures(&p, 0, &signatures).is_err());
+        check_function_with_signatures(&p, 1, &signatures).unwrap();
+    }
+    #[test]
+    fn forward_function_and_module_aliases() {
+        good(
+            "use next as renamed; use crate::a as next; use renamed::f as call; mod a{pub fn f()->i32{4}} fn main(){let x=call(); let y=renamed::f();}",
+        );
+        good(
+            "mod a { fn f(){} mod child {use super::f as call; pub fn run(){call();}} pub fn run(){child::run();}} fn main(){a::run();}",
+        );
+        good("mod a{use self as me; pub fn f(){}} fn main(){}");
+        good("use crate as root; fn f(){} fn main(){root::f();}");
+        bad("use other as one; use one as other; fn main(){}");
+        bad("use crate::absent; fn main(){}");
+        bad("mod a{fn f(){}} use crate::a::f as unused; fn main(){}");
+    }
+    #[test]
+    fn private_items_accessible_only_from_owner_and_descendants() {
+        good(
+            "mod a{fn f(){} mod inner{pub fn g(){super::f();}} pub fn run(){inner::g();}} fn main(){a::run();}",
+        );
+        good(
+            "mod a{fn f(){} use self::f as alias; mod b{pub fn f(){super::alias();}} pub fn run(){b::f();}} fn main(){a::run();}",
+        );
+        bad("mod a{fn f(){}} mod b{pub fn run(){crate::a::f();}} fn main(){b::run();}");
+        bad("mod a{mod hidden{pub fn f(){}}} fn main(){a::hidden::f();}");
+        bad("mod a{pub fn f(){} use self::f as alias;} fn main(){a::alias();}");
+        // Component boundaries, not textual prefixes, establish descendants.
+        bad("mod a{fn f(){}} mod ab{pub fn g(){crate::a::f();}} fn main(){}");
+    }
+    #[test]
+    fn module_scopes_do_not_inherit_unqualified_parent_items() {
+        bad("fn f(){} mod a{pub fn g(){f();}} fn main(){}");
+        bad("mod a{pub fn f(){}} mod b{pub fn g(){a::f();}} fn main(){}");
+        good("mod a{pub fn f(){}} mod b{use crate::a; pub fn g(){a::f();}} fn main(){b::g();}");
+        bad("fn main(){super::f();}");
+        bad("mod a{pub fn f(){super::super::g();}} fn main(){}");
+        bad("mod a{fn main(){}}");
+    }
+    #[test]
+    fn source_shadowing_is_checked_before_canonicalization() {
+        good("fn f(){} fn main(){let f=1;crate::f();self::f();}");
+        good("mod a{pub fn f(){}} use a::f as alias; fn main(){let f=1;alias();}");
+        good("mod a{pub fn f(){}} fn main(){let a=1;a::f();}");
+        good("fn f()->i32{1} fn main(){let f=f();}");
+        bad("fn f(){} fn main(){let f=1;f();}");
+        bad("mod a{pub fn f(){}} use a::f as alias; fn main(){let alias=1;alias();}");
+        bad("mod a{fn f(){} pub fn g(f:i32){f();}} fn main(){}");
+        good("fn f(){} fn main(){{let f=1;}f();}");
+    }
+    #[test]
+    fn separate_namespaces_and_import_collisions() {
+        good(
+            "mod same{pub fn value()->i32{3}} fn same()->i32{7} fn main(){let x=same()+same::value();}",
+        );
+        good(
+            "mod same{pub fn value()->i32{3}} fn same()->i32{7} use crate::same as alias; fn main(){let x=alias()+alias::value();}",
+        );
+        good("mod a{pub fn f(){}} use a::f as a; fn main(){a();a::f();}");
+        good(
+            "mod outer{mod a{pub fn f(){}} use a::f as a; pub fn run(){a();a::f();}} fn main(){outer::run();}",
+        );
+        good(
+            "mod a{pub mod same{pub fn f(){}} fn same(){}} use a::same as alias; fn main(){alias::f();}",
+        );
+        good("mod a{mod same{} pub fn same(){}} use a::same as alias; fn main(){alias();}");
+        bad("mod a{mod same{} fn same(){}} use a::same as alias; fn main(){}");
+        good("mod a{} fn f(){} use a as x; use f as x; fn main(){x();}");
+        bad("fn f(){} use f as x; use f as x; fn main(){}");
+        bad("mod a{} use a as x; mod x{} fn main(){}");
+        bad("fn f(){} use f as x; fn x(){} fn main(){}");
+    }
+    #[test]
+    fn unsupported_module_forms_are_rejected_explicitly() {
+        for (source, message) in [
+            ("mod a; fn main(){}", "external module"),
+            ("pub(crate) fn main(){}", "restricted pub"),
+            ("use crate::a::*; fn main(){}", "glob and grouped"),
+            ("use crate::a::{f}; fn main(){}", "glob and grouped"),
+            ("pub use crate::a; fn main(){}", "pub use"),
+            ("mod a{} mod a{} fn main(){}", "duplicate item"),
+        ] {
+            assert!(parse(source).unwrap_err().contains(message), "{source}");
+        }
+        bad("mod a{} fn main(){a();}");
+        bad("fn f(){} fn main(){f::g();}");
+        bad("fn main(){use crate::a;}");
+        let nested = format!("{}{}fn main(){{}}", "mod a{".repeat(300), "}".repeat(300));
+        assert!(parse(&nested).unwrap_err().contains("nesting"));
+    }
     fn good(s: &str) {
         let p = parse(s).unwrap();
         check(&p).unwrap();
