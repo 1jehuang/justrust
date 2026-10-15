@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: External source trees compile through an observed loading node
+
+Revision `8907a8b0af275f13816e8d4db5b91a53d933101b` supports `mod name;`
+from `name.rs` and `name/mod.rs`, nested file/inline directory rules, and module
+privacy without invoking another compiler. Source operation 107 captures a bounded
+expanded snapshot before parsing, with original byte/file counts and failures.
+Loading is sequential and coarse, not an atomic filesystem snapshot or a final
+per-file dependency architecture. Expanded positions are not original source maps.
+
+Hosted check `20261015-162923136-686611`, full test
+`20261015-162923692-686710` (106 passed), and warnings-denied all-targets clippy
+`20261015-162924892-686868` passed. Relevant summaries are retained in
+`data/runs/prototype-bootstrap/2026-10-external.jsonl`. Twelve external-module
+acceptance tests include missing/ambiguous files, privacy, unused modules, nested
+paths, lexical boundaries, failed-source graph capture and trace/input aliasing.
+Trace creation is deferred so writing a trace cannot satisfy a missing module.
+Nonregular files, active inclusion cycles, invalid UTF-8 and resource-limit
+violations are rejected. These limits are not full Rust language support.
+
+Charged M8a experiment `compiler-external-20261015-2331` built the committed
+compiler and the four-file, 356-byte example. All six compile/check samples at
+1/8/96 workers completed with complete capture and zero failures/dropped events.
+All three native programs matched stock Rust 1.99.0 stdout, stderr and exit status.
+Raw provenance and samples: `experiments/results/20261015-m8a-external.jsonl`.
+These are single warm fresh-process smoke samples, not a before/after benchmark
+or speedup claim. Compiler-internal build totals were 0.398/0.855/2.760 ms and
+check totals 0.275/0.522/2.657 ms at 1/8/96 workers. Tiny workloads still pay
+coordination overhead with more workers. The first charged attempt
+`compiler-external-20261015-2330` failed in the smoke harness's Python newline
+serialization after a successful compiler bootstrap, then was corrected and
+rerun. No production/admin configuration was changed.
+
+The full open implementation program is tracked in `IMPLEMENTATION.md` and the
+live todo list. This milestone is not full Rust compatibility.
+
 ## 2026-10-15: Inline modules compile through explicit graph resolution
 
 Revision `ab47b4909` adds nested inline modules, qualified calls, simple imports
