@@ -30,7 +30,7 @@ known, or that 96 threads would be useful.
 2. **Installed public interface independently re-exercised:**
    `bench/verify_dispatch_public.py` invoked the installed `justrust graph`
    executable on those original real-build captures. Its final run,
-   task `153518z1dm`, passed all eight cases in 17.22 seconds. Ten original JSON
+   task `431309dntp`, passed all eight cases with field-level checks in 17.30 seconds. Ten original JSON
    inputs and the consumer binary were hashed before/after and were unchanged.
    The path-redacted observed outputs are committed in
    `../bench/results/dispatch-result-provenance-20261015/public-cli-acceptance.json`.
@@ -42,7 +42,7 @@ known, or that 96 threads would be useful.
 The installed consumer SHA-256 was
 `e346c429d0373a4341314e375cd403611755a8c1f43cee61ad3f674ffa1d9666`.
 Full replay stdout/stderr is retained privately under
-`$JCODE_SCRATCH_DIR/dispatch-public-recheck-20261015-final/`. The compact summary
+`$JCODE_SCRATCH_DIR/dispatch-public-recheck-20261015-fields/`. The compact summary
 records exact output lengths and hashes. An initial verifier attempt used the
 analyzer's `read_coverage` name instead of the public graph's `query_reads` name
 and failed with `KeyError` after the CLI had succeeded. That failed attempt is
@@ -77,6 +77,28 @@ all-row oracle is `tests/test_frontend_mapping_native.py::assert_dispatch_receip
 adversarial consumer check, not a claim that natural scheduling exercised every
 interleaving. The named checks were included in the recorded hosted/native
 correctness gates described in the results document.
+
+## Public output field coverage
+
+The public replay also checks the following on the actual parsed CLI output,
+not a mocked return value. The independent original-stream oracle remains the
+check that those fields describe the actual compiler events, rather than merely
+a self-consistent public report.
+
+| Changed public field | Executed observation/check |
+| --- | --- |
+| `dispatch_result_provenance` optional presence | Absent in exact old default output; present only through explicit root-6 dispatch analysis |
+| `scope` | Exact `observed-dispatch-result-availability-not-execution-dag` literal checked for every dispatch assessment |
+| `records_complete`, `lost_events` | Actual accepted inventories report true / zero; source-loss negative tests separately prevent certification on incomplete input |
+| `observed_requests`, `resolved_requests`, `unresolved_requests` | Every public request partition sums exactly; resolved count equals the stored relation array length |
+| `observed_dispatch_resolutions` | Real cold t4 18,297, warm zero; original-stream oracle reconstructs terminal metadata counts |
+| `distinct_publishing_job_relations` | Recomputed from the complete relation set keyed by context, producer and consumer, not treated as DAG edges |
+| `unresolved_reasons` | Every public reason partition sums exactly to unresolved requests; named loss/null/route/admission controls cover refusal semantics |
+| `relations[].request_id`, `context_id`, `consumer_job_id`, `producer_job_id`, `result_id` | Every row has positive integer identities; requests are unique; original-stream oracle checks exact identities and admitted endpoints |
+| `relations[].dep_node_index` | Every row is a bounded u32 and the original-stream oracle checks the exact returned/publication index |
+| `request_start_event_index`, `publication_event_index`, `request_terminal_event_index` | Every row has a valid request bracket and publication strictly before terminal; original-stream oracle checks the exact zero-based positions, not just ordering |
+| Independent `cache_call_provenance` | Exact scope/partitions/distinct-job/identity checks also run; cache hit sits inside its request bracket after publication; removing only this optional field restores dispatch-only JSON |
+| `clock_alignment`, `observed_cpu`, total CPU/span and incompleteness | Mixed actual input is aligned with complete retained CPU records; full work/span remain null and full-pipeline completeness stays false in every successful case |
 
 ## How to reproduce the public replay
 

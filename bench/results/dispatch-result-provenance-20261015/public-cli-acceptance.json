@@ -30,6 +30,8 @@
       "case": "cold-both",
       "checks": [
         "full pipeline remains incomplete and CPU work/span unknown",
+        "dispatch_result_provenance: scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked",
+        "cache_call_provenance: scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked",
         "18297 actual dispatch indices produce 17669 certified availability relations",
         "153723 independent cache relations",
         "semantic and resource authority are not promoted"
@@ -47,7 +49,8 @@
     {
       "case": "warm-dispatch-only",
       "checks": [
-        "full pipeline remains incomplete and CPU work/span unknown"
+        "full pipeline remains incomplete and CPU work/span unknown",
+        "dispatch_result_provenance: scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked"
       ],
       "exit": 0,
       "flags": [
@@ -60,6 +63,8 @@
       "case": "warm-both",
       "checks": [
         "full pipeline remains incomplete and CPU work/span unknown",
+        "dispatch_result_provenance: scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked",
+        "cache_call_provenance: scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked",
         "incremental dispatch stays explicitly unobserved",
         "3580 cache relations remain separate",
         "removing optional cache field exactly restores dispatch-only public output"
@@ -76,6 +81,8 @@
       "case": "mixed-timing",
       "checks": [
         "full pipeline remains incomplete and CPU work/span unknown",
+        "dispatch_result_provenance: scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked",
+        "cache_call_provenance: scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked",
         "reciprocal timing clock aligned",
         "complete retained exclusive CPU segments coexist with 17603 dispatch relations"
       ],

@@ -69,6 +69,31 @@ def main():
             assert assessment.get('cpu_work_ns') is None
             assert assessment.get('execution_span_ns') is None
         record['checks'].append('full pipeline remains incomplete and CPU work/span unknown')
+        for assessment in value:
+            for name, scope in [('dispatch_result_provenance', 'observed-dispatch-result-availability-not-execution-dag'),
+                                ('cache_call_provenance', 'observed-cache-result-availability-not-execution-dag')]:
+                provenance = assessment.get(name)
+                if provenance is None:
+                    continue
+                rows = provenance['relations']
+                assert provenance['scope'] == scope
+                assert provenance['records_complete'] is True and provenance['lost_events'] == 0
+                assert provenance['resolved_requests'] == len(rows)
+                assert provenance['observed_requests'] == provenance['resolved_requests'] + provenance['unresolved_requests']
+                assert sum(provenance['unresolved_reasons'].values()) == provenance['unresolved_requests']
+                assert len({row['request_id'] for row in rows}) == len(rows)
+                pairs = {(r['context_id'], r['producer_job_id'], r['consumer_job_id']) for r in rows}
+                assert provenance['distinct_publishing_job_relations'] == len(pairs)
+                for row in rows:
+                    assert all(type(row[k]) is int and row[k] > 0 for k in
+                               ['request_id', 'context_id', 'producer_job_id', 'consumer_job_id', 'result_id'])
+                    assert type(row['dep_node_index']) is int and 0 <= row['dep_node_index'] <= 0xffffffff
+                    assert 0 <= row['request_start_event_index'] < row['request_terminal_event_index']
+                    assert 0 <= row['publication_event_index'] < row['request_terminal_event_index']
+                    if name == 'cache_call_provenance':
+                        assert row['request_start_event_index'] < row['cache_hit_event_index'] < row['request_terminal_event_index']
+                        assert row['publication_event_index'] < row['cache_hit_event_index']
+                record['checks'].append(name + ': scope, completeness/loss, request/reason partitions, distinct qualified jobs, unique requests and every relation field/order checked')
         results.append(record)
         return value
 
