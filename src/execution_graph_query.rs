@@ -12,6 +12,7 @@ pub(crate) struct CapturePolicy {
     pub(crate) max_bytes: usize,
     pub(crate) max_points: usize,
     pub(crate) query_cpu_ownership: bool,
+    pub(crate) observed_task_dag: bool,
 }
 
 impl CapturePolicy {
@@ -20,6 +21,7 @@ impl CapturePolicy {
             max_bytes: MAX_BYTES,
             max_points: 100_000,
             query_cpu_ownership: false,
+            observed_task_dag: false,
         }
     }
 
@@ -28,6 +30,7 @@ impl CapturePolicy {
             max_bytes: 512 * 1024 * 1024,
             max_points: 1_000_000,
             query_cpu_ownership: false,
+            observed_task_dag: false,
         }
     }
 }
@@ -614,7 +617,7 @@ fn collect_bytes_with_options(
         }
         return collect_dispatch_bindings(bytes, policy, cache_call_provenance);
     }
-    if policy.query_cpu_ownership && version.schema == 6 {
+    if (policy.query_cpu_ownership || policy.observed_task_dag) && version.schema == 6 {
         let mut query = collect_dispatch_bindings(bytes, policy, cache_call_provenance)?;
         query.assessment.dispatch_result_provenance = None;
         return Ok(query);
@@ -2197,6 +2200,7 @@ pub(crate) mod tests {
             max_bytes: text.len(),
             max_points: 7,
             query_cpu_ownership: false,
+            observed_task_dag: false,
         };
         assert!(collect_bytes_with_analysis(text.as_bytes(), bounded, true).is_ok());
         for policy in [
@@ -2406,16 +2410,19 @@ pub(crate) mod tests {
                 max_bytes: text.len() - 1,
                 max_points: 7,
                 query_cpu_ownership: false,
+                observed_task_dag: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
                 max_points: 3,
                 query_cpu_ownership: false,
+                observed_task_dag: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
                 max_points: 1_000_001,
                 query_cpu_ownership: false,
+                observed_task_dag: false,
             },
         ] {
             assert!(collect_bytes_with_dispatch_analysis(text.as_bytes(), policy, false).is_err());
@@ -2427,6 +2434,7 @@ pub(crate) mod tests {
                     max_bytes: text.len(),
                     max_points: 7,
                     query_cpu_ownership: false,
+                    observed_task_dag: false,
                 },
                 true
             )
@@ -2509,6 +2517,8 @@ pub(crate) mod tests {
         BTreeMap::from([(
             "pool-1".into(),
             PoolInventory {
+                task_nodes: vec![1],
+                task_edges: Vec::new(),
                 schema: 3,
                 capture_id: "pool-1".into(),
                 observer: 1,
@@ -2695,6 +2705,7 @@ pub(crate) mod tests {
             max_bytes: bytes.len(),
             max_points: 7,
             query_cpu_ownership: false,
+            observed_task_dag: false,
         };
         let a = collect_bytes_with_policy(&bytes, policy)
             .unwrap()
@@ -2736,6 +2747,7 @@ pub(crate) mod tests {
             max_bytes: bytes.len(),
             max_points: 7,
             query_cpu_ownership: false,
+            observed_task_dag: false,
         };
         let collected = collect_bytes_with_policy(&bytes, small).unwrap();
         assert_eq!(collected.assessment.schema, 4);

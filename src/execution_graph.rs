@@ -90,6 +90,8 @@ struct Assessment {
     #[serde(skip_serializing_if = "Option::is_none")]
     query_cpu_ownership: Option<crate::execution_graph_timing::QueryCpuOwnership>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    observed_task_dag: Option<crate::execution_graph_task_dag::TaskDag>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     clock_alignment: Option<crate::execution_graph_query::ClockAlignmentAssessment>,
     /// Strict native prefix/endorsement assessment, never compiler-launch authority.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,6 +316,7 @@ fn assess(r: Receipt) -> Result<Assessment> {
         resource_attachments: None,
         observed_cpu: None,
         query_cpu_ownership: None,
+        observed_task_dag: None,
         clock_alignment: None,
         issues,
         opaque_boundaries: r.opaque_boundaries,
@@ -538,6 +541,7 @@ fn assess_receipt_bytes_with_options(
                 resource_attachments: None,
                 observed_cpu: None,
                 query_cpu_ownership: None,
+                observed_task_dag: None,
                 clock_alignment: None,
                 issues: vec!["requires explicit --compiler-manifest reconciliation".into()],
                 opaque_boundaries: vec!["compiler-launch-authority".into()],
@@ -574,6 +578,7 @@ fn assess_receipt_bytes_with_options(
                 resource_attachments: None,
                 observed_cpu: None,
                 query_cpu_ownership: None,
+                observed_task_dag: None,
                 clock_alignment: query.clock_alignment,
                 issues: query.issues,
                 opaque_boundaries: query.opaque_boundaries,
@@ -608,6 +613,7 @@ fn assess_receipt_bytes_with_options(
                 resource_attachments: None,
                 observed_cpu: join.observed_cpu,
                 query_cpu_ownership: None,
+                observed_task_dag: None,
                 clock_alignment: None,
                 issues: join.issues,
                 opaque_boundaries: join.opaque_boundaries,
@@ -702,6 +708,7 @@ fn assess_resource_document(bytes: &[u8], producer: &str) -> Result<Assessment> 
         resource_attachments: None,
         observed_cpu: None,
         query_cpu_ownership: None,
+        observed_task_dag: None,
         clock_alignment: None,
         issues,
         opaque_boundaries: vec!["bounded-resource-prefix-not-full-lifecycle".into()],
@@ -1091,6 +1098,32 @@ pub(crate) fn command_with_query_cpu_ownership(
     dispatch_result_provenance: bool,
     query_cpu_ownership: bool,
 ) -> Result<()> {
+    command_with_observed_task_dag(
+        path,
+        json,
+        manifest,
+        large_capture,
+        cache_call_provenance,
+        dispatch_result_provenance,
+        query_cpu_ownership,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn command_with_observed_task_dag(
+    path: &Path,
+    json: bool,
+    manifest: Option<&Path>,
+    large_capture: bool,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+    query_cpu_ownership: bool,
+    observed_task_dag: bool,
+) -> Result<()> {
+    if observed_task_dag && manifest.is_some() {
+        bail!("--observed-task-dag is not supported with --manifest");
+    }
     if query_cpu_ownership && manifest.is_some() {
         bail!("--query-cpu-ownership is not supported with --manifest");
     }
@@ -1112,6 +1145,7 @@ pub(crate) fn command_with_query_cpu_ownership(
         crate::execution_graph_query::CapturePolicy::strict()
     };
     policy.query_cpu_ownership = query_cpu_ownership;
+    policy.observed_task_dag = observed_task_dag;
     let assessments = collect_path_with_options(
         path,
         policy,
@@ -1296,6 +1330,32 @@ fn collect_path_with_options(
             }
         }
     }
+    if policy.observed_task_dag {
+        let mut counts = BTreeMap::<String, usize>::new();
+        let mut task_pools = BTreeMap::new();
+        for bytes in &documents {
+            let header: serde_json::Value = serde_json::from_slice(bytes)?;
+            if let Some(id) = header["capture_id"].as_str() {
+                *counts.entry(id.to_owned()).or_default() += 1;
+            }
+            if header["producer"] == "rustc-thread-pool-join" {
+                let inventory = crate::execution_graph_continuation::collect_task_inventory(
+                    bytes,
+                    policy.query_cpu_ownership,
+                )?;
+                task_pools.insert(inventory.capture_id.clone(), inventory);
+            }
+        }
+        task_pools.retain(|id, _| counts.get(id) == Some(&1));
+        for assessment in &mut assessments {
+            if assessment.producer == "rustc-thread-pool-join" {
+                assessment.observed_task_dag = Some(crate::execution_graph_task_dag::assess(
+                    task_pools.get(&assessment.capture_id),
+                    assessment.observed_cpu.as_ref(),
+                )?);
+            }
+        }
+    }
     if let Some(first) = assessments.first_mut() {
         first.resource_attachments = Some(resource_attachments);
     }
@@ -1383,6 +1443,7 @@ fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
                 );
             }
             if let Some(bindings) = &a.task_bindings {
+                // Query point bindings are not task DAG edges.
                 println!(
                     "  task point mapping: {} bound, {} unbound, graph binding {} (not query slices)",
                     bindings.bound_points,
@@ -1395,6 +1456,27 @@ fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
                 );
                 for issue in &bindings.issues {
                     println!("  task binding: {issue}");
+                }
+            }
+            if let Some(dag) = &a.observed_task_dag {
+                println!(
+                    "  observed fork/join task DAG: {} tasks, {} native edges, known attached CPU {:?} ns, excluded task-null CPU {:?} ns (not full work/span or parallelism)",
+                    dag.nodes.len(),
+                    dag.edges.len(),
+                    dag.known_attached_cpu_ns,
+                    dag.excluded_task_null_cpu_ns
+                );
+                for component in &dag.components {
+                    println!(
+                        "    root {}: known recorded CPU chain {:?} ns, exact retained chain {:?} ns, tasks {:?}",
+                        component.root,
+                        component.known_cpu_chain_ns,
+                        component.longest_recorded_fork_join_chain_cpu_ns,
+                        component.chain
+                    );
+                }
+                for issue in &dag.issues {
+                    println!("  task DAG: {issue}");
                 }
             }
             if let Some(resource) = &a.resource {
@@ -1461,6 +1543,7 @@ mod tests {
                     max_bytes: bytes.len() - 1,
                     max_points: 7,
                     query_cpu_ownership: false,
+                    observed_task_dag: false,
                 },
                 true
             )
@@ -1488,6 +1571,7 @@ mod tests {
                     max_bytes: bytes.len(),
                     max_points: 7,
                     query_cpu_ownership: false,
+                    observed_task_dag: false,
                 },
                 true
             )
@@ -1530,6 +1614,7 @@ mod tests {
                     max_bytes: bytes.len() - 1,
                     max_points: 7,
                     query_cpu_ownership: false,
+                    observed_task_dag: false,
                 },
                 false,
                 true
@@ -1557,6 +1642,7 @@ mod tests {
                     max_bytes: bytes.len(),
                     max_points: 7,
                     query_cpu_ownership: false,
+                    observed_task_dag: false,
                 },
                 false,
                 true
@@ -1659,6 +1745,153 @@ mod tests {
             query_cpu_ownership: true,
             ..crate::execution_graph_query::CapturePolicy::strict()
         }
+    }
+
+    fn task_dag_values(directory: &Path, query_cpu: bool) -> Result<serde_json::Value> {
+        let mut policy = crate::execution_graph_query::CapturePolicy::strict();
+        policy.observed_task_dag = true;
+        policy.query_cpu_ownership = query_cpu;
+        Ok(serde_json::to_value(collect_path_with_options(
+            directory, policy, false, false,
+        )?)?)
+    }
+
+    #[test]
+    fn observed_task_dag_requires_explicit_cpu_protocol_and_reciprocal_query_authority() {
+        let directory = resource_test_directory("task-dag-authority");
+        let (query, pool) = query_cpu_documents();
+        write_json(&directory, "pool.json", &pool);
+        assert!(task_dag_values(&directory, false).is_err());
+        let lone = task_dag_values(&directory, true).unwrap();
+        let dag = &lone[0]["observed_task_dag"];
+        assert_eq!(dag["topology_complete"], true);
+        assert_eq!(dag["records_complete"], false);
+        assert!(dag["attached_cpu_ns"].is_null() && dag["known_attached_cpu_ns"].is_null());
+        assert_eq!(dag["excluded_opaque_cpu_ns"], 3);
+        assert!(dag["nodes"][0]["cpu_ns"].is_null());
+        write_json(&directory, "query.json", &query);
+        let complete = task_dag_values(&directory, true).unwrap();
+        let p = complete
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["producer"] == "rustc-thread-pool-join")
+            .unwrap();
+        assert_eq!(p["observed_task_dag"]["records_complete"], true);
+        assert_eq!(p["observed_task_dag"]["attached_cpu_ns"], 6);
+        assert_eq!(
+            p["observed_task_dag"]["components"][0]["longest_recorded_fork_join_chain_cpu_ns"],
+            6
+        );
+        let baseline = query_cpu_values(&directory).unwrap();
+        let mut without_dag = complete;
+        for value in without_dag.as_array_mut().unwrap() {
+            value.as_object_mut().unwrap().remove("observed_task_dag");
+        }
+        assert_eq!(without_dag, baseline);
+        write_json(&directory, "query-copy.json", &query);
+        let duplicate_query = task_dag_values(&directory, true).unwrap();
+        let dag = &duplicate_query
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["producer"] == "rustc-thread-pool-join")
+            .unwrap()["observed_task_dag"];
+        assert_eq!(dag["topology_complete"], true);
+        assert!(dag["known_attached_cpu_ns"].is_null());
+        assert_eq!(dag["excluded_opaque_cpu_ns"], 3);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn observed_task_dag_local_legacy_pool_and_root6_only_do_not_enable_unrelated_outputs() {
+        let directory = resource_test_directory("task-dag-legacy");
+        let mut pool = crate::execution_graph_continuation::tests::schema3();
+        write_json(&directory, "pool.json", &pool);
+        let lone = task_dag_values(&directory, false).unwrap();
+        assert_eq!(lone[0]["observed_task_dag"]["records_complete"], true);
+        assert_eq!(lone[0]["observed_task_dag"]["attached_cpu_ns"], 1);
+        let mut explicit = lone;
+        explicit[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("observed_task_dag");
+        assert_eq!(
+            explicit,
+            serde_json::to_value(collect_path(&directory).unwrap()).unwrap()
+        );
+        let mut query = crate::execution_graph_query::tests::dispatch_fixture();
+        query["capture_id"] = pool["query_capture_id"].clone();
+        query["execution_clock"] = pool["timing"]["clock_bridge"].clone();
+        pool["capture_id"] = json!("pool-1");
+        pool["timing"]["clock_bridge"]["pool_capture_id"] = json!("pool-1");
+        query["execution_clock"]["pool_capture_id"] = json!("pool-1");
+        write_json(&directory, "pool.json", &pool);
+        write_json(&directory, "query.json", &query);
+        let values = task_dag_values(&directory, false).unwrap();
+        let q = values
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["producer"] == "rustc-query-admission")
+            .unwrap();
+        assert_eq!(q["schema"], 6);
+        for key in [
+            "query_cpu_ownership",
+            "cache_call_provenance",
+            "dispatch_result_provenance",
+        ] {
+            assert!(q.get(key).is_none(), "{key}");
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn observed_task_dag_all_duplicate_pool_copies_and_cross_producer_collisions_fail_closed() {
+        for copies in [2, 3] {
+            let directory = resource_test_directory("task-dag-duplicates");
+            let pool = crate::execution_graph_continuation::tests::schema3();
+            for n in 0..copies {
+                write_json(&directory, &format!("pool-{n}.json"), &pool);
+            }
+            for p in task_dag_values(&directory, false)
+                .unwrap()
+                .as_array()
+                .unwrap()
+            {
+                assert_eq!(p["observed_task_dag"]["topology_complete"], false);
+                assert!(
+                    p["observed_task_dag"]["nodes"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
+                assert!(p["observed_task_dag"]["known_attached_cpu_ns"].is_null());
+            }
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+        let directory = resource_test_directory("task-dag-collision");
+        let (_, pool) = query_cpu_documents();
+        // A separately valid scheduler receipt with the pool's ID must also
+        // invalidate pool authority, regardless of producer or file order.
+        let scheduler = json!({"schema":1,"producer":"cargo-scheduler","scope":"cargo-unit-scheduler","capture_id":pool["capture_id"],"declared_nodes":0,"declared_edges":0,"structural_complete":false,"full_pipeline_complete":false,"issues":[],"opaque_boundaries":["native"],"events":[],"nodes":[],"edges":[]});
+        write_json(&directory, "pool.json", &pool);
+        write_json(&directory, "scheduler.json", &scheduler);
+        let values = task_dag_values(&directory, true).unwrap();
+        let p = values
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["producer"] == "rustc-thread-pool-join")
+            .unwrap();
+        assert_eq!(p["observed_task_dag"]["topology_complete"], false);
+        assert!(
+            p["observed_task_dag"]["nodes"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     fn query_cpu_values(directory: &Path) -> Result<serde_json::Value> {
@@ -2098,6 +2331,7 @@ mod tests {
             max_bytes: bytes.len(),
             max_points: 7,
             query_cpu_ownership: false,
+            observed_task_dag: false,
         };
         assert!(collect_path_with_policy(&file, policy).unwrap()[0].structural_complete);
         assert!(collect_path_with_policy(&directory, policy).unwrap()[0].structural_complete);

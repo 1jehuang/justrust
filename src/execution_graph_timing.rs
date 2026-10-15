@@ -103,6 +103,23 @@ enum Status {
     WallOverflow,
 }
 
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Shared original-row projection for opt-in execution diagnostics.
+pub(crate) struct ValidatedSegment {
+    pub segment_id: u64,
+    pub thread_id: u64,
+    pub task: Option<u64>,
+    pub query_context: Option<u64>,
+    pub query_job: Option<u64>,
+    pub query_name: Option<String>,
+    pub start_ns: Option<u64>,
+    pub end_ns: Option<u64>,
+    pub cpu_start_ns: Option<u64>,
+    pub cpu_end_ns: Option<u64>,
+    pub cpu_ns: Option<u64>,
+    pub measured: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct ObservedCpuAssessment {
     pub scope: &'static str,
@@ -117,7 +134,14 @@ pub(crate) struct ObservedCpuAssessment {
     #[serde(skip)]
     query_segments: Vec<Segment>,
     #[serde(skip)]
-    local_records_complete: bool,
+    pub(crate) local_records_complete: bool,
+    #[serde(skip)]
+    pub(crate) validated_segments: Vec<ValidatedSegment>,
+    #[serde(skip)]
+    pub(crate) endpoints_valid: bool,
+    #[serde(skip)]
+    #[allow(dead_code)] // Used by the separately opt-in native flow inventory.
+    pub(crate) segment_allocator_high_water: Option<u64>,
     pub measured_segments: usize,
     pub failed_segments: usize,
     pub observed_threads: usize,
@@ -595,6 +619,26 @@ pub(crate) fn assess_with_query_ownership(
         cpu_clock: "linux-thread-cpu",
         records_complete: capture.records_complete && complete && !query_ownership,
         local_records_complete: capture.records_complete && complete,
+        endpoints_valid,
+        segment_allocator_high_water: capture.segment_allocator_high_water,
+        validated_segments: capture
+            .segments
+            .iter()
+            .map(|row| ValidatedSegment {
+                segment_id: row.segment_id,
+                thread_id: row.thread_id,
+                task: row.task,
+                query_context: row.query_context.flatten(),
+                query_job: row.query_job.flatten(),
+                query_name: row.query_name.clone().flatten(),
+                start_ns: row.start_ns,
+                end_ns: row.end_ns,
+                cpu_start_ns: row.cpu_start_ns,
+                cpu_end_ns: row.cpu_end_ns,
+                cpu_ns: row.cpu_ns,
+                measured: row.status == Status::Measured,
+            })
+            .collect(),
         observed_cpu_ns: endpoints_valid.then_some(total),
         task_cpu_ns: endpoints_valid.then_some(task_cpu),
         opaque_cpu_ns: endpoints_valid.then_some(opaque_cpu),

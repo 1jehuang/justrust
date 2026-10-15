@@ -418,6 +418,8 @@ mod tests {
 
     fn pool(query: &str) -> PoolInventory {
         PoolInventory {
+            task_nodes: vec![1],
+            task_edges: Vec::new(),
             schema: 2,
             timing_bridge: None,
             capture_id: "pool-1".into(),

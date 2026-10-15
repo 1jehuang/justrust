@@ -197,6 +197,14 @@ pub(crate) struct PoolInventory {
     pub structural_complete: bool,
     pub task_intervals: BTreeMap<u64, TaskInterval>,
     pub timing_bridge: Option<crate::execution_graph_timing::ClockBridge>,
+    pub task_nodes: Vec<u64>,
+    pub task_edges: Vec<TaskEdge>,
+}
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct TaskEdge {
+    pub from: u64,
+    pub to: u64,
+    pub kind: &'static str,
 }
 impl PoolInventory {
     pub fn validate_point(&self, task: u64, at_ns: u64) -> Result<()> {
@@ -217,6 +225,9 @@ pub(crate) fn assess_bytes(bytes: &[u8]) -> Result<Assessment> {
 }
 pub(crate) fn collect_bytes(bytes: &[u8]) -> Result<CollectedPool> {
     collect_bytes_with_query_ownership(bytes, false)
+}
+pub(crate) fn collect_task_inventory(bytes: &[u8], query_ownership: bool) -> Result<PoolInventory> {
+    validate_bytes(bytes, query_ownership).map(|(_, inventory)| inventory)
 }
 pub(crate) fn collect_bytes_with_query_ownership(
     bytes: &[u8],
@@ -287,6 +298,7 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
     let mut adjacency: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
     let mut issues = Vec::new();
     let mut edges = 0;
+    let mut task_edges = Vec::new();
     for event in r.events {
         match event {
             Event::Root { task, at_ns } => {
@@ -324,6 +336,11 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
                     bail!("duplicate fork branch");
                 }
                 adjacency.entry(parent).or_default().insert(child);
+                task_edges.push(TaskEdge {
+                    from: parent,
+                    to: child,
+                    kind: "fork",
+                });
                 edges += 1;
             }
             Event::Start { task, at_ns } => {
@@ -375,6 +392,11 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
                     bail!("duplicate branch join");
                 }
                 adjacency.entry(child).or_default().insert(continuation);
+                task_edges.push(TaskEdge {
+                    from: child,
+                    to: continuation,
+                    kind: "join",
+                });
                 edges += 1;
             }
             Event::Resume {
@@ -504,6 +526,7 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
     if !r.sealed || r.interface_outcome != Outcome::Returned {
         issues.push("join owner is not sealed after normal interface return".into());
     }
+    task_edges.sort_by_key(|edge| (edge.from, edge.to, edge.kind));
     let mut inventory = PoolInventory {
         schema: r.schema,
         capture_id: r.capture_id.clone(),
@@ -511,6 +534,8 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
         query_capture_id: r.query_capture_id,
         structural_complete: issues.is_empty(),
         timing_bridge: None,
+        task_nodes: tasks.keys().copied().collect(),
+        task_edges,
         task_intervals: tasks
             .iter()
             .filter_map(|(&id, task)| {
@@ -576,7 +601,7 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::{Value, json};
     fn fixture() -> Value {
@@ -592,7 +617,7 @@ mod tests {
         v["query_capture_id"] = json!("query_123-safe");
         v
     }
-    fn schema3() -> Value {
+    pub(crate) fn schema3() -> Value {
         let mut v = schema2();
         v["schema"] = json!(3);
         let mut timing = crate::execution_graph_timing::tests::fixture();

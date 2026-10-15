@@ -29,6 +29,7 @@ mod execution_graph_reads;
 mod execution_graph_resource;
 mod execution_graph_resource_attachment;
 mod execution_graph_task_bindings;
+mod execution_graph_task_dag;
 mod execution_graph_timing;
 mod export;
 mod findings;
@@ -225,6 +226,9 @@ enum Command {
         /// Validate opt-in native query execution CPU ownership, never full work/span.
         #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
         query_cpu_ownership: bool,
+        /// Export only validated native fork/join tasks with retained exclusive CPU weights.
+        #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
+        observed_task_dag: bool,
         #[arg(long)]
         json: bool,
     },
@@ -788,12 +792,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             cache_call_provenance,
             dispatch_result_provenance,
             query_cpu_ownership,
+            observed_task_dag,
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
                 execution_graph_compiler_cli::command(&path, &manifest, json)?;
             } else {
-                execution_graph::command_with_query_cpu_ownership(
+                execution_graph::command_with_observed_task_dag(
                     &path,
                     json,
                     manifest.as_deref(),
@@ -801,6 +806,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     cache_call_provenance,
                     dispatch_result_provenance,
                     query_cpu_ownership,
+                    observed_task_dag,
                 )?;
             }
         }
@@ -1076,6 +1082,46 @@ mod passthrough_tests {
                     "graph",
                     "captures",
                     "--query-cpu-ownership",
+                    manifest,
+                    "owner.json"
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn graph_observed_task_dag_is_explicit_and_does_not_enable_other_flags() {
+        for enabled in [false, true] {
+            let mut args = vec!["justrust", "graph", "captures"];
+            if enabled {
+                args.push("--observed-task-dag");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(
+                matches!(cli.command, Command::Graph { observed_task_dag, query_cpu_ownership: false, dispatch_result_provenance: false, cache_call_provenance: false, .. } if observed_task_dag == enabled)
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "justrust",
+                "graph",
+                "captures",
+                "--observed-task-dag",
+                "--query-cpu-ownership",
+                "--dispatch-result-provenance",
+                "--cache-call-provenance",
+                "--large-capture"
+            ])
+            .is_ok()
+        );
+        for manifest in ["--manifest", "--compiler-manifest"] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--observed-task-dag",
                     manifest,
                     "owner.json"
                 ])
