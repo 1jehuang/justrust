@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "scope": "validated-observed-wait-hotspots-not-execution-cost",
+  "units": "nanoseconds",
+  "query_capture_id": "1792025691406032572-4000405-1",
+  "original_receipt_sha256": "a6c5b4d92e7b95de5a99edf360893763f015820f853234d76add4ab10570ec81",
+  "original_receipt_bytes": 223973636,
+  "pool_capture_id": "4000405-1792025691407612498-1",
+  "pool_receipt_sha256": "1493bdb1b0ca8249c565e5dea5805663a81f49c7b337a604542b9bfd0374d07f",
+  "authority": {
+    "validator": "installed justrust graph --json --large-capture",
+    "query_structural_complete": true,
+    "wait_structural_complete": true,
+    "query_issues": [],
+    "pool_structural_complete": true,
+    "pool_issues": [],
+    "graph_binding_valid": true,
+    "graph_binding_complete": false,
+    "binding_issues": ["task-binding targets declared incomplete"]
+  },
+  "method": {
+    "clock": "query receipt epoch only for wait timings",
+    "intervals": "half-open [start,end), nonnegative elapsed; no union across epochs",
+    "quantiles": "nearest-rank: sorted durations[ceil(p*n)-1] for p=0.50,0.90,0.95",
+    "union_check": "independent sorted-interval merge, compared with endpoint sweep in frontend_mapping",
+    "peak": "endpoints at equal timestamps process ends before starts",
+    "chain": "observed waitee-job to consumer-job wait edges only; exclude descriptive admission parents and untracked semantic dependencies",
+    "identity_scope": "all wait and job IDs below are local to query_capture_id, context_id=1; pool task IDs are local to pool_capture_id"
+  },
+  "wait_count": 79,
+  "notification_reasons": {"completed": 79},
+  "distinct_consumer_jobs": 48,
+  "distinct_waitee_jobs": 58,
+  "stages": {
+    "producer_notification": {"count": 79, "sum_elapsed_ns": 17820341, "union_elapsed_ns": 16008386, "max_elapsed_ns": 6784256, "peak_overlapping_intervals": 3, "p50_ns": 14917, "p90_ns": 282623, "p95_ns": 425052},
+    "notification_condvar": {"count": 79, "sum_elapsed_ns": 580556, "union_elapsed_ns": 443262, "max_elapsed_ns": 23626, "p50_ns": 5465, "p90_ns": 14052, "p95_ns": 18747},
+    "post_condvar": {"count": 79, "sum_elapsed_ns": 1821053, "union_elapsed_ns": 1392027, "max_elapsed_ns": 103311, "peak_overlapping_intervals": 3, "p50_ns": 15288, "p90_ns": 45773, "p95_ns": 61103},
+    "post_notification": {"count": 79, "sum_elapsed_ns": 2401609, "union_elapsed_ns": 1730277, "max_elapsed_ns": 110736, "peak_overlapping_intervals": 3, "p50_ns": 22129, "p90_ns": 53960, "p95_ns": 71236},
+    "total": {"count": 79, "sum_elapsed_ns": 20221950, "union_elapsed_ns": 17608946, "max_elapsed_ns": 6887278, "peak_overlapping_intervals": 3, "p50_ns": 42156, "p90_ns": 327511, "p95_ns": 487828}
+  },
+  "longest_waits": [
+    {"wait_id": 71, "waitee_job_id": 4755, "consumer_job_id": 5380, "registered_ns": 59056550, "notified_ns": 65840806, "condvar_returned_ns": 65863987, "resumed_ns": 65943828, "producer_notification_ns": 6784256, "notification_condvar_ns": 23181, "post_condvar_ns": 79841, "total_ns": 6887278, "both_task_endpoints": "no_active"},
+    {"wait_id": 70, "waitee_job_id": 3511, "consumer_job_id": 4297, "registered_ns": 48014389, "notified_ns": 52032560, "condvar_returned_ns": 52040440, "resumed_ns": 52101543, "producer_notification_ns": 4018171, "notification_condvar_ns": 7880, "post_condvar_ns": 61103, "total_ns": 4087154, "both_task_endpoints": "no_active"},
+    {"wait_id": 78, "waitee_job_id": 15882, "consumer_job_id": 15974, "registered_ns": 250254690, "notified_ns": 252573284, "condvar_returned_ns": 252581471, "resumed_ns": 252627244, "producer_notification_ns": 2318594, "notification_condvar_ns": 8187, "post_condvar_ns": 45773, "total_ns": 2372554, "both_task_endpoints": "no_active"}
+  ],
+  "longest_three_sum_elapsed_ns": 13346986,
+  "shared_waitee_example": {"waitee_job_id": 2059, "wait_ids": [28, 29, 30], "consumer_job_ids": [2047, 2049, 2043], "total_elapsed_ns_by_wait": [471500, 482035, 487828], "sum_elapsed_ns": 1441363, "union_elapsed_ns": 497013},
+  "observed_wait_chain": {"maximum_observed_edge_count": 2, "job_ids": [6898, 6901, 6881], "wait_ids": [72, 73], "registered_ns": [76502891, 76512786], "notified_ns": [76540529, 76603273], "resumed_ns": [76579933, 76636671], "sum_elapsed_ns": 200927, "union_elapsed_ns": 133780, "is_execution_critical_path": false},
+  "wait_task_binding": {"both_endpoints_no_active_waits": 76, "both_endpoints_bound_waits": 3, "bound_waits": [{"wait_id": 75, "registered_task": 1, "resumed_task": 1}, {"wait_id": 76, "registered_task": 1, "resumed_task": 1}, {"wait_id": 79, "registered_task": 7, "resumed_task": 7}]},
+  "completion_marker_order": {"completed_marker_after_notification_waits": 79, "minimum_marker_minus_notification_ns": 1631, "maximum_marker_minus_notification_ns": 9288, "interpretation": "notification is recorded before signaling; the admission completion marker follows latch signaling, not the instant provider execution ends"},
+  "pool_control_provenance": {"nodes": 11, "edges": 12, "fork_join_examples": [{"parent": 2, "branches": [3, 4], "continuation": 5}, {"parent": 1, "branches": [6, 7], "continuation": 8}, {"parent": 7, "branches": [9, 10], "continuation": 11}], "outer_join_branch_terminal_tasks": [6, 11], "is_semantic_query_dependency_graph": false},
+  "read_provenance_boundary": {"observed_direct_reads": 217244, "disabled_reads": 217244, "resolved_reads": 0, "resolved_job_edges": 0, "lost_read_events": 0, "semantic_complete": false},
+  "full_pipeline_complete": false,
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "theoretical_parallelism": null
+}
