@@ -21,6 +21,7 @@ pub(crate) struct QueryOwnership {
     recorder: Arc<Recorder>,
     context: u64,
     job: u64,
+    name: &'static str,
 }
 /// Worker-local ownership, never inherited by stolen work or reconstructed from query TLS.
 pub(crate) fn suspend_query() -> Option<QueryOwnership> {
@@ -75,14 +76,26 @@ pub(crate) fn enter_query(
     recorder: &Arc<Recorder>,
     context: u64,
     job: u64,
+    name: &'static str,
     task: Option<u64>,
 ) -> Option<QueryExecutionGuard> {
     if !recorder.query_ownership || context == 0 || job == 0 {
         return None;
     }
+    // QueryVTable names are compile-time Rust identifiers, never query keys,
+    // formatted values, symbols or source paths. Reject rather than escape an
+    // unexpected caller-provided category into the private capture protocol.
+    if name.is_empty()
+        || name.len() > 128
+        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        || name.as_bytes()[0].is_ascii_digit()
+    {
+        recorder.loss();
+        return None;
+    }
     let previous_recorder = pause();
     let previous = suspend_query();
-    restore_query(Some(QueryOwnership { recorder: Arc::clone(recorder), context, job }));
+    restore_query(Some(QueryOwnership { recorder: Arc::clone(recorder), context, job, name }));
     resume(Some(recorder), task);
     Some(QueryExecutionGuard { previous, previous_recorder, _not_send: PhantomData })
 }
@@ -156,14 +169,14 @@ struct Cursor {
     id: Option<u64>,
     thread: Option<u64>,
     task: Option<u64>,
-    query: Option<(u64, u64)>,
+    query: Option<(u64, u64, &'static str)>,
     start: Sample,
 }
 struct Segment {
     id: u64,
     thread: u64,
     task: Option<u64>,
-    query: Option<(u64, u64)>,
+    query: Option<(u64, u64, &'static str)>,
     start: Sample,
     end: Sample,
     cpu: Option<u64>,
@@ -274,7 +287,7 @@ impl Recorder {
                         slot.try_borrow().map(|slot| {
                             slot.as_ref()
                                 .filter(|owner| Arc::ptr_eq(&owner.recorder, self))
-                                .map(|owner| (owner.context, owner.job))
+                                .map(|owner| (owner.context, owner.job, owner.name))
                         })
                     })
                     .ok()
@@ -420,9 +433,10 @@ impl Recorder {
             if self.query_ownership {
                 let _ = write!(
                     text,
-                    ",\"query_context\":{},\"query_job\":{}",
+                    ",\"query_context\":{},\"query_job\":{},\"query_name\":{}",
                     number(row.query.map(|q| q.0)),
-                    number(row.query.map(|q| q.1))
+                    number(row.query.map(|q| q.1)),
+                    row.query.map_or_else(|| "null".into(), |q| format!("\"{}\"", q.2))
                 );
             }
             text.push('}');
@@ -505,9 +519,9 @@ mod tests {
         let mut recorder = fake((1..=6).map(|n| sample(n, Some(n))).collect(), 10);
         Arc::get_mut(&mut recorder).unwrap().query_ownership = true;
         {
-            let _outer = enter_query(&recorder, 1, 7, None).unwrap();
+            let _outer = enter_query(&recorder, 1, 7, "outer", None).unwrap();
             let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _inner = enter_query(&recorder, 2, 7, None).unwrap();
+                let _inner = enter_query(&recorder, 2, 7, "inner", None).unwrap();
                 assert_eq!(current_query_identity(), Some((2, 7)));
                 panic!("restore exact query context");
             }));
@@ -520,7 +534,7 @@ mod tests {
         let rows = recorder.lock();
         assert_eq!(
             rows.rows.iter().map(|r| r.query).collect::<Vec<_>>(),
-            [Some((1, 7)), Some((2, 7)), Some((1, 7))]
+            [Some((1, 7, "outer")), Some((2, 7, "inner")), Some((1, 7, "outer"))]
         );
         assert_eq!(rows.rows.iter().map(|r| r.cpu.unwrap()).sum::<u64>(), 3);
         drop(rows);
@@ -532,13 +546,38 @@ mod tests {
     #[test]
     fn legacy_timing_never_enters_query_ownership_or_samples_for_it() {
         let recorder = fake(Vec::new(), 10);
-        assert!(enter_query(&recorder, 1, 1, None).is_none());
+        assert!(enter_query(&recorder, 1, 1, "query", None).is_none());
         assert!(!has_active_cursor());
         assert!(current_query_identity().is_none());
         let text = json(&recorder);
         assert!(text.contains("\"schema\":1"));
         assert!(!text.contains("query_context"));
         assert!(!text.contains("query_job"));
+        assert!(!text.contains("query_name"));
+    }
+    #[test]
+    fn query_cpu_rejects_nonconstant_category_grammar_without_sampling() {
+        let mut recorder = fake(Vec::new(), 10);
+        Arc::get_mut(&mut recorder).unwrap().query_ownership = true;
+        for name in [
+            "",
+            "1query",
+            "path/to/key",
+            "query\"injection",
+            "non_ascii_é",
+            concat!(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
+        ] {
+            assert!(enter_query(&recorder, 1, 1, name, None).is_none());
+        }
+        assert!(!has_active_cursor());
+        assert!(current_query_identity().is_none());
+        recorder.seal();
+        let text = json(&recorder);
+        assert!(text.contains("\"lost_segments\":6"));
+        assert!(text.contains("\"records_complete\":false"));
     }
     #[test]
     fn exclusive_switches_do_not_double_count_or_bridge_gaps() {

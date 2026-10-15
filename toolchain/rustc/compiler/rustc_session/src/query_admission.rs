@@ -686,11 +686,12 @@ impl QueryAdmissionContext {
     pub fn enter_query_execution(
         &self,
         job: u64,
+        name: &'static str,
     ) -> Option<rustc_thread_pool::execution_observer::QueryExecutionGuard> {
         if !self.observer.query_cpu_ownership_enabled() {
             return None;
         }
-        self.observer.0.pool.0.get()?.enter_query_execution(self.id, job)
+        self.observer.0.pool.0.get()?.enter_query_execution(self.id, job, name)
     }
     pub fn admission_binding(&self) -> Option<AdmissionBinding> {
         self.observer.admission_binding()

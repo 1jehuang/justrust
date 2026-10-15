@@ -607,6 +607,7 @@ fn start_query<'tcx, R>(
     tcx: TyCtxt<'tcx>,
     job_id: QueryJobId,
     depth_limit: bool,
+    query_name: &'static str,
     compute: impl FnOnce() -> R,
 ) -> R {
     tls::with_context(move |icx| {
@@ -628,7 +629,7 @@ fn start_query<'tcx, R>(
             .query_system
             .jobs
             .observer()
-            .and_then(|observer| observer.enter_query_execution(job_id.0.get()));
+            .and_then(|observer| observer.enter_query_execution(job_id.0.get(), query_name));
         tls::enter_context(&icx, compute)
     })
 }
@@ -645,8 +646,9 @@ fn execute_job_non_incr<'tcx, C: QueryCache>(
 
     let prof_timer = tcx.prof.query_provider();
     // Call the query provider.
-    let value =
-        start_query(tcx, job_id, query.depth_limit, || (query.invoke_provider_fn)(tcx, key));
+    let value = start_query(tcx, job_id, query.depth_limit, query.name, || {
+        (query.invoke_provider_fn)(tcx, key)
+    });
     let dep_node_index = tcx.dep_graph.next_virtual_depnode_index();
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
@@ -677,7 +679,7 @@ fn execute_job_incr<'tcx, C: QueryCache>(
     if !query.eval_always {
         // The diagnostics for this query will be promoted to the current session during
         // `try_mark_green()`, so we can ignore them here.
-        if let Some(ret) = start_query(tcx, job_id, false, || try {
+        if let Some(ret) = start_query(tcx, job_id, false, query.name, || try {
             let (prev_index, dep_node_index) = dep_graph_data.try_mark_green(tcx, &dep_node)?;
             let value = load_from_disk_or_invoke_provider_green(
                 tcx,
@@ -696,7 +698,7 @@ fn execute_job_incr<'tcx, C: QueryCache>(
 
     let prof_timer = tcx.prof.query_provider();
 
-    let (result, dep_node_index) = start_query(tcx, job_id, query.depth_limit, || {
+    let (result, dep_node_index) = start_query(tcx, job_id, query.depth_limit, query.name, || {
         // Call the query provider.
         dep_graph_data.with_task(
             dep_node,

@@ -175,12 +175,13 @@ impl ExecutionObserver {
         &self,
         context: u64,
         job: u64,
+        name: &'static str,
     ) -> Option<crate::execution_timing::QueryExecutionGuard> {
         let recorder = self.timing.as_ref()?;
         let task = current_context()
             .filter(|task| std::ptr::eq(task.observer.as_ref(), self))
             .map(|task| task.id.task);
-        crate::execution_timing::enter_query(recorder, context, job, task)
+        crate::execution_timing::enter_query(recorder, context, job, name, task)
     }
 
     fn create(
@@ -767,12 +768,12 @@ mod tests {
                 .unwrap();
         let root = observer.root().unwrap();
         let root_guard = root.enter().unwrap();
-        let query = observer.enter_query_execution(1, 5).unwrap();
+        let query = observer.enter_query_execution(1, 5, "test_query").unwrap();
         assert_eq!(current_query_identity(), Some((1, 5)));
         {
             let _dispatch = suspend_for_dispatch();
             assert_eq!(current_query_identity(), None);
-            let _inner = observer.enter_query_execution(1, 6).unwrap();
+            let _inner = observer.enter_query_execution(1, 6, "test_query").unwrap();
             assert_eq!(current_query_identity(), Some((1, 6)));
             assert_eq!(current_task(), None);
         }
@@ -824,12 +825,12 @@ mod tests {
             assert!(crate::Registry::current().attach_execution_observer(Arc::clone(&observer)));
             let root = observer.root().unwrap();
             let guard = root.enter().unwrap();
-            let query = observer.enter_query_execution(1, 9).unwrap();
+            let query = observer.enter_query_execution(1, 9, "test_query").unwrap();
             crate::scope(|scope| {
                 scope.spawn(|_| {
                     assert!(is_dispatch_masked());
                     assert_eq!(current_query_identity(), None);
-                    let _inner = observer.enter_query_execution(1, 10).unwrap();
+                    let _inner = observer.enter_query_execution(1, 10, "test_query").unwrap();
                     assert_eq!(current_query_identity(), Some((1, 10)));
                 });
             });
@@ -863,18 +864,18 @@ mod tests {
             assert!(crate::Registry::current().attach_execution_observer(Arc::clone(&observer)));
             let root = observer.root().unwrap();
             let guard = root.enter().unwrap();
-            let query = observer.enter_query_execution(1, 20).unwrap();
+            let query = observer.enter_query_execution(1, 20, "test_query").unwrap();
             let barrier = std::sync::Barrier::new(2);
             crate::join(
                 || {
                     assert_eq!(current_query_identity(), None);
-                    let _child = observer.enter_query_execution(1, 21).unwrap();
+                    let _child = observer.enter_query_execution(1, 21, "test_query").unwrap();
                     barrier.wait();
                     assert_eq!(current_query_identity(), Some((1, 21)));
                 },
                 || {
                     assert_eq!(current_query_identity(), None);
-                    let _child = observer.enter_query_execution(1, 22).unwrap();
+                    let _child = observer.enter_query_execution(1, 22, "test_query").unwrap();
                     barrier.wait();
                     assert_eq!(current_query_identity(), Some((1, 22)));
                 },
@@ -910,11 +911,11 @@ mod tests {
         )
         .unwrap();
         let root_guard = source.root().unwrap().enter().unwrap();
-        let source_query = source.enter_query_execution(1, 30).unwrap();
+        let source_query = source.enter_query_execution(1, 30, "test_query").unwrap();
         {
-            let _receiver_query = receiver.enter_query_execution(2, 30).unwrap();
+            let _receiver_query = receiver.enter_query_execution(2, 30, "test_query").unwrap();
             {
-                let _nested = receiver.enter_query_execution(2, 31).unwrap();
+                let _nested = receiver.enter_query_execution(2, 31, "test_query").unwrap();
             }
             assert_eq!(current_query_identity(), Some((2, 30)));
             assert!(Arc::ptr_eq(
