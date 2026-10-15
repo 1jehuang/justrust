@@ -48,7 +48,8 @@ def check_flow(report, expected, pool):
     require(isinstance(report['limitations'], list) and report['limitations'],
             'instrumentation limitations must remain separate from issues')
     witness(report, pool)
-    return dict(**{key: report[key] for key in (*COUNTS, *COSTS)},
+    return dict(**{key: report[key] for key in (*COUNTS, *COSTS, 'records_complete',
+                                               'ready_records_complete', 'wait_records_complete')},
                 every_original_count_cost_and_witness_checked=True)
 
 
@@ -253,7 +254,7 @@ def main():
                     and row['execution_span_ns'] is None, 'public replay promoted full work/span')
 
     try:
-        warm = None
+        negative_source = None
         for label in LABELS:
             directory = accepted / (label + '-capture')
             (query_path, query), (pool_path, pool) = load_capture(directory)
@@ -334,10 +335,14 @@ def main():
             analyzer_record.update(compact_rankings_artifact_hash_mode_and_collisions_checked=True,
                                    artifact_sha256=artifact_hash, artifact_bytes=artifact.stat().st_size,
                                    compact_sha256=output_hash)
-            if label == 'readiness-warm-1':
-                warm = query_path, query, pool_path, pool
+            if label == 'readiness-cold-1':
+                require(expected['wait_attempts'] > 0 and expected['matched_readiness_transfers'] > 0,
+                        'authority controls require genuine original readiness transfers')
+                require((expected['known_task_cpu_ns'] or 0) > 0,
+                        'authority controls require independently measured task CPU')
+                negative_source = query_path, query, pool_path, pool
 
-        query_path, query, pool_path, pool = warm
+        query_path, query, pool_path, pool = negative_source
         for variant in ('missing-query', 'clock-mismatch', 'duplicate-pool', 'cross-producer-collision'):
             directory = evidence / (variant + '-copy')
             directory.mkdir(mode=0o700)
