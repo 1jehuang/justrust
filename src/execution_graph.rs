@@ -1891,6 +1891,81 @@ mod tests {
     }
 
     #[test]
+    fn query_cpu_ownership_all_copies_fail_closed_on_triples_and_cross_producer_collisions() {
+        for scenario in [
+            "triple-query",
+            "triple-pool",
+            "triple-both",
+            "resource-query",
+            "resource-pool",
+        ] {
+            let directory = resource_test_directory(scenario);
+            let (query, pool) = query_cpu_documents();
+            write_json(&directory, "query.json", &query);
+            write_json(&directory, "pool.json", &pool);
+            if matches!(scenario, "triple-query" | "triple-both") {
+                write_json(&directory, "query-copy-2.json", &query);
+                write_json(&directory, "query-copy-3.json", &query);
+            }
+            if matches!(scenario, "triple-pool" | "triple-both") {
+                write_json(&directory, "pool-copy-2.json", &pool);
+                write_json(&directory, "pool-copy-3.json", &pool);
+            }
+            if matches!(scenario, "resource-query" | "resource-pool") {
+                let mut resource = crate::execution_graph_resource::tests::fixture();
+                resource["capture_id"] = if scenario == "resource-query" {
+                    query["capture_id"].clone()
+                } else {
+                    pool["capture_id"].clone()
+                };
+                write_json(&directory, "resource-collision.json", &resource);
+            }
+            let values = query_cpu_values(&directory).unwrap();
+            let queries = values
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| v["producer"] == "rustc-query-admission")
+                .collect::<Vec<_>>();
+            let pools = values
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| v["producer"] == "rustc-thread-pool-join")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                queries.len(),
+                if matches!(scenario, "triple-query" | "triple-both") {
+                    3
+                } else {
+                    1
+                }
+            );
+            assert_eq!(
+                pools.len(),
+                if matches!(scenario, "triple-pool" | "triple-both") {
+                    3
+                } else {
+                    1
+                }
+            );
+            for query in queries {
+                let report = &query["query_cpu_ownership"];
+                assert!(report["query_execution_cpu_ns"].is_null(), "{scenario}");
+                assert_eq!(report["queries"], json!([]), "{scenario}");
+                assert_eq!(report["records_complete"], false, "{scenario}");
+            }
+            for pool in pools {
+                let cpu = &pool["observed_cpu"];
+                assert!(cpu["query_execution_cpu_ns"].is_null(), "{scenario}");
+                assert_eq!(cpu["records_complete"], false, "{scenario}");
+                assert_eq!(cpu["query_clock_aligned"], false, "{scenario}");
+            }
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
     fn pool3_query5_original_bytes_reconcile_clock_without_full_work_claims() {
         let directory = resource_test_directory("timing-clock");
         let docs = crate::execution_graph_resource_attachment::tests::documents();
