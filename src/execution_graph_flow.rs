@@ -140,6 +140,7 @@ pub(crate) struct FlowContext<'a> {
     pub task_high_water: u64,
     pub task_intervals: &'a BTreeMap<u64, crate::execution_graph_continuation::TaskInterval>,
     pub task_edges: &'a [crate::execution_graph_continuation::TaskEdge],
+    pub task_outcomes: &'a BTreeMap<u64, &'static str>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -511,6 +512,26 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
                 )),
                 "duplicate flow lifecycle role for one original task"
             );
+        }
+        if node.kind == NodeKind::TaskExit {
+            match context
+                .task_outcomes
+                .get(&node.task.expect("validated task exit"))
+            {
+                Some(&"normal") => ensure!(
+                    node.outcome == Some(Outcome::Returned),
+                    "flow task exit differs from original normal terminal"
+                ),
+                Some(&"panic") => ensure!(
+                    node.outcome == Some(Outcome::Unwound),
+                    "flow task exit differs from original panic terminal"
+                ),
+                Some(_) => anyhow::bail!("unsupported original task terminal outcome"),
+                None => ensure!(
+                    !context.structural_complete,
+                    "flow task exit lacks original task terminal authority"
+                ),
+            }
         }
         ensure!(
             (node.kind == NodeKind::CpuSegment) == node.segment_id.is_some(),
@@ -1186,6 +1207,7 @@ pub(crate) mod tests {
                 task_high_water: 2,
                 task_intervals: &tasks,
                 task_edges: &[],
+                task_outcomes: &BTreeMap::new(),
                 pool_sealed: true,
                 structural_complete: true,
                 timing: t,
@@ -1642,6 +1664,8 @@ pub(crate) mod tests {
             },
         ];
         let q = authority(&t);
+        let task_outcomes =
+            BTreeMap::from([(1, "normal"), (2, "normal"), (3, "normal"), (4, "normal")]);
         let run = |value| {
             assess(
                 serde_json::from_value(value).unwrap(),
@@ -1657,6 +1681,7 @@ pub(crate) mod tests {
                     task_high_water: 5,
                     task_intervals: &tasks,
                     task_edges: &task_edges,
+                    task_outcomes: &task_outcomes,
                 },
             )
         };
@@ -1671,6 +1696,14 @@ pub(crate) mod tests {
                 .any(|s| s.query_name.as_deref() == Some("type_of") && s.cpu_ns == Some(2))
         );
         let mut duplicate = v.clone();
+        let mut wrong_outcome = v.clone();
+        wrong_outcome["nodes"][3]["outcome"] = json!("unwound");
+        assert!(
+            run(wrong_outcome)
+                .unwrap_err()
+                .to_string()
+                .contains("original normal terminal")
+        );
         let mut extra = duplicate["nodes"][1].clone();
         extra["id"] = json!(12);
         duplicate["nodes"].as_array_mut().unwrap().push(extra);
