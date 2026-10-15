@@ -81,6 +81,11 @@ pub struct QueryVTable<'tcx, C: QueryCache> {
     /// [^1]: [`TyCtxt`], [`crate::query::TyCtxtAt`], [`crate::query::TyCtxtEnsureOk`],
     /// [`crate::query::TyCtxtEnsureDone`]
     pub execute_query_fn: fn(TyCtxt<'tcx>, Span, C::Key, QueryMode) -> Option<C::Value>,
+    /// Explicit diagnostic path retaining the actual returned result index.
+    /// Only present for opted-in nonincremental sessions. This does not identify
+    /// fresh provider execution or an execution prerequisite.
+    pub observed_non_incr_execute_query_fn:
+        Option<fn(TyCtxt<'tcx>, Span, C::Key, QueryMode) -> (C::Value, Option<DepNodeIndex>)>,
 }
 
 impl<'tcx, C: QueryCache> QueryVTable<'tcx, C> {

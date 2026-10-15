@@ -63,9 +63,29 @@ fn main() {
     // Old default controls stay exactly two lines. Timing is a separate opt-in.
     let timing = lines.next().unwrap_or("off");
     assert!(matches!(timing, "off" | "timing"), "invalid timing control");
+    let dispatch = lines.next().unwrap_or("off");
+    assert!(
+        matches!(dispatch, "off" | "dispatch"),
+        "invalid dispatch control"
+    );
     assert!(lines.next().is_none(), "unexpected fixture controls");
     let observer = if capture == "-" {
         None
+    } else if dispatch == "dispatch" {
+        #[cfg(frontend_dispatch_api)]
+        {
+            Some(
+                QueryAdmissionObserver::new_with_event_capacity_and_options(
+                    std::path::Path::new(capture),
+                    capacity.parse().expect("numeric dispatch capacity"),
+                    timing == "timing",
+                    true,
+                )
+                .expect("private dispatch capture rejected"),
+            )
+        }
+        #[cfg(not(frontend_dispatch_api))]
+        panic!("dispatch requires matching rebuilt private metadata");
     } else if timing == "timing" {
         #[cfg(frontend_timing_api)]
         {

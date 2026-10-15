@@ -481,27 +481,38 @@ impl QueryAdmissionObserver {
     /// Invalid budgets are refused before touching the directory. This API does
     /// not change compiler flags, environment, cache keys, or receipt semantics.
     pub fn new_with_event_capacity(directory: &Path, capacity: usize) -> Option<Self> {
-        Self::new_configured(directory, capacity, false)
+        Self::new_with_event_capacity_and_options(directory, capacity, false, false)
     }
 
     /// Explicit diagnostic execution timing. Default capture remains query4.
     /// Opt-in query5 endorses the attached pool3's exact shared clock origin,
     /// without promoting dependency or full-pipeline coverage.
     pub fn new_with_event_capacity_and_timing(directory: &Path, capacity: usize) -> Option<Self> {
-        Self::new_configured(directory, capacity, true)
+        Self::new_with_event_capacity_and_options(directory, capacity, true, false)
     }
 
     pub fn execution_timing_enabled(&self) -> bool {
         self.0.execution_timing
     }
 
-    fn new_configured(directory: &Path, capacity: usize, execution_timing: bool) -> Option<Self> {
+    pub fn dispatch_resolutions_enabled(&self) -> bool {
+        self.0.reads.dispatch_resolutions_enabled()
+    }
+
+    /// Explicit diagnostic options. Resolution metadata selects query6/reads2;
+    /// timing is independent and disabled unless requested. Defaults stay query4.
+    pub fn new_with_event_capacity_and_options(
+        directory: &Path,
+        capacity: usize,
+        execution_timing: bool,
+        dispatch_resolutions: bool,
+    ) -> Option<Self> {
         if !(1..=crate::query_task_bindings::MAX_EVENT_CAPACITY).contains(&capacity) {
             return None;
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (directory, capacity, execution_timing);
+            let _ = (directory, capacity, execution_timing, dispatch_resolutions);
             return None;
         }
         #[cfg(target_os = "linux")]
@@ -550,9 +561,10 @@ impl QueryAdmissionObserver {
                 wait_ids_exhausted: AtomicBool::new(false),
                 #[cfg(test)]
                 wait_id_ceiling: u64::MAX - 1,
-                reads: crate::query_reads::QueryReadObserver::with_bindings_and_event_capacity(
+                reads: crate::query_reads::QueryReadObserver::with_bindings_and_event_capacity_and_dispatch_resolutions(
                     Arc::clone(&bindings),
                     capacity,
+                    dispatch_resolutions,
                 )?,
                 bindings,
                 returned: AtomicBool::new(false),
@@ -905,8 +917,15 @@ impl Data {
         capture_id: &str,
         expected_contexts: u64,
         execution_timing: bool,
+        dispatch_resolutions: bool,
     ) -> String {
-        let schema = if execution_timing { 5 } else { 4 };
+        let schema = if dispatch_resolutions {
+            6
+        } else if execution_timing {
+            5
+        } else {
+            4
+        };
         let mut out = format!(
             "{{\"schema\":{schema},\"capture_id\":\"{capture_id}\",\"producer\":\"rustc-query-admission\",\"scope\":\"query-job-admission-lifecycle\",\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"interface_outcome\":\"{}\",\"capture_complete\":{},\"lost_events\":{},\"expected_contexts\":{expected_contexts},\"opaque_boundaries\":[\"fast-cache-hits\",\"race-cache-hits\",\"green-ensure-no-job\",\"feeds\",\"direct-paths\",\"nonquery\",\"resource-internals\",\"driver-and-process-outcome\",\"cargo-parent-binding\",\"cache-read-dependencies\",\"wait-and-resource-dependencies\"],\"contexts\":[",
             if returned { "returned" } else { "interrupted" },
@@ -970,7 +989,13 @@ impl Drop for Inner {
         let wait_high = self.next_wait.load(Ordering::Relaxed);
         let missing_waits = wait_high.saturating_sub(1).saturating_sub(data.waits.len() as u64);
         data.lost = data.lost.saturating_add(missing_waits);
-        let mut json = data.json(returned, &name, expected_contexts, self.execution_timing);
+        let mut json = data.json(
+            returned,
+            &name,
+            expected_contexts,
+            self.execution_timing,
+            self.reads.dispatch_resolutions_enabled(),
+        );
         // Preserve admission completeness as its own scope, not full causal coverage.
         json.truncate(json.len().saturating_sub(2));
         data.append_wait_json(&mut json, wait_high, returned);
@@ -982,10 +1007,14 @@ impl Drop for Inner {
             self.next_context.load(Ordering::Relaxed).checked_sub(1),
             [requests, reads, results, wait_high],
         );
-        if self.execution_timing {
+        if self.execution_timing || self.reads.dispatch_resolutions_enabled() {
             json.push_str(",\"execution_clock\":");
             #[cfg(not(test))]
-            let clock_pool = self.pool.0.get().map(|pool| (pool.capture_id(), pool.observer_id()));
+            let clock_pool = if self.execution_timing {
+                self.pool.0.get().map(|pool| (pool.capture_id(), pool.observer_id()))
+            } else {
+                None
+            };
             #[cfg(test)]
             let clock_pool: Option<(&str, u64)> = None;
             if let Some((pool_capture_id, pool_observer)) = clock_pool {
@@ -1474,6 +1503,20 @@ mod tests {
                     .is_none()
             );
             assert!(!path.exists());
+            for timing in [false, true] {
+                for resolutions in [false, true] {
+                    assert!(
+                        QueryAdmissionObserver::new_with_event_capacity_and_options(
+                            &path,
+                            capacity,
+                            timing,
+                            resolutions,
+                        )
+                        .is_none()
+                    );
+                    assert!(!path.exists());
+                }
+            }
         }
     }
     #[cfg(target_os = "linux")]
@@ -1484,6 +1527,7 @@ mod tests {
         assert_eq!(default.0.reads.event_capacity(), 100_000);
         assert_eq!(default.0.bindings.event_capacity(), 100_000);
         assert!(!default.execution_timing_enabled());
+        assert!(!default.dispatch_resolutions_enabled());
         let transport = QueryAdmissionObserver::new_from_directory(
             default.0._directory_handle.try_clone().unwrap(),
             "capacity-transport-default".into(),
@@ -1492,6 +1536,7 @@ mod tests {
         assert_eq!(transport.0.reads.event_capacity(), 100_000);
         assert_eq!(transport.0.bindings.event_capacity(), 100_000);
         assert!(!transport.execution_timing_enabled());
+        assert!(!transport.dispatch_resolutions_enabled());
         drop((transport, default));
         fs::remove_dir_all(path).unwrap();
     }
@@ -1509,6 +1554,59 @@ mod tests {
         assert!(receipt(&path).contains("\"schema\":5"));
         assert!(receipt(&path).contains("\"execution_clock\":null"));
         fs::remove_dir_all(path).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn explicit_options_select_root6_reads2_without_changing_other_budgets() {
+        for (timing, resolutions, schema) in
+            [(false, false, 4), (true, false, 5), (false, true, 6), (true, true, 6)]
+        {
+            let path = private_directory();
+            let observer = QueryAdmissionObserver::new_with_event_capacity_and_options(
+                &path,
+                7,
+                timing,
+                resolutions,
+            )
+            .unwrap();
+            assert_eq!(observer.execution_timing_enabled(), timing);
+            assert_eq!(observer.dispatch_resolutions_enabled(), resolutions);
+            assert_eq!(observer.reads().dispatch_resolutions_enabled(), resolutions);
+            assert_eq!(observer.0.reads.event_capacity(), 7);
+            assert_eq!(observer.0.bindings.event_capacity(), 7);
+            let context = observer.context();
+            context.admit(1, None, Instant::now()).complete();
+            context.snapshot(2);
+            observer
+                .reads()
+                .begin(Some(context.id()), Some(1), crate::query_reads::RequestMode::Get)
+                .finish_with_resolution(crate::query_reads::RequestOutcome::Value, Some(9));
+            observer.finalize_interface_returned();
+            drop((context, observer));
+            let text = receipt(&path);
+            assert!(text.starts_with(&format!("{{\"schema\":{schema},")));
+            let reads_schema = if resolutions { 2 } else { 1 };
+            assert!(text.contains(&format!("\"query_reads\":{{\"schema\":{reads_schema},")));
+            assert_eq!(text.contains("\"execution_clock\":null"), timing || resolutions);
+            assert_eq!(text.contains("resolved_dispatch"), resolutions);
+            assert_eq!(text.contains("\"resolution\":"), resolutions);
+            assert!(text.contains("\"semantic_complete\":false"));
+            assert!(text.contains("\"full_pipeline_complete\":false"));
+            fs::remove_dir_all(path).unwrap();
+        }
+    }
+    #[test]
+    fn root_options_preserve_legacy_lifecycle_serialization_bytes() {
+        let data = Data::default();
+        let legacy = data.json(false, "fixed-root", 0, false, false);
+        let timed = data.json(false, "fixed-root", 0, true, false);
+        assert_eq!(timed.replacen("\"schema\":5", "\"schema\":4", 1), legacy);
+        for timing in [false, true] {
+            let resolved = data.json(false, "fixed-root", 0, timing, true);
+            assert_eq!(resolved.replacen("\"schema\":6", "\"schema\":4", 1), legacy);
+        }
+        assert!(!legacy.contains("execution_clock"));
+        assert!(!legacy.contains("resolution"));
     }
     #[cfg(target_os = "linux")]
     #[test]
@@ -2014,7 +2112,8 @@ mod tests {
         data.contexts[0].1 = Some(1);
         assert!(data.complete(1));
         assert!(
-            data.json(false, "1-1", 1, false).contains("\"interface_outcome\":\"interrupted\"")
+            data.json(false, "1-1", 1, false, false)
+                .contains("\"interface_outcome\":\"interrupted\"")
         );
         data.lost = 1;
         assert!(!data.complete(1));

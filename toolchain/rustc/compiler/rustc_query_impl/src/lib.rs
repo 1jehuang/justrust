@@ -38,7 +38,10 @@ pub fn query_system<'tcx>(
     QuerySystem {
         arenas: Default::default(),
         dep_kind_vtables: dep_kind_vtables::make_dep_kind_vtables(arena),
-        query_vtables: query_vtables::make_query_vtables(incremental),
+        query_vtables: query_vtables::make_query_vtables(
+            incremental,
+            observer.is_some_and(|observer| observer.dispatch_resolutions_enabled()),
+        ),
         side_effects: Default::default(),
         used_features: Default::default(),
         on_disk_cache,

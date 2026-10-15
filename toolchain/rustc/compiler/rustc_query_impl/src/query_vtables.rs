@@ -100,6 +100,23 @@ macro_rules! define_queries {
                     }
                 }
 
+                pub(crate) mod execute_query_non_incr_observed {
+                    use super::*;
+                    use rustc_middle::queries::$name::{Key, Value};
+
+                    #[inline(never)]
+                    pub(crate) fn __rust_end_short_backtrace<'tcx>(
+                        tcx: TyCtxt<'tcx>,
+                        span: Span,
+                        key: Key<'tcx>,
+                        __mode: QueryMode,
+                    ) -> (Erased<Value<'tcx>>, Option<rustc_middle::dep_graph::DepNodeIndex>) {
+                        crate::execution::execute_query_non_incr_observed_inner(
+                            &tcx.query_system.query_vtables.$name, tcx, span, key,
+                        )
+                    }
+                }
+
                 /// Defines an `invoke_provider` function that calls the query's provider,
                 /// to be used as a function pointer in the query's vtable.
                 ///
@@ -139,7 +156,7 @@ macro_rules! define_queries {
                     }
                 }
 
-                pub(crate) fn make_query_vtable<'tcx>(incremental: bool)
+                pub(crate) fn make_query_vtable<'tcx>(incremental: bool, dispatch_resolutions: bool)
                     -> QueryVTable<'tcx, rustc_middle::queries::$name::Cache<'tcx>>
                 {
                     use rustc_middle::queries::$name::Value;
@@ -197,6 +214,11 @@ macro_rules! define_queries {
                         } else {
                             crate::query_vtables::$name::execute_query_non_incr::__rust_end_short_backtrace
                         },
+                        observed_non_incr_execute_query_fn: if !incremental && dispatch_resolutions {
+                            Some(crate::query_vtables::$name::execute_query_non_incr_observed::__rust_end_short_backtrace)
+                        } else {
+                            None
+                        },
                     }
                 }
 
@@ -214,12 +236,12 @@ macro_rules! define_queries {
             }
         )*
 
-        pub(crate) fn make_query_vtables<'tcx>(incremental: bool)
+        pub(crate) fn make_query_vtables<'tcx>(incremental: bool, dispatch_resolutions: bool)
             -> rustc_middle::queries::QueryVTables<'tcx>
         {
             rustc_middle::queries::QueryVTables {
                 $(
-                    $name: crate::query_vtables::$name::make_query_vtable(incremental),
+                    $name: crate::query_vtables::$name::make_query_vtable(incremental, dispatch_resolutions),
                 )*
             }
         }

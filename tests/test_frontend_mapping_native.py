@@ -26,6 +26,15 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def fixture_controls(sink, *, large=False, timing=False, dispatch=False):
+    text = str(sink or '-') + '\n' + ('1000000' if large or timing or dispatch else 'default') + '\n'
+    if timing or dispatch:
+        text += ('timing' if timing else 'off') + '\n'
+    if dispatch:
+        text += 'dispatch\n'
+    return text
+
+
 @unittest.skipUnless(os.environ.get('JR_FRONTEND_RUSTC'), 'requires accepted JR_FRONTEND_RUSTC')
 class FrontendMappingNative(unittest.TestCase):
     def logged(self, command, label, control=None, expected=0):
@@ -136,12 +145,15 @@ class FrontendMappingNative(unittest.TestCase):
             build_args.append('--cfg=frontend_large_capacity')
         if self._testMethodName == 'test_real_itoa_timing_cold_and_incremental':
             build_args.extend(['--cfg=frontend_large_capacity', '--cfg=frontend_timing_api'])
+        if self._testMethodName == 'test_real_itoa_dispatch_resolutions':
+            build_args.extend(['--cfg=frontend_large_capacity', '--cfg=frontend_timing_api',
+                               '--cfg=frontend_dispatch_api'])
         if os.environ.get('JR_FRONTEND_SCOPE_API'):
             build_args.append('--cfg=frontend_scope_api')
         self.logged(build_args, 'driver-build')
 
     def compile(self, label, threads, output, incremental=None, capture=False, large=False,
-                timing=False):
+                timing=False, dispatch=False):
         sink = self.root / (label + '-capture') if capture else None
         args = ['--sysroot', self.sysroot, '--crate-name=itoa', '--crate-type=rlib',
                 '--edition=' + self.edition, '--emit=link', '-Copt-level=0', '-Cdebuginfo=0',
@@ -149,9 +161,7 @@ class FrontendMappingNative(unittest.TestCase):
                 self.source, '-o', output]
         if incremental is not None:
             args.append('-Cincremental=' + str(incremental))
-        control = str(sink or '-') + '\n' + ('1000000' if large or timing else 'default') + '\n'
-        if timing:
-            control += 'timing\n'
+        control = fixture_controls(sink, large=large, timing=timing, dispatch=dispatch)
         result = self.logged([self.callback, *args], label, control=control)
         self.assertTrue(output.is_file(), 'real link-emitted rlib required')
         self.assertGreater(output.stat().st_size, 0)
@@ -190,11 +200,15 @@ class FrontendMappingNative(unittest.TestCase):
         if sink is None:
             return artifact, None, args, result.stderr, payload_hashes, executable_hash
         graph_command = [self.client, 'graph', sink, '--json']
+        if dispatch:
+            rejected = self.logged(graph_command, label + '-implicit-dispatch-graph', expected=None)
+            self.assertNotEqual(rejected.returncode, 0, 'query6 requires explicit dispatch analysis')
+            graph_command.append('--dispatch-result-provenance')
         if large:
             rejected = self.logged(graph_command, label + '-default-graph', expected=None)
             self.assertNotEqual(rejected.returncode, 0, 'oversized capture default guard must reject')
             graph_command.append('--large-capture')
-        if timing and not large:
+        if (timing or dispatch) and not large:
             graph_command.append('--large-capture')
         graph = self.logged(graph_command, label + '-graph')
         assessments = json.loads(graph.stdout)
@@ -209,7 +223,15 @@ class FrontendMappingNative(unittest.TestCase):
                 pools.append(row)
         self.assertEqual(len(queries), 1, 'one actual native query root expected')
         query = queries[0]
-        if timing:
+        if dispatch:
+            self.assertEqual(query['schema'], 6)
+            bindings = self.assert_timed_point_inventory(query, schema=6)
+            if not timing:
+                self.assertIsNone(query['execution_clock'])
+                for pool in pools:
+                    self.assertEqual(pool['schema'], 2)
+                    self.assertNotIn('timing', pool)
+        elif timing:
             self.assertEqual(query['schema'], 5)
             bindings = self.assert_timed_point_inventory(query)
         else:
@@ -244,6 +266,8 @@ class FrontendMappingNative(unittest.TestCase):
             'pool_dropped_events': sum(p['dropped_events'] for p in pools),
             'public': assessments,
         }
+        if dispatch:
+            summary['dispatch'] = self.assert_dispatch_receipts(query, assessments, sink, label)
         if timing:
             summary['timing'] = self.assert_timed_receipts(query, pools, assessments, sink, label,
                                                         large=large)
@@ -273,9 +297,9 @@ class FrontendMappingNative(unittest.TestCase):
             self.assertIsNone(assessment['execution_span_ns'])
         return artifact, summary, args, result.stderr, payload_hashes, executable_hash
 
-    def assert_timed_point_inventory(self, query):
-        """Same allocator contract as query4, without rewriting the actual query5 header."""
-        self.assertEqual(query['schema'], 5)
+    def assert_timed_point_inventory(self, query, schema=5):
+        """Check allocator contracts without rewriting actual query5/query6 headers."""
+        self.assertEqual(query['schema'], schema)
         bindings = query['task_bindings']
         reads = query['query_reads']
         contexts = {c['context_id']: c['allocator_high_water'] for c in query['contexts']}
@@ -437,7 +461,10 @@ class FrontendMappingNative(unittest.TestCase):
                 (negative / path.name).write_text(json.dumps(raw))
             else:
                 shutil.copyfile(path, negative / path.name)
-        rejected = self.logged([self.client, 'graph', negative, '--json', '--large-capture'],
+        replay_command = [self.client, 'graph', negative, '--json', '--large-capture']
+        if query['schema'] == 6:
+            replay_command.append('--dispatch-result-provenance')
+        rejected = self.logged(replay_command,
                                label + '-unilateral-clock-graph', expected=None)
         if rejected.returncode == 0:
             changed = json.loads(rejected.stdout)
@@ -455,6 +482,183 @@ class FrontendMappingNative(unittest.TestCase):
                 'measured_segments': measured, 'failed_segments': failed,
                 'observed_threads': len(per_thread), 'clock_aligned': True,
                 'unilateral_clock_rejected_or_unaligned': True}
+
+    def assert_dispatch_receipts(self, query, assessments, sink, label):
+        """Reconstruct every certified row directly from original native events."""
+        reads = query['query_reads']
+        self.assertEqual(reads['schema'], 2)
+        self.assertTrue(reads['records_complete'])
+        self.assertEqual(reads['lost_events'], 0)
+        self.assertFalse(reads['semantic_complete'])
+        events = reads['events']
+        starts, terminals, publications = {}, {}, {}
+        hits = set()
+        facts = 0
+        admitted = {(e['context_id'], e['job_id']) for e in query['events']
+                    if e['kind'] == 'admitted'}
+        for position, event in enumerate(events):
+            self.assertIn('resolution', event)
+            kind = event['kind']
+            if kind == 'request_started':
+                self.assertNotIn(event['request_id'], starts)
+                starts[event['request_id']] = (position, event)
+            elif kind in ('request_finished', 'request_interrupted'):
+                self.assertNotIn(event['request_id'], terminals)
+                terminals[event['request_id']] = (position, event)
+            elif kind == 'cache_hit':
+                hits.add(event['request_id'])
+            elif kind == 'result_produced':
+                key = (event['context_id'], event['dep_node_index'])
+                self.assertNotIn(key, publications)
+                publications[key] = (position, event)
+            resolution = event['resolution']
+            if resolution is not None:
+                self.assertEqual(kind, 'request_finished')
+                self.assertEqual(set(resolution), {'source', 'dep_node_index'})
+                self.assertEqual(resolution['source'], 'resolved_dispatch')
+                self.assertIn((event['mode'], event['outcome']),
+                              (('get', 'value'), ('ensure_ok', 'ensured'),
+                               ('ensure_result', 'ensured')))
+                facts += resolution['dep_node_index'] is not None
+        expected = []
+        for request_id, (start_position, start) in sorted(starts.items()):
+            terminal_position, terminal = terminals[request_id]
+            self.assertLess(start_position, terminal_position)
+            self.assertEqual((terminal['context_id'], terminal['consumer_job_id'], terminal['mode']),
+                             (start['context_id'], start['consumer_job_id'], start['mode']))
+            resolution = terminal['resolution']
+            if request_id in hits:
+                self.assertIsNone(resolution, 'first-cache path cannot also claim dispatch')
+            if resolution is None:
+                continue
+            self.assertNotIn(request_id, hits)
+            index = resolution['dep_node_index']
+            context, consumer = start['context_id'], start['consumer_job_id']
+            if index is None or context is None or consumer is None:
+                continue
+            publication = publications.get((context, index))
+            if publication is None:
+                continue
+            publication_position, produced = publication
+            producer = produced['producer_job_id']
+            if publication_position >= terminal_position:
+                continue
+            if (context, consumer) not in admitted or (context, producer) not in admitted:
+                continue
+            expected.append({
+                'request_id': request_id, 'context_id': context, 'consumer_job_id': consumer,
+                'result_id': produced['result_id'], 'producer_job_id': producer,
+                'dep_node_index': index, 'request_start_event_index': start_position,
+                'publication_event_index': publication_position,
+                'request_terminal_event_index': terminal_position})
+        public = next(a for a in assessments if a['producer'] == 'rustc-query-admission')
+        report = public['dispatch_result_provenance']
+        self.assertEqual(report['scope'], 'observed-dispatch-result-availability-not-execution-dag')
+        self.assertEqual(report['relations'], expected)
+        self.assertEqual(report['observed_requests'], len(starts))
+        self.assertEqual(report['observed_dispatch_resolutions'],
+                         sum(e['resolution'] is not None for e in events))
+        self.assertEqual(report['resolved_requests'], len(expected))
+        self.assertEqual(report['unresolved_requests'], len(starts) - len(expected))
+        self.assertEqual(sum(report['unresolved_reasons'].values()), report['unresolved_requests'])
+        self.assertEqual(report['distinct_publishing_job_relations'], len({
+            (r['context_id'], r['producer_job_id'], r['consumer_job_id']) for r in expected}))
+        self.assertTrue(report['records_complete'])
+        self.assertNotIn('cache_call_provenance', public)
+        # Both analyses are independently opted in and cannot alter one another.
+        both = json.loads(self.logged([
+            self.client, 'graph', sink, '--json', '--large-capture',
+            '--dispatch-result-provenance', '--cache-call-provenance'], label + '-both-graph').stdout)
+        both_query = next(a for a in both if a['producer'] == 'rustc-query-admission')
+        cache = both_query.pop('cache_call_provenance')
+        self.assertEqual(both, assessments)
+        self.assertGreater(cache['observed_cache_hits'], 0)
+        for event in events:
+            if event['mode'] == 'feed' or event['kind'] != 'request_finished':
+                self.assertIsNone(event['resolution'])
+        return {'nonnull_dispatch_indices': facts, 'resolved_requests': len(expected),
+                'observed_dispatch_resolutions': report['observed_dispatch_resolutions'],
+                'first_cache_requests': len(hits), 'all_rows_independently_verified': True}
+
+    def replay_dispatch_legacy(self):
+        for schema in (4, 5):
+            supplied = os.environ.get(f'JR_FRONTEND_QUERY{schema}_REPLAY')
+            self.assertTrue(supplied, f'dispatch acceptance requires frozen query{schema} replay')
+            reference = Path(supplied).resolve(strict=True)
+            before = {p.name: digest(p) for p in reference.glob('*.json')}
+            self.assertTrue(before)
+            label = reference.name.removesuffix('-capture')
+            expected = json.loads((reference.parent / (label + '-assessment.json')).read_text())
+            command = [self.client, 'graph', reference, '--json', '--large-capture']
+            observed = json.loads(self.logged(command, f'dispatch-query{schema}-replay').stdout)
+            self.assertEqual(observed, expected, 'legacy default assessment changed')
+            self.assertEqual(before, {p.name: digest(p) for p in reference.glob('*.json')})
+            for row in observed:
+                self.assertNotIn('dispatch_result_provenance', row)
+                self.assertNotIn('cache_call_provenance', row)
+            (self.root / f'dispatch-query{schema}-replay-hashes.json').write_text(
+                json.dumps(before, indent=2))
+
+    def assert_dispatch_control_neutrality(self, labels):
+        logs = [json.loads((self.root / (label + '.json')).read_text()) for label in labels]
+        for first, other in zip(logs, logs[1:]):
+            self.assertEqual(first['command'], other['command'], 'capture changed process argv')
+            self.assertEqual(first['environment_sha256'], other['environment_sha256'],
+                             'capture changed process environment')
+            self.assertEqual(first['stdout'], other['stdout'])
+            self.assertEqual(first['stderr'], other['stderr'])
+        self.assertEqual(logs[0]['control_sha256'], logs[-1]['control_sha256'])
+        self.assertNotEqual(logs[0]['control_sha256'], logs[1]['control_sha256'])
+
+    @unittest.skipUnless(os.environ.get('JR_FRONTEND_DISPATCH_RESOLUTIONS'),
+                         'requires coherent explicit dispatch compiler and consumer')
+    def test_real_itoa_dispatch_resolutions(self):
+        self.replay_dispatch_legacy()
+        observations = []
+        for threads in (1, 4):
+            output = self.root / f'libitoa-dispatch-t{threads}.rlib'
+            cold = [self.compile(f'dispatch-cold-t{threads}-{n}', threads, output,
+                                 capture=on, dispatch=True)
+                    for n, on in enumerate((False, True, False))]
+            self.assert_dispatch_control_neutrality([f'dispatch-cold-t{threads}-{n}' for n in range(3)])
+            for first, other in zip(cold, cold[1:]):
+                self.assertEqual(first[0], other[0], 'dispatch changed cold archive bytes')
+                self.assertEqual(first[2:], other[2:], 'dispatch changed argv/diagnostics/payload/run')
+            evidence = cold[1][1]
+            self.assertGreater(evidence['dispatch']['nonnull_dispatch_indices'], 0)
+            self.assertGreater(evidence['dispatch']['resolved_requests'], 0)
+            query_public = next(a for a in evidence['public']
+                                if a['producer'] == 'rustc-query-admission')
+            self.assertGreater(query_public['query_reads']['unbound_read_reasons']['disabled'], 0)
+            self.assertFalse(query_public['query_reads']['semantic_complete'])
+            observations.append(evidence)
+            incremental = self.root / f'dispatch-incremental-t{threads}'
+            self.compile(f'dispatch-warmup-t{threads}', threads, output,
+                         incremental=incremental, dispatch=True)
+            warm = [self.compile(f'dispatch-warm-t{threads}-{n}', threads, output,
+                                 incremental=incremental, capture=on, dispatch=True)
+                    for n, on in enumerate((False, True, False))]
+            self.assert_dispatch_control_neutrality([f'dispatch-warm-t{threads}-{n}' for n in range(3)])
+            baseline = self.compile(f'dispatch-warm-off-control-t{threads}', threads, output,
+                                    incremental=incremental, dispatch=True)
+            for first, other in zip(warm, warm[1:]):
+                self.assertEqual(first[2:], other[2:], 'warm dispatch changed observable payload')
+            self.assertEqual(warm[-1][4:], baseline[4:], 'OFF/OFF incremental baseline unstable')
+            self.assertEqual(warm[1][1]['dispatch']['observed_dispatch_resolutions'], 0,
+                             'unsupported incremental execution acquired dispatch metadata')
+            observations.append(warm[1][1])
+        mixed = self.compile('dispatch-with-timing', 4, self.root / 'libitoa-dispatch-mixed.rlib',
+                             capture=True, timing=True, dispatch=True)
+        self.assertGreater(mixed[1]['dispatch']['resolved_requests'], 0)
+        observations.append(mixed[1])
+        self.assertEqual(self.source_hashes, {
+            str(p.relative_to(self.source_root)): digest(p)
+            for p in sorted((self.source_root / 'src').rglob('*.rs'))})
+        (self.root / 'dispatch-acceptance.json').write_text(json.dumps({
+            'observations': observations, 'cold_archive_byte_identity': True,
+            'warm_rmeta_object_consumer_identity': True,
+            'full_pipeline_complete': False, 'cpu_work_ns': None,
+            'execution_span_ns': None}, indent=2))
 
     def replay_query4(self):
         """Replay original accepted bytes, never reserialize or amend the old capture."""
@@ -579,6 +783,15 @@ class FrontendMappingNative(unittest.TestCase):
 
 
 class FixtureControlSafety(unittest.TestCase):
+    def test_legacy_and_dispatch_control_packets_are_separate(self):
+        self.assertEqual(fixture_controls(None), '-\ndefault\n')
+        self.assertEqual(fixture_controls('/capture'), '/capture\ndefault\n')
+        self.assertEqual(fixture_controls('/capture', large=True), '/capture\n1000000\n')
+        self.assertEqual(fixture_controls('/capture', timing=True), '/capture\n1000000\ntiming\n')
+        self.assertEqual(fixture_controls('/capture', dispatch=True), '/capture\n1000000\noff\ndispatch\n')
+        self.assertEqual(fixture_controls('/capture', timing=True, dispatch=True),
+                         '/capture\n1000000\ntiming\ndispatch\n')
+
     def test_foreign_descriptor_is_not_overwritten(self):
         read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
         owned = None

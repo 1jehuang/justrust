@@ -162,6 +162,49 @@ fn begin_read(tcx: TyCtxt<'_>, mode: RequestMode) -> Option<QueryReadRequest<'_>
     Some(observer.reads().begin(context.map(|context| context.id()), consumer, mode))
 }
 
+/// Dispatch observation is selected using the saved request's receiver identity,
+/// never a post-execution TLS lookup. The legacy function and return ABI remain
+/// the default. The nested option distinguishes no observation from an observed
+/// dispatch that returned no certifiable index.
+#[inline(always)]
+fn execute_with_resolution<'tcx, C: QueryCache>(
+    tcx: TyCtxt<'tcx>,
+    span: Span,
+    query: &'tcx QueryVTable<'tcx, C>,
+    key: C::Key,
+    mode: QueryMode,
+    request: Option<&QueryReadRequest<'_>>,
+) -> (Option<C::Value>, Option<Option<u32>>) {
+    if let Some(execute) = query.observed_non_incr_execute_query_fn
+        && let Some(request) = request
+        && let Some(observer) = tcx.sess.query_admission.as_ref()
+        && request.matches_dispatch_context(
+            observer.reads(),
+            tcx.query_system.jobs.observer().map(|context| context.id()),
+        )
+    {
+        let (value, index) = execute(tcx, span, key, mode);
+        (Some(value), Some(index.map(|index| index.as_u32())))
+    } else {
+        ((query.execute_query_fn)(tcx, span, key, mode), None)
+    }
+}
+
+#[inline]
+fn finish_read(
+    request: Option<QueryReadRequest<'_>>,
+    outcome: RequestOutcome,
+    resolution: Option<Option<u32>>,
+) {
+    if let Some(request) = request {
+        if let Some(index) = resolution {
+            request.finish_with_resolution(outcome, index);
+        } else {
+            request.finish(outcome);
+        }
+    }
+}
+
 /// Shared implementation of `tcx.$query(..)` and `tcx.at(span).$query(..)`
 /// for all queries.
 #[inline(always)]
@@ -175,13 +218,15 @@ where
     C: QueryCache,
 {
     let request = begin_read(tcx, RequestMode::Get);
-    let value = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
-        Some(value) => value,
-        None => (query.execute_query_fn)(tcx, span, key, QueryMode::Get).unwrap(),
+    let (value, resolution) = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
+        Some(value) => (value, None),
+        None => {
+            let (value, resolution) =
+                execute_with_resolution(tcx, span, query, key, QueryMode::Get, request.as_ref());
+            (value.unwrap(), resolution)
+        }
     };
-    if let Some(request) = request {
-        request.finish(RequestOutcome::Value);
-    }
+    finish_read(request, RequestOutcome::Value, resolution);
     value
 }
 
@@ -195,19 +240,23 @@ pub(crate) fn query_ensure_ok<'tcx, C>(
     C: QueryCache,
 {
     let request = begin_read(tcx, RequestMode::EnsureOk);
-    let outcome = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
-        Some(_value) => RequestOutcome::Ensured,
+    let (outcome, resolution) = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
+        Some(_value) => (RequestOutcome::Ensured, None),
         None => {
-            if (query.execute_query_fn)(tcx, DUMMY_SP, key, QueryMode::EnsureOk).is_some() {
-                RequestOutcome::Ensured
-            } else {
-                RequestOutcome::GreenEnsure
-            }
+            let (value, resolution) = execute_with_resolution(
+                tcx,
+                DUMMY_SP,
+                query,
+                key,
+                QueryMode::EnsureOk,
+                request.as_ref(),
+            );
+            let outcome =
+                if value.is_some() { RequestOutcome::Ensured } else { RequestOutcome::GreenEnsure };
+            (outcome, resolution)
         }
     };
-    if let Some(request) = request {
-        request.finish(outcome);
-    }
+    finish_read(request, outcome, resolution);
 }
 
 /// Implementation of `tcx.ensure_result().$query(..)` for queries that
@@ -231,10 +280,20 @@ where
 
     let request = begin_read(tcx, RequestMode::EnsureResult);
     let mut outcome = RequestOutcome::Ensured;
+    let mut resolution = None;
     let result = match try_get_cached(tcx, &query.cache, key, request.as_ref()) {
         Some(value) => convert(value),
         None => {
-            match (query.execute_query_fn)(tcx, DUMMY_SP, key, QueryMode::EnsureOk) {
+            let (value, dispatch_resolution) = execute_with_resolution(
+                tcx,
+                DUMMY_SP,
+                query,
+                key,
+                QueryMode::EnsureOk,
+                request.as_ref(),
+            );
+            resolution = dispatch_resolution;
+            match value {
                 // We executed the query. Convert the successful result.
                 Some(res) => convert(res),
 
@@ -251,9 +310,9 @@ where
             }
         }
     };
-    if let Some(request) = request {
-        request.finish(outcome);
-    }
+    // Conversion above may unwind. In that case the lexical token emits only
+    // Interrupted, never a normal-return resolution for an unreturned value.
+    finish_read(request, outcome, resolution);
     result
 }
 

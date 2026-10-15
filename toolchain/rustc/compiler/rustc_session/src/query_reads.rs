@@ -76,10 +76,13 @@ struct Event {
     mode: Option<RequestMode>,
     outcome: Option<&'static str>,
     index: Option<u32>,
+    // Some(None) records a dispatch that returned without a known dep-node index.
+    resolution: Option<Option<u32>>,
 }
 
 pub struct QueryReadObserver {
     bindings: Option<Arc<TaskBindings>>,
+    dispatch_resolutions: bool,
     requests: AtomicU64,
     reads: AtomicU64,
     results: AtomicU64,
@@ -94,6 +97,7 @@ impl Default for QueryReadObserver {
     fn default() -> Self {
         Self {
             bindings: None,
+            dispatch_resolutions: false,
             requests: AtomicU64::new(1),
             reads: AtomicU64::new(1),
             results: AtomicU64::new(1),
@@ -118,6 +122,20 @@ impl QueryReadObserver {
         capacity: usize,
     ) -> Option<Self> {
         Some(Self { bindings: Some(bindings), ..Self::with_event_capacity(capacity)? })
+    }
+    /// Explicit metadata only: existing event and allocator inventories are unchanged.
+    pub fn with_bindings_and_event_capacity_and_dispatch_resolutions(
+        bindings: Arc<TaskBindings>,
+        capacity: usize,
+        dispatch_resolutions: bool,
+    ) -> Option<Self> {
+        Some(Self {
+            dispatch_resolutions,
+            ..Self::with_bindings_and_event_capacity(bindings, capacity)?
+        })
+    }
+    pub fn dispatch_resolutions_enabled(&self) -> bool {
+        self.dispatch_resolutions
     }
     pub fn with_bindings(bindings: Arc<TaskBindings>) -> Self {
         Self { bindings: Some(bindings), ..Self::default() }
@@ -192,6 +210,7 @@ impl QueryReadObserver {
             mode: Some(mode),
             outcome: None,
             index: None,
+            resolution: None,
         };
         self.event(event);
         QueryReadRequest { observer: self, event, terminal: false }
@@ -220,6 +239,7 @@ impl QueryReadObserver {
             mode: None,
             outcome: Some(outcome.name()),
             index: Some(index),
+            resolution: None,
         });
     }
     pub fn result_produced(&self, context: u64, job: u64, index: u32) {
@@ -239,6 +259,7 @@ impl QueryReadObserver {
             mode: None,
             outcome: None,
             index: Some(index),
+            resolution: None,
         });
     }
     /// Append a sibling object before the root receipt's closing brace. Called at root Drop,
@@ -254,9 +275,10 @@ impl QueryReadObserver {
         let complete = lost == 0
             && !self.lost_overflowed.load(Ordering::Relaxed)
             && inventory_matches(&events, high_requests, high_reads, high_results);
+        let schema = if self.dispatch_resolutions { 2 } else { 1 };
         let _ = write!(
             out,
-            ",\"query_reads\":{{\"schema\":1,\"records_complete\":{complete},\"semantic_complete\":false,\"full_pipeline_complete\":false,\"dep_node_namespace\":\"current-context\",\"request_high_water\":{high_requests},\"read_high_water\":{high_reads},\"result_high_water\":{high_results},\"expected_results\":{},\"expected_requests\":{},\"expected_reads\":{},\"lost_events\":{lost},\"opaque_boundaries\":[\"execution-request-read-binding\",\"previous-session-promotion\",\"feed-producer-provenance\",\"missing-consumer-context\",\"no-implicit-context-reads\",\"nonquery\"],\"events\":[",
+            ",\"query_reads\":{{\"schema\":{schema},\"records_complete\":{complete},\"semantic_complete\":false,\"full_pipeline_complete\":false,\"dep_node_namespace\":\"current-context\",\"request_high_water\":{high_requests},\"read_high_water\":{high_reads},\"result_high_water\":{high_results},\"expected_results\":{},\"expected_requests\":{},\"expected_reads\":{},\"lost_events\":{lost},\"opaque_boundaries\":[\"execution-request-read-binding\",\"previous-session-promotion\",\"feed-producer-provenance\",\"missing-consumer-context\",\"no-implicit-context-reads\",\"nonquery\"],\"events\":[",
             high_results.saturating_sub(1),
             high_requests.saturating_sub(1),
             high_reads.saturating_sub(1)
@@ -286,6 +308,18 @@ impl QueryReadObserver {
             let outcome =
                 event.outcome.map_or_else(|| "null".into(), |outcome| format!("\"{outcome}\""));
             let _ = write!(out, ",\"mode\":{mode},\"outcome\":{outcome}");
+            if self.dispatch_resolutions {
+                out.push_str(",\"resolution\":");
+                if let Some(index) = event.resolution {
+                    let _ = write!(
+                        out,
+                        "{{\"source\":\"resolved_dispatch\",\"dep_node_index\":{}}}",
+                        number(index.map(u64::from))
+                    );
+                } else {
+                    out.push_str("null");
+                }
+            }
             out.push('}');
         }
         out.push_str("]}");
@@ -303,6 +337,30 @@ pub struct QueryReadRequest<'a> {
 impl QueryReadRequest<'_> {
     pub fn id(&self) -> u64 {
         self.event.request.unwrap()
+    }
+    /// Validate the receiver's exact observer and context before using an observed
+    /// dispatch pointer. An absent context is unknown, never an identity match.
+    pub fn matches_dispatch_context(
+        &self,
+        observer: &QueryReadObserver,
+        context: Option<u64>,
+    ) -> bool {
+        self.observer.dispatch_resolutions
+            && std::ptr::eq(self.observer, observer)
+            && context.is_some()
+            && self.event.context == context
+            && self.event.mode != Some(RequestMode::Feed)
+    }
+    /// Publish only after normal non-incremental dispatch and value conversion.
+    /// A missing index remains explicitly unknown, not a cycle or a dependency.
+    pub fn finish_with_resolution(mut self, outcome: RequestOutcome, index: Option<u32>) {
+        if self.observer.dispatch_resolutions
+            && self.event.mode != Some(RequestMode::Feed)
+            && matches!(outcome, RequestOutcome::Value | RequestOutcome::Ensured)
+        {
+            self.event.resolution = Some(index);
+        }
+        self.finish(outcome);
     }
     pub fn cache_hit(&self, index: u32) {
         self.observer.event(Event { kind: "cache_hit", index: Some(index), ..self.event });
@@ -386,6 +444,126 @@ fn inventory_matches(events: &[Event], requests: u64, reads: u64, results: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn resolution_observer() -> QueryReadObserver {
+        QueryReadObserver { dispatch_resolutions: true, ..QueryReadObserver::default() }
+    }
+    #[test]
+    fn dispatch_context_requires_exact_observer_non_null_context_and_opt_in() {
+        let observer = resolution_observer();
+        let other = resolution_observer();
+        let request = observer.begin(Some(7), Some(3), RequestMode::Get);
+        let before = observer.high_waters();
+        assert!(request.matches_dispatch_context(&observer, Some(7)));
+        assert!(!request.matches_dispatch_context(&other, Some(7)));
+        assert!(!request.matches_dispatch_context(&observer, Some(8)));
+        assert!(!request.matches_dispatch_context(&observer, None));
+        assert_eq!(observer.high_waters(), before);
+        request.finish(RequestOutcome::Value);
+        let request = observer.begin(None, None, RequestMode::Get);
+        assert!(!request.matches_dispatch_context(&observer, None));
+        drop(request);
+        let request = observer.begin(Some(7), None, RequestMode::Feed);
+        assert!(!request.matches_dispatch_context(&observer, Some(7)));
+        drop(request);
+        let legacy = QueryReadObserver::default();
+        assert!(!legacy.dispatch_resolutions_enabled());
+        let request = legacy.begin(Some(7), None, RequestMode::Get);
+        assert!(!request.matches_dispatch_context(&legacy, Some(7)));
+    }
+    #[test]
+    fn resolution_adds_metadata_only_and_legacy_bytes_are_identical() {
+        let legacy = QueryReadObserver::default();
+        let observer = resolution_observer();
+        for reads in [&legacy, &observer] {
+            let request = reads.begin(Some(1), Some(2), RequestMode::Get);
+            request.cache_hit(42);
+            reads.read(Some(1), Some(2), Some(request.id()), 42, DepReadOutcome::Disabled);
+            reads.result_produced(1, 3, 42);
+            request.finish_with_resolution(RequestOutcome::Value, Some(42));
+        }
+        assert_eq!(observer.high_waters(), legacy.high_waters());
+        assert_eq!(observer.events.lock().unwrap().len(), legacy.events.lock().unwrap().len());
+        let enabled = json(&observer);
+        assert_eq!(enabled.matches("\"resolution\":").count(), 5);
+        assert_eq!(enabled.matches("\"source\":\"resolved_dispatch\"").count(), 1);
+        assert!(enabled.contains("\"records_complete\":true"));
+        assert!(!json(&legacy).contains("\"resolution\""));
+        let stripped = enabled
+            .replacen("\"schema\":2", "\"schema\":1", 1)
+            .replace(",\"resolution\":null", "")
+            .replace(
+                ",\"resolution\":{\"source\":\"resolved_dispatch\",\"dep_node_index\":42}",
+                "",
+            );
+        assert_eq!(stripped, json(&legacy));
+        let ordinary = QueryReadObserver::default();
+        ordinary.begin(Some(1), Some(2), RequestMode::Get).finish(RequestOutcome::Value);
+        let disabled = QueryReadObserver::default();
+        disabled
+            .begin(Some(1), Some(2), RequestMode::Get)
+            .finish_with_resolution(RequestOutcome::Value, Some(99));
+        assert_eq!(json(&ordinary), json(&disabled));
+    }
+    #[test]
+    fn unknown_resolution_is_distinct_from_unobserved_and_ineligible_terminals() {
+        let observer = resolution_observer();
+        observer
+            .begin(Some(1), None, RequestMode::EnsureOk)
+            .finish_with_resolution(RequestOutcome::Ensured, None);
+        observer
+            .begin(Some(1), None, RequestMode::EnsureOk)
+            .finish_with_resolution(RequestOutcome::GreenEnsure, Some(7));
+        observer
+            .begin(Some(1), None, RequestMode::Feed)
+            .finish_with_resolution(RequestOutcome::Fed, Some(7));
+        observer.begin(Some(1), None, RequestMode::Get).finish(RequestOutcome::Value);
+        drop(observer.begin(Some(1), None, RequestMode::Get));
+        let events = observer.events.lock().unwrap();
+        assert_eq!(events.iter().filter(|row| row.resolution.is_some()).count(), 1);
+        assert_eq!(events[1].resolution, Some(None));
+        assert_eq!(events.last().unwrap().kind, "request_interrupted");
+        assert!(events.last().unwrap().resolution.is_none());
+        drop(events);
+        let out = json(&observer);
+        assert!(
+            out.contains(
+                "\"resolution\":{\"source\":\"resolved_dispatch\",\"dep_node_index\":null}"
+            )
+        );
+        assert!(out.contains("\"records_complete\":true"));
+    }
+    #[test]
+    fn conversion_panic_retains_only_unresolved_interruption() {
+        let observer = resolution_observer();
+        let result = std::panic::catch_unwind(|| {
+            let _request = observer.begin(Some(1), None, RequestMode::Get);
+            panic!("value conversion failed before finish_with_resolution");
+        });
+        assert!(result.is_err());
+        let out = json(&observer);
+        assert!(out.contains("\"kind\":\"request_interrupted\""));
+        assert!(!out.contains("resolved_dispatch"));
+        assert_eq!(out.matches("\"resolution\":null").count(), 2);
+        assert_eq!(observer.high_waters(), [2, 1, 1]);
+    }
+    #[test]
+    fn resolution_metadata_does_not_change_capacity_or_loss_accounting() {
+        for enabled in [false, true] {
+            let observer = QueryReadObserver {
+                dispatch_resolutions: enabled,
+                ..QueryReadObserver::with_event_capacity(2).unwrap()
+            };
+            observer
+                .begin(Some(1), None, RequestMode::Get)
+                .finish_with_resolution(RequestOutcome::Value, Some(9));
+            assert!(json(&observer).contains("\"records_complete\":true"));
+            drop(observer.begin(Some(1), None, RequestMode::Get));
+            assert_eq!(observer.events.lock().unwrap().len(), 2);
+            assert_eq!(observer.high_waters(), [3, 1, 1]);
+            assert!(json(&observer).contains("\"lost_events\":2"));
+            assert!(json(&observer).contains("\"records_complete\":false"));
+        }
+    }
     #[test]
     fn explicit_event_capacity_is_bounded_and_defaults_are_unchanged() {
         assert!(QueryReadObserver::with_event_capacity(0).is_none());

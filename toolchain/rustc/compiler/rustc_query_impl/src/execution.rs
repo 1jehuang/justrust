@@ -821,6 +821,18 @@ pub(super) fn execute_query_non_incr_inner<'tcx, C: QueryCache>(
     try_execute_query::<C, false>(query, tcx, span, key, None).0
 }
 
+/// Retain the existing core's exact return index for an explicit diagnostic
+/// caller. No observation occurs under the core's query/cache/latch locks.
+#[inline(always)]
+pub(super) fn execute_query_non_incr_observed_inner<'tcx, C: QueryCache>(
+    query: &'tcx QueryVTable<'tcx, C>,
+    tcx: TyCtxt<'tcx>,
+    span: Span,
+    key: C::Key,
+) -> (C::Value, Option<DepNodeIndex>) {
+    try_execute_query::<C, false>(query, tcx, span, key, None)
+}
+
 /// Called by a macro-generated impl of [`QueryVTable::execute_query_fn`],
 /// in incremental mode.
 #[inline(always)]
