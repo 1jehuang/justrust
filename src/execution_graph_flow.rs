@@ -13,42 +13,42 @@ fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FlowCapture {
-    schema: u32,
-    scope: String,
-    full_pipeline_complete: bool,
-    flow_complete: bool,
-    sealed: bool,
-    records_complete: bool,
-    identity_exhausted: bool,
-    tls_failed: bool,
-    active_scopes: u64,
-    node_allocator_baseline: u64,
+    pub(crate) schema: u32,
+    pub(crate) scope: String,
+    pub(crate) full_pipeline_complete: bool,
+    pub(crate) flow_complete: bool,
+    pub(crate) sealed: bool,
+    pub(crate) records_complete: bool,
+    pub(crate) identity_exhausted: bool,
+    pub(crate) tls_failed: bool,
+    pub(crate) active_scopes: u64,
+    pub(crate) node_allocator_baseline: u64,
     #[serde(deserialize_with = "nullable")]
-    node_allocator_high_water: Option<u64>,
+    pub(crate) node_allocator_high_water: Option<u64>,
     #[serde(deserialize_with = "nullable")]
-    expected_nodes: Option<u64>,
-    edge_allocator_baseline: u64,
+    pub(crate) expected_nodes: Option<u64>,
+    pub(crate) edge_allocator_baseline: u64,
     #[serde(deserialize_with = "nullable")]
-    edge_allocator_high_water: Option<u64>,
+    pub(crate) edge_allocator_high_water: Option<u64>,
     #[serde(deserialize_with = "nullable")]
-    expected_edges: Option<u64>,
-    scope_allocator_baseline: u64,
+    pub(crate) expected_edges: Option<u64>,
+    pub(crate) scope_allocator_baseline: u64,
     #[serde(deserialize_with = "nullable")]
-    scope_allocator_high_water: Option<u64>,
+    pub(crate) scope_allocator_high_water: Option<u64>,
     #[serde(deserialize_with = "nullable")]
-    expected_scopes: Option<u64>,
-    lost_nodes: u64,
-    lost_edges: u64,
-    lost_scopes: u64,
-    loss_overflowed: bool,
-    nodes: Vec<Node>,
-    edges: Vec<Edge>,
-    scopes: Vec<Scope>,
+    pub(crate) expected_scopes: Option<u64>,
+    pub(crate) lost_nodes: u64,
+    pub(crate) lost_edges: u64,
+    pub(crate) lost_scopes: u64,
+    pub(crate) loss_overflowed: bool,
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) edges: Vec<Edge>,
+    pub(crate) scopes: Vec<Scope>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum NodeKind {
+pub(crate) enum NodeKind {
     CpuSegment,
     ScopeEnter,
     ScopeExit,
@@ -57,75 +57,89 @@ enum NodeKind {
     TaskExit,
     Join,
     Cut,
+    ReadinessPrerequisite,
+    WaitBegin,
+    WaitConsumed,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum Outcome {
+pub(crate) enum Outcome {
     Returned,
     Unwound,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum GapReason {
+pub(crate) enum GapReason {
     Dispatch,
     UnobservedQuery,
     ForeignRecorder,
     TaskSwitch,
     MissingFlow,
+    LatchVisibility,
+    QueryWait,
+    WakeToConsume,
+    ReadinessUnavailable,
+    WaitCycle,
+    WaitPoisoned,
+    WaitUnwound,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Node {
-    id: u64,
-    at_ns: u64,
-    kind: NodeKind,
+pub(crate) struct Node {
+    pub(crate) id: u64,
+    pub(crate) at_ns: u64,
+    pub(crate) kind: NodeKind,
     #[serde(deserialize_with = "nullable")]
-    segment_id: Option<u64>,
+    pub(crate) segment_id: Option<u64>,
     #[serde(deserialize_with = "nullable")]
-    scope_id: Option<u64>,
+    pub(crate) scope_id: Option<u64>,
     #[serde(deserialize_with = "nullable")]
-    task: Option<u64>,
+    pub(crate) task: Option<u64>,
     #[serde(deserialize_with = "nullable")]
-    outcome: Option<Outcome>,
+    pub(crate) outcome: Option<Outcome>,
     #[serde(deserialize_with = "nullable")]
-    gap_reason: Option<GapReason>,
+    pub(crate) gap_reason: Option<GapReason>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum EdgeKind {
+pub(crate) enum EdgeKind {
     Strand,
     SyncCall,
     SyncReturn,
     ForkBranch,
     JoinRequired,
     Continuation,
+    WaitBoundary,
+    WaitRequired,
+    ReadinessRequired,
+    ReadinessPrepare,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Edge {
-    id: u64,
-    from: u64,
-    to: u64,
-    kind: EdgeKind,
+pub(crate) struct Edge {
+    pub(crate) id: u64,
+    pub(crate) from: u64,
+    pub(crate) to: u64,
+    pub(crate) kind: EdgeKind,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum ScopeOutcome {
+pub(crate) enum ScopeOutcome {
     Active,
     Returned,
     Unwound,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Scope {
-    id: u64,
-    query_context: u64,
-    query_job: u64,
-    query_name: String,
-    entry: u64,
+pub(crate) struct Scope {
+    pub(crate) id: u64,
+    pub(crate) query_context: u64,
+    pub(crate) query_job: u64,
+    pub(crate) query_name: String,
+    pub(crate) entry: u64,
     #[serde(deserialize_with = "nullable")]
-    exit: Option<u64>,
-    outcome: ScopeOutcome,
+    pub(crate) exit: Option<u64>,
+    pub(crate) outcome: ScopeOutcome,
 }
 
 pub(crate) struct FlowContext<'a> {
@@ -222,11 +236,14 @@ impl NodeKind {
             Self::TaskExit => "task_exit",
             Self::Join => "join",
             Self::Cut => "cut",
+            Self::ReadinessPrerequisite => "readiness_prerequisite",
+            Self::WaitBegin => "wait_begin",
+            Self::WaitConsumed => "wait_consumed",
         }
     }
 }
 
-fn inventory(
+pub(crate) fn inventory(
     baseline: u64,
     high: Option<u64>,
     expected: Option<u64>,
@@ -280,7 +297,12 @@ fn valid_name(s: &str) -> bool {
         && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
-fn reference(id: u64, high: Option<u64>, present: bool, can_be_lost: bool) -> Result<bool> {
+pub(crate) fn reference(
+    id: u64,
+    high: Option<u64>,
+    present: bool,
+    can_be_lost: bool,
+) -> Result<bool> {
     ensure!(
         id != 0 && high.is_none_or(|h| id < h),
         "flow reference outside allocator range"
@@ -292,11 +314,67 @@ fn reference(id: u64, high: Option<u64>, present: bool, can_be_lost: bool) -> Re
     Ok(present)
 }
 
+#[derive(Default)]
+pub(crate) struct ReadinessProof {
+    pub edge_ids: BTreeSet<u64>,
+    pub side_edge_ids: BTreeSet<u64>,
+    pub dual_nodes: BTreeSet<u64>,
+    pub unknown_nodes: BTreeSet<u64>,
+    pub complete: bool,
+}
+
 pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<FlowAssessment> {
+    assess_mode(capture, context, None)
+}
+
+pub(crate) fn assess_readiness(
+    capture: FlowCapture,
+    context: FlowContext<'_>,
+    proof: &ReadinessProof,
+) -> Result<FlowAssessment> {
+    assess_mode(capture, context, Some(proof))
+}
+
+fn assess_mode(
+    capture: FlowCapture,
+    context: FlowContext<'_>,
+    readiness: Option<&ReadinessProof>,
+) -> Result<FlowAssessment> {
+    let (schema, scope) = if readiness.is_some() {
+        (2, "observed-query-join-and-latch-control-flow")
+    } else {
+        (1, "observed-query-and-join-control-flow")
+    };
     ensure!(
-        capture.schema == 1 && capture.scope == "observed-query-and-join-control-flow",
+        capture.schema == schema && capture.scope == scope,
         "unsupported execution flow schema or scope"
     );
+    if readiness.is_none() {
+        ensure!(
+            capture.nodes.iter().all(|n| !matches!(
+                n.kind,
+                NodeKind::ReadinessPrerequisite | NodeKind::WaitBegin | NodeKind::WaitConsumed
+            ) && !matches!(
+                n.gap_reason,
+                Some(
+                    GapReason::LatchVisibility
+                        | GapReason::QueryWait
+                        | GapReason::WakeToConsume
+                        | GapReason::ReadinessUnavailable
+                        | GapReason::WaitCycle
+                        | GapReason::WaitPoisoned
+                        | GapReason::WaitUnwound
+                )
+            )) && capture.edges.iter().all(|e| !matches!(
+                e.kind,
+                EdgeKind::ReadinessPrepare
+                    | EdgeKind::WaitBoundary
+                    | EdgeKind::WaitRequired
+                    | EdgeKind::ReadinessRequired
+            )),
+            "readiness roles require separate schema2 admission"
+        );
+    }
     ensure!(
         !capture.full_pipeline_complete && !capture.flow_complete,
         "execution flow cannot attest full execution coverage"
@@ -720,9 +798,13 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
             "self or duplicate flow edge"
         );
         *incoming.entry(edge.to).or_default() += 1;
-        *outgoing.entry(edge.from).or_default() += 1;
+        if !readiness.is_some_and(|proof| proof.side_edge_ids.contains(&edge.id)) {
+            *outgoing.entry(edge.from).or_default() += 1;
+        }
         if let (Some(from), Some(to)) = (nodes.get(&edge.from), nodes.get(&edge.to)) {
-            validate_edge(edge.kind, from, to)?;
+            if !readiness.is_some_and(|proof| proof.edge_ids.contains(&edge.id)) {
+                validate_edge(edge.kind, from, to)?;
+            }
             if edge.kind == EdgeKind::SyncCall {
                 ensure!(
                     callers
@@ -789,7 +871,9 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
         );
     }
     for node in &capture.nodes {
-        if node.kind != NodeKind::Join {
+        if node.kind != NodeKind::Join
+            && !readiness.is_some_and(|proof| proof.dual_nodes.contains(&node.id))
+        {
             ensure!(
                 incoming.get(&node.id).copied().unwrap_or(0) <= 1,
                 "multiple predecessors without explicit join gate"
@@ -833,6 +917,15 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
         }
         known_measurements = 0;
         category_measurements = [0; 3];
+    }
+    if let Some(proof) = readiness {
+        for id in &proof.unknown_nodes {
+            if let Some(cost) = costs.get_mut(id)
+                && !matches!(cost, Cost::Measured(_))
+            {
+                *cost = Cost::Unknown;
+            }
+        }
     }
     let chain = known_chain(&costs, &edges)?;
     let longest_known_chain_steps = chain
@@ -905,7 +998,8 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
         && authority.is_some()
         && unassigned.is_empty()
         && missing_measurement_references == 0
-        && unavailable_cpu_segments == 0;
+        && unavailable_cpu_segments == 0
+        && readiness.is_none_or(|proof| proof.complete);
     let mut limitations = vec!["wait/result readiness, generic dispatch, pre-attach and uninstrumented boundaries remain outside this graph".into()];
     let mut issues = Vec::new();
     if !complete {
@@ -920,7 +1014,7 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
         );
     }
     Ok(FlowAssessment {
-        scope: "observed-query-and-join-control-flow",
+        scope,
         pool_capture_id: context.pool_capture_id.into(),
         pool_observer: context.observer,
         records_complete: complete,
@@ -1011,6 +1105,12 @@ fn validate_edge(kind: EdgeKind, from: &Node, to: &Node) -> Result<()> {
                 && to.kind == NodeKind::CpuSegment,
             "continuation does not originate from explicit join"
         ),
+        EdgeKind::ReadinessPrepare
+        | EdgeKind::WaitBoundary
+        | EdgeKind::WaitRequired
+        | EdgeKind::ReadinessRequired => {
+            anyhow::bail!("readiness edge lacks row-bound validation proof")
+        }
     }
     Ok(())
 }
@@ -1140,7 +1240,7 @@ pub(crate) mod tests {
             "scopes":[{"id":1,"query_context":1,"query_job":1,"query_name":"type_of","entry":1,"exit":3,"outcome":"returned"}]})
     }
 
-    fn timing() -> crate::execution_graph_timing::ObservedCpuAssessment {
+    pub(crate) fn timing() -> crate::execution_graph_timing::ObservedCpuAssessment {
         let mut v = crate::execution_graph_timing::tests::fixture();
         v["schema"] = json!(2);
         for row in v["segments"].as_array_mut().unwrap() {
@@ -1175,7 +1275,7 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    fn authority(
+    pub(crate) fn authority(
         t: &crate::execution_graph_timing::ObservedCpuAssessment,
     ) -> crate::execution_graph_query::QueryExecutionInventory {
         crate::execution_graph_query::QueryExecutionInventory {
@@ -1183,6 +1283,16 @@ pub(crate) mod tests {
             complete: true,
             clock: Some(t.clock_bridge.clone()),
             lifetimes: BTreeMap::from([((1, 1), (1, 100)), ((1, 2), (1, 100))]),
+            terminals: BTreeMap::from([
+                (
+                    (1, 1),
+                    crate::execution_graph_query::QueryTerminal::Completed,
+                ),
+                (
+                    (1, 2),
+                    crate::execution_graph_query::QueryTerminal::Completed,
+                ),
+            ]),
         }
     }
 
