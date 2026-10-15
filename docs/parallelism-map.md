@@ -28,6 +28,13 @@ useful-thread ceiling. Visibility and wake-to-consume cuts remain unknown. Cache
 publication remains a separate authority boundary, and paired performance
 promotion remains blocked by the documented A2 baseline defects and noisy samples.
 
+The [final requirement-to-observation recheck](mapping-feedback-20261015.md) reran
+the whole native harness, hosted checks and public integration boundaries after
+all fixes. On identical cold producer bytes, invocation flow represents 36,736
+retained CPU segments versus 4,352 attachable to the task-only DAG, while
+conserving every CPU measurement and preserving explicit unknown cuts. This is
+a measured mapping-coverage improvement, not a compiler speedup.
+
 ## Mathematical target
 
 For a *known dependency DAG* with processing cost `w(v)` per node:

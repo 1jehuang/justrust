@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "scope": "original-byte-coverage-checker-mutation-controls",
+  "cases": [
+    {
+      "control": "task-weight",
+      "rejected": true,
+      "diagnostic": "not every native task weight was preserved"
+    },
+    {
+      "control": "excluded-mass",
+      "rejected": true,
+      "diagnostic": "excluded original CPU mass mismatch"
+    },
+    {
+      "control": "flow-mass",
+      "rejected": true,
+      "diagnostic": "original readiness oracle mismatch: known_cpu_work_ns"
+    },
+    {
+      "control": "query-identity",
+      "rejected": true,
+      "diagnostic": "exact original named query CPU identities/costs changed"
+    },
+    {
+      "control": "witness-label",
+      "rejected": true,
+      "diagnostic": "public witness differs from exact original scope/node/CPU fields"
+    },
+    {
+      "control": "duplicate-task",
+      "rejected": true,
+      "diagnostic": "duplicated public task identities/edges"
+    }
+  ],
+  "all_checks_passed": true,
+  "original_bytes_unchanged": true,
+  "baseline_public_sha256": "ff3ae7f88e63dabf7ddf6d750169cc6e1ac7ab6ac810383d5237f786a1199ef0",
+  "full_pipeline_complete": false,
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "parallelism": null
+}

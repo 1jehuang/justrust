@@ -1,5 +1,23 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: final mapping feedback closes on real outputs and same-input coverage
+
+The final whole-result rerun passed the complete 14-test native/safety harness,
+139 offline checks and hosted check/test/clippy. Test run
+`20261015-074812985-1877054` passed 709 tests with 3 ignored. Its slowest test
+took 9.98 s, while the preceding hosted check spent 103.718 s synchronizing.
+Fresh public replay passed 34 readiness cases, 25 flow-v1 cases, 16 retained
+native failure cases and 3 combined coverage cases, plus 6 corrupted-output
+rejections. Exact requirements, outputs and receipts are linked from
+`docs/mapping-feedback-20261015.md`.
+
+On the same original cold measurement bytes, the task DAG attaches 4,352 CPU
+segments / 53,521,730 ns, while invocation flow assigns all 36,736 segments /
+513,291,338 ns. The added 32,384 task-null segments conserve exactly
+459,769,608 ns and do not acquire invented pool ancestry. A fresh capture
+independently repeats this diagnostic coverage gain. This is better mapping,
+not evidence of faster compilation, full causal span or a thread ceiling.
+
 ## 2026-10-15: actual latch handoffs qualify waits without pretending unknown gaps are zero
 
 The immutable-compiler harness passed all 14 tests in 475.022 s: seven actual-source
