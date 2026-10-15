@@ -23,6 +23,7 @@ mod execution_graph;
 mod execution_graph_compiler;
 mod execution_graph_compiler_cli;
 mod execution_graph_continuation;
+mod execution_graph_flow;
 mod execution_graph_manifest;
 mod execution_graph_query;
 mod execution_graph_reads;
@@ -229,6 +230,9 @@ enum Command {
         /// Export only validated native fork/join tasks with retained exclusive CPU weights.
         #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
         observed_task_dag: bool,
+        /// Validate opt-in native query and fork/join flow, never full execution span.
+        #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
+        execution_flow_dag: bool,
         #[arg(long)]
         json: bool,
     },
@@ -793,12 +797,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             dispatch_result_provenance,
             query_cpu_ownership,
             observed_task_dag,
+            execution_flow_dag,
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
                 execution_graph_compiler_cli::command(&path, &manifest, json)?;
             } else {
-                execution_graph::command_with_observed_task_dag(
+                execution_graph::command_with_execution_flow_dag(
                     &path,
                     json,
                     manifest.as_deref(),
@@ -807,6 +812,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     dispatch_result_provenance,
                     query_cpu_ownership,
                     observed_task_dag,
+                    execution_flow_dag,
                 )?;
             }
         }
@@ -1122,6 +1128,50 @@ mod passthrough_tests {
                     "graph",
                     "captures",
                     "--observed-task-dag",
+                    manifest,
+                    "owner.json"
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn graph_execution_flow_is_explicit_independent_and_manifest_exclusive() {
+        for enabled in [false, true] {
+            let mut args = vec!["justrust", "graph", "captures"];
+            if enabled {
+                args.push("--execution-flow-dag");
+            }
+            assert!(
+                matches!(Cli::try_parse_from(args).unwrap().command, Command::Graph { execution_flow_dag, query_cpu_ownership:false, observed_task_dag:false, cache_call_provenance:false, dispatch_result_provenance:false, .. } if execution_flow_dag == enabled)
+            );
+        }
+        for flag in [
+            "--query-cpu-ownership",
+            "--observed-task-dag",
+            "--cache-call-provenance",
+            "--dispatch-result-provenance",
+            "--large-capture",
+        ] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--execution-flow-dag",
+                    flag
+                ])
+                .is_ok()
+            );
+        }
+        for manifest in ["--manifest", "--compiler-manifest"] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--execution-flow-dag",
                     manifest,
                     "owner.json"
                 ])

@@ -317,7 +317,7 @@ pub fn reconcile_bindings(
             .push("task-binding matching pool authority unavailable".into());
         return assessment;
     };
-    if !matches!(pool.schema, 2..=4)
+    if !matches!(pool.schema, 2..=5)
         || pool.capture_id != reference.capture_id
         || pool.observer != reference.observer
         || pool.query_capture_id.as_deref() != Some(query_capture_id)
@@ -418,6 +418,9 @@ mod tests {
 
     fn pool(query: &str) -> PoolInventory {
         PoolInventory {
+            task_high_water: 2,
+            sealed: true,
+            task_outcomes: BTreeMap::from([(1, "normal")]),
             task_nodes: vec![1],
             task_edges: Vec::new(),
             schema: 2,

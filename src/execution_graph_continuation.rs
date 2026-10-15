@@ -36,6 +36,20 @@ struct Receipt {
     events: Vec<Event>,
     #[serde(default, deserialize_with = "optional_timing")]
     timing: Option<crate::execution_graph_timing::TimingCapture>,
+    #[serde(default, deserialize_with = "optional_flow")]
+    execution_flow: Option<crate::execution_graph_flow::FlowCapture>,
+}
+fn optional_flow<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<crate::execution_graph_flow::FlowCapture>, D::Error> {
+    crate::execution_graph_flow::FlowCapture::deserialize(d).map(Some)
+}
+/// Re-read the typed original envelope only after its full pool validation.
+pub(crate) fn execution_flow_from_validated_bytes(
+    bytes: &[u8],
+) -> Result<Option<crate::execution_graph_flow::FlowCapture>> {
+    let receipt: Receipt = serde_json::from_slice(bytes)?;
+    Ok(receipt.execution_flow)
 }
 fn optional_timing<'de, D: Deserializer<'de>>(
     d: D,
@@ -100,6 +114,7 @@ struct Task {
     defined_at: Option<u64>,
     start: Option<u64>,
     finish: Option<u64>,
+    outcome: Option<Terminal>,
     resume: Option<u64>,
 }
 #[derive(Default)]
@@ -199,6 +214,9 @@ pub(crate) struct PoolInventory {
     pub timing_bridge: Option<crate::execution_graph_timing::ClockBridge>,
     pub task_nodes: Vec<u64>,
     pub task_edges: Vec<TaskEdge>,
+    pub task_high_water: u64,
+    pub sealed: bool,
+    pub task_outcomes: BTreeMap<u64, &'static str>,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct TaskEdge {
@@ -226,30 +244,54 @@ pub(crate) fn assess_bytes(bytes: &[u8]) -> Result<Assessment> {
 pub(crate) fn collect_bytes(bytes: &[u8]) -> Result<CollectedPool> {
     collect_bytes_with_query_ownership(bytes, false)
 }
+#[cfg(test)]
 pub(crate) fn collect_task_inventory(bytes: &[u8], query_ownership: bool) -> Result<PoolInventory> {
-    validate_bytes(bytes, query_ownership).map(|(_, inventory)| inventory)
+    collect_task_inventory_with_options(bytes, query_ownership, false)
+}
+pub(crate) fn collect_task_inventory_with_options(
+    bytes: &[u8],
+    query_ownership: bool,
+    execution_flow: bool,
+) -> Result<PoolInventory> {
+    validate_bytes(bytes, query_ownership, execution_flow).map(|(_, inventory)| inventory)
 }
 pub(crate) fn collect_bytes_with_query_ownership(
     bytes: &[u8],
     query_ownership: bool,
 ) -> Result<CollectedPool> {
-    let (assessment, inventory) = validate_bytes(bytes, query_ownership)?;
-    let inventory = matches!(inventory.schema, 2..=4).then_some(inventory);
+    collect_bytes_with_options(bytes, query_ownership, false)
+}
+pub(crate) fn collect_bytes_with_options(
+    bytes: &[u8],
+    query_ownership: bool,
+    execution_flow: bool,
+) -> Result<CollectedPool> {
+    let (assessment, inventory) = validate_bytes(bytes, query_ownership, execution_flow)?;
+    let inventory = matches!(inventory.schema, 2..=5).then_some(inventory);
     Ok(CollectedPool {
         assessment,
         inventory,
     })
 }
-fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, PoolInventory)> {
+fn validate_bytes(
+    bytes: &[u8],
+    query_ownership: bool,
+    execution_flow: bool,
+) -> Result<(Assessment, PoolInventory)> {
     if bytes.len() > MAX_BYTES {
         bail!("join receipt byte budget exceeded");
     }
     let r: Receipt = serde_json::from_slice(bytes)?;
-    if !(matches!(r.schema, 1..=3) || (query_ownership && r.schema == 4))
+    if !(matches!(r.schema, 1..=3)
+        || (query_ownership && r.schema == 4)
+        || (execution_flow && r.schema == 5))
         || r.producer != "rustc-thread-pool-join"
         || r.scope != "native-join-continuations"
     {
         bail!("unsupported join protocol");
+    }
+    if (r.schema == 5) != r.execution_flow.is_some() {
+        bail!("execution_flow is mandatory only for explicitly admitted pool schema5");
     }
     if r.capture_id.is_empty()
         || r.capture_id.len() > 128
@@ -263,7 +305,7 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
     }
     match (r.schema, r.query_capture_id.as_deref()) {
         (1, None) => {}
-        (2..=4, Some(id))
+        (2..=5, Some(id))
             if !id.is_empty()
                 && id.len() <= 128
                 && id != r.capture_id
@@ -273,7 +315,7 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
         _ => bail!("invalid or unsupported query capture identity"),
     }
     if (r.schema >= 3) != r.timing.is_some() {
-        bail!("timing requires explicit pool schema3/4 and is mandatory");
+        bail!("timing requires explicit pool schema3/4/5 and is mandatory");
     }
     if r.full_pipeline_complete
         || r.cpu_work_ns.is_some()
@@ -359,7 +401,6 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
                 outcome,
                 at_ns,
             } => {
-                let _ = outcome;
                 if tasks
                     .entry(task)
                     .or_default()
@@ -369,6 +410,7 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
                 {
                     bail!("duplicate task terminal");
                 }
+                tasks.get_mut(&task).expect("inventoried task").outcome = Some(outcome);
             }
             Event::Join {
                 branch,
@@ -536,6 +578,20 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
         timing_bridge: None,
         task_nodes: tasks.keys().copied().collect(),
         task_edges,
+        task_high_water: r.task_allocator_high_water,
+        sealed: r.sealed,
+        task_outcomes: tasks
+            .iter()
+            .filter_map(|(&id, task)| {
+                Some((
+                    id,
+                    match task.outcome? {
+                        Terminal::Normal => "normal",
+                        Terminal::Panic => "panic",
+                    },
+                ))
+            })
+            .collect(),
         task_intervals: tasks
             .iter()
             .filter_map(|(&id, task)| {
@@ -566,7 +622,7 @@ fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, Po
                     task_high_water: r.task_allocator_high_water,
                     task_intervals: &inventory.task_intervals,
                 },
-                r.schema == 4,
+                r.schema >= 4,
             )
         })
         .transpose()?;

@@ -13,6 +13,7 @@ pub(crate) struct CapturePolicy {
     pub(crate) max_points: usize,
     pub(crate) query_cpu_ownership: bool,
     pub(crate) observed_task_dag: bool,
+    pub(crate) execution_flow_dag: bool,
 }
 
 impl CapturePolicy {
@@ -22,6 +23,7 @@ impl CapturePolicy {
             max_points: 100_000,
             query_cpu_ownership: false,
             observed_task_dag: false,
+            execution_flow_dag: false,
         }
     }
 
@@ -31,6 +33,7 @@ impl CapturePolicy {
             max_points: 1_000_000,
             query_cpu_ownership: false,
             observed_task_dag: false,
+            execution_flow_dag: false,
         }
     }
 }
@@ -304,7 +307,7 @@ impl CollectedQuery {
                 }
                 match pools.get(&clock.pool_capture_id) {
                     Some(pool)
-                        if matches!(pool.schema, 3 | 4)
+                        if matches!(pool.schema, 3..=5)
                             && pool.structural_complete
                             && pool.capture_id == clock.pool_capture_id
                             && pool.observer == clock.pool_observer
@@ -617,7 +620,9 @@ fn collect_bytes_with_options(
         }
         return collect_dispatch_bindings(bytes, policy, cache_call_provenance);
     }
-    if (policy.query_cpu_ownership || policy.observed_task_dag) && version.schema == 6 {
+    if (policy.query_cpu_ownership || policy.observed_task_dag || policy.execution_flow_dag)
+        && version.schema == 6
+    {
         let mut query = collect_dispatch_bindings(bytes, policy, cache_call_provenance)?;
         query.assessment.dispatch_result_provenance = None;
         return Ok(query);
@@ -896,7 +901,7 @@ fn collect_bindings_base(
     // Assess admission, wait and read contracts independently. Binding partiality
     // must not downgrade any of these existing completeness assessments.
     let wait_inventory = retain_wait_inventory(&r);
-    let execution_inventory = if policy.query_cpu_ownership {
+    let execution_inventory = if policy.query_cpu_ownership || policy.execution_flow_dag {
         if r.events.len() > MAX_EVENTS {
             bail!("query execution admission inventory exceeds budget");
         }
@@ -2201,6 +2206,7 @@ pub(crate) mod tests {
             max_points: 7,
             query_cpu_ownership: false,
             observed_task_dag: false,
+            execution_flow_dag: false,
         };
         assert!(collect_bytes_with_analysis(text.as_bytes(), bounded, true).is_ok());
         for policy in [
@@ -2411,18 +2417,21 @@ pub(crate) mod tests {
                 max_points: 7,
                 query_cpu_ownership: false,
                 observed_task_dag: false,
+                execution_flow_dag: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
                 max_points: 3,
                 query_cpu_ownership: false,
                 observed_task_dag: false,
+                execution_flow_dag: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
                 max_points: 1_000_001,
                 query_cpu_ownership: false,
                 observed_task_dag: false,
+                execution_flow_dag: false,
             },
         ] {
             assert!(collect_bytes_with_dispatch_analysis(text.as_bytes(), policy, false).is_err());
@@ -2435,6 +2444,7 @@ pub(crate) mod tests {
                     max_points: 7,
                     query_cpu_ownership: false,
                     observed_task_dag: false,
+                    execution_flow_dag: false,
                 },
                 true
             )
@@ -2517,6 +2527,9 @@ pub(crate) mod tests {
         BTreeMap::from([(
             "pool-1".into(),
             PoolInventory {
+                task_high_water: 2,
+                sealed: true,
+                task_outcomes: BTreeMap::from([(1, "normal")]),
                 task_nodes: vec![1],
                 task_edges: Vec::new(),
                 schema: 3,
@@ -2706,6 +2719,7 @@ pub(crate) mod tests {
             max_points: 7,
             query_cpu_ownership: false,
             observed_task_dag: false,
+            execution_flow_dag: false,
         };
         let a = collect_bytes_with_policy(&bytes, policy)
             .unwrap()
@@ -2748,6 +2762,7 @@ pub(crate) mod tests {
             max_points: 7,
             query_cpu_ownership: false,
             observed_task_dag: false,
+            execution_flow_dag: false,
         };
         let collected = collect_bytes_with_policy(&bytes, small).unwrap();
         assert_eq!(collected.assessment.schema, 4);
