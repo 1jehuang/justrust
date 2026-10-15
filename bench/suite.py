@@ -989,7 +989,7 @@ class ToolchainIdentity:
                 raise ValueError("bench: declared toolchain artifact changed or mismatched: " + role)
         if self.sysroot_target is not None:
             libraries = self.prefix / "lib" / "rustlib" / self.sysroot_target / "lib"
-            for crate in ("std", "core"):
+            for crate in ("std", "core", "proc_macro", "rustc_literal_escaper"):
                 matches = list(libraries.glob("lib" + crate + "-*.rlib"))
                 if not any(p.is_file() and p.stat().st_size > 0
                            and p.resolve().is_relative_to(self.prefix) for p in matches):

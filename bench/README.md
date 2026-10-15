@@ -82,7 +82,8 @@ compiler executed during a no-op/cache hit. Clippy helper hashes likewise do not
 prove a particular helper was loaded.
 
 An optional manifest `sysroot_target`, for example `x86_64-unknown-linux-gnu`,
-requires nonempty `libstd-*.rlib` and `libcore-*.rlib` inside that prefix before
+requires nonempty `libstd-*.rlib`, `libcore-*.rlib`, `libproc_macro-*.rlib`, and
+`librustc_literal_escaper-*.rlib` inside that prefix before
 every invocation. This is a completeness check, not attestation of all library
 bytes. Retain a separate donor/library hash inventory and actual compile/link/run
 smoke evidence when assembling a prefix. Matched comparisons require the same

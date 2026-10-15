@@ -94,6 +94,12 @@ class ToolchainIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing core'):
             self.identity()
         core.write_bytes(b'core')
+        with self.assertRaisesRegex(ValueError, 'missing proc_macro'):
+            self.identity()
+        (libs / 'libproc_macro-fixture.rlib').write_bytes(b'proc_macro')
+        with self.assertRaisesRegex(ValueError, 'missing rustc_literal_escaper'):
+            self.identity()
+        (libs / 'librustc_literal_escaper-fixture.rlib').write_bytes(b'escaper')
         identity = self.identity()
         self.assertEqual(identity.verify_files()['sysroot_target'], self.value['sysroot_target'])
         core.unlink()
