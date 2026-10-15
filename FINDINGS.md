@@ -1,5 +1,32 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Checked scalar function bodies become immutable graph facts
+
+Revision `2d51558feaea8d4f92b07dc3afb63b2bc3bb7eaa` changes body operation 102
+from a check-only success token plus retained syntax into a published checked
+function arena. The same semantic traversal produces concrete scalar types,
+unique local IDs, typed expression IDs, validated call signatures and explicit
+divergence/normal-completion information. Object operation 103 consumes that exact
+checked function without rechecking, source-name lookup or inferred backend types.
+Check/build still share every body node once and keep independent function work
+exposed before waiting. Names remain temporary call-symbol identities.
+
+Hosted check `20261015-163401512-724532`, full test
+`20261015-163402100-724713` (123 passed), and all-target warnings-denied clippy
+`20261015-163403475-725036` passed. Summaries are in
+`data/runs/prototype-bootstrap/2026-10-typed-ir.jsonl`. Seven direct typed-IR
+acceptance tests cover shadowed locals, initializer binding identity, inferred
+scalar types, canonical calls, divergence, failed unused bodies and native
+execution under pending binary/call temporaries. Existing frontend, native
+backend, multi-file and scheduler tests remain passing. A read-only independent
+review checked parameter copies, temporary-stack returns and Never placeholders.
+
+The IR remains structured and scalar-only. It does not yet implement general
+types/layouts, places/projections, ownership, borrow checking or full Rust.
+The optional structural validator checks reference bounds/arity, not semantic
+soundness, and is not called on the normal compilation path. No speedup is claimed
+for this representation change without a matched benchmark comparison.
+
 ## 2026-10-15: External source trees compile through an observed loading node
 
 Revision `8907a8b0af275f13816e8d4db5b91a53d933101b` supports `mod name;`

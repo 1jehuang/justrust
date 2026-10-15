@@ -9,6 +9,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Independent graph runtime with shared immutable facts and lifecycle telemetry.
 - [x] Direct native Linux x86-64 executable generation for the initial subset.
 - [x] Inline modules, qualified calls, simple imports and namespace/privacy checks.
+- [x] External module source trees with bounded loading and observed source facts.
+- [x] Scalar checked-function IR shared directly by checking and native emission.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -43,12 +45,14 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
-External source modules: load `mod name;` from `name.rs` or `name/mod.rs`, including
-nested inline/file module directory rules. Preserve module privacy and checking of
-unused modules. Reject missing/ambiguous/cyclic inputs explicitly and bound source
-loading. Expose source loading as graph operation 107 with captured failures and
-source-file/byte accounting. An initial whole-tree loading node is an explicitly
-coarse implementation, not the intended final per-file graph architecture.
+Unlabelled loop expressions, break values, continue, while-loop exits and correct
+semicolon-discard typing. Resolve loop target IDs in checked functions and restore
+exact temporary-stack depth on native control transfers. Preserve invalid-program
+checking, explicit unsupported boundaries and existing graph reuse. Labels, for
+loops and general while expressions remain following work, not silently accepted.
+
+External source loading and scalar typed IR are completed prerequisite slices,
+not completion of source organization, general types, ownership or full Rust.
 
 No checkbox for an entire category is closed by implementing one slice. Unsupported
 legal programs remain tracked as gaps, never counted as conformance successes.
