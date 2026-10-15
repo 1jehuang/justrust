@@ -86,4 +86,38 @@ The actual reconstructed driver hashes are A2 `1d7b6e73ac397ddcbc6fac4ca08040c95
 
 Before the reconstructed pair is measured, the benchmark's live-process discovery conservatively excludes only proven zombie/dead processes, continues counting live sleeping/blocked/stopped compilers, and aborts on unknown discovery/parse failures. Load and other-CPU thresholds are unchanged. The policy is recorded and must match across compared results. It does not rewrite old observations, change the frozen client, or turn its raw sampled zombie counts into zeroes.
 
-Matched full seed-1, 40-point synthetic runs and `bench/suite.py compare` are ready for a fresh controlled measurement window after independent final review. No speedup, zero overhead, default-path nonregression, default compiler promotion or measured 96-core speedup is claimed before valid results exist and their command/change/noise breakdowns are inspected.
+### A2 baseline attempted, comparison blocked
+
+The reconstructed A2 seed-1, 40-point, one-replicate attempt completed with harness exit 0 (`task5673007jqd`), from October 14, 2026 21:46:08 to 23:11:52 Pacific. Completion is not eligibility. Original `bench/results/native-dispatch-synth40-A2-20261015.json` is preserved byte-for-byte, SHA-256 `7b59851e5a660e9fdf18f2953184645ce230307f489ef8a122b228613ff601d3`. B2 has not been run. Both A2/B2 setup correctness gates above remain passed, not speed evidence.
+
+The existing `bench/synth/run.py` eligibility gate reports **46 blockers: 39 noisy points and seven inconsistent success/test outcomes**. All 40 points have one sample, summary and no measurement-error entry. Only point 34 is quiet, leaving **zero comprehensively eligible points** under `_complete`, which deliberately does not salvage a subset. Measured foreign-rustc-before counts are all zero, but start load ranges from 3.82 to 20.09 and exceeds the unchanged 4-core noise threshold on 39 points. Zero sampled foreign rustc does not make a loaded run uncontended.
+
+| Point | Saved run ID | Failed tests | Outcome |
+|---:|---|---:|---|
+| 6 | `20261014-222445927-1788897481` | 1 | Desktop bundled GitHub applet assertion |
+| 11 | `20261014-223710077-1788897721` | 5 | Repository discovery, tool-description caps and feedback-hook assertion |
+| 13 | `20261014-223949395-1788897209` | 2 | Test-harness detection and provider catalog assertion |
+| 15 | `20261014-224343182-1788897308` | 10 | TUI ambient/onboarding, Git-repository assumptions, UI and restored-state assertions |
+| 21 | `20261014-225033785-1788897888` | 8 | TUI ambient/onboarding, Git-repository assumptions, model/UI and restored-state assertions |
+| 28 | `20261014-230016579-1788897555` | 1 | Desktop hint-chip bounds assertion; also retained rerun-suspect annotation |
+| 37 | `20261014-230759120-1788897944` | 9 | TUI ambient/onboarding, Git-repository assumptions, model and restored-state assertions |
+
+All seven planned success (`expect_fail=false`), compiled without a reported compile failure, then exited 101 with actual failing tests. All seven complete saved `output.jsonl` streams were read, not just summary verdicts. The audit retains their full-stream hashes, row counts, failed-test lines, result lines and panic contexts. These establish real test failures, not compiler causality or a complete root cause. The five deliberate compile-error points (16, 17, 18, 23, 31) instead have consistent `expect_fail=true`, exit 101, `compile_failed=true`, and zero failed tests. They are not the seven outcome problems. No expectations or observations were rewritten.
+
+The invocation audit contains **86 identities: 40 preparation, six previous-command and 40 measured**. All 86 saved metadata hashes match and all 40 measured samples carry identity verification. Before/after declared-file proofs match and `toolchain_identity_comparison_issues(A2,A2)` is empty. This is self-consistency only, not proof of a matched pair or loaded process memory. The frozen measurement-plan SHA-256 remains `f6fd578fa3098e4d4960bb056f6dc8f8f41ee0828ca1d1bbd3a660dddc6d4b68`.
+
+The documented export CLI was run from the repository root:
+
+```sh
+JUSTRUST_HOME=/home/jeremy/.jcode/scratch/dispatch-synth40-coherent/A2/home \
+  justrust export --out data/runs --machine dispatch-synth40-A2
+```
+
+It exported 87 slim runs into the new isolated `data/runs/dispatch-synth40-A2/` shard: all 86 cited invocation IDs plus the pre-existing coherent A2 setup run. No cited identity run is missing. Unrelated `data/runs/xps14/` and `FINDINGS.md` were not edited. Original private logs and benchmark evidence remain in place. Reproduce the read-only audit with:
+
+```sh
+python3 bench/synth/audit_dispatch_a2.py \
+  /home/jeremy/.jcode/scratch/dispatch-synth40-coherent/A2/home
+```
+
+The output is retained in `bench/results/native-dispatch-synth40-A2-audit-20261015.json`, including the exact existing suite blockers and eligibility implementation hash. **The comparison/default-promotion gate is blocked by the baseline itself.** No B benchmark or compiler build was launched for this audit. A future valid paired measurement needs controlled load and correct workload outcomes without dropping points or relabeling failures. No speedup, zero overhead, default-path nonregression, default compiler promotion or measured 96-core speedup is claimed.

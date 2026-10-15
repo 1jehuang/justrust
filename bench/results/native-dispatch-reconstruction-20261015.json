@@ -2,7 +2,7 @@
   "schema": 1,
   "scope": "coherent native toolchain reconstruction and real-project setup acceptance, not performance comparison",
   "not_byte_identical_reproduction_of_prior_accepted_compilers": true,
-  "comprehensive_synth40_performance_gate": "not run for reconstructed pair",
+  "comprehensive_synth40_performance_gate": "A2 baseline attempted: 40 points observed, comparison blocked by noise and test outcomes; B2 not run. See native-dispatch-synth40-A2-audit-20261015.json",
   "whole_job_work_span": "unknown, not measured",
   "source_changes_between_pair": [
     "toolchain/rustc/compiler/rustc_middle/src/query/calls.rs",

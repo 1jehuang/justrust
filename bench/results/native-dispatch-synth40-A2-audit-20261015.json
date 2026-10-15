@@ -1,0 +1,502 @@
+{
+  "schema": 1,
+  "scope": "preserved baseline evidence audit only, no performance claim",
+  "baseline_sha256": "7b59851e5a660e9fdf18f2953184645ce230307f489ef8a122b228613ff601d3",
+  "measurement_plan_sha256": "f6fd578fa3098e4d4960bb056f6dc8f8f41ee0828ca1d1bbd3a660dddc6d4b68",
+  "eligibility_implementation_sha256": "9f20312232f030930af3cb7c2a34594114e8c1fd1dc1e5e66739537a0ec84ab4",
+  "comparison_gate": "blocked: baseline attempted, not eligible; B2 not run",
+  "points_observed": 40,
+  "comprehensively_eligible_points": 0,
+  "noisy_samples": 39,
+  "quiet_points": [
+    34
+  ],
+  "outcome_issue_points": [
+    6,
+    11,
+    13,
+    15,
+    21,
+    28,
+    37
+  ],
+  "expected_compile_error_points": [
+    16,
+    17,
+    18,
+    23,
+    31
+  ],
+  "measured_foreign_rustc_counts": [
+    0
+  ],
+  "load_before_range": [
+    3.82,
+    20.09
+  ],
+  "suite_blockers": [
+    "point 0 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 1 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 2 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 3 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 4 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 5 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 6 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 6 suite-jr-ad23ba6b2733: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail",
+    "point 7 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 8 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 9 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 10 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 11 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 11 suite-jr-ad23ba6b2733: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail",
+    "point 12 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 13 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 13 suite-jr-ad23ba6b2733: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail",
+    "point 14 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 15 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 15 suite-jr-ad23ba6b2733: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail",
+    "point 16 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 17 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 18 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 19 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 20 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 21 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 21 suite-jr-ad23ba6b2733: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail",
+    "point 22 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 23 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 24 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 25 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 26 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 27 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 28 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 28 suite-jr-ad23ba6b2733: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail",
+    "point 29 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 30 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 31 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 32 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 33 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 35 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 36 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 37 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 37 suite-jr-ad23ba6b2733: missing or inconsistent exit/compile/test outcome provenance for plan.expect_fail",
+    "point 38 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions",
+    "point 39 suite-jr-ad23ba6b2733: noisy or missing noise provenance; rerun under controlled conditions"
+  ],
+  "identity_self_consistency_issues": [],
+  "identity_invocations": {
+    "pre": 40,
+    "run": 40,
+    "prev": 6
+  },
+  "identity_invocation_count": 86,
+  "identity_metadata_hash_mismatch_ids": [],
+  "exported_run_count": 87,
+  "missing_exported_identity_run_ids": [],
+  "outcome_log_audits": [
+    {
+      "point": 6,
+      "run_id": "20261014-222445927-1788897481",
+      "expect_fail": false,
+      "exit": 101,
+      "compile_failed": false,
+      "tests_failed": 1,
+      "saved_output_sha256": "9eaa62d73d76062cef996a9bb15aa05c7672fc7603bde06f7247fa0e85c96c1b",
+      "saved_output_rows": 2285,
+      "failed_test_lines": [
+        "test applet_runtime::tests::bundled_github_applet_renders_valid_documents ... FAILED <0.067s>"
+      ],
+      "panic_context": [
+        [
+          "thread 'applet_runtime::tests::bundled_github_applet_renders_valid_documents' (2228979) panicked at crates/jcode-desktop-ui/src/applet_runtime.rs:812:9:",
+          "assertion failed: doc(&runtime).contains(\"Review requested 1\")",
+          "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+          "failures:",
+          "    applet_runtime::tests::bundled_github_applet_renders_valid_documents"
+        ]
+      ],
+      "failed_result_lines": [
+        "test result: FAILED. 1302 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 9.04s"
+      ]
+    },
+    {
+      "point": 11,
+      "run_id": "20261014-223710077-1788897721",
+      "expect_fail": false,
+      "exit": 101,
+      "compile_failed": false,
+      "tests_failed": 5,
+      "saved_output_sha256": "639b5b885bb870c47f9685ed5d69ad325e2eba672e4d7fea039f591f782bf926",
+      "saved_output_rows": 2754,
+      "failed_test_lines": [
+        "test server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution ... FAILED <0.182s>",
+        "test tool::bash::tests::repository_commands_export_a_logged_cargo_function ... FAILED <0.000s>",
+        "test tool::tests::tool_descriptions_stay_under_token_cap ... FAILED <0.001s>",
+        "test tool::tests::tool_parameter_descriptions_stay_under_token_cap ... FAILED <0.001s>",
+        "test tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result ... FAILED <0.174s>"
+      ],
+      "panic_context": [
+        [
+          "thread 'server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution' (2379931) panicked at crates/jcode-app-core/src/server/debug_command_exec.rs:835:10:",
+          "debug selfdev reload should succeed: Could not find jcode repository directory",
+          "---- tool::bash::tests::repository_commands_export_a_logged_cargo_function stdout ----",
+          "thread 'tool::bash::tests::repository_commands_export_a_logged_cargo_function' (2380530) panicked at crates/jcode-app-core/src/tool/bash_tests.rs:84:14:",
+          "test runs inside the jcode repository"
+        ],
+        [
+          "thread 'tool::bash::tests::repository_commands_export_a_logged_cargo_function' (2380530) panicked at crates/jcode-app-core/src/tool/bash_tests.rs:84:14:",
+          "test runs inside the jcode repository",
+          "---- tool::tests::tool_descriptions_stay_under_token_cap stdout ----",
+          "thread 'tool::tests::tool_descriptions_stay_under_token_cap' (2382905) panicked at crates/jcode-app-core/src/tool/tests.rs:715:5:",
+          "tool descriptions over the 20-token cap:"
+        ],
+        [
+          "thread 'tool::tests::tool_descriptions_stay_under_token_cap' (2382905) panicked at crates/jcode-app-core/src/tool/tests.rs:715:5:",
+          "tool descriptions over the 20-token cap:",
+          "compile_remote (~101 tokens): Compile in an isolated Linux sandbox using Jcode subscription cloud-compute credits (shared with cloud agents). Uploads eligible source files and returns compiler output and metered usage. Requires a Jcode subscription; use action=status to check access and credits. Use only when the user has requested remote builds or authorized source sharing. Failed builds also consume credits. No automatic top-ups.",
+          "---- tool::tests::tool_parameter_descriptions_stay_under_token_cap stdout ----",
+          "thread 'tool::tests::tool_parameter_descriptions_stay_under_token_cap' (2382906) panicked at crates/jcode-app-core/src/tool/tests.rs:786:5:"
+        ],
+        [
+          "thread 'tool::tests::tool_parameter_descriptions_stay_under_token_cap' (2382906) panicked at crates/jcode-app-core/src/tool/tests.rs:786:5:",
+          "1 parameter descriptions over the 25-token cap:",
+          "gmail $.properties.bcc (~26 tokens): Comma-separated Bcc addresses, hidden from other recipients. On update_draft, omit to keep, \"\" to clear.",
+          "---- tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result stdout ----",
+          "thread 'tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result' (2382835) panicked at crates/jcode-app-core/src/tool/tests.rs:1934:5:"
+        ],
+        [
+          "thread 'tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result' (2382835) panicked at crates/jcode-app-core/src/tool/tests.rs:1934:5:",
+          "    1\thello",
+          "failures:",
+          "    server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution",
+          "    tool::bash::tests::repository_commands_export_a_logged_cargo_function"
+        ]
+      ],
+      "failed_result_lines": [
+        "test result: FAILED. 1485 passed; 5 failed; 15 ignored; 0 measured; 0 filtered out; finished in 42.60s"
+      ]
+    },
+    {
+      "point": 13,
+      "run_id": "20261014-223949395-1788897209",
+      "expect_fail": false,
+      "exit": 101,
+      "compile_failed": false,
+      "tests_failed": 2,
+      "saved_output_sha256": "bdcdf32e3efd5e4b6476a9e58a5ec4d08b81e31e7d5fa1e45020e06377768483",
+      "saved_output_rows": 2197,
+      "failed_test_lines": [
+        "test auth::tests::browser_suppressed_inside_test_harness_without_env_overrides ... FAILED <0.000s>",
+        "test provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... FAILED <0.028s>"
+      ],
+      "panic_context": [
+        [
+          "thread 'auth::tests::browser_suppressed_inside_test_harness_without_env_overrides' (2397527) panicked at crates/jcode-base/src/auth/tests.rs:970:5:",
+          "test binary should be detected even with a custom Cargo target directory",
+          "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+          "---- provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list stdout ----",
+          "thread 'provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list' (2398995) panicked at crates/jcode-base/src/provider/tests/catalog_subscription.rs:162:5:"
+        ],
+        [
+          "thread 'provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list' (2398995) panicked at crates/jcode-base/src/provider/tests/catalog_subscription.rs:162:5:",
+          "assertion `left == right` failed",
+          "  left: [\"claude-fable-5\", \"claude-fable-5-1\", \"claude-haiku-4-5\", \"claude-nebula-preview\", \"claude-nebula-preview[1m]\", \"claude-opus-4-5\", \"claude-opus-4-6\", \"claude-opus-4-6[1m]\", \"claude-opus-4-8\", \"claude-opus-5\", \"claude-opus-5-5\", \"claude-sonnet-4-20250514\", \"claude-sonnet-4-5\", \"claude-sonnet-4-6\", \"claude-sonnet-4-6[1m]\", \"claude-sonnet-5\"]",
+          " right: [\"claude-nebula-preview\", \"claude-nebula-preview[1m]\"]",
+          "failures:"
+        ]
+      ],
+      "failed_result_lines": [
+        "test result: FAILED. 1772 passed; 2 failed; 5 ignored; 0 measured; 0 filtered out; finished in 11.45s"
+      ]
+    },
+    {
+      "point": 15,
+      "run_id": "20261014-224343182-1788897308",
+      "expect_fail": false,
+      "exit": 101,
+      "compile_failed": false,
+      "tests_failed": 10,
+      "saved_output_sha256": "15fd3c66c0d54c096bf28823b8af6b4c074ca7f6f9399fad444b49221e481974",
+      "saved_output_rows": 3172,
+      "failed_test_lines": [
+        "test tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled ... FAILED <0.972s>",
+        "test tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session ... FAILED <0.265s>",
+        "test tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn ... FAILED <0.004s>",
+        "test tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn ... FAILED <0.003s>",
+        "test tui::app::tests::test_expand_badge_shortcut_does_not_collapse_full_inline_diff ... FAILED <0.008s>",
+        "test tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage ... FAILED <0.291s>",
+        "test tui::app::tests::test_new_for_remote_restores_observe_mode_from_reload_state ... FAILED <0.025s>",
+        "test tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level ... FAILED <0.038s>",
+        "test tui::app::tests::test_restore_session_adds_reload_message ... FAILED <0.013s>",
+        "test tui::ui::tests::basic::test_cache_retention_estimates_never_create_proactive_expiry_ui ... FAILED <0.112s>"
+      ],
+      "panic_context": [
+        [
+          "thread 'tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled' (2423095) panicked at crates/jcode-tui/src/tui/app/helpers_tests.rs:475:49:",
+          "ambient info",
+          "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+          "---- tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session stdout ----",
+          "thread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (2424594) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:"
+        ],
+        [
+          "thread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (2424594) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:",
+          "assertion failed: app.suggestion_prompts().is_empty() || !app.onboarding_welcome_active()",
+          "---- tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn stdout ----",
+          "thread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (2429195) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:",
+          "test session should start in a Git repository"
+        ],
+        [
+          "thread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (2429195) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:",
+          "test session should start in a Git repository",
+          "---- tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn stdout ----",
+          "thread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (2433472) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:",
+          "test session should start in a Git repository"
+        ],
+        [
+          "thread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (2433472) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:",
+          "test session should start in a Git repository",
+          "---- tui::app::tests::test_expand_badge_shortcut_does_not_collapse_full_inline_diff stdout ----",
+          "thread 'tui::app::tests::test_expand_badge_shortcut_does_not_collapse_full_inline_diff' (2437365) panicked at crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs:246:5:",
+          "full-inline E shortcut should not run expand/collapse action"
+        ],
+        [
+          "thread 'tui::app::tests::test_expand_badge_shortcut_does_not_collapse_full_inline_diff' (2437365) panicked at crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs:246:5:",
+          "full-inline E shortcut should not run expand/collapse action",
+          "---- tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage stdout ----",
+          "thread 'tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage' (2442117) panicked at crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs:1604:9:",
+          "claude-api should accrue token cost"
+        ],
+        [
+          "thread 'tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage' (2442117) panicked at crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs:1604:9:",
+          "claude-api should accrue token cost",
+          "---- tui::app::tests::test_new_for_remote_restores_observe_mode_from_reload_state stdout ----",
+          "thread 'tui::app::tests::test_new_for_remote_restores_observe_mode_from_reload_state' (2444707) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs:1221:5:",
+          "assertion failed: restored.observe_mode_enabled()"
+        ],
+        [
+          "thread 'tui::app::tests::test_new_for_remote_restores_observe_mode_from_reload_state' (2444707) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs:1221:5:",
+          "assertion failed: restored.observe_mode_enabled()",
+          "---- tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level stdout ----",
+          "thread 'tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level' (2445932) panicked at crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs:1211:5:",
+          "assertion `left == right` failed"
+        ],
+        [
+          "thread 'tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level' (2445932) panicked at crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs:1211:5:",
+          "assertion `left == right` failed",
+          "  left: Some(\"Image size: large \u00b7 Image copied\")",
+          " right: Some(\"Image size: large\")",
+          "---- tui::app::tests::test_restore_session_adds_reload_message stdout ----"
+        ],
+        [
+          "thread 'tui::app::tests::test_restore_session_adds_reload_message' (2449911) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs:506:5:",
+          "assertion `left == right` failed",
+          "  left: 0",
+          " right: 2",
+          "failures:"
+        ]
+      ],
+      "failed_result_lines": [
+        "test result: FAILED. 2477 passed; 10 failed; 18 ignored; 0 measured; 0 filtered out; finished in 13.37s"
+      ]
+    },
+    {
+      "point": 21,
+      "run_id": "20261014-225033785-1788897888",
+      "expect_fail": false,
+      "exit": 101,
+      "compile_failed": false,
+      "tests_failed": 8,
+      "saved_output_sha256": "7f572091d843254b36f041d20064ffca40e81a8e9781a9e0d697ba5164462268",
+      "saved_output_rows": 3169,
+      "failed_test_lines": [
+        "test tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled ... FAILED <1.043s>",
+        "test tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session ... FAILED <0.289s>",
+        "test tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn ... FAILED <0.002s>",
+        "test tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn ... FAILED <0.005s>",
+        "test tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage ... FAILED <0.292s>",
+        "test tui::app::tests::test_model_picker_waits_for_async_post_login_catalog_activation ... FAILED <0.018s>",
+        "test tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level ... FAILED <0.033s>",
+        "test tui::app::tests::test_restore_session_adds_reload_message ... FAILED <0.005s>"
+      ],
+      "panic_context": [
+        [
+          "thread 'tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled' (2507206) panicked at crates/jcode-tui/src/tui/app/helpers_tests.rs:475:49:",
+          "ambient info",
+          "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+          "---- tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session stdout ----",
+          "thread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (2508795) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:"
+        ],
+        [
+          "thread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (2508795) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:",
+          "assertion failed: app.suggestion_prompts().is_empty() || !app.onboarding_welcome_active()",
+          "---- tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn stdout ----",
+          "thread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (2513279) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:",
+          "test session should start in a Git repository"
+        ],
+        [
+          "thread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (2513279) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:",
+          "test session should start in a Git repository",
+          "---- tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn stdout ----",
+          "thread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (2517519) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:",
+          "test session should start in a Git repository"
+        ],
+        [
+          "thread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (2517519) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:",
+          "test session should start in a Git repository",
+          "---- tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage stdout ----",
+          "thread 'tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage' (2526237) panicked at crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs:1604:9:",
+          "claude-api should accrue token cost"
+        ],
+        [
+          "thread 'tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage' (2526237) panicked at crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs:1604:9:",
+          "claude-api should accrue token cost",
+          "---- tui::app::tests::test_model_picker_waits_for_async_post_login_catalog_activation stdout ----",
+          "thread 'tui::app::tests::test_model_picker_waits_for_async_post_login_catalog_activation' (2528106) panicked at crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs:1558:5:",
+          "assertion failed: picker.entries.iter().any(|entry| entry.name == \"claude-opus-4.6\")"
+        ],
+        [
+          "thread 'tui::app::tests::test_model_picker_waits_for_async_post_login_catalog_activation' (2528106) panicked at crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs:1558:5:",
+          "assertion failed: picker.entries.iter().any(|entry| entry.name == \"claude-opus-4.6\")",
+          "---- tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level stdout ----",
+          "thread 'tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level' (2529979) panicked at crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs:1211:5:",
+          "assertion `left == right` failed"
+        ],
+        [
+          "thread 'tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level' (2529979) panicked at crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs:1211:5:",
+          "assertion `left == right` failed",
+          "  left: Some(\"Image size: large \u00b7 Image copied\")",
+          " right: Some(\"Image size: large\")",
+          "---- tui::app::tests::test_restore_session_adds_reload_message stdout ----"
+        ],
+        [
+          "thread 'tui::app::tests::test_restore_session_adds_reload_message' (2533932) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs:506:5:",
+          "assertion `left == right` failed",
+          "  left: 0",
+          " right: 2",
+          "failures:"
+        ]
+      ],
+      "failed_result_lines": [
+        "test result: FAILED. 2479 passed; 8 failed; 18 ignored; 0 measured; 0 filtered out; finished in 12.90s"
+      ]
+    },
+    {
+      "point": 28,
+      "run_id": "20261014-230016579-1788897555",
+      "expect_fail": false,
+      "exit": 101,
+      "compile_failed": false,
+      "tests_failed": 1,
+      "saved_output_sha256": "40614d71550d3f2ea8c30b75d07850c5cf9f253ddb8a985539c28e33b104f5af",
+      "saved_output_rows": 2878,
+      "failed_test_lines": [
+        "test workspace::tests::the_hint_chip_uses_only_spare_tab_space ... FAILED <0.025s>"
+      ],
+      "panic_context": [
+        [
+          "thread 'workspace::tests::the_hint_chip_uses_only_spare_tab_space' (2640139) panicked at crates/jcode-desktop-ui/src/workspace.rs:13387:9:",
+          "assertion `left == right` failed",
+          "  left: Bounds { origin: Point { x: 844.5px, y: 6px }, size: Size { 208px \u00d7 28px } }",
+          " right: Bounds { origin: Point { x: 869.5px, y: 6px }, size: Size { 208px \u00d7 28px } }",
+          "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+        ]
+      ],
+      "failed_result_lines": [
+        "test result: FAILED. 1302 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 8.84s"
+      ]
+    },
+    {
+      "point": 37,
+      "run_id": "20261014-230759120-1788897944",
+      "expect_fail": false,
+      "exit": 101,
+      "compile_failed": false,
+      "tests_failed": 9,
+      "saved_output_sha256": "1e667a12a603004ba87de3da787900c82c52d5171474598774ad45d3159073cb",
+      "saved_output_rows": 3181,
+      "failed_test_lines": [
+        "test tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled ... FAILED <1.065s>",
+        "test tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session ... FAILED <0.326s>",
+        "test tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn ... FAILED <0.003s>",
+        "test tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn ... FAILED <0.007s>",
+        "test tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage ... FAILED <0.278s>",
+        "test tui::app::tests::test_login_completed_surfaces_new_provider_models_in_local_model_picker ... FAILED <0.061s>",
+        "test tui::app::tests::test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state ... FAILED <0.011s>",
+        "test tui::app::tests::test_restore_session_adds_reload_message ... FAILED <0.011s>",
+        "test tui::app::tests::test_subagent_model_large_catalog_uses_cached_searchable_picker ... FAILED <0.043s>"
+      ],
+      "panic_context": [
+        [
+          "thread 'tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled' (2703124) panicked at crates/jcode-tui/src/tui/app/helpers_tests.rs:475:49:",
+          "ambient info",
+          "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+          "---- tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session stdout ----",
+          "thread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (2704658) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:"
+        ],
+        [
+          "thread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (2704658) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:",
+          "assertion failed: app.suggestion_prompts().is_empty() || !app.onboarding_welcome_active()",
+          "---- tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn stdout ----",
+          "thread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (2709080) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:",
+          "test session should start in a Git repository"
+        ],
+        [
+          "thread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (2709080) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:",
+          "test session should start in a Git repository",
+          "---- tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn stdout ----",
+          "thread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (2713385) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:",
+          "test session should start in a Git repository"
+        ],
+        [
+          "thread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (2713385) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:",
+          "test session should start in a Git repository",
+          "---- tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage stdout ----",
+          "thread 'tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage' (2722009) panicked at crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs:1604:9:",
+          "claude-api should accrue token cost"
+        ],
+        [
+          "thread 'tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage' (2722009) panicked at crates/jcode-tui/src/tui/app/tests/remote_events_reload_04.rs:1604:9:",
+          "claude-api should accrue token cost",
+          "---- tui::app::tests::test_login_completed_surfaces_new_provider_models_in_local_model_picker stdout ----",
+          "thread 'tui::app::tests::test_login_completed_surfaces_new_provider_models_in_local_model_picker' (2722983) panicked at crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs:1595:10:",
+          "copilot model should be shown after login"
+        ],
+        [
+          "thread 'tui::app::tests::test_login_completed_surfaces_new_provider_models_in_local_model_picker' (2722983) panicked at crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs:1595:10:",
+          "copilot model should be shown after login",
+          "---- tui::app::tests::test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state stdout ----",
+          "thread 'tui::app::tests::test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state' (2724451) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_02.rs:12:5:",
+          "assertion `left == right` failed"
+        ],
+        [
+          "thread 'tui::app::tests::test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state' (2724451) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_02.rs:12:5:",
+          "assertion `left == right` failed",
+          "  left: []",
+          " right: [\"sent interrupt\"]",
+          "---- tui::app::tests::test_restore_session_adds_reload_message stdout ----"
+        ],
+        [
+          "thread 'tui::app::tests::test_restore_session_adds_reload_message' (2729798) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs:506:5:",
+          "assertion `left == right` failed",
+          "  left: 0",
+          " right: 2",
+          "---- tui::app::tests::test_subagent_model_large_catalog_uses_cached_searchable_picker stdout ----"
+        ],
+        [
+          "thread 'tui::app::tests::test_subagent_model_large_catalog_uses_cached_searchable_picker' (2731366) panicked at crates/jcode-tui/src/tui/app/tests/state_model_poke_03.rs:576:5:",
+          "assertion `left == right` failed: 400 models plus inherit",
+          "  left: 2",
+          " right: 401",
+          "failures:"
+        ]
+      ],
+      "failed_result_lines": [
+        "test result: FAILED. 2478 passed; 9 failed; 18 ignored; 0 measured; 0 filtered out; finished in 12.89s"
+      ]
+    }
+  ],
+  "limitations": [
+    "Self-consistency is not a matched A/B comparison.",
+    "Panic contexts do not establish compiler causality or a complete root cause.",
+    "No noisy points, expected failures, or test failures were rewritten or removed."
+  ]
+}
