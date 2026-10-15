@@ -69,7 +69,283 @@ def cache_call_fixture():
     return query, assessment
 
 
+def dispatch_result_fixture():
+    query, assessment = fixture()
+    query.update(schema=6, execution_clock=None, task_bindings={'pool': None})
+    assessment.update(schema=6, clock_alignment={
+        'aligned': False, 'issues': ['query execution clock unavailable']})
+    reasons = {key: 0 for key in mapping.DISPATCH_RESULT_REASONS}
+    reasons['null_dep_node_index'] = 1
+    assessment['dispatch_result_provenance'] = dict(
+        scope=mapping.DISPATCH_RESULT_SCOPE, records_complete=True,
+        observed_requests=2, observed_dispatch_resolutions=2,
+        resolved_requests=1, unresolved_requests=1,
+        distinct_publishing_job_relations=1, lost_events=0,
+        unresolved_reasons=reasons,
+        relations=[dict(request_id=2, context_id=1, consumer_job_id=2,
+                        result_id=1, producer_job_id=1, dep_node_index=42,
+                        request_start_event_index=0, publication_event_index=1,
+                        request_terminal_event_index=3)])
+    return query, assessment
+
+
 class FrontendMappingTests(unittest.TestCase):
+    def analyze_dispatch_fixture(self, query, authority, cache=False, large=False,
+                                 pool=None, pool_authority=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            if pool is not None:
+                (capture / 'pool.json').write_text(json.dumps(pool))
+            authorities = [authority] + ([pool_authority] if pool_authority else [])
+            encoded = json.dumps(authorities, indent=2).replace('\n', '\r\n').encode()
+            result = subprocess.CompletedProcess([], 0, encoded, b'')
+            artifact = root / 'graph.json'
+            with patch.object(mapping.subprocess, 'run', return_value=result) as validator:
+                report = mapping.analyze(capture, 'fake-validator', large_capture=large,
+                                         cache_call_provenance=cache,
+                                         dispatch_result_provenance=True, graph_output=artifact)
+            self.assertEqual(artifact.read_bytes(), encoded)
+            self.assertEqual(artifact.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(report['graph_output']['sha256'], hashlib.sha256(encoded).hexdigest())
+            self.assertEqual(report['graph_output']['bytes'], len(encoded))
+            self.assertNotIn(str(root), json.dumps(report))
+            return report, validator.call_args.args[0]
+
+    def test_dispatch_flag_and_both_flags_store_exact_artifact_with_separate_counts(self):
+        for cache in (False, True):
+            query, authority = dispatch_result_fixture()
+            if cache:
+                authority['cache_call_provenance'] = cache_call_fixture()[1]['cache_call_provenance']
+            report, command = self.analyze_dispatch_fixture(query, authority, cache=cache, large=True)
+            self.assertIn('--dispatch-result-provenance', command)
+            self.assertIn('--large-capture', command)
+            self.assertEqual('--cache-call-provenance' in command, cache)
+            capture, = report['captures']
+            self.assertEqual('cache_call_provenance' in capture, cache)
+            summary = capture['dispatch_result_provenance']
+            self.assertEqual(summary['stored_relation_rows'], 1)
+            self.assertEqual(summary['observed_dispatch_resolutions'], 2)
+            self.assertNotIn('relations', summary)
+            self.assertEqual(summary['unresolved_reasons']['null_dep_node_index'], 1)
+            for obj in (report, capture):
+                for key in ('cpu_work_ns', 'execution_span_ns', 'theoretical_parallelism'):
+                    self.assertIsNone(obj[key])
+                self.assertFalse(obj['full_pipeline_complete'])
+
+    def test_root6_requires_dispatch_flag_before_any_validator_or_artifact(self):
+        query, _ = dispatch_result_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            artifact = root / 'graph.json'
+            for cache in (False, True):
+                with patch.object(mapping.subprocess, 'run') as validator:
+                    with self.assertRaisesRegex(ValueError, 'explicit --dispatch-result-provenance'):
+                        mapping.analyze(capture, 'unused', cache_call_provenance=cache,
+                                        graph_output=artifact if cache else None)
+                    validator.assert_not_called()
+                self.assertFalse(artifact.exists())
+
+    def test_dispatch_requires_exact_native_schema6_and_missing_field_fails_closed(self):
+        for change in ('source4', 'source5', 'authority4', 'authority5', 'authority-bool', 'missing'):
+            query, authority = dispatch_result_fixture()
+            if change.startswith('source'):
+                query['schema'] = int(change[-1])
+                authority['schema'] = query['schema']
+            elif change.startswith('authority'):
+                authority['schema'] = True if change == 'authority-bool' else int(change[-1])
+            else:
+                del authority['dispatch_result_provenance']
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                capture = root / 'capture'
+                capture.mkdir()
+                (capture / 'query.json').write_text(json.dumps(query))
+                artifact = root / 'graph.json'
+                encoded = json.dumps([authority]).encode()
+                with patch.object(mapping.subprocess, 'run', return_value=
+                                  subprocess.CompletedProcess([], 0, encoded, b'')):
+                    with self.assertRaises(ValueError):
+                        mapping.analyze(capture, 'unused', dispatch_result_provenance=True,
+                                        graph_output=artifact)
+                self.assertEqual(artifact.read_bytes(), encoded)
+
+    def test_dispatch_null_clock_is_explicitly_unaligned_and_does_not_clear_relations(self):
+        query, authority = dispatch_result_fixture()
+        report, _ = self.analyze_dispatch_fixture(query, authority)
+        capture, = report['captures']
+        self.assertEqual(capture['clock_alignment'], authority['clock_alignment'])
+        self.assertNotIn('observed_cpu', capture)
+        self.assertEqual(capture['dispatch_result_provenance']['resolved_requests'], 1)
+        for change in ('missing-clock', 'missing-alignment', 'null-alignment', 'forged-aligned'):
+            query, authority = dispatch_result_fixture()
+            if change == 'missing-clock':
+                del query['execution_clock']
+            elif change == 'missing-alignment':
+                del authority['clock_alignment']
+            elif change == 'null-alignment':
+                authority['clock_alignment'] = None
+            else:
+                authority['clock_alignment'] = {'aligned': True, 'issues': []}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.analyze_dispatch_fixture(query, authority)
+
+    def test_dispatch_clock_bridge_uses_same_exact_pool_authority(self):
+        query, authority, pool, pool_authority = timing_fixture()
+        query['schema'] = authority['schema'] = 6
+        authority['dispatch_result_provenance'] = dispatch_result_fixture()[1]['dispatch_result_provenance']
+        report, _ = self.analyze_dispatch_fixture(query, authority, pool=pool,
+                                                 pool_authority=pool_authority)
+        self.assertEqual(report['captures'][0]['observed_cpu'], pool_authority['observed_cpu'])
+        self.assertTrue(report['captures'][0]['clock_alignment']['aligned'])
+        pool_authority['observed_cpu']['clock_bridge']['pool_observer'] = 9
+        with self.assertRaisesRegex(ValueError, 'qualified clock bridge mismatch'):
+            self.analyze_dispatch_fixture(query, authority, pool=pool, pool_authority=pool_authority)
+
+    def test_dispatch_counts_partition_and_typed_fields_fail_closed(self):
+        for change in ('row-count', 'request-count', 'reason-count', 'bool-count', 'scope', 'missing-reason'):
+            _, authority = dispatch_result_fixture()
+            result = authority['dispatch_result_provenance']
+            if change == 'row-count':
+                result['relations'] = []
+            elif change == 'request-count':
+                result['observed_requests'] += 1
+            elif change == 'reason-count':
+                result['unresolved_reasons']['feed_request'] += 1
+            elif change == 'bool-count':
+                result['observed_dispatch_resolutions'] = True
+            elif change == 'scope':
+                result['scope'] = 'execution-dag'
+            else:
+                del result['unresolved_reasons']['cache_hit_request']
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                mapping._dispatch_result_summary(authority)
+
+    def test_dispatch_partial_orphan_resolution_observations_not_request_coverage(self):
+        _, authority = dispatch_result_fixture()
+        result = authority['dispatch_result_provenance']
+        result.update(records_complete=False, observed_requests=0,
+                      observed_dispatch_resolutions=1, resolved_requests=0,
+                      unresolved_requests=0, distinct_publishing_job_relations=0,
+                      lost_events=1, relations=[])
+        result['unresolved_reasons'] = {key: 0 for key in mapping.DISPATCH_RESULT_REASONS}
+        summary = mapping._dispatch_result_summary(authority)
+        self.assertFalse(summary['records_complete'])
+        self.assertEqual(summary['observed_dispatch_resolutions'], 1)
+        self.assertEqual(summary['observed_requests'], 0)
+        self.assertEqual(summary['stored_relation_rows'], 0)
+
+    def test_dispatch_missing_companion_flags_and_cli_aliases_fail_before_side_effects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, artifact = root / 'report.json', root / 'graph.json'
+            for cache in (False, True):
+                with patch.object(mapping.subprocess, 'run') as validator:
+                    with self.assertRaisesRegex(ValueError, 'companion --graph-output'):
+                        mapping.analyze(root, 'unused', dispatch_result_provenance=True,
+                                        cache_call_provenance=cache)
+                    validator.assert_not_called()
+            for extra in ([], ['--graph-output', str(report)]):
+                with patch('sys.argv', ['frontend_mapping', '--capture', str(root),
+                                       '--dispatch-result-provenance', '--output', str(report), *extra]), \
+                        patch.object(mapping, 'analyze') as analyze, \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as error:
+                        mapping.main()
+                    self.assertEqual(error.exception.code, 2)
+                    analyze.assert_not_called()
+            self.assertFalse(report.exists())
+            self.assertFalse(artifact.exists())
+
+    def test_dispatch_cli_forwards_flag_and_preserves_independent_cache_opt_in(self):
+        for cache in (False, True):
+            query, authority = dispatch_result_fixture()
+            if cache:
+                authority['cache_call_provenance'] = cache_call_fixture()[1]['cache_call_provenance']
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                capture = root / 'capture'
+                capture.mkdir()
+                (capture / 'query.json').write_text(json.dumps(query))
+                report, artifact = root / 'report.json', root / 'graph.json'
+                encoded = json.dumps([authority]).encode()
+                extra = ['--cache-call-provenance'] if cache else []
+                with patch('sys.argv', ['frontend_mapping', '--capture', str(capture),
+                                       '--dispatch-result-provenance', '--graph-output', str(artifact),
+                                       '--output', str(report), *extra]), \
+                        patch.object(mapping.subprocess, 'run', return_value=
+                                     subprocess.CompletedProcess([], 0, encoded, b'')) as validator:
+                    mapping.main()
+                self.assertIn('--dispatch-result-provenance', validator.call_args.args[0])
+                compact = json.loads(report.read_bytes())
+                self.assertEqual('cache_call_provenance' in compact['captures'][0], cache)
+                self.assertEqual(artifact.read_bytes(), encoded)
+
+    def test_dispatch_artifact_containment_and_no_overwrite_controls(self):
+        query, _ = dispatch_result_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            source = capture / 'query.json'
+            source.write_text(json.dumps(query))
+            alias = root / 'alias'
+            alias.symlink_to(capture, target_is_directory=True)
+            original = root / 'keep.json'
+            original.write_bytes(b'preserved')
+            link = root / 'graph-link.json'
+            link.symlink_to(original)
+            for artifact in (source, capture / 'new.json', alias / 'new.json'):
+                with patch.object(mapping.subprocess, 'run') as validator, \
+                        patch.object(mapping, '_read_regular') as read:
+                    with self.assertRaisesRegex(ValueError, 'outside the original capture'):
+                        mapping.analyze(capture, 'unused', dispatch_result_provenance=True,
+                                        graph_output=artifact)
+                    validator.assert_not_called()
+                    read.assert_not_called()
+            for artifact in (original, link):
+                with patch.object(mapping.subprocess, 'run') as validator:
+                    with self.assertRaises(FileExistsError):
+                        mapping.analyze(capture, 'unused', dispatch_result_provenance=True,
+                                        graph_output=artifact)
+                    validator.assert_not_called()
+            self.assertEqual(original.read_bytes(), b'preserved')
+
+    def test_dispatch_partial_root_issues_preserve_artifact_without_compact_claim(self):
+        query, authority = dispatch_result_fixture()
+        authority['issues'] = ['query read records are incomplete or invalid']
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            artifact = root / 'graph.json'
+            encoded = json.dumps([authority]).encode()
+            with patch.object(mapping.subprocess, 'run', return_value=
+                              subprocess.CompletedProcess([], 0, encoded, b'')):
+                with self.assertRaisesRegex(ValueError, 'native query assessment has issues'):
+                    mapping.analyze(capture, 'unused', dispatch_result_provenance=True,
+                                    graph_output=artifact)
+            self.assertEqual(artifact.read_bytes(), encoded)
+
+    def test_default_ignores_unsolicited_dispatch_authority_and_does_not_forward_flag(self):
+        query, authority = fixture()
+        authority['dispatch_result_provenance'] = dispatch_result_fixture()[1]['dispatch_result_provenance']
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'query.json').write_text(json.dumps(query))
+            with patch.object(mapping.subprocess, 'run', return_value=
+                              subprocess.CompletedProcess([], 0, json.dumps([authority]), '')) as validator:
+                report = mapping.analyze(root, 'unused')
+            self.assertNotIn('--dispatch-result-provenance', validator.call_args.args[0])
+            self.assertNotIn('dispatch_result_provenance', report['captures'][0])
+            self.assertNotIn('graph_output', report)
+
     def test_cache_calls_forward_flag_and_store_exact_full_native_stdout(self):
         query, authority = cache_call_fixture()
         # Preserve CRLF and whitespace exactly rather than text-mode newline
@@ -356,6 +632,14 @@ class FrontendMappingTests(unittest.TestCase):
         original = next(item for item in report['inputs'] if item['name'] == 'query.json')
         self.assertEqual(original['sha256'], hashlib.sha256(expected_bytes).hexdigest())
         self.assertEqual(original['bytes'], len(expected_bytes))
+
+    def test_schema5_default_report_keeps_pre_dispatch_golden_bytes(self):
+        query, authority, pool, pool_authority = timing_fixture()
+        report = self.analyze_timing_fixture(query, authority, pool, pool_authority)
+        encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
+        # Independently recomputed with committed pre-dispatch analyzer 92f2bd143.
+        self.assertEqual(hashlib.sha256(encoded).hexdigest(),
+                         'e4f1782434fb375ffc494804555772958800b91d27d740bbf41327058b1d4fba')
 
     def test_forged_raw_clock_descriptor_does_not_upgrade_native_alignment(self):
         query, authority, pool, pool_authority = timing_fixture()

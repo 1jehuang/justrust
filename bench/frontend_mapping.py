@@ -32,6 +32,18 @@ CACHE_CALL_REASONS = (
     'producer_published_too_late', 'job_endpoint_unavailable',
     'admission_authority_incomplete',
 )
+DISPATCH_RESULT_SCOPE = 'observed-dispatch-result-availability-not-execution-dag'
+DISPATCH_RESULT_COUNTS = (
+    'observed_requests', 'observed_dispatch_resolutions', 'resolved_requests',
+    'unresolved_requests', 'distinct_publishing_job_relations', 'lost_events',
+)
+DISPATCH_RESULT_REASONS = (
+    'feed_request', 'interrupted_request', 'missing_request_terminal',
+    'cache_hit_request', 'no_dispatch_resolution', 'null_dep_node_index',
+    'missing_context_or_consumer', 'capture_incomplete', 'no_prior_producer',
+    'producer_published_too_late', 'job_endpoint_unavailable',
+    'admission_authority_incomplete',
+)
 
 
 def intervals_summary(intervals):
@@ -122,15 +134,20 @@ def summarize(query, assessment, timing=None):
 
 def _timing_summary(query, assessment, pool_authorities):
     """Copy public assessments, never raw timing or inferred clock/CPU claims."""
-    if query['schema'] != 5:
+    if query['schema'] not in (5, 6):
         return None
     alignment = assessment.get('clock_alignment')
+    if query['schema'] == 6:
+        if 'execution_clock' not in query:
+            raise ValueError('schema6 requires mandatory nullable execution clock')
     if (not isinstance(alignment, dict)
             or type(alignment.get('aligned')) is not bool
             or not isinstance(alignment.get('issues'), list)
             or any(not isinstance(issue, str) for issue in alignment['issues'])
             or (alignment['aligned'] and alignment['issues'])):
-        raise ValueError('schema5 requires native clock alignment authority')
+        raise ValueError('schema5/6 requires native clock alignment authority')
+    if query['schema'] == 6 and query['execution_clock'] is None and alignment['aligned']:
+        raise ValueError('schema6 null clock cannot have aligned native authority')
     timing = dict(clock_alignment=alignment)
     reference = query['task_bindings']['pool']
     authority = pool_authorities.get(reference['capture_id']) if reference else None
@@ -171,12 +188,16 @@ def _read_regular(path, remaining, directory_fd=None):
         os.close(fd)
 
 
-def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_output):
+def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_output,
+               dispatch_result_provenance=False):
     command = [str(justrust), 'graph', str(snapshot), '--json']
     if large_capture:
         command.append('--large-capture')
     if cache_call_provenance:
         command.append('--cache-call-provenance')
+    if dispatch_result_provenance:
+        command.append('--dispatch-result-provenance')
+    if cache_call_provenance or dispatch_result_provenance:
         # Reserve before invoking the validator, so collisions never overwrite an
         # existing artifact or perform an unnecessary potentially expensive run.
         fd = os.open(graph_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -224,14 +245,39 @@ def _cache_call_summary(assessment):
                 stored_relation_rows=len(calls['relations']))
 
 
+def _dispatch_result_summary(assessment):
+    """Copy strict public terminal-result facts, never inferred execution edges."""
+    result = assessment.get('dispatch_result_provenance')
+    if (not isinstance(result, dict) or result.get('scope') != DISPATCH_RESULT_SCOPE
+            or type(result.get('records_complete')) is not bool
+            or not isinstance(result.get('relations'), list)
+            or not isinstance(result.get('unresolved_reasons'), dict)):
+        raise ValueError('missing or malformed native dispatch-result provenance authority')
+    reasons = result['unresolved_reasons']
+    for container, fields in ((result, DISPATCH_RESULT_COUNTS),
+                              (reasons, DISPATCH_RESULT_REASONS)):
+        if any(type(container.get(key)) is not int or container[key] < 0 for key in fields):
+            raise ValueError('invalid native dispatch-result provenance counters')
+    if (result['resolved_requests'] != len(result['relations'])
+            or result['resolved_requests'] + result['unresolved_requests'] != result['observed_requests']
+            or sum(reasons[key] for key in DISPATCH_RESULT_REASONS) != result['unresolved_requests']):
+        raise ValueError('native dispatch-result provenance partition mismatch')
+    return dict(scope=result['scope'], records_complete=result['records_complete'],
+                **{key: result[key] for key in DISPATCH_RESULT_COUNTS},
+                unresolved_reasons={key: reasons[key] for key in DISPATCH_RESULT_REASONS},
+                stored_relation_rows=len(result['relations']))
+
+
 def analyze(directory, justrust, large_capture=False, cache_call_provenance=False,
-            graph_output=None):
-    if cache_call_provenance != (graph_output is not None):
-        raise ValueError('--cache-call-provenance requires companion --graph-output and vice versa')
+            graph_output=None, dispatch_result_provenance=False):
+    provenance = cache_call_provenance or dispatch_result_provenance
+    if provenance != (graph_output is not None):
+        raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
+                         'requires companion --graph-output and vice versa')
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('capture must be a nonsymlink directory')
-    if cache_call_provenance:
+    if provenance:
         capture_root = directory.resolve()
         artifact_path = Path(graph_output).resolve()
         if artifact_path == capture_root or capture_root in artifact_path.parents:
@@ -280,8 +326,10 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             raise ValueError('query capture identity must be a string')
         if capture_id in query_sources:
             raise ValueError('duplicate query source capture identity')
-        if type(receipt.get('schema')) is not int or receipt['schema'] not in (4, 5):
-            raise ValueError('frontend report requires native schema4 or schema5 evidence')
+        allowed_schemas = (4, 5, 6) if dispatch_result_provenance else (4, 5)
+        if type(receipt.get('schema')) is not int or receipt['schema'] not in allowed_schemas:
+            raise ValueError('frontend report requires native schema4/5 evidence '
+                             'or explicit --dispatch-result-provenance for schema6')
         query_sources[capture_id] = name
         source_receipts[name] = receipt
         neutral_sources.append(name)
@@ -304,7 +352,8 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
                 output.write(content)
             destination.chmod(0o400)
         assessments, artifact = _run_graph(snapshot, justrust, large_capture,
-                                          cache_call_provenance, graph_output)
+                                          cache_call_provenance, graph_output,
+                                          dispatch_result_provenance)
         indexed = {}
         pool_indexed = {}
         for assessment in assessments:
@@ -358,6 +407,10 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             summary = summarize(receipt, authority, timing)
             if cache_call_provenance:
                 summary['cache_call_provenance'] = _cache_call_summary(authority)
+            if dispatch_result_provenance:
+                if authority['schema'] != 6:
+                    raise ValueError('dispatch-result provenance requires native schema6 authority')
+                summary['dispatch_result_provenance'] = _dispatch_result_summary(authority)
             summaries.append(summary)
         if not summaries:
             raise ValueError('no native frontend receipt')
@@ -379,20 +432,26 @@ def main():
                         help='Explicitly allow up to 512 MiB; forwards the public validator opt-in')
     parser.add_argument('--cache-call-provenance', action='store_true',
                         help='Opt in to native cache-result availability relations, not execution edges')
+    parser.add_argument('--dispatch-result-provenance', action='store_true',
+                        help='Opt in to native schema6 dispatch-result availability, not execution edges')
     parser.add_argument('--graph-output', type=Path,
-                        help='Required with --cache-call-provenance: exclusive full native graph JSON artifact outside the capture directory')
+                        help='Required with either provenance flag: exclusive full native graph JSON artifact outside the capture directory')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        if args.cache_call_provenance or args.graph_output is not None:
-            if not args.cache_call_provenance or args.graph_output is None:
-                raise ValueError('--cache-call-provenance requires companion --graph-output and vice versa')
+        provenance = args.cache_call_provenance or args.dispatch_result_provenance
+        if provenance or args.graph_output is not None:
+            if not provenance or args.graph_output is None:
+                raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
+                                 'requires companion --graph-output and vice versa')
             if args.output.resolve() == args.graph_output.resolve():
                 raise ValueError('report and graph output paths must differ')
             if os.path.lexists(args.output):
                 raise ValueError('report output already exists')
             report = analyze(args.capture, args.justrust, args.large_capture,
-                             cache_call_provenance=True, graph_output=args.graph_output)
+                             cache_call_provenance=args.cache_call_provenance,
+                             graph_output=args.graph_output,
+                             dispatch_result_provenance=args.dispatch_result_provenance)
         else:
             report = analyze(args.capture, args.justrust, args.large_capture)
         encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
