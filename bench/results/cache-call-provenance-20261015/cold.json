@@ -1,0 +1,185 @@
+{
+  "captures": [
+    {
+      "admissions_complete": true,
+      "cache_call_provenance": {
+        "distinct_publishing_job_relations": 45663,
+        "lost_events": 0,
+        "observed_cache_hits": 213125,
+        "observed_requests": 231751,
+        "orphan_cache_hits": 0,
+        "records_complete": true,
+        "resolved_requests": 154017,
+        "scope": "observed-cache-result-availability-not-execution-dag",
+        "stored_relation_rows": 154017,
+        "unresolved_reasons": {
+          "admission_authority_incomplete": 0,
+          "ambiguous_cache_hits": 0,
+          "capture_incomplete": 0,
+          "feed_request": 322,
+          "incompatible_cache_hit_route": 0,
+          "interrupted_request": 0,
+          "job_endpoint_unavailable": 0,
+          "missing_context_or_consumer": 21333,
+          "missing_request_terminal": 0,
+          "no_cache_hit": 18306,
+          "no_prior_producer": 37773,
+          "producer_published_too_late": 0
+        },
+        "unresolved_requests": 77734
+      },
+      "capture_id": "1792027780018671314-108881-1",
+      "clock_alignment": {
+        "aligned": true,
+        "issues": []
+      },
+      "complete_observed_waits": 106,
+      "cpu_work_ns": null,
+      "execution_span_ns": null,
+      "expected_waits": 106,
+      "full_pipeline_complete": false,
+      "limitations": [
+        "Wait intervals overlap and include waiting/descheduling, not CPU work.",
+        "Post-condvar elapsed can include resource reacquisition but is not attributed resource cost.",
+        "Independent useful work may execute during a wait, so wait length is not critical-path cost.",
+        "Native clock alignment does not establish CPU coverage or an execution span; query and pool intervals are not merged.",
+        "Resolved publishing-job edges do not imply fresh provider execution.",
+        "Unbound/lost reads, nonquery work and incomplete task/resource coverage prevent a frontend span.",
+        "Semantic constraints and current implementation ordering are not interchangeable."
+      ],
+      "notification_reasons": {
+        "completed": 106
+      },
+      "observed_cpu": {
+        "active_segments": 0,
+        "clock_bridge": {
+          "pool_capture_id": "108881-1792027780020045925-1",
+          "pool_epoch_in_query_ns": 0,
+          "pool_observer": 1,
+          "query_capture_id": "1792027780018671314-108881-1"
+        },
+        "clock_failures": 0,
+        "cpu_clock": "linux-thread-cpu",
+        "expected_segments": 360,
+        "failed_segments": 0,
+        "issues": [],
+        "lost_segments": 0,
+        "measured_segments": 360,
+        "observed_cpu_ns": 198098740,
+        "observed_threads": 3,
+        "opaque_cpu_ns": 131955880,
+        "query_clock_aligned": false,
+        "records_complete": true,
+        "scope": "observed-exclusive-thread-segments",
+        "task_cpu_ns": 66142860
+      },
+      "observed_read_records": 912346,
+      "query_clock_wait_intervals": {
+        "post_condvar": {
+          "count": 106,
+          "max_elapsed_ns": 85233,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 1225942,
+          "union_elapsed_ns": 956597
+        },
+        "post_notification": {
+          "count": 106,
+          "max_elapsed_ns": 105713,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 1951686,
+          "union_elapsed_ns": 1305451
+        },
+        "producer_notification": {
+          "count": 106,
+          "max_elapsed_ns": 3827129,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 10354925,
+          "union_elapsed_ns": 8588285
+        },
+        "total": {
+          "count": 106,
+          "max_elapsed_ns": 3854609,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 12306611,
+          "union_elapsed_ns": 9858624
+        }
+      },
+      "read_coverage": {
+        "cache_hits": 213125,
+        "endpoints_complete": true,
+        "green_ensures": 0,
+        "lost_events": 0,
+        "observed_reads": 217520,
+        "observed_requests": 231751,
+        "observed_results": 18199,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": true,
+        "resolved_job_edges": 0,
+        "resolved_reads": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_read_reasons": {
+          "disabled": 217520,
+          "eval_always": 0,
+          "ignore": 0,
+          "job_endpoint_unavailable": 0,
+          "missing_context": 0,
+          "no_prior_producer": 0,
+          "producer_published_too_late": 0,
+          "tracked_missing_context_or_consumer": 0
+        },
+        "unbound_reads": 217520
+      },
+      "scope": "validated-native-frontend-evidence-not-an-execution-span",
+      "task_binding_coverage": {
+        "all_targets_bound": false,
+        "bound_points": 92998,
+        "expected_points": 485881,
+        "graph_binding_complete": false,
+        "graph_binding_valid": true,
+        "issues": [
+          "task-binding targets declared incomplete"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 392883
+      },
+      "theoretical_parallelism": null,
+      "waits_complete": true
+    }
+  ],
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "full_pipeline_complete": false,
+  "graph_output": {
+    "bytes": 60796922,
+    "format": "justrust-graph-json-stdout",
+    "name": "cold-graph.json",
+    "sha256": "1078cccd14e26b238886a9231b9ae18b16ab8fd4be848bf4540ebde54bbdfa55"
+  },
+  "inputs": [
+    {
+      "bytes": 70163,
+      "name": "1792027780018671314-108881-1-pool.json",
+      "sha256": "f91124fb5b8dfd9afdf3195d0f62460a8d1933e73a4c5e1200deb089e9c315c4"
+    },
+    {
+      "bytes": 224282469,
+      "name": "1792027780018671314-108881-1.json",
+      "sha256": "dc5d89d470e5481a6d9bb9cbe26a144cfaa0cf832f6158274602208cd4b365c1"
+    }
+  ],
+  "large_capture": true,
+  "schema": 1,
+  "scope": "native-frontend-capture-diagnostics",
+  "theoretical_parallelism": null
+}
