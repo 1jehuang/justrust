@@ -7280,3 +7280,20 @@ full hosted gate `20261014-175314579-3984435` passed 600 tests. Installed locall
 Comprehensive baseline timed out at 600 seconds, so the tier remains opt-in.
 Details, risks, provenance and incomplete raw unrecorded probe are documented in
 `docs/cache-reuse-20261015.md`; cited exported runs accompany the measurements.
+
+## 2026-10-15: measured exclusive frontend CPU remains a partial graph
+
+Opt-in query5/pool3 timing now shares the exact query clock and records worker-local
+exclusive CPU segments across task replacement, dispatch, and continuations.
+Hosted validation `20261014-181945238-10320` passed 621 tests cleanly, native
+crate/integration gates passed 216 tests (28 ignored), and the unchanged real
+itoa suite passed all four default/large/timed artifact-neutrality tests.
+The cold capture measured 198.099 ms retained observed CPU, including 131.956 ms
+opaque CPU (66.61%). Warm measured 38.733 ms, including 1.665 ms opaque (4.30%).
+These are scope-qualified observations, not whole-frontend shares or speedups.
+Cold task binding still has 392,883 unknown points of 485,881, despite zero
+read/binding record loss. Clock alignment and CPU samples do not close semantic
+query-call provenance or establish a weighted critical path/thread ceiling.
+Reports, exact hashes, acceptance controls and replay commands are in
+`docs/frontend-cpu-timing-20261015.md`; four cited client run exports are in
+`data/runs/frontend-timing/2026-10.jsonl`. Full CPU work/span remain unknown.

@@ -1,5 +1,7 @@
 # Frontend dependency mapping, 2026-10-15
 
+Follow-up: `frontend-cpu-timing-20261015.md` records the subsequently validated opt-in exclusive CPU segments and reciprocal query/pool clock alignment. The results below remain the original milestone, not a full weighted dependency graph or thread ceiling.
+
 ## Question and scope
 
 Improve the evidence needed to locate frontend parallelism bottlenecks on a real Rust compilation. This is not a measured speedup or a measurement of a 96-thread ceiling. A causal subgraph alone does not establish total CPU work W, weighted span S, or W/S. Missing ownership, non-query work, previous-session dependencies, resource delays and clock alignment remain relevant.
