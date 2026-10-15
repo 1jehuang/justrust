@@ -60,9 +60,25 @@ fn main() {
     let mut lines = controls.lines();
     let capture = lines.next().expect("capture path or '-' required");
     let capacity = lines.next().expect("capacity or 'default' required");
+    // Old default controls stay exactly two lines. Timing is a separate opt-in.
+    let timing = lines.next().unwrap_or("off");
+    assert!(matches!(timing, "off" | "timing"), "invalid timing control");
     assert!(lines.next().is_none(), "unexpected fixture controls");
     let observer = if capture == "-" {
         None
+    } else if timing == "timing" {
+        #[cfg(frontend_timing_api)]
+        {
+            Some(
+                QueryAdmissionObserver::new_with_event_capacity_and_timing(
+                    std::path::Path::new(capture),
+                    capacity.parse().expect("numeric timing capacity"),
+                )
+                .expect("private timed capture rejected"),
+            )
+        }
+        #[cfg(not(frontend_timing_api))]
+        panic!("timing requires matching rebuilt private metadata");
     } else if capacity == "default" {
         Some(
             QueryAdmissionObserver::new(std::path::Path::new(capture))

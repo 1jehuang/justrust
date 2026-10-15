@@ -1068,10 +1068,9 @@ impl WorkerThread {
         // A helper may run unrelated scope/spawn work while its own segment is
         // active. Dequeue is not parentage. Only enabled registries touch the
         // observer TLS, and instrumented job closures install their own child.
-        let _dispatch_guard = self
-            .registry
-            .execution_observer()
-            .map(|_| crate::execution_observer::suspend_for_dispatch());
+        let _dispatch_guard = (self.registry.execution_observer().is_some()
+            || crate::execution_timing::has_active_cursor())
+        .then(crate::execution_observer::suspend_for_dispatch);
         unsafe { job.execute() };
     }
 

@@ -122,12 +122,13 @@ pub struct ExecutionObserver {
     query_capture_id: Option<String>,
     resource_attachment: OnceLock<PoolEndorsementToken>,
     resource_registration: EndorsementGate,
+    timing: Option<Arc<crate::execution_timing::Recorder>>,
 }
 
 impl ExecutionObserver {
     /// Identity exhaustion disables recording, never wraps or affects work.
     pub fn new(capacity: usize) -> Option<Arc<Self>> {
-        Self::create(capacity, None)
+        Self::create(capacity, None, None)
     }
 
     /// Establish immutable, reciprocal capture linkage without inferring query context.
@@ -135,10 +136,31 @@ impl ExecutionObserver {
         if !safe_capture_id(query_capture_id) {
             return None;
         }
-        Self::create(capacity, Some(query_capture_id))
+        Self::create(capacity, Some(query_capture_id), None)
     }
 
-    fn create(capacity: usize, query_capture_id: Option<&str>) -> Option<Arc<Self>> {
+    /// Programmatic opt-in. Both native clocks use the supplied query Instant.
+    /// Legacy constructors retain their exact schema and do not sample CPU time.
+    pub fn new_for_query_with_timing(
+        capacity: usize,
+        query_capture_id: &str,
+        query_epoch: Instant,
+    ) -> Option<Arc<Self>> {
+        if !safe_capture_id(query_capture_id) || query_epoch > Instant::now() {
+            return None;
+        }
+        Self::create(capacity, Some(query_capture_id), Some(query_epoch))
+    }
+
+    pub fn timing_enabled(&self) -> bool {
+        self.timing.is_some()
+    }
+
+    fn create(
+        capacity: usize,
+        query_capture_id: Option<&str>,
+        timing_epoch: Option<Instant>,
+    ) -> Option<Arc<Self>> {
         let id = allocate_id(&NEXT_OBSERVER, u64::MAX)?;
         let capture_id = format!(
             "{}-{}-{id}",
@@ -153,12 +175,14 @@ impl ExecutionObserver {
         let mut timestamps = Vec::new();
         events.try_reserve_exact(capacity).ok()?;
         timestamps.try_reserve_exact(capacity).ok()?;
+        let epoch = timing_epoch.unwrap_or_else(Instant::now);
         Some(Arc::new(Self {
             id,
             attached: AtomicBool::new(false),
             next_task: AtomicU64::new(1),
             capacity,
-            epoch: Instant::now(),
+            epoch,
+            timing: timing_epoch.map(|_| crate::execution_timing::Recorder::new(epoch, capacity)),
             capture_id,
             query_capture_id: query_capture_id.map(str::to_owned),
             resource_attachment: OnceLock::new(),
@@ -335,13 +359,23 @@ impl ExecutionObserver {
             buffer.outcome = outcome;
             buffer.sealed = true;
         }
+        drop(buffer);
+        if let Some(timing) = &self.timing {
+            timing.seal();
+        }
     }
 
     /// Separate receipt protocol, intentionally not a query-admission schema.
     /// IDs in events are task-local numbers qualified by the header observer.
     pub fn write_json(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         let receipt = self.snapshot();
-        let schema = if self.query_capture_id.is_some() { 2 } else { 1 };
+        let schema = if self.timing.is_some() {
+            3
+        } else if self.query_capture_id.is_some() {
+            2
+        } else {
+            1
+        };
         let reciprocal = self
             .query_capture_id
             .as_ref()
@@ -399,7 +433,16 @@ impl ExecutionObserver {
                 )?,
             }
         }
-        writeln!(out, "]}}")
+        write!(out, "]")?;
+        if let Some(timing) = &self.timing {
+            timing.write_json(
+                out,
+                self.query_capture_id.as_deref().unwrap_or(""),
+                &self.capture_id,
+                self.id,
+            )?;
+        }
+        writeln!(out, "}}")
     }
 
     pub(crate) fn claim_registry(&self) -> bool {
@@ -447,22 +490,35 @@ pub fn is_dispatch_masked() -> bool {
 /// their own contexts, while opaque work stays unbound. Never finish or replace
 /// the suspended slot's contents, including an in-progress fork's None state.
 pub(crate) fn suspend_for_dispatch() -> DispatchGuard {
+    let timing = crate::execution_timing::pause();
     let previous = CURRENT.with(|current| current.replace(None));
     let previous_mask = DISPATCH_MASKED.with(|masked| masked.replace(true));
-    DispatchGuard { previous, previous_mask, _not_send: PhantomData }
+    crate::execution_timing::resume(timing.as_ref(), None);
+    DispatchGuard { previous, previous_mask, timing, _not_send: PhantomData }
 }
 
 /// Worker-local restoration, including when a dispatched closure unwinds.
 pub(crate) struct DispatchGuard {
     previous: Option<Active>,
     previous_mask: bool,
+    timing: Option<Arc<crate::execution_timing::Recorder>>,
     _not_send: PhantomData<Rc<()>>,
 }
 
 impl Drop for DispatchGuard {
     fn drop(&mut self) {
+        crate::execution_timing::pause();
         CURRENT.with(|current| current.replace(self.previous.take()));
         DISPATCH_MASKED.with(|masked| masked.set(self.previous_mask));
+        resume_current_timing(self.timing.as_ref());
+    }
+}
+
+fn resume_current_timing(fallback: Option<&Arc<crate::execution_timing::Recorder>>) {
+    if let Some(context) = current_context() {
+        crate::execution_timing::resume(context.observer.timing.as_ref(), Some(context.id.task));
+    } else {
+        crate::execution_timing::resume(fallback, None);
     }
 }
 
@@ -492,12 +548,21 @@ impl TaskContext {
 
     /// Never execute user work conditionally on recording success.
     pub fn enter(&self) -> Option<TaskGuard> {
+        let timing = crate::execution_timing::pause();
         if !self.start() {
+            resume_current_timing(timing.as_ref());
             return None;
         }
         let active = Rc::new(RefCell::new(Some(self.clone())));
         let previous = CURRENT.with(|current| current.replace(Some(Rc::clone(&active))));
-        Some(TaskGuard { active, previous, outcome: Outcome::Normal, _not_send: PhantomData })
+        crate::execution_timing::resume(self.observer.timing.as_ref(), Some(self.id.task));
+        Some(TaskGuard {
+            active,
+            previous,
+            timing,
+            outcome: Outcome::Normal,
+            _not_send: PhantomData,
+        })
     }
 
     /// Ends the current segment, creates parallel children, and reserves a
@@ -522,6 +587,7 @@ impl TaskContext {
         }
         let mut continuation = self.observer.task()?;
         continuation.completion = Arc::clone(&self.completion);
+        crate::execution_timing::pause();
         for child in &children {
             self.observer.event(Event::Fork {
                 parent: self.id,
@@ -531,6 +597,7 @@ impl TaskContext {
         }
         self.finish(Outcome::Normal);
         active.replace(None);
+        crate::execution_timing::resume(self.observer.timing.as_ref(), None);
         Some(Fork { observer: Arc::clone(&self.observer), children, continuation, origin: active })
     }
 }
@@ -539,6 +606,7 @@ impl TaskContext {
 pub struct TaskGuard {
     active: Active,
     previous: Option<Active>,
+    timing: Option<Arc<crate::execution_timing::Recorder>>,
     outcome: Outcome,
     _not_send: PhantomData<Rc<()>>,
 }
@@ -552,6 +620,7 @@ impl TaskGuard {
 
 impl Drop for TaskGuard {
     fn drop(&mut self) {
+        crate::execution_timing::pause();
         let outcome = if std::thread::panicking() { Outcome::Panic } else { self.outcome };
         if let Some(task) = self.active.borrow_mut().take() {
             task.finish(outcome);
@@ -560,6 +629,7 @@ impl Drop for TaskGuard {
         CURRENT.with(|current| {
             current.replace(self.previous.take());
         });
+        resume_current_timing(self.timing.as_ref());
     }
 }
 
@@ -589,6 +659,7 @@ impl Fork {
         {
             return Err(self);
         }
+        crate::execution_timing::pause();
         for child in &self.children {
             let terminal = *child.completion.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(terminal) = terminal {
@@ -603,6 +674,7 @@ impl Fork {
         self.continuation.start();
         let id = self.continuation.id;
         active.replace(Some(self.continuation));
+        crate::execution_timing::resume(self.observer.timing.as_ref(), Some(id.task));
         Ok(id)
     }
 }
@@ -628,6 +700,111 @@ mod tests {
             std::num::NonZeroU64::new(observer_id).unwrap(),
         )
         .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timed_guards_restore_exclusive_cursor_across_foreign_dispatch_and_fork() {
+        let observer =
+            ExecutionObserver::new_for_query_with_timing(100, "query-timed", Instant::now())
+                .unwrap();
+        let root = observer.root().unwrap();
+        let root_guard = root.enter().unwrap();
+        assert!(crate::execution_timing::has_active_cursor());
+        {
+            let foreign = ExecutionObserver::new(10).unwrap();
+            let foreign_guard = foreign.root().unwrap().enter().unwrap();
+            assert!(!crate::execution_timing::has_active_cursor());
+            drop(foreign_guard);
+        }
+        assert!(crate::execution_timing::has_active_cursor());
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _dispatch = suspend_for_dispatch();
+            assert!(current_context().is_none());
+            assert!(crate::execution_timing::has_active_cursor());
+            panic!("restore timed context");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(current_task(), Some(root.id()));
+        let fork = root.fork(2).unwrap();
+        for child in fork.children() {
+            drop(child.enter().unwrap());
+        }
+        let continuation = fork.resume().ok().unwrap();
+        assert_eq!(current_task(), Some(continuation));
+        drop(root_guard);
+        assert!(!crate::execution_timing::has_active_cursor());
+        observer.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        observer.write_json(&mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("\"schema\":3"));
+        assert!(out.contains("\"owner_kind\":\"opaque\""));
+        assert!(out.contains("\"records_complete\":true"));
+        assert!(out.contains("\"pool_epoch_in_query_ns\":0"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timed_pool_restores_source_after_unobserved_install_and_nested_timed_task() {
+        let source = crate::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let target = crate::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let observer =
+            ExecutionObserver::new_for_query_with_timing(100, "query-source", Instant::now())
+                .unwrap();
+        source.install(|| {
+            assert!(crate::Registry::current().attach_execution_observer(Arc::clone(&observer)));
+            let root = observer.root().unwrap();
+            let guard = root.enter().unwrap();
+            target.install(|| {
+                assert!(crate::Registry::current().execution_observer().is_none());
+                assert!(current_task().is_none());
+            });
+            assert_eq!(current_task(), Some(root.id()));
+            let nested =
+                ExecutionObserver::new_for_query_with_timing(20, "query-nested", Instant::now())
+                    .unwrap();
+            let nested_guard = nested.root().unwrap().enter().unwrap();
+            drop(nested_guard);
+            assert_eq!(current_task(), Some(root.id()));
+            nested.seal(InterfaceOutcome::Returned);
+            drop(guard);
+            assert!(!crate::execution_timing::has_active_cursor());
+        });
+        observer.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        observer.write_json(&mut out).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("\"records_complete\":true"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timing_cursor_alone_masks_real_unobserved_registry_dispatch() {
+        let pool = crate::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let observer =
+            ExecutionObserver::new_for_query_with_timing(100, "query-cursor-only", Instant::now())
+                .unwrap();
+        pool.install(|| {
+            assert!(crate::Registry::current().execution_observer().is_none());
+            let root = observer.root().unwrap();
+            let guard = root.enter().unwrap();
+            crate::scope(|scope| {
+                scope.spawn(|_| {
+                    assert!(is_dispatch_masked());
+                    assert!(current_task().is_none());
+                    assert!(crate::execution_timing::has_active_cursor());
+                });
+            });
+            assert_eq!(current_task(), Some(root.id()));
+            drop(guard);
+            assert!(!crate::execution_timing::has_active_cursor());
+        });
+        observer.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        observer.write_json(&mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("\"owner_kind\":\"opaque\""));
+        assert!(out.contains("\"records_complete\":true"));
     }
 
     #[test]

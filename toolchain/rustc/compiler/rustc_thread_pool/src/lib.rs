@@ -84,6 +84,7 @@ pub use admission::{
 mod admission_dispatch_tests;
 
 pub mod execution_observer;
+mod execution_timing;
 
 #[cfg(test)]
 mod execution_observer_dispatch_tests;

@@ -16,6 +16,9 @@ crossbeam-deque = "0.8"
 crossbeam-utils = "0.8"
 smallvec = "1.8.1"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 rand = "0.9"
 rand_xorshift = "0.4"

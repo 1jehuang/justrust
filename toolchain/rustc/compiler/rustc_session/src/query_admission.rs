@@ -135,6 +135,7 @@ struct Inner {
     admission: OnceLock<AdmissionBinding>,
     resource_registration: ResourceRegistration,
     epoch: Instant,
+    execution_timing: bool,
     next_context: AtomicU64,
     next_wait: AtomicU64,
     wait_ids_exhausted: AtomicBool,
@@ -435,9 +436,13 @@ impl QueryAdmissionObserver {
             if self.0.pool.0.get().is_some() {
                 return;
             }
-            let Some(observer) =
-                ExecutionObserver::new_for_query(MAX_EVENTS, self.0.capture_id.as_deref().unwrap())
-            else {
+            let capture_id = self.0.capture_id.as_deref().unwrap();
+            let observer = if self.execution_timing_enabled() {
+                ExecutionObserver::new_for_query_with_timing(MAX_EVENTS, capture_id, self.0.epoch)
+            } else {
+                ExecutionObserver::new_for_query(MAX_EVENTS, capture_id)
+            };
+            let Some(observer) = observer else {
                 return;
             };
             if rustc_thread_pool::Registry::current()
@@ -476,12 +481,27 @@ impl QueryAdmissionObserver {
     /// Invalid budgets are refused before touching the directory. This API does
     /// not change compiler flags, environment, cache keys, or receipt semantics.
     pub fn new_with_event_capacity(directory: &Path, capacity: usize) -> Option<Self> {
+        Self::new_configured(directory, capacity, false)
+    }
+
+    /// Explicit diagnostic execution timing. Default capture remains query4.
+    /// Opt-in query5 endorses the attached pool3's exact shared clock origin,
+    /// without promoting dependency or full-pipeline coverage.
+    pub fn new_with_event_capacity_and_timing(directory: &Path, capacity: usize) -> Option<Self> {
+        Self::new_configured(directory, capacity, true)
+    }
+
+    pub fn execution_timing_enabled(&self) -> bool {
+        self.0.execution_timing
+    }
+
+    fn new_configured(directory: &Path, capacity: usize, execution_timing: bool) -> Option<Self> {
         if !(1..=crate::query_task_bindings::MAX_EVENT_CAPACITY).contains(&capacity) {
             return None;
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (directory, capacity);
+            let _ = (directory, capacity, execution_timing);
             return None;
         }
         #[cfg(target_os = "linux")]
@@ -524,6 +544,7 @@ impl QueryAdmissionObserver {
                 admission: OnceLock::new(),
                 resource_registration: ResourceRegistration::default(),
                 epoch: Instant::now(),
+                execution_timing,
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -573,6 +594,7 @@ impl QueryAdmissionObserver {
                 admission: OnceLock::new(),
                 resource_registration: ResourceRegistration::default(),
                 epoch: Instant::now(),
+                execution_timing: false,
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -877,9 +899,16 @@ impl Data {
                 })
         }) && self.events.iter().all(|e| self.contexts.iter().any(|c| c.0 == e.context))
     }
-    fn json(&self, returned: bool, capture_id: &str, expected_contexts: u64) -> String {
+    fn json(
+        &self,
+        returned: bool,
+        capture_id: &str,
+        expected_contexts: u64,
+        execution_timing: bool,
+    ) -> String {
+        let schema = if execution_timing { 5 } else { 4 };
         let mut out = format!(
-            "{{\"schema\":4,\"capture_id\":\"{capture_id}\",\"producer\":\"rustc-query-admission\",\"scope\":\"query-job-admission-lifecycle\",\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"interface_outcome\":\"{}\",\"capture_complete\":{},\"lost_events\":{},\"expected_contexts\":{expected_contexts},\"opaque_boundaries\":[\"fast-cache-hits\",\"race-cache-hits\",\"green-ensure-no-job\",\"feeds\",\"direct-paths\",\"nonquery\",\"resource-internals\",\"driver-and-process-outcome\",\"cargo-parent-binding\",\"cache-read-dependencies\",\"wait-and-resource-dependencies\"],\"contexts\":[",
+            "{{\"schema\":{schema},\"capture_id\":\"{capture_id}\",\"producer\":\"rustc-query-admission\",\"scope\":\"query-job-admission-lifecycle\",\"full_pipeline_complete\":false,\"cpu_work_ns\":null,\"execution_span_ns\":null,\"interface_outcome\":\"{}\",\"capture_complete\":{},\"lost_events\":{},\"expected_contexts\":{expected_contexts},\"opaque_boundaries\":[\"fast-cache-hits\",\"race-cache-hits\",\"green-ensure-no-job\",\"feeds\",\"direct-paths\",\"nonquery\",\"resource-internals\",\"driver-and-process-outcome\",\"cargo-parent-binding\",\"cache-read-dependencies\",\"wait-and-resource-dependencies\"],\"contexts\":[",
             if returned { "returned" } else { "interrupted" },
             returned && self.complete(expected_contexts),
             self.lost
@@ -941,7 +970,7 @@ impl Drop for Inner {
         let wait_high = self.next_wait.load(Ordering::Relaxed);
         let missing_waits = wait_high.saturating_sub(1).saturating_sub(data.waits.len() as u64);
         data.lost = data.lost.saturating_add(missing_waits);
-        let mut json = data.json(returned, &name, expected_contexts);
+        let mut json = data.json(returned, &name, expected_contexts, self.execution_timing);
         // Preserve admission completeness as its own scope, not full causal coverage.
         json.truncate(json.len().saturating_sub(2));
         data.append_wait_json(&mut json, wait_high, returned);
@@ -953,6 +982,21 @@ impl Drop for Inner {
             self.next_context.load(Ordering::Relaxed).checked_sub(1),
             [requests, reads, results, wait_high],
         );
+        if self.execution_timing {
+            json.push_str(",\"execution_clock\":");
+            #[cfg(not(test))]
+            let clock_pool = self.pool.0.get().map(|pool| (pool.capture_id(), pool.observer_id()));
+            #[cfg(test)]
+            let clock_pool: Option<(&str, u64)> = None;
+            if let Some((pool_capture_id, pool_observer)) = clock_pool {
+                let _ = write!(
+                    json,
+                    "{{\"query_capture_id\":\"{name}\",\"pool_capture_id\":\"{pool_capture_id}\",\"pool_observer\":{pool_observer},\"pool_epoch_in_query_ns\":0}}"
+                );
+            } else {
+                json.push_str("null");
+            }
+        }
         json.push_str("}\n");
         #[cfg(target_os = "linux")]
         let _ = publish(&self._directory_handle, &name, json.as_bytes());
@@ -1425,6 +1469,11 @@ mod tests {
             let path = private_directory();
             assert!(QueryAdmissionObserver::new_with_event_capacity(&path, capacity).is_none());
             assert!(!path.exists());
+            assert!(
+                QueryAdmissionObserver::new_with_event_capacity_and_timing(&path, capacity)
+                    .is_none()
+            );
+            assert!(!path.exists());
         }
     }
     #[cfg(target_os = "linux")]
@@ -1434,6 +1483,7 @@ mod tests {
         let default = QueryAdmissionObserver::new(&path).unwrap();
         assert_eq!(default.0.reads.event_capacity(), 100_000);
         assert_eq!(default.0.bindings.event_capacity(), 100_000);
+        assert!(!default.execution_timing_enabled());
         let transport = QueryAdmissionObserver::new_from_directory(
             default.0._directory_handle.try_clone().unwrap(),
             "capacity-transport-default".into(),
@@ -1441,7 +1491,23 @@ mod tests {
         .unwrap();
         assert_eq!(transport.0.reads.event_capacity(), 100_000);
         assert_eq!(transport.0.bindings.event_capacity(), 100_000);
+        assert!(!transport.execution_timing_enabled());
         drop((transport, default));
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timing_is_explicit_and_keeps_query_budgets_and_schema() {
+        let path = private_directory();
+        let observer =
+            QueryAdmissionObserver::new_with_event_capacity_and_timing(&path, 7).unwrap();
+        assert!(observer.execution_timing_enabled());
+        assert_eq!(observer.0.reads.event_capacity(), 7);
+        assert_eq!(observer.0.bindings.event_capacity(), 7);
+        observer.context().snapshot(1);
+        drop(observer);
+        assert!(receipt(&path).contains("\"schema\":5"));
+        assert!(receipt(&path).contains("\"execution_clock\":null"));
         fs::remove_dir_all(path).unwrap();
     }
     #[cfg(target_os = "linux")]
@@ -1947,7 +2013,9 @@ mod tests {
         assert!(!data.complete(1));
         data.contexts[0].1 = Some(1);
         assert!(data.complete(1));
-        assert!(data.json(false, "1-1", 1).contains("\"interface_outcome\":\"interrupted\""));
+        assert!(
+            data.json(false, "1-1", 1, false).contains("\"interface_outcome\":\"interrupted\"")
+        );
         data.lost = 1;
         assert!(!data.complete(1));
     }
