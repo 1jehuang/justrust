@@ -5,13 +5,49 @@
 //! i32/bool results (unit is zero). All registers are caller-saved. Frames use
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
+//! Aggregate layout is private: each scalar/unit leaf occupies eight bytes,
+//! tuples concatenate their fields. Tuple arguments carry snapshot pointers.
+//! Tuple results use a caller-owned destination, passed last at rbp+16.
 use super::frontend::{self, BinaryOp, Program, UnaryOp};
 use super::ir::{self, ExprKind, LocalId, LoopId};
 use std::collections::HashMap;
 
 const MAX_ARGS: usize = 4096;
+const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
+
+fn value_size(ty: &ir::Ty) -> Result<i32, String> {
+    match ty {
+        ir::Ty::Tuple(fields) => fields.iter().try_fold(0_i32, |size, field| {
+            size.checked_add(value_size(field)?)
+                .filter(|size| *size <= MAX_FRAME_BYTES)
+                .ok_or_else(|| "aggregate exceeds private frame limit".to_string())
+        }),
+        _ => Ok(8),
+    }
+}
+
+fn field_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
+    let ir::Ty::Tuple(fields) = ty else {
+        return Err("invalid checked tuple projection".into());
+    };
+    let field = fields.get(index).ok_or("invalid checked tuple field")?;
+    let offset = fields[..index].iter().try_fold(0_i32, |offset, ty| {
+        offset
+            .checked_add(value_size(ty)?)
+            .ok_or_else(|| "aggregate layout too large".to_string())
+    })?;
+    Ok((offset, field))
+}
+
+fn allocate_value(frame: &mut i32, ty: &ir::Ty) -> Result<i32, String> {
+    *frame = frame
+        .checked_add(value_size(ty)?)
+        .filter(|size| *size <= MAX_FRAME_BYTES)
+        .ok_or("function exceeds private frame limit")?;
+    Ok(-*frame)
+}
 
 /// Relocations refer to byte offsets within `code`: calls address a signed
 /// rel32 displacement field, strings address an absolute u64 immediate field.
@@ -27,6 +63,7 @@ struct LoopFrame {
     head: usize,
     temporary_depth: usize,
     breaks: Vec<usize>,
+    result: Option<(i32, i32)>,
 }
 
 struct Emitter<'a> {
@@ -36,6 +73,8 @@ struct Emitter<'a> {
     traps: Vec<usize>,
     loops: Vec<LoopFrame>,
     temporary_depth: usize,
+    locals: Vec<i32>,
+    snapshots: Vec<Option<i32>>,
 }
 impl Emitter<'_> {
     fn bytes(&mut self, bytes: &[u8]) {
@@ -68,19 +107,45 @@ impl Emitter<'_> {
         self.i32(n);
     }
     fn local_offset(&self, local: LocalId) -> Result<i32, String> {
-        i32::try_from(local.0)
-            .ok()
-            .and_then(|index| index.checked_add(1))
-            .and_then(|slot| slot.checked_mul(-8))
-            .ok_or_else(|| "local frame too large".to_string())
+        self.locals
+            .get(local.0)
+            .copied()
+            .ok_or_else(|| "invalid checked local".to_string())
     }
     fn load(&mut self, offset: i32) {
         self.bytes(&[0x8b, 0x85]);
         self.i32(offset);
     }
     fn store(&mut self, offset: i32) {
-        self.bytes(&[0x89, 0x85]);
+        self.bytes(&[0x48, 0x89, 0x85]);
         self.i32(offset);
+    }
+    fn address(&mut self, offset: i32) {
+        self.bytes(&[0x48, 0x8d, 0x85]);
+        self.i32(offset);
+    }
+    fn copy_pointer_value(&mut self, size: i32) {
+        // rsi/rdi are source/destination, distinct owned storage or identical.
+        for offset in (0..size).step_by(8) {
+            self.bytes(&[0x48, 0x8b, 0x8e]);
+            self.i32(offset);
+            self.bytes(&[0x48, 0x89, 0x8f]);
+            self.i32(offset);
+        }
+    }
+    fn snapshot(&mut self, offset: i32, size: i32) {
+        self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
+        self.i32(offset);
+        self.copy_pointer_value(size);
+        self.address(offset);
+    }
+    fn store_value(&mut self, offset: i32, ty: &ir::Ty) -> Result<(), String> {
+        if matches!(ty, ir::Ty::Tuple(_)) {
+            self.snapshot(offset, value_size(ty)?);
+        } else {
+            self.store(offset);
+        }
+        Ok(())
     }
     fn push_temporary(&mut self) -> Result<(), String> {
         self.temporary_depth = self
@@ -98,12 +163,13 @@ impl Emitter<'_> {
         }
         Ok(())
     }
-    fn enter_loop(&mut self, id: LoopId) {
+    fn enter_loop(&mut self, id: LoopId, result: Option<(i32, i32)>) {
         self.loops.push(LoopFrame {
             id,
             head: self.position(),
             temporary_depth: self.temporary_depth,
             breaks: Vec::new(),
+            result,
         });
     }
     fn exit_loop(&mut self) -> Result<(), String> {
@@ -120,6 +186,9 @@ impl Emitter<'_> {
             .rposition(|frame| frame.id == target)
             .ok_or("missing backend loop target")?;
         let depth = self.loops[index].temporary_depth;
+        if is_break && let Some((offset, size)) = self.loops[index].result {
+            self.snapshot(offset, size);
+        }
         let bytes = self
             .temporary_depth
             .checked_sub(depth)
@@ -141,7 +210,23 @@ impl Emitter<'_> {
             match statement {
                 ir::Stmt::Let { local, value } | ir::Stmt::Assign { local, value } => {
                     self.expr(*value)?;
-                    self.store(self.local_offset(*local)?);
+                    self.store_value(
+                        self.local_offset(*local)?,
+                        &self.function.locals[local.0].ty,
+                    )?;
+                }
+                ir::Stmt::AssignPlace { place, value } => {
+                    self.expr(*value)?;
+                    let mut offset = self.local_offset(place.local)?;
+                    let mut ty = &self.function.locals[place.local.0].ty;
+                    for &index in &place.fields {
+                        let (field, next) = field_offset(ty, index)?;
+                        offset = offset
+                            .checked_add(field)
+                            .ok_or("projection offset too large")?;
+                        ty = next;
+                    }
+                    self.store_value(offset, ty)?;
                 }
                 ir::Stmt::Expr(value) => self.expr(*value)?,
                 ir::Stmt::Return(value) => {
@@ -159,7 +244,7 @@ impl Emitter<'_> {
                     body,
                 } => {
                     let start = self.position();
-                    self.enter_loop(*id);
+                    self.enter_loop(*id, None);
                     self.expr(*condition)?;
                     self.bytes(&[0x85, 0xc0]);
                     let end = self.jump(&[0x0f, 0x84]);
@@ -183,7 +268,36 @@ impl Emitter<'_> {
         match &self.function.exprs[expression.0].kind {
             ExprKind::Int(n) => self.immediate(*n),
             ExprKind::Bool(value) => self.immediate(i32::from(*value)),
-            ExprKind::Local(local) => self.load(self.local_offset(*local)?),
+            ExprKind::Local(local) => {
+                if matches!(self.function.locals[local.0].ty, ir::Ty::Tuple(_)) {
+                    self.address(self.local_offset(*local)?);
+                } else {
+                    self.load(self.local_offset(*local)?);
+                }
+            }
+            ExprKind::Tuple(fields) => {
+                let destination = self.snapshots[expression.0].ok_or("missing tuple snapshot")?;
+                let mut offset = destination;
+                for &field in fields {
+                    self.expr(field)?;
+                    let ty = &self.function.exprs[field.0].ty;
+                    self.store_value(offset, ty)?;
+                    offset = offset
+                        .checked_add(value_size(ty)?)
+                        .ok_or("tuple offset too large")?;
+                }
+                self.address(destination);
+            }
+            ExprKind::Field { base, index } => {
+                self.expr(*base)?;
+                let (offset, ty) = field_offset(&self.function.exprs[base.0].ty, *index)?;
+                if matches!(ty, ir::Ty::Tuple(_)) {
+                    self.bytes(&[0x48, 0x8d, 0x80]);
+                } else {
+                    self.bytes(&[0x8b, 0x80]);
+                }
+                self.i32(offset);
+            }
             ExprKind::Unary { op, value } => {
                 self.expr(*value)?;
                 match op {
@@ -263,7 +377,11 @@ impl Emitter<'_> {
                     BinaryOp::And | BinaryOp::Or => unreachable!(),
                 }
             }
-            ExprKind::Call { name, args, .. } => {
+            ExprKind::Call {
+                name,
+                args,
+                signature,
+            } => {
                 if args.len() > MAX_ARGS {
                     return Err(format!("at most {MAX_ARGS} arguments are supported"));
                 }
@@ -271,14 +389,26 @@ impl Emitter<'_> {
                     self.expr(*arg)?;
                     self.push_temporary()?;
                 }
+                let aggregate_result = matches!(signature.result, ir::Ty::Tuple(_));
+                if aggregate_result {
+                    self.address(
+                        self.snapshots[expression.0].ok_or("missing call result snapshot")?,
+                    );
+                    self.push_temporary()?;
+                }
                 let at = self.jump(&[0xe8]);
                 self.object.calls.push((at, name.clone()));
-                let bytes = args.len() * 8;
+                let bytes = (args.len() + usize::from(aggregate_result)) * 8;
                 self.discard_stack_bytes(bytes)?;
                 self.temporary_depth = self
                     .temporary_depth
                     .checked_sub(bytes)
                     .ok_or("invalid backend temporary depth")?;
+                if aggregate_result {
+                    self.address(
+                        self.snapshots[expression.0].ok_or("missing call result snapshot")?,
+                    );
+                }
             }
             ExprKind::If {
                 condition,
@@ -297,7 +427,15 @@ impl Emitter<'_> {
             ExprKind::Block(block) => self.block(block)?,
             ExprKind::Loop { id, body } => {
                 let head = self.position();
-                self.enter_loop(*id);
+                let result = self.snapshots[expression.0]
+                    .map(|offset| {
+                        Ok::<_, String>((
+                            offset,
+                            value_size(&self.function.exprs[expression.0].ty)?,
+                        ))
+                    })
+                    .transpose()?;
+                self.enter_loop(*id, result);
                 self.block(body)?;
                 let back = self.jump(&[0xe9]);
                 self.patch(back, head)?;
@@ -336,17 +474,47 @@ impl Emitter<'_> {
                 self.immediate(0);
             }
         }
+        // Literals build this buffer directly, calls receive it as sret, and
+        // every aggregate loop break writes it before jumping to the exit.
+        if let Some(offset) = self.snapshots[expression.0]
+            && !matches!(
+                self.function.exprs[expression.0].kind,
+                ExprKind::Tuple(_) | ExprKind::Call { .. } | ExprKind::Loop { .. }
+            )
+        {
+            self.snapshot(offset, value_size(&self.function.exprs[expression.0].ty)?);
+        }
         Ok(())
     }
 }
 
 /// Compile one checked function independently, suitable for parallel graph workers.
-/// Semantic analysis is complete. Local slots are `-8 * (LocalId + 1)` and
-/// parameters are copied into those slots from the incoming private ABI.
+/// Semantic analysis is complete. Locals are laid out monotonically by LocalId,
+/// followed by independently owned tuple ExprId snapshot buffers. Parameters
+/// are copied into local storage from the incoming private ABI before the body.
 pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
     if function.params.len() > MAX_ARGS {
         return Err(format!("at most {MAX_ARGS} parameters are supported"));
     }
+    let mut frame_bytes = 0;
+    let locals = function
+        .locals
+        .iter()
+        .map(|local| allocate_value(&mut frame_bytes, &local.ty))
+        .collect::<Result<Vec<_>, _>>()?;
+    let snapshots = function
+        .exprs
+        .iter()
+        .map(|expr| {
+            if matches!(expr.ty, ir::Ty::Tuple(_)) {
+                allocate_value(&mut frame_bytes, &expr.ty).map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let aggregate_result = matches!(function.result, ir::Ty::Tuple(_));
+    let result_size = value_size(&function.result)?;
     let mut emitter = Emitter {
         object: Object {
             code: Vec::new(),
@@ -358,17 +526,28 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
         traps: Vec::new(),
         loops: Vec::new(),
         temporary_depth: 0,
+        locals,
+        snapshots,
     };
     emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
     let frame = emitter.position();
     emitter.i32(0);
     for (index, local) in function.params.iter().enumerate() {
-        let offset = 16 + (function.params.len() - index - 1) * 8;
-        emitter.load(offset as i32);
-        emitter.store(emitter.local_offset(*local)?);
+        let offset =
+            16 + usize::from(aggregate_result) * 8 + (function.params.len() - index - 1) * 8;
+        // Tuple words are full-width pointers. Scalar words have canonical low eax.
+        emitter.bytes(&[0x48, 0x8b, 0x85]);
+        emitter.i32(offset as i32);
+        emitter.store_value(emitter.local_offset(*local)?, &function.locals[local.0].ty)?;
     }
     emitter.block(&function.body)?;
     let epilogue = emitter.position();
+    if aggregate_result {
+        emitter.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8b, 0xbd]);
+        emitter.i32(16);
+        emitter.copy_pointer_value(result_size);
+        emitter.bytes(&[0x48, 0x89, 0xf8]);
+    }
     emitter.bytes(&[0xc9, 0xc3]);
     for at in std::mem::take(&mut emitter.returns) {
         emitter.patch(at, epilogue)?;
@@ -380,10 +559,6 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
     for at in std::mem::take(&mut emitter.traps) {
         emitter.patch(at, trap)?;
     }
-    let frame_bytes = i32::try_from(function.locals.len())
-        .ok()
-        .and_then(|slots| slots.checked_mul(8))
-        .ok_or("frame too large")?;
     emitter.object.code[frame..frame + 4].copy_from_slice(&frame_bytes.to_le_bytes());
     Ok(emitter.object)
 }
@@ -1150,5 +1325,137 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"while\n");
+    }
+
+    #[test]
+    fn tuples_snapshot_fields_arguments_and_local_assignment() {
+        let p = frontend::parse(
+            r#"
+            fn check(a: ((i32, bool), ((), i32)), b: i32) -> i32 {
+                if a.0.0 != 1 { 1 / 0; }
+                if !a.0.1 { 1 / 0; }
+                if a.1.1 != 3 { 1 / 0; }
+                let mut own = a;
+                own.0.0 = 99;
+                own.1.0 = ();
+                b
+            }
+            fn main() {
+                let mut t = ((1, true), ((), 3));
+                let old = t;
+                let pair = (t, { t.0.0 = 8; t.0.1 = false; 9 });
+                if pair.0.0.0 != 1 { 1 / 0; }
+                if !pair.0.0.1 { 1 / 0; }
+                if pair.1 != 9 { 1 / 0; }
+                t = old;
+                let answer = check(t, { t.1.1 = 7; 11 });
+                if answer != 11 { 1 / 0; }
+                if t.0.0 != 1 { 1 / 0; }
+                if t.1.1 != 7 { 1 / 0; }
+                t.0 = { t.1.1 = 12; old.0 };
+                if t.0.0 != 1 { 1 / 0; }
+                if t.1.1 != 12 { 1 / 0; }
+                let single = (42,);
+                if single.0 != 42 { 1 / 0; }
+                println!("snapshots");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"snapshots\n");
+    }
+
+    #[test]
+    fn tuple_returns_recursion_branch_blocks_and_break_values() {
+        let p = frontend::parse(
+            r#"
+            fn descend(n: i32, t: (i32, (bool, ()))) -> (i32, (bool, ())) {
+                if n == 0 { return t; }
+                descend(n - 1, (t.0 + 1, t.1))
+            }
+            fn make(n: i32) -> (i32, (bool, ())) {
+                let mut own = (n, (true, ()));
+                let result = if n > 0 { own } else { (0, (false, ())) };
+                own.0 = 99;
+                result
+            }
+            fn consume(a: (i32, (bool, ())), b: (i32, (bool, ())), c: i32) -> i32 {
+                a.0 * 100 + b.0 * 10 + c
+            }
+            fn main() {
+                let t = descend(4, make(2));
+                if t.0 != 6 { 1 / 0; }
+                if !t.1.0 { 1 / 0; }
+                if make(5).0 != 5 { 1 / 0; }
+                if ({ make(3) }).0 != 3 { 1 / 0; }
+                let mut turns = 0;
+                let value = consume(make(1), loop {
+                    turns = turns + 1;
+                    if turns < 3 { consume(make(8), { continue; }, 0); }
+                    consume(make(9), { break make(2); }, 0);
+                }, 3);
+                if value != 123 { 1 / 0; }
+                let projected = (loop { break (make(7), true); }).0.0;
+                if projected != 7 { 1 / 0; }
+                println!("returns");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"returns\n");
+        let signatures = frontend::signature_table(&p).unwrap();
+        let index = p.functions.iter().position(|f| f.name == "make").unwrap();
+        let checked = frontend::type_function_with_signatures(&p, index, &signatures).unwrap();
+        let object = emit_checked_function(&checked).unwrap();
+        assert!(
+            object
+                .code
+                .windows(5)
+                .any(|bytes| bytes == [0x48, 0x89, 0xf8, 0xc9, 0xc3]),
+            "aggregate epilogue must return the caller destination pointer"
+        );
+    }
+
+    #[test]
+    fn aggregate_layout_and_frame_limits_are_checked() {
+        use std::sync::Arc;
+        let mixed = ir::Ty::Tuple(Arc::from([
+            ir::Ty::Bool,
+            ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::I32])),
+        ]));
+        assert_eq!(value_size(&mixed).unwrap(), 24);
+        assert_eq!(field_offset(&mixed, 1).unwrap().0, 8);
+        let mut frame = MAX_FRAME_BYTES - 8;
+        assert_eq!(
+            allocate_value(&mut frame, &ir::Ty::Unit).unwrap(),
+            -MAX_FRAME_BYTES
+        );
+        assert!(allocate_value(&mut frame, &ir::Ty::Bool).is_err());
+        let too_large = ir::Ty::Tuple(vec![ir::Ty::I32; MAX_FRAME_BYTES as usize / 8 + 1].into());
+        assert!(value_size(&too_large).is_err());
+        let checked = ir::CheckedFunction {
+            name: "oversized".into(),
+            params: vec![],
+            result: ir::Ty::Unit,
+            locals: vec![ir::LocalDecl {
+                name: "t".into(),
+                ty: too_large,
+                mutable: false,
+            }],
+            exprs: vec![],
+            body: ir::Block {
+                statements: vec![],
+                tail: None,
+            },
+        };
+        assert!(
+            emit_checked_function(&checked)
+                .unwrap_err()
+                .contains("limit")
+        );
     }
 }

@@ -21,10 +21,12 @@ an executable and does not require `-o`. Existing outputs and traces are never
 overwritten. Invalid and unsupported programs fail explicitly. Output is not
 published until every required check and code generation operation succeeds.
 
-Initial supported syntax: free functions with `i32`, `bool`, and unit parameters
-and results, local bindings and shadowing, `mut` and assignment, integer
+Initial supported syntax: free functions with `i32`, `bool`, unit and nested
+Copy tuple parameters/results, tuple literals and numeric field projections,
+local bindings and shadowing, `mut`, whole-value and local-rooted field assignment,
+integer
 arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
-`while`, unlabelled `loop` expressions, `break` with scalar loop values,
+`while`, unlabelled `loop` expressions, `break` with supported value types,
 `continue`, `return`, calls including recursion, and `println!("literal")`.
 `main` takes no arguments and returns unit. Arithmetic has overflow checks,
 matching Rust debug behavior. Runtime arithmetic failure exits 101. This first
@@ -77,7 +79,7 @@ declarations and body checks. Output facts contain typed-arena handles because
 the prototype runtime currently stores u64 slots. Arenas remain owned by the
 compilation snapshot and are not persistent cache keys.
 
-Checked scalar functions now retain resolved local and expression IDs, concrete
+Checked functions now retain resolved local and expression IDs, concrete
 inferred types, validated call signatures and explicit normal-completion versus
 divergence information. Every shadowed binding has its own LocalId. The native
 emitter consumes these facts directly, without source-name lookup or inference.
@@ -102,6 +104,26 @@ operations. These are explicit implementation limitations, not architectural
 claims that all
 Rust parsing or linking must be serialized. Per-function checking/codegen is a
 starting granularity, not proof of optimal units. No cross-build cache exists.
+
+## Aggregate implementation boundary
+
+Nested tuples contain only the currently supported Copy types. Reads produce
+by-value snapshots, including tuple fields, arguments and control-flow joins.
+Every tuple-typed expression has its own frame buffer, so later mutation of a
+local cannot change an already evaluated argument. Mutable field assignment
+requires a mutable local root and evaluates its complete RHS before writing.
+General destructuring, tuple comparisons, references and named structs are not
+included in this slice. In particular, a named struct is not made Copy merely
+because its fields are scalar.
+
+The private ABI passes one 8-byte word per argument, containing a scalar or a
+pointer to a caller-owned tuple snapshot. Callees copy tuple arguments before
+executing their bodies. Tuple-returning calls add a final hidden caller-buffer
+pointer, and all return paths copy into that buffer. Nested tuples currently use
+recursive 8-byte leaf slots, including unit dummy slots. This is an internal
+representation, not a Rust platform-layout or FFI promise. `size_of` and general
+memory inspection are not supported. Concrete frame limits and implementation
+validation are recorded with the aggregate milestone in `FINDINGS.md`.
 
 ## Running the compiler
 

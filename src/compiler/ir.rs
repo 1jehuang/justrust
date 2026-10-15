@@ -1,10 +1,11 @@
-//! Checked scalar bodies shared by semantic analysis and native code generation.
+//! Checked scalar and tuple bodies shared by semantic analysis and code generation.
 //!
 //! IDs are local to one immutable function, not persistent cache identities.
 //! Allocate a new LocalId for every binding, including shadowing. Names are for
 //! diagnostics only. This structured representation is a migration boundary,
 //! not yet an ownership-checking CFG or a target layout/ABI representation.
 use super::frontend::{BinaryOp, UnaryOp};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalId(pub usize);
@@ -16,11 +17,15 @@ pub struct ExprId(pub usize);
 pub struct LoopId(pub usize);
 
 /// Resolved semantic types. Inference variables never cross this boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Tuple structure is immutable and shared cheaply across checked facts.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     I32,
     Bool,
     Unit,
+    /// Nonempty structural tuple. The empty tuple is canonically Unit.
+    /// Rust Copy semantics for admitted tuples do not make this host enum Copy.
+    Tuple(Arc<[Ty]>),
     /// The semantic never type, distinct from runtime completion information.
     Never,
 }
@@ -74,7 +79,7 @@ impl TypedExpr {
     /// Operator selection, coercion and inference must inspect `ty` separately.
     pub fn flow(&self) -> Option<Ty> {
         match self.completion {
-            Completion::Returns => Some(self.ty),
+            Completion::Returns => Some(self.ty.clone()),
             Completion::Never => None,
         }
     }
@@ -86,6 +91,15 @@ pub struct Block {
     pub tail: Option<ExprId>,
 }
 
+/// A resolved local-rooted storage location. Field indices are in source
+/// projection order and are checked against the nested tuple type by typing.
+/// Empty fields denote the whole local. No byte offsets or target ABI here.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Place {
+    pub local: LocalId,
+    pub fields: Vec<usize>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Stmt {
     Let {
@@ -94,6 +108,10 @@ pub enum Stmt {
     },
     Assign {
         local: LocalId,
+        value: ExprId,
+    },
+    AssignPlace {
+        place: Place,
         value: ExprId,
     },
     Expr(ExprId),
@@ -109,8 +127,15 @@ pub enum Stmt {
 pub enum ExprKind {
     Int(i32),
     Bool(bool),
-    /// A scalar read of a resolved local place. No name lookup in codegen.
+    /// Read a resolved local into this expression's independent value snapshot.
     Local(LocalId),
+    /// Elements are evaluated left to right into a new value snapshot.
+    Tuple(Vec<ExprId>),
+    /// Projects from an arbitrary expression snapshot, not a live local alias.
+    Field {
+        base: ExprId,
+        index: usize,
+    },
     Unary {
         op: UnaryOp,
         value: ExprId,
@@ -157,7 +182,8 @@ impl CheckedFunction {
     ///
     /// Checks reference bounds, distinct parameters, and call arity. Deliberately
     /// does not establish lexical scope, reachability, expression flow, or loop
-    /// target validity. Those are established once by semantic analysis.
+    /// target validity or projection typing. Those are established once by
+    /// semantic analysis.
     pub fn validate(&self) -> Result<(), String> {
         let local = |id: LocalId| {
             if id.0 < self.locals.len() {
@@ -189,6 +215,12 @@ impl CheckedFunction {
         for value in &self.exprs {
             match &value.kind {
                 ExprKind::Local(id) => local(*id)?,
+                ExprKind::Tuple(elements) => {
+                    for &id in elements {
+                        expr(id)?;
+                    }
+                }
+                ExprKind::Field { base, .. } => expr(*base)?,
                 ExprKind::Unary { value, .. } => expr(*value)?,
                 ExprKind::Binary { left, right, .. } => {
                     expr(*left)?;
@@ -233,6 +265,10 @@ impl CheckedFunction {
                         local(*id)?;
                         expr(*value)?;
                     }
+                    Stmt::AssignPlace { place, value } => {
+                        local(place.local)?;
+                        expr(*value)?;
+                    }
                     Stmt::Expr(id) | Stmt::Return(Some(id)) => expr(*id)?,
                     Stmt::Return(None) => {}
                     Stmt::While {
@@ -251,6 +287,80 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tuple_types_are_structural_and_cheaply_cloned() {
+        let fields: Arc<[Ty]> = vec![Ty::I32, Ty::Tuple(vec![Ty::Bool, Ty::Unit].into())].into();
+        let ty = Ty::Tuple(fields.clone());
+        let expression = TypedExpr {
+            ty: ty.clone(),
+            completion: Completion::Returns,
+            kind: ExprKind::Tuple(vec![]),
+        };
+        let Some(Ty::Tuple(cloned_fields)) = expression.flow() else {
+            panic!("tuple flow missing")
+        };
+        assert!(Arc::ptr_eq(&fields, &cloned_fields));
+        assert_eq!(
+            ty,
+            Ty::Tuple(vec![Ty::I32, Ty::Tuple(vec![Ty::Bool, Ty::Unit].into())].into())
+        );
+        assert_ne!(ty, Ty::Tuple(vec![Ty::Bool, Ty::I32].into()));
+        assert_ne!(Ty::Unit, Ty::Tuple(vec![Ty::Unit].into()));
+    }
+
+    #[test]
+    fn tuple_field_and_assignment_references_are_checked() {
+        let mut value = fixture();
+        value.exprs.push(TypedExpr {
+            ty: Ty::Tuple(vec![Ty::I32].into()),
+            completion: Completion::Returns,
+            kind: ExprKind::Tuple(vec![ExprId(0)]),
+        });
+        value.exprs.push(TypedExpr {
+            ty: Ty::I32,
+            completion: Completion::Returns,
+            kind: ExprKind::Field {
+                base: ExprId(1),
+                index: 0,
+            },
+        });
+        value.body.statements.push(Stmt::AssignPlace {
+            place: Place {
+                local: LocalId(0),
+                fields: vec![0, 1],
+            },
+            value: ExprId(2),
+        });
+        // Structural validation intentionally does not redo projection typing.
+        value.validate().unwrap();
+        value.exprs[2].kind = ExprKind::Field {
+            base: ExprId(99),
+            index: 0,
+        };
+        assert!(
+            value
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
+        value.exprs[2].kind = ExprKind::Tuple(vec![ExprId(99)]);
+        assert!(
+            value
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
+        value.exprs[2].kind = ExprKind::Int(0);
+        value.body.statements.push(Stmt::AssignPlace {
+            place: Place {
+                local: LocalId(99),
+                fields: vec![0],
+            },
+            value: ExprId(2),
+        });
+        assert!(value.validate().unwrap_err().contains("invalid local 99"));
+    }
 
     fn fixture() -> CheckedFunction {
         CheckedFunction {

@@ -296,8 +296,8 @@ fn checked_ir_calls_retain_canonical_targets_and_validated_signatures() {
             assert_eq!(signature.result, Ty::Bool);
             assert_eq!(expr.ty, Ty::Bool);
             assert_eq!(expr.completion, Completion::Returns);
-            for (&arg, &expected) in args.iter().zip(&signature.params) {
-                assert_eq!(function.exprs[arg.0].flow(), Some(expected));
+            for (&arg, expected) in args.iter().zip(&signature.params) {
+                assert_eq!(function.exprs[arg.0].flow(), Some(expected.clone()));
             }
         },
     );

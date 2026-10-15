@@ -51,11 +51,12 @@ pub struct Function {
     pub result: Type,
     pub body: Block,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     I32,
     Bool,
     Unit,
+    Tuple(Vec<Type>),
     /// Semantic-only never type, not an admitted source type annotation.
     Never,
     /// Unannotated locals only, resolved independently during function checking.
@@ -65,6 +66,11 @@ pub enum Type {
 pub struct Block {
     pub statements: Vec<Stmt>,
     pub tail: Option<Box<Expr>>,
+}
+#[derive(Clone, Debug)]
+pub struct Place {
+    pub local: String,
+    pub fields: Vec<usize>,
 }
 #[derive(Clone, Debug)]
 pub enum Stmt {
@@ -78,6 +84,10 @@ pub enum Stmt {
         name: String,
         value: Expr,
     },
+    AssignPlace {
+        place: Place,
+        value: Expr,
+    },
     Expr(Expr),
     /// A blocklike statement without an explicit value-discarding semicolon.
     ImplicitExpr(Expr),
@@ -89,6 +99,11 @@ pub enum Stmt {
 }
 #[derive(Clone, Debug)]
 pub enum Expr {
+    Tuple(Vec<Expr>),
+    Field {
+        base: Box<Expr>,
+        index: usize,
+    },
     Int(i32),
     Bool(bool),
     Var(String),
@@ -340,6 +355,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | "::"
                     | ";"
                     | ","
+                    | "."
                     | "->"
                     | "+"
                     | "-"
@@ -436,15 +452,39 @@ impl Parser {
         }
     }
     fn ty(&mut self) -> Result<Type, String> {
+        if self.nesting >= 128 {
+            return Err(self.error("type nesting exceeds limit 128"));
+        }
+        self.nesting += 1;
+        let result = self.ty_inner();
+        self.nesting -= 1;
+        result
+    }
+    fn ty_inner(&mut self) -> Result<Type, String> {
         if self.eat("i32") {
             Ok(Type::I32)
         } else if self.eat("bool") {
             Ok(Type::Bool)
         } else if self.eat("(") {
+            if self.eat(")") {
+                return Ok(Type::Unit);
+            }
+            let first = self.ty()?;
+            if !self.eat(",") {
+                self.expect(")")?;
+                return Ok(first);
+            }
+            let mut fields = vec![first];
+            while !self.is(")") {
+                fields.push(self.ty()?);
+                if !self.eat(",") {
+                    break;
+                }
+            }
             self.expect(")")?;
-            Ok(Type::Unit)
+            Ok(Type::Tuple(fields))
         } else {
-            Err(self.error("expected i32, bool or ()"))
+            Err(self.error("expected scalar or tuple type"))
         }
     }
     fn path(&mut self) -> Result<String, String> {
@@ -599,6 +639,9 @@ impl Parser {
             }
             if self.eat("let") {
                 let mutable = self.eat("mut");
+                if self.is("(") {
+                    return Err(self.error("destructuring patterns are unsupported"));
+                }
                 let name = self.ident()?;
                 // Local inference is performed by each independent function checker.
                 let annotation = if self.eat(":") {
@@ -630,18 +673,21 @@ impl Parser {
                 let condition = self.expr(0)?;
                 let body = self.block()?;
                 statements.push(Stmt::While { condition, body });
-            } else if self.at + 1 < self.tokens.len()
-                && self.tokens[self.at + 1].text == "="
-                && !self.token().string
-            {
-                let name = self.ident()?;
-                self.expect("=")?;
-                let value = self.expr(0)?;
-                self.expect(";")?;
-                statements.push(Stmt::Assign { name, value });
             } else {
                 let expr = self.expr(0)?;
-                if self.eat(";") {
+                if self.eat("=") {
+                    let place = self.assignment_place(expr)?;
+                    let value = self.expr(0)?;
+                    self.expect(";")?;
+                    if place.fields.is_empty() {
+                        statements.push(Stmt::Assign {
+                            name: place.local,
+                            value,
+                        });
+                    } else {
+                        statements.push(Stmt::AssignPlace { place, value });
+                    }
+                } else if self.eat(";") {
                     statements.push(Stmt::Expr(expr));
                 } else if self.is("}") {
                     tail = Some(Box::new(expr));
@@ -655,6 +701,16 @@ impl Parser {
         }
         self.expect("}")?;
         Ok(Block { statements, tail })
+    }
+    fn assignment_place(&self, mut expr: Expr) -> Result<Place, String> {
+        let mut fields = Vec::new();
+        loop {
+            match expr {
+                Expr::Var(local) => { fields.reverse(); return Ok(Place { local, fields }); }
+                Expr::Field { base, index } => { fields.push(index); expr = *base; }
+                _ => return Err(self.error("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported")),
+            }
+        }
     }
     fn expr(&mut self, min: u8) -> Result<Expr, String> {
         if self.nesting >= 128 {
@@ -730,9 +786,21 @@ impl Parser {
                     tail: None,
                 })
             } else {
-                let e = self.expr(0)?;
-                self.expect(")")?;
-                e
+                let first = self.expr(0)?;
+                if self.eat(",") {
+                    let mut fields = vec![first];
+                    while !self.is(")") {
+                        fields.push(self.expr(0)?);
+                        if !self.eat(",") {
+                            break;
+                        }
+                    }
+                    self.expect(")")?;
+                    Expr::Tuple(fields)
+                } else {
+                    self.expect(")")?;
+                    first
+                }
             }
         } else if !self.token().string
             && self.token().text.starts_with(|c: char| c.is_ascii_digit())
@@ -781,6 +849,27 @@ impl Parser {
         };
         let mut compared = false;
         loop {
+            if self.eat(".") {
+                let token = self.token();
+                if token.string
+                    || token.text.is_empty()
+                    || !token.text.bytes().all(|c| c.is_ascii_digit())
+                    || (token.text.len() > 1 && token.text.starts_with('0'))
+                {
+                    return Err(self.error("tuple field index must be a canonical unsigned decimal integer; named fields are unsupported"));
+                }
+                let index = token
+                    .text
+                    .parse::<usize>()
+                    .map_err(|_| self.error("tuple field index is out of range"))?;
+                self.at += 1;
+                left = Expr::Field {
+                    base: Box::new(left),
+                    index,
+                };
+                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
+                continue;
+            }
             let (precedence, op) = match self.token().text.as_str() {
                 "||" => (1, BinaryOp::Or),
                 "&&" => (2, BinaryOp::And),
@@ -1032,6 +1121,7 @@ impl Resolver<'_> {
                     locals.last_mut().unwrap().insert(name.clone());
                 }
                 Stmt::Assign { value, .. }
+                | Stmt::AssignPlace { value, .. }
                 | Stmt::Expr(value)
                 | Stmt::ImplicitExpr(value)
                 | Stmt::Return(Some(value)) => {
@@ -1071,6 +1161,12 @@ impl Resolver<'_> {
                     self.expr(arg, module, locals)?;
                 }
             }
+            Expr::Tuple(fields) => {
+                for field in fields {
+                    self.expr(field, module, locals)?;
+                }
+            }
+            Expr::Field { base, .. } => self.expr(base, module, locals)?,
             Expr::Unary { value, .. } => self.expr(value, module, locals)?,
             Expr::Binary { left, right, .. } => {
                 self.expr(left, module, locals)?;
@@ -1131,6 +1227,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     Ok(program)
 }
 enum DepthNode<'a> {
+    Type(&'a Type),
     Expr(&'a Expr),
     Block(&'a Block),
 }
@@ -1142,7 +1239,19 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
         }
         let mut push = |node| stack.push((node, depth + 1));
         match node {
+            DepthNode::Type(Type::Tuple(fields)) => {
+                for field in fields {
+                    push(DepthNode::Type(field));
+                }
+            }
+            DepthNode::Type(_) => {}
             DepthNode::Expr(expr) => match expr {
+                Expr::Tuple(fields) => {
+                    for field in fields {
+                        push(DepthNode::Expr(field));
+                    }
+                }
+                Expr::Field { base, .. } => push(DepthNode::Expr(base)),
                 Expr::Unary { value, .. } => push(DepthNode::Expr(value)),
                 Expr::Binary { left, right, .. } => {
                     push(DepthNode::Expr(left));
@@ -1169,8 +1278,12 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
             DepthNode::Block(block) => {
                 for stmt in &block.statements {
                     match stmt {
-                        Stmt::Let { value, .. }
-                        | Stmt::Assign { value, .. }
+                        Stmt::Let { value, ty, .. } => {
+                            push(DepthNode::Expr(value));
+                            push(DepthNode::Type(ty));
+                        }
+                        Stmt::Assign { value, .. }
+                        | Stmt::AssignPlace { value, .. }
                         | Stmt::Expr(value)
                         | Stmt::ImplicitExpr(value)
                         | Stmt::Return(Some(value)) => push(DepthNode::Expr(value)),
@@ -1193,6 +1306,11 @@ pub type Signatures = HashMap<String, (Vec<Type>, Type)>;
 fn signatures(program: &Program) -> Result<Signatures, String> {
     let mut signatures: Signatures = HashMap::new();
     for f in &program.functions {
+        for ty in std::iter::once(&f.result).chain(f.params.iter().map(|(_, ty)| ty)) {
+            validate_depth(DepthNode::Type(ty))
+                .and_then(|_| checked_ty(ty).map(|_| ()))
+                .map_err(|e| format!("in function {}: {e}", f.name))?;
+        }
         if f.result == Type::Infer || f.params.iter().any(|(_, t)| *t == Type::Infer) {
             return Err(format!(
                 "in function {}: signature types cannot be inferred",
@@ -1202,7 +1320,10 @@ fn signatures(program: &Program) -> Result<Signatures, String> {
         if signatures
             .insert(
                 f.name.clone(),
-                (f.params.iter().map(|(_, t)| *t).collect(), f.result),
+                (
+                    f.params.iter().map(|(_, t)| t.clone()).collect(),
+                    f.result.clone(),
+                ),
             )
             .is_some()
         {
@@ -1219,7 +1340,7 @@ struct LoopFrame {
     id: ir::LoopId,
     accepts_value: bool,
     checking_condition: bool,
-    break_ty: Option<Type>,
+    break_ty: Option<ir::Ty>,
     can_exit: bool,
 }
 struct Checker<'a> {
@@ -1230,17 +1351,17 @@ struct Checker<'a> {
     loops: Vec<LoopFrame>,
     next_loop: usize,
     reachable: bool,
-    result: Type,
+    result: ir::Ty,
 }
 // Semantic type and possible normal completion are independent. In particular,
 // an unreachable explicit block tail retains its type, unlike a pure never value.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Flow {
-    ty: Type,
+    ty: ir::Ty,
     completes: bool,
 }
 impl Flow {
-    fn value(ty: Type) -> Self {
+    fn value(ty: ir::Ty) -> Self {
         Self {
             ty,
             completes: true,
@@ -1248,30 +1369,46 @@ impl Flow {
     }
     fn never() -> Self {
         Self {
-            ty: Type::Never,
+            ty: ir::Ty::Never,
             completes: false,
         }
     }
 }
-fn checked_ty(ty: Type) -> Result<ir::Ty, String> {
+fn checked_ty(ty: &Type) -> Result<ir::Ty, String> {
     match ty {
         Type::I32 => Ok(ir::Ty::I32),
         Type::Bool => Ok(ir::Ty::Bool),
         Type::Unit => Ok(ir::Ty::Unit),
         Type::Never => Ok(ir::Ty::Never),
+        Type::Tuple(fields) if !fields.is_empty() => fields
+            .iter()
+            .map(checked_ty)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|fields| ir::Ty::Tuple(fields.into())),
+        Type::Tuple(_) => Err("empty tuple types must use ()".into()),
         Type::Infer => Err("signature types cannot be inferred".into()),
     }
 }
-fn syntax_ty(ty: ir::Ty) -> Type {
+fn inhabited(ty: &ir::Ty) -> bool {
     match ty {
-        ir::Ty::I32 => Type::I32,
-        ir::Ty::Bool => Type::Bool,
-        ir::Ty::Unit => Type::Unit,
-        ir::Ty::Never => Type::Never,
+        ir::Ty::Never => false,
+        ir::Ty::Tuple(fields) => fields.iter().all(inhabited),
+        _ => true,
+    }
+}
+fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
+    if *got == ir::Ty::Never || got == want {
+        return true;
+    }
+    match (got, want) {
+        (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) if a.len() == b.len() => {
+            a.iter().zip(b.iter()).all(|(a, b)| coerces(a, b))
+        }
+        _ => false,
     }
 }
 impl<'a> Checker<'a> {
-    fn new(signatures: &'a Signatures, result: Type) -> Self {
+    fn new(signatures: &'a Signatures, result: ir::Ty) -> Self {
         Self {
             signatures,
             scopes: vec![HashMap::new()],
@@ -1307,11 +1444,11 @@ impl<'a> Checker<'a> {
         }
         Ok(frame.id)
     }
-    fn local(&mut self, name: &str, ty: Type, mutable: bool) -> Result<ir::LocalId, String> {
+    fn local(&mut self, name: &str, ty: ir::Ty, mutable: bool) -> Result<ir::LocalId, String> {
         let local = ir::LocalId(self.locals.len());
         self.locals.push(ir::LocalDecl {
             name: name.to_owned(),
-            ty: checked_ty(ty)?,
+            ty,
             mutable,
         });
         self.scopes
@@ -1320,7 +1457,7 @@ impl<'a> Checker<'a> {
             .insert(name.to_owned(), local);
         Ok(local)
     }
-    fn bind(&mut self, name: &str, ty: Type) -> Result<ir::LocalId, String> {
+    fn bind(&mut self, name: &str, ty: ir::Ty) -> Result<ir::LocalId, String> {
         if self.scopes.last().unwrap().contains_key(name) {
             return Err(format!("duplicate parameter {name}"));
         }
@@ -1336,24 +1473,47 @@ impl<'a> Checker<'a> {
     fn flow(&self, id: ir::ExprId) -> Flow {
         let e = &self.exprs[id.0];
         Flow {
-            ty: syntax_ty(e.ty),
+            ty: e.ty.clone(),
             completes: e.completion == ir::Completion::Returns,
         }
     }
-    fn require(&self, got: Flow, want: Type) -> Result<(), String> {
-        if got.ty != Type::Never && got.ty != want {
+    fn require(&self, got: &Flow, want: &ir::Ty) -> Result<(), String> {
+        if !coerces(&got.ty, want) {
             Err(format!("expected {want:?}, got {:?}", got.ty))
         } else {
             Ok(())
         }
     }
-    fn join(&self, a: Type, b: Type, context: &str) -> Result<Type, String> {
-        if a == Type::Never {
-            Ok(b)
-        } else if b == Type::Never || a == b {
-            Ok(a)
-        } else {
-            Err(format!("{context} differ: {a:?} and {b:?}"))
+    fn join(&self, a: &ir::Ty, b: &ir::Ty, context: &str) -> Result<ir::Ty, String> {
+        if *a == ir::Ty::Never {
+            return Ok(b.clone());
+        }
+        if *b == ir::Ty::Never || a == b {
+            return Ok(a.clone());
+        }
+        if let (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) = (a, b)
+            && a.len() == b.len()
+        {
+            return a
+                .iter()
+                .zip(b.iter())
+                .map(|(a, b)| self.join(a, b, context))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|fields| ir::Ty::Tuple(fields.into()));
+        }
+        Err(format!("{context} differ: {a:?} and {b:?}"))
+    }
+    fn field_type(&self, ty: &ir::Ty, index: usize) -> Result<ir::Ty, String> {
+        match ty {
+            ir::Ty::Tuple(fields) => fields.get(index).cloned().ok_or_else(|| {
+                format!(
+                    "tuple field {index} is out of bounds for {} fields",
+                    fields.len()
+                )
+            }),
+            _ => Err(format!(
+                "tuple field projection requires a tuple, got {ty:?}"
+            )),
         }
     }
     fn expr_when(&mut self, e: &Expr, reachable: bool) -> Result<ir::ExprId, String> {
@@ -1387,10 +1547,11 @@ impl<'a> Checker<'a> {
                     let value = self.expr(value)?;
                     let f = self.flow(value);
                     let t = if *ty == Type::Infer {
-                        f.ty
+                        f.ty.clone()
                     } else {
-                        self.require(f, *ty)?;
-                        *ty
+                        let ty = checked_ty(ty)?;
+                        self.require(&f, &ty)?;
+                        ty
                     };
                     let local = self.local(name, t, *mutable)?;
                     (ir::Stmt::Let { local, value }, f.completes)
@@ -1398,27 +1559,51 @@ impl<'a> Checker<'a> {
                 Stmt::Assign { name, value } => {
                     let local = self.lookup(name)?;
                     let declaration = &self.locals[local.0];
-                    let t = syntax_ty(declaration.ty);
+                    let t = declaration.ty.clone();
                     if !declaration.mutable {
                         return Err(format!("assignment to immutable local {name}"));
                     }
                     let value = self.expr(value)?;
                     let f = self.flow(value);
-                    self.require(f, t)?;
+                    self.require(&f, &t)?;
                     (ir::Stmt::Assign { local, value }, f.completes)
+                }
+                Stmt::AssignPlace { place, value } => {
+                    let local = self.lookup(&place.local)?;
+                    let declaration = &self.locals[local.0];
+                    if !declaration.mutable {
+                        return Err(format!("assignment to immutable local {}", place.local));
+                    }
+                    let mut ty = declaration.ty.clone();
+                    for &index in &place.fields {
+                        ty = self.field_type(&ty, index)?;
+                    }
+                    let value = self.expr(value)?;
+                    let flow = self.flow(value);
+                    self.require(&flow, &ty)?;
+                    (
+                        ir::Stmt::AssignPlace {
+                            place: ir::Place {
+                                local,
+                                fields: place.fields.clone(),
+                            },
+                            value,
+                        },
+                        flow.completes,
+                    )
                 }
                 Stmt::Expr(e) | Stmt::ImplicitExpr(e) => {
                     let value = self.expr(e)?;
                     let f = self.flow(value);
                     if matches!(s, Stmt::ImplicitExpr(_)) {
-                        self.require(f, Type::Unit)?;
+                        self.require(&f, &ir::Ty::Unit)?;
                     }
                     (ir::Stmt::Expr(value), f.completes)
                 }
                 Stmt::Return(e) => {
                     let value = e.as_ref().map(|e| self.expr(e)).transpose()?;
-                    let f = value.map_or(Flow::value(Type::Unit), |e| self.flow(e));
-                    self.require(f, self.result)?;
+                    let f = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
+                    self.require(&f, &self.result)?;
                     (ir::Stmt::Return(value), false)
                 }
                 Stmt::While { condition, body } => {
@@ -1426,10 +1611,10 @@ impl<'a> Checker<'a> {
                     let id = self.enter_loop(false);
                     let condition = self.expr(condition)?;
                     let f = self.flow(condition);
-                    self.require(f, Type::Bool)?;
+                    self.require(&f, &ir::Ty::Bool)?;
                     self.loops.last_mut().unwrap().checking_condition = false;
                     let (body, bf) = self.block(body)?;
-                    self.require(bf, Type::Unit)?;
+                    self.require(&bf, &ir::Ty::Unit)?;
                     self.loops.pop();
                     (
                         ir::Stmt::While {
@@ -1450,7 +1635,7 @@ impl<'a> Checker<'a> {
         let mut flow = tail.map_or_else(
             || {
                 if live {
-                    Flow::value(Type::Unit)
+                    Flow::value(ir::Ty::Unit)
                 } else {
                     Flow::never()
                 }
@@ -1463,32 +1648,76 @@ impl<'a> Checker<'a> {
     }
     fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
         let (kind, flow) = match e {
-            Expr::Int(value) => (ir::ExprKind::Int(*value), Flow::value(Type::I32)),
-            Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(Type::Bool)),
-            Expr::Var(n) => {
-                let local = self.lookup(n)?;
-                let ty = syntax_ty(self.locals[local.0].ty);
+            Expr::Tuple(fields) => {
+                if fields.is_empty() {
+                    return Err("empty tuples must use ()".into());
+                }
+                let mut values = Vec::with_capacity(fields.len());
+                let mut types = Vec::with_capacity(fields.len());
+                let mut completes = true;
+                for field in fields {
+                    let value = self.expr_when(field, self.reachable && completes)?;
+                    let flow = self.flow(value);
+                    completes &= flow.completes;
+                    types.push(flow.ty);
+                    values.push(value);
+                }
                 (
-                    ir::ExprKind::Local(local),
+                    ir::ExprKind::Tuple(values),
                     Flow {
-                        ty,
-                        completes: ty != Type::Never,
+                        ty: ir::Ty::Tuple(types.into()),
+                        completes,
                     },
                 )
             }
-            Expr::Println(text) => (ir::ExprKind::Println(text.clone()), Flow::value(Type::Unit)),
+            Expr::Field { base, index } => {
+                let base = self.expr(base)?;
+                let flow = self.flow(base);
+                let ty = self.field_type(&flow.ty, *index)?;
+                (
+                    ir::ExprKind::Field {
+                        base,
+                        index: *index,
+                    },
+                    Flow {
+                        ty,
+                        completes: flow.completes,
+                    },
+                )
+            }
+            Expr::Int(value) => (ir::ExprKind::Int(*value), Flow::value(ir::Ty::I32)),
+            Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(ir::Ty::Bool)),
+            Expr::Var(n) => {
+                let local = self.lookup(n)?;
+                let ty = self.locals[local.0].ty.clone();
+                (
+                    ir::ExprKind::Local(local),
+                    Flow {
+                        completes: inhabited(&ty),
+                        ty,
+                    },
+                )
+            }
+            Expr::Println(text) => (
+                ir::ExprKind::Println(text.clone()),
+                Flow::value(ir::Ty::Unit),
+            ),
             Expr::Unary { op, value } => {
                 let value = self.expr(value)?;
                 let f = self.flow(value);
                 let t = match op {
-                    UnaryOp::Neg => Type::I32,
-                    UnaryOp::Not => Type::Bool,
+                    UnaryOp::Neg => ir::Ty::I32,
+                    UnaryOp::Not => ir::Ty::Bool,
                 };
-                self.require(f, t)?;
-                if matches!(op, UnaryOp::Neg) && f.ty == Type::Never {
+                self.require(&f, &t)?;
+                if matches!(op, UnaryOp::Neg) && f.ty == ir::Ty::Never {
                     return Err("unary negation of never is unsupported".into());
                 }
-                let ty = if f.ty == Type::Never { Type::Never } else { t };
+                let ty = if f.ty == ir::Ty::Never {
+                    ir::Ty::Never
+                } else {
+                    t
+                };
                 (
                     ir::ExprKind::Unary { op: *op, value },
                     Flow {
@@ -1503,21 +1732,24 @@ impl<'a> Checker<'a> {
                 let l = self.flow(left);
                 let r = self.flow(right);
                 let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
+                if matches!(l.ty, ir::Ty::Tuple(_)) || matches!(r.ty, ir::Ty::Tuple(_)) {
+                    return Err("tuple operators and comparisons are unsupported".into());
+                }
                 let (operand, result) = match op {
-                    BinaryOp::And | BinaryOp::Or => (Type::Bool, Type::Bool),
+                    BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
                     BinaryOp::Eq | BinaryOp::Ne => {
-                        (self.join(l.ty, r.ty, "equality operands")?, Type::Bool)
+                        (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
                     }
                     BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                        (Type::I32, Type::Bool)
+                        (ir::Ty::I32, ir::Ty::Bool)
                     }
-                    _ => (Type::I32, Type::I32),
+                    _ => (ir::Ty::I32, ir::Ty::I32),
                 };
-                self.require(l, operand)?;
-                self.require(r, operand)?;
+                self.require(&l, &operand)?;
+                self.require(&r, &operand)?;
                 // Trait-based scalar operators do not gain a never coercion
                 // merely because evaluating an operand cannot complete.
-                if !logical && (l.ty == Type::Never || r.ty == Type::Never) {
+                if !logical && (l.ty == ir::Ty::Never || r.ty == ir::Ty::Never) {
                     return Err("binary operator on never is unsupported".into());
                 }
                 let completes = l.completes && (logical || r.completes);
@@ -1546,22 +1778,19 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 let signature = ir::Signature {
-                    params: params
-                        .iter()
-                        .copied()
-                        .map(checked_ty)
-                        .collect::<Result<_, _>>()?,
-                    result: checked_ty(*result)?,
+                    params: params.iter().map(checked_ty).collect::<Result<_, _>>()?,
+                    result: checked_ty(result)?,
                 };
                 let mut completes = true;
                 let mut arguments = Vec::with_capacity(args.len());
-                for (a, t) in args.iter().zip(params) {
+                for (a, t) in args.iter().zip(&signature.params) {
                     let value = self.expr_when(a, self.reachable && completes)?;
                     let f = self.flow(value);
-                    self.require(f, *t)?;
+                    self.require(&f, t)?;
                     completes &= f.completes;
                     arguments.push(value);
                 }
+                let result_ty = signature.result.clone();
                 (
                     ir::ExprKind::Call {
                         name: name.clone(),
@@ -1569,7 +1798,7 @@ impl<'a> Checker<'a> {
                         signature,
                     },
                     Flow {
-                        ty: *result,
+                        ty: result_ty,
                         completes,
                     },
                 )
@@ -1581,11 +1810,11 @@ impl<'a> Checker<'a> {
             } => {
                 let condition = self.expr(condition)?;
                 let c = self.flow(condition);
-                self.require(c, Type::Bool)?;
+                self.require(&c, &ir::Ty::Bool)?;
                 let reachable = self.reachable && c.completes;
                 let (then_block, t) = self.block_when(then_block, reachable)?;
                 let (else_block, e) = self.block_when(else_block, reachable)?;
-                let ty = self.join(t.ty, e.ty, "if branches")?;
+                let ty = self.join(&t.ty, &e.ty, "if branches")?;
                 let completes = c.completes && (t.completes || e.completes);
                 (
                     ir::ExprKind::If {
@@ -1602,10 +1831,10 @@ impl<'a> Checker<'a> {
                 // enclosing expression is unreachable. Only its own body paths
                 // determine whether one of its breaks can complete.
                 let (body, body_flow) = self.block_when(body, true)?;
-                self.require(body_flow, Type::Unit)?;
+                self.require(&body_flow, &ir::Ty::Unit)?;
                 let frame = self.loops.pop().unwrap();
                 let flow = Flow {
-                    ty: frame.break_ty.unwrap_or(Type::Never),
+                    ty: frame.break_ty.unwrap_or(ir::Ty::Never),
                     completes: frame.can_exit,
                 };
                 (ir::ExprKind::Loop { id, body }, flow)
@@ -1613,9 +1842,9 @@ impl<'a> Checker<'a> {
             Expr::Break { value } => {
                 let target = self.loop_target("break")?;
                 let value = value.as_ref().map(|e| self.expr(e)).transpose()?;
-                let flow = value.map_or(Flow::value(Type::Unit), |e| self.flow(e));
+                let flow = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
                 let frame = self.loops.last().unwrap();
-                let previous_break_ty = frame.break_ty;
+                let previous_break_ty = frame.break_ty.clone();
                 if !frame.accepts_value && value.is_some() {
                     return Err("break with a value is only allowed in loop, not while".into());
                 }
@@ -1624,9 +1853,9 @@ impl<'a> Checker<'a> {
                 if self.reachable && flow.completes {
                     self.loops.last_mut().unwrap().can_exit = true;
                 }
-                if flow.ty != Type::Never {
-                    let previous = previous_break_ty.unwrap_or(Type::Never);
-                    let ty = self.join(previous, flow.ty, "break values")?;
+                if flow.ty != ir::Ty::Never {
+                    let previous = previous_break_ty.unwrap_or(ir::Ty::Never);
+                    let ty = self.join(&previous, &flow.ty, "break values")?;
                     self.loops.last_mut().unwrap().break_ty = Some(ty);
                 }
                 (ir::ExprKind::Break { target, value }, Flow::never())
@@ -1642,7 +1871,7 @@ impl<'a> Checker<'a> {
         };
         let id = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {
-            ty: checked_ty(flow.ty)?,
+            ty: flow.ty,
             completion: if flow.completes {
                 ir::Completion::Returns
             } else {
@@ -1696,23 +1925,29 @@ pub fn type_function_with_signatures(
         .get(index)
         .ok_or_else(|| format!("invalid function index {index}"))?;
     validate_depth(DepthNode::Block(&f.body))?;
-    let mut c = Checker::new(signatures, f.result);
+    let mut c = Checker::new(
+        signatures,
+        checked_ty(&f.result).map_err(|e| format!("in function {}: {e}", f.name))?,
+    );
     let mut params = Vec::with_capacity(f.params.len());
     for (n, t) in &f.params {
         params.push(
-            c.bind(n, *t)
-                .map_err(|e| format!("in function {}: {e}", f.name))?,
+            c.bind(
+                n,
+                checked_ty(t).map_err(|e| format!("in function {}: {e}", f.name))?,
+            )
+            .map_err(|e| format!("in function {}: {e}", f.name))?,
         );
     }
     let (body, flow) = c
         .block(&f.body)
         .map_err(|e| format!("in function {}: {e}", f.name))?;
-    c.require(flow, f.result)
+    c.require(&flow, &c.result)
         .map_err(|e| format!("in function {}: {e}", f.name))?;
     Ok(ir::CheckedFunction {
         name: f.name.clone(),
         params,
-        result: checked_ty(f.result).map_err(|e| format!("in function {}: {e}", f.name))?,
+        result: c.result,
         locals: c.locals,
         exprs: c.exprs,
         body,
@@ -1745,7 +1980,7 @@ mod typed_tests {
             0,
         );
         assert_eq!(
-            f.locals.iter().map(|l| l.ty).collect::<Vec<_>>(),
+            f.locals.iter().map(|l| l.ty.clone()).collect::<Vec<_>>(),
             vec![ir::Ty::I32, ir::Ty::Bool]
         );
         let breaks = f
@@ -1915,7 +2150,7 @@ mod typed_tests {
         );
         assert_eq!(f.params, vec![ir::LocalId(0)]);
         assert_eq!(
-            f.locals.iter().map(|l| l.ty).collect::<Vec<_>>(),
+            f.locals.iter().map(|l| l.ty.clone()).collect::<Vec<_>>(),
             vec![ir::Ty::I32, ir::Ty::I32, ir::Ty::Bool, ir::Ty::I32]
         );
         assert!(f.locals.iter().all(|l| l.name == "x"));
@@ -1988,7 +2223,7 @@ mod typed_tests {
             0,
         );
         assert_eq!(
-            f.locals.iter().map(|l| l.ty).collect::<Vec<_>>(),
+            f.locals.iter().map(|l| l.ty.clone()).collect::<Vec<_>>(),
             vec![ir::Ty::Bool, ir::Ty::Bool, ir::Ty::Never]
         );
         let binaries = f
