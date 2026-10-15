@@ -79,6 +79,44 @@ class ToolchainIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'artifact changed'):
             identity.verify_files()
 
+    def test_declared_sysroot_requires_nonempty_std_and_core_inside_prefix(self):
+        self.value['sysroot_target'] = 'x86_64-unknown-linux-gnu'
+        self.save_manifest()
+        libs = self.prefix / 'lib/rustlib/x86_64-unknown-linux-gnu/lib'
+        libs.mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, 'missing std'):
+            self.identity()
+        (libs / 'libstd-fixture.rlib').write_bytes(b'std')
+        with self.assertRaisesRegex(ValueError, 'missing core'):
+            self.identity()
+        core = libs / 'libcore-fixture.rlib'
+        core.write_bytes(b'')
+        with self.assertRaisesRegex(ValueError, 'missing core'):
+            self.identity()
+        core.write_bytes(b'core')
+        identity = self.identity()
+        self.assertEqual(identity.verify_files()['sysroot_target'], self.value['sysroot_target'])
+        core.unlink()
+        core.symlink_to(self.manifest)
+        with self.assertRaisesRegex(ValueError, 'missing core'):
+            identity.verify_files()
+
+    def test_declared_sysroot_target_rejects_invalid_or_null(self):
+        for target in (None, '', '../outside', 'x86_64/unknown', 42):
+            self.value['sysroot_target'] = target
+            self.save_manifest()
+            with self.assertRaisesRegex(ValueError, 'sysroot target'):
+                self.identity()
+
+    def test_attested_partial_isolated_from_legacy_and_other_outputs(self):
+        args = SimpleNamespace(synth=1, out='/private/A-recovered.json')
+        self.assertEqual(suite.synthetic_partial_path(args), suite.RESULTS / 'partial/synth1.json')
+        self.assertEqual(suite.synthetic_partial_path(args, object()),
+                         suite.RESULTS / 'partial/A-recovered.json')
+        args.out = '/private/B-fresh.json'
+        self.assertEqual(suite.synthetic_partial_path(args, object()),
+                         suite.RESULTS / 'partial/B-fresh.json')
+
     def test_driver_helper_or_marker_replacement_rejects(self):
         for role in ('driver', 'rustdoc', 'clippy-driver', 'cargo-clippy', 'cargo'):
             identity = self.identity()

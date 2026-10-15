@@ -934,11 +934,17 @@ class ToolchainIdentity:
         if not self.prefix.is_relative_to(JR_HOME.resolve()):
             raise ValueError("bench: toolchain prefix escapes isolated home")
         value = bounded_identity_json(Path(manifest), 65536)
-        if (set(value) != {"schema", "toolchain", "artifacts"}
+        if (set(value) not in ({"schema", "toolchain", "artifacts"},
+                              {"schema", "toolchain", "artifacts", "sysroot_target"})
                 or type(value["schema"]) is not int or value["schema"] != 1
                 or value["toolchain"] != spec or not isinstance(value["artifacts"], dict)
                 or set(value["artifacts"]) != self.ROLES):
             raise ValueError("bench: invalid toolchain identity manifest")
+        self.sysroot_target = value.get("sysroot_target")
+        if "sysroot_target" in value and (not isinstance(self.sysroot_target, str)
+                or not re.fullmatch(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+", self.sysroot_target)
+                or len(self.sysroot_target) > 128):
+            raise ValueError("bench: invalid declared sysroot target")
         self.paths = {}
         self.expected = {}
         for role, artifact in value["artifacts"].items():
@@ -981,10 +987,18 @@ class ToolchainIdentity:
                     or (role != "driver" and not os.access(path, os.X_OK))
                     or binary_sha256(path) != self.expected[role]):
                 raise ValueError("bench: declared toolchain artifact changed or mismatched: " + role)
+        if self.sysroot_target is not None:
+            libraries = self.prefix / "lib" / "rustlib" / self.sysroot_target / "lib"
+            for crate in ("std", "core"):
+                matches = list(libraries.glob("lib" + crate + "-*.rlib"))
+                if not any(p.is_file() and p.stat().st_size > 0
+                           and p.resolve().is_relative_to(self.prefix) for p in matches):
+                    raise ValueError("bench: incomplete declared sysroot target: missing " + crate)
         if (not self.marker.resolve().is_relative_to(self.prefix)
                 or binary_sha256(self.marker) != self.marker_sha256):
             raise ValueError("bench: toolchain marker changed during benchmark")
-        return {"schema": 1, "toolchain": self.spec,
+        return {**({"sysroot_target": self.sysroot_target} if self.sysroot_target else {}),
+                "schema": 1, "toolchain": self.spec,
                 "scope": "declared-prefix-files-and-recorded-selection-not-loaded-memory",
                 "page_cache_conditioning": "declared files hashed before/after each invocation, not cold OS cache",
                 "artifacts": dict(self.expected), "marker_sha256": self.marker_sha256}
@@ -1039,7 +1053,8 @@ def toolchain_identity_comparison_issues(a: dict, b: dict) -> list[str]:
                        for value in before["artifacts"].values())):
             issues.append(label + ": incomplete or changed declared toolchain identity")
             continue
-        protocols.append((before["schema"], before["scope"], before["page_cache_conditioning"]))
+        protocols.append((before["schema"], before["scope"], before["page_cache_conditioning"],
+                          before.get("sysroot_target")))
         records = proof.get("invocations")
         if not isinstance(records, list) or not records:
             issues.append(label + ": missing recorded invocation identity audits")
@@ -1337,6 +1352,12 @@ def _synth():
     return synth_run, versus
 
 
+def synthetic_partial_path(args, identity=None) -> Path:
+    if identity is not None and args.out:
+        return RESULTS / "partial" / (Path(args.out).stem + ".json")
+    return RESULTS / "partial" / f"synth{args.synth}.json"
+
+
 def cmd_run_synth(args, identity=None) -> None:
     """The synthetic usage-weighted workload (bench/synth/) on justrust as
     agents run it: one stack, for comparing justrust commits."""
@@ -1353,7 +1374,7 @@ def cmd_run_synth(args, identity=None) -> None:
     before_identity = identity.verify_files() if identity is not None else None
     options = {"identity": identity} if identity is not None else {}
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
-              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume, **options)}
+              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=synthetic_partial_path(args, identity), resume=args.resume, **options)}
     if identity is not None:
         result["toolchain_identity"] = {"before": before_identity, "after": identity.verify_files(),
                                         "invocations": list(identity.invocations)}

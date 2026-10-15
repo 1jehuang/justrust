@@ -81,6 +81,14 @@ prefix files and recorded selection**, not mapped-memory identity or that a
 compiler executed during a no-op/cache hit. Clippy helper hashes likewise do not
 prove a particular helper was loaded.
 
+An optional manifest `sysroot_target`, for example `x86_64-unknown-linux-gnu`,
+requires nonempty `libstd-*.rlib` and `libcore-*.rlib` inside that prefix before
+every invocation. This is a completeness check, not attestation of all library
+bytes. Retain a separate donor/library hash inventory and actual compile/link/run
+smoke evidence when assembling a prefix. Matched comparisons require the same
+declared target. With explicit output names, attested runs keep separate partial
+files under `bench/results/partial/<output-stem>.json`, preserving earlier failures.
+
 Hashing is outside measured intervals but warms compiler/driver OS page caches.
 Compare only A/B runs using the same attestation protocol; `suite.py compare`
 rejects attested versus legacy-unattested results. A cold target directory is
