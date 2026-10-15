@@ -1,7 +1,11 @@
 # Parallelism map: what the measurements do and do not prove
 
-Updated October 14, 2026. This supersedes the work/span interpretation in the
+Updated October 15, 2026. This supersedes the work/span interpretation in the
 initial `critpath.py` report and the initial FINDINGS critical-path section.
+
+Latest accepted milestone: [named query-execution CPU ownership](query-cpu-ownership-20261015.md)
+now assigns validated exclusive CPU costs to actual admitted query executions.
+It does not yet establish the complete execution DAG or a useful-thread ceiling.
 
 ## Mathematical target
 

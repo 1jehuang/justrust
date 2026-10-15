@@ -131,6 +131,20 @@ Full public graph artifacts remain private and are identified by exact byte
 size and SHA-256 in each committed compact report. Native runtime, source,
 fixture, controls, and analyzer hashes remain in the retained acceptance cohort.
 
+Installed public replay independently passed 13 cases, including all original
+query owners and lifetimes, disjoint CPU sums, CPU-only/combined flag equality,
+three default pool4 refusals, and copied-directory missing-query, foreign-context,
+and clock-mismatch negatives. Original inputs and the installed client were
+unchanged. The reusable verifier is `bench/verify_query_cpu_public.py`; its compact
+receipt is `bench/results/20261015-query-cpu-public-acceptance.json`.
+
+The benchmark harness-path regression was also corrected natively in Cargo,
+with real hosted CLI acceptance. Other A2 outcomes include independently
+reproduced pinned-source assertions and an archived snapshot without `.git`.
+See `bench/synth/ISOLATION-A2.md` for bounded evidence, the remaining unresolved
+catalog isolation, and the inherited native Cargo lint gate that is still blocked.
+No historical A2 result was edited or declared eligible.
+
 ## Broader work still open
 
 Named query CPU ownership is a prerequisite for useful bottleneck localization,
