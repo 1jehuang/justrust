@@ -1,5 +1,38 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Matched stock rustc timings for the two subset fixtures
+
+Charged experiment `compiler-stock-20261015-2259`, harness revision
+`544221729` and unchanged prototype binary from `405611808`, alternated stock
+Rust 1.99.0 and prototype builds on the same shared M8a. Each source/tool pair
+had one warmup and seven measured compilations. Every invocation used a fresh
+process and unique output, no incremental compilation directory, and every
+executable was run and checked. OS/toolchain caches remained warm. This is
+explicitly not a cold-machine or cold-page-cache benchmark.
+
+Median whole-process source-to-executable latency, including subprocess startup
+and output collection, but excluding program execution and Cargo:
+
+| Source | Stock rustc | Prototype, 1 worker |
+|---|---:|---:|
+| 6 functions / 391 bytes | 37.063 ms | 0.933 ms |
+| 258 functions / 22,163 bytes | 62.222 ms | 5.044 ms |
+
+Stock rustc used edition 2024, opt-level=0 and overflow-checks=yes, its default
+linker and standard runtime. Prototype uses its much smaller private runtime,
+subset frontend and direct ELF emitter. Stdout and exit status match for these
+fixtures, but diagnostic coverage, runtime behavior, supported language and
+optimization capabilities are not equivalent. This is not a general speedup
+claim and does not substitute for representative project benchmarks. The
+synthetic 391-byte source is not a proxy for a typical Cargo project.
+
+Raw environment, flags, source hashes, all 32 samples including warmups, and
+binary digest: `experiments/results/20261015-m8a-compiler-stock.jsonl`.
+Reproduce with `experiments/compiler_stock.py`. The earlier 0.323 ms figure
+was in-process, so it must not be directly compared with whole-process rustc
+time. Use the matched whole-process table above instead. Results remain
+contended/uncontrolled, and no live host caches were flushed.
+
 ## 2026-10-15: First actual Rust-subset source-to-native compiler
 
 Revision `4056118081a547d39c2361f20b7aaca0f959bf8c` implements an independent
