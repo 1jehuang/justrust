@@ -11,6 +11,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Inline modules, qualified calls, simple imports and namespace/privacy checks.
 - [x] External module source trees with bounded loading and observed source facts.
 - [x] Scalar checked-function IR shared directly by checking and native emission.
+- [x] Unlabelled loop values, break/continue and exact native temporary cleanup.
+- [x] Separate semantic Never typing from completion, including typed dead tails.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -45,11 +47,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
-Unlabelled loop expressions, break values, continue, while-loop exits and correct
-semicolon-discard typing. Resolve loop target IDs in checked functions and restore
-exact temporary-stack depth on native control transfers. Preserve invalid-program
-checking, explicit unsupported boundaries and existing graph reuse. Labels, for
-loops and general while expressions remain following work, not silently accepted.
+Nested Copy tuple types and values, field projections/mutation, aggregate value
+snapshots and native calls/returns/control-flow joins. Keep scalar ABI behavior,
+checked frame bounds and explicit unsupported boundaries. Structs and other
+non-Copy values require ownership/move analysis, not automatic copying.
+
+Loop control flow passed 148 hosted tests and the charged M8a differential corpus:
+64 generated valid loop programs plus 28 Never-typing cases. Three stock-legal
+pure-Never comparison cases remain explicit unsupported inference boundaries.
+Labels, for loops and general while expressions remain following work.
 
 External source loading and scalar typed IR are completed prerequisite slices,
 not completion of source organization, general types, ownership or full Rust.

@@ -1,5 +1,38 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Loop values and semantic Never typing, validated on M8a
+
+Revision `c39c6402acc55653ef5f7bccb9c4e55c53311156` implements unlabelled
+loop expressions, break values, continue and while exits with resolved loop IDs.
+Native abrupt edges restore the target's exact temporary depth, preserving outer
+pending operands and arguments. Explicit semicolons discard block-like values,
+while omitted-semicolon expression statements retain their unit requirement.
+
+Stock-oracle probes exposed a correctness issue in the earlier scalar checker:
+runtime divergence had erased the semantic type of unreachable tails. The checker
+and typed IR now track semantic type and completion independently. For example,
+`1 + { return 3; }` is rejected, a typed dead tail in
+`1 + { return 3; 0 }` remains i32, and a boolean dead tail cannot satisfy an i32
+return type. Full integer/operator inference is not implemented: pure-Never
+nonlogical binary operands are conservatively unsupported, including some legal
+comparisons. These are tracked boundaries, not falsely counted as Rust errors.
+
+Final hosted gates passed: check `20261015-164244849-795645`, all 148 tests
+`20261015-164245371-795676`, warning-free all-target Clippy
+`20261015-164246569-795821`. Exported summaries are in
+`data/runs/prototype-bootstrap/2026-10-loops.jsonl`.
+
+Charged experiment `compiler-loops-20261015-2346` ran this exact revision on the
+96-core m8a.24xlarge and compared native output against Rust 1.99.0 edition 2024:
+64 seeded loop programs matched output and status with workers rotating 1/8/96.
+The separate 28-case Never corpus passed 10 accepted parity cases, 15 invalid
+rejections and 3 explicit legal-unsupported comparison boundaries, with native
+build/check paths at workers 1/8. Raw records, compiler hashes and oracle identity
+are retained in `experiments/results/20261015-m8a-loops-differential.jsonl` and
+`experiments/results/20261015-m8a-never-differential.jsonl`.
+These are correctness experiments, not compiler latency benchmarks or speedup
+claims. Labels, for loops, general while expressions and full Rust remain open.
+
 ## 2026-10-15: Checked scalar function bodies become immutable graph facts
 
 Revision `2d51558feaea8d4f92b07dc3afb63b2bc3bb7eaa` changes body operation 102
