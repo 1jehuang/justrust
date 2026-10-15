@@ -711,6 +711,19 @@ class FrontendMappingNative(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('JR_FRONTEND_EXECUTION_FLOW'),
                          'requires coherent explicit execution flow compiler and consumer')
     def test_real_itoa_execution_flow(self):
+        exhausted = Path(os.environ['JR_FRONTEND_FLOW_EXHAUSTION_REPLAY']).resolve(strict=True)
+        exhausted_hash = digest(exhausted)
+        result = self.logged([self.client, 'graph', exhausted, '--json', '--large-capture',
+                              '--execution-flow-dag'], 'flow-native-exhaustion-graph')
+        pool, = json.loads(result.stdout)
+        flow = pool['execution_flow_dag']
+        self.assertFalse(flow['records_complete'])
+        for key in ('known_cpu_work_ns', 'known_query_cpu_ns', 'known_task_cpu_ns',
+                    'known_opaque_cpu_ns', 'longest_known_chain_cpu_ns'):
+            self.assertIsNone(flow[key], key)
+        self.assertEqual(flow['longest_known_chain_path'], [])
+        self.assertEqual(flow['longest_known_chain_steps'], [])
+        self.assertEqual(digest(exhausted), exhausted_hash)
         output = self.root / 'libitoa-flow.rlib'
         observations = []
         cold = [self.compile(f'flow-cold-{n}', 4, output, capture=on, execution_flow=True)
@@ -754,7 +767,7 @@ class FrontendMappingNative(unittest.TestCase):
             value = json.loads(path.read_text())
             if value['producer'] == 'rustc-query-admission':
                 value['execution_clock']['pool_epoch_in_query_ns'] = offset
-                for event in value['events']:
+                for event in value['events'] + value['wait_events']:
                     event['at_ns'] += offset
             else:
                 value['timing']['clock_bridge']['pool_epoch_in_query_ns'] = offset

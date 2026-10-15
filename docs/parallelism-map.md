@@ -3,9 +3,17 @@
 Updated October 15, 2026. This supersedes the work/span interpretation in the
 initial `critpath.py` report and the initial FINDINGS critical-path section.
 
-Latest accepted milestone: [named query-execution CPU ownership](query-cpu-ownership-20261015.md)
-now assigns validated exclusive CPU costs to actual admitted query executions.
-It does not yet establish the complete execution DAG or a useful-thread ceiling.
+Latest accepted milestones: [named query-execution CPU ownership](query-cpu-ownership-20261015.md)
+assigns validated exclusive CPU costs to actual admitted query executions, and the
+[observed native fork/join task DAG](observed-task-dag-20261015.md) retains genuine
+instrumented task prerequisites and CPU-chain witnesses. The cold accepted task
+DAG attaches only about 10% of observed CPU. Native invocation-level execution
+flow is being validated to connect the remaining named query CPU, not to infer
+edges from query nesting, worker chronology or whole-job completion.
+Neither accepted milestone establishes the complete execution DAG or a
+useful-thread ceiling. Successful latch readiness and cache publication remain
+separate authority boundaries, and paired performance promotion remains blocked
+by the documented A2 baseline defects and noisy samples.
 
 ## Mathematical target
 
