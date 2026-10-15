@@ -267,6 +267,18 @@ SCENARIOS = [
         "small crate: body edit in this repo, full `test` (the old bench/edit-loop.sh)",
     ),
     Scenario(
+        "justrust-integration-retouch",
+        "justrust",
+        ["test", "--test", "remote_agent"],
+        Edit(
+            "justrust/tests/remote_agent.rs",
+            "//! Protocol tests for `justrust __agent`, run locally as a subprocess (no\n",
+            "//! Protocol tests for `justrust __agent`, run locally as a subprocess (no\n",
+        ),
+        "identical-content retouch of an integration test embedding CARGO_BIN_EXE: "
+        "same-target artifact reuse without changing its runtime executable path",
+    ),
+    Scenario(
         "desktop-workspace-test",
         "desktop",
         ["test", "--workspace", "--no-fail-fast"],
@@ -936,6 +948,7 @@ def load_scheduler_hints(path: Path) -> tuple[bytes, dict]:
 
 OPTIMIZATION_CONTROLS = (
     "JUSTRUST_SHADOW",
+    "JUSTRUST_LOCALCACHE", "JUSTRUST_LOCALCACHE_TARGET_BOUND",
     "JUSTRUST_TEST_FILTER_COMPILE", "JUSTRUST_CACHE_PROC_MACROS",
     "JUSTRUST_CUTOFF", "JUSTRUST_CARGO_CUTOFF", "JUSTRUST_CARGO_FORK",
     "JUSTRUST_CARGO_DAEMON", "JUSTRUST_CARGO_DAEMON_TRACE",

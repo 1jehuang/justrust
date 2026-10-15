@@ -51,6 +51,14 @@ class HostedMeasurements(unittest.TestCase):
                                           "CACHE_PUBLISH_TOKEN": "secret"}, clear=True):
             self.assertEqual(suite.optimization_env(), {"JUSTRUST_CARGO_CRITICAL_PATH": "1"})
 
+    def test_workspace_cache_controls_recorded_without_machine_local_paths(self):
+        controls = {"JUSTRUST_LOCALCACHE": "1", "JUSTRUST_LOCALCACHE_TARGET_BOUND": "1"}
+        with patch.dict(suite.os.environ, {**controls,
+                                          "JUSTRUST_LOCALCACHE_DIR": "/private/cache",
+                                          "CACHE_PUBLISH_TOKEN": "secret"}, clear=True):
+            self.assertEqual(suite.optimization_env(), controls)
+            self.assertEqual(suite.synthetic_stack_controls(), controls)
+
     PHASE_LINE = ("justrust trace: admission identity 54.0 ms | charge 225.0 ms | "
                   "identity_wait 0.0 ms | queue 67.0 ms | total 292.0 ms "
                   "(awaited paths, identity overlaps)")

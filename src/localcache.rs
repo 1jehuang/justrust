@@ -23,7 +23,10 @@
 //!   cargo's fingerprints. Consequence: outputs carry the checkout's absolute
 //!   path (debuginfo `comp_dir`, `CARGO_MANIFEST_DIR`), so the key includes
 //!   the working dir and a checkout at another path (a new `git worktree`)
-//!   does not hit. Outputs naming the target dir as data are still refused.
+//!   does not hit. Outputs naming the target dir as data are stored in a
+//!   separate opt-in tier (`JUSTRUST_LOCALCACHE_TARGET_BOUND=1`) keyed by
+//!   the exact target and profile paths. They can
+//!   hit on a revert in that same directory, never in another build slot.
 //! - **`-C incremental` accepted.** A hit leaves the incremental dir as it
 //!   was. rustc validates incremental state by content hashes, so the next
 //!   real compile is correct, it only reuses less if the state is older.
@@ -47,6 +50,7 @@ use crate::paths;
 use crate::sys::Detach;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const FINISH_ARG: &str = "__localcache-finish";
@@ -96,6 +100,43 @@ pub fn plan(
     )
 }
 
+/// Prefer portable artifacts, then artifacts valid only at this exact target
+/// and profile path. Keep both manifest and result namespaces distinct from
+/// the portable cache so older clients cannot restore a target-bound entry.
+pub fn restore(plan: &Plan, err: &mut dyn Write) -> Option<depcache::Hit> {
+    restore_with(plan, err, target_bound_enabled())
+}
+
+fn target_bound_enabled() -> bool {
+    matches!(
+        std::env::var("JUSTRUST_LOCALCACHE_TARGET_BOUND").as_deref(),
+        Ok("1" | "on" | "true" | "yes")
+    )
+}
+
+fn restore_with(plan: &Plan, err: &mut dyn Write, target_bound: bool) -> Option<depcache::Hit> {
+    plan.restore(err).or_else(|| {
+        target_bound
+            .then(|| target_bound_plan(plan).restore(err))
+            .flatten()
+    })
+}
+
+fn target_bound_key(key: &str, norm: &depcache::Norm) -> String {
+    let mut h = H128::new();
+    h.field(b"local-target-bound-v1");
+    h.field(key.as_bytes());
+    h.field(norm.target.as_bytes());
+    h.field(norm.profile.as_bytes());
+    h.hex()
+}
+
+fn target_bound_plan(plan: &Plan) -> Plan {
+    let mut scoped = plan.clone();
+    scoped.base = target_bound_key(&plan.base, &plan.norm);
+    scoped
+}
+
 /// What the shim hands the finisher.
 #[derive(Serialize, Deserialize)]
 struct Staged {
@@ -109,13 +150,17 @@ struct Staged {
     target: String,
     target_inputs: Vec<String>,
     manifest: PathBuf,
+    /// Exact-target fallback. Absent in stages made by older binaries, which
+    /// must still refuse nonportable output instead of publishing it globally.
+    #[serde(default)]
+    target_bound: Option<(PathBuf, String)>,
 }
 
 /// After a successful compile: key the inputs, reflink the outputs into a
 /// staging dir, and leave the rest to a background finisher. Returns the
 /// result key.
 pub fn stage(plan: &Plan, start: f64, wall: f64, stderr: &[Vec<u8>]) -> Option<String> {
-    stage_with(plan, start, wall, stderr, false)
+    stage_with(plan, start, wall, stderr, false, target_bound_enabled())
 }
 
 /// `stage`; `sync` commits in this process instead of a finisher (tests).
@@ -125,6 +170,7 @@ fn stage_with(
     wall: f64,
     stderr: &[Vec<u8>],
     sync: bool,
+    target_bound: bool,
 ) -> Option<String> {
     let dep_info = plan
         .out_dir
@@ -164,7 +210,22 @@ fn stage_with(
         append_once(&manifest, &line)?;
         return Some(entry.out);
     }
-    if volatile(&manifest, &entry) {
+    let scoped = target_bound.then(|| {
+        (
+            target_bound_plan(plan).manifest(),
+            target_bound_key(&entry.out, &plan.norm),
+        )
+    });
+    if let Some((manifest, out)) = &scoped
+        && root.join("o").join(out).join("meta.json").is_file()
+    {
+        let mut scoped_entry = entry.clone();
+        scoped_entry.out = out.clone();
+        depcache::touch(&root.join("o").join(out).join("meta.json"));
+        append_once(manifest, &serde_json::to_string(&scoped_entry).ok()?)?;
+        return Some(scoped_entry.out);
+    }
+    if volatile(&entry) {
         return None;
     }
 
@@ -239,6 +300,7 @@ fn stage_with(
         target: plan.norm.target.clone(),
         target_inputs,
         manifest,
+        target_bound: scoped,
     };
     let out = staged.entry.out.clone();
     if !ok
@@ -258,27 +320,14 @@ fn stage_with(
     Some(out)
 }
 
-/// Stored this many times with the same sources but other values of a
-/// tracked env var: the var changes on every build (a build script stamping
-/// the build time, like Jcode Desktop's `JCODE_DESKTOP_BUILD_ID`), so new
-/// entries can never hit. Stop storing them (FINDINGS 50).
-const VOLATILE_AFTER: usize = 2;
-
-fn volatile(manifest: &Path, entry: &Entry) -> bool {
-    if entry.env.iter().any(|(_, v)| {
+/// A tracked env var contains a fresh build-time stamp, so this result is
+/// unlikely to be reused. Other env changes must remain cacheable: even
+/// several distinct values can be a finite set of stable build inputs.
+fn volatile(entry: &Entry) -> bool {
+    entry.env.iter().any(|(_, v)| {
         v.as_deref()
             .is_some_and(|v| is_fresh_stamp(v, paths::now()))
-    }) {
-        return true;
-    }
-    let Ok(text) = std::fs::read_to_string(manifest) else {
-        return false;
-    };
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
-        .filter(|e| e.inputs == entry.inputs && e.env != entry.env)
-        .count()
-        >= VOLATILE_AFTER
+    })
 }
 
 /// A Unix time in seconds or milliseconds from the last ten minutes: a
@@ -333,7 +382,8 @@ pub fn finish_main(dir: PathBuf) -> ! {
         libc::syscall(libc::SYS_ioprio_set, 1, 0, 3 << 13);
     }
     let t0 = paths::now();
-    let ok = finish(&dir).is_some();
+    let outcome = finish(&dir);
+    let ok = outcome.is_some();
     if !ok {
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -341,6 +391,7 @@ pub fn finish_main(dir: PathBuf) -> ! {
         let cpu = crate::sys::self_cpu();
         let line = serde_json::json!({
             "t": t0, "secs": paths::now() - t0, "cpu": cpu, "ok": ok,
+            "target_bound": outcome,
         });
         let _ = paths::append_line(&root.join("finish.jsonl"), &line.to_string());
         maybe_gc(root);
@@ -349,8 +400,8 @@ pub fn finish_main(dir: PathBuf) -> ! {
 }
 
 /// Hash and check the staged outputs, then publish them.
-fn finish(dir: &Path) -> Option<()> {
-    let staged: Staged =
+fn finish(dir: &Path) -> Option<bool> {
+    let mut staged: Staged =
         serde_json::from_slice(&std::fs::read(dir.join("stage.json")).ok()?).ok()?;
     let mut outs = Outputs {
         files: Vec::new(),
@@ -358,6 +409,7 @@ fn finish(dir: &Path) -> Option<()> {
         wall: staged.wall,
         glibc: None,
     };
+    let mut target_bound = false;
     for name in &staged.files {
         let p = dir.join(name);
         let text = name.ends_with(".d");
@@ -367,7 +419,10 @@ fn finish(dir: &Path) -> Option<()> {
         if !text {
             let bytes = std::fs::read(&p).ok()?;
             if !depcache::target_refs_are_inputs(&bytes, &staged.target, &staged.target_inputs) {
-                return None;
+                // Do not weaken the portable guard. Runtime paths such as
+                // CARGO_BIN_EXE remain valid only in their original target.
+                staged.target_bound.as_ref()?;
+                target_bound = true;
             }
             if !name.ends_with(".rlib") && !name.ends_with(".rmeta") {
                 let need = depcache::needed_glibc(&p)?;
@@ -381,6 +436,11 @@ fn finish(dir: &Path) -> Option<()> {
             hash: depcache::file_hash(&p, false)?,
             text,
         });
+    }
+    if target_bound {
+        let (manifest, out) = staged.target_bound.take()?;
+        staged.manifest = manifest;
+        staged.entry.out = out;
     }
     let _ = std::fs::remove_file(dir.join("stage.json"));
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&outs).ok()?).ok()?;
@@ -397,7 +457,8 @@ fn finish(dir: &Path) -> Option<()> {
     append_once(
         &staged.manifest,
         &serde_json::to_string(&staged.entry).ok()?,
-    )
+    )?;
+    Some(target_bound)
 }
 
 fn stamp(m: &std::fs::Metadata) -> String {
@@ -482,6 +543,231 @@ mod tests {
         assert!(!is_fresh_stamp("42", now));
     }
 
+    #[test]
+    fn stable_env_variants_remain_cacheable() {
+        // Three or more values do not establish that an input is volatile.
+        // Admission must not depend on which variants were stored first.
+        let entries: Vec<Entry> = [Some("red"), Some("blue"), Some("green"), None]
+            .into_iter()
+            .map(|value| Entry {
+                inputs: vec![("src/lib.rs".into(), "same-source-hash".into())],
+                env: vec![("FLAVOR".into(), value.map(str::to_owned))],
+                out: String::new(),
+            })
+            .collect();
+        for entry in entries.iter().chain(entries.iter().rev()) {
+            assert!(!volatile(entry), "stable env variant: {:?}", entry.env);
+        }
+    }
+
+    #[test]
+    fn fresh_seconds_and_milliseconds_env_stamps_skip_admission() {
+        let now = paths::now();
+        for value in [
+            format!("{}", now as u64),
+            format!("{}", (now * 1000.0) as u64),
+        ] {
+            let entry = Entry {
+                inputs: vec![("src/lib.rs".into(), "same-source-hash".into())],
+                env: vec![("BUILD_ID".into(), Some(value))],
+                out: String::new(),
+            };
+            assert!(volatile(&entry), "fresh build stamp: {:?}", entry.env);
+        }
+        let fixed_epoch = Entry {
+            inputs: vec![("src/lib.rs".into(), "same-source-hash".into())],
+            env: vec![("SOURCE_DATE_EPOCH".into(), Some("1791700000".into()))],
+            out: String::new(),
+        };
+        assert!(
+            !volatile(&fixed_epoch),
+            "stable old epoch remains cacheable"
+        );
+    }
+
+    #[test]
+    fn legacy_stages_preserve_the_portable_guard() {
+        let base =
+            std::env::temp_dir().join(format!("justrust-localcache-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for (name, portable, scoped) in [
+            ("portable", true, false),
+            ("refused", false, false),
+            ("scoped", false, true),
+        ] {
+            let root = base.join(name);
+            let dir = root.join("s/stage");
+            std::fs::create_dir_all(&dir).unwrap();
+            let target = root.join("target").display().to_string();
+            let bytes = if portable {
+                "portable metadata".to_owned()
+            } else {
+                format!("runtime data: {target}/debug/current")
+            };
+            let file = dir.join("unit.rmeta");
+            std::fs::write(&file, bytes).unwrap();
+            std::fs::write(
+                dir.join("unit.rmeta.stamp"),
+                stamp(&std::fs::metadata(&file).unwrap()),
+            )
+            .unwrap();
+            let manifest = root.join("m/portable.jsonl");
+            let scoped_manifest = root.join("m/scoped.jsonl");
+            let staged = Staged {
+                entry: Entry {
+                    inputs: vec![],
+                    env: vec![],
+                    out: "portable".into(),
+                },
+                files: vec!["unit.rmeta".into()],
+                stderr: vec![],
+                wall: 1.0,
+                target,
+                target_inputs: vec![],
+                manifest: manifest.clone(),
+                target_bound: scoped.then(|| (scoped_manifest.clone(), "scoped".into())),
+            };
+            let mut value = serde_json::to_value(&staged).unwrap();
+            if !scoped {
+                value.as_object_mut().unwrap().remove("target_bound");
+            }
+            std::fs::write(dir.join("stage.json"), value.to_string()).unwrap();
+            assert_eq!(finish(&dir), (portable || scoped).then_some(scoped));
+            assert_eq!(manifest.exists(), portable);
+            assert_eq!(root.join("o/portable/meta.json").exists(), portable);
+            assert_eq!(scoped_manifest.exists(), scoped);
+            assert_eq!(root.join("o/scoped/meta.json").exists(), scoped);
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn target_bound_outputs_reuse_only_the_exact_target_and_profile() {
+        if std::env::var_os("JR_TARGET_BOUND_TEST_CHILD").is_none() {
+            // Other tests fork while cache restoration has an executable open
+            // for writing. Their pre-exec children can temporarily inherit the
+            // fd and cause ETXTBSY. Isolate this fixture, without retrying or
+            // hiding any restore or executable errors.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "localcache::tests::target_bound_outputs_reuse_only_the_exact_target_and_profile",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("JR_TARGET_BOUND_TEST_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let base = std::env::temp_dir().join(format!(
+            "justrust-localcache-target-bound-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        let runtime_data = ws.join("t1/debug/current.txt");
+        let source = format!(
+            "fn main() {{ print!(\"{{}}\", std::fs::read_to_string({:?}).unwrap()); }}",
+            runtime_data.to_str().unwrap()
+        );
+        std::fs::write(ws.join("src/main.rs"), &source).unwrap();
+        let rustc = paths::find_on_path("rustc", Path::new("/nonexistent")).unwrap();
+        let build = |target: &str, profile: &str| {
+            let out = ws.join(target).join(profile).join("deps");
+            std::fs::create_dir_all(&out).unwrap();
+            let args: Vec<OsString> = [
+                "--crate-name",
+                "bound",
+                "--edition=2021",
+                "src/main.rs",
+                "--crate-type",
+                "bin",
+                "--emit=dep-info,link",
+                "-C",
+                "extra-filename=-0123456789abcdef",
+                "--out-dir",
+                out.to_str().unwrap(),
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+            let plan = depcache::plan_with(
+                &rustc,
+                &args,
+                &[],
+                Some(LocalKey {
+                    root: base.join("cache"),
+                    salt: vec![],
+                    cwd: Some(ws.clone()),
+                }),
+            )
+            .unwrap();
+            (plan, args)
+        };
+        let (plan, args) = build("t1", "debug");
+        std::fs::write(&runtime_data, "first").unwrap();
+        assert!(
+            std::process::Command::new(&rustc)
+                .args(&args)
+                .current_dir(&ws)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(stage_with(&plan, paths::now() - 2.0, 1.5, &[], true, true).is_some());
+        assert!(
+            !plan.manifest().exists(),
+            "target-bound output must never be advertised as portable"
+        );
+        assert!(plan.restore(&mut Vec::new()).is_none());
+        let binary = plan.out_dir.join(format!(
+            "bound-0123456789abcdef{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        std::fs::remove_file(&binary).unwrap();
+        assert!(restore_with(&plan, &mut Vec::new(), false).is_none());
+        let hit = restore_with(&plan, &mut Vec::new(), true).expect("same-target restore");
+        assert_eq!(hit.saved_secs, 1.5);
+        assert_eq!(
+            std::process::Command::new(&binary).output().unwrap().stdout,
+            b"first"
+        );
+        // A runtime path must continue resolving the current file, not freeze
+        // its old contents into the key or replay a different target's path.
+        std::fs::write(&runtime_data, "second").unwrap();
+        assert_eq!(
+            std::process::Command::new(&binary).output().unwrap().stdout,
+            b"second"
+        );
+        let (other_target, _) = build("t2", "debug");
+        let (other_profile, _) = build("t1", "release");
+        for other in [&other_target, &other_profile] {
+            assert_eq!(
+                plan.base, other.base,
+                "portable base is deliberately shared"
+            );
+            assert!(restore_with(other, &mut Vec::new(), true).is_none());
+        }
+        std::fs::write(ws.join("src/main.rs"), "fn main() {}").unwrap();
+        assert!(restore_with(&plan, &mut Vec::new(), true).is_none());
+        std::fs::write(ws.join("src/main.rs"), &source).unwrap();
+        assert!(restore_with(&plan, &mut Vec::new(), true).is_some());
+        std::fs::remove_dir_all(plan.root.join("o").join(&hit.out)).unwrap();
+        assert!(
+            restore_with(&plan, &mut Vec::new(), true).is_none(),
+            "eviction fails open"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
     /// A local unit stored by one target dir is restored into another one,
     /// with its dep-info rewritten and stderr replayed, and misses once a
     /// source changes.
@@ -536,14 +822,14 @@ mod tests {
             .status()
             .unwrap();
         assert!(st.success());
-        assert!(stage_with(&p1, start, 1.5, &[b"warning: x\n".to_vec()], true).is_some());
+        assert!(stage_with(&p1, start, 1.5, &[b"warning: x\n".to_vec()], true, false).is_some());
 
         let (p2, _) = build("t2");
         assert_eq!(
             p1.base, p2.base,
             "base key must not depend on the target dir"
         );
-        let hit = p2.restore(&mut err).expect("hit in a second target dir");
+        let hit = restore(&p2, &mut err).expect("hit in a second target dir");
         assert_eq!(hit.saved_secs, 1.5);
         assert_eq!(String::from_utf8_lossy(&err), "warning: x\n");
         let d = std::fs::read_to_string(ws.join("t2/debug/deps/w-0123456789abcdef.d")).unwrap();

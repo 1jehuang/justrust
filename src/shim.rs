@@ -214,7 +214,7 @@ fn run_unit(real: &PathBuf, args: &[OsString], run_dir: &std::path::Path) -> Opt
     let plan_secs = paths::now() - plan_t0;
     if let Some(lp) = &local_plan {
         let start = paths::now();
-        if let Some(hit) = lp.restore(&mut std::io::stderr()) {
+        if let Some(hit) = crate::localcache::restore(lp, &mut std::io::stderr()) {
             let end = paths::now();
             let mut unit = described;
             unit.start = start;

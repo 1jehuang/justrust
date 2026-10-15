@@ -7252,3 +7252,18 @@ same ledger and checks publication neutrality only. Full lifecycle/resource/
 pipeline completeness remains false, CPU/span remain null, and actual rare IO
 fault injection and helper-quiescent teardown remain unproven. Detailed checks
 and public output are in `docs/native-resource-prefix-results-20261014.md`.
+
+## 2026-10-15: hosted workspace-cache admission and target-bound reuse
+
+Hosted attributed telemetry shows approximately 97.8% observed unit reuse when
+Cargo-fresh units are included, versus 2.1% workspace-cache lookup hits. These
+are not lifetime or compute-weighted figures. Removed the invalid two-stable-env
+variant admission cutoff and added an opt-in exact-target/profile artifact tier
+(`JUSTRUST_LOCALCACHE_TARGET_BOUND=1`) without relaxing portable path guards.
+Pinned integration retouch changed from 0/3 to 5/5 cache hits. Suite comparison
+reports 0.77s to 0.49s (-37%), explicitly uncontrolled/noisy, not a broad speedup.
+Hosted reuse run `20261014-175613844-4021580` passed 22 tests with one cache hit;
+full hosted gate `20261014-175314579-3984435` passed 600 tests. Installed locally.
+Comprehensive baseline timed out at 600 seconds, so the tier remains opt-in.
+Details, risks, provenance and incomplete raw unrecorded probe are documented in
+`docs/cache-reuse-20261015.md`; cited exported runs accompany the measurements.
