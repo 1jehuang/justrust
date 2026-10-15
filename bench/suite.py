@@ -463,13 +463,41 @@ def restore(root: Path, edit: Edit | None) -> None:
         shutil.copy2(pristine(root, edit.file), root / edit.file)
 
 
+FOREIGN_RUSTC_POLICY = "proc-stat-live-excluding-Z-X-x-fail-closed-v1"
+
+
+def rustc_process_is_live(pid: int, proc: Path = Path("/proc")) -> bool:
+    try:
+        record = (proc / str(pid) / "stat").read_text()
+        prefix, separator, remainder = record.partition(" (")
+        end = remainder.rfind(")")
+        fields = remainder[end + 1:].split()
+        if (not separator or prefix != str(pid) or end < 0
+                or remainder[:end] != "rustc" or len(fields) < 2
+                or fields[0] not in ("R", "S", "D", "Z", "T", "t", "X", "x", "K", "W", "P", "I")
+                or not fields[1].isdigit()):
+            raise ValueError("malformed or changed rustc process identity/state")
+        return fields[0] not in ("Z", "X", "x")
+    except (OSError, ValueError) as error:
+        raise RuntimeError("bench: foreign rustc state unknown for pid " + str(pid)) from error
+
+
 def foreign_load() -> tuple[float, int]:
     load = float(Path("/proc/loadavg").read_text().split()[0])
+    if not 0 <= load < float("inf"):
+        raise RuntimeError("bench: foreign load unknown")
     try:
-        rustc = int(sh(["pgrep", "-c", "-x", "rustc"]))
-    except subprocess.CalledProcessError:
-        rustc = 0
-    return load, rustc
+        result = subprocess.run(["pgrep", "-x", "rustc"], capture_output=True, text=True)
+    except OSError as error:
+        raise RuntimeError("bench: foreign rustc discovery unknown") from error
+    if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+        return load, 0
+    identifiers = result.stdout.splitlines()
+    if (result.returncode != 0 or result.stderr.strip() or not identifiers
+            or any(not re.fullmatch(r"[1-9][0-9]*", pid) for pid in identifiers)
+            or len(identifiers) != len(set(identifiers))):
+        raise RuntimeError("bench: foreign rustc discovery unknown")
+    return load, sum(rustc_process_is_live(int(pid)) for pid in identifiers)
 
 
 def wait_quiet(max_secs: float) -> None:
@@ -1214,6 +1242,7 @@ def env_info() -> dict:
         "ncpu": os.cpu_count(),
         "mem_gb": round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30, 1),
         "kernel": platform.release(),
+        "foreign_rustc_policy": FOREIGN_RUSTC_POLICY,
         "justrust": version,
         # Legacy label retained for old compare consumers. Repository HEAD is
         # not necessarily the installed executable's build revision.
@@ -1425,7 +1454,7 @@ def cmd_compare(args) -> None:
             if not isinstance(env.get("execution", "local"), str) or not env.get("execution", "local"):
                 reasons.append(f"{label}: malformed execution environment provenance")
         if isinstance(ea, dict) and isinstance(eb, dict):
-            for key in ("snapshots", "host", "cpu", "ncpu", "execution"):
+            for key in ("snapshots", "host", "cpu", "ncpu", "execution", "foreign_rustc_policy"):
                 if ea.get(key, "local" if key == "execution" else None) != eb.get(key, "local" if key == "execution" else None):
                     reasons.append(f"different {key}: compare the same pinned workload, machine and execution mode")
         if reasons:
@@ -1447,6 +1476,8 @@ def cmd_compare(args) -> None:
         return
     if a["env"]["snapshots"] != b["env"]["snapshots"]:
         sys.exit("bench: different pinned snapshots, numbers are not comparable")
+    if a["env"].get("foreign_rustc_policy") != b["env"].get("foreign_rustc_policy"):
+        sys.exit("bench: different foreign_rustc_policy, numbers are not comparable")
     if a["env"].get("host") != b["env"].get("host"):
         print("WARNING: different machines", file=sys.stderr)
     if a["env"].get("execution", "local") != b["env"].get("execution", "local"):

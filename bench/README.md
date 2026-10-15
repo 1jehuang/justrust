@@ -90,6 +90,16 @@ smoke evidence when assembling a prefix. Matched comparisons require the same
 declared target. With explicit output names, attested runs keep separate partial
 files under `bench/results/partial/<output-stem>.json`, preserving earlier failures.
 
+New measurements record `foreign_rustc_policy` in environment provenance. The
+live-process policy excludes only proven `/proc/<pid>/stat` zombie/dead states
+`Z`, `X`, and `x`. Sleeping, blocked, stopped, and runnable compilers still count.
+Discovery, read, identity, or state failures abort with unknown coverage instead
+of becoming zero. Comparisons reject mixed policies, so apply this consistently
+to both sides of a new pair, never retroactively to old runs. Load and average
+other-CPU thresholds are unchanged. The pinned recorder's raw sampled rustc count
+may still include zombies and is retained unchanged. A zero live-before count
+does not imply zero sampled legacy count or a quiet overall CPU window.
+
 Hashing is outside measured intervals but warms compiler/driver OS page caches.
 Compare only A/B runs using the same attestation protocol; `suite.py compare`
 rejects attested versus legacy-unattested results. A cold target directory is
