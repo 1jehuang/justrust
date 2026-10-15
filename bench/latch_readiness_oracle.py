@@ -80,7 +80,7 @@ def _rows(flow, prefix, plural):
     return rows
 
 
-def _readiness_authority(query, pool, nodes, edges, scopes, lifetimes):
+def _readiness_authority(query, pool, nodes, edges, scopes, lifetimes, *, allow_unbound=False):
     """Validate row-indexed control obligations before the generic CPU DAG pass."""
     flow = pool['execution_flow']
     for key in ('pool_observer', 'pool_epoch_in_query_ns'):
@@ -139,42 +139,65 @@ def _readiness_authority(query, pool, nodes, edges, scopes, lifetimes):
             special.add(pair)
         visibility_nodes.add(row['visibility_gap'])
 
-    registered_ids, consumed_count = set(), 0
+    registered_ids, consumed_count, unbound_count = set(), 0, 0
     for row in attempts.values():
         require(set(row) == {'id', 'query_context', 'waitee_job', 'consumer_job', 'caller_scope', 'wait_id',
                              'mode', 'outcome', 'begin', 'wait_gap', 'readiness', 'wake_gap', 'consumed'},
                 'invalid original WaitRow fields')
-        context, waitee, consumer = uint(row['query_context']), uint(row['waitee_job']), uint(row['consumer_job'])
-        require(consumer > 0 and consumer != waitee and (context, waitee) in lifetimes
-                and (context, consumer) in lifetimes, 'unbound or foreign original wait endpoints')
-        require(row['outcome'] == 'consumed' and row['mode'] in ('registered', 'already_ready'),
+        context, waitee = uint(row['query_context']), uint(row['waitee_job'])
+        unbound = allow_unbound and row['outcome'] == 'consumed_unbound'
+        consumer = row['consumer_job']
+        if consumer is not None:
+            consumer = uint(consumer)
+            require(consumer > 0 and consumer != waitee and (context, consumer) in lifetimes,
+                    'foreign original wait consumer')
+        require((context, waitee) in lifetimes and (unbound or consumer is not None),
+                'unbound or foreign original wait endpoints')
+        require((row['outcome'] == 'consumed' or unbound) and row['mode'] in ('registered', 'already_ready'),
                 'positive readiness rejects cycle, poison, unwind, active or unbound encounter')
-        scope_id = uint(row['caller_scope'])
-        require(scope_id in scopes, 'wait caller lacks exact original invocation')
-        scope = scopes[scope_id]
-        require((scope['query_context'], scope['query_job']) == (context, consumer)
-                and scope['outcome'] == 'returned', 'saved caller is another or unsuccessful invocation')
+        scope_id = row['caller_scope']
+        if scope_id is not None:
+            scope_id = uint(scope_id)
+            require(scope_id in scopes, 'wait caller lacks exact original invocation')
+            scope = scopes[scope_id]
+            require((scope['query_context'], scope['query_job']) == (context, consumer)
+                    and scope['outcome'] == 'returned', 'saved caller is another or unsuccessful invocation')
+        else:
+            require(unbound, 'successful wait lacks saved invocation')
+            scope = None
         begin = gate(row['begin'], 'wait_begin', scope_id)
         gap = gate(row['wait_gap'], 'cut', scope_id, 'query_wait')
-        wake = gate(row['wake_gap'], 'cut', scope_id, 'wake_to_consume')
-        consumed = gate(row['consumed'], 'wait_consumed', scope_id)
+        wake = gate(row['wake_gap'], 'cut', scope_id,
+                    'readiness_unavailable' if unbound else 'wake_to_consume')
+        consumed = None if unbound else gate(row['consumed'], 'wait_consumed', scope_id)
+        if unbound:
+            require(row['consumed'] is None, 'unbound encounter invents successful consumption gate')
         require(gap['task'] is None and not incoming[row['wait_gap']],
                 'wait/help gap must be an independent root, never caller ancestry')
-        require(begin['at_ns'] <= gap['at_ns'] <= wake['at_ns'] <= consumed['at_ns'],
+        end_at = wake['at_ns'] if unbound else consumed['at_ns']
+        require(begin['at_ns'] <= gap['at_ns'] <= wake['at_ns'] <= end_at,
                 'invalid native wait encounter chronology')
-        entry, exit = nodes[scope['entry']]['at_ns'], nodes[scope['exit']]['at_ns']
-        require(entry <= begin['at_ns'] <= consumed['at_ns'] <= exit,
-                'wait escapes saved exact invocation lifetime')
-        start, end = lifetimes[context, consumer]
-        require(start <= begin['at_ns'] <= consumed['at_ns'] <= end, 'wait escapes consumer admission lifetime')
-        ready_id = uint(row['readiness'])
-        require(ready_id in ready, 'wait transfer lacks same original published readiness row')
-        producer = ready[ready_id]
-        require((producer['query_context'], producer['query_job']) == (context, waitee),
-                'readiness transfer crosses original latch/producer')
-        prerequisite = nodes[producer['prerequisite']]
-        visibility = nodes[producer['visibility_gap']]
-        require(visibility['at_ns'] <= consumed['at_ns'], 'consumption precedes published prerequisite visibility')
+        if scope is not None:
+            entry, exit = nodes[scope['entry']]['at_ns'], nodes[scope['exit']]['at_ns']
+            require(entry <= begin['at_ns'] <= end_at <= exit,
+                    'wait escapes saved exact invocation lifetime')
+        if consumer is not None:
+            start, end = lifetimes[context, consumer]
+            require(start <= begin['at_ns'] <= end_at <= end, 'wait escapes consumer admission lifetime')
+        ready_id = row['readiness']
+        producer = None
+        if ready_id is not None:
+            ready_id = uint(ready_id)
+            require(ready_id in ready, 'wait transfer lacks same original published readiness row')
+            producer = ready[ready_id]
+            require((producer['query_context'], producer['query_job']) == (context, waitee),
+                    'readiness transfer crosses original latch/producer')
+        require(unbound or producer is not None, 'successful transfer lacks published readiness')
+        if producer is not None:
+            prerequisite = nodes[producer['prerequisite']]
+            visibility = nodes[producer['visibility_gap']]
+            if not unbound:
+                require(visibility['at_ns'] <= end_at, 'consumption precedes published prerequisite visibility')
         if row['mode'] == 'registered':
             wait_id = uint(row['wait_id'])
             require(wait_id in waits and wait_id not in registered_ids,
@@ -185,11 +208,21 @@ def _readiness_authority(query, pool, nodes, edges, scopes, lifetimes):
                     'registered encounter differs from original consumer/waitee or completed reason')
             times = {kind: value[1] for kind, value in original['stages'].items()}
             require(begin['at_ns'] <= times['registered'] <= times['resumed'] <= wake['at_ns']
-                    and prerequisite['at_ns'] <= times['notified'],
+                    and (producer is None or visibility['at_ns'] <= times['notified']),
                     'registered wait/readiness chronology contradicts original lifecycle')
         else:
             require(row['wait_id'] is None, 'already-ready encounter fabricates registered wait')
         boundary = row['begin'], row['wake_gap'], 'wait_boundary'
+        require(outgoing[row['begin']] == {boundary} and incoming[row['wake_gap']] == {boundary},
+                'wait boundary differs from original encounter')
+        if unbound:
+            require(all(kind == 'continuation' and nodes[right]['kind'] == 'cpu_segment'
+                        and nodes[right]['scope_id'] == scope_id
+                        for _, right, kind in outgoing[row['wake_gap']]),
+                    'unbound wake invents consumption obligation')
+            special.add(boundary)
+            unbound_count += 1
+            continue
         required = row['wake_gap'], row['consumed'], 'wait_required'
         transfer = producer['visibility_gap'], row['consumed'], 'readiness_required'
         require(outgoing[row['begin']] == {boundary} and incoming[row['wake_gap']] == {boundary}
@@ -226,23 +259,27 @@ def _readiness_authority(query, pool, nodes, edges, scopes, lifetimes):
         if triple[2] in ('readiness_prepare', 'wait_boundary', 'wait_required', 'readiness_required'):
             require(triple in special, 'unclaimed readiness edge without exact row authority')
     return dict(special_edges=special, consumed_nodes=consumed_nodes, visibility_nodes=visibility_nodes,
-                counts=dict(ready_records_complete=True, wait_records_complete=True,
+                counts=dict(ready_records_complete=True, wait_records_complete=not unbound_count,
                             readiness_rows=len(ready), active_readiness=0, lost_readiness=0,
                             wait_attempts=len(attempts), active_wait_attempts=0, lost_wait_attempts=0,
-                            matched_readiness_transfers=consumed_count, unbound_wait_attempts=0,
+                            matched_readiness_transfers=consumed_count, unbound_wait_attempts=unbound_count,
                             unavailable_readiness_references=0))
 
 
-def latch_readiness_oracle(query, pool):
+def latch_readiness_oracle(query, pool, *, allow_unbound=False):
     """Strict-positive original pool6/flow2 oracle, explicit opt-in only.
 
     Returns consumer-compatible observed flow counts/costs/witness plus readiness
     counters. Registered and already-ready encounters are distinguished using
     original rows, never by timing heuristics. No source dictionary is mutated.
-    Failure/unknown controls must be checked separately, not accepted here.
+    Default failure/unknown controls are rejected, not silently certified.
+    Explicit allow_unbound=True also admits complete original consumed_unbound
+    rows as conservative barriers, never successful transfers. Their exact count
+    is retained and records_complete/wait_records_complete remain false. Other
+    failures, loss, unknown measurements and allocator exhaustion still reject.
     """
     try:
         from .execution_flow_oracle import execution_flow_oracle
     except ImportError:
         from execution_flow_oracle import execution_flow_oracle
-    return execution_flow_oracle(query, pool, readiness=True)
+    return execution_flow_oracle(query, pool, readiness=True, allow_unbound=allow_unbound)

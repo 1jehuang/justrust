@@ -267,7 +267,7 @@ def _task_authority(pool):
     return facts, {task: {'start': starts[task], 'finish': ends[task]} for task in starts}
 
 
-def _execution_flow_oracle(query, pool, readiness=False):
+def _execution_flow_oracle(query, pool, readiness=False, allow_unbound=False):
     """Return independently reconstructed consumer-comparable strict-positive facts.
 
     Raises ValueError on loss/incompleteness, unknown CPU, unassigned segments,
@@ -353,7 +353,7 @@ def _execution_flow_oracle(query, pool, readiness=False):
             from .latch_readiness_oracle import _readiness_authority
         except ImportError:
             from latch_readiness_oracle import _readiness_authority
-        policy = _readiness_authority(query, pool, nodes, edges, scopes, lifetimes)
+        policy = _readiness_authority(query, pool, nodes, edges, scopes, lifetimes, allow_unbound=allow_unbound)
     assigned, costs, totals = set(), {}, Counter()
     for ident, node in nodes.items():
         allowed_kinds = KINDS | ({'readiness_prerequisite', 'wait_begin', 'wait_consumed'} if readiness else set())
@@ -485,10 +485,11 @@ def _execution_flow_oracle(query, pool, readiness=False):
                 cpu_work_ns=None, execution_span_ns=None, parallelism=None)
     if policy is not None:
         result.update(policy['counts'])
+        result['records_complete'] = policy['counts']['ready_records_complete'] and policy['counts']['wait_records_complete']
     return result
 
 
-def execution_flow_oracle(query, pool, *, readiness=False):
+def execution_flow_oracle(query, pool, *, readiness=False, allow_unbound=False):
     """Strict original query5/6 + pool5/timing2 oracle, no input mutation.
 
     Explicit readiness=True selects pool6/flow2 and strict latch-row authority.
@@ -500,7 +501,8 @@ def execution_flow_oracle(query, pool, *, readiness=False):
     This is not a validator for unrelated query read/cache/dispatch subprotocols.
     """
     try:
-        require(type(readiness) is bool, 'readiness policy must be explicit bool')
-        return _execution_flow_oracle(query, pool, readiness=readiness)
+        require(type(readiness) is bool and type(allow_unbound) is bool, 'readiness policy must be explicit bool')
+        require(not allow_unbound or readiness, 'unbound policy requires explicit readiness')
+        return _execution_flow_oracle(query, pool, readiness=readiness, allow_unbound=allow_unbound)
     except (KeyError, TypeError, IndexError) as error:
         raise ValueError(f'malformed original flow authority: {error}') from error

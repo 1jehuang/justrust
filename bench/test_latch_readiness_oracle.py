@@ -62,6 +62,61 @@ def fixture(registered=True):
     return query, pool
 
 
+def unbound_fixture(registered=True):
+    query, pool = fixture(registered)
+    flow = pool['execution_flow']
+    row = flow['wait_attempts'][0]
+    row.update(outcome='consumed_unbound', consumed=None, readiness=None)
+    flow['nodes'][7]['gap_reason'] = 'readiness_unavailable'
+    flow['nodes'] = [n for n in flow['nodes'] if n['id'] != 9]
+    flow['edges'] = [e for e in flow['edges'] if e['kind'] not in ('wait_required', 'readiness_required')]
+    for e in flow['edges']:
+        if e['from'] == 9:
+            e['from'] = 8
+    mapping = {n['id']: index for index, n in enumerate(flow['nodes'], 1)}
+    for n in flow['nodes']:
+        n['id'] = mapping[n['id']]
+    for index, e in enumerate(flow['edges'], 1):
+        e.update(id=index, **{'from': mapping[e['from']], 'to': mapping[e['to']]})
+    for scope in flow['scopes']:
+        for key in ('entry', 'exit'):
+            scope[key] = mapping[scope[key]]
+    for ready in flow['readiness']:
+        for key in ('prefix', 'prerequisite', 'visibility_gap'):
+            ready[key] = mapping[ready[key]]
+    recount(flow)
+    return query, pool
+
+
+class ConservativeUnboundTests(unittest.TestCase):
+    def test_explicit_policy_retains_costs_but_never_certifies_waits(self):
+        for registered in (True, False):
+            query, pool = unbound_fixture(registered)
+            before = copy.deepcopy((query, pool))
+            with self.assertRaisesRegex(ValueError, 'rejects'):
+                latch_readiness_oracle(query, pool)
+            result = latch_readiness_oracle(query, pool, allow_unbound=True)
+            self.assertFalse(result['records_complete'] or result['wait_records_complete'])
+            self.assertTrue(result['ready_records_complete'])
+            self.assertEqual(result['unbound_wait_attempts'], 1)
+            self.assertEqual(result['matched_readiness_transfers'], 0)
+            self.assertEqual(result['known_cpu_work_ns'], 12)
+            self.assertEqual(result['longest_known_chain_cpu_ns'], 7)
+            self.assertEqual((query, pool), before)
+
+    def test_unbound_cannot_invent_success_or_diagnostic_transfer(self):
+        for mutation in (
+                lambda q, p: p['execution_flow']['wait_attempts'][0].__setitem__('consumed', 9),
+                lambda q, p: p['execution_flow']['nodes'][7].__setitem__('gap_reason', 'wake_to_consume'),
+                lambda q, p: p['execution_flow']['wait_attempts'][0].__setitem__('readiness', 99),
+                lambda q, p: p['execution_flow']['edges'][-2].__setitem__('kind', 'wait_required'),
+                lambda q, p: q['wait_events'][1].__setitem__('reason', 'cycle')):
+            query, pool = unbound_fixture()
+            mutation(query, pool)
+            with self.assertRaises(ValueError):
+                latch_readiness_oracle(query, pool, allow_unbound=True)
+
+
 class PositiveReadinessTests(unittest.TestCase):
     def test_registered_original_wait_and_two_obligations(self):
         query, pool = fixture()
@@ -223,7 +278,7 @@ class NegativeReadinessTests(unittest.TestCase):
             with self.subTest(producer=outcome):
                 self.reject(lambda q, p: p['execution_flow']['readiness'][0].__setitem__('outcome', outcome), 'unpublished')
         self.reject(lambda q, p: q['wait_events'][1].__setitem__('reason', 'cycle'), 'completed reason')
-        self.reject(lambda q, p: p['execution_flow']['wait_attempts'][0].__setitem__('consumer_job', None), 'unsigned')
+        self.reject(lambda q, p: p['execution_flow']['wait_attempts'][0].__setitem__('consumer_job', None), 'unbound')
 
     def test_actual_original_wait_consumer_waitee_and_lifecycle_required(self):
         self.reject(lambda q, p: q['wait_events'][1].__setitem__('consumer_job_id', 1), 'inconsistent')

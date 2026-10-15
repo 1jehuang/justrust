@@ -27,7 +27,8 @@ def digest(path):
 
 
 def fixture_controls(sink, *, large=False, timing=False, dispatch=False, query_cpu=False,
-                     execution_flow=False):
+                     execution_flow=False, latch_readiness=False):
+    execution_flow = execution_flow or latch_readiness
     query_cpu = query_cpu or execution_flow
     text = str(sink or '-') + '\n' + ('1000000' if large or timing or dispatch or query_cpu else 'default') + '\n'
     if timing or dispatch or query_cpu:
@@ -38,6 +39,8 @@ def fixture_controls(sink, *, large=False, timing=False, dispatch=False, query_c
         text += 'query_cpu\n'
     if execution_flow:
         text += 'execution_flow\n'
+    if latch_readiness:
+        text += 'latch_readiness\n'
     return text
 
 
@@ -160,16 +163,20 @@ class FrontendMappingNative(unittest.TestCase):
         if self._testMethodName == 'test_real_itoa_query_cpu_ownership':
             build_args.extend(['--cfg=frontend_large_capacity', '--cfg=frontend_timing_api',
                                '--cfg=frontend_dispatch_api', '--cfg=frontend_query_cpu_api'])
-        if self._testMethodName == 'test_real_itoa_execution_flow':
+        if self._testMethodName in ('test_real_itoa_execution_flow', 'test_real_itoa_latch_readiness'):
             build_args.extend(['--cfg=frontend_large_capacity', '--cfg=frontend_timing_api',
                                '--cfg=frontend_dispatch_api', '--cfg=frontend_query_cpu_api',
                                '--cfg=frontend_execution_flow_api'])
+        if self._testMethodName == 'test_real_itoa_latch_readiness':
+            build_args.append('--cfg=frontend_latch_readiness_api')
         if os.environ.get('JR_FRONTEND_SCOPE_API'):
             build_args.append('--cfg=frontend_scope_api')
         self.logged(build_args, 'driver-build')
 
     def compile(self, label, threads, output, incremental=None, capture=False, large=False,
-                timing=False, dispatch=False, query_cpu=False, execution_flow=False):
+                timing=False, dispatch=False, query_cpu=False, execution_flow=False,
+                latch_readiness=False):
+        execution_flow = execution_flow or latch_readiness
         query_cpu = query_cpu or execution_flow
         timing = timing or query_cpu
         sink = self.root / (label + '-capture') if capture else None
@@ -180,7 +187,8 @@ class FrontendMappingNative(unittest.TestCase):
         if incremental is not None:
             args.append('-Cincremental=' + str(incremental))
         control = fixture_controls(sink, large=large, timing=timing, dispatch=dispatch,
-                                   query_cpu=query_cpu, execution_flow=execution_flow)
+                                   query_cpu=query_cpu, execution_flow=execution_flow,
+                                   latch_readiness=latch_readiness)
         result = self.logged([self.callback, *args], label, control=control)
         self.assertTrue(output.is_file(), 'real link-emitted rlib required')
         self.assertGreater(output.stat().st_size, 0)
@@ -219,7 +227,12 @@ class FrontendMappingNative(unittest.TestCase):
         if sink is None:
             return artifact, None, args, result.stderr, payload_hashes, executable_hash
         graph_command = [self.client, 'graph', sink, '--json']
-        if execution_flow:
+        if latch_readiness:
+            rejected = self.logged(graph_command + ['--large-capture', '--execution-flow-dag'],
+                                   label + '-implicit-latch-readiness-graph', expected=None)
+            self.assertNotEqual(rejected.returncode, 0, 'pool6 requires explicit readiness analysis')
+            graph_command.append('--latch-readiness-dag')
+        elif execution_flow:
             rejected = self.logged(graph_command + ['--large-capture', '--query-cpu-ownership'],
                                    label + '-implicit-execution-flow-graph', expected=None)
             self.assertNotEqual(rejected.returncode, 0, 'pool5 requires explicit execution flow analysis')
@@ -300,14 +313,18 @@ class FrontendMappingNative(unittest.TestCase):
         if dispatch:
             summary['dispatch'] = self.assert_dispatch_receipts(query, assessments, sink, label,
                                                                query_cpu=query_cpu,
-                                                               execution_flow=execution_flow)
+                                                               execution_flow=execution_flow,
+                                                               latch_readiness=latch_readiness)
         if timing:
             summary['timing'] = self.assert_timed_receipts(query, pools, assessments, sink, label,
                                                         large=large, query_cpu=query_cpu,
-                                                        execution_flow=execution_flow)
+                                                        execution_flow=execution_flow,
+                                                        latch_readiness=latch_readiness)
         if query_cpu:
             summary['query_cpu'] = self.assert_query_cpu_receipts(query, pools, assessments)
-        if execution_flow:
+        if latch_readiness:
+            summary['latch_readiness'] = self.assert_latch_readiness_receipts(query, pools, assessments)
+        elif execution_flow:
             summary['execution_flow'] = self.assert_execution_flow_receipts(query, pools, assessments)
         (self.root / (label + '-inventory.json')).write_text(json.dumps(summary, indent=2))
         print(json.dumps({k: v for k, v in summary.items() if k != 'public'}, sort_keys=True), flush=True)
@@ -378,10 +395,10 @@ class FrontendMappingNative(unittest.TestCase):
         return bindings
 
     def assert_timed_receipts(self, query, pools, assessments, sink, label, *, large,
-                              query_cpu=False, execution_flow=False):
+                              query_cpu=False, execution_flow=False, latch_readiness=False):
         self.assertEqual(len(pools), 1, 'one actual timed native pool required')
         pool = pools[0]
-        self.assertEqual(pool['schema'], 5 if execution_flow else (4 if query_cpu else 3))
+        self.assertEqual(pool['schema'], 6 if latch_readiness else (5 if execution_flow else (4 if query_cpu else 3)))
         clock = query['execution_clock']
         self.assertIsNotNone(clock, 'actual attached query5 clock required')
         self.assertEqual(set(clock), {'query_capture_id', 'pool_capture_id', 'pool_observer',
@@ -513,7 +530,9 @@ class FrontendMappingNative(unittest.TestCase):
             else:
                 shutil.copyfile(path, negative / path.name)
         replay_command = [self.client, 'graph', negative, '--json', '--large-capture']
-        if execution_flow:
+        if latch_readiness:
+            replay_command.append('--latch-readiness-dag')
+        elif execution_flow:
             replay_command.append('--execution-flow-dag')
         if query_cpu:
             replay_command.append('--query-cpu-ownership')
@@ -608,17 +627,35 @@ class FrontendMappingNative(unittest.TestCase):
                     measured_segments=owned_segments, observed_query_owners=len(costs),
                     all_original_owners_checked=True, records_complete=cpu['records_complete'])
 
-    def assert_execution_flow_receipts(self, query, pools, assessments):
+    def assert_latch_readiness_receipts(self, query, pools, assessments):
+        return self.assert_execution_flow_receipts(query, pools, assessments, latch_readiness=True)
+
+    def assert_execution_flow_receipts(self, query, pools, assessments, *, latch_readiness=False):
         from bench.execution_flow_oracle import execution_flow_oracle
+        from bench.latch_readiness_oracle import latch_readiness_oracle
         pool, = pools
-        self.assertEqual(pool['schema'], 5)
-        expected = execution_flow_oracle(query, pool)
+        self.assertEqual(pool['schema'], 6 if latch_readiness else 5)
+        expected = (latch_readiness_oracle(query, pool, allow_unbound=True) if latch_readiness
+                    else execution_flow_oracle(query, pool))
         public = next(a for a in assessments if a['producer'] == 'rustc-thread-pool-join')
-        flow = public['execution_flow_dag']
-        self.assertEqual(flow['scope'], 'observed-query-and-join-control-flow')
-        self.assertTrue(flow['records_complete'], flow['issues'])
-        self.assertEqual(flow['issues'], [])
-        for key in ('nodes', 'edges', 'scopes', 'assigned_cpu_segments',
+        field = 'latch_readiness_dag' if latch_readiness else 'execution_flow_dag'
+        flow = public[field]
+        self.assertEqual(flow['scope'], expected['scope'])
+        self.assertEqual(flow['records_complete'], expected['records_complete'], flow['issues'])
+        if expected['records_complete']:
+            self.assertEqual(flow['issues'], [])
+        else:
+            self.assertTrue(latch_readiness and expected['unbound_wait_attempts'] > 0)
+            self.assertTrue(flow['issues'], 'unqualified readiness needs an explicit limitation')
+        if latch_readiness:
+            for key in ('ready_records_complete', 'wait_records_complete', 'readiness_rows',
+                        'active_readiness', 'lost_readiness', 'wait_attempts', 'active_wait_attempts',
+                        'lost_wait_attempts', 'matched_readiness_transfers', 'unbound_wait_attempts',
+                        'unavailable_readiness_references'):
+                self.assertEqual(flow[key], expected[key], key)
+            self.assertTrue(flow['ready_records_complete'])
+        for key in ('nodes', 'edges', 'scopes', 'assigned_cpu_segments', 'cut_nodes',
+                    'active_scopes', 'lost_nodes', 'lost_edges', 'lost_scopes',
                     'known_cpu_work_ns', 'known_query_cpu_ns', 'known_task_cpu_ns',
                     'known_opaque_cpu_ns', 'longest_known_chain_cpu_ns'):
             self.assertEqual(flow[key], expected[key], key)
@@ -646,6 +683,12 @@ class FrontendMappingNative(unittest.TestCase):
             self.assertEqual(step['kind'], node['kind'])
             self.assertEqual(step['at_ns'], node['at_ns'])
             self.assertEqual(step['segment_id'], node['segment_id'])
+            if latch_readiness:
+                self.assertEqual(step['scope_id'], node['scope_id'])
+                self.assertEqual(step['task'], node['task'])
+                scope = next((s for s in pool['execution_flow']['scopes'] if s['id'] == node['scope_id']), None)
+                self.assertEqual(step['query_context'], scope['query_context'] if scope else None)
+                self.assertEqual(step['query_job'], scope['query_job'] if scope else None)
             if node['kind'] == 'cpu_segment':
                 segment = segments[node['segment_id']]
                 self.assertEqual(step['cpu_ns'], segment['cpu_ns'])
@@ -653,19 +696,34 @@ class FrontendMappingNative(unittest.TestCase):
                     self.assertEqual(step[key], segment[key])
             else:
                 self.assertEqual(step['cpu_ns'], 0)
-        return {key: flow[key] for key in (
+                self.assertIsNone(step['query_name'], 'control gates have no query name authority')
+        receipt = {key: flow[key] for key in (
             'scope', 'records_complete', 'nodes', 'edges', 'scopes', 'assigned_cpu_segments',
             'known_cpu_work_ns', 'known_query_cpu_ns', 'known_task_cpu_ns',
             'known_opaque_cpu_ns', 'longest_known_chain_cpu_ns', 'cut_nodes')}
+        if latch_readiness:
+            receipt.update({key: flow[key] for key in expected if key in (
+                'ready_records_complete', 'wait_records_complete', 'readiness_rows',
+                'active_readiness', 'lost_readiness', 'wait_attempts', 'active_wait_attempts',
+                'lost_wait_attempts', 'matched_readiness_transfers', 'unbound_wait_attempts',
+                'unavailable_readiness_references')})
+            rows = pool['execution_flow']['wait_attempts']
+            receipt['registered_wait_attempts'] = sum(r['mode'] == 'registered' for r in rows)
+            receipt['matched_registered_transfers'] = sum(
+                r['mode'] == 'registered' and r['outcome'] == 'consumed' for r in rows)
+            receipt['already_ready_attempts'] = sum(r['mode'] == 'already_ready' for r in rows)
+        return receipt
 
-    def assert_execution_flow_analyzer(self, evidence):
+    def assert_execution_flow_analyzer(self, evidence, *, latch_readiness=False):
         label = evidence['label']
         sink = self.root / (label + '-capture')
         original = {p.name: digest(p) for p in sink.glob('*.json')}
         output = self.root / (label + '-flow-summary.json')
         graph = self.root / (label + '-flow-public.json')
+        flag = '--latch-readiness-dag' if latch_readiness else '--execution-flow-dag'
+        field = 'latch_readiness_dag' if latch_readiness else 'execution_flow_dag'
         command = ['python3', self.analyzer, '--capture', sink, '--justrust', self.client,
-                   '--large-capture', '--execution-flow-dag', '--graph-output', graph,
+                   '--large-capture', flag, '--graph-output', graph,
                    '--output', output]
         self.logged(command, label + '-flow-analyzer')
         report = json.loads(output.read_text())
@@ -675,13 +733,19 @@ class FrontendMappingNative(unittest.TestCase):
             self.assertNotIn(key, query, 'flow-only analysis acquired an unrelated opt-in')
         pool = next(a for a in native if a['producer'] == 'rustc-thread-pool-join')
         expected = next(a for a in evidence['public']
-                        if a['producer'] == 'rustc-thread-pool-join')['execution_flow_dag']
-        self.assertEqual(pool['execution_flow_dag'], expected)
+                        if a['producer'] == 'rustc-thread-pool-join')[field]
+        self.assertEqual(pool[field], expected)
         summary, = report['captures']
-        compact = summary['execution_flow_dag']
+        compact = summary[field]
         for key in ('scope', 'records_complete', 'known_cpu_work_ns', 'known_query_cpu_ns',
                     'longest_known_chain_cpu_ns'):
             self.assertEqual(compact[key], expected[key], key)
+        if latch_readiness:
+            for key in ('ready_records_complete', 'wait_records_complete', 'readiness_rows',
+                        'active_readiness', 'lost_readiness', 'wait_attempts', 'active_wait_attempts',
+                        'lost_wait_attempts', 'matched_readiness_transfers', 'unbound_wait_attempts',
+                        'unavailable_readiness_references'):
+                self.assertEqual(compact[key], expected[key], key)
         named = [step for step in expected['longest_known_chain_steps']
                  if step['query_name'] is not None]
         named.sort(key=lambda step: (-step['cpu_ns'], step['node_id']))
@@ -757,7 +821,56 @@ class FrontendMappingNative(unittest.TestCase):
             'warm_rmeta_object_consumer_identity': True, 'full_pipeline_complete': False,
             'cpu_work_ns': None, 'execution_span_ns': None}, indent=2))
 
-    def assert_unsupported_flow_clock_offset_refused(self, evidence):
+    @unittest.skipUnless(os.environ.get('JR_FRONTEND_LATCH_READINESS') == '1',
+                         'requires coherent explicit latch readiness compiler and consumer')
+    def test_real_itoa_latch_readiness(self):
+        output = self.root / 'libitoa-readiness.rlib'
+        cold = [self.compile(f'readiness-cold-{n}', 4, output, capture=on, latch_readiness=True)
+                for n, on in enumerate((False, True, False))]
+        self.assert_dispatch_control_neutrality([f'readiness-cold-{n}' for n in range(3)])
+        for first, other in zip(cold, cold[1:]):
+            self.assertEqual(first[0], other[0], 'readiness changed cold archive bytes')
+            self.assertEqual(first[2:], other[2:], 'readiness changed external compiler behavior')
+        positive = cold[1][1]['latch_readiness']
+        self.assertGreater(positive['registered_wait_attempts'], 0, 'cold must observe actual registered waits')
+        self.assertGreater(positive['matched_registered_transfers'], 0,
+                           'cold requires independently qualified registered transfer, not all-unknown')
+        self.assertGreater(positive['matched_readiness_transfers'], 0)
+        incremental = self.root / 'incremental-readiness'
+        self.compile('readiness-warmup', 4, output, incremental=incremental, latch_readiness=True)
+        warm = [self.compile(f'readiness-warm-{n}', 4, output, incremental=incremental,
+                             capture=on, latch_readiness=True)
+                for n, on in enumerate((False, True, False))]
+        self.assert_dispatch_control_neutrality([f'readiness-warm-{n}' for n in range(3)])
+        for first, other in zip(warm, warm[1:]):
+            self.assertEqual(first[2:], other[2:], 'readiness changed warm payload/diagnostics/run')
+        mixed = self.compile('readiness-with-dispatch', 4, output, capture=True,
+                             latch_readiness=True, dispatch=True)
+        observations = [cold[1][1], warm[1][1], mixed[1]]
+        original_hashes = {}
+        for evidence in observations:
+            sink = self.root / (evidence['label'] + '-capture')
+            before = {p.name: digest(p) for p in sink.glob('*.json')}
+            query, = [json.loads(p.read_text()) for p in sink.glob('*.json')
+                      if json.loads(p.read_text()).get('producer') == 'rustc-query-admission']
+            self.assertEqual(query['schema'], 6 if evidence['label'] == 'readiness-with-dispatch' else 5)
+            self.assert_execution_flow_analyzer(evidence, latch_readiness=True)
+            self.assertEqual(before, {p.name: digest(p) for p in sink.glob('*.json')})
+            original_hashes[evidence['label']] = before
+        self.assert_unsupported_flow_clock_offset_refused(observations[1], latch_readiness=True)
+        self.assertEqual(self.source_hashes, {
+            str(p.relative_to(self.source_root)): digest(p)
+            for p in sorted((self.source_root / 'src').rglob('*.rs'))})
+        self.assertEqual(digest(self.analyzer), self.analyzer_sha256)
+        # No success receipt is created before every original/public/analyzer,
+        # neutrality and hard-refusal assertion above has completed.
+        (self.root / 'latch-readiness-acceptance.json').write_text(json.dumps({
+            'observations': observations, 'original_sha256': original_hashes,
+            'cold_archive_byte_identity': True, 'warm_rmeta_object_consumer_identity': True,
+            'allow_conservative_unbound': True, 'full_pipeline_complete': False,
+            'cpu_work_ns': None, 'execution_span_ns': None, 'parallelism': None}, indent=2))
+
+    def assert_unsupported_flow_clock_offset_refused(self, evidence, *, latch_readiness=False):
         """The frozen public protocol admits reciprocal same-epoch zero only."""
         original = self.root / (evidence['label'] + '-capture')
         hashes = {p.name: digest(p) for p in original.glob('*.json')}
@@ -774,7 +887,8 @@ class FrontendMappingNative(unittest.TestCase):
                 value['timing']['clock_bridge']['pool_epoch_in_query_ns'] = offset
             (copied / path.name).write_text(json.dumps(value))
         result = self.logged([self.client, 'graph', copied, '--json', '--large-capture',
-                              '--execution-flow-dag'], 'flow-nonzero-offset-graph', expected=None)
+                              '--latch-readiness-dag' if latch_readiness else '--execution-flow-dag'],
+                             'flow-nonzero-offset-graph', expected=None)
         self.assertNotEqual(result.returncode, 0, 'unsupported nonzero epoch acquired authority')
         self.assertIn('same-epoch', result.stderr)
         self.assertEqual(hashes, {p.name: digest(p) for p in original.glob('*.json')})
@@ -923,7 +1037,7 @@ class FrontendMappingNative(unittest.TestCase):
         self.assertEqual(digest(self.analyzer), self.analyzer_sha256)
 
     def assert_dispatch_receipts(self, query, assessments, sink, label, *, query_cpu=False,
-                                 execution_flow=False):
+                                 execution_flow=False, latch_readiness=False):
         """Reconstruct every certified row directly from original native events."""
         reads = query['query_reads']
         self.assertEqual(reads['schema'], 2)
@@ -1010,7 +1124,9 @@ class FrontendMappingNative(unittest.TestCase):
                    '--dispatch-result-provenance', '--cache-call-provenance']
         if query_cpu:
             command.append('--query-cpu-ownership')
-        if execution_flow:
+        if latch_readiness:
+            command.append('--latch-readiness-dag')
+        elif execution_flow:
             command.append('--execution-flow-dag')
         both = json.loads(self.logged(command, label + '-both-graph').stdout)
         both_query = next(a for a in both if a['producer'] == 'rustc-query-admission')
@@ -1269,6 +1385,48 @@ class FixtureControlSafety(unittest.TestCase):
                      '--dispatch-result-provenance', '--cache-call-provenance'):
             self.assertIn(flag, command)
 
+        with patch.object(harness, 'logged', return_value=SimpleNamespace(
+                stdout=json.dumps(both))) as logged:
+            harness.assert_dispatch_receipts(query, assessments, Path('capture'), 'ready-mixed',
+                                             query_cpu=True, execution_flow=True, latch_readiness=True)
+        command = logged.call_args.args[0]
+        self.assertIn('--latch-readiness-dag', command)
+        self.assertNotIn('--execution-flow-dag', command)
+        for flag in ('--query-cpu-ownership', '--dispatch-result-provenance', '--cache-call-provenance'):
+            self.assertIn(flag, command)
+
+    def test_latch_receipts_preserve_unbound_and_refuse_invented_authority(self):
+        from bench.test_latch_readiness_oracle import fixture, unbound_fixture
+        from bench.latch_readiness_oracle import latch_readiness_oracle
+        harness = FrontendMappingNative('test_real_itoa_latch_readiness')
+        for factory in (fixture, unbound_fixture):
+            query, pool = factory()
+            flow = latch_readiness_oracle(query, pool, allow_unbound=True)
+            flow['issues'] = [] if flow['records_complete'] else ['incomplete readiness authority']
+            reports = [dict(producer='rustc-thread-pool-join', latch_readiness_dag=flow)]
+            receipt = harness.assert_latch_readiness_receipts(query, [pool], reports)
+            self.assertEqual(receipt['unbound_wait_attempts'], factory is unbound_fixture)
+            self.assertEqual(receipt['matched_registered_transfers'], factory is fixture)
+            self.assertEqual(receipt['records_complete'], factory is fixture)
+            flow['cut_nodes'] += 1
+            with self.assertRaises(AssertionError):
+                harness.assert_latch_readiness_receipts(query, [pool], reports)
+            flow['cut_nodes'] -= 1
+            if factory is fixture:
+                gate = flow['longest_known_chain_steps'][0]
+                self.assertNotEqual(gate['kind'], 'cpu_segment')
+                gate['query_name'] = 'invented_gate_name'
+                with self.assertRaises(AssertionError):
+                    harness.assert_latch_readiness_receipts(query, [pool], reports)
+                gate['query_name'] = None
+            flow['known_cpu_work_ns'] = None
+            with self.assertRaises(AssertionError):
+                harness.assert_latch_readiness_receipts(query, [pool], reports)
+            flow['known_cpu_work_ns'] = 12
+            flow['matched_readiness_transfers'] += 1
+            with self.assertRaises(AssertionError):
+                harness.assert_latch_readiness_receipts(query, [pool], reports)
+
     def test_flow_positive_acceptance_refuses_all_unknown(self):
         from bench.test_execution_flow_oracle import fixture
         from bench.execution_flow_oracle import execution_flow_oracle
@@ -1314,6 +1472,10 @@ class FixtureControlSafety(unittest.TestCase):
                          '/capture\n1000000\ntiming\noff\nquery_cpu\nexecution_flow\n')
         self.assertEqual(fixture_controls('/capture', dispatch=True, execution_flow=True),
                          '/capture\n1000000\ntiming\ndispatch\nquery_cpu\nexecution_flow\n')
+        self.assertEqual(fixture_controls('/capture', latch_readiness=True),
+                         '/capture\n1000000\ntiming\noff\nquery_cpu\nexecution_flow\nlatch_readiness\n')
+        self.assertEqual(fixture_controls('/capture', dispatch=True, latch_readiness=True),
+                         '/capture\n1000000\ntiming\ndispatch\nquery_cpu\nexecution_flow\nlatch_readiness\n')
 
     def test_foreign_descriptor_is_not_overwritten(self):
         read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
