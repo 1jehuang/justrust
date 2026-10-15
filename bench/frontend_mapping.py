@@ -44,7 +44,7 @@ def intervals_summary(intervals):
                 peak_overlapping_intervals=peak)
 
 
-def summarize(query, assessment):
+def summarize(query, assessment, timing=None):
     """Only call after strict native validation. Never merge different clock epochs."""
     if query['capture_id'] != assessment['capture_id']:
         raise ValueError('assessment/capture mismatch')
@@ -74,7 +74,7 @@ def summarize(query, assessment):
         phases['post_notification'].append((b, d))
         phases['post_condvar'].append((c, d))
         phases['total'].append((a, d))
-    return dict(
+    summary = dict(
         capture_id=query['capture_id'],
         scope='validated-native-frontend-evidence-not-an-execution-span',
         admissions_complete=assessment['structural_complete'],
@@ -97,6 +97,43 @@ def summarize(query, assessment):
             'Unbound/lost reads, nonquery work and incomplete task/resource coverage prevent a frontend span.',
             'Semantic constraints and current implementation ordering are not interchangeable.',
         ])
+    if timing is not None:
+        summary['clock_alignment'] = timing['clock_alignment']
+        if 'observed_cpu' in timing:
+            summary['observed_cpu'] = timing['observed_cpu']
+        summary['limitations'][3] = (
+            'Native clock alignment does not establish CPU coverage or an execution span; '
+            'query and pool intervals are not merged.')
+    return summary
+
+
+def _timing_summary(query, assessment, pool_authorities):
+    """Copy public assessments, never raw timing or inferred clock/CPU claims."""
+    if query['schema'] != 5:
+        return None
+    alignment = assessment.get('clock_alignment')
+    if (not isinstance(alignment, dict)
+            or type(alignment.get('aligned')) is not bool
+            or not isinstance(alignment.get('issues'), list)
+            or any(not isinstance(issue, str) for issue in alignment['issues'])
+            or (alignment['aligned'] and alignment['issues'])):
+        raise ValueError('schema5 requires native clock alignment authority')
+    timing = dict(clock_alignment=alignment)
+    reference = query['task_bindings']['pool']
+    authority = pool_authorities.get(reference['capture_id']) if reference else None
+    if authority is None:
+        if alignment['aligned']:
+            raise ValueError('aligned query has no matching CPU pool authority')
+        return timing
+    source, cpu = authority
+    if (source['query_capture_id'] != query['capture_id']
+            or type(reference['observer']) is not int
+            or reference['observer'] != source['observer']):
+        raise ValueError('query/CPU pool qualified identity mismatch')
+    # The pool's checked measurement sums and partial/failed coverage stay as
+    # reported. In particular, do not upgrade query_clock_aligned or CPU coverage.
+    timing['observed_cpu'] = cpu
+    return timing
 
 
 def _read_regular(path, remaining, directory_fd=None):
@@ -147,13 +184,21 @@ def analyze(directory, justrust, large_capture=False):
         raise ValueError('empty capture is unknown, not successful evidence')
     # Capture IDs alone cannot prove that the native directory router consumed
     # a source: owner/envelope filenames are deliberately skipped by graph.
-    # Route every query source under a neutral snapshot name, retaining its exact
-    # bytes. Leave auxiliary documents under their original native routing names.
+    # Route query and timing-pool sources under neutral snapshot names, retaining
+    # exact bytes. Leave auxiliary documents under their native routing names.
     query_sources = {}
     source_receipts = {}
+    pool_sources = {}
+    neutral_sources = []
     snapshot_names = {name for name, _ in originals}
     for name, content in originals:
         receipt = json.loads(content)
+        if receipt.get('producer') == 'rustc-thread-pool-join' and receipt.get('schema') == 3:
+            capture_id = receipt['capture_id']
+            if not isinstance(capture_id, str) or capture_id in pool_sources:
+                raise ValueError('invalid or duplicate CPU pool source capture identity')
+            pool_sources[capture_id] = receipt
+            neutral_sources.append(name)
         if receipt.get('producer') != 'rustc-query-admission':
             continue
         capture_id = receipt['capture_id']
@@ -161,13 +206,14 @@ def analyze(directory, justrust, large_capture=False):
             raise ValueError('query capture identity must be a string')
         if capture_id in query_sources:
             raise ValueError('duplicate query source capture identity')
-        if receipt.get('schema') != 4:
-            raise ValueError('frontend report requires native schema4 evidence')
+        if type(receipt.get('schema')) is not int or receipt['schema'] not in (4, 5):
+            raise ValueError('frontend report requires native schema4 or schema5 evidence')
         query_sources[capture_id] = name
         source_receipts[name] = receipt
+        neutral_sources.append(name)
     neutral_names = {}
     next_name = 0
-    for name in source_receipts:
+    for name in neutral_sources:
         while True:
             candidate = f'frontend-query-{next_name}.json'
             next_name += 1
@@ -191,14 +237,42 @@ def analyze(directory, justrust, large_capture=False):
             raise ValueError('native graph validation failed:\n' + result.stdout + '\n' + result.stderr)
         assessments = json.loads(result.stdout)
         indexed = {}
+        pool_indexed = {}
         for assessment in assessments:
             if assessment['producer'] == 'rustc-query-admission':
                 key = assessment['capture_id']
                 if key in indexed:
                     raise ValueError('duplicate query capture authority')
                 indexed[key] = assessment
+            elif assessment['producer'] == 'rustc-thread-pool-join':
+                key = assessment['capture_id']
+                if key in pool_indexed:
+                    raise ValueError('duplicate CPU pool capture authority')
+                pool_indexed[key] = assessment
         if set(indexed) != set(query_sources):
             raise ValueError('query source/validated authority mismatch')
+        pool_authorities = {}
+        timing_ids = {key for key, value in pool_indexed.items()
+                      if value.get('schema') == 3 or value.get('observed_cpu') is not None}
+        if timing_ids != set(pool_sources):
+            raise ValueError('CPU pool source/validated authority mismatch')
+        for key, source in pool_sources.items():
+            authority = pool_indexed[key]
+            cpu = authority.get('observed_cpu')
+            expected_bridge = dict(query_capture_id=source['query_capture_id'],
+                                   pool_capture_id=key, pool_observer=source['observer'],
+                                   pool_epoch_in_query_ns=0)
+            bridge = cpu.get('clock_bridge') if isinstance(cpu, dict) else None
+            if (type(authority.get('schema')) is not int or authority['schema'] != 3
+                    or type(source['schema']) is not int
+                    or not isinstance(source['query_capture_id'], str)
+                    or type(source['observer']) is not int or source['observer'] <= 0
+                    or not isinstance(bridge, dict)
+                    or type(bridge.get('pool_observer')) is not int
+                    or type(bridge.get('pool_epoch_in_query_ns')) is not int
+                    or bridge != expected_bridge):
+                raise ValueError('CPU pool schema or qualified clock bridge mismatch')
+            pool_authorities[key] = (source, cpu)
         summaries = []
         inputs = []
         for name, content in sorted(originals):
@@ -207,7 +281,12 @@ def analyze(directory, justrust, large_capture=False):
             if name not in source_receipts:
                 continue
             receipt = source_receipts[name]
-            summaries.append(summarize(receipt, indexed[receipt['capture_id']]))
+            authority = indexed[receipt['capture_id']]
+            if (type(authority.get('schema')) is not int
+                    or authority['schema'] != receipt['schema']):
+                raise ValueError('query source/validated schema mismatch')
+            timing = _timing_summary(receipt, authority, pool_authorities)
+            summaries.append(summarize(receipt, authority, timing))
         if not summaries:
             raise ValueError('no native frontend receipt')
         return dict(schema=1, scope='native-frontend-capture-diagnostics',

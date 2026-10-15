@@ -1,4 +1,6 @@
 import contextlib
+import copy
+import hashlib
 import io
 import json
 import os
@@ -20,7 +22,7 @@ def fixture():
             if stage == 'notified':
                 event['reason'] = 'completed'
             query['wait_events'].append(event)
-    assessment = dict(producer=query['producer'], capture_id='test',
+    assessment = dict(schema=4, producer=query['producer'], capture_id='test',
                       issues=[],
                       structural_complete=True, wait_structural_complete=True,
                       query_reads={'records_complete': True, 'semantic_complete': False},
@@ -28,7 +30,200 @@ def fixture():
     return query, assessment
 
 
+def timing_fixture():
+    # These fixtures model assessment consumption, not strict native schemas.
+    query, assessment = fixture()
+    bridge = dict(query_capture_id='test', pool_capture_id='pool',
+                  pool_observer=7, pool_epoch_in_query_ns=0)
+    query.update(schema=5, execution_clock=dict(bridge),
+                 task_bindings={'pool': {'capture_id': 'pool', 'observer': 7}})
+    assessment.update(schema=5, clock_alignment={'aligned': True, 'issues': []})
+    pool = dict(schema=3, producer='rustc-thread-pool-join', capture_id='pool',
+                observer=7, query_capture_id='test',
+                timing={'clock_bridge': dict(bridge), 'observed_cpu_ns': 999999})
+    cpu = dict(scope='observed-exclusive-thread-segments', cpu_clock='linux-thread-cpu',
+               records_complete=True, observed_cpu_ns=100, task_cpu_ns=80,
+               opaque_cpu_ns=20, measured_segments=2, failed_segments=0,
+               observed_threads=1, expected_segments=2, lost_segments=0,
+               active_segments=0, clock_failures=0, clock_bridge=dict(bridge),
+               query_clock_aligned=False, issues=[])
+    pool_assessment = dict(schema=3, producer=pool['producer'], capture_id='pool',
+                           structural_complete=True, issues=[], observed_cpu=cpu)
+    return query, assessment, pool, pool_assessment
+
+
 class FrontendMappingTests(unittest.TestCase):
+    def analyze_timing_fixture(self, query, assessment, pool, pool_assessment):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'query.json').write_text(json.dumps(query))
+            if pool is not None:
+                (root / 'pool.json').write_text(json.dumps(pool))
+            authorities = [assessment]
+            if pool_assessment is not None:
+                authorities.extend(pool_assessment if isinstance(pool_assessment, list)
+                                   else [pool_assessment])
+            result = subprocess.CompletedProcess([], 0, json.dumps(authorities), '')
+            with patch.object(mapping.subprocess, 'run', return_value=result):
+                return mapping.analyze(root, 'fake-validator')
+
+    def test_query5_copies_only_public_timing_and_preserves_unknown_full_cost(self):
+        query, authority, pool, pool_authority = timing_fixture()
+        report = self.analyze_timing_fixture(query, authority, pool, pool_authority)
+        capture, = report['captures']
+        self.assertEqual(capture['clock_alignment'], authority['clock_alignment'])
+        self.assertEqual(capture['observed_cpu'], pool_authority['observed_cpu'])
+        self.assertEqual(capture['observed_cpu']['observed_cpu_ns'], 100)
+        self.assertFalse(capture['observed_cpu']['query_clock_aligned'])
+        for item in (report, capture):
+            for key in ('cpu_work_ns', 'execution_span_ns', 'theoretical_parallelism'):
+                self.assertIsNone(item[key])
+            self.assertFalse(item['full_pipeline_complete'])
+        expected_bytes = json.dumps(query).encode()
+        original = next(item for item in report['inputs'] if item['name'] == 'query.json')
+        self.assertEqual(original['sha256'], hashlib.sha256(expected_bytes).hexdigest())
+        self.assertEqual(original['bytes'], len(expected_bytes))
+
+    def test_forged_raw_clock_descriptor_does_not_upgrade_native_alignment(self):
+        query, authority, pool, pool_authority = timing_fixture()
+        authority['clock_alignment'] = {'aligned': False, 'issues': ['clock unavailable']}
+        query['execution_clock']['pool_observer'] = 999
+        capture, = self.analyze_timing_fixture(query, authority, pool, pool_authority)['captures']
+        self.assertEqual(capture['clock_alignment'], authority['clock_alignment'])
+        self.assertFalse(capture['observed_cpu']['query_clock_aligned'])
+
+    def test_query5_requires_native_schema5_and_alignment_assessment(self):
+        for change in ('schema4', 'missing', 'null', 'truthy', 'contradictory'):
+            with self.subTest(change=change):
+                query, authority, pool, pool_authority = timing_fixture()
+                if change == 'schema4':
+                    authority['schema'] = 4
+                elif change == 'missing':
+                    del authority['clock_alignment']
+                elif change == 'null':
+                    authority['clock_alignment'] = None
+                elif change == 'truthy':
+                    authority['clock_alignment']['aligned'] = 1
+                else:
+                    authority['clock_alignment']['issues'] = ['not aligned']
+                with self.assertRaises(ValueError):
+                    self.analyze_timing_fixture(query, authority, pool, pool_authority)
+
+    def test_unavailable_clock_and_pool_remain_unknown_without_invented_cpu(self):
+        query, authority, _, _ = timing_fixture()
+        query['execution_clock'] = None
+        query['task_bindings']['pool'] = None
+        authority['clock_alignment'] = {'aligned': False, 'issues': ['clock unavailable']}
+        capture, = self.analyze_timing_fixture(query, authority, None, None)['captures']
+        self.assertEqual(capture['clock_alignment'], authority['clock_alignment'])
+        self.assertNotIn('observed_cpu', capture)
+        authority['clock_alignment'] = {'aligned': True, 'issues': []}
+        with self.assertRaisesRegex(ValueError, 'no matching CPU pool'):
+            self.analyze_timing_fixture(query, authority, None, None)
+
+    def test_partial_and_unmeasurable_cpu_stays_as_public_native_assessment(self):
+        query, authority, pool, pool_authority = timing_fixture()
+        cpu = pool_authority['observed_cpu']
+        cpu.update(records_complete=False, observed_cpu_ns=None, task_cpu_ns=None,
+                   opaque_cpu_ns=None, failed_segments=1, lost_segments=2,
+                   clock_failures=1, issues=['CPU task/thread authority unavailable'])
+        capture, = self.analyze_timing_fixture(query, authority, pool, pool_authority)['captures']
+        self.assertEqual(capture['observed_cpu'], cpu)
+        self.assertIsNone(capture['cpu_work_ns'])
+
+    def test_foreign_cpu_clock_bridge_components_are_rejected(self):
+        for field, value in [('query_capture_id', 'foreign'), ('pool_capture_id', 'foreign'),
+                             ('pool_observer', 8), ('pool_epoch_in_query_ns', 1),
+                             ('pool_epoch_in_query_ns', False)]:
+            with self.subTest(field=field):
+                query, authority, pool, pool_authority = timing_fixture()
+                pool_authority['observed_cpu']['clock_bridge'][field] = value
+                with self.assertRaisesRegex(ValueError, 'qualified clock bridge mismatch'):
+                    self.analyze_timing_fixture(query, authority, pool, pool_authority)
+
+    def test_query_pool_reference_requires_exact_query_and_observer(self):
+        for field in ('query', 'observer'):
+            with self.subTest(field=field):
+                query, authority, pool, pool_authority = timing_fixture()
+                if field == 'query':
+                    pool['query_capture_id'] = 'foreign'
+                    pool_authority['observed_cpu']['clock_bridge']['query_capture_id'] = 'foreign'
+                else:
+                    query['task_bindings']['pool']['observer'] = 8
+                with self.assertRaisesRegex(ValueError, 'qualified identity mismatch'):
+                    self.analyze_timing_fixture(query, authority, pool, pool_authority)
+
+    def test_duplicate_missing_foreign_and_legacy_cpu_authorities_are_rejected(self):
+        for change in ('duplicate', 'missing', 'foreign', 'schema2', 'missing-source',
+                       'missing-cpu'):
+            with self.subTest(change=change):
+                query, authority, pool, pool_authority = timing_fixture()
+                if change == 'duplicate':
+                    pool_authority = [pool_authority, copy.deepcopy(pool_authority)]
+                elif change == 'missing':
+                    pool_authority = None
+                elif change == 'foreign':
+                    pool_authority['capture_id'] = 'foreign'
+                elif change == 'schema2':
+                    pool_authority['schema'] = 2
+                elif change == 'missing-cpu':
+                    del pool_authority['observed_cpu']
+                else:
+                    pool = None
+                with self.assertRaises(ValueError):
+                    self.analyze_timing_fixture(query, authority, pool, pool_authority)
+
+    def test_skipped_pool3_source_is_validated_under_neutral_name(self):
+        query, authority, pool, pool_authority = timing_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'query.json').write_text(json.dumps(query))
+            original = json.dumps(pool).encode()
+            (root / 'pool.manifest.json').write_bytes(original)
+            def validate(command, **kwargs):
+                snapshot = Path(command[2])
+                self.assertFalse((snapshot / 'pool.manifest.json').exists())
+                pools = [p for p in snapshot.glob('*.json')
+                         if json.loads(p.read_bytes())['producer'] == pool['producer']]
+                self.assertEqual(len(pools), 1)
+                self.assertEqual(pools[0].read_bytes(), original)
+                return subprocess.CompletedProcess(command, 0,
+                                                   json.dumps([authority, pool_authority]), '')
+            with patch.object(mapping.subprocess, 'run', side_effect=validate):
+                report = mapping.analyze(root, 'fake-validator')
+            self.assertEqual(report['captures'][0]['observed_cpu'], pool_authority['observed_cpu'])
+            original_input = next(item for item in report['inputs']
+                                  if item['name'] == 'pool.manifest.json')
+            self.assertEqual(original_input['sha256'], hashlib.sha256(original).hexdigest())
+
+    def test_duplicate_skipped_pool3_source_cannot_borrow_authority(self):
+        query, _, pool, _ = timing_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'query.json').write_text(json.dumps(query))
+            (root / 'pool.json').write_text(json.dumps(pool))
+            pool['timing']['observed_cpu_ns'] = 123456789
+            (root / 'pool.envelope.json').write_text(json.dumps(pool))
+            with patch.object(mapping.subprocess, 'run') as validator:
+                with self.assertRaisesRegex(ValueError, 'duplicate CPU pool source'):
+                    mapping.analyze(root, 'fake-validator')
+                validator.assert_not_called()
+
+    def test_legacy_query_report_keeps_original_fields_without_timing(self):
+        query, authority = fixture()
+        # Optional foreign timing claims on a legacy assessment are not consumed.
+        authority['clock_alignment'] = {'aligned': True, 'issues': []}
+        report = self.analyze_timing_fixture(query, authority, None, None)
+        capture, = report['captures']
+        self.assertEqual(capture, mapping.summarize(query, authority))
+        self.assertNotIn('clock_alignment', capture)
+        self.assertNotIn('observed_cpu', capture)
+        encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
+        # Golden derived independently using committed pre-timing analyzer
+        # 46128dfdd and the same fixture with mocked public schema4 validation.
+        self.assertEqual(hashlib.sha256(encoded).hexdigest(),
+                         'a21b3148b38491d16e4886dfc035e0a24d74c1cb713e617d8e05bf535bcc7302')
+
     def test_overlaps_are_not_added_as_wall_or_cpu_time(self):
         summary = mapping.intervals_summary([(0, 10), (3, 12), (12, 12)])
         self.assertEqual(summary['sum_elapsed_ns'], 19)
