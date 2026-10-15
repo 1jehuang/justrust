@@ -543,7 +543,21 @@ mod tests {
         observer.seal(InterfaceOutcome::Returned);
         let mut out = Vec::new();
         observer.write_json(&mut out).unwrap();
-        String::from_utf8(out).unwrap()
+        let packet = String::from_utf8(out).unwrap();
+        // Explicit test-only export. No compiler controls, production environment,
+        // or accepted runtime/private metadata are changed by this harness hook.
+        if let Some(directory) = std::env::var_os("JR_READY_NATIVE_PACKETS") {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let thread = std::thread::current();
+            let name = thread.name().unwrap_or("native-readiness").replace("::", "_");
+            let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+            std::fs::write(
+                std::path::Path::new(&directory).join(format!("{name}-{sequence}.pool.json")),
+                &packet,
+            )
+            .unwrap();
+        }
+        packet
     }
     fn assert_ordinary_degrees(r: &Recorder) {
         let b = r.lock();
@@ -679,9 +693,9 @@ mod tests {
         let observer = new_observer();
         let r = recorder(&observer);
         let caller = observer.enter_query_execution(1, 1, "caller").unwrap();
-        for outcome in ["cycle", "poisoned", "unwound"] {
+        for (index, outcome) in ["cycle", "poisoned", "unwound"].into_iter().enumerate() {
             let mut w = observer.begin_latch_wait(1, 2, Some(1)).unwrap();
-            w.observed(true, Some(7), None);
+            w.observed(true, Some(7 + index as u64), None);
             if outcome == "unwound" {
                 drop(w);
             } else {
@@ -689,13 +703,17 @@ mod tests {
             }
             assert_eq!(current().unwrap().scope, Some(1));
         }
+        // Unwind may occur before actual latch registration/observation returns.
+        drop(observer.begin_latch_wait(1, 2, Some(1)).unwrap());
         drop(caller);
         let b = r.lock();
         let inv = b.readiness.as_ref().unwrap();
         assert_eq!(
             inv.waits.iter().map(|w| w.outcome).collect::<Vec<_>>(),
-            vec!["cycle", "poisoned", "unwound"]
+            vec!["cycle", "poisoned", "unwound", "unwound"]
         );
+        assert_eq!(inv.waits[3].mode, "active");
+        assert!(inv.waits[3].wait.is_none());
         assert!(inv.waits.iter().all(|w| w.consumed.is_none()));
         assert_eq!(inv.active_wait, 0);
         drop(b);
@@ -753,9 +771,11 @@ mod tests {
         let caller = observer.enter_query_execution(1, 1, "caller").unwrap();
         let preparation = observer.prepare_latch_readiness(1, 2).unwrap();
         let token = preparation.token();
-        let mut wait = observer.begin_latch_wait(1, 2, Some(1)).unwrap();
-        wait.observed(true, Some(13), token);
-        wait.consumed();
+        for registered in [true, false] {
+            let mut wait = observer.begin_latch_wait(1, 2, Some(1)).unwrap();
+            wait.observed(registered, registered.then_some(13), token);
+            wait.consumed();
+        }
         // The successful latch transition was real, but its outside-lock recorder
         // finalization lost the race. Never wait for it or trust an active row.
         preparation.finish(true);
@@ -763,8 +783,12 @@ mod tests {
         let b = r.lock();
         let inv = b.readiness.as_ref().unwrap();
         assert_eq!(inv.ready[0].outcome, "published");
-        assert_eq!(inv.waits[0].outcome, "consumed_unbound");
-        assert!(inv.waits[0].consumed.is_none());
+        assert_eq!(inv.waits.len(), 2);
+        assert!(
+            inv.waits
+                .iter()
+                .all(|wait| wait.outcome == "consumed_unbound" && wait.consumed.is_none())
+        );
         assert!(!b.edges.iter().any(|e| e.kind == "readiness_required"));
         drop(b);
         finish(&observer);
