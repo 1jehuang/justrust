@@ -1,5 +1,61 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Inline modules compile through explicit graph resolution
+
+Revision `ab47b4909` adds nested inline modules, qualified calls, simple imports
+and aliases, private/public visibility and separate module/function namespaces.
+A new resolution operation (106) publishes an immutable canonical function arena
+between parse (100) and signatures (101). Check/build share it exactly once.
+Code emission and relocations use canonical paths without invoking another
+compiler. See `RUST-COMPATIBILITY.md` for the full-language implementation target.
+
+Hosted check `20261015-161839807-605119`, final full test
+`20261015-161932956-611411` (86 passed), warning-denied all-target clippy
+`20261015-161934154-611518`, formatting and diff checks passed. Slim summaries
+are in `data/runs/prototype-bootstrap/2026-10-modules.jsonl`. Independent review
+found and fixed self-prefix import cycles and mixed-public/private bindings in
+separate namespaces before the milestone was committed.
+
+Charged experiment `compiler-modules-20261015-2320` built the exact revision on
+M8a with bootstrap Rust 1.99.0 and ran 60 source cases against stock Rust 1.99.0:
+23 valid programs matched execution at workers 1 and 8, 30 invalid programs were
+rejected, and 7 legal-but-unsupported cases were separately recorded as boundaries,
+not parity successes. Check-mode validation also passed at both worker counts.
+Imported `main`, external module files, grouped/glob imports, re-exports and
+restricted visibility remain among those explicit unsupported boundaries.
+Raw sources, diagnostics and outcomes:
+`experiments/results/20261015-m8a-modules-differential.jsonl`.
+
+All 36 actual compile/check samples passed with complete graph capture and no
+dropped events. Fixtures contain four modules/six functions/575 bytes, or eight
+modules/258 functions/24,515 bytes. Three warm, fresh-process samples per point,
+shared-host contended/uncontrolled, not cache-flushed. Median in-process times:
+
+| Functions | Workers | Check | Source-to-ELF |
+|---|---:|---:|---:|
+| 6 | 1 | 0.258 ms | 0.337 ms |
+| 6 | 8 | 0.486 ms | 0.669 ms |
+| 6 | 96 | 2.620 ms | 2.976 ms |
+| 258 | 1 | 3.490 ms | 5.111 ms |
+| 258 | 8 | 6.360 ms | 10.859 ms |
+| 258 | 96 | 10.127 ms | 15.650 ms |
+
+Whole-process source-to-ELF medians were 0.892 ms and 5.916 ms at one worker.
+Raw timing/accounting: `experiments/results/20261015-m8a-modules-matrix.jsonl`.
+Reproduce with `experiments/compiler.py --modules` and the exact revision/binary.
+The differential harness's file-backed timeout-poll elapsed values are safety
+harness timings, not the latency benchmark above. Native example output was also
+verified on the guest and locally after SHA-256 verification of the downloaded
+experimental binary, without replacing the installed stable client.
+
+This milestone expands semantics, not demonstrated speed or broad Rust parity.
+Name resolution still walks all function call paths in one coarse graph node
+before body checks, and canonical strings are not persistent cache identities.
+Per-module declaration and per-path resolution facts remain architectural work.
+The cheap bodies still run slower with additional workers. File-based modules,
+richer typed data/IR, ownership and the remaining full-language milestones are
+not implemented by this change.
+
 ## 2026-10-15: Verified Linux-cache-cold subset compilation
 
 Charged experiment `compiler-cold-20261015-2309` ran harness revision
