@@ -273,6 +273,35 @@ class ToolchainIdentityTests(unittest.TestCase):
             altered = {**result, 'synth': {'results': [{'samples': samples}]}}
             self.assertTrue(suite.toolchain_identity_comparison_issues(result, altered))
 
+    def test_public_compare_accepts_different_natural_specs_with_same_identity_protocol(self):
+        from test_synth_reporting import fixture
+        public = self.identity().verify_files()
+        results = []
+        for suffix in ('123456789abc', 'c515f6b3476d'):
+            spec = 'jr-' + suffix
+            stack = 'suite-' + spec
+            payload = fixture(names=(stack,))
+            records = []
+            for point in payload['results']:
+                sample = point['samples'][stack][0]
+                sample['id'] = suffix + '-point-' + str(point['i'])
+                sample['toolchain_identity_verified'] = True
+                records.append({'id': sample['id'], 'stage': 'run', 'meta_sha256': '0' * 64})
+            declared = {**public, 'toolchain': spec}
+            result = {'env': {'justrust_rev': 'pinned', 'host': 'fixture', 'cpu': 'fixture',
+                              'ncpu': 1, 'snapshots': {'fixture': 'rev'}, 'execution': 'local',
+                              'toolchain': spec}, 'synth': payload,
+                      'toolchain_identity': {'before': declared, 'after': declared,
+                                             'invocations': records}}
+            path = self.root / (suffix + '.json')
+            path.write_text(json.dumps(result))
+            results.append(path)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            suite.cmd_compare(argparse.Namespace(a=str(results[0]), b=str(results[1]), floor=10))
+        self.assertNotIn('blocked', output.getvalue().lower())
+        self.assertIn('+0%', output.getvalue())
+
     def test_single_stack_legacy_output_and_calls_are_unchanged_without_demand(self):
         args = argparse.Namespace(synth=1, points=40, n=1, quiet_wait=0, resume=False,
                                   out=str(self.root / 'legacy.json'))
