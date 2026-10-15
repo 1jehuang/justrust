@@ -1,0 +1,622 @@
+{
+  "schema": 1,
+  "scope": "all preserved A2 failing tests, targeted no-build isolation diagnostics",
+  "baseline_audit_sha256": "e31af6d605ca6a386a48c1eb2e2c368bf1bbd842e3de396b6709c1d5f104e0b8",
+  "historical_environment_or_per_run_binary_identity_attested": false,
+  "preserved_current_binary_sha256_before_and_after": {
+    "base": "327e78cc9ff635537046aae04836e93fa0bc8d8a3bf8cd77f31fedfdbd00f6aa",
+    "app": "22839d476ef33cb56cad24eb4843c3090206b9e0acc0a925491d1030da343893",
+    "tui": "d5243fe486638d935eb8c2f6124ab5fea9bd30e7d3f672db3a37af6ca84bcbdd",
+    "desktop": "7eba763d3b71c70d58174f63d310b630548d85516d2d3502f0f5a514c7b427bb"
+  },
+  "snapshot_tree_manifest_sha256_before_and_after": "ea116ea833888dca2db78c1e69540498029353087b1cf4d1c4451593c8e37b0c",
+  "snapshot_tree_manifest_entries": 3400,
+  "unique_failing_tests": 23,
+  "failing_test_occurrences": 36,
+  "original_snapshots_and_observations_modified": false,
+  "controls_are_benchmark_samples": false,
+  "safety": "Disposable HOME/JCODE_HOME/XDG/runtime/temp paths, no inherited credentials/display/DBus, browser suppressed, captured stdout; no Cargo or compiler invoked",
+  "results": [
+    {
+      "test": "applet_runtime::tests::bundled_github_applet_renders_valid_documents",
+      "affected_points": [
+        6
+      ],
+      "crate": "desktop",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest applet_runtime::tests::bundled_github_applet_renders_valid_documents ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1312 filtered out; finished in 0.12s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest applet_runtime::tests::bundled_github_applet_renders_valid_documents ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1312 filtered out; finished in 0.12s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution",
+      "affected_points": [
+        11
+      ],
+      "crate": "app",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-app-core",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution ... FAILED\n\nfailures:\n\nfailures:\n    server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.07s\n\n\nthread 'server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution' (983771) panicked at crates/jcode-app-core/src/server/debug_command_exec.rs:835:10:\ndebug selfdev reload should succeed: Could not find jcode repository directory\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution ... FAILED\n\nfailures:\n\nfailures:\n    server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.06s\n\n\nthread 'server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution' (983798) panicked at crates/jcode-app-core/src/server/debug_command_exec.rs:835:10:\ndebug selfdev reload should succeed: Could not find jcode repository directory\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        }
+      ]
+    },
+    {
+      "test": "tool::bash::tests::repository_commands_export_a_logged_cargo_function",
+      "affected_points": [
+        11
+      ],
+      "crate": "app",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-app-core",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::bash::tests::repository_commands_export_a_logged_cargo_function ... FAILED\n\nfailures:\n\nfailures:\n    tool::bash::tests::repository_commands_export_a_logged_cargo_function\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.00s\n\n\nthread 'tool::bash::tests::repository_commands_export_a_logged_cargo_function' (983808) panicked at crates/jcode-app-core/src/tool/bash_tests.rs:84:14:\ntest runs inside the jcode repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::bash::tests::repository_commands_export_a_logged_cargo_function ... FAILED\n\nfailures:\n\nfailures:\n    tool::bash::tests::repository_commands_export_a_logged_cargo_function\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.00s\n\n\nthread 'tool::bash::tests::repository_commands_export_a_logged_cargo_function' (983810) panicked at crates/jcode-app-core/src/tool/bash_tests.rs:84:14:\ntest runs inside the jcode repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        }
+      ]
+    },
+    {
+      "test": "tool::tests::tool_descriptions_stay_under_token_cap",
+      "affected_points": [
+        11
+      ],
+      "crate": "app",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-app-core",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::tests::tool_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.03s\n\n\nthread 'tool::tests::tool_descriptions_stay_under_token_cap' (983812) panicked at crates/jcode-app-core/src/tool/tests.rs:715:5:\ntool descriptions over the 20-token cap:\ncompile_remote (~101 tokens): Compile in an isolated Linux sandbox using Jcode subscription cloud-compute credits (shared with cloud agents). Uploads eligible source files and returns compiler output and metered usage. Requires a Jcode subscription; use action=status to check access and credits. Use only when the user has requested remote builds or authorized source sharing. Failed builds also consume credits. No automatic top-ups.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::tests::tool_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.03s\n\n\nthread 'tool::tests::tool_descriptions_stay_under_token_cap' (983814) panicked at crates/jcode-app-core/src/tool/tests.rs:715:5:\ntool descriptions over the 20-token cap:\ncompile_remote (~101 tokens): Compile in an isolated Linux sandbox using Jcode subscription cloud-compute credits (shared with cloud agents). Uploads eligible source files and returns compiler output and metered usage. Requires a Jcode subscription; use action=status to check access and credits. Use only when the user has requested remote builds or authorized source sharing. Failed builds also consume credits. No automatic top-ups.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        }
+      ]
+    },
+    {
+      "test": "tool::tests::tool_parameter_descriptions_stay_under_token_cap",
+      "affected_points": [
+        11
+      ],
+      "crate": "app",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-app-core",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::tests::tool_parameter_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_parameter_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.03s\n\n\nthread 'tool::tests::tool_parameter_descriptions_stay_under_token_cap' (983816) panicked at crates/jcode-app-core/src/tool/tests.rs:786:5:\n1 parameter descriptions over the 25-token cap:\ngmail $.properties.bcc (~26 tokens): Comma-separated Bcc addresses, hidden from other recipients. On update_draft, omit to keep, \"\" to clear.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::tests::tool_parameter_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_parameter_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.03s\n\n\nthread 'tool::tests::tool_parameter_descriptions_stay_under_token_cap' (983818) panicked at crates/jcode-app-core/src/tool/tests.rs:786:5:\n1 parameter descriptions over the 25-token cap:\ngmail $.properties.bcc (~26 tokens): Comma-separated Bcc addresses, hidden from other recipients. On update_draft, omit to keep, \"\" to clear.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        }
+      ]
+    },
+    {
+      "test": "tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result",
+      "affected_points": [
+        11
+      ],
+      "crate": "app",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-app-core",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.03s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.03s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "auth::tests::browser_suppressed_inside_test_harness_without_env_overrides",
+      "affected_points": [
+        13
+      ],
+      "crate": "base",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-base",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest auth::tests::browser_suppressed_inside_test_harness_without_env_overrides ... FAILED\n\nfailures:\n\nfailures:\n    auth::tests::browser_suppressed_inside_test_harness_without_env_overrides\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n\nthread 'auth::tests::browser_suppressed_inside_test_harness_without_env_overrides' (983831) panicked at crates/jcode-base/src/auth/tests.rs:970:5:\ntest binary should be detected even with a custom Cargo target directory\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest auth::tests::browser_suppressed_inside_test_harness_without_env_overrides ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list",
+      "affected_points": [
+        13
+      ],
+      "crate": "base",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-base",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled",
+      "affected_points": [
+        15,
+        21,
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.00s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::helpers::helpers_tests::gather_ambient_info_filters_to_session_reminders_when_ambient_disabled ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.00s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session",
+      "affected_points": [
+        15,
+        21,
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session ... FAILED\n\nfailures:\n\nfailures:\n    tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n\nthread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (983843) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:\nassertion failed: app.suggestion_prompts().is_empty() || !app.onboarding_welcome_active()\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session ... FAILED\n\nfailures:\n\nfailures:\n    tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n\nthread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (983863) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:\nassertion failed: app.suggestion_prompts().is_empty() || !app.onboarding_welcome_active()\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn",
+      "affected_points": [
+        15,
+        21,
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn ... FAILED\n\nfailures:\n\nfailures:\n    tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n\nthread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (983883) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:\ntest session should start in a Git repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn ... FAILED\n\nfailures:\n\nfailures:\n    tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n\nthread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (983909) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:\ntest session should start in a Git repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn",
+      "affected_points": [
+        15,
+        21,
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn ... FAILED\n\nfailures:\n\nfailures:\n    tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n\nthread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (983953) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:\ntest session should start in a Git repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 101,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn ... FAILED\n\nfailures:\n\nfailures:\n    tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n\nthread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (983997) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:\ntest session should start in a Git repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_expand_badge_shortcut_does_not_collapse_full_inline_diff",
+      "affected_points": [
+        15
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_expand_badge_shortcut_does_not_collapse_full_inline_diff ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.05s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_expand_badge_shortcut_does_not_collapse_full_inline_diff ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage",
+      "affected_points": [
+        15,
+        21,
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.08s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_info_widget_local_direct_api_runtime_shows_cost_based_usage ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.08s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_new_for_remote_restores_observe_mode_from_reload_state",
+      "affected_points": [
+        15
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_new_for_remote_restores_observe_mode_from_reload_state ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_new_for_remote_restores_observe_mode_from_reload_state ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level",
+      "affected_points": [
+        15,
+        21
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_real_draw_click_on_body_anchored_image_label_cycles_level ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_restore_session_adds_reload_message",
+      "affected_points": [
+        15,
+        21,
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_restore_session_adds_reload_message ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_restore_session_adds_reload_message ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::ui::tests::basic::test_cache_retention_estimates_never_create_proactive_expiry_ui",
+      "affected_points": [
+        15
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::ui::tests::basic::test_cache_retention_estimates_never_create_proactive_expiry_ui ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.00s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::ui::tests::basic::test_cache_retention_estimates_never_create_proactive_expiry_ui ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.00s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_model_picker_waits_for_async_post_login_catalog_activation",
+      "affected_points": [
+        21
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_model_picker_waits_for_async_post_login_catalog_activation ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_model_picker_waits_for_async_post_login_catalog_activation ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "workspace::tests::the_hint_chip_uses_only_spare_tab_space",
+      "affected_points": [
+        28
+      ],
+      "crate": "desktop",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode-desktop/crates/jcode-desktop-ui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest workspace::tests::the_hint_chip_uses_only_spare_tab_space ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1312 filtered out; finished in 0.02s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest workspace::tests::the_hint_chip_uses_only_spare_tab_space ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1312 filtered out; finished in 0.02s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_login_completed_surfaces_new_provider_models_in_local_model_picker",
+      "affected_points": [
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_login_completed_surfaces_new_provider_models_in_local_model_picker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.07s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_login_completed_surfaces_new_provider_models_in_local_model_picker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state",
+      "affected_points": [
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.06s\n\n"
+        }
+      ]
+    },
+    {
+      "test": "tui::app::tests::test_subagent_model_large_catalog_uses_cached_searchable_picker",
+      "affected_points": [
+        37
+      ],
+      "crate": "tui",
+      "cwd_relative_to_a2": "measure/work/desktop/jcode@abff94eeb-jcode-desktop@7d38fb7/jcode/crates/jcode-tui",
+      "controls": [
+        {
+          "control": "original-path-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_subagent_model_large_catalog_uses_cached_searchable_picker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.09s\n\n"
+        },
+        {
+          "control": "hashed-deps-clean-state",
+          "exit": 0,
+          "timed_out": false,
+          "selected_one_test": true,
+          "output": "\nrunning 1 test\ntest tui::app::tests::test_subagent_model_large_catalog_uses_cached_searchable_picker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2504 filtered out; finished in 0.09s\n\n"
+        }
+      ]
+    }
+  ],
+  "synthetic_catalog_controls": [
+    {
+      "control": "neither",
+      "exit": 0,
+      "timed_out": false,
+      "selected_one_test": true,
+      "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "control": "api-only",
+      "exit": 0,
+      "timed_out": false,
+      "selected_one_test": true,
+      "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "control": "oauth-only",
+      "exit": 0,
+      "timed_out": false,
+      "selected_one_test": true,
+      "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "control": "api-and-oauth",
+      "exit": 101,
+      "timed_out": false,
+      "selected_one_test": true,
+      "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... FAILED\n\nfailures:\n\nfailures:\n    provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n\nthread 'provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list' (984832) panicked at crates/jcode-base/src/provider/tests/catalog_subscription.rs:162:5:\nassertion `left == right` failed\n  left: [\"claude-fable-5\", \"claude-fable-5-1\", \"claude-haiku-4-5\", \"claude-nebula-preview\", \"claude-nebula-preview[1m]\", \"claude-opus-4-5\", \"claude-opus-4-6\", \"claude-opus-4-6[1m]\", \"claude-opus-4-8\", \"claude-opus-5\", \"claude-opus-5-5\", \"claude-sonnet-4-20250514\", \"claude-sonnet-4-5\", \"claude-sonnet-4-6\", \"claude-sonnet-4-6[1m]\", \"claude-sonnet-5\"]\n right: [\"claude-nebula-preview\", \"claude-nebula-preview[1m]\"]\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    }
+  ],
+  "limitations": [
+    "Preserved target binaries may reflect later A2 point recompiles.",
+    "Minimal environment is a diagnostic intervention, not a replay or benchmark.",
+    "Single-test passes cannot establish freedom from whole-suite races.",
+    "Original-path vs alias control isolates execution path within clean state only."
+  ]
+}
