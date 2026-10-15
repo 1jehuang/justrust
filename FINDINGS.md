@@ -7347,9 +7347,21 @@ passed. Warm whole-archive identity is explicitly not claimed.
 
 The first comprehensive baseline attempt had an incomplete assembled sysroot:
 five preparation builds failed with missing std/core before any valid measured
-samples, then the run stopped with exit 130. Original evidence is preserved.
-A new prefix recovered only matching immutable baseline runtime artifacts;
-both registered toolchains passed a real std compile/link/run smoke test.
-The matched 40-point performance comparison remains open. No speedup, zero
-default overhead, full CPU/span or useful-thread ceiling follows from these
-correctness results. See `docs/dispatch-result-provenance-results-20261015.md`.
+samples, then the run stopped with exit 130. A matching-runtime recovery passed
+a std smoke test but the real workspace exposed missing proc_macro, so that
+attempt was also stopped. Both failures and their logs remain preserved.
+
+Fresh isolated A2/B2 source reconstructions subsequently built complete native
+sysroots, passed proc-macro compile/load, std execution and libtest, and each
+passed the pinned 895-unit Desktop release preflight. Independent review
+verified source, config, cache, prefix and selected-toolchain identities.
+These preflights are setup/correctness evidence, not speed comparisons.
+
+The attested A2 seed-1/40-point baseline completed, but its own eligibility
+checks report contention and unexpected test outcomes. For example, run
+`20261014-230759120-1788897944` exited 101 with nine failed tests where success
+was expected. A zero suite-process exit does not make those samples valid.
+The candidate measurement is withheld pending a usable baseline, and the
+comprehensive comparison remains blocked rather than replaced by a narrow
+fixture. No speedup, zero default overhead, full CPU/span or useful-thread
+ceiling follows. See `docs/dispatch-result-provenance-results-20261015.md`.
