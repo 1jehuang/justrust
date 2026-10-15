@@ -26,12 +26,14 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def fixture_controls(sink, *, large=False, timing=False, dispatch=False):
-    text = str(sink or '-') + '\n' + ('1000000' if large or timing or dispatch else 'default') + '\n'
-    if timing or dispatch:
-        text += ('timing' if timing else 'off') + '\n'
-    if dispatch:
-        text += 'dispatch\n'
+def fixture_controls(sink, *, large=False, timing=False, dispatch=False, query_cpu=False):
+    text = str(sink or '-') + '\n' + ('1000000' if large or timing or dispatch or query_cpu else 'default') + '\n'
+    if timing or dispatch or query_cpu:
+        text += ('timing' if timing or query_cpu else 'off') + '\n'
+    if dispatch or query_cpu:
+        text += ('dispatch' if dispatch else 'off') + '\n'
+    if query_cpu:
+        text += 'query_cpu\n'
     return text
 
 
@@ -126,13 +128,16 @@ class FrontendMappingNative(unittest.TestCase):
             str(driver.parent), str(meta.parent), str(self.metadata / 'lib'),
             self.env.get('LD_LIBRARY_PATH', '')])
         fixture = repo / 'tests/fixtures/frontend_mapping_driver.rs'
+        self.analyzer = repo / 'bench/frontend_mapping.py'
+        self.analyzer_sha256 = digest(self.analyzer)
         shutil.copyfile(fixture, self.root / fixture.name)
         (self.root / 'provenance.json').write_text(json.dumps({
             'crate': 'itoa', 'version': versions[0], 'edition': self.edition,
             'source_root': str(self.source_root), 'source_hashes': self.source_hashes,
             'default_features': [], 'local_reason': 'accepted private compiler diagnostic',
             'artifacts': {str(p): digest(p) for p in
-                          (self.rustc, self.stage0, driver, meta, fixture, repo / 'Cargo.lock',
+                          (self.rustc, self.stage0, driver, meta, fixture, self.analyzer,
+                           Path(__file__), repo / 'Cargo.lock',
                            self.client)}
         }, indent=2))
         self.callback = self.root / 'frontend-driver'
@@ -148,12 +153,16 @@ class FrontendMappingNative(unittest.TestCase):
         if self._testMethodName == 'test_real_itoa_dispatch_resolutions':
             build_args.extend(['--cfg=frontend_large_capacity', '--cfg=frontend_timing_api',
                                '--cfg=frontend_dispatch_api'])
+        if self._testMethodName == 'test_real_itoa_query_cpu_ownership':
+            build_args.extend(['--cfg=frontend_large_capacity', '--cfg=frontend_timing_api',
+                               '--cfg=frontend_dispatch_api', '--cfg=frontend_query_cpu_api'])
         if os.environ.get('JR_FRONTEND_SCOPE_API'):
             build_args.append('--cfg=frontend_scope_api')
         self.logged(build_args, 'driver-build')
 
     def compile(self, label, threads, output, incremental=None, capture=False, large=False,
-                timing=False, dispatch=False):
+                timing=False, dispatch=False, query_cpu=False):
+        timing = timing or query_cpu
         sink = self.root / (label + '-capture') if capture else None
         args = ['--sysroot', self.sysroot, '--crate-name=itoa', '--crate-type=rlib',
                 '--edition=' + self.edition, '--emit=link', '-Copt-level=0', '-Cdebuginfo=0',
@@ -161,7 +170,8 @@ class FrontendMappingNative(unittest.TestCase):
                 self.source, '-o', output]
         if incremental is not None:
             args.append('-Cincremental=' + str(incremental))
-        control = fixture_controls(sink, large=large, timing=timing, dispatch=dispatch)
+        control = fixture_controls(sink, large=large, timing=timing, dispatch=dispatch,
+                                   query_cpu=query_cpu)
         result = self.logged([self.callback, *args], label, control=control)
         self.assertTrue(output.is_file(), 'real link-emitted rlib required')
         self.assertGreater(output.stat().st_size, 0)
@@ -200,9 +210,15 @@ class FrontendMappingNative(unittest.TestCase):
         if sink is None:
             return artifact, None, args, result.stderr, payload_hashes, executable_hash
         graph_command = [self.client, 'graph', sink, '--json']
-        if dispatch:
+        if query_cpu:
+            rejected = self.logged(graph_command + ['--large-capture'],
+                                   label + '-implicit-query-cpu-graph', expected=None)
+            self.assertNotEqual(rejected.returncode, 0, 'pool4 requires explicit query CPU analysis')
+            graph_command.append('--query-cpu-ownership')
+        if dispatch and not query_cpu:
             rejected = self.logged(graph_command, label + '-implicit-dispatch-graph', expected=None)
             self.assertNotEqual(rejected.returncode, 0, 'query6 requires explicit dispatch analysis')
+        if dispatch:
             graph_command.append('--dispatch-result-provenance')
         if large:
             rejected = self.logged(graph_command, label + '-default-graph', expected=None)
@@ -267,10 +283,13 @@ class FrontendMappingNative(unittest.TestCase):
             'public': assessments,
         }
         if dispatch:
-            summary['dispatch'] = self.assert_dispatch_receipts(query, assessments, sink, label)
+            summary['dispatch'] = self.assert_dispatch_receipts(query, assessments, sink, label,
+                                                               query_cpu=query_cpu)
         if timing:
             summary['timing'] = self.assert_timed_receipts(query, pools, assessments, sink, label,
-                                                        large=large)
+                                                        large=large, query_cpu=query_cpu)
+        if query_cpu:
+            summary['query_cpu'] = self.assert_query_cpu_receipts(query, pools, assessments)
         (self.root / (label + '-inventory.json')).write_text(json.dumps(summary, indent=2))
         print(json.dumps({k: v for k, v in summary.items() if k != 'public'}, sort_keys=True), flush=True)
         query_public = [a for a in assessments if a['producer'] == 'rustc-query-admission']
@@ -339,10 +358,11 @@ class FrontendMappingNative(unittest.TestCase):
             self.assertEqual(row['target'] is None, row['unbound_reason'] is not None)
         return bindings
 
-    def assert_timed_receipts(self, query, pools, assessments, sink, label, *, large):
+    def assert_timed_receipts(self, query, pools, assessments, sink, label, *, large,
+                              query_cpu=False):
         self.assertEqual(len(pools), 1, 'one actual timed native pool required')
         pool = pools[0]
-        self.assertEqual(pool['schema'], 3)
+        self.assertEqual(pool['schema'], 4 if query_cpu else 3)
         clock = query['execution_clock']
         self.assertIsNotNone(clock, 'actual attached query5 clock required')
         self.assertEqual(set(clock), {'query_capture_id', 'pool_capture_id', 'pool_observer',
@@ -355,7 +375,7 @@ class FrontendMappingNative(unittest.TestCase):
             'capture_id': pool['capture_id'], 'observer': pool['observer']})
         timing = pool['timing']
         self.assertEqual(timing['clock_bridge'], clock)
-        self.assertEqual(timing['schema'], 1)
+        self.assertEqual(timing['schema'], 2 if query_cpu else 1)
         self.assertEqual(timing['scope'], 'observed-exclusive-thread-segments')
         self.assertEqual(timing['cpu_clock'], 'linux-thread-cpu')
         self.assertTrue(timing['sealed'])
@@ -370,7 +390,7 @@ class FrontendMappingNative(unittest.TestCase):
         self.assertGreater(len(segments), 0)
         ids = set()
         per_thread = collections.defaultdict(list)
-        task_cpu = opaque_cpu = measured = failed = 0
+        task_cpu = opaque_cpu = query_execution_cpu = measured = failed = 0
         envelope_uncertain = False
         for segment in segments:
             sid = segment['segment_id']
@@ -378,7 +398,12 @@ class FrontendMappingNative(unittest.TestCase):
             ids.add(sid)
             self.assertTrue(1 <= sid < timing['segment_allocator_high_water'])
             self.assertTrue(1 <= segment['thread_id'] < timing['thread_allocator_high_water'])
-            self.assertEqual(segment['task'] is None, segment['owner_kind'] == 'opaque')
+            if segment['owner_kind'] == 'query_execution':
+                self.assertTrue(query_cpu, 'legacy timing gained query ownership')
+                self.assertIsNotNone(segment['query_context'])
+                self.assertIsNotNone(segment['query_job'])
+            else:
+                self.assertEqual(segment['task'] is None, segment['owner_kind'] == 'opaque')
             per_thread[segment['thread_id']].append(segment)
             if segment['status'] == 'measured':
                 self.assertIsNotNone(segment['cpu_start_ns'])
@@ -391,6 +416,8 @@ class FrontendMappingNative(unittest.TestCase):
                     envelope_uncertain = True
                 if segment['owner_kind'] == 'task':
                     task_cpu += segment['cpu_ns']
+                elif segment['owner_kind'] == 'query_execution':
+                    query_execution_cpu += segment['cpu_ns']
                 else:
                     opaque_cpu += segment['cpu_ns']
                 measured += 1
@@ -426,7 +453,8 @@ class FrontendMappingNative(unittest.TestCase):
                         self.assertLessEqual(cpu_end, segment['cpu_start_ns'], 'exclusive CPU overlap')
                     cpu_end = segment['cpu_end_ns']
         if not failed:
-            self.assertGreater(task_cpu + opaque_cpu, 0, 'actual busy compiler must have scoped CPU')
+            self.assertGreater(task_cpu + opaque_cpu + query_execution_cpu, 0,
+                               'actual busy compiler must have scoped CPU')
         query_public = next(a for a in assessments if a['producer'] == 'rustc-query-admission')
         pool_public = next(a for a in assessments if a['producer'] == 'rustc-thread-pool-join')
         self.assertTrue(query_public['clock_alignment']['aligned'],
@@ -438,12 +466,16 @@ class FrontendMappingNative(unittest.TestCase):
             self.assertIsNone(cpu['observed_cpu_ns'])
             self.assertIsNone(cpu['task_cpu_ns'])
             self.assertIsNone(cpu['opaque_cpu_ns'])
+            if query_cpu:
+                self.assertIsNone(cpu['query_execution_cpu_ns'])
             self.assertFalse(cpu['records_complete'])
             self.assertTrue(cpu['issues'], 'unknown quantities need an explicit cause')
         else:
-            self.assertEqual(cpu['observed_cpu_ns'], task_cpu + opaque_cpu)
+            self.assertEqual(cpu['observed_cpu_ns'], task_cpu + opaque_cpu + query_execution_cpu)
             self.assertEqual(cpu['task_cpu_ns'], task_cpu)
             self.assertEqual(cpu['opaque_cpu_ns'], opaque_cpu)
+            if query_cpu:
+                self.assertEqual(cpu['query_execution_cpu_ns'], query_execution_cpu)
         self.assertEqual(cpu['measured_segments'], measured)
         self.assertEqual(cpu['failed_segments'], failed)
         self.assertEqual(cpu['observed_threads'], len(per_thread))
@@ -462,6 +494,8 @@ class FrontendMappingNative(unittest.TestCase):
             else:
                 shutil.copyfile(path, negative / path.name)
         replay_command = [self.client, 'graph', negative, '--json', '--large-capture']
+        if query_cpu:
+            replay_command.append('--query-cpu-ownership')
         if query['schema'] == 6:
             replay_command.append('--dispatch-result-provenance')
         rejected = self.logged(replay_command,
@@ -472,8 +506,14 @@ class FrontendMappingNative(unittest.TestCase):
             self.assertFalse(changed_query['clock_alignment']['aligned'],
                              'unilateral clock declaration acquired reciprocal authority')
             changed_pool = next(a for a in changed if a['producer'] == 'rustc-thread-pool-join')
-            self.assertEqual(changed_pool['observed_cpu'], cpu,
-                             'foreign query clock erased independent pool CPU evidence')
+            if not query_cpu:
+                self.assertEqual(changed_pool['observed_cpu'], cpu,
+                                 'foreign query clock erased independent pool CPU evidence')
+            else:
+                changed_cpu = changed_query['query_cpu_ownership']
+                self.assertFalse(changed_cpu['records_complete'])
+                self.assertIsNone(changed_cpu['query_execution_cpu_ns'])
+                self.assertEqual(changed_cpu['queries'], [])
             self.assertEqual(changed_query['task_bindings'], query_public['task_bindings'],
                              'clock mismatch altered independent point authority')
         return {'scoped_observed_cpu_ns': cpu['observed_cpu_ns'], 'task_cpu_ns': cpu['task_cpu_ns'],
@@ -483,7 +523,164 @@ class FrontendMappingNative(unittest.TestCase):
                 'observed_threads': len(per_thread), 'clock_aligned': True,
                 'unilateral_clock_rejected_or_unaligned': True}
 
-    def assert_dispatch_receipts(self, query, assessments, sink, label):
+    def assert_query_cpu_receipts(self, query, pools, assessments):
+        """Check every actual execution owner against original admitted lifetimes."""
+        admitted, completed = {}, {}
+        for event in query['events']:
+            key = event['context_id'], event['job_id']
+            target = admitted if event['kind'] == 'admitted' else completed
+            self.assertNotIn(key, target)
+            target[key] = event['at_ns']
+        segments = pools[0]['timing']['segments']
+        costs = collections.Counter()
+        per_owner = collections.defaultdict(list)
+        names = {}
+        owned_segments = 0
+        for segment in segments:
+            self.assertIn('query_context', segment)
+            self.assertIn('query_job', segment)
+            self.assertIn('query_name', segment)
+            context, job = segment['query_context'], segment['query_job']
+            self.assertEqual(context is None, job is None)
+            self.assertEqual(context is None, segment['query_name'] is None)
+            self.assertEqual(context is not None, segment['owner_kind'] == 'query_execution')
+            if context is None:
+                continue
+            owner = context, job
+            name = segment['query_name']
+            self.assertTrue(name.isascii() and name.isidentifier() and len(name) <= 128)
+            self.assertEqual(names.setdefault(owner, name), name, 'query kind changed for actual job')
+            self.assertIn(owner, admitted)
+            self.assertIn(owner, completed)
+            if segment['start_ns'] is not None and segment['end_ns'] is not None:
+                self.assertLessEqual(admitted[owner], segment['start_ns'])
+                self.assertLessEqual(segment['end_ns'], completed[owner])
+                per_owner[owner].append((segment['start_ns'], segment['end_ns']))
+            if segment['status'] == 'measured':
+                costs[owner] += segment['cpu_ns']
+                owned_segments += 1
+        for intervals in per_owner.values():
+            intervals.sort()
+            for left, right in zip(intervals, intervals[1:]):
+                self.assertLessEqual(left[1], right[0], 'same-query cross-thread overlap')
+        public = next(a for a in assessments if a['producer'] == 'rustc-query-admission')
+        cpu = public['query_cpu_ownership']
+        pool_cpu = next(a for a in assessments
+                        if a['producer'] == 'rustc-thread-pool-join')['observed_cpu']
+        self.assertEqual(cpu['scope'], 'observed-query-execution-cpu')
+        self.assertEqual(cpu['measured_segments'], owned_segments)
+        # Honest unknowns are correct negative behavior, but cannot satisfy this
+        # positive information-gain acceptance. Do not pass an all-unknown run.
+        self.assertIsNotNone(pool_cpu['query_execution_cpu_ns'], pool_cpu['issues'])
+        self.assertIsNotNone(cpu['query_execution_cpu_ns'], cpu['issues'])
+        self.assertGreater(owned_segments, 0, 'real compiler must execute observed queries')
+        self.assertGreater(cpu['query_execution_cpu_ns'], 0, 'actual query CPU required')
+        expected = [dict(query_context=context, query_job=job,
+                         query_name=names[(context, job)], cpu_ns=cost)
+                    for (context, job), cost in costs.items()]
+        expected.sort(key=lambda row: (-row['cpu_ns'], row['query_context'], row['query_job']))
+        self.assertEqual(cpu['queries'], expected)
+        self.assertEqual(cpu['query_execution_cpu_ns'], sum(costs.values()))
+        self.assertEqual(cpu['query_execution_cpu_ns'], pool_cpu['query_execution_cpu_ns'])
+        self.assertTrue(cpu['records_complete'], cpu['issues'])
+        return dict(query_execution_cpu_ns=cpu['query_execution_cpu_ns'],
+                    measured_segments=owned_segments, observed_query_owners=len(costs),
+                    all_original_owners_checked=True, records_complete=cpu['records_complete'])
+
+    @unittest.skipUnless(os.environ.get('JR_FRONTEND_QUERY_CPU'),
+                         'requires coherent explicit query CPU compiler and consumer')
+    def test_real_itoa_query_cpu_ownership(self):
+        self.replay_dispatch_legacy()
+        output = self.root / 'libitoa-query-cpu.rlib'
+        observations = []
+        cold = [self.compile(f'query-cpu-cold-{n}', 4, output, capture=on, query_cpu=True)
+                for n, on in enumerate((False, True, False))]
+        self.assert_dispatch_control_neutrality([f'query-cpu-cold-{n}' for n in range(3)])
+        for first, other in zip(cold, cold[1:]):
+            self.assertEqual(first[0], other[0], 'query CPU changed cold archive bytes')
+            self.assertEqual(first[2:], other[2:], 'query CPU changed external compiler behavior')
+        observations.append(cold[1][1])
+        incremental = self.root / 'incremental-query-cpu'
+        self.compile('query-cpu-warmup', 4, output, incremental=incremental, query_cpu=True)
+        warm = [self.compile(f'query-cpu-warm-{n}', 4, output, incremental=incremental,
+                             capture=on, query_cpu=True)
+                for n, on in enumerate((False, True, False))]
+        self.assert_dispatch_control_neutrality([f'query-cpu-warm-{n}' for n in range(3)])
+        off = self.compile('query-cpu-warm-off-control', 4, output, incremental=incremental,
+                           query_cpu=True)
+        for first, other in zip(warm, warm[1:]):
+            self.assertEqual(first[2:], other[2:], 'query CPU changed warm payload/diagnostics/run')
+        self.assertEqual(warm[-1][4:], off[4:])
+        observations.append(warm[1][1])
+        mixed = self.compile('query-cpu-with-dispatch', 4, output, capture=True,
+                             query_cpu=True, dispatch=True)
+        observations.append(mixed[1])
+        for evidence in observations:
+            self.assert_query_cpu_analyzer(evidence)
+        self.assertEqual(self.source_hashes, {
+            str(p.relative_to(self.source_root)): digest(p)
+            for p in sorted((self.source_root / 'src').rglob('*.rs'))})
+        (self.root / 'query-cpu-acceptance.json').write_text(json.dumps({
+            'observations': observations, 'cold_archive_byte_identity': True,
+            'warm_rmeta_object_consumer_identity': True, 'full_pipeline_complete': False,
+            'cpu_work_ns': None, 'execution_span_ns': None}, indent=2))
+
+    def assert_query_cpu_analyzer(self, evidence):
+        """Exercise actual public analyzer, full artifact and named-kind rankings."""
+        label = evidence['label']
+        sink = self.root / (label + '-capture')
+        original = {p.name: digest(p) for p in sink.glob('*.json')}
+        output = self.root / (label + '-frontend-summary.json')
+        graph = self.root / (label + '-frontend-graph.json')
+        command = ['python3', self.analyzer, '--capture', sink, '--justrust', self.client,
+                   '--large-capture', '--query-cpu-ownership', '--graph-output', graph,
+                   '--output', output]
+        self.logged(command, label + '-analyzer')
+        report = json.loads(output.read_text())
+        native = json.loads(graph.read_text())
+        self.assertEqual(graph.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(report['graph_output']['sha256'], digest(graph))
+        self.assertEqual(report['graph_output']['bytes'], graph.stat().st_size)
+        actual = next(a for a in native if a['producer'] == 'rustc-query-admission')
+        expected = next(a for a in evidence['public']
+                        if a['producer'] == 'rustc-query-admission')
+        self.assertNotIn('dispatch_result_provenance', actual,
+                         'CPU-only root6 analysis acquired independent dispatch opt-in')
+        self.assertNotIn('cache_call_provenance', actual)
+        self.assertEqual(actual['query_cpu_ownership'], expected['query_cpu_ownership'])
+        summary, = report['captures']
+        costs = expected['query_cpu_ownership']
+        compact = summary['query_cpu_ownership']
+        self.assertTrue(compact['records_complete'], compact['issues'])
+        self.assertEqual(compact['query_execution_cpu_ns'], costs['query_execution_cpu_ns'])
+        self.assertEqual(compact['observed_query_owners'], len(costs['queries']))
+        self.assertEqual(compact['top_queries'], costs['queries'][:20])
+        kinds = collections.Counter()
+        for row in costs['queries']:
+            kinds[row['query_name']] += row['cpu_ns']
+        ranked = [dict(query_name=name, cpu_ns=cost)
+                  for name, cost in sorted(kinds.items(), key=lambda row: (-row[1], row[0]))]
+        self.assertEqual(compact['observed_query_kinds'], len(kinds))
+        self.assertEqual(compact['top_query_kinds'], ranked[:20])
+        self.assertEqual(sum(kinds.values()), costs['query_execution_cpu_ns'])
+        for scope in (report, summary):
+            self.assertFalse(scope['full_pipeline_complete'])
+            self.assertIsNone(scope['cpu_work_ns'])
+            self.assertIsNone(scope['execution_span_ns'])
+            self.assertIsNone(scope['theoretical_parallelism'])
+        # An artifact collision must preserve both original files and avoid even
+        # creating the fresh report. This executes the real CLI, not a mock.
+        before = digest(graph), digest(output)
+        collision = self.root / (label + '-must-not-exist.json')
+        rejected = self.logged(command[:-1] + [collision], label + '-analyzer-collision', expected=None)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertFalse(collision.exists())
+        self.assertEqual(before, (digest(graph), digest(output)))
+        self.assertEqual(original, {p.name: digest(p) for p in sink.glob('*.json')})
+        self.assertEqual(digest(self.analyzer), self.analyzer_sha256)
+
+    def assert_dispatch_receipts(self, query, assessments, sink, label, *, query_cpu=False):
         """Reconstruct every certified row directly from original native events."""
         reads = query['query_reads']
         self.assertEqual(reads['schema'], 2)
@@ -566,9 +763,11 @@ class FrontendMappingNative(unittest.TestCase):
         self.assertTrue(report['records_complete'])
         self.assertNotIn('cache_call_provenance', public)
         # Both analyses are independently opted in and cannot alter one another.
-        both = json.loads(self.logged([
-            self.client, 'graph', sink, '--json', '--large-capture',
-            '--dispatch-result-provenance', '--cache-call-provenance'], label + '-both-graph').stdout)
+        command = [self.client, 'graph', sink, '--json', '--large-capture',
+                   '--dispatch-result-provenance', '--cache-call-provenance']
+        if query_cpu:
+            command.append('--query-cpu-ownership')
+        both = json.loads(self.logged(command, label + '-both-graph').stdout)
         both_query = next(a for a in both if a['producer'] == 'rustc-query-admission')
         cache = both_query.pop('cache_call_provenance')
         self.assertEqual(both, assessments)
@@ -783,6 +982,20 @@ class FrontendMappingNative(unittest.TestCase):
 
 
 class FixtureControlSafety(unittest.TestCase):
+    def test_query_cpu_positive_acceptance_refuses_all_unknown(self):
+        harness = FrontendMappingNative('test_real_itoa_query_cpu_ownership')
+        query = {'events': []}
+        pools = [{'timing': {'segments': []}}]
+        assessments = [
+            dict(producer='rustc-query-admission', query_cpu_ownership=dict(
+                scope='observed-query-execution-cpu', measured_segments=0,
+                query_execution_cpu_ns=None, queries=[], records_complete=False,
+                issues=['unavailable'])),
+            dict(producer='rustc-thread-pool-join', observed_cpu=dict(
+                query_execution_cpu_ns=None, issues=['unavailable']))]
+        with self.assertRaises(AssertionError):
+            harness.assert_query_cpu_receipts(query, pools, assessments)
+
     def test_legacy_and_dispatch_control_packets_are_separate(self):
         self.assertEqual(fixture_controls(None), '-\ndefault\n')
         self.assertEqual(fixture_controls('/capture'), '/capture\ndefault\n')
@@ -791,6 +1004,10 @@ class FixtureControlSafety(unittest.TestCase):
         self.assertEqual(fixture_controls('/capture', dispatch=True), '/capture\n1000000\noff\ndispatch\n')
         self.assertEqual(fixture_controls('/capture', timing=True, dispatch=True),
                          '/capture\n1000000\ntiming\ndispatch\n')
+        self.assertEqual(fixture_controls('/capture', query_cpu=True),
+                         '/capture\n1000000\ntiming\noff\nquery_cpu\n')
+        self.assertEqual(fixture_controls('/capture', dispatch=True, query_cpu=True),
+                         '/capture\n1000000\ntiming\ndispatch\nquery_cpu\n')
 
     def test_foreign_descriptor_is_not_overwritten(self):
         read_fd, write_fd = os.pipe2(os.O_CLOEXEC)

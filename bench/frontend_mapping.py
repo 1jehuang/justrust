@@ -189,7 +189,7 @@ def _read_regular(path, remaining, directory_fd=None):
 
 
 def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_output,
-               dispatch_result_provenance=False):
+               dispatch_result_provenance=False, query_cpu_ownership=False):
     command = [str(justrust), 'graph', str(snapshot), '--json']
     if large_capture:
         command.append('--large-capture')
@@ -197,7 +197,9 @@ def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_o
         command.append('--cache-call-provenance')
     if dispatch_result_provenance:
         command.append('--dispatch-result-provenance')
-    if cache_call_provenance or dispatch_result_provenance:
+    if query_cpu_ownership:
+        command.append('--query-cpu-ownership')
+    if cache_call_provenance or dispatch_result_provenance or query_cpu_ownership:
         # Reserve before invoking the validator, so collisions never overwrite an
         # existing artifact or perform an unnecessary potentially expensive run.
         fd = os.open(graph_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -268,12 +270,60 @@ def _dispatch_result_summary(assessment):
                 stored_relation_rows=len(result['relations']))
 
 
+def _query_cpu_summary(assessment):
+    """Copy admitted execution CPU facts, never infer providers, span or ancestry."""
+    cpu = assessment.get('query_cpu_ownership')
+    if (not isinstance(cpu, dict) or cpu.get('scope') != 'observed-query-execution-cpu'
+            or type(cpu.get('records_complete')) is not bool
+            or type(cpu.get('measured_segments')) is not int or cpu['measured_segments'] < 0
+            or not isinstance(cpu.get('queries'), list)
+            or not isinstance(cpu.get('issues'), list)
+            or any(not isinstance(issue, str) for issue in cpu['issues'])):
+        raise ValueError('missing or malformed native query CPU ownership authority')
+    total = cpu.get('query_execution_cpu_ns')
+    if total is not None and (type(total) is not int or total < 0):
+        raise ValueError('invalid native query CPU total')
+    identities = set()
+    kinds = collections.Counter()
+    for row in cpu['queries']:
+        if (not isinstance(row, dict)
+                or any(type(row.get(key)) is not int or row[key] <= 0
+                       for key in ('query_context', 'query_job'))
+                or type(row.get('cpu_ns')) is not int or row['cpu_ns'] < 0):
+            raise ValueError('invalid native query CPU row')
+        name = row.get('query_name')
+        if (not isinstance(name, str) or not 1 <= len(name) <= 128
+                or not name.isascii() or not name.isidentifier()):
+            raise ValueError('invalid native query CPU name')
+        identity = row['query_context'], row['query_job']
+        if identity in identities:
+            raise ValueError('duplicate native query CPU owner')
+        identities.add(identity)
+        kinds[name] += row['cpu_ns']
+    ranked = sorted(cpu['queries'], key=lambda row: (
+        -row['cpu_ns'], row['query_context'], row['query_job']))
+    if total is not None and sum(row['cpu_ns'] for row in ranked) != total:
+        raise ValueError('native query CPU partition mismatch')
+    if total is None and ranked:
+        raise ValueError('unknown native query CPU cannot expose numeric rankings')
+    if cpu['records_complete'] and (total is None or cpu['issues']):
+        raise ValueError('complete native query CPU has unknown or issue-bearing authority')
+    ranked_kinds = [dict(query_name=name, cpu_ns=cost)
+                    for name, cost in sorted(kinds.items(), key=lambda row: (-row[1], row[0]))]
+    return dict(scope=cpu['scope'], records_complete=cpu['records_complete'],
+                query_execution_cpu_ns=total, measured_segments=cpu['measured_segments'],
+                observed_query_owners=len(ranked), top_queries=ranked[:20],
+                omitted_query_owners=max(0, len(ranked) - 20),
+                observed_query_kinds=len(ranked_kinds), top_query_kinds=ranked_kinds[:20],
+                omitted_query_kinds=max(0, len(ranked_kinds) - 20), issues=cpu['issues'])
+
+
 def analyze(directory, justrust, large_capture=False, cache_call_provenance=False,
-            graph_output=None, dispatch_result_provenance=False):
-    provenance = cache_call_provenance or dispatch_result_provenance
+            graph_output=None, dispatch_result_provenance=False, query_cpu_ownership=False):
+    provenance = cache_call_provenance or dispatch_result_provenance or query_cpu_ownership
     if provenance != (graph_output is not None):
         raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
-                         'requires companion --graph-output and vice versa')
+                         'or --query-cpu-ownership requires companion --graph-output and vice versa')
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('capture must be a nonsymlink directory')
@@ -313,7 +363,9 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
     snapshot_names = {name for name, _ in originals}
     for name, content in originals:
         receipt = json.loads(content)
-        if receipt.get('producer') == 'rustc-thread-pool-join' and receipt.get('schema') == 3:
+        if receipt.get('producer') == 'rustc-thread-pool-join' and receipt.get('schema') in (3, 4):
+            if receipt['schema'] == 4 and not query_cpu_ownership:
+                raise ValueError('pool4 requires explicit --query-cpu-ownership')
             capture_id = receipt['capture_id']
             if not isinstance(capture_id, str) or capture_id in pool_sources:
                 raise ValueError('invalid or duplicate CPU pool source capture identity')
@@ -326,7 +378,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             raise ValueError('query capture identity must be a string')
         if capture_id in query_sources:
             raise ValueError('duplicate query source capture identity')
-        allowed_schemas = (4, 5, 6) if dispatch_result_provenance else (4, 5)
+        allowed_schemas = (4, 5, 6) if dispatch_result_provenance or query_cpu_ownership else (4, 5)
         if type(receipt.get('schema')) is not int or receipt['schema'] not in allowed_schemas:
             raise ValueError('frontend report requires native schema4/5 evidence '
                              'or explicit --dispatch-result-provenance for schema6')
@@ -353,7 +405,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             destination.chmod(0o400)
         assessments, artifact = _run_graph(snapshot, justrust, large_capture,
                                           cache_call_provenance, graph_output,
-                                          dispatch_result_provenance)
+                                          dispatch_result_provenance, query_cpu_ownership)
         indexed = {}
         pool_indexed = {}
         for assessment in assessments:
@@ -371,7 +423,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             raise ValueError('query source/validated authority mismatch')
         pool_authorities = {}
         timing_ids = {key for key, value in pool_indexed.items()
-                      if value.get('schema') == 3 or value.get('observed_cpu') is not None}
+                      if value.get('schema') in (3, 4) or value.get('observed_cpu') is not None}
         if timing_ids != set(pool_sources):
             raise ValueError('CPU pool source/validated authority mismatch')
         for key, source in pool_sources.items():
@@ -381,7 +433,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
                                    pool_capture_id=key, pool_observer=source['observer'],
                                    pool_epoch_in_query_ns=0)
             bridge = cpu.get('clock_bridge') if isinstance(cpu, dict) else None
-            if (type(authority.get('schema')) is not int or authority['schema'] != 3
+            if (type(authority.get('schema')) is not int or authority['schema'] != source['schema']
                     or type(source['schema']) is not int
                     or not isinstance(source['query_capture_id'], str)
                     or type(source['observer']) is not int or source['observer'] <= 0
@@ -411,6 +463,8 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
                 if authority['schema'] != 6:
                     raise ValueError('dispatch-result provenance requires native schema6 authority')
                 summary['dispatch_result_provenance'] = _dispatch_result_summary(authority)
+            if query_cpu_ownership:
+                summary['query_cpu_ownership'] = _query_cpu_summary(authority)
             summaries.append(summary)
         if not summaries:
             raise ValueError('no native frontend receipt')
@@ -434,16 +488,18 @@ def main():
                         help='Opt in to native cache-result availability relations, not execution edges')
     parser.add_argument('--dispatch-result-provenance', action='store_true',
                         help='Opt in to native schema6 dispatch-result availability, not execution edges')
+    parser.add_argument('--query-cpu-ownership', action='store_true',
+                        help='Opt in to validated exclusive query-execution CPU ownership, not a critical path')
     parser.add_argument('--graph-output', type=Path,
-                        help='Required with either provenance flag: exclusive full native graph JSON artifact outside the capture directory')
+                        help='Required with provenance or query CPU ownership: exclusive full native graph JSON artifact outside the capture directory')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        provenance = args.cache_call_provenance or args.dispatch_result_provenance
+        provenance = args.cache_call_provenance or args.dispatch_result_provenance or args.query_cpu_ownership
         if provenance or args.graph_output is not None:
             if not provenance or args.graph_output is None:
                 raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
-                                 'requires companion --graph-output and vice versa')
+                                 'or --query-cpu-ownership requires companion --graph-output and vice versa')
             if args.output.resolve() == args.graph_output.resolve():
                 raise ValueError('report and graph output paths must differ')
             if os.path.lexists(args.output):
@@ -451,7 +507,8 @@ def main():
             report = analyze(args.capture, args.justrust, args.large_capture,
                              cache_call_provenance=args.cache_call_provenance,
                              graph_output=args.graph_output,
-                             dispatch_result_provenance=args.dispatch_result_provenance)
+                             dispatch_result_provenance=args.dispatch_result_provenance,
+                             query_cpu_ownership=args.query_cpu_ownership)
         else:
             report = analyze(args.capture, args.justrust, args.large_capture)
         encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
