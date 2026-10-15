@@ -1,0 +1,114 @@
+{
+  "schema": 1,
+  "source": "genuine-retained-native-readiness-packets",
+  "consumer_sha256": "c477b59037551e26babe623103e1d52449717c3789c04917089798e1bfa203e0",
+  "original_sha256": {
+    "execution_flow_readiness_tests_waiter_beating_post_unlock_publication_finalization_is_explicitly_unbound-11.pool.json": "257a44d865d362e1113f4730336b3a4f74b590e9d52a6abbf40d8311df35950f",
+    "execution_flow_readiness_tests_cycle_poison_and_unwind_restore_caller_with_explicit_cuts-2.pool.json": "62804caf17348663962df571558e0ecab59fee7d06fe01e3e57244c5e54ca84e",
+    "execution_flow_readiness_tests_active_aborted_poisoned_foreign_and_original_wait_exhaustion_never_transfer-1.pool.json": "4dcd5ffe7a7e00c7cbbc9df7d72f77cadd11bc1407a7d7f2ae5c452aad565ab9",
+    "execution_flow_readiness_tests_registered_and_already_ready_have_fresh_encounters_and_two_exact_obligations-10.pool.json": "b20ab55a59022ac8fff36b1b0a79394ef77e6d5dd5677916aa17eb4bc8d307fa"
+  },
+  "cases": [
+    {
+      "source": "execution_flow_readiness_tests_waiter_beating_post_unlock_publication_finalization_is_explicitly_unbound-11.pool.json",
+      "mode": "default",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_waiter_beating_post_unlock_publication_finalization_is_explicitly_unbound-11.pool.json",
+      "mode": "query-cpu",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_waiter_beating_post_unlock_publication_finalization_is_explicitly_unbound-11.pool.json",
+      "mode": "flow",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_waiter_beating_post_unlock_publication_finalization_is_explicitly_unbound-11.pool.json",
+      "mode": "readiness",
+      "exit_code": 0,
+      "wait_attempts": 2,
+      "unbound_wait_attempts": 2,
+      "all_authority_unknown": true
+    },
+    {
+      "source": "execution_flow_readiness_tests_cycle_poison_and_unwind_restore_caller_with_explicit_cuts-2.pool.json",
+      "mode": "default",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_cycle_poison_and_unwind_restore_caller_with_explicit_cuts-2.pool.json",
+      "mode": "query-cpu",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_cycle_poison_and_unwind_restore_caller_with_explicit_cuts-2.pool.json",
+      "mode": "flow",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_cycle_poison_and_unwind_restore_caller_with_explicit_cuts-2.pool.json",
+      "mode": "readiness",
+      "exit_code": 0,
+      "wait_attempts": 4,
+      "unbound_wait_attempts": 0,
+      "all_authority_unknown": true
+    },
+    {
+      "source": "execution_flow_readiness_tests_active_aborted_poisoned_foreign_and_original_wait_exhaustion_never_transfer-1.pool.json",
+      "mode": "default",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_active_aborted_poisoned_foreign_and_original_wait_exhaustion_never_transfer-1.pool.json",
+      "mode": "query-cpu",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_active_aborted_poisoned_foreign_and_original_wait_exhaustion_never_transfer-1.pool.json",
+      "mode": "flow",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_active_aborted_poisoned_foreign_and_original_wait_exhaustion_never_transfer-1.pool.json",
+      "mode": "readiness",
+      "exit_code": 0,
+      "wait_attempts": 5,
+      "unbound_wait_attempts": 5,
+      "all_authority_unknown": true
+    },
+    {
+      "source": "execution_flow_readiness_tests_registered_and_already_ready_have_fresh_encounters_and_two_exact_obligations-10.pool.json",
+      "mode": "default",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_registered_and_already_ready_have_fresh_encounters_and_two_exact_obligations-10.pool.json",
+      "mode": "query-cpu",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_registered_and_already_ready_have_fresh_encounters_and_two_exact_obligations-10.pool.json",
+      "mode": "flow",
+      "exit_code": 1
+    },
+    {
+      "source": "execution_flow_readiness_tests_registered_and_already_ready_have_fresh_encounters_and_two_exact_obligations-10.pool.json",
+      "mode": "readiness",
+      "exit_code": 0,
+      "wait_attempts": 3,
+      "unbound_wait_attempts": 0,
+      "all_authority_unknown": true
+    }
+  ],
+  "active_mode_unwound_checked": true,
+  "registered_null_checked": true,
+  "all_checks_passed": true,
+  "originals_unchanged": true,
+  "consumer_unchanged": true,
+  "limitations": [
+    "Pool-only guard-test packets have no original admission/wait root. Acceptance proves typed partial handling and exact native failure/success role shape, not qualified positive readiness transfers.",
+    "These four packets have no independently qualified nonquery CPU. This oracle does not require suppressing genuine nonquery CPU in other partial captures."
+  ]
+}
