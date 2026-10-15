@@ -739,6 +739,16 @@ pub(crate) mod tests {
             complete: true,
             clock: Some(serde_json::from_value(fixture()["clock_bridge"].clone()).unwrap()),
             lifetimes: BTreeMap::from([((1, 1), (1, 100)), ((1, 2), (1, 100))]),
+            terminals: BTreeMap::from([
+                (
+                    (1, 1),
+                    crate::execution_graph_query::QueryTerminal::Completed,
+                ),
+                (
+                    (1, 2),
+                    crate::execution_graph_query::QueryTerminal::Completed,
+                ),
+            ]),
         }
     }
 

@@ -26,6 +26,7 @@ mod execution_graph_continuation;
 mod execution_graph_flow;
 mod execution_graph_manifest;
 mod execution_graph_query;
+mod execution_graph_readiness;
 mod execution_graph_reads;
 mod execution_graph_resource;
 mod execution_graph_resource_attachment;
@@ -233,6 +234,9 @@ enum Command {
         /// Validate opt-in native query and fork/join flow, never full execution span.
         #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
         execution_flow_dag: bool,
+        /// Validate native latch readiness with explicit unknown visibility gaps, never full span.
+        #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
+        latch_readiness_dag: bool,
         #[arg(long)]
         json: bool,
     },
@@ -798,12 +802,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             query_cpu_ownership,
             observed_task_dag,
             execution_flow_dag,
+            latch_readiness_dag,
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
                 execution_graph_compiler_cli::command(&path, &manifest, json)?;
             } else {
-                execution_graph::command_with_execution_flow_dag(
+                execution_graph::command_with_latch_readiness_dag(
                     &path,
                     json,
                     manifest.as_deref(),
@@ -813,6 +818,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     query_cpu_ownership,
                     observed_task_dag,
                     execution_flow_dag,
+                    latch_readiness_dag,
                 )?;
             }
         }
@@ -1172,6 +1178,53 @@ mod passthrough_tests {
                     "graph",
                     "captures",
                     "--execution-flow-dag",
+                    manifest,
+                    "owner.json"
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn graph_latch_readiness_is_explicit_independent_and_manifest_exclusive() {
+        for enabled in [false, true] {
+            let mut args = vec!["justrust", "graph", "captures"];
+            if enabled {
+                args.push("--latch-readiness-dag");
+            }
+            assert!(matches!(Cli::try_parse_from(args).unwrap().command,
+                Command::Graph { latch_readiness_dag, execution_flow_dag:false,
+                    query_cpu_ownership:false, observed_task_dag:false,
+                    cache_call_provenance:false, dispatch_result_provenance:false, .. }
+                    if latch_readiness_dag == enabled));
+        }
+        for flag in [
+            "--execution-flow-dag",
+            "--query-cpu-ownership",
+            "--observed-task-dag",
+            "--cache-call-provenance",
+            "--dispatch-result-provenance",
+            "--large-capture",
+        ] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--latch-readiness-dag",
+                    flag
+                ])
+                .is_ok()
+            );
+        }
+        for manifest in ["--manifest", "--compiler-manifest"] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--latch-readiness-dag",
                     manifest,
                     "owner.json"
                 ])

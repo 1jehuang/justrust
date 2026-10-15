@@ -14,6 +14,7 @@ pub(crate) struct CapturePolicy {
     pub(crate) query_cpu_ownership: bool,
     pub(crate) observed_task_dag: bool,
     pub(crate) execution_flow_dag: bool,
+    pub(crate) latch_readiness_dag: bool,
 }
 
 impl CapturePolicy {
@@ -24,6 +25,7 @@ impl CapturePolicy {
             query_cpu_ownership: false,
             observed_task_dag: false,
             execution_flow_dag: false,
+            latch_readiness_dag: false,
         }
     }
 
@@ -34,6 +36,7 @@ impl CapturePolicy {
             query_cpu_ownership: false,
             observed_task_dag: false,
             execution_flow_dag: false,
+            latch_readiness_dag: false,
         }
     }
 }
@@ -263,6 +266,13 @@ pub(crate) struct QueryExecutionInventory {
     pub complete: bool,
     pub clock: Option<crate::execution_graph_timing::ClockBridge>,
     pub lifetimes: BTreeMap<(u64, u64), (u64, u64)>,
+    pub terminals: BTreeMap<(u64, u64), QueryTerminal>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueryTerminal {
+    Completed,
+    Poisoned,
 }
 
 /// Clock authority only. Valid alignment does not attest CPU coverage, query
@@ -307,7 +317,7 @@ impl CollectedQuery {
                 }
                 match pools.get(&clock.pool_capture_id) {
                     Some(pool)
-                        if matches!(pool.schema, 3..=5)
+                        if matches!(pool.schema, 3..=6)
                             && pool.structural_complete
                             && pool.capture_id == clock.pool_capture_id
                             && pool.observer == clock.pool_observer
@@ -340,9 +350,78 @@ pub(crate) struct ValidatedQueryWaitInventory {
     capture_id: String,
     complete: bool,
     waits: BTreeMap<u64, WaitLifecycle>,
+    allocator_high_water: Option<u64>,
+    expected_waits: Option<u64>,
+    lost_events: u64,
+}
+
+pub(crate) struct OriginalWaitAuthority {
+    pub(crate) capture_id: String,
+    pub(crate) records_complete: bool,
+    pub(crate) allocator_high_water: Option<u64>,
+    pub(crate) expected_waits: Option<u64>,
+    pub(crate) lost_events: u64,
+    pub(crate) waits: BTreeMap<u64, OriginalWait>,
+}
+
+pub(crate) struct OriginalWait {
+    pub(crate) context: u64,
+    pub(crate) waitee: u64,
+    pub(crate) consumer: Option<u64>,
+    pub(crate) registered_ns: Option<u64>,
+    pub(crate) notified_ns: Option<u64>,
+    pub(crate) condvar_returned_ns: Option<u64>,
+    pub(crate) resumed_ns: Option<u64>,
+    pub(crate) reason: Option<OriginalWaitReason>,
+    pub(crate) valid: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OriginalWaitReason {
+    Completed,
+    Poisoned,
+    Cycle,
 }
 
 impl ValidatedQueryWaitInventory {
+    /// Retain facts from the original typed root, never infer allocator exhaustion
+    /// from absent nullable metadata or authorize an incomplete lifecycle.
+    pub(crate) fn original_authority(&self) -> OriginalWaitAuthority {
+        OriginalWaitAuthority {
+            capture_id: self.capture_id.clone(),
+            records_complete: self.complete,
+            allocator_high_water: self.allocator_high_water,
+            expected_waits: self.expected_waits,
+            lost_events: self.lost_events,
+            waits: self
+                .waits
+                .iter()
+                .filter_map(|(&id, w)| {
+                    let (context, waitee, consumer) = w.endpoints?;
+                    Some((
+                        id,
+                        OriginalWait {
+                            context,
+                            waitee,
+                            consumer,
+                            registered_ns: w.stages[0].map(|(_, ns)| ns),
+                            notified_ns: w.stages[1].map(|(_, ns)| ns),
+                            condvar_returned_ns: w.stages[2].map(|(_, ns)| ns),
+                            resumed_ns: w.stages[3].map(|(_, ns)| ns),
+                            reason: w.reason.map(|reason| match reason {
+                                WaitReason::Completed => OriginalWaitReason::Completed,
+                                WaitReason::Poisoned => OriginalWaitReason::Poisoned,
+                                WaitReason::Cycle => OriginalWaitReason::Cycle,
+                            }),
+                            valid: self.complete
+                                && !w.invalid
+                                && w.stages.iter().all(Option::is_some),
+                        },
+                    ))
+                })
+                .collect(),
+        }
+    }
     pub(crate) fn contains_resumed(&self, capture_id: &str, wait_id: u64) -> bool {
         self.complete
             && self.capture_id == capture_id
@@ -370,6 +449,9 @@ fn retain_wait_inventory(r: &ReceiptV4) -> ValidatedQueryWaitInventory {
         capture_id: r.capture_id.clone(),
         complete: false,
         waits,
+        allocator_high_water: r.wait_allocator_high_water,
+        expected_waits: r.expected_waits,
+        lost_events: r.lost_events,
     }
 }
 
@@ -620,7 +702,10 @@ fn collect_bytes_with_options(
         }
         return collect_dispatch_bindings(bytes, policy, cache_call_provenance);
     }
-    if (policy.query_cpu_ownership || policy.observed_task_dag || policy.execution_flow_dag)
+    if (policy.query_cpu_ownership
+        || policy.observed_task_dag
+        || policy.execution_flow_dag
+        || policy.latch_readiness_dag)
         && version.schema == 6
     {
         let mut query = collect_dispatch_bindings(bytes, policy, cache_call_provenance)?;
@@ -901,48 +986,55 @@ fn collect_bindings_base(
     // Assess admission, wait and read contracts independently. Binding partiality
     // must not downgrade any of these existing completeness assessments.
     let wait_inventory = retain_wait_inventory(&r);
-    let execution_inventory = if policy.query_cpu_ownership || policy.execution_flow_dag {
-        if r.events.len() > MAX_EVENTS {
-            bail!("query execution admission inventory exceeds budget");
-        }
-        let mut starts = BTreeMap::new();
-        let mut finishes = BTreeMap::new();
-        for event in &r.events {
-            match *event {
-                Event::Admitted {
-                    context_id,
-                    job_id,
-                    at_ns,
-                    ..
-                } => {
-                    starts.insert((context_id, job_id), at_ns);
-                }
-                Event::Completed {
-                    context_id,
-                    job_id,
-                    at_ns,
-                }
-                | Event::Poisoned {
-                    context_id,
-                    job_id,
-                    at_ns,
-                } => {
-                    finishes.insert((context_id, job_id), at_ns);
+    let execution_inventory =
+        if policy.query_cpu_ownership || policy.execution_flow_dag || policy.latch_readiness_dag {
+            if r.events.len() > MAX_EVENTS {
+                bail!("query execution admission inventory exceeds budget");
+            }
+            let mut starts = BTreeMap::new();
+            let mut finishes = BTreeMap::new();
+            let mut terminals = BTreeMap::new();
+            for event in &r.events {
+                match *event {
+                    Event::Admitted {
+                        context_id,
+                        job_id,
+                        at_ns,
+                        ..
+                    } => {
+                        starts.insert((context_id, job_id), at_ns);
+                    }
+                    Event::Completed {
+                        context_id,
+                        job_id,
+                        at_ns,
+                    } => {
+                        finishes.insert((context_id, job_id), at_ns);
+                        terminals.insert((context_id, job_id), QueryTerminal::Completed);
+                    }
+                    Event::Poisoned {
+                        context_id,
+                        job_id,
+                        at_ns,
+                    } => {
+                        finishes.insert((context_id, job_id), at_ns);
+                        terminals.insert((context_id, job_id), QueryTerminal::Poisoned);
+                    }
                 }
             }
-        }
-        Some(QueryExecutionInventory {
-            capture_id: r.capture_id.clone(),
-            complete: false,
-            clock: None,
-            lifetimes: starts
-                .into_iter()
-                .filter_map(|(key, start)| Some((key, (start, *finishes.get(&key)?))))
-                .collect(),
-        })
-    } else {
-        None
-    };
+            Some(QueryExecutionInventory {
+                capture_id: r.capture_id.clone(),
+                complete: false,
+                clock: None,
+                terminals,
+                lifetimes: starts
+                    .into_iter()
+                    .filter_map(|(key, start)| Some((key, (start, *finishes.get(&key)?))))
+                    .collect(),
+            })
+        } else {
+            None
+        };
     let mut assessment = assess_reads_policy(
         ReceiptV3 {
             schema: 3,
@@ -2132,6 +2224,94 @@ pub(crate) mod tests {
         v
     }
 
+    #[test]
+    fn readiness_original_wait_projection_retains_exact_authority_without_exhaustion_inference() {
+        let original = task_binding_fixture();
+        let capture = collect_bytes_with_policy(
+            &serde_json::to_vec(&original).unwrap(),
+            CapturePolicy::strict(),
+        )
+        .unwrap();
+        let authority = capture.wait_inventory.unwrap().original_authority();
+        assert_eq!(
+            authority.capture_id,
+            original["capture_id"].as_str().unwrap()
+        );
+        assert!(authority.records_complete);
+        assert_eq!(authority.allocator_high_water, Some(2));
+        assert_eq!(authority.expected_waits, Some(1));
+        assert_eq!(authority.lost_events, 0);
+        let row = &authority.waits[&1];
+        assert_eq!((row.context, row.waitee, row.consumer), (1, 2, Some(1)));
+        assert_eq!(
+            (
+                row.registered_ns,
+                row.notified_ns,
+                row.condvar_returned_ns,
+                row.resumed_ns
+            ),
+            (Some(10), Some(11), Some(12), Some(13))
+        );
+        assert_eq!(row.reason, Some(OriginalWaitReason::Completed));
+        assert!(row.valid);
+        let mut partial = original.clone();
+        partial["wait_capture_complete"] = json!(false);
+        partial["lost_events"] = json!(1);
+        partial["wait_events"].as_array_mut().unwrap().pop();
+        let capture = collect_bytes_with_policy(
+            &serde_json::to_vec(&partial).unwrap(),
+            CapturePolicy::strict(),
+        )
+        .unwrap();
+        let authority = capture.wait_inventory.unwrap().original_authority();
+        assert!(!authority.records_complete);
+        assert_eq!(authority.lost_events, 1);
+        assert!(!authority.waits[&1].valid);
+        assert_eq!(authority.waits[&1].resumed_ns, None);
+        assert_eq!(authority.allocator_high_water, Some(2));
+    }
+
+    #[test]
+    fn readiness_original_job_terminal_kind_is_not_erased_into_lifetime() {
+        let mut original = task_binding_fixture();
+        let policy = CapturePolicy {
+            latch_readiness_dag: true,
+            ..CapturePolicy::strict()
+        };
+        let capture =
+            collect_bytes_with_policy(&serde_json::to_vec(&original).unwrap(), policy).unwrap();
+        let inventory = capture.execution_inventory.unwrap();
+        assert!(inventory.complete);
+        for event in original["events"].as_array().unwrap() {
+            let expected = match event["kind"].as_str() {
+                Some("completed") => QueryTerminal::Completed,
+                Some("poisoned") => QueryTerminal::Poisoned,
+                _ => continue,
+            };
+            let key = (
+                event["context_id"].as_u64().unwrap(),
+                event["job_id"].as_u64().unwrap(),
+            );
+            assert_eq!(inventory.terminals[&key], expected);
+        }
+        let event = original["events"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["kind"] == "completed")
+            .unwrap();
+        let key = (
+            event["context_id"].as_u64().unwrap(),
+            event["job_id"].as_u64().unwrap(),
+        );
+        event["kind"] = json!("poisoned");
+        let capture =
+            collect_bytes_with_policy(&serde_json::to_vec(&original).unwrap(), policy).unwrap();
+        let changed = capture.execution_inventory.unwrap();
+        assert_eq!(changed.terminals[&key], QueryTerminal::Poisoned);
+        assert_eq!(changed.lifetimes, inventory.lifetimes);
+    }
+
     pub(crate) fn cache_call_fixture() -> Value {
         let mut v = task_binding_fixture();
         let mut hit = v["query_reads"]["events"][0].clone();
@@ -2207,6 +2387,7 @@ pub(crate) mod tests {
             query_cpu_ownership: false,
             observed_task_dag: false,
             execution_flow_dag: false,
+            latch_readiness_dag: false,
         };
         assert!(collect_bytes_with_analysis(text.as_bytes(), bounded, true).is_ok());
         for policy in [
@@ -2418,6 +2599,7 @@ pub(crate) mod tests {
                 query_cpu_ownership: false,
                 observed_task_dag: false,
                 execution_flow_dag: false,
+                latch_readiness_dag: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
@@ -2425,6 +2607,7 @@ pub(crate) mod tests {
                 query_cpu_ownership: false,
                 observed_task_dag: false,
                 execution_flow_dag: false,
+                latch_readiness_dag: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
@@ -2432,6 +2615,7 @@ pub(crate) mod tests {
                 query_cpu_ownership: false,
                 observed_task_dag: false,
                 execution_flow_dag: false,
+                latch_readiness_dag: false,
             },
         ] {
             assert!(collect_bytes_with_dispatch_analysis(text.as_bytes(), policy, false).is_err());
@@ -2445,6 +2629,7 @@ pub(crate) mod tests {
                     query_cpu_ownership: false,
                     observed_task_dag: false,
                     execution_flow_dag: false,
+                    latch_readiness_dag: false,
                 },
                 true
             )
@@ -2720,6 +2905,7 @@ pub(crate) mod tests {
             query_cpu_ownership: false,
             observed_task_dag: false,
             execution_flow_dag: false,
+            latch_readiness_dag: false,
         };
         let a = collect_bytes_with_policy(&bytes, policy)
             .unwrap()
@@ -2763,6 +2949,7 @@ pub(crate) mod tests {
             query_cpu_ownership: false,
             observed_task_dag: false,
             execution_flow_dag: false,
+            latch_readiness_dag: false,
         };
         let collected = collect_bytes_with_policy(&bytes, small).unwrap();
         assert_eq!(collected.assessment.schema, 4);

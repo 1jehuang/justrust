@@ -11,7 +11,8 @@ fn nullable<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<u64>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Receipt {
+#[serde(bound(deserialize = "F: Deserialize<'de>"))]
+struct Receipt<F = FlowEnvelope> {
     schema: u32,
     producer: String,
     scope: String,
@@ -37,18 +38,67 @@ struct Receipt {
     #[serde(default, deserialize_with = "optional_timing")]
     timing: Option<crate::execution_graph_timing::TimingCapture>,
     #[serde(default, deserialize_with = "optional_flow")]
-    execution_flow: Option<crate::execution_graph_flow::FlowCapture>,
+    execution_flow: Option<F>,
 }
-fn optional_flow<'de, D: Deserializer<'de>>(
+
+pub(crate) enum FlowEnvelope {
+    V1(crate::execution_graph_flow::FlowCapture),
+    V2(crate::execution_graph_readiness::ReadinessCapture),
+}
+
+impl<F> Receipt<F> {
+    fn map_flow(self, map: impl FnOnce(F) -> FlowEnvelope) -> Receipt {
+        Receipt {
+            schema: self.schema,
+            producer: self.producer,
+            scope: self.scope,
+            capture_id: self.capture_id,
+            query_capture_id: self.query_capture_id,
+            observer: self.observer,
+            full_pipeline_complete: self.full_pipeline_complete,
+            cpu_work_ns: self.cpu_work_ns,
+            execution_span_ns: self.execution_span_ns,
+            scope_coverage: self.scope_coverage,
+            scheduler_coverage: self.scheduler_coverage,
+            pre_attach_coverage: self.pre_attach_coverage,
+            sealed: self.sealed,
+            interface_outcome: self.interface_outcome,
+            task_allocator_baseline: self.task_allocator_baseline,
+            task_allocator_high_water: self.task_allocator_high_water,
+            expected_tasks: self.expected_tasks,
+            dropped_events: self.dropped_events,
+            events: self.events,
+            timing: self.timing,
+            execution_flow: self.execution_flow.map(map),
+        }
+    }
+}
+
+fn parse_receipt(bytes: &[u8]) -> Result<Receipt> {
+    #[derive(Deserialize)]
+    struct Version {
+        schema: u32,
+    }
+    // Header dispatch never replaces original bytes as protocol authority.
+    let version: Version = serde_json::from_slice(bytes)?;
+    if version.schema == 6 {
+        let r: Receipt<crate::execution_graph_readiness::ReadinessCapture> =
+            serde_json::from_slice(bytes)?;
+        Ok(r.map_flow(FlowEnvelope::V2))
+    } else {
+        let r: Receipt<crate::execution_graph_flow::FlowCapture> = serde_json::from_slice(bytes)?;
+        Ok(r.map_flow(FlowEnvelope::V1))
+    }
+}
+
+fn optional_flow<'de, D: Deserializer<'de>, F: Deserialize<'de>>(
     d: D,
-) -> std::result::Result<Option<crate::execution_graph_flow::FlowCapture>, D::Error> {
-    crate::execution_graph_flow::FlowCapture::deserialize(d).map(Some)
+) -> std::result::Result<Option<F>, D::Error> {
+    F::deserialize(d).map(Some)
 }
 /// Re-read the typed original envelope only after its full pool validation.
-pub(crate) fn execution_flow_from_validated_bytes(
-    bytes: &[u8],
-) -> Result<Option<crate::execution_graph_flow::FlowCapture>> {
-    let receipt: Receipt = serde_json::from_slice(bytes)?;
+pub(crate) fn execution_flow_from_validated_bytes(bytes: &[u8]) -> Result<Option<FlowEnvelope>> {
+    let receipt = parse_receipt(bytes)?;
     Ok(receipt.execution_flow)
 }
 fn optional_timing<'de, D: Deserializer<'de>>(
@@ -246,28 +296,32 @@ pub(crate) fn collect_bytes(bytes: &[u8]) -> Result<CollectedPool> {
 }
 #[cfg(test)]
 pub(crate) fn collect_task_inventory(bytes: &[u8], query_ownership: bool) -> Result<PoolInventory> {
-    collect_task_inventory_with_options(bytes, query_ownership, false)
+    collect_task_inventory_with_options(bytes, query_ownership, false, false)
 }
 pub(crate) fn collect_task_inventory_with_options(
     bytes: &[u8],
     query_ownership: bool,
     execution_flow: bool,
+    latch_readiness: bool,
 ) -> Result<PoolInventory> {
-    validate_bytes(bytes, query_ownership, execution_flow).map(|(_, inventory)| inventory)
+    validate_bytes(bytes, query_ownership, execution_flow, latch_readiness)
+        .map(|(_, inventory)| inventory)
 }
 pub(crate) fn collect_bytes_with_query_ownership(
     bytes: &[u8],
     query_ownership: bool,
 ) -> Result<CollectedPool> {
-    collect_bytes_with_options(bytes, query_ownership, false)
+    collect_bytes_with_options(bytes, query_ownership, false, false)
 }
 pub(crate) fn collect_bytes_with_options(
     bytes: &[u8],
     query_ownership: bool,
     execution_flow: bool,
+    latch_readiness: bool,
 ) -> Result<CollectedPool> {
-    let (assessment, inventory) = validate_bytes(bytes, query_ownership, execution_flow)?;
-    let inventory = matches!(inventory.schema, 2..=5).then_some(inventory);
+    let (assessment, inventory) =
+        validate_bytes(bytes, query_ownership, execution_flow, latch_readiness)?;
+    let inventory = matches!(inventory.schema, 2..=6).then_some(inventory);
     Ok(CollectedPool {
         assessment,
         inventory,
@@ -277,21 +331,23 @@ fn validate_bytes(
     bytes: &[u8],
     query_ownership: bool,
     execution_flow: bool,
+    latch_readiness: bool,
 ) -> Result<(Assessment, PoolInventory)> {
     if bytes.len() > MAX_BYTES {
         bail!("join receipt byte budget exceeded");
     }
-    let r: Receipt = serde_json::from_slice(bytes)?;
+    let r = parse_receipt(bytes)?;
     if !(matches!(r.schema, 1..=3)
         || (query_ownership && r.schema == 4)
-        || (execution_flow && r.schema == 5))
+        || (execution_flow && r.schema == 5)
+        || (latch_readiness && r.schema == 6))
         || r.producer != "rustc-thread-pool-join"
         || r.scope != "native-join-continuations"
     {
         bail!("unsupported join protocol");
     }
-    if (r.schema == 5) != r.execution_flow.is_some() {
-        bail!("execution_flow is mandatory only for explicitly admitted pool schema5");
+    if matches!(r.schema, 5 | 6) != r.execution_flow.is_some() {
+        bail!("execution_flow is mandatory only for explicitly admitted pool schema5/6");
     }
     if r.capture_id.is_empty()
         || r.capture_id.len() > 128
@@ -305,7 +361,7 @@ fn validate_bytes(
     }
     match (r.schema, r.query_capture_id.as_deref()) {
         (1, None) => {}
-        (2..=5, Some(id))
+        (2..=6, Some(id))
             if !id.is_empty()
                 && id.len() <= 128
                 && id != r.capture_id

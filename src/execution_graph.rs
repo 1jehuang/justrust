@@ -94,6 +94,8 @@ struct Assessment {
     #[serde(skip_serializing_if = "Option::is_none")]
     execution_flow_dag: Option<crate::execution_graph_flow::FlowAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    latch_readiness_dag: Option<crate::execution_graph_readiness::ReadinessAssessment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     clock_alignment: Option<crate::execution_graph_query::ClockAlignmentAssessment>,
     /// Strict native prefix/endorsement assessment, never compiler-launch authority.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -320,6 +322,7 @@ fn assess(r: Receipt) -> Result<Assessment> {
         query_cpu_ownership: None,
         observed_task_dag: None,
         execution_flow_dag: None,
+        latch_readiness_dag: None,
         clock_alignment: None,
         issues,
         opaque_boundaries: r.opaque_boundaries,
@@ -369,12 +372,13 @@ fn collect_pool_inventories_with_query_ownership(
     documents: &[Vec<u8>],
     query_ownership: bool,
 ) -> Result<BTreeMap<String, crate::execution_graph_continuation::PoolInventory>> {
-    collect_pool_inventories_with_options(documents, query_ownership, false)
+    collect_pool_inventories_with_options(documents, query_ownership, false, false)
 }
 fn collect_pool_inventories_with_options(
     documents: &[Vec<u8>],
     query_ownership: bool,
     execution_flow: bool,
+    latch_readiness: bool,
 ) -> Result<BTreeMap<String, crate::execution_graph_continuation::PoolInventory>> {
     let mut pools = BTreeMap::new();
     let mut identities = BTreeMap::<String, usize>::new();
@@ -390,6 +394,7 @@ fn collect_pool_inventories_with_options(
             bytes,
             query_ownership,
             execution_flow,
+            latch_readiness,
         )?;
         let id = pool.assessment.capture_id;
         if let Some(inventory) = pool.inventory {
@@ -554,6 +559,7 @@ fn assess_receipt_bytes_with_options(
                 query_cpu_ownership: None,
                 observed_task_dag: None,
                 execution_flow_dag: None,
+                latch_readiness_dag: None,
                 clock_alignment: None,
                 issues: vec!["requires explicit --compiler-manifest reconciliation".into()],
                 opaque_boundaries: vec!["compiler-launch-authority".into()],
@@ -592,6 +598,7 @@ fn assess_receipt_bytes_with_options(
                 query_cpu_ownership: None,
                 observed_task_dag: None,
                 execution_flow_dag: None,
+                latch_readiness_dag: None,
                 clock_alignment: query.clock_alignment,
                 issues: query.issues,
                 opaque_boundaries: query.opaque_boundaries,
@@ -604,6 +611,7 @@ fn assess_receipt_bytes_with_options(
                 bytes,
                 policy.query_cpu_ownership,
                 policy.execution_flow_dag,
+                policy.latch_readiness_dag,
             )?
             .assessment;
             Ok(Assessment {
@@ -629,6 +637,7 @@ fn assess_receipt_bytes_with_options(
                 query_cpu_ownership: None,
                 observed_task_dag: None,
                 execution_flow_dag: None,
+                latch_readiness_dag: None,
                 clock_alignment: None,
                 issues: join.issues,
                 opaque_boundaries: join.opaque_boundaries,
@@ -725,6 +734,7 @@ fn assess_resource_document(bytes: &[u8], producer: &str) -> Result<Assessment> 
         query_cpu_ownership: None,
         observed_task_dag: None,
         execution_flow_dag: None,
+        latch_readiness_dag: None,
         clock_alignment: None,
         issues,
         opaque_boundaries: vec!["bounded-resource-prefix-not-full-lifecycle".into()],
@@ -1162,6 +1172,36 @@ pub(crate) fn command_with_execution_flow_dag(
     observed_task_dag: bool,
     execution_flow_dag: bool,
 ) -> Result<()> {
+    command_with_latch_readiness_dag(
+        path,
+        json,
+        manifest,
+        large_capture,
+        cache_call_provenance,
+        dispatch_result_provenance,
+        query_cpu_ownership,
+        observed_task_dag,
+        execution_flow_dag,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn command_with_latch_readiness_dag(
+    path: &Path,
+    json: bool,
+    manifest: Option<&Path>,
+    large_capture: bool,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+    query_cpu_ownership: bool,
+    observed_task_dag: bool,
+    execution_flow_dag: bool,
+    latch_readiness_dag: bool,
+) -> Result<()> {
+    if latch_readiness_dag && manifest.is_some() {
+        bail!("--latch-readiness-dag is not supported with --manifest");
+    }
     if execution_flow_dag && manifest.is_some() {
         bail!("--execution-flow-dag is not supported with --manifest");
     }
@@ -1191,6 +1231,7 @@ pub(crate) fn command_with_execution_flow_dag(
     policy.query_cpu_ownership = query_cpu_ownership;
     policy.observed_task_dag = observed_task_dag;
     policy.execution_flow_dag = execution_flow_dag;
+    policy.latch_readiness_dag = latch_readiness_dag;
     let assessments = collect_path_with_options(
         path,
         policy,
@@ -1299,9 +1340,11 @@ fn collect_path_with_options(
         &documents,
         policy.query_cpu_ownership,
         policy.execution_flow_dag,
+        policy.latch_readiness_dag,
     )?;
     let mut query_authorities = BTreeMap::new();
-    if policy.query_cpu_ownership || policy.execution_flow_dag {
+    let mut wait_authorities = BTreeMap::new();
+    if policy.query_cpu_ownership || policy.execution_flow_dag || policy.latch_readiness_dag {
         let mut counts = BTreeMap::<String, usize>::new();
         for bytes in &documents {
             let header: serde_json::Value = serde_json::from_slice(bytes)?;
@@ -1321,12 +1364,19 @@ fn collect_path_with_options(
                     .clock_alignment
                     .as_ref()
                     .is_some_and(|c| c.aligned);
+                if policy.latch_readiness_dag
+                    && let Some(waits) = &query.wait_inventory
+                {
+                    let authority = waits.original_authority();
+                    wait_authorities.insert(authority.capture_id.clone(), authority);
+                }
                 if let Some(inventory) = query.execution_inventory {
                     query_authorities.insert(inventory.capture_id.clone(), (inventory, aligned));
                 }
             }
         }
         query_authorities.retain(|id, _| counts.get(id) == Some(&1));
+        wait_authorities.retain(|id, _| counts.get(id) == Some(&1));
     }
     for bytes in &documents {
         let mut assessment = assess_receipt_bytes_with_options(
@@ -1345,11 +1395,11 @@ fn collect_path_with_options(
         }
         assessments.push(assessment);
     }
-    if policy.query_cpu_ownership || policy.execution_flow_dag {
+    if policy.query_cpu_ownership || policy.execution_flow_dag || policy.latch_readiness_dag {
         let mut reports = BTreeMap::new();
         for assessment in &mut assessments {
             if assessment.producer != "rustc-thread-pool-join"
-                || !matches!(assessment.schema, 4 | 5)
+                || !matches!(assessment.schema, 4..=6)
             {
                 continue;
             }
@@ -1394,6 +1444,7 @@ fn collect_path_with_options(
                         bytes,
                         policy.query_cpu_ownership,
                         policy.execution_flow_dag,
+                        policy.latch_readiness_dag,
                     )?;
                 task_pools.insert(inventory.capture_id.clone(), inventory);
             }
@@ -1408,7 +1459,7 @@ fn collect_path_with_options(
             }
         }
     }
-    if policy.execution_flow_dag {
+    if policy.execution_flow_dag || policy.latch_readiness_dag {
         let mut counts = BTreeMap::<String, usize>::new();
         for bytes in &documents {
             let header: serde_json::Value = serde_json::from_slice(bytes)?;
@@ -1417,7 +1468,9 @@ fn collect_path_with_options(
             }
         }
         for (bytes, assessment) in documents.iter().zip(&mut assessments) {
-            if assessment.producer != "rustc-thread-pool-join" || assessment.schema != 5 {
+            if assessment.producer != "rustc-thread-pool-join"
+                || !matches!(assessment.schema, 5 | 6)
+            {
                 continue;
             }
             // Each original pool is independently parsed and locally validated,
@@ -1425,11 +1478,12 @@ fn collect_path_with_options(
             let pool = crate::execution_graph_continuation::collect_task_inventory_with_options(
                 bytes,
                 policy.query_cpu_ownership,
-                true,
+                policy.execution_flow_dag,
+                policy.latch_readiness_dag,
             )?;
             let flow =
                 crate::execution_graph_continuation::execution_flow_from_validated_bytes(bytes)?
-                    .expect("mandatory schema5 flow");
+                    .expect("mandatory schema5/6 flow");
             let timing = assessment
                 .observed_cpu
                 .as_ref()
@@ -1441,37 +1495,55 @@ fn collect_path_with_options(
             let authority = query_authorities
                 .get(query_id)
                 .filter(|_| pools.contains_key(&pool.capture_id));
-            let report = crate::execution_graph_flow::assess(
-                flow,
-                crate::execution_graph_flow::FlowContext {
-                    pool_capture_id: &pool.capture_id,
-                    query_capture_id: query_id,
-                    observer: pool.observer,
-                    pool_sealed: pool.sealed,
-                    structural_complete: pool.structural_complete,
-                    timing,
-                    query_inventory: authority.map(|(q, _)| q),
-                    clock_aligned: authority.is_some_and(|(_, aligned)| *aligned)
-                        && timing.query_clock_aligned,
-                    task_high_water: pool.task_high_water,
-                    task_intervals: &pool.task_intervals,
-                    task_edges: &pool.task_edges,
-                    task_outcomes: &pool.task_outcomes,
-                },
-            )?;
-            assessment.execution_flow_dag = Some(
-                if counts.get(&pool.capture_id) != Some(&1)
-                    || counts.get(query_id).is_some_and(|n| *n > 1)
-                {
-                    crate::execution_graph_flow::FlowAssessment::unavailable(
-                        &pool.capture_id,
-                        pool.observer,
-                        "duplicate or cross-producer capture identity makes execution flow authority unavailable",
-                    )
-                } else {
-                    report
-                },
-            );
+            let context = crate::execution_graph_flow::FlowContext {
+                pool_capture_id: &pool.capture_id,
+                query_capture_id: query_id,
+                observer: pool.observer,
+                pool_sealed: pool.sealed,
+                structural_complete: pool.structural_complete,
+                timing,
+                query_inventory: authority.map(|(q, _)| q),
+                clock_aligned: authority.is_some_and(|(_, aligned)| *aligned)
+                    && timing.query_clock_aligned,
+                task_high_water: pool.task_high_water,
+                task_intervals: &pool.task_intervals,
+                task_edges: &pool.task_edges,
+                task_outcomes: &pool.task_outcomes,
+            };
+            let duplicate = counts.get(&pool.capture_id) != Some(&1)
+                || counts.get(query_id).is_some_and(|n| *n > 1);
+            match flow {
+                crate::execution_graph_continuation::FlowEnvelope::V1(flow) => {
+                    let report = crate::execution_graph_flow::assess(flow, context)?;
+                    assessment.execution_flow_dag = Some(if duplicate {
+                        crate::execution_graph_flow::FlowAssessment::unavailable(
+                            &pool.capture_id,
+                            pool.observer,
+                            "duplicate or cross-producer capture identity makes execution flow authority unavailable",
+                        )
+                    } else {
+                        report
+                    });
+                }
+                crate::execution_graph_continuation::FlowEnvelope::V2(flow) => {
+                    let report = crate::execution_graph_readiness::assess(
+                        flow,
+                        crate::execution_graph_readiness::ReadinessContext {
+                            flow: context,
+                            waits: authority.and_then(|_| wait_authorities.get(query_id)),
+                        },
+                    )?;
+                    assessment.latch_readiness_dag = Some(if duplicate {
+                        crate::execution_graph_readiness::ReadinessAssessment::unavailable(
+                            &pool.capture_id,
+                            pool.observer,
+                            "duplicate or cross-producer capture identity makes readiness authority unavailable",
+                        )
+                    } else {
+                        report
+                    });
+                }
+            }
         }
     }
     if let Some(first) = assessments.first_mut() {
@@ -1603,6 +1675,12 @@ fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
                     serde_json::to_string(flow)?
                 );
             }
+            if let Some(readiness) = &a.latch_readiness_dag {
+                println!(
+                    "  observed query/join/latch readiness (unknown gaps, not full work/span or parallelism): {}",
+                    serde_json::to_string(readiness)?
+                );
+            }
             if let Some(resource) = &a.resource {
                 println!("  resource authority: {}", serde_json::to_string(resource)?);
             }
@@ -1669,6 +1747,7 @@ mod tests {
                     query_cpu_ownership: false,
                     observed_task_dag: false,
                     execution_flow_dag: false,
+                    latch_readiness_dag: false,
                 },
                 true
             )
@@ -1698,6 +1777,7 @@ mod tests {
                     query_cpu_ownership: false,
                     observed_task_dag: false,
                     execution_flow_dag: false,
+                    latch_readiness_dag: false,
                 },
                 true
             )
@@ -1742,6 +1822,7 @@ mod tests {
                     query_cpu_ownership: false,
                     observed_task_dag: false,
                     execution_flow_dag: false,
+                    latch_readiness_dag: false,
                 },
                 false,
                 true
@@ -1771,6 +1852,7 @@ mod tests {
                     query_cpu_ownership: false,
                     observed_task_dag: false,
                     execution_flow_dag: false,
+                    latch_readiness_dag: false,
                 },
                 false,
                 true
@@ -1898,6 +1980,299 @@ mod tests {
         Ok(serde_json::to_value(collect_path_with_options(
             directory, policy, false, false,
         )?)?)
+    }
+    fn readiness_documents() -> (serde_json::Value, serde_json::Value) {
+        let (mut query, mut pool) = flow_documents();
+        remove_original_fixture_waits(&mut query);
+        pool["schema"] = json!(6);
+        let flow = &mut pool["execution_flow"];
+        flow["schema"] = json!(2);
+        flow["scope"] = json!("observed-query-join-and-latch-control-flow");
+        for prefix in ["readiness", "wait_attempt"] {
+            flow[format!("{prefix}_allocator_baseline")] = json!(1);
+            flow[format!("{prefix}_allocator_high_water")] = json!(1);
+        }
+        for field in [
+            "expected_readiness",
+            "lost_readiness",
+            "active_readiness",
+            "expected_wait_attempts",
+            "lost_wait_attempts",
+            "active_wait_attempts",
+        ] {
+            flow[field] = json!(0);
+        }
+        flow["readiness"] = json!([]);
+        flow["wait_attempts"] = json!([]);
+        (query, pool)
+    }
+    fn remove_original_fixture_waits(query: &mut serde_json::Value) {
+        query["wait_allocator_high_water"] = json!(1);
+        query["expected_waits"] = json!(0);
+        query["wait_events"] = json!([]);
+        let events = query["task_bindings"]["events"].as_array_mut().unwrap();
+        events.retain(|event| {
+            !matches!(
+                event["source"]["kind"].as_str(),
+                Some("wait_registered" | "wait_resumed")
+            )
+        });
+        let retained = events.len();
+        query["task_bindings"]["expected_points"] = json!(retained);
+    }
+    fn readiness_values(directory: &Path) -> Result<serde_json::Value> {
+        let policy = crate::execution_graph_query::CapturePolicy {
+            latch_readiness_dag: true,
+            ..crate::execution_graph_query::CapturePolicy::strict()
+        };
+        Ok(serde_json::to_value(collect_path_with_options(
+            directory, policy, false, false,
+        )?)?)
+    }
+    #[test]
+    fn latch_readiness_is_independent_explicit_and_preserves_old_modes() {
+        let directory = resource_test_directory("readiness-policy");
+        let (query, pool) = readiness_documents();
+        write_json(&directory, "query.json", &query);
+        write_json(&directory, "pool.json", &pool);
+        for mut policy in [
+            crate::execution_graph_query::CapturePolicy::strict(),
+            query_cpu_policy(),
+        ] {
+            assert!(collect_path_with_options(&directory, policy, false, false).is_err());
+            policy.execution_flow_dag = true;
+            policy.observed_task_dag = true;
+            assert!(collect_path_with_options(&directory, policy, false, false).is_err());
+        }
+        let values = readiness_values(&directory).unwrap();
+        let p = pool_value(&values);
+        assert_eq!(
+            p["latch_readiness_dag"]["scope"],
+            "observed-query-join-and-latch-control-flow"
+        );
+        assert_eq!(p["latch_readiness_dag"]["records_complete"], true);
+        assert_eq!(p["latch_readiness_dag"]["matched_readiness_transfers"], 0);
+        for value in values.as_array().unwrap() {
+            for field in [
+                "execution_flow_dag",
+                "query_cpu_ownership",
+                "cache_call_provenance",
+                "dispatch_result_provenance",
+            ] {
+                assert!(value.get(field).is_none(), "{field}");
+            }
+            assert_eq!(value["full_pipeline_complete"], false);
+            assert!(value["cpu_work_ns"].is_null() && value["execution_span_ns"].is_null());
+        }
+        let mut root6 = crate::execution_graph_query::tests::dispatch_fixture();
+        root6["capture_id"] = query["capture_id"].clone();
+        root6["execution_clock"] = query["execution_clock"].clone();
+        root6["events"][3]["at_ns"] = json!(30);
+        remove_original_fixture_waits(&mut root6);
+        write_json(&directory, "query.json", &root6);
+        let root6_values = readiness_values(&directory).unwrap();
+        assert_eq!(
+            pool_value(&root6_values)["latch_readiness_dag"]["records_complete"],
+            true
+        );
+        assert!(
+            root6_values
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|v| v.get("dispatch_result_provenance").is_none()
+                    && v.get("query_cpu_ownership").is_none())
+        );
+        let policy = crate::execution_graph_query::CapturePolicy {
+            latch_readiness_dag: true,
+            execution_flow_dag: true,
+            query_cpu_ownership: true,
+            observed_task_dag: true,
+            ..crate::execution_graph_query::CapturePolicy::strict()
+        };
+        let all = serde_json::to_value(
+            collect_path_with_options(&directory, policy, true, true).unwrap(),
+        )
+        .unwrap();
+        assert!(pool_value(&all).get("execution_flow_dag").is_none());
+        assert_eq!(
+            pool_value(&all)["latch_readiness_dag"]["records_complete"],
+            true
+        );
+        assert_eq!(pool_value(&all)["observed_task_dag"]["attached_cpu_ns"], 6);
+        let q = all
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["producer"] == "rustc-query-admission")
+            .unwrap();
+        assert_eq!(q["query_cpu_ownership"]["query_execution_cpu_ns"], 6);
+        assert!(
+            q.get("dispatch_result_provenance").is_some()
+                && q.get("cache_call_provenance").is_some()
+        );
+        for (query, pool, cpu, flow) in [
+            {
+                let (q, mut p) = query_cpu_documents();
+                p["schema"] = json!(3);
+                p["timing"]["schema"] = json!(1);
+                p["timing"]["segments"][0]["owner_kind"] = json!("task");
+                for row in p["timing"]["segments"].as_array_mut().unwrap() {
+                    for field in ["query_context", "query_job", "query_name"] {
+                        row.as_object_mut().unwrap().remove(field);
+                    }
+                }
+                (q, p, false, false)
+            },
+            {
+                let (q, p) = query_cpu_documents();
+                (q, p, true, false)
+            },
+            {
+                let (q, p) = flow_documents();
+                (q, p, false, true)
+            },
+        ] {
+            write_json(&directory, "query.json", &query);
+            write_json(&directory, "pool.json", &pool);
+            assert_eq!(
+                readiness_values(&directory).is_err(),
+                pool["schema"].as_u64().unwrap() >= 4
+            );
+            let mut policy = crate::execution_graph_query::CapturePolicy::strict();
+            policy.query_cpu_ownership = cpu;
+            policy.execution_flow_dag = flow;
+            let before = serde_json::to_value(
+                collect_path_with_options(&directory, policy, false, false).unwrap(),
+            )
+            .unwrap();
+            policy.latch_readiness_dag = true;
+            let after = serde_json::to_value(
+                collect_path_with_options(&directory, policy, false, false).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(before, after);
+            assert!(pool_value(&after).get("latch_readiness_dag").is_none());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn latch_readiness_strict_original_envelope_and_global_identity_authority() {
+        let directory = resource_test_directory("readiness-authorities");
+        let (query, pool) = readiness_documents();
+        write_json(&directory, "query.json", &query);
+        for field in ["execution_flow", "timing"] {
+            for null in [false, true] {
+                let mut invalid = pool.clone();
+                if null {
+                    invalid[field] = serde_json::Value::Null;
+                } else {
+                    invalid.as_object_mut().unwrap().remove(field);
+                }
+                write_json(&directory, "pool.json", &invalid);
+                assert!(readiness_values(&directory).is_err(), "{field}");
+            }
+        }
+        for (pointer, value) in [
+            ("/execution_flow/schema", json!(1)),
+            (
+                "/execution_flow/scope",
+                json!("observed-query-and-join-control-flow"),
+            ),
+            ("/execution_flow/readiness_allocator_baseline", json!(0)),
+            ("/execution_flow/wait_attempt_allocator_baseline", json!(0)),
+            ("/execution_flow/expected_readiness", json!(1)),
+            ("/execution_flow/scopes/0/query_job", json!(99)),
+            ("/timing/clock_bridge/pool_epoch_in_query_ns", json!(1)),
+        ] {
+            let mut invalid = pool.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            write_json(&directory, "pool.json", &invalid);
+            assert!(readiness_values(&directory).is_err(), "{pointer}");
+        }
+        let text = serde_json::to_string(&pool).unwrap();
+        for duplicated in [
+            text.replacen("\"schema\":6", "\"schema\":6,\"schema\":6", 1),
+            text.replacen("\"readiness\":[]", "\"readiness\":[],\"readiness\":[]", 1),
+        ] {
+            std::fs::write(directory.join("pool.json"), duplicated).unwrap();
+            assert!(readiness_values(&directory).is_err());
+        }
+        write_json(&directory, "pool.json", &pool);
+        for duplicate_query in [true, false] {
+            let duplicate = if duplicate_query { &query } else { &pool };
+            write_json(&directory, "copy1.json", duplicate);
+            write_json(&directory, "copy2.json", duplicate);
+            let values = readiness_values(&directory).unwrap();
+            for p in values
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["producer"] == "rustc-thread-pool-join")
+            {
+                let report = &p["latch_readiness_dag"];
+                assert_eq!(report["records_complete"], false);
+                assert!(report["known_cpu_work_ns"].is_null());
+                assert!(report["longest_known_chain_cpu_ns"].is_null());
+                assert!(
+                    report["longest_known_chain_path"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
+                assert!(p["observed_cpu"]["query_execution_cpu_ns"].is_null());
+            }
+            std::fs::remove_file(directory.join("copy1.json")).unwrap();
+            std::fs::remove_file(directory.join("copy2.json")).unwrap();
+        }
+        std::fs::remove_file(directory.join("query.json")).unwrap();
+        let values = readiness_values(&directory).unwrap();
+        assert_eq!(
+            pool_value(&values)["latch_readiness_dag"]["records_complete"],
+            false
+        );
+        assert!(pool_value(&values)["observed_cpu"]["query_execution_cpu_ns"].is_null());
+        write_json(&directory, "query.json", &query);
+        for identity in [&pool["capture_id"], &query["capture_id"]] {
+            let scheduler = json!({"schema":1,"producer":"cargo-scheduler","scope":"cargo-unit-scheduler",
+                "capture_id":identity,"declared_nodes":0,"declared_edges":0,"structural_complete":false,
+                "full_pipeline_complete":false,"issues":[],"opaque_boundaries":["native"],"events":[],"nodes":[],"edges":[]});
+            write_json(&directory, "scheduler.json", &scheduler);
+            let values = readiness_values(&directory).unwrap();
+            let p = pool_value(&values);
+            let report = &p["latch_readiness_dag"];
+            assert_eq!(report["records_complete"], false);
+            assert!(report["known_cpu_work_ns"].is_null());
+            assert!(report["longest_known_chain_cpu_ns"].is_null());
+            assert!(
+                report["longest_known_chain_path"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(p["observed_cpu"]["query_execution_cpu_ns"].is_null());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn latch_readiness_missing_original_registered_encounter_cannot_claim_complete() {
+        let directory = resource_test_directory("readiness-original-wait-gap");
+        let (query, _) = flow_documents();
+        let (_, pool) = readiness_documents();
+        // Both independent inventories are individually well formed. The
+        // retained original registered wait still requires an encounter witness.
+        write_json(&directory, "query.json", &query);
+        write_json(&directory, "pool.json", &pool);
+        let values = readiness_values(&directory).unwrap();
+        let report = &pool_value(&values)["latch_readiness_dag"];
+        assert_eq!(report["records_complete"], false);
+        assert_eq!(report["wait_records_complete"], false);
+        assert_eq!(report["matched_readiness_transfers"], 0);
+        assert_eq!(report["full_pipeline_complete"], false);
+        assert!(report["cpu_work_ns"].is_null() && report["execution_span_ns"].is_null());
+        std::fs::remove_dir_all(directory).unwrap();
     }
     fn pool_value(values: &serde_json::Value) -> &serde_json::Value {
         values
@@ -2688,6 +3063,7 @@ mod tests {
             query_cpu_ownership: false,
             observed_task_dag: false,
             execution_flow_dag: false,
+            latch_readiness_dag: false,
         };
         assert!(collect_path_with_policy(&file, policy).unwrap()[0].structural_complete);
         assert!(collect_path_with_policy(&directory, policy).unwrap()[0].structural_complete);

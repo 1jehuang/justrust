@@ -317,7 +317,7 @@ pub fn reconcile_bindings(
             .push("task-binding matching pool authority unavailable".into());
         return assessment;
     };
-    if !matches!(pool.schema, 2..=5)
+    if !matches!(pool.schema, 2..=6)
         || pool.capture_id != reference.capture_id
         || pool.observer != reference.observer
         || pool.query_capture_id.as_deref() != Some(query_capture_id)
