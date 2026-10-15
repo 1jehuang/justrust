@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "scope": "original-native-observed-task-dag-acceptance-not-a-benchmark",
+  "consumer_sha256": "dd0f06a0dd6c5d74e30cc5f5900e13956591973156977366b0450da46e44ec23",
+  "cases": [
+    {
+      "case": "query-cpu-cold-1",
+      "checks": {
+        "tasks": 11,
+        "edges": 12,
+        "attached_cpu_ns": 54787070,
+        "excluded_query_cpu_ns": 496824661,
+        "excluded_opaque_cpu_ns": 4015578,
+        "components": [
+          {
+            "root": 1,
+            "tasks": 7,
+            "edges": 8,
+            "records_complete": true,
+            "cpu_ns": 47415480,
+            "known_cpu_ns": 47415480,
+            "longest_recorded_fork_join_chain_cpu_ns": 45866307,
+            "known_cpu_chain_ns": 45866307,
+            "chain": [
+              1,
+              7,
+              10,
+              11,
+              8
+            ]
+          },
+          {
+            "root": 2,
+            "tasks": 4,
+            "edges": 4,
+            "records_complete": true,
+            "cpu_ns": 7371590,
+            "known_cpu_ns": 7371590,
+            "longest_recorded_fork_join_chain_cpu_ns": 7367130,
+            "known_cpu_chain_ns": 7367130,
+            "chain": [
+              2,
+              4,
+              5
+            ]
+          }
+        ],
+        "every_original_task_edge_weight_checked": true
+      },
+      "graph_sha256": "f5bd73c60f577de6d227114e5f77e8ffef74099079438d751d1990247a92f9ce",
+      "analyzer_sha256": "8ff10d0ddd2a69e37265e1397140145f67bbb0c5b8b62fe555fd0fc53e6c518e",
+      "collision_preserved": true
+    },
+    {
+      "case": "query-cpu-warm-1",
+      "checks": {
+        "tasks": 14,
+        "edges": 16,
+        "attached_cpu_ns": 33195573,
+        "excluded_query_cpu_ns": 1754247,
+        "excluded_opaque_cpu_ns": 1047598,
+        "components": [
+          {
+            "root": 1,
+            "tasks": 10,
+            "edges": 12,
+            "records_complete": true,
+            "cpu_ns": 33166390,
+            "known_cpu_ns": 33166390,
+            "longest_recorded_fork_join_chain_cpu_ns": 31137137,
+            "known_cpu_chain_ns": 31137137,
+            "chain": [
+              1,
+              6,
+              8,
+              9,
+              13,
+              14,
+              11
+            ]
+          },
+          {
+            "root": 2,
+            "tasks": 4,
+            "edges": 4,
+            "records_complete": true,
+            "cpu_ns": 29183,
+            "known_cpu_ns": 29183,
+            "longest_recorded_fork_join_chain_cpu_ns": 26772,
+            "known_cpu_chain_ns": 26772,
+            "chain": [
+              2,
+              4,
+              5
+            ]
+          }
+        ],
+        "every_original_task_edge_weight_checked": true
+      },
+      "graph_sha256": "dadeee74df18ac17ab4cd7a0e17d4ad85324a4e3b9e2461468918a2850fa1505",
+      "analyzer_sha256": "7ca2d7153136f9dbb16c75e02e1b70acf761241eed55deab111ef0203e13db2e",
+      "collision_preserved": true
+    },
+    {
+      "case": "missing-query-copy",
+      "topology_preserved": true,
+      "query_weights_unknown": true,
+      "known_attached_cpu_ns": 15138516,
+      "graph_sha256": "aaa21c112873958e7659bae21bc240ce4c5bfc67f6d1dc3874085411a96bb599"
+    },
+    {
+      "case": "query-cpu-with-dispatch",
+      "checks": {
+        "tasks": 11,
+        "edges": 12,
+        "attached_cpu_ns": 53203158,
+        "excluded_query_cpu_ns": 437084668,
+        "excluded_opaque_cpu_ns": 3942291,
+        "components": [
+          {
+            "root": 1,
+            "tasks": 7,
+            "edges": 8,
+            "records_complete": true,
+            "cpu_ns": 45662164,
+            "known_cpu_ns": 45662164,
+            "longest_recorded_fork_join_chain_cpu_ns": 44665384,
+            "known_cpu_chain_ns": 44665384,
+            "chain": [
+              1,
+              7,
+              9,
+              11,
+              8
+            ]
+          },
+          {
+            "root": 2,
+            "tasks": 4,
+            "edges": 4,
+            "records_complete": true,
+            "cpu_ns": 7540994,
+            "known_cpu_ns": 7540994,
+            "longest_recorded_fork_join_chain_cpu_ns": 7537450,
+            "known_cpu_chain_ns": 7537450,
+            "chain": [
+              2,
+              4,
+              5
+            ]
+          }
+        ],
+        "every_original_task_edge_weight_checked": true
+      },
+      "graph_sha256": "ee914e82914d1aa605259fda1e63ce923f4e40643966df8d13cb2d59b26bffd0",
+      "analyzer_sha256": "efcbda9a05a946b1d61ba216ca19c892f9b395d19cd25ef07c768e90a372b9a9",
+      "collision_preserved": true
+    }
+  ],
+  "original_files_unchanged": 6,
+  "full_pipeline_complete": false,
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "theoretical_parallelism": null
+}

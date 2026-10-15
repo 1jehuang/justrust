@@ -23,7 +23,7 @@ def native_task_oracle(pool):
             or timing['active_segments'] != 0
             or len(timing['segments']) != timing['expected_segments']):
         raise ValueError('positive oracle requires complete original task/timing inventories')
-    tasks, roots, edges = set(), set(), set()
+    tasks, roots, edges, edge_kinds = set(), set(), set(), {}
     starts, ends, definitions = {}, {}, {}
     for event in pool['events']:
         kind = event['kind']
@@ -45,8 +45,11 @@ def native_task_oracle(pool):
             definitions[continuation] = ('continuation', parent)
             tasks.update((parent, child, continuation))
             edges.add((parent, child))
+            edge_kinds[parent, child] = 'fork'
         elif kind == 'join':
-            edges.add((event['child'], event['continuation']))
+            pair = event['child'], event['continuation']
+            edges.add(pair)
+            edge_kinds[pair] = 'join'
         elif kind in ('start', 'finish'):
             target = starts if kind == 'start' else ends
             if event['task'] in target:
@@ -68,13 +71,18 @@ def native_task_oracle(pool):
             raise ValueError('positive oracle requires measured original segments')
         task = row['task']
         if task is None:
-            excluded[row['owner_kind']] += row['cpu_ns']
+            owner = row.get('owner_kind')
+            if owner is None and timing.get('schema') == 1:
+                owner = 'opaque'
+            if owner is None:
+                raise ValueError('missing original CPU owner category')
+            excluded[owner] += row['cpu_ns']
             continue
         if task not in tasks or not starts[task] <= row['start_ns'] <= row['end_ns'] <= ends[task]:
             raise ValueError('original measured CPU outside actual task')
         weights[task] += row['cpu_ns']
     return dict(tasks=sorted(tasks), roots=sorted(roots), edges=sorted(edges),
-                weights=dict(weights), excluded=dict(excluded),
+                edge_kinds=edge_kinds, weights=dict(weights), excluded=dict(excluded),
                 components=components_and_chains(tasks, edges, weights))
 
 

@@ -189,7 +189,8 @@ def _read_regular(path, remaining, directory_fd=None):
 
 
 def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_output,
-               dispatch_result_provenance=False, query_cpu_ownership=False):
+               dispatch_result_provenance=False, query_cpu_ownership=False,
+               observed_task_dag=False):
     command = [str(justrust), 'graph', str(snapshot), '--json']
     if large_capture:
         command.append('--large-capture')
@@ -199,7 +200,9 @@ def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_o
         command.append('--dispatch-result-provenance')
     if query_cpu_ownership:
         command.append('--query-cpu-ownership')
-    if cache_call_provenance or dispatch_result_provenance or query_cpu_ownership:
+    if observed_task_dag:
+        command.append('--observed-task-dag')
+    if cache_call_provenance or dispatch_result_provenance or query_cpu_ownership or observed_task_dag:
         # Reserve before invoking the validator, so collisions never overwrite an
         # existing artifact or perform an unnecessary potentially expensive run.
         fd = os.open(graph_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -318,12 +321,90 @@ def _query_cpu_summary(assessment):
                 omitted_query_kinds=max(0, len(ranked_kinds) - 20), issues=cpu['issues'])
 
 
+def _observed_task_dag_summary(assessment):
+    """Retain only the public validator's scoped causal task diagnostics."""
+    dag = assessment.get('observed_task_dag')
+    flags = ('topology_complete', 'timing_records_complete', 'records_complete',
+             'query_authority_valid')
+    totals = ('attached_cpu_ns', 'known_attached_cpu_ns', 'excluded_task_null_cpu_ns',
+              'excluded_query_cpu_ns', 'excluded_opaque_cpu_ns')
+    counts = ('excluded_task_null_segments', 'unmeasured_segments')
+    if (not isinstance(dag, dict) or dag.get('scope') != 'observed-fork-join-task-dag'
+            or any(type(dag.get(key)) is not bool for key in flags)
+            or any(key not in dag or (dag[key] is not None
+                   and (type(dag[key]) is not int or dag[key] < 0)) for key in totals)
+            or any(type(dag.get(key)) is not int or dag[key] < 0 for key in counts)
+            or any(not isinstance(dag.get(key), list) for key in
+                   ('nodes', 'edges', 'components', 'issues'))
+            or any(not isinstance(issue, str) for issue in dag['issues'])):
+        raise ValueError('missing or malformed observed task DAG authority')
+    if dag['records_complete'] and (not dag['topology_complete']
+                                   or not dag['timing_records_complete'] or dag['issues']):
+        raise ValueError('complete observed task DAG lacks complete authority')
+    nodes = {}
+    for node in dag['nodes']:
+        task = node.get('task')
+        if type(task) is not int or task <= 0 or task in nodes:
+            raise ValueError('invalid observed task DAG node identity')
+        for key in ('cpu_ns', 'known_cpu_ns'):
+            if key not in node or (node[key] is not None
+                                  and (type(node[key]) is not int or node[key] < 0)):
+                raise ValueError('invalid observed task DAG node cost')
+        nodes[task] = node
+    edges = set()
+    for edge in dag['edges']:
+        if (edge.get('kind') not in ('fork', 'join')
+                or type(edge.get('from')) is not int or type(edge.get('to')) is not int
+                or edge['from'] not in nodes or edge['to'] not in nodes
+                or (edge['from'], edge['to']) in edges):
+            raise ValueError('invalid observed task DAG edge')
+        edges.add((edge['from'], edge['to']))
+    roots = set()
+    for component in dag['components']:
+        if (type(component.get('root')) is not int or component['root'] not in nodes
+                or component['root'] in roots or type(component.get('records_complete')) is not bool
+                or any(type(component.get(key)) is not int or component[key] < 0
+                       for key in ('tasks', 'edges'))
+                or not isinstance(component.get('chain'), list)):
+            raise ValueError('invalid observed task DAG component')
+        roots.add(component['root'])
+        for key in ('cpu_ns', 'known_cpu_ns', 'longest_recorded_fork_join_chain_cpu_ns',
+                    'known_cpu_chain_ns'):
+            if key not in component or (component[key] is not None
+                    and (type(component[key]) is not int or component[key] < 0)):
+                raise ValueError('invalid observed task DAG chain cost')
+        chain = component['chain']
+        if (any(type(task) is not int or task not in nodes for task in chain)
+                or len(set(chain)) != len(chain)
+                or any(pair not in edges for pair in zip(chain, chain[1:]))
+                or (component['known_cpu_chain_ns'] is None and chain)):
+            raise ValueError('invalid observed task DAG chain authority')
+    if (sum(row['tasks'] for row in dag['components']) != len(nodes)
+            or sum(row['edges'] for row in dag['components']) != len(edges)):
+        raise ValueError('observed task DAG component inventory mismatch')
+    ranked = sorted(dag['components'], key=lambda row: (
+        row['known_cpu_chain_ns'] is None, -(row['known_cpu_chain_ns'] or 0), row['root']))
+    return dict(scope=dag['scope'], **{key: dag[key] for key in (*flags, *totals, *counts)},
+                observed_tasks=len(nodes), observed_edges=len(edges),
+                observed_components=len(ranked), top_components=ranked[:20],
+                omitted_components=max(0, len(ranked) - 20), issues=dag['issues'],
+                limitations=[
+                    'Only explicitly instrumented native fork/join edges are represented.',
+                    'CPU with no genuine pool-task owner is excluded, including named query CPU.',
+                    'Known CPU chains sum retained measurements, not a full execution span.',
+                    'Missing records and instrumentation gaps are unknown, not zero work.',
+                    'No work/span ratio or useful-thread ceiling follows from this partial DAG.',
+                ])
+
+
 def analyze(directory, justrust, large_capture=False, cache_call_provenance=False,
-            graph_output=None, dispatch_result_provenance=False, query_cpu_ownership=False):
-    provenance = cache_call_provenance or dispatch_result_provenance or query_cpu_ownership
+            graph_output=None, dispatch_result_provenance=False, query_cpu_ownership=False,
+            observed_task_dag=False):
+    provenance = (cache_call_provenance or dispatch_result_provenance or query_cpu_ownership
+                  or observed_task_dag)
     if provenance != (graph_output is not None):
         raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
-                         'or --query-cpu-ownership requires companion --graph-output and vice versa')
+                         'or --query-cpu-ownership or --observed-task-dag requires companion --graph-output and vice versa')
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('capture must be a nonsymlink directory')
@@ -378,7 +459,8 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             raise ValueError('query capture identity must be a string')
         if capture_id in query_sources:
             raise ValueError('duplicate query source capture identity')
-        allowed_schemas = (4, 5, 6) if dispatch_result_provenance or query_cpu_ownership else (4, 5)
+        allowed_schemas = (4, 5, 6) if (dispatch_result_provenance or query_cpu_ownership
+                                               or observed_task_dag) else (4, 5)
         if type(receipt.get('schema')) is not int or receipt['schema'] not in allowed_schemas:
             raise ValueError('frontend report requires native schema4/5 evidence '
                              'or explicit --dispatch-result-provenance for schema6')
@@ -405,7 +487,8 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             destination.chmod(0o400)
         assessments, artifact = _run_graph(snapshot, justrust, large_capture,
                                           cache_call_provenance, graph_output,
-                                          dispatch_result_provenance, query_cpu_ownership)
+                                          dispatch_result_provenance, query_cpu_ownership,
+                                          observed_task_dag)
         indexed = {}
         pool_indexed = {}
         for assessment in assessments:
@@ -465,6 +548,12 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
                 summary['dispatch_result_provenance'] = _dispatch_result_summary(authority)
             if query_cpu_ownership:
                 summary['query_cpu_ownership'] = _query_cpu_summary(authority)
+            if observed_task_dag:
+                reference = receipt['task_bindings']['pool']
+                pool_authority = pool_indexed.get(reference['capture_id']) if reference else None
+                if pool_authority is None:
+                    raise ValueError('observed task DAG requires original matching pool authority')
+                summary['observed_task_dag'] = _observed_task_dag_summary(pool_authority)
             summaries.append(summary)
         if not summaries:
             raise ValueError('no native frontend receipt')
@@ -490,16 +579,19 @@ def main():
                         help='Opt in to native schema6 dispatch-result availability, not execution edges')
     parser.add_argument('--query-cpu-ownership', action='store_true',
                         help='Opt in to validated exclusive query-execution CPU ownership, not a critical path')
+    parser.add_argument('--observed-task-dag', action='store_true',
+                        help='Retain explicit native fork/join task DAG and scoped known CPU chains, not full span')
     parser.add_argument('--graph-output', type=Path,
                         help='Required with provenance or query CPU ownership: exclusive full native graph JSON artifact outside the capture directory')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        provenance = args.cache_call_provenance or args.dispatch_result_provenance or args.query_cpu_ownership
+        provenance = (args.cache_call_provenance or args.dispatch_result_provenance
+                      or args.query_cpu_ownership or args.observed_task_dag)
         if provenance or args.graph_output is not None:
             if not provenance or args.graph_output is None:
                 raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
-                                 'or --query-cpu-ownership requires companion --graph-output and vice versa')
+                                 'or --query-cpu-ownership or --observed-task-dag requires companion --graph-output and vice versa')
             if args.output.resolve() == args.graph_output.resolve():
                 raise ValueError('report and graph output paths must differ')
             if os.path.lexists(args.output):
@@ -508,7 +600,8 @@ def main():
                              cache_call_provenance=args.cache_call_provenance,
                              graph_output=args.graph_output,
                              dispatch_result_provenance=args.dispatch_result_provenance,
-                             query_cpu_ownership=args.query_cpu_ownership)
+                             query_cpu_ownership=args.query_cpu_ownership,
+                             observed_task_dag=args.observed_task_dag)
         else:
             report = analyze(args.capture, args.justrust, args.large_capture)
         encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
