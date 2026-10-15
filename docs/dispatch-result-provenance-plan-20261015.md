@@ -1,6 +1,6 @@
 # Next slice: exact nonincremental dispatch result availability
 
-Status: design frozen at the semantic boundary, implementation not yet accepted. This follows the accepted cache-hit mapping in `cache-call-provenance-20261015.md`, not a completed execution DAG.
+Status: the minimal semantic boundary is frozen and implemented. Native and actual-source correctness gates passed, as recorded in `dispatch-result-provenance-results-20261015.md`; comprehensive default-disabled performance acceptance remains open. This follows the accepted cache-hit mapping in `cache-call-provenance-20261015.md`, not a completed execution DAG.
 
 ## Why continue
 
@@ -48,7 +48,7 @@ Publication may occur after request start. A producer's completed marker need no
 
 The immutable accepted compiler is the baseline, not the system compiler. Compare A-disabled to B-disabled separately from B-enabled. Use separate compiler-target/incremental/cache namespaces and record compiler, driver and helper identities. A shared upstream `rustc -vV` string is not sufficient identification of these owned compiler builds.
 
-The comprehensive gate remains matched `bench/suite.py run --synth 1 -n 1` with all 40 points and identical seed, generator/weights, snapshots and controlled execution mode, followed by `suite.py compare`. The harness must attest the actual compiler selected in each run and reject silent stock fallback. Current audit found two blockers: the accepted prefix has only `rustc`, while `jr-install` requires rustdoc and clippy helpers, and the synthetic benchmark does not yet attest per-run compiler/driver hashes. Resolve these before claiming a default-path nonregression. Do not substitute the focused itoa fixture for this gate.
+The comprehensive gate remains matched `bench/suite.py run --synth 1 -n 1` with all 40 points and identical seed, generator/weights, snapshots and controlled execution mode, followed by `suite.py compare`. The harness must attest the actual compiler selected in each run and reject silent stock fallback. The initial audit found two blockers: the accepted prefix had only `rustc`, while `jr-install` requires rustdoc and clippy helpers, and the synthetic benchmark did not attest per-run compiler/driver hashes. Matched helpers and explicit fail-closed identity attestation have now been implemented. Actual paired runs must still finish and be reviewed before claiming a default-path nonregression. Do not substitute the focused itoa fixture for this gate.
 
 Supplement with repeated matched cold/warm itoa compilations at one and four frontend threads. Retain compilation wall/CPU separately from serialization and graph analysis. Where usable, retired instructions help distinguish work from scheduling noise. An inconclusive noisy comparison is not a nonregression pass. No speedup is claimed by this design.
 
