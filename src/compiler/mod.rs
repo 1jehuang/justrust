@@ -1,6 +1,7 @@
 //! Source-to-native compiler built on the fact graph. See COMPILER.md.
 pub mod backend;
 pub mod frontend;
+pub mod ir;
 pub mod source;
 
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ struct Snapshot {
     parsed: OnceLock<frontend::ParsedProgram>,
     program: OnceLock<frontend::Program>,
     signatures: OnceLock<frontend::Signatures>,
+    checked: OnceLock<Vec<OnceLock<ir::CheckedFunction>>>,
     objects: OnceLock<Vec<OnceLock<backend::Object>>>,
     executable: OnceLock<Vec<u8>>,
 }
@@ -82,6 +84,13 @@ impl Provider for CompilerProvider {
                     let objects = (0..parsed.program.functions.len())
                         .map(|_| OnceLock::new())
                         .collect();
+                    let checked = (0..parsed.program.functions.len())
+                        .map(|_| OnceLock::new())
+                        .collect();
+                    this.0
+                        .checked
+                        .set(checked)
+                        .map_err(|_| Error::new("duplicate checked function arena"))?;
                     this.0
                         .objects
                         .set(objects)
@@ -126,20 +135,29 @@ impl Provider for CompilerProvider {
                             .signatures
                             .get()
                             .ok_or_else(|| Error::new("missing signatures"))?;
-                        frontend::check_function_with_signatures(
+                        let checked = frontend::type_function_with_signatures(
                             this.program()?,
                             index,
                             signatures,
                         )
                         .map_err(Error::new)?;
+                        this.0
+                            .checked
+                            .get()
+                            .and_then(|v| v.get(index))
+                            .ok_or_else(|| Error::new("missing checked function slot"))?
+                            .set(checked)
+                            .map_err(|_| Error::new("duplicate checked function"))?;
                     } else {
                         cx.read(cx.request(function(BODY, index)).get(0)).await?;
-                        let program = this.program()?;
-                        let item = program
-                            .functions
-                            .get(index)
-                            .ok_or_else(|| Error::new("function index out of bounds"))?;
-                        let object = backend::emit_function(item).map_err(Error::new)?;
+                        let item = this
+                            .0
+                            .checked
+                            .get()
+                            .and_then(|v| v.get(index))
+                            .and_then(OnceLock::get)
+                            .ok_or_else(|| Error::new("missing checked function"))?;
+                        let object = backend::emit_checked_function(item).map_err(Error::new)?;
                         this.0
                             .objects
                             .get()
@@ -245,6 +263,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         parsed: OnceLock::new(),
         program: OnceLock::new(),
         signatures: OnceLock::new(),
+        checked: OnceLock::new(),
         objects: OnceLock::new(),
         executable: OnceLock::new(),
     });

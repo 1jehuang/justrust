@@ -9,6 +9,7 @@
 //! imports have separate module/value namespaces. External modules, restricted
 //! visibility, reexports, grouped/glob imports, and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
+use super::ir;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -1181,32 +1182,66 @@ fn signatures(program: &Program) -> Result<Signatures, String> {
 }
 struct Checker<'a> {
     signatures: &'a Signatures,
-    scopes: Vec<HashMap<String, (Type, bool)>>,
+    scopes: Vec<HashMap<String, ir::LocalId>>,
+    locals: Vec<ir::LocalDecl>,
+    exprs: Vec<ir::TypedExpr>,
     result: Type,
 }
 // None means the expression cannot complete normally (the subset's never type).
 type Flow = Option<Type>;
+fn checked_ty(ty: Type) -> Result<ir::Ty, String> {
+    match ty {
+        Type::I32 => Ok(ir::Ty::I32),
+        Type::Bool => Ok(ir::Ty::Bool),
+        Type::Unit => Ok(ir::Ty::Unit),
+        Type::Infer => Err("signature types cannot be inferred".into()),
+    }
+}
+fn syntax_ty(ty: ir::Ty) -> Type {
+    match ty {
+        ir::Ty::I32 => Type::I32,
+        ir::Ty::Bool => Type::Bool,
+        ir::Ty::Unit => Type::Unit,
+    }
+}
 impl<'a> Checker<'a> {
     fn new(signatures: &'a Signatures, result: Type) -> Self {
         Self {
             signatures,
             scopes: vec![HashMap::new()],
+            locals: Vec::new(),
+            exprs: Vec::new(),
             result,
         }
     }
-    fn bind(&mut self, n: &str, t: Type, mutable: bool) -> Result<(), String> {
-        let scope = self.scopes.last_mut().unwrap();
-        if scope.insert(n.to_owned(), (t, mutable)).is_some() {
-            return Err(format!("duplicate parameter {n}"));
-        }
-        Ok(())
+    fn local(&mut self, name: &str, ty: Type, mutable: bool) -> Result<ir::LocalId, String> {
+        let local = ir::LocalId(self.locals.len());
+        self.locals.push(ir::LocalDecl {
+            name: name.to_owned(),
+            ty: checked_ty(ty)?,
+            mutable,
+        });
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert(name.to_owned(), local);
+        Ok(local)
     }
-    fn lookup(&self, n: &str) -> Result<(Type, bool), String> {
+    fn bind(&mut self, name: &str, ty: Type) -> Result<ir::LocalId, String> {
+        if self.scopes.last().unwrap().contains_key(name) {
+            return Err(format!("duplicate parameter {name}"));
+        }
+        self.local(name, ty, false)
+    }
+    fn lookup(&self, n: &str) -> Result<ir::LocalId, String> {
         self.scopes
             .iter()
             .rev()
             .find_map(|s| s.get(n).copied())
             .ok_or_else(|| format!("unresolved local {n}"))
+    }
+    fn flow(&self, id: ir::ExprId) -> Flow {
+        self.exprs[id.0].flow().map(syntax_ty)
     }
     fn require(&self, got: Flow, want: Type) -> Result<(), String> {
         if got.is_some_and(|t| t != want) {
@@ -1215,91 +1250,102 @@ impl<'a> Checker<'a> {
             Ok(())
         }
     }
-    fn block(&mut self, b: &Block) -> Result<Flow, String> {
+    fn block(&mut self, b: &Block) -> Result<(ir::Block, Flow), String> {
         self.scopes.push(HashMap::new());
         let mut live = true;
+        let mut statements = Vec::with_capacity(b.statements.len());
         for s in &b.statements {
-            let flow = match s {
+            let (statement, flow) = match s {
                 Stmt::Let {
                     name,
                     mutable,
                     ty,
                     value,
                 } => {
-                    let f = self.expr(value)?;
+                    let value = self.expr(value)?;
+                    let f = self.flow(value);
                     let t = if *ty == Type::Infer {
                         f.unwrap_or(Type::Unit)
                     } else {
                         self.require(f, *ty)?;
                         *ty
                     };
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(name.clone(), (t, *mutable));
-                    f.map(|_| Type::Unit)
+                    let local = self.local(name, t, *mutable)?;
+                    (ir::Stmt::Let { local, value }, f.map(|_| Type::Unit))
                 }
                 Stmt::Assign { name, value } => {
-                    let (t, m) = self.lookup(name)?;
-                    if !m {
+                    let local = self.lookup(name)?;
+                    let declaration = &self.locals[local.0];
+                    let t = syntax_ty(declaration.ty);
+                    if !declaration.mutable {
                         return Err(format!("assignment to immutable local {name}"));
                     }
-                    let f = self.expr(value)?;
+                    let value = self.expr(value)?;
+                    let f = self.flow(value);
                     self.require(f, t)?;
-                    f.map(|_| Type::Unit)
+                    (ir::Stmt::Assign { local, value }, f.map(|_| Type::Unit))
                 }
                 Stmt::Expr(e) => {
-                    let f = self.expr(e)?;
+                    let value = self.expr(e)?;
+                    let f = self.flow(value);
                     if matches!(e, Expr::If { .. } | Expr::Block(_)) {
                         self.require(f, Type::Unit)?;
                     }
-                    f.map(|_| Type::Unit)
+                    (ir::Stmt::Expr(value), f.map(|_| Type::Unit))
                 }
                 Stmt::Return(e) => {
-                    let f = if let Some(e) = e {
-                        self.expr(e)?
-                    } else {
-                        Some(Type::Unit)
-                    };
+                    let value = e.as_ref().map(|e| self.expr(e)).transpose()?;
+                    let f = value.map_or(Some(Type::Unit), |e| self.flow(e));
                     self.require(f, self.result)?;
-                    None
+                    (ir::Stmt::Return(value), None)
                 }
                 Stmt::While { condition, body } => {
-                    let f = self.expr(condition)?;
+                    let condition = self.expr(condition)?;
+                    let f = self.flow(condition);
                     self.require(f, Type::Bool)?;
-                    let bf = self.block(body)?;
+                    let (body, bf) = self.block(body)?;
                     self.require(bf, Type::Unit)?;
-                    f.map(|_| Type::Unit)
+                    (ir::Stmt::While { condition, body }, f.map(|_| Type::Unit))
                 }
             };
+            statements.push(statement);
             live &= flow.is_some();
         }
-        let tail = if let Some(e) = &b.tail {
-            self.expr(e)?
-        } else {
-            Some(Type::Unit)
-        };
+        let tail = b.tail.as_ref().map(|e| self.expr(e)).transpose()?;
+        let flow = tail.map_or(Some(Type::Unit), |e| self.flow(e));
         self.scopes.pop();
-        Ok(if live { tail } else { None })
+        Ok((
+            ir::Block { statements, tail },
+            if live { flow } else { None },
+        ))
     }
-    fn expr(&mut self, e: &Expr) -> Result<Flow, String> {
-        Ok(match e {
-            Expr::Int(_) => Some(Type::I32),
-            Expr::Bool(_) => Some(Type::Bool),
-            Expr::Var(n) => Some(self.lookup(n)?.0),
-            Expr::Println(_) => Some(Type::Unit),
+    fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
+        let (kind, flow) = match e {
+            Expr::Int(value) => (ir::ExprKind::Int(*value), Some(Type::I32)),
+            Expr::Bool(value) => (ir::ExprKind::Bool(*value), Some(Type::Bool)),
+            Expr::Var(n) => {
+                let local = self.lookup(n)?;
+                (
+                    ir::ExprKind::Local(local),
+                    Some(syntax_ty(self.locals[local.0].ty)),
+                )
+            }
+            Expr::Println(text) => (ir::ExprKind::Println(text.clone()), Some(Type::Unit)),
             Expr::Unary { op, value } => {
-                let f = self.expr(value)?;
+                let value = self.expr(value)?;
+                let f = self.flow(value);
                 let t = match op {
                     UnaryOp::Neg => Type::I32,
                     UnaryOp::Not => Type::Bool,
                 };
                 self.require(f, t)?;
-                f.map(|_| t)
+                (ir::ExprKind::Unary { op: *op, value }, f.map(|_| t))
             }
             Expr::Binary { op, left, right } => {
-                let l = self.expr(left)?;
-                let r = self.expr(right)?;
+                let left = self.expr(left)?;
+                let right = self.expr(right)?;
+                let l = self.flow(left);
+                let r = self.flow(right);
                 let (operand, result) = match op {
                     BinaryOp::And | BinaryOp::Or => (Type::Bool, Type::Bool),
                     BinaryOp::Eq | BinaryOp::Ne => (l.or(r).unwrap_or(Type::Unit), Type::Bool),
@@ -1310,11 +1356,21 @@ impl<'a> Checker<'a> {
                 };
                 self.require(l, operand)?;
                 self.require(r, operand)?;
-                if l.is_none() || (r.is_none() && !matches!(op, BinaryOp::And | BinaryOp::Or)) {
+                let flow = if l.is_none()
+                    || (r.is_none() && !matches!(op, BinaryOp::And | BinaryOp::Or))
+                {
                     None
                 } else {
                     Some(result)
-                }
+                };
+                (
+                    ir::ExprKind::Binary {
+                        op: *op,
+                        left,
+                        right,
+                    },
+                    flow,
+                )
             }
             Expr::Call { name, args } => {
                 // Source-level shadowing is checked before canonicalization.
@@ -1329,32 +1385,72 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
+                let signature = ir::Signature {
+                    params: params
+                        .iter()
+                        .copied()
+                        .map(checked_ty)
+                        .collect::<Result<_, _>>()?,
+                    result: checked_ty(*result)?,
+                };
                 let mut live = true;
+                let mut arguments = Vec::with_capacity(args.len());
                 for (a, t) in args.iter().zip(params) {
-                    let f = self.expr(a)?;
+                    let value = self.expr(a)?;
+                    let f = self.flow(value);
                     self.require(f, *t)?;
                     live &= f.is_some();
+                    arguments.push(value);
                 }
-                if live { Some(*result) } else { None }
+                (
+                    ir::ExprKind::Call {
+                        name: name.clone(),
+                        args: arguments,
+                        signature,
+                    },
+                    if live { Some(*result) } else { None },
+                )
             }
             Expr::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                let c = self.expr(condition)?;
+                let condition = self.expr(condition)?;
+                let c = self.flow(condition);
                 self.require(c, Type::Bool)?;
-                let t = self.block(then_block)?;
-                let e = self.block(else_block)?;
+                let (then_block, t) = self.block(then_block)?;
+                let (else_block, e) = self.block(else_block)?;
                 if let (Some(a), Some(b)) = (t, e)
                     && a != b
                 {
                     return Err(format!("if branches differ: {a:?} and {b:?}"));
                 }
-                if c.is_none() { None } else { t.or(e) }
+                (
+                    ir::ExprKind::If {
+                        condition,
+                        then_block,
+                        else_block,
+                    },
+                    if c.is_none() { None } else { t.or(e) },
+                )
             }
-            Expr::Block(b) => self.block(b)?,
-        })
+            Expr::Block(b) => {
+                let (block, flow) = self.block(b)?;
+                (ir::ExprKind::Block(block), flow)
+            }
+        };
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty: checked_ty(flow.unwrap_or(Type::Unit))?,
+            completion: if flow.is_some() {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind,
+        });
+        Ok(id)
     }
 }
 /// Validate signatures, lexical scopes, types, mutability, calls and return flow.
@@ -1386,21 +1482,41 @@ pub fn check_function_with_signatures(
     index: usize,
     signatures: &Signatures,
 ) -> Result<(), String> {
+    type_function_with_signatures(program, index, signatures).map(|_| ())
+}
+/// Check and lower one body using the validated signatures for this program.
+/// The returned arena owns all resolved locals, expression types and call facts.
+pub fn type_function_with_signatures(
+    program: &Program,
+    index: usize,
+    signatures: &Signatures,
+) -> Result<ir::CheckedFunction, String> {
     let f = program
         .functions
         .get(index)
         .ok_or_else(|| format!("invalid function index {index}"))?;
     validate_depth(DepthNode::Block(&f.body))?;
     let mut c = Checker::new(signatures, f.result);
+    let mut params = Vec::with_capacity(f.params.len());
     for (n, t) in &f.params {
-        c.bind(n, *t, false)
-            .map_err(|e| format!("in function {}: {e}", f.name))?;
+        params.push(
+            c.bind(n, *t)
+                .map_err(|e| format!("in function {}: {e}", f.name))?,
+        );
     }
-    let flow = c
+    let (body, flow) = c
         .block(&f.body)
         .map_err(|e| format!("in function {}: {e}", f.name))?;
     c.require(flow, f.result)
-        .map_err(|e| format!("in function {}: {e}", f.name))
+        .map_err(|e| format!("in function {}: {e}", f.name))?;
+    Ok(ir::CheckedFunction {
+        name: f.name.clone(),
+        params,
+        result: checked_ty(f.result).map_err(|e| format!("in function {}: {e}", f.name))?,
+        locals: c.locals,
+        exprs: c.exprs,
+        body,
+    })
 }
 pub fn check(program: &Program) -> Result<(), String> {
     let signatures = signature_table(program)?;
@@ -1408,6 +1524,141 @@ pub fn check(program: &Program) -> Result<(), String> {
         check_function_with_signatures(program, i, &signatures)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+
+    fn typed(source: &str, index: usize) -> ir::CheckedFunction {
+        let program = parse(source).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let checked = type_function_with_signatures(&program, index, &signatures).unwrap();
+        checked.validate().unwrap();
+        checked
+    }
+
+    #[test]
+    fn inferred_shadowing_allocates_distinct_typed_locals() {
+        let f = typed(
+            "fn f(x:i32)->i32 { let x=x+1; let x=true; { let x=3; x; }; if x { 4 } else { 5 } } fn main(){}",
+            0,
+        );
+        assert_eq!(f.params, vec![ir::LocalId(0)]);
+        assert_eq!(
+            f.locals.iter().map(|l| l.ty).collect::<Vec<_>>(),
+            vec![ir::Ty::I32, ir::Ty::I32, ir::Ty::Bool, ir::Ty::I32]
+        );
+        assert!(f.locals.iter().all(|l| l.name == "x"));
+        let reads = f
+            .exprs
+            .iter()
+            .filter_map(|e| match e.kind {
+                ir::ExprKind::Local(id) => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reads, vec![ir::LocalId(0), ir::LocalId(3), ir::LocalId(2)]);
+    }
+
+    #[test]
+    fn assignment_and_initializer_resolve_before_shadowing() {
+        let f = typed("fn main(){ let mut x=1; x=x+1; let x=x==2; x; }", 0);
+        assert!(f.locals[0].mutable);
+        assert!(!f.locals[1].mutable);
+        assert_eq!(f.locals[1].ty, ir::Ty::Bool);
+        assert!(matches!(
+            f.body.statements[1],
+            ir::Stmt::Assign {
+                local: ir::LocalId(0),
+                ..
+            }
+        ));
+        let reads = f
+            .exprs
+            .iter()
+            .filter_map(|e| match e.kind {
+                ir::ExprKind::Local(id) => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reads, vec![ir::LocalId(0), ir::LocalId(0), ir::LocalId(1)]);
+    }
+
+    #[test]
+    fn canonical_calls_keep_validated_signature() {
+        let f = typed(
+            "mod m { pub fn f(x:bool)->i32 { if x { 1 } else { 2 } } } use m::f as g; fn main(){ let n=g(true); }",
+            1,
+        );
+        let call = f
+            .exprs
+            .iter()
+            .find(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+            .unwrap();
+        assert_eq!(call.flow(), Some(ir::Ty::I32));
+        let ir::ExprKind::Call {
+            name,
+            args,
+            signature,
+        } = &call.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(name, "m::f");
+        assert_eq!(signature.params, vec![ir::Ty::Bool]);
+        assert_eq!(signature.result, ir::Ty::I32);
+        assert_eq!(f.exprs[args[0].0].ty, ir::Ty::Bool);
+        assert_eq!(f.locals[0].ty, ir::Ty::I32);
+    }
+
+    #[test]
+    fn divergence_and_short_circuit_keep_existing_completion() {
+        let f = typed(
+            "fn f()->bool { let x=false && { return true; }; let y=true || { return false; }; let z={ return x; }; } fn main(){}",
+            0,
+        );
+        assert_eq!(
+            f.locals.iter().map(|l| l.ty).collect::<Vec<_>>(),
+            vec![ir::Ty::Bool, ir::Ty::Bool, ir::Ty::Unit]
+        );
+        let binaries = f
+            .exprs
+            .iter()
+            .filter(|e| matches!(e.kind, ir::ExprKind::Binary { .. }))
+            .collect::<Vec<_>>();
+        assert!(binaries.iter().all(|e| e.flow() == Some(ir::Ty::Bool)));
+        let never = f
+            .exprs
+            .iter()
+            .filter(|e| e.completion == ir::Completion::Never)
+            .collect::<Vec<_>>();
+        assert_eq!(never.len(), 3);
+        assert!(
+            never
+                .iter()
+                .all(|e| e.ty == ir::Ty::Unit && e.flow().is_none())
+        );
+    }
+
+    #[test]
+    fn lowering_and_checking_reject_unreachable_errors_identically() {
+        for source in [
+            "fn main(){ return; let x=true+1; }",
+            "fn main(){ return; let x:bool=1; }",
+            "fn main(){ return; let x=1; x=2; }",
+            "fn main(){ if true { 1 } else { 2 }; }",
+            "fn f()->i32 { while true { return 1; } } fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            let signatures = signature_table(&program).unwrap();
+            let lowered = type_function_with_signatures(&program, 0, &signatures).unwrap_err();
+            assert_eq!(
+                check_function_with_signatures(&program, 0, &signatures).unwrap_err(),
+                lowered
+            );
+        }
+    }
 }
 
 #[cfg(test)]

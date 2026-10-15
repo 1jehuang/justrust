@@ -60,8 +60,10 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 - Parse immutable source into a retained unresolved module/declaration arena.
 - Resolve paths, imports and visibility once, publishing canonical item identities.
 - Validate declarations and publish the callable signatures.
-- Check each function body independently against those signatures.
-- Emit each function after its own body check, without waiting for other bodies.
+- Check and lower each function body independently against those signatures,
+  publishing an immutable typed-function fact (operation 102).
+- Emit each function from that exact checked fact after its own body check,
+  without repeating checking or waiting for other bodies.
 - Link emitted functions and resolve relocations into one executable.
 - A check root joins all required semantic checks but demands no code generation.
 - A build root joins emitted objects, then executable publication.
@@ -72,6 +74,16 @@ Within one graph, concurrent check and build requests share parsing, resolution,
 declarations and body checks. Output facts contain typed-arena handles because
 the prototype runtime currently stores u64 slots. Arenas remain owned by the
 compilation snapshot and are not persistent cache keys.
+
+Checked scalar functions now retain resolved local and expression IDs, concrete
+inferred types, validated call signatures and explicit normal-completion versus
+divergence information. Every shadowed binding has its own LocalId. The native
+emitter consumes these facts directly, without source-name lookup or inference.
+This structured typed IR is groundwork for general types and ownership analysis,
+not a completed layout, CFG, borrow checker or public cross-version IR format.
+String names remain temporary canonical call symbols. The optional structural
+IR validator is a debugging helper, not a proof of semantic validity and not a
+second checker on the normal compilation path.
 
 Source-tree loading and text expansion currently form one coarse operation.
 String-input library calls retain their original parse-first graph.

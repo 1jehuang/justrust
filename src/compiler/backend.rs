@@ -5,7 +5,8 @@
 //! i32/bool results (unit is zero). All registers are caller-saved. Frames use
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
-use super::frontend::{BinaryOp, Block, Expr, Function, Program, Stmt, UnaryOp};
+use super::frontend::{self, BinaryOp, Program, UnaryOp};
+use super::ir::{self, ExprKind, LocalId};
 use std::collections::HashMap;
 
 const MAX_ARGS: usize = 4096;
@@ -21,14 +22,13 @@ pub struct Object {
     pub strings: Vec<(usize, Vec<u8>)>,
 }
 
-struct Emitter {
+struct Emitter<'a> {
     object: Object,
-    scopes: Vec<HashMap<String, i32>>,
-    slots: i32,
+    function: &'a ir::CheckedFunction,
     returns: Vec<usize>,
     traps: Vec<usize>,
 }
-impl Emitter {
+impl Emitter<'_> {
     fn bytes(&mut self, bytes: &[u8]) {
         self.object.code.extend_from_slice(bytes);
     }
@@ -58,12 +58,12 @@ impl Emitter {
         self.bytes(&[0xb8]);
         self.i32(n);
     }
-    fn lookup(&self, name: &str) -> Result<i32, String> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
-            .ok_or_else(|| format!("unknown backend variable `{name}`"))
+    fn local_offset(&self, local: LocalId) -> Result<i32, String> {
+        i32::try_from(local.0)
+            .ok()
+            .and_then(|index| index.checked_add(1))
+            .and_then(|slot| slot.checked_mul(-8))
+            .ok_or_else(|| "local frame too large".to_string())
     }
     fn load(&mut self, offset: i32) {
         self.bytes(&[0x8b, 0x85]);
@@ -73,35 +73,26 @@ impl Emitter {
         self.bytes(&[0x89, 0x85]);
         self.i32(offset);
     }
-    fn block(&mut self, block: &Block) -> Result<(), String> {
-        self.scopes.push(HashMap::new());
+    fn block(&mut self, block: &ir::Block) -> Result<(), String> {
         for statement in &block.statements {
             match statement {
-                Stmt::Let { name, value, .. } => {
-                    self.expr(value)?;
-                    self.slots = self.slots.checked_add(1).ok_or("too many local slots")?;
-                    let offset = self.slots.checked_mul(-8).ok_or("local frame too large")?;
-                    self.store(offset);
-                    self.scopes.last_mut().unwrap().insert(name.clone(), offset);
+                ir::Stmt::Let { local, value } | ir::Stmt::Assign { local, value } => {
+                    self.expr(*value)?;
+                    self.store(self.local_offset(*local)?);
                 }
-                Stmt::Assign { name, value } => {
-                    let offset = self.lookup(name)?;
-                    self.expr(value)?;
-                    self.store(offset);
-                }
-                Stmt::Expr(value) => self.expr(value)?,
-                Stmt::Return(value) => {
+                ir::Stmt::Expr(value) => self.expr(*value)?,
+                ir::Stmt::Return(value) => {
                     if let Some(value) = value {
-                        self.expr(value)?;
+                        self.expr(*value)?;
                     } else {
                         self.immediate(0);
                     }
                     let at = self.jump(&[0xe9]);
                     self.returns.push(at);
                 }
-                Stmt::While { condition, body } => {
+                ir::Stmt::While { condition, body } => {
                     let start = self.position();
-                    self.expr(condition)?;
+                    self.expr(*condition)?;
                     self.bytes(&[0x85, 0xc0]);
                     let end = self.jump(&[0x0f, 0x84]);
                     self.block(body)?;
@@ -112,20 +103,19 @@ impl Emitter {
             }
         }
         if let Some(tail) = &block.tail {
-            self.expr(tail)?;
+            self.expr(*tail)?;
         } else {
             self.immediate(0);
         }
-        self.scopes.pop();
         Ok(())
     }
-    fn expr(&mut self, expression: &Expr) -> Result<(), String> {
-        match expression {
-            Expr::Int(n) => self.immediate(*n),
-            Expr::Bool(value) => self.immediate(i32::from(*value)),
-            Expr::Var(name) => self.load(self.lookup(name)?),
-            Expr::Unary { op, value } => {
-                self.expr(value)?;
+    fn expr(&mut self, expression: ir::ExprId) -> Result<(), String> {
+        match &self.function.exprs[expression.0].kind {
+            ExprKind::Int(n) => self.immediate(*n),
+            ExprKind::Bool(value) => self.immediate(i32::from(*value)),
+            ExprKind::Local(local) => self.load(self.local_offset(*local)?),
+            ExprKind::Unary { op, value } => {
+                self.expr(*value)?;
                 match op {
                     UnaryOp::Neg => {
                         self.bytes(&[0xf7, 0xd8]);
@@ -134,8 +124,8 @@ impl Emitter {
                     UnaryOp::Not => self.bytes(&[0x83, 0xf0, 0x01]),
                 }
             }
-            Expr::Binary { op, left, right } => {
-                self.expr(left)?;
+            ExprKind::Binary { op, left, right } => {
+                self.expr(*left)?;
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     self.bytes(&[0x85, 0xc0]);
                     let done = self.jump(&[
@@ -146,12 +136,12 @@ impl Emitter {
                             0x85
                         },
                     ]);
-                    self.expr(right)?;
+                    self.expr(*right)?;
                     self.patch(done, self.position())?;
                     return Ok(());
                 }
                 self.bytes(&[0x50]); // push rax
-                self.expr(right)?;
+                self.expr(*right)?;
                 self.bytes(&[0x89, 0xc1, 0x58]); // ecx = right, pop left
                 match op {
                     BinaryOp::Add => {
@@ -199,12 +189,12 @@ impl Emitter {
                     BinaryOp::And | BinaryOp::Or => unreachable!(),
                 }
             }
-            Expr::Call { name, args } => {
+            ExprKind::Call { name, args, .. } => {
                 if args.len() > MAX_ARGS {
                     return Err(format!("at most {MAX_ARGS} arguments are supported"));
                 }
                 for arg in args {
-                    self.expr(arg)?;
+                    self.expr(*arg)?;
                     self.bytes(&[0x50]);
                 }
                 let at = self.jump(&[0xe8]);
@@ -214,12 +204,12 @@ impl Emitter {
                     self.i32((args.len() * 8) as i32);
                 }
             }
-            Expr::If {
+            ExprKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.expr(condition)?;
+                self.expr(*condition)?;
                 self.bytes(&[0x85, 0xc0]);
                 let other = self.jump(&[0x0f, 0x84]);
                 self.block(then_block)?;
@@ -228,8 +218,8 @@ impl Emitter {
                 self.block(else_block)?;
                 self.patch(done, self.position())?;
             }
-            Expr::Block(block) => self.block(block)?,
-            Expr::Println(text) => {
+            ExprKind::Block(block) => self.block(block)?,
+            ExprKind::Println(text) => {
                 let mut bytes = text.as_bytes().to_vec();
                 bytes.push(b'\n');
                 self.bytes(&[0x48, 0xbe]); // movabs rsi, literal
@@ -257,8 +247,10 @@ impl Emitter {
     }
 }
 
-/// Compile one function independently, suitable for parallel graph workers.
-pub fn emit_function(function: &Function) -> Result<Object, String> {
+/// Compile one checked function independently, suitable for parallel graph workers.
+/// Semantic analysis is complete. Local slots are `-8 * (LocalId + 1)` and
+/// parameters are copied into those slots from the incoming private ABI.
+pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
     if function.params.len() > MAX_ARGS {
         return Err(format!("at most {MAX_ARGS} parameters are supported"));
     }
@@ -268,17 +260,17 @@ pub fn emit_function(function: &Function) -> Result<Object, String> {
             calls: Vec::new(),
             strings: Vec::new(),
         },
-        scopes: vec![HashMap::new()],
-        slots: 0,
+        function,
         returns: Vec::new(),
         traps: Vec::new(),
     };
     emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
     let frame = emitter.position();
     emitter.i32(0);
-    for (index, (name, _)) in function.params.iter().enumerate() {
+    for (index, local) in function.params.iter().enumerate() {
         let offset = 16 + (function.params.len() - index - 1) * 8;
-        emitter.scopes[0].insert(name.clone(), offset as i32);
+        emitter.load(offset as i32);
+        emitter.store(emitter.local_offset(*local)?);
     }
     emitter.block(&function.body)?;
     let epilogue = emitter.position();
@@ -293,7 +285,10 @@ pub fn emit_function(function: &Function) -> Result<Object, String> {
     for at in std::mem::take(&mut emitter.traps) {
         emitter.patch(at, trap)?;
     }
-    let frame_bytes = emitter.slots.checked_mul(8).ok_or("frame too large")?;
+    let frame_bytes = i32::try_from(function.locals.len())
+        .ok()
+        .and_then(|slots| slots.checked_mul(8))
+        .ok_or("frame too large")?;
     emitter.object.code[frame..frame + 4].copy_from_slice(&frame_bytes.to_le_bytes());
     Ok(emitter.object)
 }
@@ -388,18 +383,25 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
     Ok(elf)
 }
 
+/// Compatibility entry point for AST callers. Build signatures once and lower
+/// each body once, then use the same checked emitter as graph compilation.
 pub fn emit(program: &Program) -> Result<Vec<u8>, String> {
+    let signatures = frontend::signature_table(program)?;
     let objects = program
         .functions
         .iter()
-        .map(|f| Ok((f.name.clone(), emit_function(f)?)))
+        .enumerate()
+        .map(|(index, f)| {
+            let checked = frontend::type_function_with_signatures(program, index, &signatures)?;
+            Ok((f.name.clone(), emit_checked_function(&checked)?))
+        })
         .collect::<Result<Vec<_>, String>>()?;
     link(&objects)
 }
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
-    use super::super::frontend::Type;
+    use super::super::frontend::{Block, Expr, Function, Stmt, Type};
     use super::*;
     use std::io::{Read, Write};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -445,6 +447,12 @@ mod tests {
             then_block: block(vec![], None),
             else_block: block(vec![Stmt::Expr(crash())], None),
         })
+    }
+    fn bool_equals(value: Expr, expected: bool) -> Stmt {
+        assertion(binary(BinaryOp::Eq, value, Expr::Bool(expected)))
+    }
+    fn crash_bool() -> Expr {
+        binary(BinaryOp::Eq, crash(), Expr::Int(0))
     }
     fn equals(value: Expr, expected: i32) -> Stmt {
         assertion(binary(BinaryOp::Eq, value, Expr::Int(expected)))
@@ -584,20 +592,26 @@ mod tests {
                 },
                 -7,
             ),
-            equals(
+            bool_equals(
                 Expr::Unary {
                     op: UnaryOp::Not,
                     value: Box::new(Expr::Bool(true)),
                 },
-                0,
+                false,
             ),
-            equals(binary(BinaryOp::And, Expr::Bool(false), crash()), 0),
-            equals(binary(BinaryOp::Or, Expr::Bool(true), crash()), 1),
-            equals(
+            bool_equals(
+                binary(BinaryOp::And, Expr::Bool(false), crash_bool()),
+                false,
+            ),
+            bool_equals(binary(BinaryOp::Or, Expr::Bool(true), crash_bool()), true),
+            bool_equals(
                 binary(BinaryOp::And, Expr::Bool(true), Expr::Bool(false)),
-                0,
+                false,
             ),
-            equals(binary(BinaryOp::Or, Expr::Bool(false), Expr::Bool(true)), 1),
+            bool_equals(
+                binary(BinaryOp::Or, Expr::Bool(false), Expr::Bool(true)),
+                true,
+            ),
         ];
         for (op, expected) in [
             (BinaryOp::Eq, 0),
@@ -607,7 +621,10 @@ mod tests {
             (BinaryOp::Gt, 0),
             (BinaryOp::Ge, 0),
         ] {
-            statements.push(equals(binary(op, Expr::Int(-7), Expr::Int(3)), expected));
+            statements.push(bool_equals(
+                binary(op, Expr::Int(-7), Expr::Int(3)),
+                expected != 0,
+            ));
         }
         let output = run(&program(statements, vec![]));
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -744,11 +761,15 @@ mod tests {
         assert_eq!(run(&p).status.code(), Some(0));
         let mut too_many = pick;
         too_many.params.push(("extra".into(), Type::I32));
-        assert!(emit_function(&too_many).unwrap_err().contains("4096"));
+        assert!(
+            emit(&program(vec![], vec![too_many]))
+                .unwrap_err()
+                .contains("4096")
+        );
         assert!(
             emit(&program(
                 vec![Stmt::Expr(call("pick", vec![Expr::Int(0); MAX_ARGS + 1]))],
-                vec![]
+                vec![p.functions[0].clone()]
             ))
             .unwrap_err()
             .contains("4096")
@@ -861,8 +882,59 @@ mod tests {
         }
         assert_eq!(run(&p).status.code(), Some(0));
         assert!(link(&[]).is_err());
-        let object = emit_function(&p.functions[0]).unwrap();
+        let signatures = frontend::signature_table(&p).unwrap();
+        let checked = frontend::type_function_with_signatures(&p, 0, &signatures).unwrap();
+        let object = emit_checked_function(&checked).unwrap();
         assert!(link(&[("main".into(), object.clone()), ("main".into(), object)]).is_err());
         assert!(emit(&program(vec![Stmt::Expr(call("missing", vec![]))], vec![])).is_err());
+    }
+
+    #[test]
+    fn checked_emission_uses_local_ids_not_display_names() {
+        let p = program(
+            vec![equals(call("shadow", vec![Expr::Int(17)]), 19)],
+            vec![function(
+                "shadow",
+                vec![("x".into(), Type::I32)],
+                Type::I32,
+                block(
+                    vec![Stmt::Let {
+                        name: "x".into(),
+                        mutable: false,
+                        ty: Type::I32,
+                        value: binary(BinaryOp::Add, var("x"), Expr::Int(2)),
+                    }],
+                    Some(var("x")),
+                ),
+            )],
+        );
+        assert_eq!(run(&p).status.code(), Some(0));
+        let signatures = frontend::signature_table(&p).unwrap();
+        let mut checked = frontend::type_function_with_signatures(&p, 0, &signatures).unwrap();
+        let original = emit_checked_function(&checked).unwrap();
+        for local in &mut checked.locals {
+            local.name = "not_a_source_binding".into();
+        }
+        let renamed = emit_checked_function(&checked).unwrap();
+        assert_eq!(original.code, renamed.code);
+        assert_eq!(original.calls, renamed.calls);
+        assert_eq!(original.strings, renamed.strings);
+        // Both the parameter and shadow binding own a distinct monotonic slot.
+        assert_eq!(
+            i32::from_le_bytes(original.code[7..11].try_into().unwrap()),
+            16
+        );
+        assert!(
+            original
+                .code
+                .windows(6)
+                .any(|bytes| bytes == [0x89, 0x85, 0xf8, 0xff, 0xff, 0xff])
+        );
+        assert!(
+            original
+                .code
+                .windows(6)
+                .any(|bytes| bytes == [0x89, 0x85, 0xf0, 0xff, 0xff, 0xff])
+        );
     }
 }
