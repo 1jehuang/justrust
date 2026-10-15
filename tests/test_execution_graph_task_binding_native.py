@@ -84,8 +84,9 @@ class NativeTaskBindingAcceptance(unittest.TestCase):
         self.assertTrue(self.justrust, 'native consumer required')
         self.stage = self.rustc.parent.parent
         host_build = self.stage.parent
-        stage0 = host_build / 'stage0/bin/rustc'
-        sysroot = host_build / 'stage0-sysroot'
+        stage0 = Path(os.environ.get('JR_QUERY_STAGE0') or host_build / 'stage0/bin/rustc')
+        sysroot = Path(os.environ.get('JR_QUERY_METADATA_SYSROOT') or
+                       host_build / 'stage0-sysroot')
         drivers = list((self.stage / 'lib').glob('librustc_driver-*.so'))
         self.assertEqual(len(drivers), 1, 'require unique rebuilt driver')
         driver = drivers[0]
@@ -127,7 +128,11 @@ class NativeTaskBindingAcceptance(unittest.TestCase):
         control = self.run_logged(command, 'control-build')
         baseline_output = self.run_logged([artifact], 'control-execute').stdout
         self.assertEqual(baseline_output, '28\n')
-        captured = self.run_logged(command + ['-Zjr-query-graph=' + str(sink)], 'capture-build')
+        witness_path = self.root / 'frontend-scope-witness.json'
+        captured_env = dict(self.env, JR_QUERY_SCOPE_WITNESS=str(witness_path))
+        captured = self.run_logged(command + ['-Zjr-query-graph=' + str(sink)],
+                                   'capture-build', env=captured_env)
+        witness = json.loads(witness_path.read_text())
         self.assertEqual(captured.stdout + captured.stderr, control.stdout + control.stderr)
         self.assertEqual(self.run_logged([artifact], 'execute').stdout, baseline_output)
         files = {p: json.loads(p.read_text()) for p in sink.glob('*.json')}
@@ -154,20 +159,35 @@ class NativeTaskBindingAcceptance(unittest.TestCase):
                     if e['target'] is not None and e['source']['kind'] == 'admitted'}
         self.assertTrue(admitted & children, 'no actual query admission inside child')
         self.assertTrue(admitted & continuations, 'no actual distinct continuation query')
-        self.assertTrue(any(e['target'] is None for e in points),
-                        'outside/pre-attachment queries must remain explicitly unbound')
+        self.assertIn(witness['continuation_task'], continuations,
+                      'cached callback request must run on a real resumed continuation')
+        self.assertTrue(any(e['kind'] in ('root', 'resume') and
+                            e.get('task', e.get('continuation')) == witness['entry_task']
+                            for e in pool['events']), 'callback entry has no native scope')
         read_events = query['query_reads']['events']
         cached_requests = {e['request_id'] for e in read_events if e['kind'] == 'cache_hit'}
-        unbound_requests = {e['source']['request_id'] for e in points
-                            if e['source']['kind'] == 'request_started' and e['target'] is None}
-        self.assertTrue(cached_requests & unbound_requests,
-                        'cached request outside native joins must remain unbound')
         opaque_reads = {e['read_id'] for e in read_events if e['kind'] == 'dep_read'
                         and e['outcome'] != 'tracked_new'}
-        unbound_reads = {e['source']['read_id'] for e in points
-                         if e['source']['kind'] == 'dep_read' and e['target'] is None}
-        self.assertTrue(opaque_reads & unbound_reads,
-                        'opaque read outside native joins must remain unbound')
+        for prefix, target_task in (('cached', witness['continuation_task']), ('opaque', None)):
+            for suffix, kind, field, actual_ids in (
+                    ('requests', 'request_started', 'request_id', cached_requests),
+                    ('reads', 'dep_read', 'read_id', opaque_reads)):
+                low, high = witness[prefix + '_' + suffix]
+                self.assertLess(low, high, (prefix, suffix, witness))
+                expected_ids = set(range(low, high))
+                rows = [row for row in points if row['source']['kind'] == kind
+                        and row['source'][field] in expected_ids]
+                self.assertEqual({row['source'][field] for row in rows}, expected_ids)
+                self.assertTrue(expected_ids & actual_ids,
+                                (prefix, suffix, 'no actual cached request/opaque read'))
+                for row in rows:
+                    if target_task is None:
+                        self.assertIsNone(row['target'], (prefix, row))
+                        self.assertEqual(row['unbound_reason'], 'no_active', row)
+                    else:
+                        self.assertIsNotNone(row['target'], (prefix, row))
+                        self.assertEqual(row['target']['task'], target_task, row)
+                        self.assertIsNone(row['unbound_reason'], row)
         baseline = self.assess(sink, 'assessment')
         self.assertTrue(baseline['task_bindings']['graph_binding_valid'], baseline)
         self.assertEqual(baseline['task_bindings']['graph_binding_complete'],
@@ -220,6 +240,7 @@ class NativeTaskBindingAcceptance(unittest.TestCase):
         # native wait gate asserts real registered/resumed points under contention.
         print(json.dumps({'artifact_sha256': hashlib.sha256(artifact.read_bytes()).hexdigest(),
                           'actual_points': len(points), 'expected_points': bindings['expected_points'],
+                          'frontend_scope_witness': witness,
                           'bound_admission_tasks': sorted(admitted), 'wait_points': dict(waits),
                           'wait_exercise': 'observed' if waits else 'blocked: bounded fixture has no actual wait; run wait_native contention gate'}), flush=True)
 
