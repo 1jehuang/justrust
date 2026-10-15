@@ -184,6 +184,23 @@ impl ExecutionObserver {
         crate::execution_timing::enter_query(recorder, context, job, name, task)
     }
 
+    pub fn new_for_query_with_execution_flow(
+        capacity: usize,
+        query_capture_id: &str,
+        query_epoch: Instant,
+    ) -> Option<Arc<Self>> {
+        let mut observer =
+            Self::new_for_query_with_cpu_ownership(capacity, query_capture_id, query_epoch)?;
+        let capacity = observer.capacity;
+        Arc::get_mut(&mut observer)?.timing =
+            Some(crate::execution_timing::Recorder::new_with_execution_flow(query_epoch, capacity));
+        Some(observer)
+    }
+
+    fn flow(&self) -> Option<&Arc<crate::execution_flow::Recorder>> {
+        self.timing.as_ref().and_then(|t| t.flow.as_ref())
+    }
+
     fn create(
         capacity: usize,
         query_capture_id: Option<&str>,
@@ -340,6 +357,8 @@ impl ExecutionObserver {
             id: TaskId { observer: self.id, task },
             state: Arc::new(Mutex::new(TaskState::Created)),
             completion: Arc::new(Mutex::new(None)),
+            flow_parent: None,
+            flow_completion: self.flow().map(|_| Arc::new(Mutex::new(None))),
         })
     }
 
@@ -397,7 +416,9 @@ impl ExecutionObserver {
     /// IDs in events are task-local numbers qualified by the header observer.
     pub fn write_json(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         let receipt = self.snapshot();
-        let schema = if self.timing.as_ref().is_some_and(|t| t.query_ownership_enabled()) {
+        let schema = if self.flow().is_some() {
+            5
+        } else if self.timing.as_ref().is_some_and(|t| t.query_ownership_enabled()) {
             4
         } else if self.timing.is_some() {
             3
@@ -498,6 +519,8 @@ pub struct TaskContext {
     state: Arc<Mutex<TaskState>>,
     // The terminal segment of this logical invocation, set only by its guard.
     completion: Arc<Mutex<Option<TaskId>>>,
+    flow_parent: Option<crate::execution_flow::Cursor>,
+    flow_completion: Option<Arc<Mutex<Option<crate::execution_flow::Cursor>>>>,
 }
 
 pub fn current_task() -> Option<TaskId> {
@@ -528,10 +551,11 @@ pub fn is_dispatch_masked() -> bool {
 pub(crate) fn suspend_for_dispatch() -> DispatchGuard {
     let timing = crate::execution_timing::pause();
     let query = crate::execution_timing::suspend_query();
+    let flow = crate::execution_flow::take();
     let previous = CURRENT.with(|current| current.replace(None));
     let previous_mask = DISPATCH_MASKED.with(|masked| masked.replace(true));
     crate::execution_timing::resume(timing.as_ref(), None);
-    DispatchGuard { previous, previous_mask, timing, query, _not_send: PhantomData }
+    DispatchGuard { previous, previous_mask, timing, query, flow, _not_send: PhantomData }
 }
 
 /// Worker-local restoration, including when a dispatched closure unwinds.
@@ -540,12 +564,15 @@ pub(crate) struct DispatchGuard {
     previous_mask: bool,
     timing: Option<Arc<crate::execution_timing::Recorder>>,
     query: Option<crate::execution_timing::QueryOwnership>,
+    flow: Option<crate::execution_flow::Cursor>,
     _not_send: PhantomData<Rc<()>>,
 }
 
 impl Drop for DispatchGuard {
     fn drop(&mut self) {
         crate::execution_timing::pause();
+        crate::execution_flow::take();
+        crate::execution_flow::restore(crate::execution_flow::cut(self.flow.take(), "dispatch"));
         CURRENT.with(|current| current.replace(self.previous.take()));
         DISPATCH_MASKED.with(|masked| masked.set(self.previous_mask));
         crate::execution_timing::restore_query(self.query.take());
@@ -604,6 +631,11 @@ impl TaskContext {
             return None;
         }
         let query = crate::execution_timing::suspend_query();
+        let flow = crate::execution_flow::take();
+        crate::execution_flow::restore(self.flow_parent.clone());
+        if let Some(recorder) = self.observer.flow() {
+            recorder.gate("task_enter", Some(self.id.task), None);
+        }
         let active = Rc::new(RefCell::new(Some(self.clone())));
         let previous = CURRENT.with(|current| current.replace(Some(Rc::clone(&active))));
         crate::execution_timing::resume(self.observer.timing.as_ref(), Some(self.id.task));
@@ -612,6 +644,7 @@ impl TaskContext {
             previous,
             timing,
             query,
+            flow,
             outcome: Outcome::Normal,
             _not_send: PhantomData,
         })
@@ -639,8 +672,19 @@ impl TaskContext {
         }
         let mut continuation = self.observer.task()?;
         continuation.completion = Arc::clone(&self.completion);
+        continuation.flow_completion = self.flow_completion.clone();
         crate::execution_timing::pause();
         let query = crate::execution_timing::suspend_query();
+        let flow = crate::execution_flow::take();
+        crate::execution_flow::restore(flow.clone());
+        let fork_flow = self
+            .observer
+            .flow()
+            .and_then(|recorder| recorder.gate("fork", Some(self.id.task), None));
+        crate::execution_flow::take();
+        for child in &mut children {
+            child.flow_parent = crate::execution_flow::branch(&fork_flow);
+        }
         for child in &children {
             self.observer.event(Event::Fork {
                 parent: self.id,
@@ -657,6 +701,7 @@ impl TaskContext {
             continuation,
             origin: active,
             query,
+            flow,
         })
     }
 }
@@ -667,6 +712,7 @@ pub struct TaskGuard {
     previous: Option<Active>,
     timing: Option<Arc<crate::execution_timing::Recorder>>,
     query: Option<crate::execution_timing::QueryOwnership>,
+    flow: Option<crate::execution_flow::Cursor>,
     outcome: Outcome,
     _not_send: PhantomData<Rc<()>>,
 }
@@ -683,9 +729,21 @@ impl Drop for TaskGuard {
         crate::execution_timing::pause();
         let outcome = if std::thread::panicking() { Outcome::Panic } else { self.outcome };
         if let Some(task) = self.active.borrow_mut().take() {
+            let terminal = task.observer.flow().and_then(|recorder| {
+                recorder.gate(
+                    "task_exit",
+                    Some(task.id.task),
+                    Some(if outcome == Outcome::Panic { "unwound" } else { "returned" }),
+                )
+            });
             task.finish(outcome);
             *task.completion.lock().unwrap_or_else(|e| e.into_inner()) = Some(task.id);
+            if let Some(completion) = &task.flow_completion {
+                *completion.lock().unwrap_or_else(|e| e.into_inner()) = terminal;
+            }
         }
+        crate::execution_flow::take();
+        crate::execution_flow::restore(crate::execution_flow::cut(self.flow.take(), "task_switch"));
         CURRENT.with(|current| {
             current.replace(self.previous.take());
         });
@@ -700,6 +758,7 @@ pub struct Fork {
     continuation: TaskContext,
     origin: Active,
     query: Option<crate::execution_timing::QueryOwnership>,
+    flow: Option<crate::execution_flow::Cursor>,
 }
 
 impl Fork {
@@ -722,6 +781,13 @@ impl Fork {
             return Err(self);
         }
         crate::execution_timing::pause();
+        let terminals: [Option<crate::execution_flow::Cursor>; 2] = std::array::from_fn(|index| {
+            self.children[index]
+                .flow_completion
+                .as_ref()
+                .and_then(|completion| completion.lock().unwrap_or_else(|e| e.into_inner()).clone())
+        });
+        crate::execution_flow::take();
         for child in &self.children {
             let terminal = *child.completion.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(terminal) = terminal {
@@ -734,6 +800,15 @@ impl Fork {
         }
         self.observer.event(Event::Resume { continuation: self.continuation.id });
         self.continuation.start();
+        let joined = self.observer.flow().and_then(|recorder| {
+            crate::execution_flow::join(
+                recorder,
+                &terminals,
+                self.flow.take(),
+                self.continuation.id.task,
+            )
+        });
+        crate::execution_flow::restore(joined);
         let id = self.continuation.id;
         active.replace(Some(self.continuation));
         crate::execution_timing::restore_query(self.query.take());

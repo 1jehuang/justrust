@@ -137,6 +137,7 @@ struct Inner {
     epoch: Instant,
     execution_timing: bool,
     query_cpu_ownership: bool,
+    execution_flow: Option<usize>,
     next_context: AtomicU64,
     next_wait: AtomicU64,
     wait_ids_exhausted: AtomicBool,
@@ -438,7 +439,13 @@ impl QueryAdmissionObserver {
                 return;
             }
             let capture_id = self.0.capture_id.as_deref().unwrap();
-            let observer = if self.0.query_cpu_ownership {
+            let observer = if let Some(capacity) = self.0.execution_flow {
+                ExecutionObserver::new_for_query_with_execution_flow(
+                    capacity,
+                    capture_id,
+                    self.0.epoch,
+                )
+            } else if self.0.query_cpu_ownership {
                 ExecutionObserver::new_for_query_with_cpu_ownership(
                     MAX_EVENTS,
                     capture_id,
@@ -506,6 +513,10 @@ impl QueryAdmissionObserver {
         self.0.query_cpu_ownership
     }
 
+    pub fn execution_flow_enabled(&self) -> bool {
+        self.0.execution_flow.is_some()
+    }
+
     pub fn dispatch_resolutions_enabled(&self) -> bool {
         self.0.reads.dispatch_resolutions_enabled()
     }
@@ -524,6 +535,7 @@ impl QueryAdmissionObserver {
             execution_timing,
             dispatch_resolutions,
             false,
+            false,
         )
     }
 
@@ -534,7 +546,31 @@ impl QueryAdmissionObserver {
         capacity: usize,
         dispatch_resolutions: bool,
     ) -> Option<Self> {
-        Self::new_with_diagnostic_options(directory, capacity, true, dispatch_resolutions, true)
+        Self::new_with_diagnostic_options(
+            directory,
+            capacity,
+            true,
+            dispatch_resolutions,
+            true,
+            false,
+        )
+    }
+
+    /// Explicit observed call/return and instrumented fork/join control flow.
+    /// Root/read/timing schemas stay unchanged. Only the pool opts into schema5.
+    pub fn new_with_event_capacity_and_execution_flow(
+        directory: &Path,
+        capacity: usize,
+        dispatch_resolutions: bool,
+    ) -> Option<Self> {
+        Self::new_with_diagnostic_options(
+            directory,
+            capacity,
+            true,
+            dispatch_resolutions,
+            true,
+            true,
+        )
     }
 
     fn new_with_diagnostic_options(
@@ -543,14 +579,21 @@ impl QueryAdmissionObserver {
         execution_timing: bool,
         dispatch_resolutions: bool,
         query_cpu_ownership: bool,
+        execution_flow: bool,
     ) -> Option<Self> {
         if !(1..=crate::query_task_bindings::MAX_EVENT_CAPACITY).contains(&capacity) {
             return None;
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ =
-                (directory, capacity, execution_timing, dispatch_resolutions, query_cpu_ownership);
+            let _ = (
+                directory,
+                capacity,
+                execution_timing,
+                dispatch_resolutions,
+                query_cpu_ownership,
+                execution_flow,
+            );
             return None;
         }
         #[cfg(target_os = "linux")]
@@ -595,6 +638,7 @@ impl QueryAdmissionObserver {
                 epoch: Instant::now(),
                 execution_timing,
                 query_cpu_ownership,
+                execution_flow: execution_flow.then_some(capacity),
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -647,6 +691,7 @@ impl QueryAdmissionObserver {
                 epoch: Instant::now(),
                 execution_timing: false,
                 query_cpu_ownership: false,
+                execution_flow: None,
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -1592,6 +1637,35 @@ mod tests {
         drop((transport, default));
         fs::remove_dir_all(path).unwrap();
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn execution_flow_is_separate_explicit_opt_in_without_query_schema_change() {
+        for dispatch in [false, true] {
+            let path = private_directory();
+            let observer = QueryAdmissionObserver::new_with_event_capacity_and_execution_flow(
+                &path, 7, dispatch,
+            )
+            .unwrap();
+            assert!(observer.execution_flow_enabled());
+            assert_eq!(observer.0.execution_flow, Some(7));
+            assert!(observer.query_cpu_ownership_enabled());
+            assert!(observer.execution_timing_enabled());
+            assert_eq!(observer.dispatch_resolutions_enabled(), dispatch);
+            observer.context().snapshot(1);
+            drop(observer);
+            let text = receipt(&path);
+            assert!(text.starts_with(if dispatch { "{\"schema\":6," } else { "{\"schema\":5," }));
+            assert!(!text.contains("execution_flow"));
+            fs::remove_dir_all(path).unwrap();
+        }
+        let path = private_directory();
+        let observer =
+            QueryAdmissionObserver::new_with_event_capacity_and_query_cpu(&path, 7, false).unwrap();
+        assert!(!observer.execution_flow_enabled());
+        drop(observer);
+        fs::remove_dir_all(path).unwrap();
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn query_cpu_is_explicit_and_preserves_query_root_and_read_versions() {

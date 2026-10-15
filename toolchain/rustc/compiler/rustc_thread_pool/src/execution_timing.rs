@@ -63,11 +63,22 @@ pub(crate) fn current_query_identity() -> Option<(u64, u64)> {
 pub struct QueryExecutionGuard {
     previous: Option<QueryOwnership>,
     previous_recorder: Option<Arc<Recorder>>,
+    flow: Option<crate::execution_flow::ScopeGuard>,
+    masked_flow: Option<crate::execution_flow::Cursor>,
+    masked: bool,
     _not_send: PhantomData<Rc<()>>,
 }
 impl Drop for QueryExecutionGuard {
     fn drop(&mut self) {
         pause();
+        drop(self.flow.take());
+        if self.masked {
+            crate::execution_flow::take();
+            crate::execution_flow::restore(crate::execution_flow::cut(
+                self.masked_flow.take(),
+                "unobserved_query",
+            ));
+        }
         restore_query(self.previous.take());
         crate::execution_observer::resume_current_timing(self.previous_recorder.as_ref());
     }
@@ -78,8 +89,16 @@ pub(crate) fn suspend_query_execution() -> Option<QueryExecutionGuard> {
     current_query_recorder()?;
     let previous_recorder = pause();
     let previous = suspend_query();
+    let masked_flow = crate::execution_flow::take();
     crate::execution_observer::resume_current_timing(previous_recorder.as_ref());
-    Some(QueryExecutionGuard { previous, previous_recorder, _not_send: PhantomData })
+    Some(QueryExecutionGuard {
+        previous,
+        previous_recorder,
+        flow: None,
+        masked_flow,
+        masked: true,
+        _not_send: PhantomData,
+    })
 }
 pub(crate) fn enter_query(
     recorder: &Arc<Recorder>,
@@ -104,9 +123,19 @@ pub(crate) fn enter_query(
     }
     let previous_recorder = pause();
     let previous = suspend_query();
+    let flow = recorder.flow.as_ref().map(|flow| flow.enter_scope(context, job, name));
+    let masked = recorder.flow.is_none();
+    let masked_flow = if masked { crate::execution_flow::take() } else { None };
     restore_query(Some(QueryOwnership { recorder: Arc::clone(recorder), context, job, name }));
     resume(Some(recorder), task);
-    Some(QueryExecutionGuard { previous, previous_recorder, _not_send: PhantomData })
+    Some(QueryExecutionGuard {
+        previous,
+        previous_recorder,
+        flow,
+        masked_flow,
+        masked,
+        _not_send: PhantomData,
+    })
 }
 fn allocate(counter: &AtomicU64) -> Option<u64> {
     counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1)).ok()
@@ -200,6 +229,7 @@ pub(crate) struct Recorder {
     epoch: Instant,
     capacity: usize,
     query_ownership: bool,
+    pub(crate) flow: Option<Arc<crate::execution_flow::Recorder>>,
     // Production remains concrete so compiler DynSend/DynSync are structural.
     #[cfg(not(test))]
     clock: NativeClock,
@@ -232,6 +262,12 @@ impl Recorder {
     pub(crate) fn query_ownership_enabled(&self) -> bool {
         self.query_ownership
     }
+    pub(crate) fn new_with_execution_flow(epoch: Instant, capacity: usize) -> Arc<Self> {
+        let mut recorder = Self::new_with_query_ownership(epoch, capacity);
+        Arc::get_mut(&mut recorder).unwrap().flow =
+            Some(crate::execution_flow::Recorder::new(epoch, capacity));
+        recorder
+    }
     fn with_clock(
         epoch: Instant,
         capacity: usize,
@@ -241,6 +277,7 @@ impl Recorder {
             epoch,
             capacity,
             query_ownership: false,
+            flow: None,
             #[cfg(test)]
             clock,
             #[cfg(not(test))]
@@ -285,7 +322,7 @@ impl Recorder {
             self.identity_exhausted.store(true, Ordering::Relaxed);
         }
         drop(buffer);
-        Some(Cursor {
+        let cursor = Cursor {
             recorder: Arc::clone(self),
             id,
             thread,
@@ -309,7 +346,11 @@ impl Recorder {
                 None
             },
             start: self.clock.sample(self.epoch),
-        })
+        };
+        if let (Some(flow), Some(id)) = (&self.flow, cursor.id) {
+            flow.cpu(id, cursor.start.before, task, cursor.query.is_some());
+        }
+        Some(cursor)
     }
     fn end(&self, cursor: Cursor) {
         let mut end = self.clock.sample(self.epoch);
@@ -372,6 +413,10 @@ impl Recorder {
         if !buffer.sealed {
             buffer.active_at_cutoff = self.active.load(Ordering::Relaxed);
             buffer.sealed = true;
+        }
+        drop(buffer);
+        if let Some(flow) = &self.flow {
+            flow.seal();
         }
     }
     pub(crate) fn write_json(
@@ -451,7 +496,12 @@ impl Recorder {
             text.push('}');
             out.write_all(text.as_bytes())?;
         }
-        write!(out, "]}}")
+        write!(out, "]}}")?;
+        drop(buffer);
+        if let Some(flow) = &self.flow {
+            flow.write_json(out, TLS_FAILED.load(Ordering::Relaxed))?;
+        }
+        Ok(())
     }
 }
 fn number(value: Option<u64>) -> String {

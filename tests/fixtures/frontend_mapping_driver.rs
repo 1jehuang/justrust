@@ -73,9 +73,28 @@ fn main() {
         matches!(query_cpu, "off" | "query_cpu"),
         "invalid query CPU control"
     );
+    let execution_flow = lines.next().unwrap_or("off");
+    assert!(
+        matches!(execution_flow, "off" | "execution_flow"),
+        "invalid execution flow control"
+    );
     assert!(lines.next().is_none(), "unexpected fixture controls");
     let observer = if capture == "-" {
         None
+    } else if execution_flow == "execution_flow" {
+        #[cfg(frontend_execution_flow_api)]
+        {
+            Some(
+                QueryAdmissionObserver::new_with_event_capacity_and_execution_flow(
+                    std::path::Path::new(capture),
+                    capacity.parse().expect("numeric execution flow capacity"),
+                    dispatch == "dispatch",
+                )
+                .expect("private execution flow capture rejected"),
+            )
+        }
+        #[cfg(not(frontend_execution_flow_api))]
+        panic!("execution flow requires matching rebuilt private metadata");
     } else if query_cpu == "query_cpu" {
         #[cfg(frontend_query_cpu_api)]
         {
