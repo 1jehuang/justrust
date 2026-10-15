@@ -603,7 +603,12 @@ fn depth_limit_error<'tcx>(tcx: TyCtxt<'tcx>, job: QueryJobId) {
 
 /// Executes a job by changing the `ImplicitCtxt` to point to the new query job while it executes.
 #[inline(always)]
-fn start_query<R>(job_id: QueryJobId, depth_limit: bool, compute: impl FnOnce() -> R) -> R {
+fn start_query<'tcx, R>(
+    tcx: TyCtxt<'tcx>,
+    job_id: QueryJobId,
+    depth_limit: bool,
+    compute: impl FnOnce() -> R,
+) -> R {
     tls::with_context(move |icx| {
         if depth_limit && !icx.tcx.recursion_limit().value_within_limit(icx.query_depth) {
             depth_limit_error(icx.tcx, job_id);
@@ -617,6 +622,13 @@ fn start_query<R>(job_id: QueryJobId, depth_limit: bool, compute: impl FnOnce() 
         };
 
         // Use the `ImplicitCtxt` while we execute the query.
+        // Actual execution establishes CPU ownership. Inherited query TLS on a
+        // helping worker is deliberately not an authority for this guard.
+        let _query_cpu = tcx
+            .query_system
+            .jobs
+            .observer()
+            .and_then(|observer| observer.enter_query_execution(job_id.0.get()));
         tls::enter_context(&icx, compute)
     })
 }
@@ -633,7 +645,8 @@ fn execute_job_non_incr<'tcx, C: QueryCache>(
 
     let prof_timer = tcx.prof.query_provider();
     // Call the query provider.
-    let value = start_query(job_id, query.depth_limit, || (query.invoke_provider_fn)(tcx, key));
+    let value =
+        start_query(tcx, job_id, query.depth_limit, || (query.invoke_provider_fn)(tcx, key));
     let dep_node_index = tcx.dep_graph.next_virtual_depnode_index();
     prof_timer.finish_with_query_invocation_id(dep_node_index.into());
 
@@ -664,7 +677,7 @@ fn execute_job_incr<'tcx, C: QueryCache>(
     if !query.eval_always {
         // The diagnostics for this query will be promoted to the current session during
         // `try_mark_green()`, so we can ignore them here.
-        if let Some(ret) = start_query(job_id, false, || try {
+        if let Some(ret) = start_query(tcx, job_id, false, || try {
             let (prev_index, dep_node_index) = dep_graph_data.try_mark_green(tcx, &dep_node)?;
             let value = load_from_disk_or_invoke_provider_green(
                 tcx,
@@ -683,7 +696,7 @@ fn execute_job_incr<'tcx, C: QueryCache>(
 
     let prof_timer = tcx.prof.query_provider();
 
-    let (result, dep_node_index) = start_query(job_id, query.depth_limit, || {
+    let (result, dep_node_index) = start_query(tcx, job_id, query.depth_limit, || {
         // Call the query provider.
         dep_graph_data.with_task(
             dep_node,

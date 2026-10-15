@@ -2,6 +2,8 @@
 //! not evidence of zero work. A single TLS cursor prevents nested/help double counts.
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -12,6 +14,77 @@ static TLS_FAILED: AtomicBool = AtomicBool::new(false);
 thread_local! {
     static THREAD_ID: Cell<u64> = const { Cell::new(0) };
     static CURSOR: RefCell<Option<Cursor>> = const { RefCell::new(None) };
+    static QUERY_OWNER: RefCell<Option<QueryOwnership>> = const { RefCell::new(None) };
+}
+#[derive(Clone)]
+pub(crate) struct QueryOwnership {
+    recorder: Arc<Recorder>,
+    context: u64,
+    job: u64,
+}
+/// Worker-local ownership, never inherited by stolen work or reconstructed from query TLS.
+pub(crate) fn suspend_query() -> Option<QueryOwnership> {
+    QUERY_OWNER
+        .try_with(|owner| owner.try_borrow_mut().map(|mut slot| slot.take()))
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| {
+            TLS_FAILED.store(true, Ordering::Relaxed);
+            None
+        })
+}
+pub(crate) fn restore_query(owner: Option<QueryOwnership>) {
+    if QUERY_OWNER
+        .try_with(|slot| slot.try_borrow_mut().map(|mut slot| *slot = owner))
+        .ok()
+        .and_then(Result::ok)
+        .is_none()
+    {
+        TLS_FAILED.store(true, Ordering::Relaxed);
+    }
+}
+pub(crate) fn current_query_recorder() -> Option<Arc<Recorder>> {
+    QUERY_OWNER
+        .try_with(|slot| {
+            slot.try_borrow().map(|slot| slot.as_ref().map(|owner| Arc::clone(&owner.recorder)))
+        })
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| {
+            TLS_FAILED.store(true, Ordering::Relaxed);
+            None
+        })
+}
+#[cfg(test)]
+pub(crate) fn current_query_identity() -> Option<(u64, u64)> {
+    QUERY_OWNER.with(|slot| slot.borrow().as_ref().map(|owner| (owner.context, owner.job)))
+}
+pub struct QueryExecutionGuard {
+    previous: Option<QueryOwnership>,
+    previous_recorder: Option<Arc<Recorder>>,
+    _not_send: PhantomData<Rc<()>>,
+}
+impl Drop for QueryExecutionGuard {
+    fn drop(&mut self) {
+        pause();
+        restore_query(self.previous.take());
+        crate::execution_observer::resume_current_timing(self.previous_recorder.as_ref());
+    }
+}
+pub(crate) fn enter_query(
+    recorder: &Arc<Recorder>,
+    context: u64,
+    job: u64,
+    task: Option<u64>,
+) -> Option<QueryExecutionGuard> {
+    if !recorder.query_ownership || context == 0 || job == 0 {
+        return None;
+    }
+    let previous_recorder = pause();
+    let previous = suspend_query();
+    restore_query(Some(QueryOwnership { recorder: Arc::clone(recorder), context, job }));
+    resume(Some(recorder), task);
+    Some(QueryExecutionGuard { previous, previous_recorder, _not_send: PhantomData })
 }
 fn allocate(counter: &AtomicU64) -> Option<u64> {
     counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1)).ok()
@@ -83,12 +156,14 @@ struct Cursor {
     id: Option<u64>,
     thread: Option<u64>,
     task: Option<u64>,
+    query: Option<(u64, u64)>,
     start: Sample,
 }
 struct Segment {
     id: u64,
     thread: u64,
     task: Option<u64>,
+    query: Option<(u64, u64)>,
     start: Sample,
     end: Sample,
     cpu: Option<u64>,
@@ -102,6 +177,7 @@ struct Buffer {
 pub(crate) struct Recorder {
     epoch: Instant,
     capacity: usize,
+    query_ownership: bool,
     // Production remains concrete so compiler DynSend/DynSync are structural.
     #[cfg(not(test))]
     clock: NativeClock,
@@ -126,6 +202,14 @@ impl Recorder {
             Self::with_clock(epoch, capacity)
         }
     }
+    pub(crate) fn new_with_query_ownership(epoch: Instant, capacity: usize) -> Arc<Self> {
+        let mut recorder = Self::new(epoch, capacity);
+        Arc::get_mut(&mut recorder).unwrap().query_ownership = true;
+        recorder
+    }
+    pub(crate) fn query_ownership_enabled(&self) -> bool {
+        self.query_ownership
+    }
     fn with_clock(
         epoch: Instant,
         capacity: usize,
@@ -134,6 +218,7 @@ impl Recorder {
         Arc::new(Self {
             epoch,
             capacity,
+            query_ownership: false,
             #[cfg(test)]
             clock,
             #[cfg(not(test))]
@@ -183,6 +268,24 @@ impl Recorder {
             id,
             thread,
             task,
+            query: if self.query_ownership {
+                QUERY_OWNER
+                    .try_with(|slot| {
+                        slot.try_borrow().map(|slot| {
+                            slot.as_ref()
+                                .filter(|owner| Arc::ptr_eq(&owner.recorder, self))
+                                .map(|owner| (owner.context, owner.job))
+                        })
+                    })
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_else(|| {
+                        TLS_FAILED.store(true, Ordering::Relaxed);
+                        None
+                    })
+            } else {
+                None
+            },
             start: self.clock.sample(self.epoch),
         })
     }
@@ -232,6 +335,7 @@ impl Recorder {
                 id,
                 thread,
                 task: cursor.task,
+                query: cursor.query,
                 start: cursor.start,
                 end,
                 cpu,
@@ -283,7 +387,8 @@ impl Recorder {
         };
         write!(
             out,
-            ",\"timing\":{{\"schema\":1,\"scope\":\"observed-exclusive-thread-segments\",\"clock_bridge\":{{\"query_capture_id\":\"{query}\",\"pool_capture_id\":\"{pool}\",\"pool_observer\":{observer},\"pool_epoch_in_query_ns\":0}},\"cpu_clock\":\"linux-thread-cpu\",\"segment_allocator_baseline\":1,\"segment_allocator_high_water\":{high_text},\"expected_segments\":{expected},\"thread_allocator_high_water\":{threads},\"lost_segments\":{lost},\"loss_overflowed\":{overflow},\"identity_exhausted\":{exhausted},\"clock_failures\":{},\"active_segments\":{active},\"sealed\":{},\"records_complete\":{complete},\"segments\":[",
+            ",\"timing\":{{\"schema\":{},\"scope\":\"observed-exclusive-thread-segments\",\"clock_bridge\":{{\"query_capture_id\":\"{query}\",\"pool_capture_id\":\"{pool}\",\"pool_observer\":{observer},\"pool_epoch_in_query_ns\":0}},\"cpu_clock\":\"linux-thread-cpu\",\"segment_allocator_baseline\":1,\"segment_allocator_high_water\":{high_text},\"expected_segments\":{expected},\"thread_allocator_high_water\":{threads},\"lost_segments\":{lost},\"loss_overflowed\":{overflow},\"identity_exhausted\":{exhausted},\"clock_failures\":{},\"active_segments\":{active},\"sealed\":{},\"records_complete\":{complete},\"segments\":[",
+            if self.query_ownership { 2 } else { 1 },
             self.clock_failures.load(Ordering::Relaxed),
             buffer.sealed
         )?;
@@ -294,11 +399,17 @@ impl Recorder {
             let mut text = String::new();
             let _ = write!(
                 text,
-                "{{\"segment_id\":{},\"thread_id\":{},\"task\":{},\"owner_kind\":\"{}\",\"start_ns\":{},\"end_ns\":{},\"cpu_start_ns\":{},\"cpu_end_ns\":{},\"cpu_ns\":{},\"status\":\"{}\"}}",
+                "{{\"segment_id\":{},\"thread_id\":{},\"task\":{},\"owner_kind\":\"{}\",\"start_ns\":{},\"end_ns\":{},\"cpu_start_ns\":{},\"cpu_end_ns\":{},\"cpu_ns\":{},\"status\":\"{}\"",
                 row.id,
                 row.thread,
                 number(row.task),
-                if row.task.is_some() { "task" } else { "opaque" },
+                if row.query.is_some() {
+                    "query_execution"
+                } else if row.task.is_some() {
+                    "task"
+                } else {
+                    "opaque"
+                },
                 number(row.start.before),
                 number(row.end.after),
                 number(row.start.cpu),
@@ -306,6 +417,15 @@ impl Recorder {
                 number(row.cpu),
                 row.status
             );
+            if self.query_ownership {
+                let _ = write!(
+                    text,
+                    ",\"query_context\":{},\"query_job\":{}",
+                    number(row.query.map(|q| q.0)),
+                    number(row.query.map(|q| q.1))
+                );
+            }
+            text.push('}');
             out.write_all(text.as_bytes())?;
         }
         write!(out, "]}}")
@@ -379,6 +499,46 @@ mod tests {
         let mut out = Vec::new();
         recorder.write_json(&mut out, "query", "pool", 1).unwrap();
         String::from_utf8(out).unwrap()
+    }
+    #[test]
+    fn query_cpu_nesting_is_exclusive_and_unwind_restores_exact_context() {
+        let mut recorder = fake((1..=6).map(|n| sample(n, Some(n))).collect(), 10);
+        Arc::get_mut(&mut recorder).unwrap().query_ownership = true;
+        {
+            let _outer = enter_query(&recorder, 1, 7, None).unwrap();
+            let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _inner = enter_query(&recorder, 2, 7, None).unwrap();
+                assert_eq!(current_query_identity(), Some((2, 7)));
+                panic!("restore exact query context");
+            }));
+            assert!(unwind.is_err());
+            assert_eq!(current_query_identity(), Some((1, 7)));
+        }
+        assert_eq!(current_query_identity(), None);
+        assert!(!has_active_cursor());
+        recorder.seal();
+        let rows = recorder.lock();
+        assert_eq!(
+            rows.rows.iter().map(|r| r.query).collect::<Vec<_>>(),
+            [Some((1, 7)), Some((2, 7)), Some((1, 7))]
+        );
+        assert_eq!(rows.rows.iter().map(|r| r.cpu.unwrap()).sum::<u64>(), 3);
+        drop(rows);
+        let text = json(&recorder);
+        assert!(text.contains("\"schema\":2"));
+        assert_eq!(text.matches("\"owner_kind\":\"query_execution\"").count(), 3);
+        assert!(text.contains("\"records_complete\":true"));
+    }
+    #[test]
+    fn legacy_timing_never_enters_query_ownership_or_samples_for_it() {
+        let recorder = fake(Vec::new(), 10);
+        assert!(enter_query(&recorder, 1, 1, None).is_none());
+        assert!(!has_active_cursor());
+        assert!(current_query_identity().is_none());
+        let text = json(&recorder);
+        assert!(text.contains("\"schema\":1"));
+        assert!(!text.contains("query_context"));
+        assert!(!text.contains("query_job"));
     }
     #[test]
     fn exclusive_switches_do_not_double_count_or_bridge_gaps() {

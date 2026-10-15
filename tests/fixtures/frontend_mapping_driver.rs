@@ -68,9 +68,28 @@ fn main() {
         matches!(dispatch, "off" | "dispatch"),
         "invalid dispatch control"
     );
+    let query_cpu = lines.next().unwrap_or("off");
+    assert!(
+        matches!(query_cpu, "off" | "query_cpu"),
+        "invalid query CPU control"
+    );
     assert!(lines.next().is_none(), "unexpected fixture controls");
     let observer = if capture == "-" {
         None
+    } else if query_cpu == "query_cpu" {
+        #[cfg(frontend_query_cpu_api)]
+        {
+            Some(
+                QueryAdmissionObserver::new_with_event_capacity_and_query_cpu(
+                    std::path::Path::new(capture),
+                    capacity.parse().expect("numeric query CPU capacity"),
+                    dispatch == "dispatch",
+                )
+                .expect("private query CPU capture rejected"),
+            )
+        }
+        #[cfg(not(frontend_query_cpu_api))]
+        panic!("query CPU requires matching rebuilt private metadata");
     } else if dispatch == "dispatch" {
         #[cfg(frontend_dispatch_api)]
         {

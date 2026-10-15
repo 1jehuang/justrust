@@ -2,6 +2,7 @@
 //! Only explicitly instrumented joins are covered. Dequeue order is not a causal
 //! edge, and these receipts make no CPU, span, or full-pipeline coverage claim.
 
+pub use crate::execution_timing::QueryExecutionGuard;
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -154,6 +155,32 @@ impl ExecutionObserver {
 
     pub fn timing_enabled(&self) -> bool {
         self.timing.is_some()
+    }
+
+    /// Separate opt-in: retain legacy pool3/timing1 for existing timed captures.
+    pub fn new_for_query_with_cpu_ownership(
+        capacity: usize,
+        query_capture_id: &str,
+        query_epoch: Instant,
+    ) -> Option<Arc<Self>> {
+        let mut observer =
+            Self::new_for_query_with_timing(capacity, query_capture_id, query_epoch)?;
+        Arc::get_mut(&mut observer)?.timing = Some(
+            crate::execution_timing::Recorder::new_with_query_ownership(query_epoch, capacity),
+        );
+        Some(observer)
+    }
+
+    pub fn enter_query_execution(
+        &self,
+        context: u64,
+        job: u64,
+    ) -> Option<crate::execution_timing::QueryExecutionGuard> {
+        let recorder = self.timing.as_ref()?;
+        let task = current_context()
+            .filter(|task| std::ptr::eq(task.observer.as_ref(), self))
+            .map(|task| task.id.task);
+        crate::execution_timing::enter_query(recorder, context, job, task)
     }
 
     fn create(
@@ -369,7 +396,9 @@ impl ExecutionObserver {
     /// IDs in events are task-local numbers qualified by the header observer.
     pub fn write_json(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         let receipt = self.snapshot();
-        let schema = if self.timing.is_some() {
+        let schema = if self.timing.as_ref().is_some_and(|t| t.query_ownership_enabled()) {
+            4
+        } else if self.timing.is_some() {
             3
         } else if self.query_capture_id.is_some() {
             2
@@ -491,10 +520,11 @@ pub fn is_dispatch_masked() -> bool {
 /// the suspended slot's contents, including an in-progress fork's None state.
 pub(crate) fn suspend_for_dispatch() -> DispatchGuard {
     let timing = crate::execution_timing::pause();
+    let query = crate::execution_timing::suspend_query();
     let previous = CURRENT.with(|current| current.replace(None));
     let previous_mask = DISPATCH_MASKED.with(|masked| masked.replace(true));
     crate::execution_timing::resume(timing.as_ref(), None);
-    DispatchGuard { previous, previous_mask, timing, _not_send: PhantomData }
+    DispatchGuard { previous, previous_mask, timing, query, _not_send: PhantomData }
 }
 
 /// Worker-local restoration, including when a dispatched closure unwinds.
@@ -502,6 +532,7 @@ pub(crate) struct DispatchGuard {
     previous: Option<Active>,
     previous_mask: bool,
     timing: Option<Arc<crate::execution_timing::Recorder>>,
+    query: Option<crate::execution_timing::QueryOwnership>,
     _not_send: PhantomData<Rc<()>>,
 }
 
@@ -510,12 +541,24 @@ impl Drop for DispatchGuard {
         crate::execution_timing::pause();
         CURRENT.with(|current| current.replace(self.previous.take()));
         DISPATCH_MASKED.with(|masked| masked.set(self.previous_mask));
+        crate::execution_timing::restore_query(self.query.take());
         resume_current_timing(self.timing.as_ref());
     }
 }
 
-fn resume_current_timing(fallback: Option<&Arc<crate::execution_timing::Recorder>>) {
-    if let Some(context) = current_context() {
+pub(crate) fn resume_current_timing(fallback: Option<&Arc<crate::execution_timing::Recorder>>) {
+    if let Some(recorder) = crate::execution_timing::current_query_recorder() {
+        let task = current_context()
+            .filter(|context| {
+                context
+                    .observer
+                    .timing
+                    .as_ref()
+                    .is_some_and(|timing| Arc::ptr_eq(timing, &recorder))
+            })
+            .map(|context| context.id.task);
+        crate::execution_timing::resume(Some(&recorder), task);
+    } else if let Some(context) = current_context() {
         crate::execution_timing::resume(context.observer.timing.as_ref(), Some(context.id.task));
     } else {
         crate::execution_timing::resume(fallback, None);
@@ -553,6 +596,7 @@ impl TaskContext {
             resume_current_timing(timing.as_ref());
             return None;
         }
+        let query = crate::execution_timing::suspend_query();
         let active = Rc::new(RefCell::new(Some(self.clone())));
         let previous = CURRENT.with(|current| current.replace(Some(Rc::clone(&active))));
         crate::execution_timing::resume(self.observer.timing.as_ref(), Some(self.id.task));
@@ -560,6 +604,7 @@ impl TaskContext {
             active,
             previous,
             timing,
+            query,
             outcome: Outcome::Normal,
             _not_send: PhantomData,
         })
@@ -588,6 +633,7 @@ impl TaskContext {
         let mut continuation = self.observer.task()?;
         continuation.completion = Arc::clone(&self.completion);
         crate::execution_timing::pause();
+        let query = crate::execution_timing::suspend_query();
         for child in &children {
             self.observer.event(Event::Fork {
                 parent: self.id,
@@ -598,7 +644,13 @@ impl TaskContext {
         self.finish(Outcome::Normal);
         active.replace(None);
         crate::execution_timing::resume(self.observer.timing.as_ref(), None);
-        Some(Fork { observer: Arc::clone(&self.observer), children, continuation, origin: active })
+        Some(Fork {
+            observer: Arc::clone(&self.observer),
+            children,
+            continuation,
+            origin: active,
+            query,
+        })
     }
 }
 
@@ -607,6 +659,7 @@ pub struct TaskGuard {
     active: Active,
     previous: Option<Active>,
     timing: Option<Arc<crate::execution_timing::Recorder>>,
+    query: Option<crate::execution_timing::QueryOwnership>,
     outcome: Outcome,
     _not_send: PhantomData<Rc<()>>,
 }
@@ -629,6 +682,7 @@ impl Drop for TaskGuard {
         CURRENT.with(|current| {
             current.replace(self.previous.take());
         });
+        crate::execution_timing::restore_query(self.query.take());
         resume_current_timing(self.timing.as_ref());
     }
 }
@@ -638,6 +692,7 @@ pub struct Fork {
     children: Vec<TaskContext>,
     continuation: TaskContext,
     origin: Active,
+    query: Option<crate::execution_timing::QueryOwnership>,
 }
 
 impl Fork {
@@ -647,7 +702,7 @@ impl Fork {
 
     /// Resume in the original suspended guard after the scheduler's actual
     /// join. An early call or an unrelated active context creates no edges.
-    pub fn resume(self) -> Result<TaskId, Self> {
+    pub fn resume(mut self) -> Result<TaskId, Self> {
         let active = CURRENT.with(|current| current.borrow().clone());
         let Some(active) = active else { return Err(self) };
         if !Rc::ptr_eq(&active, &self.origin)
@@ -674,6 +729,7 @@ impl Fork {
         self.continuation.start();
         let id = self.continuation.id;
         active.replace(Some(self.continuation));
+        crate::execution_timing::restore_query(self.query.take());
         crate::execution_timing::resume(self.observer.timing.as_ref(), Some(id.task));
         Ok(id)
     }
@@ -700,6 +756,181 @@ mod tests {
             std::num::NonZeroU64::new(observer_id).unwrap(),
         )
         .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn query_cpu_masks_dispatch_forks_and_foreign_tasks_without_pool_ancestry() {
+        use crate::execution_timing::current_query_identity;
+        let observer =
+            ExecutionObserver::new_for_query_with_cpu_ownership(100, "query-owner", Instant::now())
+                .unwrap();
+        let root = observer.root().unwrap();
+        let root_guard = root.enter().unwrap();
+        let query = observer.enter_query_execution(1, 5).unwrap();
+        assert_eq!(current_query_identity(), Some((1, 5)));
+        {
+            let _dispatch = suspend_for_dispatch();
+            assert_eq!(current_query_identity(), None);
+            let _inner = observer.enter_query_execution(1, 6).unwrap();
+            assert_eq!(current_query_identity(), Some((1, 6)));
+            assert_eq!(current_task(), None);
+        }
+        assert_eq!(current_query_identity(), Some((1, 5)));
+        {
+            let foreign = ExecutionObserver::new(10).unwrap();
+            let _guard = foreign.root().unwrap().enter().unwrap();
+            assert_eq!(current_query_identity(), None);
+        }
+        assert_eq!(current_query_identity(), Some((1, 5)));
+        let fork = root.fork(2).unwrap();
+        assert_eq!(current_query_identity(), None);
+        for child in fork.children() {
+            let _guard = child.enter().unwrap();
+            assert_eq!(current_query_identity(), None);
+        }
+        let continuation = fork.resume().ok().unwrap();
+        assert_eq!(current_query_identity(), Some((1, 5)));
+        assert_eq!(current_task(), Some(continuation));
+        drop(query);
+        assert_eq!(current_query_identity(), None);
+        drop(root_guard);
+        assert!(!crate::execution_timing::has_active_cursor());
+        observer.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        observer.write_json(&mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.starts_with("{\"schema\":4,"));
+        assert!(out.contains("\"timing\":{\"schema\":2,"));
+        assert!(out.contains("\"query_context\":1,\"query_job\":5"));
+        assert!(out.contains("\"task\":null,\"owner_kind\":\"query_execution\""));
+        assert!(out.contains("\"query_context\":null,\"query_job\":null"));
+        assert!(out.contains("\"records_complete\":true"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn query_cpu_real_scope_help_and_unobserved_registry_do_not_inherit_query() {
+        use crate::execution_timing::current_query_identity;
+        let source = crate::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let target = crate::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let observer = ExecutionObserver::new_for_query_with_cpu_ownership(
+            100,
+            "query-real-owner",
+            Instant::now(),
+        )
+        .unwrap();
+        source.install(|| {
+            assert!(crate::Registry::current().attach_execution_observer(Arc::clone(&observer)));
+            let root = observer.root().unwrap();
+            let guard = root.enter().unwrap();
+            let query = observer.enter_query_execution(1, 9).unwrap();
+            crate::scope(|scope| {
+                scope.spawn(|_| {
+                    assert!(is_dispatch_masked());
+                    assert_eq!(current_query_identity(), None);
+                    let _inner = observer.enter_query_execution(1, 10).unwrap();
+                    assert_eq!(current_query_identity(), Some((1, 10)));
+                });
+            });
+            assert_eq!(current_query_identity(), Some((1, 9)));
+            target.install(|| {
+                assert_eq!(current_query_identity(), None);
+                assert!(crate::Registry::current().execution_observer().is_none());
+            });
+            assert_eq!(current_query_identity(), Some((1, 9)));
+            drop(query);
+            drop(guard);
+        });
+        observer.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        observer.write_json(&mut out).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("\"records_complete\":true"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn query_cpu_real_join_children_have_only_their_explicit_execution_owners() {
+        use crate::execution_timing::current_query_identity;
+        let pool = crate::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        let observer = ExecutionObserver::new_for_query_with_cpu_ownership(
+            100,
+            "query-join-owner",
+            Instant::now(),
+        )
+        .unwrap();
+        pool.install(|| {
+            assert!(crate::Registry::current().attach_execution_observer(Arc::clone(&observer)));
+            let root = observer.root().unwrap();
+            let guard = root.enter().unwrap();
+            let query = observer.enter_query_execution(1, 20).unwrap();
+            let barrier = std::sync::Barrier::new(2);
+            crate::join(
+                || {
+                    assert_eq!(current_query_identity(), None);
+                    let _child = observer.enter_query_execution(1, 21).unwrap();
+                    barrier.wait();
+                    assert_eq!(current_query_identity(), Some((1, 21)));
+                },
+                || {
+                    assert_eq!(current_query_identity(), None);
+                    let _child = observer.enter_query_execution(1, 22).unwrap();
+                    barrier.wait();
+                    assert_eq!(current_query_identity(), Some((1, 22)));
+                },
+            );
+            assert_eq!(current_query_identity(), Some((1, 20)));
+            assert_ne!(current_task(), Some(root.id()));
+            drop(query);
+            drop(guard);
+        });
+        observer.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        observer.write_json(&mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("\"query_job\":21"));
+        assert!(out.contains("\"query_job\":22"));
+        assert!(out.contains("\"records_complete\":true"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn query_cpu_foreign_receiver_retains_its_own_recorder_not_the_pool_tls() {
+        use crate::execution_timing::current_query_identity;
+        let source = ExecutionObserver::new_for_query_with_cpu_ownership(
+            100,
+            "query-source-owner",
+            Instant::now(),
+        )
+        .unwrap();
+        let receiver = ExecutionObserver::new_for_query_with_cpu_ownership(
+            100,
+            "query-receiver-owner",
+            Instant::now(),
+        )
+        .unwrap();
+        let root_guard = source.root().unwrap().enter().unwrap();
+        let source_query = source.enter_query_execution(1, 30).unwrap();
+        {
+            let _receiver_query = receiver.enter_query_execution(2, 30).unwrap();
+            {
+                let _nested = receiver.enter_query_execution(2, 31).unwrap();
+            }
+            assert_eq!(current_query_identity(), Some((2, 30)));
+            assert!(Arc::ptr_eq(
+                &crate::execution_timing::current_query_recorder().unwrap(),
+                receiver.timing.as_ref().unwrap()
+            ));
+        }
+        assert_eq!(current_query_identity(), Some((1, 30)));
+        drop(source_query);
+        drop(root_guard);
+        receiver.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        receiver.write_json(&mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.matches("\"task\":null,\"owner_kind\":\"query_execution\"").count(), 3);
+        assert!(out.contains("\"records_complete\":true"));
     }
 
     #[cfg(target_os = "linux")]

@@ -136,6 +136,7 @@ struct Inner {
     resource_registration: ResourceRegistration,
     epoch: Instant,
     execution_timing: bool,
+    query_cpu_ownership: bool,
     next_context: AtomicU64,
     next_wait: AtomicU64,
     wait_ids_exhausted: AtomicBool,
@@ -437,7 +438,13 @@ impl QueryAdmissionObserver {
                 return;
             }
             let capture_id = self.0.capture_id.as_deref().unwrap();
-            let observer = if self.execution_timing_enabled() {
+            let observer = if self.0.query_cpu_ownership {
+                ExecutionObserver::new_for_query_with_cpu_ownership(
+                    MAX_EVENTS,
+                    capture_id,
+                    self.0.epoch,
+                )
+            } else if self.execution_timing_enabled() {
                 ExecutionObserver::new_for_query_with_timing(MAX_EVENTS, capture_id, self.0.epoch)
             } else {
                 ExecutionObserver::new_for_query(MAX_EVENTS, capture_id)
@@ -495,6 +502,10 @@ impl QueryAdmissionObserver {
         self.0.execution_timing
     }
 
+    pub fn query_cpu_ownership_enabled(&self) -> bool {
+        self.0.query_cpu_ownership
+    }
+
     pub fn dispatch_resolutions_enabled(&self) -> bool {
         self.0.reads.dispatch_resolutions_enabled()
     }
@@ -507,12 +518,39 @@ impl QueryAdmissionObserver {
         execution_timing: bool,
         dispatch_resolutions: bool,
     ) -> Option<Self> {
+        Self::new_with_diagnostic_options(
+            directory,
+            capacity,
+            execution_timing,
+            dispatch_resolutions,
+            false,
+        )
+    }
+
+    /// Query execution is an independent CPU owner, never invented pool ancestry.
+    /// This constructor alone opts into pool4/timing2. Query root5/6 stays unchanged.
+    pub fn new_with_event_capacity_and_query_cpu(
+        directory: &Path,
+        capacity: usize,
+        dispatch_resolutions: bool,
+    ) -> Option<Self> {
+        Self::new_with_diagnostic_options(directory, capacity, true, dispatch_resolutions, true)
+    }
+
+    fn new_with_diagnostic_options(
+        directory: &Path,
+        capacity: usize,
+        execution_timing: bool,
+        dispatch_resolutions: bool,
+        query_cpu_ownership: bool,
+    ) -> Option<Self> {
         if !(1..=crate::query_task_bindings::MAX_EVENT_CAPACITY).contains(&capacity) {
             return None;
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (directory, capacity, execution_timing, dispatch_resolutions);
+            let _ =
+                (directory, capacity, execution_timing, dispatch_resolutions, query_cpu_ownership);
             return None;
         }
         #[cfg(target_os = "linux")]
@@ -556,6 +594,7 @@ impl QueryAdmissionObserver {
                 resource_registration: ResourceRegistration::default(),
                 epoch: Instant::now(),
                 execution_timing,
+                query_cpu_ownership,
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -607,6 +646,7 @@ impl QueryAdmissionObserver {
                 resource_registration: ResourceRegistration::default(),
                 epoch: Instant::now(),
                 execution_timing: false,
+                query_cpu_ownership: false,
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -641,6 +681,17 @@ impl QueryAdmissionObserver {
     }
 }
 impl QueryAdmissionContext {
+    /// The caller must be entering the actual admitted query job, not inherited TLS.
+    #[cfg(not(test))]
+    pub fn enter_query_execution(
+        &self,
+        job: u64,
+    ) -> Option<rustc_thread_pool::execution_observer::QueryExecutionGuard> {
+        if !self.observer.query_cpu_ownership_enabled() {
+            return None;
+        }
+        self.observer.0.pool.0.get()?.enter_query_execution(self.id, job)
+    }
     pub fn admission_binding(&self) -> Option<AdmissionBinding> {
         self.observer.admission_binding()
     }
@@ -1540,6 +1591,32 @@ mod tests {
         drop((transport, default));
         fs::remove_dir_all(path).unwrap();
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn query_cpu_is_explicit_and_preserves_query_root_and_read_versions() {
+        for dispatch in [false, true] {
+            let path = private_directory();
+            let observer =
+                QueryAdmissionObserver::new_with_event_capacity_and_query_cpu(&path, 7, dispatch)
+                    .unwrap();
+            assert!(observer.query_cpu_ownership_enabled());
+            assert!(observer.execution_timing_enabled());
+            assert_eq!(observer.dispatch_resolutions_enabled(), dispatch);
+            assert_eq!(observer.0.reads.event_capacity(), 7);
+            observer.context().snapshot(1);
+            drop(observer);
+            let text = receipt(&path);
+            assert!(text.starts_with(if dispatch { "{\"schema\":6," } else { "{\"schema\":5," }));
+            assert!(!text.contains("query_cpu"));
+            fs::remove_dir_all(path).unwrap();
+        }
+        let path = private_directory();
+        let legacy = QueryAdmissionObserver::new_with_event_capacity_and_timing(&path, 7).unwrap();
+        assert!(!legacy.query_cpu_ownership_enabled());
+        drop(legacy);
+        fs::remove_dir_all(path).unwrap();
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn timing_is_explicit_and_keeps_query_budgets_and_schema() {
