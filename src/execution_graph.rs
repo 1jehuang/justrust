@@ -371,7 +371,19 @@ pub(crate) fn collect_query(
     bytes: &[u8],
     pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
 ) -> Result<crate::execution_graph_query::QueryAssessment> {
-    let mut query = crate::execution_graph_query::collect_bytes(bytes)?;
+    collect_query_with_policy(
+        bytes,
+        pools,
+        crate::execution_graph_query::CapturePolicy::strict(),
+    )
+}
+
+fn collect_query_with_policy(
+    bytes: &[u8],
+    pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+    policy: crate::execution_graph_query::CapturePolicy,
+) -> Result<crate::execution_graph_query::QueryAssessment> {
+    let mut query = crate::execution_graph_query::collect_bytes_with_policy(bytes, policy)?;
     if let Some(bindings) = &query.bindings {
         query.assessment.task_bindings =
             Some(crate::execution_graph_task_bindings::reconcile_bindings(
@@ -386,6 +398,18 @@ pub(crate) fn collect_query(
 fn assess_receipt_bytes(
     bytes: &[u8],
     pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+) -> Result<Assessment> {
+    assess_receipt_bytes_with_policy(
+        bytes,
+        pools,
+        crate::execution_graph_query::CapturePolicy::strict(),
+    )
+}
+
+fn assess_receipt_bytes_with_policy(
+    bytes: &[u8],
+    pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+    policy: crate::execution_graph_query::CapturePolicy,
 ) -> Result<Assessment> {
     if let Some(producer) = resource_producer(bytes)? {
         return assess_resource_document(bytes, &producer);
@@ -424,7 +448,7 @@ fn assess_receipt_bytes(
             })
         }
         "rustc-query-admission" => {
-            let query = collect_query(bytes, pools)?;
+            let query = collect_query_with_policy(bytes, pools, policy)?;
             Ok(Assessment {
                 schema: query.schema,
                 producer: query.producer,
@@ -884,15 +908,41 @@ fn command_manifest(path: &Path, manifest_path: &Path, json: bool) -> Result<()>
     Ok(())
 }
 
+#[allow(dead_code)] // Strict compatibility entry point.
 pub fn command(path: &Path, json: bool, manifest: Option<&Path>) -> Result<()> {
+    command_with_policy(path, json, manifest, false)
+}
+
+pub(crate) fn command_with_policy(
+    path: &Path,
+    json: bool,
+    manifest: Option<&Path>,
+    large_capture: bool,
+) -> Result<()> {
+    if large_capture && manifest.is_some() {
+        bail!("--large-capture is not supported with --manifest");
+    }
     if let Some(manifest) = manifest {
         return command_manifest(path, manifest, json);
     }
-    let assessments = collect_path(path)?;
+    let policy = if large_capture {
+        crate::execution_graph_query::CapturePolicy::large()
+    } else {
+        crate::execution_graph_query::CapturePolicy::strict()
+    };
+    let assessments = collect_path_with_policy(path, policy)?;
     render_assessments(assessments, json)
 }
 
+#[cfg(test)]
 fn collect_path(path: &Path) -> Result<Vec<Assessment>> {
+    collect_path_with_policy(path, crate::execution_graph_query::CapturePolicy::strict())
+}
+
+fn collect_path_with_policy(
+    path: &Path,
+    policy: crate::execution_graph_query::CapturePolicy,
+) -> Result<Vec<Assessment>> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         bail!("capture path must not be a symlink");
@@ -926,9 +976,9 @@ fn collect_path(path: &Path) -> Result<Vec<Assessment>> {
     let mut total_bytes = 0u64;
     let mut documents = Vec::new();
     for file in files {
-        let bytes = read_bytes(&file, MAX_BYTES)?;
+        let bytes = read_bytes(&file, policy.max_bytes as u64)?;
         total_bytes = total_bytes.saturating_add(bytes.len() as u64);
-        if total_bytes > MAX_BYTES {
+        if total_bytes > policy.max_bytes as u64 {
             bail!("capture directory exceeds total receipt byte budget");
         }
         let resource = serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -958,7 +1008,7 @@ fn collect_path(path: &Path) -> Result<Vec<Assessment>> {
         crate::execution_graph_resource_attachment::collect_documents(&documents, None)?;
     let pools = collect_pool_inventories(&documents)?;
     for bytes in &documents {
-        let mut assessment = assess_receipt_bytes(bytes, &pools)?;
+        let mut assessment = assess_receipt_bytes_with_policy(bytes, &pools, policy)?;
         if let Some(&previous) = identities.get(&assessment.capture_id) {
             let previous: &mut Assessment = &mut assessments[previous];
             poison_duplicate_capture(previous);
@@ -1086,6 +1136,47 @@ mod tests {
 
     fn write_json(directory: &Path, name: &str, value: &serde_json::Value) {
         std::fs::write(directory.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn large_capture_path_preserves_total_bytes_identity_and_symlink_bounds() {
+        use crate::execution_graph_query::{CapturePolicy, tests::task_binding_fixture};
+        let directory = resource_test_directory("large-policy");
+        let fixture = task_binding_fixture();
+        let bytes = serde_json::to_vec(&fixture).unwrap();
+        let file = directory.join("a.json");
+        std::fs::write(&file, &bytes).unwrap();
+        let policy = CapturePolicy {
+            max_bytes: bytes.len(),
+            max_points: 7,
+        };
+        assert!(collect_path_with_policy(&file, policy).unwrap()[0].structural_complete);
+        assert!(collect_path_with_policy(&directory, policy).unwrap()[0].structural_complete);
+        assert!(
+            collect_path_with_policy(
+                &file,
+                CapturePolicy {
+                    max_bytes: bytes.len() - 1,
+                    ..policy
+                }
+            )
+            .is_err()
+        );
+        std::fs::write(directory.join("b.json"), &bytes).unwrap();
+        assert!(collect_path_with_policy(&directory, policy).is_err());
+        let duplicates = collect_path_with_policy(&directory, CapturePolicy::large()).unwrap();
+        assert_eq!(duplicates.len(), 2);
+        assert!(duplicates.iter().all(|a| !a.structural_complete
+            && a.issues.iter().any(|s| s == "duplicate capture identity")));
+        assert!(command_with_policy(&directory, true, Some(&file), true).is_err());
+        #[cfg(unix)]
+        {
+            let link = directory.join("link.json");
+            std::os::unix::fs::symlink(&file, &link).unwrap();
+            assert!(collect_path_with_policy(&link, CapturePolicy::large()).is_err());
+            assert!(collect_path_with_policy(&directory, CapturePolicy::large()).is_err());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     fn resource_summary(assessments: &[Assessment]) -> serde_json::Value {

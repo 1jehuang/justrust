@@ -120,13 +120,26 @@ pub(crate) struct QuerySourceInventory {
     pub unknown_waits: bool,
 }
 
+#[allow(dead_code)] // Strict compatibility entry point.
 pub(crate) fn assess(
     capture: BindingCapture,
-    mut inventory: QuerySourceInventory,
+    inventory: QuerySourceInventory,
 ) -> Result<ValidatedBindingCapture> {
+    assess_with_limit(capture, inventory, MAX_POINTS)
+}
+
+pub(crate) fn assess_with_limit(
+    capture: BindingCapture,
+    mut inventory: QuerySourceInventory,
+    max_points: usize,
+) -> Result<ValidatedBindingCapture> {
+    ensure!(
+        max_points <= 1_000_000,
+        "task-binding policy exceeds hard bound"
+    );
     ensure!(capture.schema == 1, "unsupported task-binding schema");
     ensure!(
-        capture.events.len() <= MAX_POINTS,
+        capture.events.len() <= max_points,
         "task-binding event budget exceeded"
     );
     if capture.expected_points.is_none() && inventory.expected_points.is_some() {
@@ -339,6 +352,61 @@ mod tests {
     use super::*;
     use crate::execution_graph_continuation::{PoolInventory, TaskInterval};
     use crate::execution_graph_query::{collect_bytes, tests::task_binding_fixture};
+
+    #[test]
+    fn large_capture_binding_limit_is_explicit_and_preserves_validation() {
+        let count = MAX_POINTS + 1;
+        let make = || {
+            let events = (1..=count as u64)
+                .map(|request_id| BindingEvent {
+                    source: Source::RequestStarted { request_id },
+                    target: Some(Target {
+                        task: 1,
+                        at_pool_ns: 10,
+                    }),
+                    unbound_reason: None,
+                })
+                .collect();
+            let capture = BindingCapture {
+                schema: 1,
+                records_complete: true,
+                all_targets_bound: true,
+                expected_points: Some(count as u64),
+                lost_events: 0,
+                loss_overflowed: false,
+                pool: Some(PoolReference {
+                    capture_id: "pool-1".into(),
+                    observer: 1,
+                }),
+                unavailable_reason: None,
+                events,
+            };
+            let inventory = QuerySourceInventory {
+                expected_points: Some(count as u64),
+                read_high_water: [count as u64 + 1, 1, 1],
+                observed: (1..=count as u64)
+                    .map(|request_id| Source::RequestStarted { request_id })
+                    .collect(),
+                ..Default::default()
+            };
+            (capture, inventory)
+        };
+        let (capture, inventory) = make();
+        assert!(assess(capture, inventory).is_err());
+        let (capture, inventory) = make();
+        let valid = assess_with_limit(capture, inventory, 1_000_000).unwrap();
+        assert!(valid.assessment.records_complete && valid.assessment.all_targets_bound);
+        assert_eq!(valid.assessment.bound_points, count);
+        let (mut capture, inventory) = make();
+        capture.events[0].source = Source::RequestStarted {
+            request_id: count as u64 + 1,
+        };
+        assert!(assess_with_limit(capture, inventory, 1_000_000).is_err());
+        let (capture, inventory) = make();
+        assert!(assess_with_limit(capture, inventory, count - 1).is_err());
+        let (capture, inventory) = make();
+        assert!(assess_with_limit(capture, inventory, 1_000_001).is_err());
+    }
     use serde_json::json;
 
     fn pool(query: &str) -> PoolInventory {

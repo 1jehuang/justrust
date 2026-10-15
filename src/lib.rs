@@ -212,6 +212,9 @@ enum Command {
         /// An explicit compiler-launch authority manifest, including child receipts.
         #[arg(long, conflicts_with = "manifest")]
         compiler_manifest: Option<PathBuf>,
+        /// Opt in to bounded 512 MiB captures with up to one million read/binding events.
+        #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
+        large_capture: bool,
         #[arg(long)]
         json: bool,
     },
@@ -771,12 +774,18 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             path,
             manifest,
             compiler_manifest,
+            large_capture,
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
                 execution_graph_compiler_cli::command(&path, &manifest, json)?;
             } else {
-                execution_graph::command(&path, json, manifest.as_deref())?;
+                execution_graph::command_with_policy(
+                    &path,
+                    json,
+                    manifest.as_deref(),
+                    large_capture,
+                )?;
             }
         }
         Command::Cargo(p) => record::main(p.args),
@@ -921,6 +930,35 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
 #[cfg(test)]
 mod passthrough_tests {
     use super::*;
+
+    #[test]
+    fn graph_large_capture_is_explicit_and_excludes_manifests() {
+        for (args, expected) in [
+            (vec!["justrust", "graph", "capture.json"], false),
+            (
+                vec!["justrust", "graph", "capture-dir", "--large-capture"],
+                true,
+            ),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(
+                matches!(cli.command, Command::Graph { large_capture, .. } if large_capture == expected)
+            );
+        }
+        for manifest in ["--manifest", "--compiler-manifest"] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--large-capture",
+                    manifest,
+                    "owner.json"
+                ])
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn jr_install_defaults_to_vendored_stage2() {

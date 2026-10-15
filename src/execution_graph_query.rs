@@ -6,6 +6,29 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Explicit opt-in policy. Schema and all non-read inventories remain unchanged.
+#[derive(Clone, Copy)]
+pub(crate) struct CapturePolicy {
+    pub(crate) max_bytes: usize,
+    pub(crate) max_points: usize,
+}
+
+impl CapturePolicy {
+    pub(crate) const fn strict() -> Self {
+        Self {
+            max_bytes: MAX_BYTES,
+            max_points: 100_000,
+        }
+    }
+
+    pub(crate) const fn large() -> Self {
+        Self {
+            max_bytes: 512 * 1024 * 1024,
+            max_points: 1_000_000,
+        }
+    }
+}
+
 const MAX_CONTEXTS: usize = 1024;
 const MAX_EVENTS: usize = 100_000;
 const MAX_JOBS: u64 = 100_000;
@@ -367,8 +390,18 @@ pub fn assess_bytes(bytes: &[u8]) -> Result<QueryAssessment> {
 }
 
 pub fn collect_bytes(bytes: &[u8]) -> Result<CollectedQuery> {
-    if bytes.len() > MAX_BYTES {
-        bail!("query receipt exceeds 64 MiB byte budget");
+    collect_bytes_with_policy(bytes, CapturePolicy::strict())
+}
+
+pub(crate) fn collect_bytes_with_policy(
+    bytes: &[u8],
+    policy: CapturePolicy,
+) -> Result<CollectedQuery> {
+    if policy.max_bytes > 512 * 1024 * 1024 || policy.max_points > 1_000_000 {
+        bail!("query capture policy exceeds hard bounds");
+    }
+    if bytes.len() > policy.max_bytes {
+        bail!("query receipt exceeds byte budget");
     }
     #[derive(Deserialize)]
     struct Version {
@@ -382,7 +415,7 @@ pub fn collect_bytes(bytes: &[u8]) -> Result<CollectedQuery> {
         ),
         2 => assess_waits(serde_json::from_slice(bytes).context("invalid query wait receipt")?),
         3 => assess_reads(serde_json::from_slice(bytes).context("invalid query read receipt")?),
-        4 => return collect_bindings(bytes),
+        4 => return collect_bindings(bytes, policy),
         _ => bail!("unsupported query receipt schema"),
     }?;
     Ok(CollectedQuery {
@@ -413,7 +446,7 @@ struct ReadPointEvent {
     result_id: Option<u64>,
 }
 
-fn collect_bindings(bytes: &[u8]) -> Result<CollectedQuery> {
+fn collect_bindings(bytes: &[u8], policy: CapturePolicy) -> Result<CollectedQuery> {
     use crate::execution_graph_task_bindings::{QuerySourceInventory, Source};
     let r: ReceiptV4 =
         serde_json::from_slice(bytes).context("invalid query task-binding receipt")?;
@@ -548,8 +581,13 @@ fn collect_bindings(bytes: &[u8]) -> Result<CollectedQuery> {
             query_reads: r.query_reads,
         },
         true,
+        policy,
     )?;
-    let bindings = crate::execution_graph_task_bindings::assess(r.task_bindings, inventory)?;
+    let bindings = crate::execution_graph_task_bindings::assess_with_limit(
+        r.task_bindings,
+        inventory,
+        policy.max_points,
+    )?;
     assessment.schema = 4;
     assessment.task_bindings = Some(bindings.assessment.clone());
     let assessment_wait_complete = assessment.wait_structural_complete == Some(true);
@@ -793,10 +831,14 @@ struct WaitLifecycle {
 }
 
 fn assess_reads(r: ReceiptV3) -> Result<QueryAssessment> {
-    assess_reads_policy(r, false)
+    assess_reads_policy(r, false, CapturePolicy::strict())
 }
 
-fn assess_reads_policy(r: ReceiptV3, large_inventory: bool) -> Result<QueryAssessment> {
+fn assess_reads_policy(
+    r: ReceiptV3,
+    large_inventory: bool,
+    policy: CapturePolicy,
+) -> Result<QueryAssessment> {
     if r.schema != 3 {
         bail!("unsupported query read receipt schema");
     }
@@ -842,12 +884,22 @@ fn assess_reads_policy(r: ReceiptV3, large_inventory: bool) -> Result<QueryAsses
     )?;
     assessment.schema = 3;
     let reads = if large_inventory {
-        crate::execution_graph_reads::assess_with_inventory(
-            &r.query_reads,
-            &admitted,
-            expected_contexts,
-            &context_high_water,
-        )?
+        if policy.max_points == CapturePolicy::strict().max_points {
+            crate::execution_graph_reads::assess_with_inventory(
+                &r.query_reads,
+                &admitted,
+                expected_contexts,
+                &context_high_water,
+            )?
+        } else {
+            crate::execution_graph_reads::assess_with_inventory_limit(
+                &r.query_reads,
+                &admitted,
+                expected_contexts,
+                &context_high_water,
+                policy.max_points,
+            )?
+        }
     } else {
         crate::execution_graph_reads::assess(&r.query_reads, &admitted, expected_contexts)?
     };
@@ -1666,6 +1718,88 @@ pub(crate) mod tests {
             "pool":{"capture_id":"pool-1","observer":1},"unavailable_reason":null,
             "events":sources.into_iter().map(|source| json!({"source":source,"target":{"task":1,"at_pool_ns":10},"unbound_reason":null})).collect::<Vec<_>>()});
         v
+    }
+
+    #[test]
+    fn large_capture_policy_is_explicit_and_bounded() {
+        assert_eq!(CapturePolicy::strict().max_bytes, 64 * 1024 * 1024);
+        assert_eq!(CapturePolicy::strict().max_points, 100_000);
+        assert_eq!(CapturePolicy::large().max_bytes, 512 * 1024 * 1024);
+        assert_eq!(CapturePolicy::large().max_points, 1_000_000);
+        let bytes = serde_json::to_vec(&task_binding_fixture()).unwrap();
+        let small = CapturePolicy {
+            max_bytes: bytes.len(),
+            max_points: 7,
+        };
+        let collected = collect_bytes_with_policy(&bytes, small).unwrap();
+        assert_eq!(collected.assessment.schema, 4);
+        assert!(collected.assessment.structural_complete);
+        assert!(collected.assessment.task_bindings.unwrap().records_complete);
+        for policy in [
+            CapturePolicy {
+                max_bytes: bytes.len() - 1,
+                ..small
+            },
+            CapturePolicy {
+                max_points: 6,
+                ..small
+            },
+            CapturePolicy {
+                max_points: 1_000_001,
+                ..small
+            },
+            CapturePolicy {
+                max_bytes: 512 * 1024 * 1024 + 1,
+                ..small
+            },
+        ] {
+            assert!(collect_bytes_with_policy(&bytes, policy).is_err());
+        }
+    }
+
+    #[test]
+    fn large_capture_keeps_strict_original_bytes_and_independent_bounds() {
+        let v = task_binding_fixture();
+        let raw = serde_json::to_string(&v).unwrap();
+        let duplicate = raw.replacen("\"schema\":4", "\"schema\":4,\"schema\":4", 1);
+        assert_ne!(duplicate, raw);
+        assert!(collect_bytes_with_policy(duplicate.as_bytes(), CapturePolicy::large()).is_err());
+        let mut invalid = v.clone();
+        invalid["task_bindings"]["events"][0]["target"]["task"] = json!(0);
+        assert!(
+            collect_bytes_with_policy(
+                &serde_json::to_vec(&invalid).unwrap(),
+                CapturePolicy::large()
+            )
+            .is_err()
+        );
+        for field in ["events", "wait_events"] {
+            let mut invalid = v.clone();
+            let row = invalid[field][0].clone();
+            invalid[field] = Value::Array(vec![row; MAX_EVENTS + 1]);
+            assert!(
+                collect_bytes_with_policy(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    CapturePolicy::large()
+                )
+                .is_err()
+            );
+        }
+        let mut partial = v;
+        partial["query_reads"]["events"]
+            .as_array_mut()
+            .unwrap()
+            .remove(1);
+        partial["query_reads"]["records_complete"] = json!(false);
+        partial["query_reads"]["lost_events"] = json!(1);
+        let a = collect_bytes_with_policy(
+            &serde_json::to_vec(&partial).unwrap(),
+            CapturePolicy::large(),
+        )
+        .unwrap()
+        .assessment;
+        assert!(!a.query_reads.unwrap().records_complete);
+        assert!(!a.task_bindings.unwrap().graph_binding_complete);
     }
 
     #[test]
