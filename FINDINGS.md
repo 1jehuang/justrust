@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: actual latch handoffs qualify waits without pretending unknown gaps are zero
+
+The immutable-compiler harness passed all 14 tests in 475.022 s: seven actual-source
+tests and seven safety tests.
+Cold retained 74,024 flow nodes, 73,538 native edges and 18,199 invocation scopes,
+assigning all 36,736 measured CPU segments. Actual latch provenance qualified
+138 of 139 encounters, including all 134 registered waits. The remaining
+already-ready encounter honestly remained unbound because diagnostic publication
+finalization can race its consumer. No records were dropped, yet aggregate and
+wait completeness correctly stayed false. Warm observed no encounters; root6
+mixed qualified 180, including 170 registered and 10 already-ready encounters.
+
+The cold known CPU chain cost 20.787135 ms, including 17.556408 ms `typeck_root`.
+Warm's 16.342947 ms chain includes 5.991975 ms `resolver_for_lowering_raw` and
+2.470884 ms `lower_to_hir`. These locate concrete query-execution costs, not
+immutable serial work or a useful-thread ceiling. Cold still has 511 unknown
+cuts. Visibility, wake-to-consume work, cache publication and uninstrumented
+scheduler boundaries are not fabricated zero-weight prerequisites. No speedup
+or full work/span/parallelism is claimed.
+
+Native source-stable tests passed 258 with 28 ignored plus 28 doctests. Hosted
+client run `20261015-070226556-1549304` passed 709 with 3 ignored, and final check
+and strict all-target clippy passed. Three cited runs are exported under
+`data/runs/latch-readiness-20261015/`. The combined offline mapping/oracle/control
+suite passed 139 tests. Sixteen separate public guard-packet cases cover honest
+partial failure/race handling without fabricating missing query authority.
+See `docs/latch-readiness-20261015.md` and exact compact analyzer reports in
+`bench/results/latch-readiness-20261015/`. Expanded independent public replay
+passed all 34 cases in 184.34 s, preserving all 130 original files and the frozen
+client. Its authority-withdrawal controls use the actual cold 139-encounter
+inventory, not the zero-wait warm capture. Exact full analyzer stdout is checked
+against independently byte-preserved neutral snapshots. The receipt is
+`bench/results/20261015-latch-readiness-public-acceptance.json`. The invalid/noisy
+A2 baseline still blocks performance promotion, not this correctness result.
+
 ## 2026-10-15: actual invocation flow connects named query CPU without inventing span
 
 The new native pool5/flow1 diagnostic passed all 12 real-source compile/link/

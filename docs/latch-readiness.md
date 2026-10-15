@@ -1,6 +1,6 @@
 # Observed latch-readiness provenance
 
-Status, October 15, 2026: native and consumer implementation is shipped. Actual-source acceptance is in progress. This is not a complete execution DAG or a performance claim.
+Status, October 15, 2026: native and consumer implementation is shipped. The [full fourteen-test harness](latch-readiness-20261015.md) passed seven actual-source and seven safety tests, followed by [34 independent public replay cases](../bench/results/20261015-latch-readiness-public-acceptance.json). This is not a complete execution DAG or a performance claim.
 
 ## Explicit opt-in
 
@@ -52,7 +52,7 @@ All cuts remain unknown barriers. Full CPU work, complete execution span and par
 - Final explicit hosted consumer check, 709 passing tests with 3 ignored, and all-target warning-free clippy passed. The three run summaries are committed under `data/runs/latch-readiness-20261015/`.
 - Three genuine native partial/foreign packets passed twelve installed public CLI admission and authority checks without changing input bytes or the client. One task-bearing foreign packet retained exactly 1,762 ns of independent task CPU and a 1,084 ns native-edge chain, with no query labels or qualified readiness transfers.
 - The [retained native failure/race packet replay](../bench/results/20261015-readiness-retained-public.json) passed sixteen public cases on four original packets. It covers registered and already-ready unbound races, cycle/poison/unwind, active-mode unwind and registered encounters without an original wait ID. These guard-test packets deliberately lack query-root authority, so they establish typed partial handling, not qualified scheduling transfers.
-- The combined offline analyzer, original-byte oracle and descriptor-control suite passed all 137 tests.
-- Actual cold/warm/mixed source captures and independent public acceptance are still pending. Do not describe this milestone as fully accepted until those receipts are committed.
+- The combined offline analyzer, original-byte oracle and descriptor-control suite passed all 139 tests.
+- [Actual cold/warm/mixed source acceptance](latch-readiness-20261015.md) passed the full fourteen-test harness. Cold preserved one honest unbound encounter and incomplete aggregate/wait flags while qualifying 138 other transfers. The separate 34-case public replay passed, including authority withdrawal on that same nonempty cold readiness inventory. All 130 original files and the frozen client were unchanged.
 
 The accepted predecessor is documented in [execution-flow-20261015.md](execution-flow-20261015.md). Paired performance promotion remains blocked by the separately documented synthetic baseline defects and noise, not replaced by these correctness checks.

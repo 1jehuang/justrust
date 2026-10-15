@@ -1,6 +1,6 @@
 # Actual latch-readiness mapping acceptance, October 15, 2026
 
-The complete actual-source suite passed all 14 tests, with no skips, in 475.022 seconds. It compiled, linked and executed the locked `itoa` source with an immutable coherent compiler, matching private metadata and frozen installed consumer. This is a correctness and provenance acceptance, not a compile-time benchmark.
+The full 14-test harness passed, with no skips, in 475.022 seconds: seven actual-source tests and seven safety tests. The actual-source tests compiled, linked and executed the locked `itoa` source with an immutable coherent compiler, matching private metadata and frozen installed consumer. This is a correctness and provenance acceptance, not a compile-time benchmark.
 
 ## Retained observed graph
 
@@ -41,7 +41,9 @@ These are costs on validated native-edge witnesses, not category sums across unr
 - Separate genuine native guard packets cover failure, unwind, missing original wait ID and unbound races through sixteen public cases. Those deliberately lack query-root authority and remain typed partial reports, not invented qualified transfers.
 - Native source-stable tests passed 258 primary tests with 28 ignored, plus 28 doctests. Final hosted client tests passed 709 with 3 ignored, with check and strict all-target clippy green. Final hosted run summaries are committed under `data/runs/latch-readiness-20261015/`. Combined offline mapping/oracle/control tests passed 139.
 
-Expanded independent installed-client replay is a separate gate whose receipt will be published after completion. Compact actual analyzer reports are under `bench/results/latch-readiness-20261015/`; raw captures and full witnesses remain private.
+The [expanded independent installed-client replay](../bench/results/20261015-latch-readiness-public-acceptance.json) passed all 34 cases in 184.34 seconds. All 130 original files and the frozen client were unchanged. Copied missing-query, clock-mismatch, duplicate-pool and cross-producer controls use the nonempty cold inventory with 139 encounters and 138 qualified transfers, so readiness-authority withdrawal is not vacuous. Independently qualified nonquery CPU remains available without inventing query labels or transfers. Three byte-preserving neutral snapshots prove exact full analyzer-artifact stdout equality, including resource attachments and input-enumeration order. Compact actual analyzer reports are under `bench/results/latch-readiness-20261015/`; raw captures and full witnesses remain private.
+
+An earlier public-verifier attempt stopped after 46.75 seconds because it compared analyzer-neutral input ordering with the original directory ordering. Global resource attachments correctly follow the first report row, so this was not a graph or analyzer defect. The corrected verifier independently reproduces the exact neutral input bytes/naming and compares entire stdout artifacts without stripping fields. A subsequent passing replay was strengthened further to use cold rather than zero-wait warm authority controls before this final receipt was published.
 
 ## Reproducible artifact identity
 

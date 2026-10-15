@@ -16,11 +16,17 @@ It does not infer edges from query nesting, worker chronology or whole-job
 completion. The cold retained known chain is 44.280185 ms, including
 37.521239 ms of `typeck_root`, but 175 explicit cuts prevent interpreting that
 chain as the complete dependency span.
+The accepted [latch-readiness provenance](latch-readiness-20261015.md) adds exact
+row-bound producer/waiter obligations and passed a fourteen-test harness (seven
+actual-source and seven safety tests) plus 34 independent public replay cases.
+Cold qualified 138 of 139 encounters while preserving one genuine unbound race
+and incomplete aggregate/wait flags. Its 20.787135 ms known chain includes
+17.556408 ms of `typeck_root`; these different instrumentation captures are not
+a paired performance comparison with the earlier flow measurements.
 None of these accepted milestones establishes the complete execution DAG or a
-useful-thread ceiling. Successful latch-readiness provenance is implemented and
-undergoing its own actual-source acceptance. Cache publication remains a
-separate authority boundary, and paired performance promotion remains blocked
-by the documented A2 baseline defects and noisy samples.
+useful-thread ceiling. Visibility and wake-to-consume cuts remain unknown. Cache
+publication remains a separate authority boundary, and paired performance
+promotion remains blocked by the documented A2 baseline defects and noisy samples.
 
 ## Mathematical target
 
