@@ -267,7 +267,7 @@ def _task_authority(pool):
     return facts, {task: {'start': starts[task], 'finish': ends[task]} for task in starts}
 
 
-def _execution_flow_oracle(query, pool):
+def _execution_flow_oracle(query, pool, readiness=False):
     """Return independently reconstructed consumer-comparable strict-positive facts.
 
     Raises ValueError on loss/incompleteness, unknown CPU, unassigned segments,
@@ -289,8 +289,8 @@ def _execution_flow_oracle(query, pool):
             uint(owner[key])
     for key in ('pool_observer', 'pool_epoch_in_query_ns'):
         uint(pool['timing']['clock_bridge'][key])
-    require(pool['schema'] == 5 and pool['producer'] == 'rustc-thread-pool-join'
-            and pool['scope'] == 'native-join-continuations', 'original pool5 required')
+    require(pool['schema'] == (6 if readiness else 5) and pool['producer'] == 'rustc-thread-pool-join'
+            and pool['scope'] == 'native-join-continuations', 'original pool6 required' if readiness else 'original pool5 required')
     require(pool['sealed'] is True and pool['interface_outcome'] == 'returned'
             and pool['dropped_events'] == 0 and uint(pool['observer']) > 0,
             'incomplete original pool')
@@ -311,7 +311,12 @@ def _execution_flow_oracle(query, pool):
                      'lost_nodes', 'lost_edges', 'lost_scopes', 'loss_overflowed', 'nodes', 'edges', 'scopes'}
     for singular, plural in [('node', 'nodes'), ('edge', 'edges'), ('scope', 'scopes')]:
         expected_keys.update((singular + '_allocator_baseline', singular + '_allocator_high_water', 'expected_' + plural))
-    require(set(flow) == expected_keys and flow['schema'] == 1 and flow['scope'] == SCOPE,
+    if readiness:
+        for prefix, plural in [('readiness', 'readiness'), ('wait_attempt', 'wait_attempts')]:
+            expected_keys.update((prefix + '_allocator_baseline', prefix + '_allocator_high_water',
+                                  'expected_' + plural, 'lost_' + plural, 'active_' + plural, plural))
+    flow_scope = 'observed-query-join-and-latch-control-flow' if readiness else SCOPE
+    require(set(flow) == expected_keys and flow['schema'] == (2 if readiness else 1) and flow['scope'] == flow_scope,
             'invalid original execution flow schema/fields')
     require(flow['full_pipeline_complete'] is False and flow['flow_complete'] is False,
             'flow cannot attest full coverage')
@@ -342,16 +347,27 @@ def _execution_flow_oracle(query, pool):
             require(lifetimes[key][0] <= uint(node['at_ns']) <= lifetimes[key][1], 'scope gate outside query lifetime')
         require(nodes[scope['entry']]['at_ns'] <= nodes[scope['exit']]['at_ns']
                 and nodes[scope['exit']]['outcome'] == scope['outcome'], 'invalid scope terminal')
+    policy = None
+    if readiness:
+        try:
+            from .latch_readiness_oracle import _readiness_authority
+        except ImportError:
+            from latch_readiness_oracle import _readiness_authority
+        policy = _readiness_authority(query, pool, nodes, edges, scopes, lifetimes)
     assigned, costs, totals = set(), {}, Counter()
     for ident, node in nodes.items():
-        require(set(node) == NODE_KEYS and node['kind'] in KINDS, 'invalid original flow node fields/kind')
+        allowed_kinds = KINDS | ({'readiness_prerequisite', 'wait_begin', 'wait_consumed'} if readiness else set())
+        require(set(node) == NODE_KEYS and node['kind'] in allowed_kinds, 'invalid original flow node fields/kind')
         at, kind = uint(node['at_ns']), node['kind']
         require((kind == 'cpu_segment') == (node['segment_id'] is not None)
                 and (kind in ('scope_exit', 'task_exit')) == (node['outcome'] is not None)
                 and (kind == 'cut') == (node['gap_reason'] is not None), 'flow node kind/nullable fields mismatch')
         require(node['outcome'] in (None, 'returned', 'unwound'), 'unknown flow outcome')
-        require(node['gap_reason'] in (None, 'dispatch', 'unobserved_query', 'foreign_recorder', 'task_switch', 'missing_flow'),
-                'unknown flow cut reason')
+        gaps = {'dispatch', 'unobserved_query', 'foreign_recorder', 'task_switch', 'missing_flow'}
+        if readiness:
+            gaps |= {'latch_visibility', 'query_wait', 'wake_to_consume', 'readiness_unavailable',
+                     'wait_cycle', 'wait_poisoned', 'wait_unwound'}
+        require(node['gap_reason'] is None or node['gap_reason'] in gaps, 'unknown flow cut reason')
         task, scope_id = node['task'], node['scope_id']
         for value in (task, scope_id):
             if value is not None:
@@ -389,7 +405,8 @@ def _execution_flow_oracle(query, pool):
     pairs, incoming, outgoing = set(), Counter(), Counter()
     calls, returns, observed_tasks = {}, {}, set()
     for edge in edges.values():
-        require(set(edge) == {'id', 'from', 'to', 'kind'} and edge['kind'] in EDGE_KINDS, 'invalid flow edge fields')
+        allowed_edges = EDGE_KINDS | ({'readiness_prepare', 'wait_boundary', 'wait_required', 'readiness_required'} if readiness else set())
+        require(set(edge) == {'id', 'from', 'to', 'kind'} and edge['kind'] in allowed_edges, 'invalid flow edge fields')
         left, right, kind = uint(edge['from']), uint(edge['to']), edge['kind']
         require(left in nodes and right in nodes and left != right and (left, right) not in pairs,
                 'missing, self or duplicate original edge')
@@ -404,6 +421,8 @@ def _execution_flow_oracle(query, pool):
         task_ok = (a['task'] == b['task'] or
                    (a['task'] is None and a['kind'] in ('scope_enter', 'scope_exit')) or
                    (b['task'] is None and b['kind'] in ('scope_enter', 'scope_exit', 'cut')))
+        if policy is not None and (left, right, kind) in policy['special_edges']:
+            continue  # Exact row-bound roles checked independently, temporal checks above still apply.
         if kind == 'strand':
             require(same_scope and task_ok and a['kind'] not in ('scope_exit', 'task_exit', 'fork', 'join')
                     and b['kind'] not in ('scope_enter', 'task_enter', 'join'), 'invalid strand transition')
@@ -426,8 +445,17 @@ def _execution_flow_oracle(query, pool):
         else:
             require(a['kind'] in ('join', 'cut') and same_scope and b['kind'] == 'cpu_segment'
                     and (a['kind'] == 'cut' or a['task'] == b['task']), 'invalid continuation edge')
-    require(all(incoming[node] <= 1 or row['kind'] == 'join' for node, row in nodes.items())
-            and all(outgoing[node] <= 1 or row['kind'] == 'fork' for node, row in nodes.items()), 'implicit fork/join')
+    ordinary_in, ordinary_out = incoming.copy(), outgoing.copy()
+    if policy is not None:
+        for left, right, kind in policy['special_edges']:
+            if kind == 'readiness_prepare':
+                ordinary_out[left] -= 1
+        for consumed in policy['consumed_nodes']:
+            ordinary_in[consumed] -= 1  # Exactly two independently checked obligations, not implicit ancestry.
+        for visibility in policy['visibility_nodes']:
+            ordinary_out[visibility] = 0  # Exact own-row transfer fanout, already checked in policy.
+    require(all(ordinary_in[node] <= 1 or row['kind'] == 'join' for node, row in nodes.items())
+            and all(ordinary_out[node] <= 1 or row['kind'] == 'fork' for node, row in nodes.items()), 'implicit fork/join')
     require(all(scope in calls and calls[scope] == parent for scope, parent in returns.items()),
             'nonreciprocal synchronous caller return')
     expected_tasks = {(left, right, task_facts['edge_kinds'][left, right]) for left, right in task_facts['edges']}
@@ -443,7 +471,7 @@ def _execution_flow_oracle(query, pool):
                           query_job=scope['query_job'] if scope else None, query_name=row['query_name'] if row else None,
                           cpu_ns=costs[ident]))
     count = Counter(row['owner_kind'] for row in segments.values())
-    return dict(scope=SCOPE, pool_capture_id=pool['capture_id'], pool_observer=pool['observer'],
+    result = dict(scope=flow_scope, pool_capture_id=pool['capture_id'], pool_observer=pool['observer'],
                 records_complete=True, full_pipeline_complete=False, flow_complete=False,
                 nodes=len(nodes), edges=len(edges), scopes=len(scopes), active_scopes=0,
                 lost_nodes=0, lost_edges=0, lost_scopes=0, assigned_cpu_segments=len(assigned),
@@ -455,11 +483,16 @@ def _execution_flow_oracle(query, pool):
                 known_opaque_cpu_ns=totals['opaque'] if count['opaque'] else None,
                 longest_known_chain_cpu_ns=maximum, longest_known_chain_path=path, longest_known_chain_steps=steps,
                 cpu_work_ns=None, execution_span_ns=None, parallelism=None)
+    if policy is not None:
+        result.update(policy['counts'])
+    return result
 
 
-def execution_flow_oracle(query, pool):
+def execution_flow_oracle(query, pool, *, readiness=False):
     """Strict original query5/6 + pool5/timing2 oracle, no input mutation.
 
+    Explicit readiness=True selects pool6/flow2 and strict latch-row authority.
+    The default remains the original pool5/flow1 policy.
     Inputs: original decoded dictionaries, JSON bytes/text, or pathlib.Path.
     Returns: consumer-named count/cost fields and independently derived longest
     known CPU-chain path/steps. Cuts break paths; full work/span/parallelism stay
@@ -467,6 +500,7 @@ def execution_flow_oracle(query, pool):
     This is not a validator for unrelated query read/cache/dispatch subprotocols.
     """
     try:
-        return _execution_flow_oracle(query, pool)
+        require(type(readiness) is bool, 'readiness policy must be explicit bool')
+        return _execution_flow_oracle(query, pool, readiness=readiness)
     except (KeyError, TypeError, IndexError) as error:
         raise ValueError(f'malformed original flow authority: {error}') from error
