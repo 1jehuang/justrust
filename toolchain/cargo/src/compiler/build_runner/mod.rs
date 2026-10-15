@@ -348,9 +348,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             let bindst = output.bin_dst();
 
             if unit.mode == CompileMode::Test {
-                self.compilation
-                    .tests
-                    .push(self.unit_output(unit, &output.path)?);
+                self.compilation.tests.push(self.unit_output(unit, bindst)?);
             } else if unit.target.is_executable() {
                 self.compilation
                     .binaries

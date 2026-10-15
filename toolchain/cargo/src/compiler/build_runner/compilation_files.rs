@@ -462,6 +462,23 @@ impl<'a, 'gctx: 'a> CompilationFiles<'a, 'gctx> {
         from_path: &Path,
         bcx: &BuildContext<'_, '_>,
     ) -> Option<PathBuf> {
+        // The per-unit build directory is private compiler storage. Test
+        // executables still need the public, hashed deps path: code running
+        // inside the harness observes current_exe(), and external runners and
+        // artifact consumers use this path too. Keep compiler outputs in the
+        // new layout and publish the existing hashed filename unchanged.
+        if unit.mode == CompileMode::Test
+            && matches!(file_type.flavor, FileFlavor::Normal | FileFlavor::DebugInfo)
+        {
+            let destination = self
+                .layout(unit.kind)
+                .artifact_dir()?
+                .dest()
+                .join("deps")
+                .join(from_path.file_name()?);
+            return (destination != from_path).then_some(destination);
+        }
+
         // Tests, check, doc, etc. should not be uplifted.
         if unit.mode != CompileMode::Build || file_type.flavor == FileFlavor::Rmeta {
             return None;

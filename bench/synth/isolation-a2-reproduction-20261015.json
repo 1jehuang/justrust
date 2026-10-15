@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "scope": "targeted no-build isolation diagnostics, not performance evidence",
+  "historical_binary_identity_attested": false,
+  "environment": "current environment plus recorded meta.env subset, not complete historical environment",
+  "recorded_environment_keys": [
+    "CARGO_TARGET_DIR",
+    "JCODE_SCRATCH_DIR",
+    "JCODE_SESSION_ID"
+  ],
+  "metadata_sha256": {
+    "base": "7b43438ffbc0149e8568278a9e673b7f4b2413b3e269a0c6304980dc6bb5f728",
+    "app": "d66093e49b5646e38e77d6095a3cddbf341161e2f24253a6c3f5752a0d5faabd"
+  },
+  "preserved_binary_sha256_before_and_after": {
+    "base": "327e78cc9ff635537046aae04836e93fa0bc8d8a3bf8cd77f31fedfdbd00f6aa",
+    "app": "22839d476ef33cb56cad24eb4843c3090206b9e0acc0a925491d1030da343893"
+  },
+  "source_sha256": {
+    "crates/jcode-base/src/auth/mod.rs": "f795d2ca570fed10d545e446e8e1363667b38ed385bf80b5a0c692eee42607b8",
+    "crates/jcode-base/src/auth/tests.rs": "2759be2a6a853d40aec4f85f741f735dd0c792354e97e350cd49842c9aa938fa",
+    "crates/jcode-build-support/src/paths.rs": "a3003fbc3d9a42218577f084ee3189d49ef243b237e111820673808e507ee9e9",
+    "crates/jcode-app-core/src/tool/bash_tests.rs": "539adb3d1972b910834d164457807592630ea48a0afabd4336250156ace94256",
+    "crates/jcode-app-core/src/tool/tests.rs": "c9b77a1ea9795d306327dbcde7e9accb3a6680af632ef354076cf6a4a111aadb",
+    "crates/jcode-app-core/src/tool/compile_remote.rs": "1c21b11a3ccdb631d19c93691292ea44a54569e1c5b4ca3fad56ab470290e74a",
+    "crates/jcode-app-core/src/tool/gmail.rs": "248fe8cec539e686f1f631c6e457c9b6e03ccb8066fbf9db1417083e106db05a",
+    "crates/jcode-message-types/src/lib.rs": "28a241aa07e2cf4c527c1abb5072bc8f2bcd86eef86c65aabfbeb8c8ca904292",
+    "crates/jcode-core/src/util.rs": "63eb21f314b612e308919263c180aba6c13cfd32aa93e404c93fbc81f6f242d2",
+    "crates/jcode-base/src/provider/models.rs": "502fbbed7f77d73c2ad6a203f1d0482f9cfd947fbf3ff207b74f408645dd23cb",
+    "crates/jcode-base/src/provider/tests/catalog_subscription.rs": "b1c37d461495b0e34e566fc029105d9fac7f0234bed4af9c341849bbb1b854e0",
+    "crates/jcode-provider-env/src/lib.rs": "171720a718df9789e120938c620dcef3b59bb732e2172efb797ecf73f66d914d",
+    "crates/jcode-storage/src/lib.rs": "9a5abd1b73e034b94b46a95d243f57f5576e66fa698e6ce23462cde03a91b2df"
+  },
+  "static_token_cap_estimates": {
+    "compile_remote": {
+      "utf8_bytes": 405,
+      "estimate": 101,
+      "cap": 20
+    },
+    "gmail_bcc": {
+      "utf8_bytes": 104,
+      "estimate": 26,
+      "cap": 25
+    }
+  },
+  "git_manifest_candidates": 1,
+  "git_manifest_candidates_with_dotgit": 0,
+  "results": [
+    {
+      "case": "original-build-out",
+      "test": "auth::tests::browser_suppressed_inside_test_harness_without_env_overrides",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest auth::tests::browser_suppressed_inside_test_harness_without_env_overrides ... FAILED\n\nfailures:\n\nfailures:\n    auth::tests::browser_suppressed_inside_test_harness_without_env_overrides\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n\nthread 'auth::tests::browser_suppressed_inside_test_harness_without_env_overrides' (839542) panicked at crates/jcode-base/src/auth/tests.rs:970:5:\ntest binary should be detected even with a custom Cargo target directory\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "path-parser-positive-controls",
+      "test": "auth::tests::test_harness_paths_include_custom_cargo_target_directories",
+      "exit": 0,
+      "output": "\nrunning 1 test\ntest auth::tests::test_harness_paths_include_custom_cargo_target_directories ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "case": "hashed-deps-same-inode",
+      "test": "auth::tests::browser_suppressed_inside_test_harness_without_env_overrides",
+      "exit": 0,
+      "output": "\nrunning 1 test\ntest auth::tests::browser_suppressed_inside_test_harness_without_env_overrides ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "case": "hashed-non-deps-negative",
+      "test": "auth::tests::browser_suppressed_inside_test_harness_without_env_overrides",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest auth::tests::browser_suppressed_inside_test_harness_without_env_overrides ... FAILED\n\nfailures:\n\nfailures:\n    auth::tests::browser_suppressed_inside_test_harness_without_env_overrides\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n\nthread 'auth::tests::browser_suppressed_inside_test_harness_without_env_overrides' (839548) panicked at crates/jcode-base/src/auth/tests.rs:970:5:\ntest binary should be detected even with a custom Cargo target directory\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "unhashed-deps-negative",
+      "test": "auth::tests::browser_suppressed_inside_test_harness_without_env_overrides",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest auth::tests::browser_suppressed_inside_test_harness_without_env_overrides ... FAILED\n\nfailures:\n\nfailures:\n    auth::tests::browser_suppressed_inside_test_harness_without_env_overrides\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n\nthread 'auth::tests::browser_suppressed_inside_test_harness_without_env_overrides' (839550) panicked at crates/jcode-base/src/auth/tests.rs:970:5:\ntest binary should be detected even with a custom Cargo target directory\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "gitless-manifest-ancestor",
+      "test": "tool::bash::tests::repository_commands_export_a_logged_cargo_function",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest tool::bash::tests::repository_commands_export_a_logged_cargo_function ... FAILED\n\nfailures:\n\nfailures:\n    tool::bash::tests::repository_commands_export_a_logged_cargo_function\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.00s\n\n\nthread 'tool::bash::tests::repository_commands_export_a_logged_cargo_function' (839552) panicked at crates/jcode-app-core/src/tool/bash_tests.rs:84:14:\ntest runs inside the jcode repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "gitless-explicit-cwd-and-repo-override",
+      "test": "tool::bash::tests::repository_commands_export_a_logged_cargo_function",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest tool::bash::tests::repository_commands_export_a_logged_cargo_function ... FAILED\n\nfailures:\n\nfailures:\n    tool::bash::tests::repository_commands_export_a_logged_cargo_function\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.00s\n\n\nthread 'tool::bash::tests::repository_commands_export_a_logged_cargo_function' (839554) panicked at crates/jcode-app-core/src/tool/bash_tests.rs:84:14:\ntest runs inside the jcode repository\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "tool_descriptions_stay_under_token_cap",
+      "test": "tool::tests::tool_descriptions_stay_under_token_cap",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest tool::tests::tool_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.05s\n\n\nthread 'tool::tests::tool_descriptions_stay_under_token_cap' (839556) panicked at crates/jcode-app-core/src/tool/tests.rs:715:5:\ntool descriptions over the 20-token cap:\ncodemode (~395 tokens): Run a JavaScript program in a sandbox that can call any of your other tools, including MCP tools. Use it to chain, loop over, filter, or parallelize many tool calls in one step, so intermediate results never enter the conversation. Only what you `return` (plus console output) comes back.\n\nThe code is the body of an async function: use `await` and `return`.\n- `await tools.<name>(args)` calls a tool with the same arguments it normally takes. JSON output is parsed into objects, other output is a string. Failures throw an Error.\n- `await callTool(name, args)` does the same for names that are not valid identifiers.\n- `listTools(filter?)` returns `[{name, description}]`. `describeTool(name)` returns the full description and input_schema. Call these first if unsure of a tool's arguments.\n- `store(key, value)` / `load(key)` / `storedKeys()` keep JSON values across codemode calls in this session. Use them to avoid refetching.\n- `console.log(...)` output is returned along with the result.\n- Run independent calls in parallel with `Promise.all`.\nNo filesystem, network, timers, or modules exist except through tools. Limits: 64 MB heap, 300 s, 2000 tool calls per run.\n\nExample:\nconst files = (await tools.bash({ command: \"git ls-files '*.rs'\" })).trim().split(\"\\n\");\nconst hits = await Promise.all(files.slice(0, 50).map(async (f) => {\n  const text = await tools.read({ file_path: f, limit: 400 });\n  return { f, todos: (text.match(/TODO/g) || []).length };\n}));\nstore(\"todo_counts\", hits);\nreturn hits.filter((h) => h.todos > 0).sort((a, b) => b.todos - a.todos).slice(0, 10);\ncompile_remote (~101 tokens): Compile in an isolated Linux sandbox using Jcode subscription cloud-compute credits (shared with cloud agents). Uploads eligible source files and returns compiler output and metered usage. Requires a Jcode subscription; use action=status to check access and credits. Use only when the user has requested remote builds or authorized source sharing. Failed builds also consume credits. No automatic top-ups.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "tool_parameter_descriptions_stay_under_token_cap",
+      "test": "tool::tests::tool_parameter_descriptions_stay_under_token_cap",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest tool::tests::tool_parameter_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_parameter_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.04s\n\n\nthread 'tool::tests::tool_parameter_descriptions_stay_under_token_cap' (839558) panicked at crates/jcode-app-core/src/tool/tests.rs:786:5:\n1 parameter descriptions over the 25-token cap:\ngmail $.properties.bcc (~26 tokens): Comma-separated Bcc addresses, hidden from other recipients. On update_draft, omit to keep, \"\" to clear.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "empty-home-tool_descriptions_stay_under_token_cap",
+      "test": "tool::tests::tool_descriptions_stay_under_token_cap",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest tool::tests::tool_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.04s\n\n\nthread 'tool::tests::tool_descriptions_stay_under_token_cap' (839560) panicked at crates/jcode-app-core/src/tool/tests.rs:715:5:\ntool descriptions over the 20-token cap:\ncompile_remote (~101 tokens): Compile in an isolated Linux sandbox using Jcode subscription cloud-compute credits (shared with cloud agents). Uploads eligible source files and returns compiler output and metered usage. Requires a Jcode subscription; use action=status to check access and credits. Use only when the user has requested remote builds or authorized source sharing. Failed builds also consume credits. No automatic top-ups.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "empty-home-tool_parameter_descriptions_stay_under_token_cap",
+      "test": "tool::tests::tool_parameter_descriptions_stay_under_token_cap",
+      "exit": 101,
+      "output": "\nrunning 1 test\ntest tool::tests::tool_parameter_descriptions_stay_under_token_cap ... FAILED\n\nfailures:\n\nfailures:\n    tool::tests::tool_parameter_descriptions_stay_under_token_cap\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1504 filtered out; finished in 0.04s\n\n\nthread 'tool::tests::tool_parameter_descriptions_stay_under_token_cap' (839562) panicked at crates/jcode-app-core/src/tool/tests.rs:786:5:\n1 parameter descriptions over the 25-token cap:\ngmail $.properties.bcc (~26 tokens): Comma-separated Bcc addresses, hidden from other recipients. On update_draft, omit to keep, \"\" to clear.\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "empty-home-anthropic-catalog",
+      "test": "provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list",
+      "exit": 0,
+      "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "case": "fake-config-key-anthropic-catalog",
+      "test": "provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list",
+      "exit": 0,
+      "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "case": "removed-fake-key-anthropic-catalog",
+      "test": "provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list",
+      "exit": 0,
+      "output": "\nrunning 1 test\ntest provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1778 filtered out; finished in 0.00s\n\n"
+    }
+  ],
+  "limitations": [
+    "Target artifacts may have been overwritten by later points in A2.",
+    "Single selected tests do not recreate whole-suite parallel state.",
+    "No app source, original binary, benchmark observation or expectation was changed."
+  ]
+}

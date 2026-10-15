@@ -371,6 +371,9 @@ impl ArtifactDirLayout {
     /// Makes sure all directories stored in the Layout exist on the filesystem.
     pub fn prepare(&mut self) -> CargoResult<()> {
         paths::create_dir_all(&self.examples)?;
+        // Public execution paths for tests, including when build.build-dir
+        // keeps all compiler outputs outside the artifact directory.
+        paths::create_dir_all(self.dest.join("deps"))?;
 
         Ok(())
     }
