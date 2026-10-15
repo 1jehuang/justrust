@@ -222,6 +222,9 @@ enum Command {
         /// Validate explicit nonincremental dispatch-result availability, not execution DAG edges.
         #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
         dispatch_result_provenance: bool,
+        /// Validate opt-in native query execution CPU ownership, never full work/span.
+        #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
+        query_cpu_ownership: bool,
         #[arg(long)]
         json: bool,
     },
@@ -784,18 +787,20 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             large_capture,
             cache_call_provenance,
             dispatch_result_provenance,
+            query_cpu_ownership,
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
                 execution_graph_compiler_cli::command(&path, &manifest, json)?;
             } else {
-                execution_graph::command_with_options(
+                execution_graph::command_with_query_cpu_ownership(
                     &path,
                     json,
                     manifest.as_deref(),
                     large_capture,
                     cache_call_provenance,
                     dispatch_result_provenance,
+                    query_cpu_ownership,
                 )?;
             }
         }
@@ -1036,6 +1041,43 @@ mod passthrough_tests {
                     "--dispatch-result-provenance",
                     manifest,
                     "owner.json",
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn graph_query_cpu_ownership_is_explicit_and_manifest_exclusive() {
+        for (extra, enabled) in [
+            (vec![], false),
+            (vec!["--query-cpu-ownership"], true),
+            (
+                vec![
+                    "--query-cpu-ownership",
+                    "--dispatch-result-provenance",
+                    "--cache-call-provenance",
+                    "--large-capture",
+                ],
+                true,
+            ),
+        ] {
+            let mut args = vec!["justrust", "graph", "captures"];
+            args.extend(extra);
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(
+                matches!(cli.command, Command::Graph { query_cpu_ownership, .. } if query_cpu_ownership == enabled)
+            );
+        }
+        for manifest in ["--manifest", "--compiler-manifest"] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--query-cpu-ownership",
+                    manifest,
+                    "owner.json"
                 ])
                 .is_err()
             );

@@ -317,12 +317,12 @@ pub fn reconcile_bindings(
             .push("task-binding matching pool authority unavailable".into());
         return assessment;
     };
-    if !matches!(pool.schema, 2 | 3)
+    if !matches!(pool.schema, 2..=4)
         || pool.capture_id != reference.capture_id
         || pool.observer != reference.observer
         || pool.query_capture_id.as_deref() != Some(query_capture_id)
         || !pool.structural_complete
-        || (pool.schema == 3
+        || (pool.schema >= 3
             && pool.timing_bridge.as_ref().is_none_or(|bridge| {
                 bridge.pool_capture_id != pool.capture_id
                     || bridge.query_capture_id != query_capture_id

@@ -88,6 +88,8 @@ struct Assessment {
     #[serde(skip_serializing_if = "Option::is_none")]
     observed_cpu: Option<crate::execution_graph_timing::ObservedCpuAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    query_cpu_ownership: Option<crate::execution_graph_timing::QueryCpuOwnership>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     clock_alignment: Option<crate::execution_graph_query::ClockAlignmentAssessment>,
     /// Strict native prefix/endorsement assessment, never compiler-launch authority.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -311,6 +313,7 @@ fn assess(r: Receipt) -> Result<Assessment> {
         resource: None,
         resource_attachments: None,
         observed_cpu: None,
+        query_cpu_ownership: None,
         clock_alignment: None,
         issues,
         opaque_boundaries: r.opaque_boundaries,
@@ -353,6 +356,13 @@ fn read_receipt(path: &Path) -> Result<Assessment> {
 pub(crate) fn collect_pool_inventories(
     documents: &[Vec<u8>],
 ) -> Result<BTreeMap<String, crate::execution_graph_continuation::PoolInventory>> {
+    collect_pool_inventories_with_query_ownership(documents, false)
+}
+
+fn collect_pool_inventories_with_query_ownership(
+    documents: &[Vec<u8>],
+    query_ownership: bool,
+) -> Result<BTreeMap<String, crate::execution_graph_continuation::PoolInventory>> {
     let mut pools = BTreeMap::new();
     let mut identities = BTreeMap::<String, usize>::new();
     for bytes in documents {
@@ -363,7 +373,10 @@ pub(crate) fn collect_pool_inventories(
         if header["producer"] != "rustc-thread-pool-join" {
             continue;
         }
-        let pool = crate::execution_graph_continuation::collect_bytes(bytes)?;
+        let pool = crate::execution_graph_continuation::collect_bytes_with_query_ownership(
+            bytes,
+            query_ownership,
+        )?;
         let id = pool.assessment.capture_id;
         if let Some(inventory) = pool.inventory {
             pools.insert(id, inventory);
@@ -414,6 +427,23 @@ fn collect_query_with_options(
     cache_call_provenance: bool,
     dispatch_result_provenance: bool,
 ) -> Result<crate::execution_graph_query::QueryAssessment> {
+    Ok(collect_query_capture_with_options(
+        bytes,
+        pools,
+        policy,
+        cache_call_provenance,
+        dispatch_result_provenance,
+    )?
+    .assessment)
+}
+
+fn collect_query_capture_with_options(
+    bytes: &[u8],
+    pools: &BTreeMap<String, crate::execution_graph_continuation::PoolInventory>,
+    policy: crate::execution_graph_query::CapturePolicy,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+) -> Result<crate::execution_graph_query::CollectedQuery> {
     let mut query = if dispatch_result_provenance {
         crate::execution_graph_query::collect_bytes_with_dispatch_analysis(
             bytes,
@@ -436,7 +466,7 @@ fn collect_query_with_options(
             ));
     }
     query.reconcile_clock_alignment(pools);
-    Ok(query.assessment)
+    Ok(query)
 }
 
 fn assess_receipt_bytes(
@@ -507,6 +537,7 @@ fn assess_receipt_bytes_with_options(
                 resource: None,
                 resource_attachments: None,
                 observed_cpu: None,
+                query_cpu_ownership: None,
                 clock_alignment: None,
                 issues: vec!["requires explicit --compiler-manifest reconciliation".into()],
                 opaque_boundaries: vec!["compiler-launch-authority".into()],
@@ -542,6 +573,7 @@ fn assess_receipt_bytes_with_options(
                 resource: None,
                 resource_attachments: None,
                 observed_cpu: None,
+                query_cpu_ownership: None,
                 clock_alignment: query.clock_alignment,
                 issues: query.issues,
                 opaque_boundaries: query.opaque_boundaries,
@@ -550,7 +582,11 @@ fn assess_receipt_bytes_with_options(
             })
         }
         "rustc-thread-pool-join" => {
-            let join = crate::execution_graph_continuation::assess_bytes(bytes)?;
+            let join = crate::execution_graph_continuation::collect_bytes_with_query_ownership(
+                bytes,
+                policy.query_cpu_ownership,
+            )?
+            .assessment;
             Ok(Assessment {
                 schema: join.schema,
                 producer: join.producer,
@@ -571,6 +607,7 @@ fn assess_receipt_bytes_with_options(
                 resource: None,
                 resource_attachments: None,
                 observed_cpu: join.observed_cpu,
+                query_cpu_ownership: None,
                 clock_alignment: None,
                 issues: join.issues,
                 opaque_boundaries: join.opaque_boundaries,
@@ -664,6 +701,7 @@ fn assess_resource_document(bytes: &[u8], producer: &str) -> Result<Assessment> 
         resource: Some(resource),
         resource_attachments: None,
         observed_cpu: None,
+        query_cpu_ownership: None,
         clock_alignment: None,
         issues,
         opaque_boundaries: vec!["bounded-resource-prefix-not-full-lifecycle".into()],
@@ -1032,6 +1070,30 @@ pub(crate) fn command_with_options(
     cache_call_provenance: bool,
     dispatch_result_provenance: bool,
 ) -> Result<()> {
+    command_with_query_cpu_ownership(
+        path,
+        json,
+        manifest,
+        large_capture,
+        cache_call_provenance,
+        dispatch_result_provenance,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn command_with_query_cpu_ownership(
+    path: &Path,
+    json: bool,
+    manifest: Option<&Path>,
+    large_capture: bool,
+    cache_call_provenance: bool,
+    dispatch_result_provenance: bool,
+    query_cpu_ownership: bool,
+) -> Result<()> {
+    if query_cpu_ownership && manifest.is_some() {
+        bail!("--query-cpu-ownership is not supported with --manifest");
+    }
     if dispatch_result_provenance && manifest.is_some() {
         bail!("--dispatch-result-provenance is not supported with --manifest");
     }
@@ -1044,11 +1106,12 @@ pub(crate) fn command_with_options(
     if let Some(manifest) = manifest {
         return command_manifest(path, manifest, json);
     }
-    let policy = if large_capture {
+    let mut policy = if large_capture {
         crate::execution_graph_query::CapturePolicy::large()
     } else {
         crate::execution_graph_query::CapturePolicy::strict()
     };
+    policy.query_cpu_ownership = query_cpu_ownership;
     let assessments = collect_path_with_options(
         path,
         policy,
@@ -1153,7 +1216,36 @@ fn collect_path_with_options(
             None,
             policy.max_bytes,
         )?;
-    let pools = collect_pool_inventories(&documents)?;
+    let pools =
+        collect_pool_inventories_with_query_ownership(&documents, policy.query_cpu_ownership)?;
+    let mut query_authorities = BTreeMap::new();
+    if policy.query_cpu_ownership {
+        let mut counts = BTreeMap::<String, usize>::new();
+        for bytes in &documents {
+            let header: serde_json::Value = serde_json::from_slice(bytes)?;
+            if let Some(id) = header["capture_id"].as_str() {
+                *counts.entry(id.to_owned()).or_default() += 1;
+            }
+            if header["producer"] == "rustc-query-admission" {
+                let query = collect_query_capture_with_options(
+                    bytes,
+                    &pools,
+                    policy,
+                    cache_call_provenance,
+                    dispatch_result_provenance,
+                )?;
+                let aligned = query
+                    .assessment
+                    .clock_alignment
+                    .as_ref()
+                    .is_some_and(|c| c.aligned);
+                if let Some(inventory) = query.execution_inventory {
+                    query_authorities.insert(inventory.capture_id.clone(), (inventory, aligned));
+                }
+            }
+        }
+        query_authorities.retain(|id, _| counts.get(id) == Some(&1));
+    }
     for bytes in &documents {
         let mut assessment = assess_receipt_bytes_with_options(
             bytes,
@@ -1170,6 +1262,39 @@ fn collect_path_with_options(
             identities.insert(assessment.capture_id.clone(), assessments.len());
         }
         assessments.push(assessment);
+    }
+    if policy.query_cpu_ownership {
+        let mut reports = BTreeMap::new();
+        for assessment in &mut assessments {
+            if assessment.producer != "rustc-thread-pool-join" || assessment.schema != 4 {
+                continue;
+            }
+            if let Some(cpu) = &mut assessment.observed_cpu {
+                let query_id = cpu.clock_bridge.query_capture_id.clone();
+                let authority = query_authorities
+                    .get(&query_id)
+                    .filter(|_| pools.contains_key(&assessment.capture_id));
+                let report = cpu.reconcile_query_ownership(
+                    authority.map(|(q, _)| q),
+                    authority.is_some_and(|(_, aligned)| *aligned),
+                )?;
+                if query_authorities.get(&query_id).is_some_and(|(q, _)| {
+                    q.clock
+                        .as_ref()
+                        .is_some_and(|clock| clock.pool_capture_id == assessment.capture_id)
+                }) {
+                    reports.insert(query_id, report);
+                }
+            }
+        }
+        for assessment in &mut assessments {
+            if assessment.producer == "rustc-query-admission" {
+                assessment.query_cpu_ownership =
+                    Some(reports.remove(&assessment.capture_id).unwrap_or_else(|| {
+                        crate::execution_graph_timing::QueryCpuOwnership::unavailable()
+                    }));
+            }
+        }
     }
     if let Some(first) = assessments.first_mut() {
         first.resource_attachments = Some(resource_attachments);
@@ -1251,6 +1376,12 @@ fn render_assessments(assessments: Vec<Assessment>, json: bool) -> Result<()> {
                     dispatch.unresolved_requests
                 );
             }
+            if let Some(ownership) = &a.query_cpu_ownership {
+                println!(
+                    "  query execution CPU (observed exclusive segments only): {}",
+                    serde_json::to_string(ownership)?
+                );
+            }
             if let Some(bindings) = &a.task_bindings {
                 println!(
                     "  task point mapping: {} bound, {} unbound, graph binding {} (not query slices)",
@@ -1329,6 +1460,7 @@ mod tests {
                 CapturePolicy {
                     max_bytes: bytes.len() - 1,
                     max_points: 7,
+                    query_cpu_ownership: false,
                 },
                 true
             )
@@ -1355,6 +1487,7 @@ mod tests {
                 CapturePolicy {
                     max_bytes: bytes.len(),
                     max_points: 7,
+                    query_cpu_ownership: false,
                 },
                 true
             )
@@ -1395,7 +1528,8 @@ mod tests {
                 &file,
                 CapturePolicy {
                     max_bytes: bytes.len() - 1,
-                    max_points: 7
+                    max_points: 7,
+                    query_cpu_ownership: false,
                 },
                 false,
                 true
@@ -1421,7 +1555,8 @@ mod tests {
                 &directory,
                 CapturePolicy {
                     max_bytes: bytes.len(),
-                    max_points: 7
+                    max_points: 7,
+                    query_cpu_ownership: false,
                 },
                 false,
                 true
@@ -1493,6 +1628,266 @@ mod tests {
 
     fn write_json(directory: &Path, name: &str, value: &serde_json::Value) {
         std::fs::write(directory.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
+    fn query_cpu_documents() -> (serde_json::Value, serde_json::Value) {
+        let docs = crate::execution_graph_resource_attachment::tests::documents();
+        let mut query = docs[0].clone();
+        let mut pool = docs[1].clone();
+        let mut timing = crate::execution_graph_timing::tests::fixture();
+        timing["schema"] = json!(2);
+        timing["clock_bridge"]["pool_capture_id"] = pool["capture_id"].clone();
+        for row in timing["segments"].as_array_mut().unwrap() {
+            row["query_context"] = serde_json::Value::Null;
+            row["query_job"] = serde_json::Value::Null;
+            row["query_name"] = serde_json::Value::Null;
+        }
+        timing["segments"][0]["owner_kind"] = json!("query_execution");
+        timing["segments"][0]["query_context"] = json!(1);
+        timing["segments"][0]["query_job"] = json!(1);
+        timing["segments"][0]["query_name"] = json!("type_of");
+        pool["schema"] = json!(4);
+        pool["timing"] = timing;
+        query["schema"] = json!(5);
+        query["execution_clock"] = pool["timing"]["clock_bridge"].clone();
+        query["events"][3]["at_ns"] = json!(30);
+        (query, pool)
+    }
+
+    fn query_cpu_policy() -> crate::execution_graph_query::CapturePolicy {
+        crate::execution_graph_query::CapturePolicy {
+            query_cpu_ownership: true,
+            ..crate::execution_graph_query::CapturePolicy::strict()
+        }
+    }
+
+    fn query_cpu_values(directory: &Path) -> Result<serde_json::Value> {
+        Ok(serde_json::to_value(collect_path_with_options(
+            directory,
+            query_cpu_policy(),
+            false,
+            false,
+        )?)?)
+    }
+
+    #[test]
+    fn query_cpu_ownership_is_explicit_disjoint_and_admission_scoped() {
+        let directory = resource_test_directory("query-cpu");
+        let (query, mut pool) = query_cpu_documents();
+        write_json(&directory, "query.json", &query);
+        for task in [json!(1), serde_json::Value::Null] {
+            pool["timing"]["segments"][0]["task"] = task;
+            write_json(&directory, "pool.json", &pool);
+            assert!(collect_path(&directory).is_err());
+            let values = query_cpu_values(&directory).unwrap();
+            let q = values
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["producer"] == "rustc-query-admission")
+                .unwrap();
+            let p = values
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["producer"] == "rustc-thread-pool-join")
+                .unwrap();
+            let report = &q["query_cpu_ownership"];
+            assert_eq!(report["query_execution_cpu_ns"], 6);
+            assert_eq!(report["measured_segments"], 1);
+            assert_eq!(
+                report["queries"],
+                json!([{"query_context":1,"query_job":1,"query_name":"type_of","cpu_ns":6}])
+            );
+            assert_eq!(report["records_complete"], true);
+            let cpu = &p["observed_cpu"];
+            assert_eq!(cpu["query_execution_cpu_ns"], 6);
+            assert_eq!(cpu["task_cpu_ns"], 0);
+            assert_eq!(cpu["opaque_cpu_ns"], 3);
+            assert_eq!(cpu["observed_cpu_ns"], 9);
+            assert_eq!(cpu["query_clock_aligned"], true);
+            for value in values.as_array().unwrap() {
+                assert!(value["cpu_work_ns"].is_null());
+                assert!(value["execution_span_ns"].is_null());
+                assert_eq!(value["full_pipeline_complete"], false);
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn query_cpu_ownership_rejects_foreign_pairs_lifetimes_and_schema_laundering() {
+        let directory = resource_test_directory("query-cpu-forged");
+        let (query, pool) = query_cpu_documents();
+        write_json(&directory, "query.json", &query);
+        for (pointer, value) in [
+            ("/timing/segments/0/query_context", json!(2)),
+            ("/timing/segments/0/query_job", json!(3)),
+            ("/timing/segments/0/query_job", json!(2)), // job2 exists but lifetime is 10..11
+            ("/timing/segments/0/query_job", json!(0)),
+            ("/timing/segments/0/query_job", serde_json::Value::Null),
+            ("/timing/segments/0/owner_kind", json!("task")),
+            ("/timing/segments/0/task", json!(2)),
+            ("/timing/schema", json!(1)),
+            ("/schema", json!(3)),
+            ("/cpu_work_ns", json!(9)),
+            ("/full_pipeline_complete", json!(true)),
+        ] {
+            let mut forged = pool.clone();
+            *forged.pointer_mut(pointer).unwrap() = value;
+            write_json(&directory, "pool.json", &forged);
+            assert!(query_cpu_values(&directory).is_err(), "{pointer}");
+        }
+        for field in ["query_context", "query_job", "query_name"] {
+            for index in [0, 1] {
+                let mut forged = pool.clone();
+                forged["timing"]["segments"][index]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+                write_json(&directory, "pool.json", &forged);
+                assert!(
+                    query_cpu_values(&directory).is_err(),
+                    "missing {field} row {index}"
+                );
+            }
+        }
+        let raw = serde_json::to_string(&pool).unwrap();
+        for (from, to) in [
+            ("\"query_job\":1", "\"query_job\":1,\"query_job\":1"),
+            (
+                "\"query_context\":null",
+                "\"query_context\":null,\"query_context\":null",
+            ),
+            ("\"schema\":4", "\"schema\":4,\"schema\":4"),
+        ] {
+            std::fs::write(directory.join("pool.json"), raw.replacen(from, to, 1)).unwrap();
+            assert!(query_cpu_values(&directory).is_err(), "duplicate {from}");
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn query_cpu_ownership_never_borrows_missing_incomplete_or_duplicate_authority() {
+        let directory = resource_test_directory("query-cpu-authority");
+        let (query, pool) = query_cpu_documents();
+        write_json(&directory, "pool.json", &pool);
+        let lone = query_cpu_values(&directory).unwrap();
+        assert!(lone[0]["observed_cpu"]["query_execution_cpu_ns"].is_null());
+        assert_eq!(lone[0]["observed_cpu"]["records_complete"], false);
+        for (pointer, value) in [
+            ("/capture_complete", json!(false)),
+            ("/lost_events", json!(1)),
+            ("/interface_outcome", json!("interrupted")),
+            ("/execution_clock", serde_json::Value::Null),
+            ("/execution_clock/pool_observer", json!(2)),
+            ("/events/3/at_ns", json!(0)),
+            ("/events/3/job_id", json!(2)),
+        ] {
+            let mut forged = query.clone();
+            *forged.pointer_mut(pointer).unwrap() = value;
+            write_json(&directory, "query.json", &forged);
+            let values = query_cpu_values(&directory).unwrap();
+            for value in values.as_array().unwrap() {
+                if value["producer"] == "rustc-query-admission" {
+                    assert!(
+                        value["query_cpu_ownership"]["query_execution_cpu_ns"].is_null(),
+                        "{pointer}"
+                    );
+                    assert_eq!(value["query_cpu_ownership"]["records_complete"], false);
+                } else {
+                    assert!(
+                        value["observed_cpu"]["query_execution_cpu_ns"].is_null(),
+                        "{pointer}"
+                    );
+                }
+            }
+        }
+        write_json(&directory, "query.json", &query);
+        for (name, duplicate) in [
+            ("duplicate-query.json", &query),
+            ("duplicate-pool.json", &pool),
+        ] {
+            write_json(&directory, name, duplicate);
+            let values = query_cpu_values(&directory).unwrap();
+            for value in values.as_array().unwrap() {
+                assert!(value["observed_cpu"]["query_execution_cpu_ns"].is_null());
+                assert!(value["query_cpu_ownership"]["query_execution_cpu_ns"].is_null());
+            }
+            std::fs::remove_file(directory.join(name)).unwrap();
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn query_cpu_ownership_honest_loss_is_partial_and_root6_does_not_enable_dispatch_output() {
+        let directory = resource_test_directory("query-cpu-loss");
+        let (query, mut pool) = query_cpu_documents();
+        write_json(&directory, "query.json", &query);
+        pool["timing"]["records_complete"] = json!(false);
+        pool["timing"]["lost_segments"] = json!(1);
+        pool["timing"]["segment_allocator_high_water"] = json!(4);
+        pool["timing"]["expected_segments"] = json!(3);
+        write_json(&directory, "pool.json", &pool);
+        let values = query_cpu_values(&directory).unwrap();
+        let q = values
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["producer"] == "rustc-query-admission")
+            .unwrap();
+        assert_eq!(q["query_cpu_ownership"]["query_execution_cpu_ns"], 6);
+        assert_eq!(q["query_cpu_ownership"]["records_complete"], false);
+        let mut root6 = crate::execution_graph_query::tests::dispatch_fixture();
+        root6["capture_id"] = query["capture_id"].clone();
+        root6["execution_clock"] = query["execution_clock"].clone();
+        root6["events"][3]["at_ns"] = json!(30);
+        write_json(&directory, "query.json", &root6);
+        let values = query_cpu_values(&directory).unwrap();
+        let q = values
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["producer"] == "rustc-query-admission")
+            .unwrap();
+        assert_eq!(q["schema"], 6);
+        assert!(q.get("dispatch_result_provenance").is_none());
+        assert_eq!(q["query_cpu_ownership"]["query_execution_cpu_ns"], 6);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn query_cpu_ownership_opt_in_preserves_every_legacy_measurement() {
+        let directory = resource_test_directory("query-cpu-legacy");
+        let (query, mut pool) = query_cpu_documents();
+        pool["schema"] = json!(3);
+        pool["timing"]["schema"] = json!(1);
+        pool["timing"]["segments"][0]["owner_kind"] = json!("task");
+        for row in pool["timing"]["segments"].as_array_mut().unwrap() {
+            for field in ["query_context", "query_job", "query_name"] {
+                row.as_object_mut().unwrap().remove(field);
+            }
+        }
+        write_json(&directory, "query.json", &query);
+        write_json(&directory, "pool.json", &pool);
+        let legacy = serde_json::to_value(collect_path(&directory).unwrap()).unwrap();
+        let mut explicit = query_cpu_values(&directory).unwrap();
+        for value in explicit.as_array_mut().unwrap() {
+            if value["producer"] == "rustc-query-admission" {
+                let report = value
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("query_cpu_ownership")
+                    .unwrap();
+                assert!(report["query_execution_cpu_ns"].is_null());
+                assert_eq!(report["records_complete"], false);
+            }
+        }
+        assert_eq!(
+            serde_json::to_vec(&explicit).unwrap(),
+            serde_json::to_vec(&legacy).unwrap()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1627,6 +2022,7 @@ mod tests {
         let policy = CapturePolicy {
             max_bytes: bytes.len(),
             max_points: 7,
+            query_cpu_ownership: false,
         };
         assert!(collect_path_with_policy(&file, policy).unwrap()[0].structural_complete);
         assert!(collect_path_with_policy(&directory, policy).unwrap()[0].structural_complete);

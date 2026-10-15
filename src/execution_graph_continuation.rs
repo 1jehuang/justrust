@@ -211,23 +211,30 @@ impl PoolInventory {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn assess_bytes(bytes: &[u8]) -> Result<Assessment> {
     collect_bytes(bytes).map(|collected| collected.assessment)
 }
 pub(crate) fn collect_bytes(bytes: &[u8]) -> Result<CollectedPool> {
-    let (assessment, inventory) = validate_bytes(bytes)?;
-    let inventory = matches!(inventory.schema, 2 | 3).then_some(inventory);
+    collect_bytes_with_query_ownership(bytes, false)
+}
+pub(crate) fn collect_bytes_with_query_ownership(
+    bytes: &[u8],
+    query_ownership: bool,
+) -> Result<CollectedPool> {
+    let (assessment, inventory) = validate_bytes(bytes, query_ownership)?;
+    let inventory = matches!(inventory.schema, 2..=4).then_some(inventory);
     Ok(CollectedPool {
         assessment,
         inventory,
     })
 }
-fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
+fn validate_bytes(bytes: &[u8], query_ownership: bool) -> Result<(Assessment, PoolInventory)> {
     if bytes.len() > MAX_BYTES {
         bail!("join receipt byte budget exceeded");
     }
     let r: Receipt = serde_json::from_slice(bytes)?;
-    if !matches!(r.schema, 1..=3)
+    if !(matches!(r.schema, 1..=3) || (query_ownership && r.schema == 4))
         || r.producer != "rustc-thread-pool-join"
         || r.scope != "native-join-continuations"
     {
@@ -245,7 +252,7 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
     }
     match (r.schema, r.query_capture_id.as_deref()) {
         (1, None) => {}
-        (2 | 3, Some(id))
+        (2..=4, Some(id))
             if !id.is_empty()
                 && id.len() <= 128
                 && id != r.capture_id
@@ -254,8 +261,8 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
                     .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)) => {}
         _ => bail!("invalid or unsupported query capture identity"),
     }
-    if (r.schema == 3) != r.timing.is_some() {
-        bail!("timing requires explicit pool schema3 and is mandatory for schema3");
+    if (r.schema >= 3) != r.timing.is_some() {
+        bail!("timing requires explicit pool schema3/4 and is mandatory");
     }
     if r.full_pipeline_complete
         || r.cpu_work_ns.is_some()
@@ -520,7 +527,7 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
     let observed_cpu = r
         .timing
         .map(|timing| {
-            crate::execution_graph_timing::assess(
+            crate::execution_graph_timing::assess_with_query_ownership(
                 timing,
                 crate::execution_graph_timing::TimingContext {
                     pool_capture_id: &inventory.capture_id,
@@ -534,6 +541,7 @@ fn validate_bytes(bytes: &[u8]) -> Result<(Assessment, PoolInventory)> {
                     task_high_water: r.task_allocator_high_water,
                     task_intervals: &inventory.task_intervals,
                 },
+                r.schema == 4,
             )
         })
         .transpose()?;

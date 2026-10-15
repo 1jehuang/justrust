@@ -11,6 +11,7 @@ const MAX_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) struct CapturePolicy {
     pub(crate) max_bytes: usize,
     pub(crate) max_points: usize,
+    pub(crate) query_cpu_ownership: bool,
 }
 
 impl CapturePolicy {
@@ -18,6 +19,7 @@ impl CapturePolicy {
         Self {
             max_bytes: MAX_BYTES,
             max_points: 100_000,
+            query_cpu_ownership: false,
         }
     }
 
@@ -25,6 +27,7 @@ impl CapturePolicy {
         Self {
             max_bytes: 512 * 1024 * 1024,
             max_points: 1_000_000,
+            query_cpu_ownership: false,
         }
     }
 }
@@ -244,6 +247,16 @@ pub struct CollectedQuery {
     pub(crate) wait_inventory: Option<ValidatedQueryWaitInventory>,
     execution_clock: Option<crate::execution_graph_timing::ClockBridge>,
     clock_binding: Option<ClockBinding>,
+    pub(crate) execution_inventory: Option<QueryExecutionInventory>,
+}
+
+/// Admission lifetimes from the original strict receipt, never inferred from
+/// descriptive parents, task bindings, providers, or allocator ranges alone.
+pub(crate) struct QueryExecutionInventory {
+    pub capture_id: String,
+    pub complete: bool,
+    pub clock: Option<crate::execution_graph_timing::ClockBridge>,
+    pub lifetimes: BTreeMap<(u64, u64), (u64, u64)>,
 }
 
 /// Clock authority only. Valid alignment does not attest CPU coverage, query
@@ -288,7 +301,7 @@ impl CollectedQuery {
                 }
                 match pools.get(&clock.pool_capture_id) {
                     Some(pool)
-                        if pool.schema == 3
+                        if matches!(pool.schema, 3 | 4)
                             && pool.structural_complete
                             && pool.capture_id == clock.pool_capture_id
                             && pool.observer == clock.pool_observer
@@ -601,6 +614,11 @@ fn collect_bytes_with_options(
         }
         return collect_dispatch_bindings(bytes, policy, cache_call_provenance);
     }
+    if policy.query_cpu_ownership && version.schema == 6 {
+        let mut query = collect_dispatch_bindings(bytes, policy, cache_call_provenance)?;
+        query.assessment.dispatch_result_provenance = None;
+        return Ok(query);
+    }
     if cache_call_provenance && !matches!(version.schema, 4 | 5) {
         bail!(
             "--cache-call-provenance requires query schema4 or schema5 with independent endpoint inventory"
@@ -622,6 +640,7 @@ fn collect_bytes_with_options(
         wait_inventory: None,
         execution_clock: None,
         clock_binding: None,
+        execution_inventory: None,
     })
 }
 
@@ -675,6 +694,9 @@ fn collect_clock_bindings(
     let mut query = collect_bindings_base(base, bytes, policy, cache_call_provenance)?;
     query.assessment.schema = 5;
     query.execution_clock = clock;
+    if let Some(inventory) = &mut query.execution_inventory {
+        inventory.clock = query.execution_clock.clone();
+    }
     // Standalone collection has no validated reciprocal pool authority. Never
     // upgrade alignment based on a one-sided descriptor.
     query.reconcile_clock_alignment(&BTreeMap::new());
@@ -749,6 +771,9 @@ fn collect_dispatch_bindings(
     query.assessment.schema = 6;
     query.assessment.dispatch_result_provenance = Some(dispatch);
     query.execution_clock = clock;
+    if let Some(inventory) = &mut query.execution_inventory {
+        inventory.clock = query.execution_clock.clone();
+    }
     query.reconcile_clock_alignment(&BTreeMap::new());
     Ok(query)
 }
@@ -868,6 +893,48 @@ fn collect_bindings_base(
     // Assess admission, wait and read contracts independently. Binding partiality
     // must not downgrade any of these existing completeness assessments.
     let wait_inventory = retain_wait_inventory(&r);
+    let execution_inventory = if policy.query_cpu_ownership {
+        if r.events.len() > MAX_EVENTS {
+            bail!("query execution admission inventory exceeds budget");
+        }
+        let mut starts = BTreeMap::new();
+        let mut finishes = BTreeMap::new();
+        for event in &r.events {
+            match *event {
+                Event::Admitted {
+                    context_id,
+                    job_id,
+                    at_ns,
+                    ..
+                } => {
+                    starts.insert((context_id, job_id), at_ns);
+                }
+                Event::Completed {
+                    context_id,
+                    job_id,
+                    at_ns,
+                }
+                | Event::Poisoned {
+                    context_id,
+                    job_id,
+                    at_ns,
+                } => {
+                    finishes.insert((context_id, job_id), at_ns);
+                }
+            }
+        }
+        Some(QueryExecutionInventory {
+            capture_id: r.capture_id.clone(),
+            complete: false,
+            clock: None,
+            lifetimes: starts
+                .into_iter()
+                .filter_map(|(key, start)| Some((key, (start, *finishes.get(&key)?))))
+                .collect(),
+        })
+    } else {
+        None
+    };
     let mut assessment = assess_reads_policy(
         ReceiptV3 {
             schema: 3,
@@ -903,6 +970,7 @@ fn collect_bindings_base(
     assessment.schema = 4;
     assessment.task_bindings = Some(bindings.assessment.clone());
     let assessment_wait_complete = assessment.wait_structural_complete == Some(true);
+    let admission_complete = assessment.structural_complete;
     Ok(CollectedQuery {
         assessment,
         bindings: Some(bindings),
@@ -912,6 +980,10 @@ fn collect_bindings_base(
         }),
         execution_clock: None,
         clock_binding,
+        execution_inventory: execution_inventory.map(|mut inventory| {
+            inventory.complete = admission_complete;
+            inventory
+        }),
     })
 }
 
@@ -2124,6 +2196,7 @@ pub(crate) mod tests {
         let bounded = CapturePolicy {
             max_bytes: text.len(),
             max_points: 7,
+            query_cpu_ownership: false,
         };
         assert!(collect_bytes_with_analysis(text.as_bytes(), bounded, true).is_ok());
         for policy in [
@@ -2332,14 +2405,17 @@ pub(crate) mod tests {
             CapturePolicy {
                 max_bytes: text.len() - 1,
                 max_points: 7,
+                query_cpu_ownership: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
                 max_points: 3,
+                query_cpu_ownership: false,
             },
             CapturePolicy {
                 max_bytes: text.len(),
                 max_points: 1_000_001,
+                query_cpu_ownership: false,
             },
         ] {
             assert!(collect_bytes_with_dispatch_analysis(text.as_bytes(), policy, false).is_err());
@@ -2349,7 +2425,8 @@ pub(crate) mod tests {
                 text.as_bytes(),
                 CapturePolicy {
                     max_bytes: text.len(),
-                    max_points: 7
+                    max_points: 7,
+                    query_cpu_ownership: false,
                 },
                 true
             )
@@ -2617,6 +2694,7 @@ pub(crate) mod tests {
         let policy = CapturePolicy {
             max_bytes: bytes.len(),
             max_points: 7,
+            query_cpu_ownership: false,
         };
         let a = collect_bytes_with_policy(&bytes, policy)
             .unwrap()
@@ -2657,6 +2735,7 @@ pub(crate) mod tests {
         let small = CapturePolicy {
             max_bytes: bytes.len(),
             max_points: 7,
+            query_cpu_ownership: false,
         };
         let collected = collect_bytes_with_policy(&bytes, small).unwrap();
         assert_eq!(collected.assessment.schema, 4);

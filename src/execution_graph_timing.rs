@@ -41,7 +41,7 @@ pub(crate) struct TimingCapture {
     records_complete: bool,
     segments: Vec<Segment>,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Segment {
     segment_id: u64,
@@ -49,6 +49,12 @@ struct Segment {
     #[serde(deserialize_with = "nullable")]
     task: Option<u64>,
     owner_kind: OwnerKind,
+    #[serde(default, deserialize_with = "present_nullable")]
+    query_context: Option<Option<u64>>,
+    #[serde(default, deserialize_with = "present_nullable")]
+    query_job: Option<Option<u64>>,
+    #[serde(default, deserialize_with = "present_name")]
+    query_name: Option<Option<String>>,
     #[serde(deserialize_with = "nullable")]
     start_ns: Option<u64>,
     #[serde(deserialize_with = "nullable")]
@@ -62,13 +68,33 @@ struct Segment {
     status: Status,
 }
 
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum OwnerKind {
     Task,
     Opaque,
+    QueryExecution,
 }
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+fn present_nullable<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Option<u64>>, D::Error> {
+    Option::<u64>::deserialize(d).map(Some)
+}
+fn present_name<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
+}
+
+fn valid_query_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Status {
     Measured,
@@ -86,6 +112,12 @@ pub(crate) struct ObservedCpuAssessment {
     pub observed_cpu_ns: Option<u64>,
     pub task_cpu_ns: Option<u64>,
     pub opaque_cpu_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_execution_cpu_ns: Option<Option<u64>>,
+    #[serde(skip)]
+    query_segments: Vec<Segment>,
+    #[serde(skip)]
+    local_records_complete: bool,
     pub measured_segments: usize,
     pub failed_segments: usize,
     pub observed_threads: usize,
@@ -109,12 +141,156 @@ pub(crate) struct TimingContext<'a> {
     pub task_intervals: &'a BTreeMap<u64, TaskInterval>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct QueryCpuOwnership {
+    pub scope: &'static str,
+    pub records_complete: bool,
+    pub query_execution_cpu_ns: Option<u64>,
+    pub measured_segments: usize,
+    pub queries: Vec<QueryCpu>,
+    pub issues: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct QueryCpu {
+    pub query_context: u64,
+    pub query_job: u64,
+    pub query_name: String,
+    pub cpu_ns: u64,
+}
+
+impl QueryCpuOwnership {
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            scope: "observed-query-execution-cpu",
+            records_complete: false,
+            query_execution_cpu_ns: None,
+            measured_segments: 0,
+            queries: Vec::new(),
+            issues: vec!["reciprocal timing2 query execution ownership unavailable".into()],
+        }
+    }
+}
+
+impl ObservedCpuAssessment {
+    /// Timing2 labels alone are not admission authority. Only an independently
+    /// validated original query receipt with reciprocal clock can authorize them.
+    pub(crate) fn reconcile_query_ownership(
+        &mut self,
+        inventory: Option<&crate::execution_graph_query::QueryExecutionInventory>,
+        clock_aligned: bool,
+    ) -> Result<QueryCpuOwnership> {
+        let mut issues = self.issues.clone();
+        let authority = inventory.filter(|q| {
+            q.complete
+                && q.capture_id == self.clock_bridge.query_capture_id
+                && q.clock.as_ref() == Some(&self.clock_bridge)
+                && clock_aligned
+        });
+        if authority.is_none() {
+            issues.push(
+                "reciprocal query admission lifecycle/clock authority unavailable or incomplete"
+                    .into(),
+            );
+        }
+        let mut totals = BTreeMap::<(u64, u64), u64>::new();
+        let mut names = BTreeMap::new();
+        let mut measured_segments = 0;
+        let mut valid = authority.is_some() && self.observed_cpu_ns.is_some();
+        for row in &self.query_segments {
+            let key = (
+                row.query_context
+                    .flatten()
+                    .expect("validated timing2 context"),
+                row.query_job.flatten().expect("validated timing2 job"),
+            );
+            names.insert(
+                key,
+                row.query_name
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .expect("validated query name")
+                    .clone(),
+            );
+            if let Some(q) = authority {
+                let &(admitted, terminal) = q.lifetimes.get(&key).ok_or_else(|| {
+                    anyhow::anyhow!("CPU query endpoint is not an actual same-capture admitted job")
+                })?;
+                for wall in [row.start_ns, row.end_ns].into_iter().flatten() {
+                    let wall = wall
+                        .checked_add(self.clock_bridge.pool_epoch_in_query_ns)
+                        .ok_or_else(|| anyhow::anyhow!("CPU query-clock mapping overflow"))?;
+                    ensure!(
+                        admitted <= wall && wall <= terminal,
+                        "CPU segment outside actual query admission lifecycle"
+                    );
+                }
+            }
+            if row.status == Status::Measured {
+                measured_segments += 1;
+                let total = totals.entry(key).or_default();
+                *total = total
+                    .checked_add(row.cpu_ns.expect("validated measured CPU"))
+                    .ok_or_else(|| anyhow::anyhow!("query CPU sum overflow"))?;
+            } else {
+                valid = false;
+                issues.push("query execution includes unavailable CPU measurements".into());
+            }
+        }
+        let total = totals
+            .values()
+            .try_fold(0u64, |sum, n| sum.checked_add(*n))
+            .ok_or_else(|| anyhow::anyhow!("query CPU total overflow"))?;
+        let mut queries = if valid {
+            totals
+                .into_iter()
+                .map(|((query_context, query_job), cpu_ns)| QueryCpu {
+                    query_context,
+                    query_job,
+                    query_name: names
+                        .remove(&(query_context, query_job))
+                        .expect("measured query category"),
+                    cpu_ns,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        queries.sort_by_key(|q| (std::cmp::Reverse(q.cpu_ns), q.query_context, q.query_job));
+        self.query_clock_aligned = authority.is_some();
+        self.query_execution_cpu_ns = Some(valid.then_some(total));
+        self.records_complete = self.local_records_complete && valid;
+        if !valid {
+            self.observed_cpu_ns = None;
+        }
+        self.issues = issues.clone();
+        Ok(QueryCpuOwnership {
+            scope: "observed-query-execution-cpu",
+            records_complete: self.records_complete,
+            query_execution_cpu_ns: valid.then_some(total),
+            measured_segments,
+            queries,
+            issues,
+        })
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn assess(
     capture: TimingCapture,
     context: TimingContext<'_>,
 ) -> Result<ObservedCpuAssessment> {
+    assess_with_query_ownership(capture, context, false)
+}
+
+pub(crate) fn assess_with_query_ownership(
+    capture: TimingCapture,
+    context: TimingContext<'_>,
+    query_ownership: bool,
+) -> Result<ObservedCpuAssessment> {
     ensure!(
-        capture.schema == 1 && capture.scope == "observed-exclusive-thread-segments",
+        capture.schema == if query_ownership { 2 } else { 1 }
+            && capture.scope == "observed-exclusive-thread-segments",
         "unsupported CPU timing schema or scope"
     );
     ensure!(
@@ -174,11 +350,14 @@ pub(crate) fn assess(
     let mut ids = BTreeSet::new();
     let mut threads: BTreeMap<u64, Vec<&Segment>> = BTreeMap::new();
     let mut owned_tasks: BTreeMap<u64, Vec<&Segment>> = BTreeMap::new();
+    let mut owned_queries: BTreeMap<(u64, u64), Vec<&Segment>> = BTreeMap::new();
+    let mut query_names = BTreeMap::new();
     let mut measured = 0usize;
     let mut failed = 0usize;
     let mut clock_failed_rows = 0u64;
     let mut task_cpu = 0u64;
     let mut opaque_cpu = 0u64;
+    let mut query_cpu = 0u64;
     // Exhaustion also represents a failed TLS attribution cursor in the native
     // recorder. Without a separate integrity flag, retained CPU ownership is
     // unknown, even when some allocator bounds are still available.
@@ -187,6 +366,43 @@ pub(crate) fn assess(
         && !capture.identity_exhausted
         && !capture.loss_overflowed;
     for row in &capture.segments {
+        if query_ownership {
+            ensure!(
+                row.query_context.is_some() && row.query_job.is_some() && row.query_name.is_some(),
+                "timing2 requires nullable query endpoints"
+            );
+        } else {
+            ensure!(
+                row.query_context.is_none() && row.query_job.is_none() && row.query_name.is_none(),
+                "timing1 cannot carry query endpoints"
+            );
+        }
+        match (
+            row.owner_kind,
+            row.query_context.flatten(),
+            row.query_job.flatten(),
+        ) {
+            (OwnerKind::QueryExecution, Some(context), Some(job))
+                if query_ownership && context > 0 && job > 0 =>
+            {
+                let name = row
+                    .query_name
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .filter(|name| valid_query_name(name))
+                    .ok_or_else(|| anyhow::anyhow!("invalid or missing static query category"))?;
+                ensure!(
+                    query_names
+                        .insert((context, job), name)
+                        .is_none_or(|previous| previous == name),
+                    "inconsistent static query category for admitted job"
+                );
+                owned_queries.entry((context, job)).or_default().push(row);
+            }
+            (OwnerKind::Task | OwnerKind::Opaque, None, None)
+                if row.query_name.as_ref().is_none_or(Option::is_none) => {}
+            _ => bail!("CPU segment query owner/endpoint mismatch"),
+        }
         ensure!(
             row.segment_id > 0
                 && capture
@@ -207,7 +423,9 @@ pub(crate) fn assess(
             clock_failed_rows += 1;
         }
         let interval = match (row.owner_kind, row.task) {
-            (OwnerKind::Task, Some(task)) if task > 0 && task < context.task_high_water => {
+            (OwnerKind::Task | OwnerKind::QueryExecution, Some(task))
+                if task > 0 && task < context.task_high_water =>
+            {
                 owned_tasks.entry(task).or_default().push(row);
                 let interval = context.task_intervals.get(&task);
                 if interval.is_none() {
@@ -220,6 +438,7 @@ pub(crate) fn assess(
                 interval
             }
             (OwnerKind::Opaque, None) => None,
+            (OwnerKind::QueryExecution, None) => None,
             _ => bail!("CPU segment owner/task mismatch or foreign task"),
         };
         for wall in [row.start_ns, row.end_ns].into_iter().flatten() {
@@ -264,6 +483,7 @@ pub(crate) fn assess(
                 let total = match row.owner_kind {
                     OwnerKind::Task => &mut task_cpu,
                     OwnerKind::Opaque => &mut opaque_cpu,
+                    OwnerKind::QueryExecution => &mut query_cpu,
                 };
                 *total = total
                     .checked_add(cpu_ns)
@@ -302,14 +522,14 @@ pub(crate) fn assess(
     // A native task guard cannot execute concurrently on different threads.
     // Validate the task axis as well as thread axes to prevent relabeling a
     // duplicated owned interval into another otherwise-valid thread stream.
-    for rows in owned_tasks.values_mut() {
+    for rows in owned_tasks.values_mut().chain(owned_queries.values_mut()) {
         rows.sort_by_key(|row| (row.start_ns, row.segment_id));
         let mut previous_end = None;
         for row in rows {
             if let (Some(start), Some(end)) = (row.start_ns, row.end_ns) {
                 ensure!(
                     previous_end.is_none_or(|previous| previous <= start),
-                    "overlapping CPU segments for one logical task across threads"
+                    "overlapping CPU segments for one logical task/query across threads"
                 );
                 previous_end = Some(end);
             }
@@ -368,14 +588,27 @@ pub(crate) fn assess(
     }
     let total = task_cpu
         .checked_add(opaque_cpu)
+        .and_then(|n| n.checked_add(query_cpu))
         .ok_or_else(|| anyhow::anyhow!("observed CPU sum overflow"))?;
     Ok(ObservedCpuAssessment {
         scope: "observed-exclusive-thread-segments",
         cpu_clock: "linux-thread-cpu",
-        records_complete: capture.records_complete && complete,
+        records_complete: capture.records_complete && complete && !query_ownership,
+        local_records_complete: capture.records_complete && complete,
         observed_cpu_ns: endpoints_valid.then_some(total),
         task_cpu_ns: endpoints_valid.then_some(task_cpu),
         opaque_cpu_ns: endpoints_valid.then_some(opaque_cpu),
+        query_execution_cpu_ns: query_ownership.then_some(None),
+        query_segments: if query_ownership {
+            capture
+                .segments
+                .iter()
+                .filter(|s| s.owner_kind == OwnerKind::QueryExecution)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        },
         measured_segments: measured,
         failed_segments: failed,
         observed_threads: threads.len(),
@@ -431,6 +664,182 @@ pub(crate) mod tests {
             serde_json::from_slice(&serde_json::to_vec(v)?)?,
             context(&intervals()),
         )
+    }
+
+    fn query_fixture() -> Value {
+        let mut v = fixture();
+        v["schema"] = json!(2);
+        for row in v["segments"].as_array_mut().unwrap() {
+            row["query_context"] = Value::Null;
+            row["query_job"] = Value::Null;
+            row["query_name"] = Value::Null;
+        }
+        v["segments"][0]["owner_kind"] = json!("query_execution");
+        v["segments"][0]["query_context"] = json!(1);
+        v["segments"][0]["query_job"] = json!(1);
+        v["segments"][0]["query_name"] = json!("type_of");
+        v
+    }
+
+    fn collect_query(v: &Value) -> Result<ObservedCpuAssessment> {
+        assess_with_query_ownership(
+            serde_json::from_slice(&serde_json::to_vec(v)?)?,
+            context(&intervals()),
+            true,
+        )
+    }
+
+    fn authority() -> crate::execution_graph_query::QueryExecutionInventory {
+        crate::execution_graph_query::QueryExecutionInventory {
+            capture_id: "query_123-safe".into(),
+            complete: true,
+            clock: Some(serde_json::from_value(fixture()["clock_bridge"].clone()).unwrap()),
+            lifetimes: BTreeMap::from([((1, 1), (1, 100)), ((1, 2), (1, 100))]),
+        }
+    }
+
+    #[test]
+    fn query_timing_wire_gate_and_legacy_serialization_are_strict() {
+        let standalone = collect_query(&query_fixture()).unwrap();
+        assert!(!standalone.records_complete);
+        assert_eq!(standalone.query_execution_cpu_ns, Some(None));
+        assert!(!standalone.query_clock_aligned);
+        let legacy = serde_json::to_value(collect(&fixture()).unwrap()).unwrap();
+        assert!(legacy.get("query_execution_cpu_ns").is_none());
+        assert!(legacy.get("query_segments").is_none());
+        assert!(collect(&query_fixture()).is_err());
+        assert!(collect_query(&fixture()).is_err());
+        for field in ["query_context", "query_job", "query_name"] {
+            let mut v = fixture();
+            v["segments"][0][field] = Value::Null;
+            assert!(collect(&v).is_err());
+        }
+        for (pointer, value) in [
+            ("/segments/0/query_context", Value::Null),
+            ("/segments/0/query_context", json!(0)),
+            ("/segments/0/query_job", json!(0)),
+            ("/segments/0/owner_kind", json!("opaque")),
+            ("/segments/1/query_job", json!(1)),
+            ("/segments/1/query_context", json!(1)),
+        ] {
+            let mut v = query_fixture();
+            *v.pointer_mut(pointer).unwrap() = value;
+            assert!(collect_query(&v).is_err(), "{pointer}");
+        }
+    }
+
+    #[test]
+    fn query_timing_cpu_requires_reciprocal_authority_and_ranks_disjoint_work() {
+        for (inventory, aligned) in [(None, true), (Some(authority()), false)] {
+            let mut cpu = collect_query(&query_fixture()).unwrap();
+            let report = cpu
+                .reconcile_query_ownership(inventory.as_ref(), aligned)
+                .unwrap();
+            assert!(report.query_execution_cpu_ns.is_none());
+            assert!(!report.records_complete);
+            assert!(cpu.observed_cpu_ns.is_none());
+            assert_eq!(
+                serde_json::to_value(cpu).unwrap()["query_execution_cpu_ns"],
+                Value::Null
+            );
+        }
+        let mut v = query_fixture();
+        v["segments"][1]["owner_kind"] = json!("query_execution");
+        v["segments"][1]["query_context"] = json!(1);
+        v["segments"][1]["query_job"] = json!(2);
+        v["segments"][1]["query_name"] = json!("type_of");
+        let mut cpu = collect_query(&v).unwrap();
+        let report = cpu
+            .reconcile_query_ownership(Some(&authority()), true)
+            .unwrap();
+        assert!(report.records_complete);
+        assert_eq!(report.query_execution_cpu_ns, Some(9));
+        assert_eq!(report.measured_segments, 2);
+        assert_eq!(
+            report
+                .queries
+                .iter()
+                .map(|q| (q.query_context, q.query_job, q.cpu_ns))
+                .collect::<Vec<_>>(),
+            [(1, 1, 6), (1, 2, 3)]
+        );
+        assert_eq!(cpu.task_cpu_ns, Some(0));
+        assert_eq!(cpu.opaque_cpu_ns, Some(0));
+        // Equal CPU ranks are deterministic by admitted context/job, not stream order.
+        v["segments"][1]["cpu_end_ns"] = json!(112);
+        v["segments"][1]["cpu_ns"] = json!(6);
+        v["segments"][0]["query_job"] = json!(2);
+        v["segments"][1]["query_job"] = json!(1);
+        let mut cpu = collect_query(&v).unwrap();
+        let report = cpu
+            .reconcile_query_ownership(Some(&authority()), true)
+            .unwrap();
+        assert_eq!(report.queries[0].query_job, 1);
+    }
+
+    #[test]
+    fn query_timing_rejects_cross_thread_duplicate_execution_and_lifetime_forgery() {
+        let mut v = query_fixture();
+        let mut duplicate = v["segments"][0].clone();
+        duplicate["segment_id"] = json!(2);
+        duplicate["thread_id"] = json!(6);
+        duplicate["task"] = Value::Null;
+        v["segments"][1] = duplicate;
+        assert!(collect_query(&v).is_err());
+        for lifetimes in [
+            BTreeMap::new(),
+            BTreeMap::from([((1, 1), (11, 20))]),
+            BTreeMap::from([((1, 1), (10, 19))]),
+        ] {
+            let mut q = authority();
+            q.lifetimes = lifetimes;
+            let mut cpu = collect_query(&query_fixture()).unwrap();
+            assert!(cpu.reconcile_query_ownership(Some(&q), true).is_err());
+        }
+        for field in ["complete", "clock", "capture"] {
+            let mut q = authority();
+            match field {
+                "complete" => q.complete = false,
+                "clock" => q.clock.as_mut().unwrap().pool_observer = 2,
+                _ => q.capture_id = "foreign".into(),
+            }
+            let mut cpu = collect_query(&query_fixture()).unwrap();
+            let report = cpu.reconcile_query_ownership(Some(&q), true).unwrap();
+            assert!(report.query_execution_cpu_ns.is_none());
+        }
+    }
+
+    #[test]
+    fn query_timing_static_categories_are_bounded_nonidentifying_and_consistent() {
+        for name in [
+            Value::Null,
+            json!(""),
+            json!("1type"),
+            json!("type-of"),
+            json!("path::type"),
+            json!("é"),
+            json!("x".repeat(129)),
+            json!(17),
+        ] {
+            let mut v = query_fixture();
+            v["segments"][0]["query_name"] = name;
+            assert!(collect_query(&v).is_err());
+        }
+        for name in ["_", "type_of", &"x".repeat(128)] {
+            let mut v = query_fixture();
+            v["segments"][0]["query_name"] = json!(name);
+            assert!(collect_query(&v).is_ok());
+        }
+        let mut v = query_fixture();
+        v["segments"][1]["owner_kind"] = json!("query_execution");
+        v["segments"][1]["query_context"] = json!(1);
+        v["segments"][1]["query_job"] = json!(1);
+        v["segments"][1]["query_name"] = json!("other_query");
+        assert!(collect_query(&v).is_err());
+        v["segments"][1]["owner_kind"] = json!("opaque");
+        v["segments"][1]["query_context"] = Value::Null;
+        v["segments"][1]["query_job"] = Value::Null;
+        assert!(collect_query(&v).is_err());
     }
 
     #[test]
