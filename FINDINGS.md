@@ -1,5 +1,18 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: real frontend ownership coverage, not a threading ceiling
+
+On unchanged itoa 1.0.18 incremental compilation, actual task ownership increased
+from 3,028 to 17,024 of 19,596 captured points. Read-derived edges remain 15.
+An explicit million-event cold capture retained 911,210 read-slice events and
+485,256 binding points with zero loss, but direct reads were all dep-graph
+`disabled`, so loss-free capture is not full semantic coverage. CPU work and
+weighted span remain unknown. No compile speedup or 96-core ceiling is claimed.
+See `docs/frontend-mapping-results-20261015.md` and its committed reports.
+Hosted validation: `20261014-180011428-4084443` reported 602 passed after an
+unrelated parallel ETXTBSY test passed on isolated retry. Native gates: 205
+passed, 28 ignored, plus real cold/incremental artifact and dispatch witnesses.
+
 ## 2026-10-14: capped semantic-read recording no longer waits for its event mutex
 
 The real large native fixture attempts over 30 million events after retaining
