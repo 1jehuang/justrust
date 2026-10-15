@@ -7,12 +7,19 @@ Latest accepted milestones: [named query-execution CPU ownership](query-cpu-owne
 assigns validated exclusive CPU costs to actual admitted query executions, and the
 [observed native fork/join task DAG](observed-task-dag-20261015.md) retains genuine
 instrumented task prerequisites and CPU-chain witnesses. The cold accepted task
-DAG attaches only about 10% of observed CPU. Native invocation-level execution
-flow is being validated to connect the remaining named query CPU, not to infer
-edges from query nesting, worker chronology or whole-job completion.
-Neither accepted milestone establishes the complete execution DAG or a
-useful-thread ceiling. Successful latch readiness and cache publication remain
-separate authority boundaries, and paired performance promotion remains blocked
+DAG attaches only about 10% of observed CPU. The accepted
+[invocation-level execution flow](execution-flow-20261015.md) connects actual
+native query scope and fork/join tokens, assigns every retained CPU segment in
+its cold/warm/mixed cohorts, and passed twelve actual-source tests plus
+[twenty-five independent public replay cases](../bench/results/20261015-execution-flow-public-acceptance.json).
+It does not infer edges from query nesting, worker chronology or whole-job
+completion. The cold retained known chain is 44.280185 ms, including
+37.521239 ms of `typeck_root`, but 175 explicit cuts prevent interpreting that
+chain as the complete dependency span.
+None of these accepted milestones establishes the complete execution DAG or a
+useful-thread ceiling. Successful latch-readiness provenance is implemented and
+undergoing its own actual-source acceptance. Cache publication remains a
+separate authority boundary, and paired performance promotion remains blocked
 by the documented A2 baseline defects and noisy samples.
 
 ## Mathematical target
