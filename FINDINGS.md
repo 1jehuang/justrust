@@ -1,5 +1,28 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: actual invocation flow connects named query CPU without inventing span
+
+The new native pool5/flow1 diagnostic passed all 12 real-source compile/link/
+execute/analyzer tests against an immutable coherent compiler and installed
+client. Cold retained 73,038 nodes, 72,550 explicit edges and 18,199 invocation
+scopes, assigning all 36,443 measured CPU segments exactly once. Its known
+CPU-chain witness cost 44.280185 ms, including 37.521239 ms of `typeck_root`.
+Warm retained 1,838 invocation scopes for 1,833 admitted jobs, demonstrating
+actual reentry rather than whole-job contraction. Its 15.772376 ms known chain
+includes resolver 5.900361 ms and HIR lowering 2.510948 ms.
+
+These are observed-chain attribution facts, not compile-time speed comparisons
+or a full critical path. Cold has 175 explicit unknown cuts. Missing latch
+readiness, visibility/wake work and scheduler boundaries are not zeroed or
+inferred from job completion. Full work/span/parallelism stay unavailable.
+Actual bounded-capacity and allocator-exhaustion packets passed partial/no-
+numeric replay; unsupported nonzero clock declarations remained hard refusals.
+Native tests passed 247 with 28 ignored plus 28 doctests. Hosted client run
+`20261015-060855169-1146356` passed 688 with 3 ignored, plus check/strict clippy.
+See `docs/execution-flow-20261015.md`, compact reports in
+`bench/results/execution-flow-20261015/`, and dedicated run exports in
+`data/runs/execution-flow-20261015/`. Paired performance promotion remains blocked.
+
 ## 2026-10-15: retained native task DAG explains only a minority of cold CPU
 
 The installed explicit task-DAG analysis independently replayed the original
