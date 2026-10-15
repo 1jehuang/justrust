@@ -100,6 +100,103 @@ def check_unqualified(report, query, pool):
     witness(report, pool, query_authorized=False)
 
 
+def check_report_inventory(actual, expected):
+    """Compare every report field and exact identity cardinality, not row order."""
+    def inventory(rows):
+        identities = [(row['producer'], row['capture_id']) for row in rows]
+        require(len(set(identities)) == len(identities), 'duplicate public report identity')
+        return len(rows), Counter(json.dumps(row, sort_keys=True) for row in rows)
+    require(inventory(actual) == inventory(expected), 'public report inventory or fields changed')
+
+
+def test_report_inventory():
+    """Offline regression checks only, never produces native acceptance evidence."""
+    first = dict(producer='query', capture_id='q', fact=7, resource_attachments={'state': 'unknown'})
+    second = dict(producer='pool', capture_id='p', fact=9)
+    original = [first, second]
+    check_report_inventory(list(reversed(original)), original)
+    for changed in ([dict(first, fact=8), second], [first, second, second],
+                    [first], [dict(first, resource_attachments={'state': 'fabricated'}), second]):
+        try:
+            check_report_inventory(changed, original)
+        except AssertionError:
+            continue
+        raise AssertionError('report inventory mutation accepted')
+
+
+def neutral_snapshot(directory, reference):
+    """Copy exact original bytes in analyzer scandir-to-neutral-name order."""
+    reference.mkdir(mode=0o700)
+    sources = [path for path in directory.iterdir() if path.suffix == '.json']
+    require(len(sources) == 2, 'neutral reference requires original query/pool pair only')
+    mapping = []
+    taken = {source.name for source in sources}
+    next_name = 0
+    for source in sources:
+        while True:
+            name = 'frontend-query-' + str(next_name) + '.json'
+            next_name += 1
+            if name not in taken:
+                break
+        taken.add(name)
+        raw = source.read_bytes()
+        private_write(reference / name, raw)
+        mapping.append(dict(source=source.name, neutral=name, bytes=len(raw),
+                            sha256=hashlib.sha256(raw).hexdigest()))
+    check_neutral_snapshot(directory, reference, mapping)
+    return mapping
+
+
+def check_neutral_snapshot(directory, reference, mapping):
+    require(sorted(path.name for path in reference.iterdir()) ==
+            sorted(row['neutral'] for row in mapping), 'neutral snapshot inventory changed')
+    for row in mapping:
+        source, target = directory / row['source'], reference / row['neutral']
+        require(source.stat().st_size == target.stat().st_size == row['bytes']
+                and digest(source) == digest(target) == row['sha256'],
+                'neutral snapshot changed exact original source bytes')
+        require(target.stat().st_mode & 0o777 == 0o600, 'neutral snapshot file is not private')
+
+
+def test_neutral_snapshot():
+    """Offline routing and byte-preservation regression, not capture acceptance."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='jr-readiness-verifier-test-') as temporary:
+        root = Path(temporary)
+        sources = root / 'sources'
+        sources.mkdir()
+        private_write(sources / 'z-query.json', b'{ "original": "query" }\n')
+        private_write(sources / 'a-pool.json', b'{ "original": "pool" }\n')
+        before = [(path.name, path.read_bytes()) for path in sources.iterdir()]
+        reference = root / 'reference'
+        mapping = neutral_snapshot(sources, reference)
+        require([(row['source'], row['neutral']) for row in mapping] ==
+                [(name, 'frontend-query-' + str(index) + '.json')
+                 for index, (name, _) in enumerate(before)], 'source-to-neutral map changed')
+        require(sorted(path.name for path in reference.iterdir()) ==
+                ['frontend-query-0.json', 'frontend-query-1.json'], 'incorrect neutral names')
+        for index, (_, raw) in enumerate(before):
+            require((reference / ('frontend-query-' + str(index) + '.json')).read_bytes() == raw,
+                    'neutral routing changed source order or original bytes')
+        require(before == [(path.name, path.read_bytes()) for path in sources.iterdir()],
+                'snapshot modified source inventory')
+        (reference / 'frontend-query-0.json').write_bytes(b'altered')
+        try:
+            check_neutral_snapshot(sources, reference, mapping)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('altered neutral snapshot accepted')
+        collision = root / 'collision'
+        collision.mkdir()
+        private_write(collision / 'frontend-query-0.json', b'first-original')
+        private_write(collision / 'other.json', b'second-original')
+        collision_mapping = neutral_snapshot(collision, root / 'collision-reference')
+        require([row['neutral'] for row in collision_mapping] ==
+                ['frontend-query-1.json', 'frontend-query-2.json'],
+                'neutral allocator overwrote an original source name')
+
+
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument('--accepted', type=Path, required=True)
@@ -200,9 +297,23 @@ def main():
             compact = summary['captures'][0]
             require(all(key not in compact for key in ('query_cpu_ownership', 'cache_call_provenance',
                         'dispatch_result_provenance', 'observed_task_dag', 'execution_flow_dag')), 'compact flow implied unrelated diagnostics')
-            require(artifact.read_bytes() == (evidence / (label + '-flow-only.stdout')).read_bytes(),
-                    'analyzer companion is not the exact independently replayed public stdout')
             artifact_values = json.loads(artifact.read_bytes())
+            # Reproduce only the analyzer's neutral source-name routing. Original
+            # scandir order assigns neutral identities, native graph orders them.
+            # Copy exact original bytes, never rewrite receipt JSON or originals.
+            reference = evidence / (label + '-neutral-reference')
+            mapping = neutral_snapshot(directory, reference)
+            mapping_bytes = json.dumps(mapping, sort_keys=True).encode()
+            private_write(evidence / (label + '-neutral-before.json'), mapping_bytes)
+            reference_values, reference_record = graph(label + '-artifact-reference', reference,
+                                                       ['--latch-readiness-dag'])
+            check_report_inventory(artifact_values, reference_values)
+            require(artifact.read_bytes() == (evidence / (label + '-artifact-reference.stdout')).read_bytes(),
+                    'analyzer companion differs from exact independently replayed neutral stdout')
+            check_neutral_snapshot(directory, reference, mapping)
+            private_write(evidence / (label + '-neutral-after.json'), mapping_bytes)
+            reference_record.update(exact_analyzer_stdout_checked=True,
+                                    original_byte_snapshot_mapping_sha256=hashlib.sha256(mapping_bytes).hexdigest())
             artifact_flow = pool_flow(artifact_values)
             check_flow(artifact_flow, expected, pool)
             check_compact(compact['latch_readiness_dag'], artifact_flow)
