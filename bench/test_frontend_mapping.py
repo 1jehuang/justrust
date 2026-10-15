@@ -52,7 +52,280 @@ def timing_fixture():
     return query, assessment, pool, pool_assessment
 
 
+def cache_call_fixture():
+    query, assessment = fixture()
+    reasons = {key: 0 for key in mapping.CACHE_CALL_REASONS}
+    reasons['no_cache_hit'] = 1
+    assessment['cache_call_provenance'] = dict(
+        scope=mapping.CACHE_CALL_SCOPE, records_complete=True,
+        observed_requests=2, observed_cache_hits=1, orphan_cache_hits=0,
+        resolved_requests=1, unresolved_requests=1,
+        distinct_publishing_job_relations=1, lost_events=0,
+        unresolved_reasons=reasons,
+        relations=[dict(request_id=2, context_id=1, consumer_job_id=2,
+                        result_id=1, producer_job_id=1, dep_node_index=42,
+                        request_start_event_index=0, publication_event_index=1,
+                        cache_hit_event_index=2, request_terminal_event_index=3)])
+    return query, assessment
+
+
 class FrontendMappingTests(unittest.TestCase):
+    def test_cache_calls_forward_flag_and_store_exact_full_native_stdout(self):
+        query, authority = cache_call_fixture()
+        # Preserve CRLF and whitespace exactly rather than text-mode newline
+        # normalization or reserialization. Native rows live in this artifact.
+        encoded = ('  ' + json.dumps([authority], indent=2) + '\n').replace('\n', '\r\n').encode()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            artifact = root / 'private-native-graph.json'
+            result = subprocess.CompletedProcess([], 0, encoded, b'')
+            with patch.object(mapping.subprocess, 'run', return_value=result) as validator:
+                report = mapping.analyze(capture, 'fake-validator', large_capture=True,
+                                         cache_call_provenance=True, graph_output=artifact)
+            command = validator.call_args.args[0]
+            self.assertIn('--cache-call-provenance', command)
+            self.assertIn('--large-capture', command)
+            self.assertFalse(validator.call_args.kwargs['text'])
+            self.assertEqual(artifact.read_bytes(), encoded)
+            self.assertEqual(artifact.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(report['graph_output'], dict(
+                name=artifact.name, bytes=len(encoded), sha256=hashlib.sha256(encoded).hexdigest(),
+                format='justrust-graph-json-stdout'))
+            summary = report['captures'][0]['cache_call_provenance']
+            self.assertNotIn('relations', summary)
+            self.assertEqual(summary['stored_relation_rows'], 1)
+            self.assertEqual(summary['resolved_requests'], 1)
+            self.assertEqual(summary['unresolved_requests'], 1)
+            self.assertEqual(json.loads(artifact.read_bytes())[0]['cache_call_provenance']['relations'],
+                             authority['cache_call_provenance']['relations'])
+            self.assertNotIn(str(root), json.dumps(report))
+            for obj in (report, report['captures'][0]):
+                for key in ('cpu_work_ns', 'execution_span_ns', 'theoretical_parallelism'):
+                    self.assertIsNone(obj[key])
+
+    def test_cli_cache_calls_write_compact_report_and_exclusive_full_artifact(self):
+        query, authority = cache_call_fixture()
+        encoded = json.dumps([authority], indent=2).encode()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            report = root / 'report.json'
+            artifact = root / 'graph.json'
+            result = subprocess.CompletedProcess([], 0, encoded, b'')
+            with patch('sys.argv', ['frontend_mapping', '--capture', str(capture),
+                                   '--cache-call-provenance', '--graph-output', str(artifact),
+                                   '--output', str(report)]), \
+                    patch.object(mapping.subprocess, 'run', return_value=result):
+                mapping.main()
+            compact = json.loads(report.read_bytes())
+            self.assertEqual(artifact.read_bytes(), encoded)
+            self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(compact['graph_output']['sha256'], hashlib.sha256(encoded).hexdigest())
+            self.assertNotIn('relations', compact['captures'][0]['cache_call_provenance'])
+
+    def test_cache_call_flag_and_graph_output_must_be_paired(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / 'graph.json'
+            for flag, output in [(True, None), (False, artifact)]:
+                with self.subTest(flag=flag), patch.object(mapping.subprocess, 'run') as validator:
+                    with self.assertRaisesRegex(ValueError, 'companion --graph-output'):
+                        mapping.analyze(temporary, 'unused', cache_call_provenance=flag,
+                                        graph_output=output)
+                    validator.assert_not_called()
+            self.assertFalse(artifact.exists())
+
+    def test_default_ignores_unsolicited_native_calls_without_artifact_side_effects(self):
+        query, authority = cache_call_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'query.json').write_text(json.dumps(query))
+            result = subprocess.CompletedProcess([], 0, json.dumps([authority]), '')
+            with patch.object(mapping.subprocess, 'run', return_value=result) as validator:
+                report = mapping.analyze(root, 'fake-validator')
+            self.assertNotIn('--cache-call-provenance', validator.call_args.args[0])
+            self.assertTrue(validator.call_args.kwargs['text'])
+            self.assertNotIn('graph_output', report)
+            self.assertNotIn('cache_call_provenance', report['captures'][0])
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ['query.json'])
+
+    def test_missing_native_cache_call_opt_in_field_fails_closed_but_retains_artifact(self):
+        query, authority = fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            artifact = root / 'full-graph.json'
+            encoded = json.dumps([authority]).encode()
+            result = subprocess.CompletedProcess([], 0, encoded, b'')
+            with patch.object(mapping.subprocess, 'run', return_value=result):
+                with self.assertRaisesRegex(ValueError, 'native cache-call provenance authority'):
+                    mapping.analyze(capture, 'fake-validator', cache_call_provenance=True,
+                                    graph_output=artifact)
+            self.assertEqual(artifact.read_bytes(), encoded)
+
+    def test_cache_call_artifact_never_overwrites_files_or_symlinks(self):
+        query, _ = cache_call_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'query.json').write_text(json.dumps(query))
+            original = root / 'preserved.txt'
+            original.write_bytes(b'keep')
+            link = root / 'link.json'
+            link.symlink_to(original)
+            dangling = root / 'dangling.json'
+            dangling.symlink_to(root / 'missing')
+            for artifact in (original, link, dangling):
+                with self.subTest(artifact=artifact.name), \
+                        patch.object(mapping.subprocess, 'run') as validator:
+                    # Keep these non-receipt artifacts out of the capture source.
+                    capture = root / 'capture'
+                    capture.mkdir(exist_ok=True)
+                    (capture / 'query.json').write_text(json.dumps(query))
+                    with self.assertRaises(FileExistsError):
+                        mapping.analyze(capture, 'fake-validator', cache_call_provenance=True,
+                                        graph_output=artifact)
+                    validator.assert_not_called()
+            self.assertEqual(original.read_bytes(), b'keep')
+            self.assertFalse((root / 'missing').exists())
+
+    def test_graph_output_must_not_contaminate_capture_or_resolve_to_source(self):
+        query, _ = cache_call_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            original = json.dumps(query).encode()
+            source = capture / 'query.json'
+            source.write_bytes(original)
+            alias = root / 'capture-alias'
+            alias.symlink_to(capture, target_is_directory=True)
+            source_alias = root / 'source-alias.json'
+            source_alias.symlink_to(source)
+            before = sorted(str(p.relative_to(root)) for p in root.rglob('*'))
+            for artifact in (capture, source, capture / 'graph.json',
+                             capture / 'new-subdirectory' / 'graph.json',
+                             alias / 'graph.json', source_alias,
+                             root / 'capture' / '..' / 'capture' / 'graph.json'):
+                with self.subTest(artifact=str(artifact)), \
+                        patch.object(mapping.subprocess, 'run') as validator, \
+                        patch.object(mapping, '_read_regular') as read:
+                    with self.assertRaisesRegex(ValueError, 'outside the original capture'):
+                        mapping.analyze(capture, 'fake-validator', cache_call_provenance=True,
+                                        graph_output=artifact)
+                    validator.assert_not_called()
+                    read.assert_not_called()
+            self.assertEqual(sorted(str(p.relative_to(root)) for p in root.rglob('*')), before)
+            self.assertEqual(source.read_bytes(), original)
+
+    def test_failed_native_graph_stdout_is_retained_without_valid_summary(self):
+        query, _ = fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            artifact = root / 'graph.json'
+            result = subprocess.CompletedProcess([], 1, b'partial native stdout\r\n',
+                                                 b'strict native rejection')
+            with patch.object(mapping.subprocess, 'run', return_value=result):
+                with self.assertRaisesRegex(ValueError, 'strict native rejection'):
+                    mapping.analyze(capture, 'fake-validator', cache_call_provenance=True,
+                                    graph_output=artifact)
+            self.assertEqual(artifact.read_bytes(), result.stdout)
+
+    def test_partial_native_cache_call_counters_and_reasons_are_not_promoted(self):
+        _, authority = cache_call_fixture()
+        calls = authority['cache_call_provenance']
+        calls['records_complete'] = False
+        calls['lost_events'] = 4
+        calls['unresolved_reasons']['no_cache_hit'] = 0
+        calls['unresolved_reasons']['capture_incomplete'] = 1
+        summary = mapping._cache_call_summary(authority)
+        self.assertFalse(summary['records_complete'])
+        self.assertEqual(summary['lost_events'], 4)
+        self.assertEqual(summary['unresolved_reasons']['capture_incomplete'], 1)
+        self.assertEqual(summary['resolved_requests'], 1)
+        self.assertEqual(summary['stored_relation_rows'], 1)
+
+    def test_partial_root_issues_reject_summary_but_preserve_full_native_report(self):
+        query, authority = cache_call_fixture()
+        authority['issues'] = ['query read records are incomplete or invalid']
+        authority['structural_complete'] = False
+        authority['cache_call_provenance']['records_complete'] = False
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = root / 'capture'
+            capture.mkdir()
+            (capture / 'query.json').write_text(json.dumps(query))
+            artifact = root / 'graph.json'
+            encoded = json.dumps([authority]).encode()
+            result = subprocess.CompletedProcess([], 0, encoded, b'')
+            with patch.object(mapping.subprocess, 'run', return_value=result):
+                with self.assertRaisesRegex(ValueError, 'native query assessment has issues'):
+                    mapping.analyze(capture, 'fake-validator', cache_call_provenance=True,
+                                    graph_output=artifact)
+            self.assertEqual(artifact.read_bytes(), encoded)
+
+    def test_cache_call_counter_partition_and_typed_fields_fail_closed(self):
+        for change in ('row-count', 'request-count', 'reason-count', 'bool-count', 'scope'):
+            with self.subTest(change=change):
+                _, authority = cache_call_fixture()
+                calls = authority['cache_call_provenance']
+                if change == 'row-count':
+                    calls['relations'] = []
+                elif change == 'request-count':
+                    calls['observed_requests'] += 1
+                elif change == 'reason-count':
+                    calls['unresolved_reasons']['feed_request'] += 1
+                elif change == 'bool-count':
+                    calls['resolved_requests'] = True
+                else:
+                    calls['scope'] = 'execution-dag'
+                with self.assertRaises(ValueError):
+                    mapping._cache_call_summary(authority)
+
+    def test_cli_cache_artifact_report_aliases_and_existing_reports_fail_before_analysis(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = root / 'report.json'
+            artifact = root / 'graph.json'
+            for extra in (['--cache-call-provenance'], ['--graph-output', str(artifact)]):
+                with patch('sys.argv', ['frontend_mapping', '--capture', temporary,
+                                       '--output', str(report), *extra]), \
+                        patch.object(mapping, 'analyze') as analyze, \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as error:
+                        mapping.main()
+                    self.assertEqual(error.exception.code, 2)
+                    analyze.assert_not_called()
+            for args in [('--output', str(report), '--graph-output', str(report)),
+                         ('--output', str(report), '--graph-output', str(root / './report.json'))]:
+                with patch('sys.argv', ['frontend_mapping', '--capture', temporary,
+                                       '--cache-call-provenance', *args]), \
+                        patch.object(mapping, 'analyze') as analyze, \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as error:
+                        mapping.main()
+                    self.assertEqual(error.exception.code, 2)
+                    analyze.assert_not_called()
+            report.write_text('keep')
+            with patch('sys.argv', ['frontend_mapping', '--capture', temporary,
+                                   '--cache-call-provenance', '--graph-output', str(artifact),
+                                   '--output', str(report)]), \
+                    patch.object(mapping, 'analyze') as analyze, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    mapping.main()
+                analyze.assert_not_called()
+            self.assertEqual(report.read_text(), 'keep')
+            self.assertFalse(artifact.exists())
+
     def analyze_timing_fixture(self, query, assessment, pool, pool_assessment):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

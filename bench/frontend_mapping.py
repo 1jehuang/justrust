@@ -19,6 +19,19 @@ MAX_BYTES = 64 * 1024 * 1024
 LARGE_MAX_BYTES = 512 * 1024 * 1024
 MAX_FILES = 20_000
 STAGES = ('registered', 'notified', 'condvar_returned', 'resumed')
+CACHE_CALL_SCOPE = 'observed-cache-result-availability-not-execution-dag'
+CACHE_CALL_COUNTS = (
+    'observed_requests', 'observed_cache_hits', 'orphan_cache_hits',
+    'resolved_requests', 'unresolved_requests', 'distinct_publishing_job_relations',
+    'lost_events',
+)
+CACHE_CALL_REASONS = (
+    'feed_request', 'interrupted_request', 'missing_request_terminal',
+    'ambiguous_cache_hits', 'no_cache_hit', 'incompatible_cache_hit_route',
+    'missing_context_or_consumer', 'capture_incomplete', 'no_prior_producer',
+    'producer_published_too_late', 'job_endpoint_unavailable',
+    'admission_authority_incomplete',
+)
 
 
 def intervals_summary(intervals):
@@ -158,10 +171,71 @@ def _read_regular(path, remaining, directory_fd=None):
         os.close(fd)
 
 
-def analyze(directory, justrust, large_capture=False):
+def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_output):
+    command = [str(justrust), 'graph', str(snapshot), '--json']
+    if large_capture:
+        command.append('--large-capture')
+    if cache_call_provenance:
+        command.append('--cache-call-provenance')
+        # Reserve before invoking the validator, so collisions never overwrite an
+        # existing artifact or perform an unnecessary potentially expensive run.
+        fd = os.open(graph_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as output:
+            os.fchmod(output.fileno(), 0o600)
+            result = subprocess.run(command, capture_output=True, text=False, timeout=300)
+            if not isinstance(result.stdout, bytes):
+                raise ValueError('exact graph artifact requires binary native stdout')
+            output.write(result.stdout)
+        artifact = dict(name=Path(graph_output).name, bytes=len(result.stdout),
+                        sha256=hashlib.sha256(result.stdout).hexdigest(),
+                        format='justrust-graph-json-stdout')
+    else:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+        artifact = None
+    if result.returncode:
+        def diagnostic(value):
+            return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else value
+        raise ValueError('native graph validation failed:\n' + diagnostic(result.stdout)
+                         + '\n' + diagnostic(result.stderr))
+    return json.loads(result.stdout), artifact
+
+
+def _cache_call_summary(assessment):
+    """Native availability relations only, never execution or semantic edges."""
+    calls = assessment.get('cache_call_provenance')
+    if (not isinstance(calls, dict) or calls.get('scope') != CACHE_CALL_SCOPE
+            or type(calls.get('records_complete')) is not bool
+            or not isinstance(calls.get('relations'), list)
+            or not isinstance(calls.get('unresolved_reasons'), dict)):
+        raise ValueError('missing or malformed native cache-call provenance authority')
+    reasons = calls['unresolved_reasons']
+    for container, fields in ((calls, CACHE_CALL_COUNTS), (reasons, CACHE_CALL_REASONS)):
+        if any(type(container.get(key)) is not int or container[key] < 0 for key in fields):
+            raise ValueError('invalid native cache-call provenance counters')
+    if (calls['resolved_requests'] != len(calls['relations'])
+            or calls['resolved_requests'] + calls['unresolved_requests'] != calls['observed_requests']
+            or sum(reasons[key] for key in CACHE_CALL_REASONS) != calls['unresolved_requests']):
+        raise ValueError('native cache-call provenance partition mismatch')
+    # Full native rows are retained in the exact public graph artifact. Do not
+    # reserialize them or turn publishing-job relations into graph edges.
+    return dict(scope=calls['scope'], records_complete=calls['records_complete'],
+                **{key: calls[key] for key in CACHE_CALL_COUNTS},
+                unresolved_reasons={key: reasons[key] for key in CACHE_CALL_REASONS},
+                stored_relation_rows=len(calls['relations']))
+
+
+def analyze(directory, justrust, large_capture=False, cache_call_provenance=False,
+            graph_output=None):
+    if cache_call_provenance != (graph_output is not None):
+        raise ValueError('--cache-call-provenance requires companion --graph-output and vice versa')
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('capture must be a nonsymlink directory')
+    if cache_call_provenance:
+        capture_root = directory.resolve()
+        artifact_path = Path(graph_output).resolve()
+        if artifact_path == capture_root or capture_root in artifact_path.parents:
+            raise ValueError('graph output must be outside the original capture directory')
     # Snapshot before validation, not afterward: mutations cannot substitute bytes
     # after the strict public consumer has endorsed a different receipt.
     originals = []
@@ -229,13 +303,8 @@ def analyze(directory, justrust, large_capture=False):
             with destination.open('xb') as output:
                 output.write(content)
             destination.chmod(0o400)
-        command = [str(justrust), 'graph', str(snapshot), '--json']
-        if large_capture:
-            command.append('--large-capture')
-        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
-        if result.returncode:
-            raise ValueError('native graph validation failed:\n' + result.stdout + '\n' + result.stderr)
-        assessments = json.loads(result.stdout)
+        assessments, artifact = _run_graph(snapshot, justrust, large_capture,
+                                          cache_call_provenance, graph_output)
         indexed = {}
         pool_indexed = {}
         for assessment in assessments:
@@ -286,14 +355,20 @@ def analyze(directory, justrust, large_capture=False):
                     or authority['schema'] != receipt['schema']):
                 raise ValueError('query source/validated schema mismatch')
             timing = _timing_summary(receipt, authority, pool_authorities)
-            summaries.append(summarize(receipt, authority, timing))
+            summary = summarize(receipt, authority, timing)
+            if cache_call_provenance:
+                summary['cache_call_provenance'] = _cache_call_summary(authority)
+            summaries.append(summary)
         if not summaries:
             raise ValueError('no native frontend receipt')
-        return dict(schema=1, scope='native-frontend-capture-diagnostics',
-                    large_capture=large_capture,
-                    inputs=inputs, captures=summaries,
-                    full_pipeline_complete=False, cpu_work_ns=None,
-                    execution_span_ns=None, theoretical_parallelism=None)
+        report = dict(schema=1, scope='native-frontend-capture-diagnostics',
+                      large_capture=large_capture,
+                      inputs=inputs, captures=summaries,
+                      full_pipeline_complete=False, cpu_work_ns=None,
+                      execution_span_ns=None, theoretical_parallelism=None)
+        if artifact is not None:
+            report['graph_output'] = artifact
+        return report
 
 
 def main():
@@ -302,10 +377,24 @@ def main():
     parser.add_argument('--justrust', default='justrust')
     parser.add_argument('--large-capture', action='store_true',
                         help='Explicitly allow up to 512 MiB; forwards the public validator opt-in')
+    parser.add_argument('--cache-call-provenance', action='store_true',
+                        help='Opt in to native cache-result availability relations, not execution edges')
+    parser.add_argument('--graph-output', type=Path,
+                        help='Required with --cache-call-provenance: exclusive full native graph JSON artifact outside the capture directory')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        report = analyze(args.capture, args.justrust, args.large_capture)
+        if args.cache_call_provenance or args.graph_output is not None:
+            if not args.cache_call_provenance or args.graph_output is None:
+                raise ValueError('--cache-call-provenance requires companion --graph-output and vice versa')
+            if args.output.resolve() == args.graph_output.resolve():
+                raise ValueError('report and graph output paths must differ')
+            if os.path.lexists(args.output):
+                raise ValueError('report output already exists')
+            report = analyze(args.capture, args.justrust, args.large_capture,
+                             cache_call_provenance=True, graph_output=args.graph_output)
+        else:
+            report = analyze(args.capture, args.justrust, args.large_capture)
         encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
         fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'wb') as output:
