@@ -24,8 +24,7 @@ published until every required check and code generation operation succeeds.
 Initial supported syntax: free functions with `i32`, `bool`, unit and nested
 Copy tuple parameters/results, tuple literals and numeric field projections,
 local bindings and shadowing, `mut`, whole-value and local-rooted field assignment,
-integer
-arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
+integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
 `while`, unlabelled `loop` expressions, `break` with supported value types,
 `continue`, `return`, calls including recursion, and `println!("literal")`.
 `main` takes no arguments and returns unit. Arithmetic has overflow checks,
@@ -66,8 +65,11 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 - Validate declarations and publish the callable signatures.
 - Check and lower each function body independently against those signatures,
   publishing an immutable typed-function fact (operation 102).
-- Emit each function from that exact checked fact after its own body check,
-  without repeating checking or waiting for other bodies.
+- Lower each checked function once into an explicit control-flow graph
+  (operation 108), with ordered value snapshots, branches, loop edges and calls.
+  Verify its structural invariants before publishing it to either root.
+- Emit each function from that exact cached CFG fact without repeating lowering
+  or waiting for other bodies.
 - Link emitted functions and resolve relocations into one executable.
 - A check root joins all required semantic checks but demands no code generation.
 - A build root joins emitted objects, then executable publication.
@@ -75,7 +77,9 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 Recursive calls depend on declarations, not completion of the callee body.
 All independent function prerequisites are demanded before awaiting results.
 Within one graph, concurrent check and build requests share parsing, resolution,
-declarations and body checks. Output facts contain typed-arena handles because
+declarations, body checks and per-function CFG lowering. Check demands the same
+validated CFG facts as native codegen, without demanding objects or linking.
+Output facts contain typed-arena handles because
 the prototype runtime currently stores u64 slots. Arenas remain owned by the
 compilation snapshot and are not persistent cache keys.
 
@@ -83,8 +87,13 @@ Checked functions now retain resolved local and expression IDs, concrete
 inferred types, validated call signatures and explicit normal-completion versus
 divergence information. Every shadowed binding has its own LocalId. The native
 emitter consumes these facts directly, without source-name lookup or inference.
-This structured typed IR is groundwork for general types and ownership analysis,
-not a completed layout, CFG, borrow checker or public cross-version IR format.
+This structured typed IR feeds explicit CFG lowering before native generation.
+CFG blocks contain ordered assignments to owning local/temporary places and
+explicit conditional, call, return and unreachable terminators. Short-circuit
+operators become branches, and loop exits become ordinary edges with resolved
+destinations. Source-expression IDs remain attached to operations for provenance.
+The CFG is a prerequisite for ownership analysis, not a completed borrow checker,
+platform layout or public cross-version IR format.
 In the checked IR, semantic `Ty::Never` is distinct from runtime non-completion.
 Explicit unreachable tails retain their actual type and are still checked. Pure
 never operands to nonlogical binary operators currently receive an explicit
@@ -148,6 +157,9 @@ Use the resulting binary on the machine holding that build artifact:
 /new/path/external
 ```
 
+`cfg_blocks`, `cfg_edges` and `cfg_locals` count explicit control-flow work,
+separately from scheduling dependency `nodes` and `edges`. Counts include retained
+blocks and generated temporary locals, not just source declarations.
 The compiler prints a JSON accounting summary, not the program's output.
 Execute the emitted ELF separately. `--trace NEW_TRACE` writes the full Debug
 report, including failure events on rejected compilations. Trace creation occurs

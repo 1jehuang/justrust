@@ -8,8 +8,9 @@
 //! Aggregate layout is private: each scalar/unit leaf occupies eight bytes,
 //! tuples concatenate their fields. Tuple arguments carry snapshot pointers.
 //! Tuple results use a caller-owned destination, passed last at rbp+16.
+use super::cfg;
 use super::frontend::{self, BinaryOp, Program, UnaryOp};
-use super::ir::{self, ExprKind, LocalId, LoopId};
+use super::ir::{self, LocalId};
 use std::collections::HashMap;
 
 const MAX_ARGS: usize = 4096;
@@ -58,33 +59,28 @@ pub struct Object {
     pub strings: Vec<(usize, Vec<u8>)>,
 }
 
-struct LoopFrame {
-    id: LoopId,
-    head: usize,
-    temporary_depth: usize,
-    breaks: Vec<usize>,
-    result: Option<(i32, i32)>,
-}
-
 struct Emitter<'a> {
     object: Object,
-    function: &'a ir::CheckedFunction,
+    function: &'a cfg::Function,
+    locals: Vec<i32>,
+    aggregate_scratch: i32,
     returns: Vec<usize>,
     traps: Vec<usize>,
-    loops: Vec<LoopFrame>,
-    temporary_depth: usize,
-    locals: Vec<i32>,
-    snapshots: Vec<Option<i32>>,
+    edges: Vec<(usize, cfg::BlockId)>,
 }
-impl Emitter<'_> {
+impl<'a> Emitter<'a> {
     fn bytes(&mut self, bytes: &[u8]) {
         self.object.code.extend_from_slice(bytes);
     }
-    fn i32(&mut self, n: i32) {
-        self.bytes(&n.to_le_bytes());
+    fn i32(&mut self, value: i32) {
+        self.bytes(&value.to_le_bytes());
     }
     fn position(&self) -> usize {
         self.object.code.len()
+    }
+    fn immediate(&mut self, value: i32) {
+        self.bytes(&[0xb8]);
+        self.i32(value);
     }
     fn jump(&mut self, opcode: &[u8]) -> usize {
         self.bytes(opcode);
@@ -98,34 +94,42 @@ impl Emitter<'_> {
         self.object.code[at..at + 4].copy_from_slice(&displacement.to_le_bytes());
         Ok(())
     }
+    fn edge(&mut self, opcode: &[u8], target: cfg::BlockId) {
+        let at = self.jump(opcode);
+        self.edges.push((at, target));
+    }
     fn trap_if(&mut self, condition: u8) {
         let at = self.jump(&[0x0f, condition]);
         self.traps.push(at);
-    }
-    fn immediate(&mut self, n: i32) {
-        self.bytes(&[0xb8]);
-        self.i32(n);
     }
     fn local_offset(&self, local: LocalId) -> Result<i32, String> {
         self.locals
             .get(local.0)
             .copied()
-            .ok_or_else(|| "invalid checked local".to_string())
+            .ok_or_else(|| "invalid CFG local".to_string())
     }
-    fn load(&mut self, offset: i32) {
-        self.bytes(&[0x8b, 0x85]);
-        self.i32(offset);
-    }
-    fn store(&mut self, offset: i32) {
-        self.bytes(&[0x48, 0x89, 0x85]);
-        self.i32(offset);
+    fn place(&self, place: &ir::Place) -> Result<(i32, &'a ir::Ty), String> {
+        let mut offset = self.local_offset(place.local)?;
+        let mut ty: &'a ir::Ty = &self.function.locals[place.local.0].ty;
+        for &index in &place.fields {
+            let (field, next) = field_offset(ty, index)?;
+            offset = offset
+                .checked_add(field)
+                .ok_or("projection offset too large")?;
+            ty = next;
+        }
+        Ok((offset, ty))
     }
     fn address(&mut self, offset: i32) {
         self.bytes(&[0x48, 0x8d, 0x85]);
         self.i32(offset);
     }
+    fn load(&mut self, offset: i32) {
+        self.bytes(&[0x8b, 0x85]);
+        self.i32(offset);
+    }
     fn copy_pointer_value(&mut self, size: i32) {
-        // rsi/rdi are source/destination, distinct owned storage or identical.
+        // All private scalar/unit leaves are initialized eight-byte words.
         for offset in (0..size).step_by(8) {
             self.bytes(&[0x48, 0x8b, 0x8e]);
             self.i32(offset);
@@ -133,173 +137,114 @@ impl Emitter<'_> {
             self.i32(offset);
         }
     }
-    fn snapshot(&mut self, offset: i32, size: i32) {
-        self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
-        self.i32(offset);
-        self.copy_pointer_value(size);
-        self.address(offset);
-    }
     fn store_value(&mut self, offset: i32, ty: &ir::Ty) -> Result<(), String> {
         if matches!(ty, ir::Ty::Tuple(_)) {
-            self.snapshot(offset, value_size(ty)?);
+            self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
+            self.i32(offset);
+            self.copy_pointer_value(value_size(ty)?);
+            self.address(offset);
         } else {
-            self.store(offset);
+            self.bytes(&[0x48, 0x89, 0x85]);
+            self.i32(offset);
         }
         Ok(())
     }
-    fn push_temporary(&mut self) -> Result<(), String> {
-        self.temporary_depth = self
-            .temporary_depth
-            .checked_add(8)
-            .ok_or("temporary stack too large")?;
-        self.bytes(&[0x50]);
-        Ok(())
-    }
-    fn discard_stack_bytes(&mut self, bytes: usize) -> Result<(), String> {
-        if bytes != 0 {
-            let bytes = i32::try_from(bytes).map_err(|_| "temporary stack too large")?;
-            self.bytes(&[0x48, 0x81, 0xc4]);
-            self.i32(bytes);
-        }
-        Ok(())
-    }
-    fn enter_loop(&mut self, id: LoopId, result: Option<(i32, i32)>) {
-        self.loops.push(LoopFrame {
-            id,
-            head: self.position(),
-            temporary_depth: self.temporary_depth,
-            breaks: Vec::new(),
-            result,
-        });
-    }
-    fn exit_loop(&mut self) -> Result<(), String> {
-        let frame = self.loops.pop().ok_or("missing backend loop frame")?;
-        for at in frame.breaks {
-            self.patch(at, self.position())?;
-        }
-        Ok(())
-    }
-    fn loop_jump(&mut self, target: LoopId, is_break: bool) -> Result<(), String> {
-        let index = self
-            .loops
-            .iter()
-            .rposition(|frame| frame.id == target)
-            .ok_or("missing backend loop target")?;
-        let depth = self.loops[index].temporary_depth;
-        if is_break && let Some((offset, size)) = self.loops[index].result {
-            self.snapshot(offset, size);
-        }
-        let bytes = self
-            .temporary_depth
-            .checked_sub(depth)
-            .ok_or("invalid backend temporary depth")?;
-        // This cleanup belongs only to the abrupt runtime edge. Keep lexical
-        // accounting unchanged so unreachable code and sibling branches compile
-        // with their own pending operands/arguments intact. eax holds break's value.
-        self.discard_stack_bytes(bytes)?;
-        let at = self.jump(&[0xe9]);
-        if is_break {
-            self.loops[index].breaks.push(at);
-        } else {
-            self.patch(at, self.loops[index].head)?;
-        }
-        Ok(())
-    }
-    fn block(&mut self, block: &ir::Block) -> Result<(), String> {
-        for statement in &block.statements {
-            match statement {
-                ir::Stmt::Let { local, value } | ir::Stmt::Assign { local, value } => {
-                    self.expr(*value)?;
-                    self.store_value(
-                        self.local_offset(*local)?,
-                        &self.function.locals[local.0].ty,
-                    )?;
-                }
-                ir::Stmt::AssignPlace { place, value } => {
-                    self.expr(*value)?;
-                    let mut offset = self.local_offset(place.local)?;
-                    let mut ty = &self.function.locals[place.local.0].ty;
-                    for &index in &place.fields {
-                        let (field, next) = field_offset(ty, index)?;
-                        offset = offset
-                            .checked_add(field)
-                            .ok_or("projection offset too large")?;
-                        ty = next;
-                    }
-                    self.store_value(offset, ty)?;
-                }
-                ir::Stmt::Expr(value) => self.expr(*value)?,
-                ir::Stmt::Return(value) => {
-                    if let Some(value) = value {
-                        self.expr(*value)?;
-                    } else {
-                        self.immediate(0);
-                    }
-                    let at = self.jump(&[0xe9]);
-                    self.returns.push(at);
-                }
-                ir::Stmt::While {
-                    id,
-                    condition,
-                    body,
-                } => {
-                    let start = self.position();
-                    self.enter_loop(*id, None);
-                    self.expr(*condition)?;
-                    self.bytes(&[0x85, 0xc0]);
-                    let end = self.jump(&[0x0f, 0x84]);
-                    self.block(body)?;
-                    let back = self.jump(&[0xe9]);
-                    self.patch(back, start)?;
-                    self.patch(end, self.position())?;
-                    self.exit_loop()?;
-                    self.immediate(0);
-                }
-            }
-        }
-        if let Some(tail) = &block.tail {
-            self.expr(*tail)?;
-        } else {
-            self.immediate(0);
-        }
-        Ok(())
-    }
-    fn expr(&mut self, expression: ir::ExprId) -> Result<(), String> {
-        match &self.function.exprs[expression.0].kind {
-            ExprKind::Int(n) => self.immediate(*n),
-            ExprKind::Bool(value) => self.immediate(i32::from(*value)),
-            ExprKind::Local(local) => {
-                if matches!(self.function.locals[local.0].ty, ir::Ty::Tuple(_)) {
-                    self.address(self.local_offset(*local)?);
-                } else {
-                    self.load(self.local_offset(*local)?);
-                }
-            }
-            ExprKind::Tuple(fields) => {
-                let destination = self.snapshots[expression.0].ok_or("missing tuple snapshot")?;
-                let mut offset = destination;
-                for &field in fields {
-                    self.expr(field)?;
-                    let ty = &self.function.exprs[field.0].ty;
-                    self.store_value(offset, ty)?;
-                    offset = offset
-                        .checked_add(value_size(ty)?)
-                        .ok_or("tuple offset too large")?;
-                }
-                self.address(destination);
-            }
-            ExprKind::Field { base, index } => {
-                self.expr(*base)?;
-                let (offset, ty) = field_offset(&self.function.exprs[base.0].ty, *index)?;
+    fn operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
+        match operand {
+            cfg::Operand::Constant(value) => self.immediate(match value {
+                cfg::Constant::I32(value) => *value,
+                cfg::Constant::Bool(value) => i32::from(*value),
+                cfg::Constant::Unit => 0,
+            }),
+            cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
+                let (offset, ty) = self.place(place)?;
                 if matches!(ty, ir::Ty::Tuple(_)) {
-                    self.bytes(&[0x48, 0x8d, 0x80]);
+                    self.address(offset);
                 } else {
-                    self.bytes(&[0x8b, 0x80]);
+                    self.load(offset);
                 }
-                self.i32(offset);
             }
-            ExprKind::Unary { op, value } => {
-                self.expr(*value)?;
+        }
+        Ok(())
+    }
+    fn binary(&mut self, op: BinaryOp) -> Result<(), String> {
+        match op {
+            BinaryOp::Add => {
+                self.bytes(&[0x01, 0xc8]);
+                self.trap_if(0x80);
+            }
+            BinaryOp::Sub => {
+                self.bytes(&[0x29, 0xc8]);
+                self.trap_if(0x80);
+            }
+            BinaryOp::Mul => {
+                self.bytes(&[0x0f, 0xaf, 0xc1]);
+                self.trap_if(0x80);
+            }
+            BinaryOp::Div | BinaryOp::Rem => {
+                self.bytes(&[0x85, 0xc9]);
+                self.trap_if(0x84);
+                self.bytes(&[0x3d]);
+                self.i32(i32::MIN);
+                let ordinary = self.jump(&[0x0f, 0x85]);
+                self.bytes(&[0x83, 0xf9, 0xff]);
+                self.trap_if(0x84);
+                self.patch(ordinary, self.position())?;
+                self.bytes(&[0x99, 0xf7, 0xf9]);
+                if matches!(op, BinaryOp::Rem) {
+                    self.bytes(&[0x89, 0xd0]);
+                }
+            }
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge => {
+                let cc = match op {
+                    BinaryOp::Eq => 0x94,
+                    BinaryOp::Ne => 0x95,
+                    BinaryOp::Lt => 0x9c,
+                    BinaryOp::Le => 0x9e,
+                    BinaryOp::Gt => 0x9f,
+                    _ => 0x9d,
+                };
+                self.bytes(&[0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
+            }
+            // Source short-circuiting is already represented by CFG edges.
+            BinaryOp::And => self.bytes(&[0x21, 0xc8]),
+            BinaryOp::Or => self.bytes(&[0x09, 0xc8]),
+        }
+        Ok(())
+    }
+    fn println(&mut self, text: &str) -> Result<(), String> {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(b'\n');
+        self.bytes(&[0x48, 0xbe]);
+        let at = self.position();
+        self.bytes(&[0; 8]);
+        let length = u64::try_from(bytes.len()).map_err(|_| "literal too large")?;
+        self.object.strings.push((at, bytes));
+        self.bytes(&[0x48, 0xba]);
+        self.bytes(&length.to_le_bytes());
+        let retry = self.position();
+        self.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, 1, 0, 0, 0, 0x0f, 0x05]);
+        self.bytes(&[0x48, 0x83, 0xf8, 0xfc]);
+        let interrupted = self.jump(&[0x0f, 0x84]);
+        self.patch(interrupted, retry)?;
+        self.bytes(&[0x48, 0x85, 0xc0]);
+        self.trap_if(0x8e);
+        self.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2]);
+        let more = self.jump(&[0x0f, 0x85]);
+        self.patch(more, retry)?;
+        self.immediate(0);
+        Ok(())
+    }
+    fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
+        match value {
+            cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::Unary { op, value } => {
+                self.operand(value)?;
                 match op {
                     UnaryOp::Neg => {
                         self.bytes(&[0xf7, 0xd8]);
@@ -308,191 +253,107 @@ impl Emitter<'_> {
                     UnaryOp::Not => self.bytes(&[0x83, 0xf0, 0x01]),
                 }
             }
-            ExprKind::Binary { op, left, right } => {
-                self.expr(*left)?;
-                if matches!(op, BinaryOp::And | BinaryOp::Or) {
-                    self.bytes(&[0x85, 0xc0]);
-                    let done = self.jump(&[
-                        0x0f,
-                        if matches!(op, BinaryOp::And) {
-                            0x84
-                        } else {
-                            0x85
-                        },
-                    ]);
-                    self.expr(*right)?;
-                    self.patch(done, self.position())?;
-                    return Ok(());
-                }
-                self.push_temporary()?;
-                self.expr(*right)?;
-                self.bytes(&[0x89, 0xc1, 0x58]); // ecx = right, pop left
-                self.temporary_depth = self
-                    .temporary_depth
-                    .checked_sub(8)
-                    .ok_or("invalid backend temporary depth")?;
-                match op {
-                    BinaryOp::Add => {
-                        self.bytes(&[0x01, 0xc8]);
-                        self.trap_if(0x80);
-                    }
-                    BinaryOp::Sub => {
-                        self.bytes(&[0x29, 0xc8]);
-                        self.trap_if(0x80);
-                    }
-                    BinaryOp::Mul => {
-                        self.bytes(&[0x0f, 0xaf, 0xc1]);
-                        self.trap_if(0x80);
-                    }
-                    BinaryOp::Div | BinaryOp::Rem => {
-                        self.bytes(&[0x85, 0xc9]);
-                        self.trap_if(0x84);
-                        self.bytes(&[0x3d]);
-                        self.i32(i32::MIN);
-                        let ordinary = self.jump(&[0x0f, 0x85]);
-                        self.bytes(&[0x83, 0xf9, 0xff]);
-                        self.trap_if(0x84);
-                        self.patch(ordinary, self.position())?;
-                        self.bytes(&[0x99, 0xf7, 0xf9]); // cdq; idiv ecx
-                        if matches!(op, BinaryOp::Rem) {
-                            self.bytes(&[0x89, 0xd0]);
-                        }
-                    }
-                    BinaryOp::Eq
-                    | BinaryOp::Ne
-                    | BinaryOp::Lt
-                    | BinaryOp::Le
-                    | BinaryOp::Gt
-                    | BinaryOp::Ge => {
-                        let cc = match op {
-                            BinaryOp::Eq => 0x94,
-                            BinaryOp::Ne => 0x95,
-                            BinaryOp::Lt => 0x9c,
-                            BinaryOp::Le => 0x9e,
-                            BinaryOp::Gt => 0x9f,
-                            _ => 0x9d,
-                        };
-                        self.bytes(&[0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
-                    }
-                    BinaryOp::And | BinaryOp::Or => unreachable!(),
-                }
+            cfg::Rvalue::Binary { op, left, right } => {
+                self.operand(left)?;
+                self.bytes(&[0x41, 0x89, 0xc0]); // r8d = left
+                self.operand(right)?;
+                self.bytes(&[0x89, 0xc1, 0x44, 0x89, 0xc0]); // ecx = right, eax = left
+                self.binary(*op)?;
             }
-            ExprKind::Call {
-                name,
-                args,
-                signature,
-            } => {
-                if args.len() > MAX_ARGS {
-                    return Err(format!("at most {MAX_ARGS} arguments are supported"));
+            cfg::Rvalue::Aggregate { ty, fields } => {
+                // Evaluate the whole aggregate into scratch, so destination
+                // projections cannot overwrite a later Copy operand's source.
+                for (index, operand) in fields.iter().enumerate() {
+                    let (field, field_ty) = field_offset(ty, index)?;
+                    self.operand(operand)?;
+                    let offset = self
+                        .aggregate_scratch
+                        .checked_add(field)
+                        .ok_or("aggregate offset too large")?;
+                    self.store_value(offset, field_ty)?;
                 }
-                for arg in args {
-                    self.expr(*arg)?;
-                    self.push_temporary()?;
-                }
-                let aggregate_result = matches!(signature.result, ir::Ty::Tuple(_));
-                if aggregate_result {
-                    self.address(
-                        self.snapshots[expression.0].ok_or("missing call result snapshot")?,
-                    );
-                    self.push_temporary()?;
-                }
-                let at = self.jump(&[0xe8]);
-                self.object.calls.push((at, name.clone()));
-                let bytes = (args.len() + usize::from(aggregate_result)) * 8;
-                self.discard_stack_bytes(bytes)?;
-                self.temporary_depth = self
-                    .temporary_depth
-                    .checked_sub(bytes)
-                    .ok_or("invalid backend temporary depth")?;
-                if aggregate_result {
-                    self.address(
-                        self.snapshots[expression.0].ok_or("missing call result snapshot")?,
-                    );
-                }
+                self.address(self.aggregate_scratch);
             }
-            ExprKind::If {
+            cfg::Rvalue::Println(text) => self.println(text)?,
+        }
+        Ok(())
+    }
+    fn statement(&mut self, statement: &cfg::Statement) -> Result<(), String> {
+        match statement {
+            // Copy-only locals have fixed storage for the whole invocation.
+            cfg::Statement::StorageLive(_) | cfg::Statement::StorageDead(_) => {}
+            cfg::Statement::Assign { destination, value } => {
+                self.rvalue(value)?;
+                let (offset, ty) = self.place(destination)?;
+                self.store_value(offset, ty)?;
+            }
+        }
+        Ok(())
+    }
+    fn terminator(&mut self, terminator: &cfg::Terminator) -> Result<(), String> {
+        match terminator {
+            cfg::Terminator::Goto(target) => self.edge(&[0xe9], *target),
+            cfg::Terminator::Switch {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.expr(*condition)?;
+                self.operand(condition)?;
                 self.bytes(&[0x85, 0xc0]);
-                let other = self.jump(&[0x0f, 0x84]);
-                self.block(then_block)?;
-                let done = self.jump(&[0xe9]);
-                self.patch(other, self.position())?;
-                self.block(else_block)?;
-                self.patch(done, self.position())?;
+                self.edge(&[0x0f, 0x85], *then_block);
+                self.edge(&[0xe9], *else_block);
             }
-            ExprKind::Block(block) => self.block(block)?,
-            ExprKind::Loop { id, body } => {
-                let head = self.position();
-                let result = self.snapshots[expression.0]
-                    .map(|offset| {
-                        Ok::<_, String>((
-                            offset,
-                            value_size(&self.function.exprs[expression.0].ty)?,
-                        ))
-                    })
-                    .transpose()?;
-                self.enter_loop(*id, result);
-                self.block(body)?;
-                let back = self.jump(&[0xe9]);
-                self.patch(back, head)?;
-                self.exit_loop()?;
-            }
-            ExprKind::Break { target, value } => {
-                if let Some(value) = value {
-                    self.expr(*value)?;
-                } else {
-                    self.immediate(0);
+            cfg::Terminator::Call {
+                name,
+                signature,
+                args,
+                destination,
+                next,
+            } => {
+                if args.len() > MAX_ARGS {
+                    return Err(format!("at most {MAX_ARGS} arguments are supported"));
                 }
-                self.loop_jump(*target, true)?;
+                for operand in args {
+                    self.operand(operand)?;
+                    self.bytes(&[0x50]);
+                }
+                let aggregate = matches!(signature.result, ir::Ty::Tuple(_));
+                let (offset, ty) = self.place(destination)?;
+                if aggregate {
+                    self.address(offset);
+                    self.bytes(&[0x50]);
+                }
+                let at = self.jump(&[0xe8]);
+                self.object.calls.push((at, name.clone()));
+                let words = args.len() + usize::from(aggregate);
+                if words != 0 {
+                    self.bytes(&[0x48, 0x81, 0xc4]);
+                    self.i32((words * 8) as i32);
+                }
+                if aggregate {
+                    self.address(offset);
+                } else {
+                    self.store_value(offset, ty)?;
+                }
+                self.edge(&[0xe9], *next);
             }
-            ExprKind::Continue { target } => self.loop_jump(*target, false)?,
-            ExprKind::Println(text) => {
-                let mut bytes = text.as_bytes().to_vec();
-                bytes.push(b'\n');
-                self.bytes(&[0x48, 0xbe]); // movabs rsi, literal
-                let at = self.position();
-                self.bytes(&[0; 8]);
-                let length = u64::try_from(bytes.len()).map_err(|_| "literal too large")?;
-                self.object.strings.push((at, bytes));
-                self.bytes(&[0x48, 0xba]);
-                self.bytes(&length.to_le_bytes());
-                let retry = self.position();
-                self.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, 1, 0, 0, 0, 0x0f, 0x05]);
-                // Retry EINTR, handle partial writes, fail on all other errors or zero progress.
-                self.bytes(&[0x48, 0x83, 0xf8, 0xfc]);
-                let interrupted = self.jump(&[0x0f, 0x84]);
-                self.patch(interrupted, retry)?;
-                self.bytes(&[0x48, 0x85, 0xc0]);
-                self.trap_if(0x8e);
-                self.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2]);
-                let more = self.jump(&[0x0f, 0x85]);
-                self.patch(more, retry)?;
-                self.immediate(0);
+            cfg::Terminator::Return => {
+                self.operand(&cfg::Operand::Copy(ir::Place {
+                    local: self.function.return_local,
+                    fields: Vec::new(),
+                }))?;
+                let at = self.jump(&[0xe9]);
+                self.returns.push(at);
             }
-        }
-        // Literals build this buffer directly, calls receive it as sret, and
-        // every aggregate loop break writes it before jumping to the exit.
-        if let Some(offset) = self.snapshots[expression.0]
-            && !matches!(
-                self.function.exprs[expression.0].kind,
-                ExprKind::Tuple(_) | ExprKind::Call { .. } | ExprKind::Loop { .. }
-            )
-        {
-            self.snapshot(offset, value_size(&self.function.exprs[expression.0].ty)?);
+            cfg::Terminator::Unreachable => self.bytes(&[0x0f, 0x0b]),
         }
         Ok(())
     }
 }
 
-/// Compile one checked function independently, suitable for parallel graph workers.
-/// Semantic analysis is complete. Locals are laid out monotonically by LocalId,
-/// followed by independently owned tuple ExprId snapshot buffers. Parameters
-/// are copied into local storage from the incoming private ABI before the body.
-pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
+/// Emit an already-lowered immutable CFG without source or semantic rechecking.
+/// Every local and lowering temporary has stable invocation-owned frame storage.
+pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     if function.params.len() > MAX_ARGS {
         return Err(format!("at most {MAX_ARGS} parameters are supported"));
     }
@@ -502,17 +363,23 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
         .iter()
         .map(|local| allocate_value(&mut frame_bytes, &local.ty))
         .collect::<Result<Vec<_>, _>>()?;
-    let snapshots = function
-        .exprs
-        .iter()
-        .map(|expr| {
-            if matches!(expr.ty, ir::Ty::Tuple(_)) {
-                allocate_value(&mut frame_bytes, &expr.ty).map(Some)
-            } else {
-                Ok(None)
+    let mut scratch_size = 0;
+    for block in &function.blocks {
+        for statement in &block.statements {
+            if let cfg::Statement::Assign {
+                value: cfg::Rvalue::Aggregate { ty, .. },
+                ..
+            } = &statement.value
+            {
+                scratch_size = scratch_size.max(value_size(ty)?);
             }
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+        }
+    }
+    frame_bytes = frame_bytes
+        .checked_add(scratch_size)
+        .filter(|size| *size <= MAX_FRAME_BYTES)
+        .ok_or("function exceeds private frame limit")?;
+    let aggregate_scratch = -frame_bytes;
     let aggregate_result = matches!(function.result, ir::Ty::Tuple(_));
     let result_size = value_size(&function.result)?;
     let mut emitter = Emitter {
@@ -522,25 +389,33 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
             strings: Vec::new(),
         },
         function,
+        locals,
+        aggregate_scratch,
         returns: Vec::new(),
         traps: Vec::new(),
-        loops: Vec::new(),
-        temporary_depth: 0,
-        locals,
-        snapshots,
+        edges: Vec::new(),
     };
     emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
-    let frame = emitter.position();
-    emitter.i32(0);
+    emitter.i32(frame_bytes);
     for (index, local) in function.params.iter().enumerate() {
         let offset =
             16 + usize::from(aggregate_result) * 8 + (function.params.len() - index - 1) * 8;
-        // Tuple words are full-width pointers. Scalar words have canonical low eax.
         emitter.bytes(&[0x48, 0x8b, 0x85]);
         emitter.i32(offset as i32);
         emitter.store_value(emitter.local_offset(*local)?, &function.locals[local.0].ty)?;
     }
-    emitter.block(&function.body)?;
+    emitter.edge(&[0xe9], function.entry);
+    let mut labels = Vec::with_capacity(function.blocks.len());
+    for block in &function.blocks {
+        labels.push(emitter.position());
+        for statement in &block.statements {
+            emitter.statement(&statement.value)?;
+        }
+        emitter.terminator(&block.terminator.value)?;
+    }
+    for (at, target) in std::mem::take(&mut emitter.edges) {
+        emitter.patch(at, *labels.get(target.0).ok_or("invalid CFG block target")?)?;
+    }
     let epilogue = emitter.position();
     if aggregate_result {
         emitter.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8b, 0xbd]);
@@ -559,8 +434,13 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
     for at in std::mem::take(&mut emitter.traps) {
         emitter.patch(at, trap)?;
     }
-    emitter.object.code[frame..frame + 4].copy_from_slice(&frame_bytes.to_le_bytes());
     Ok(emitter.object)
+}
+
+/// Compatibility entry point for direct checked-body callers. Graph compilation
+/// owns the lowered CFG fact and calls emit_cfg_function without lowering again.
+pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
+    emit_cfg_function(&cfg::lower(function)?)
 }
 
 fn put16(bytes: &mut [u8], at: usize, n: u16) {
@@ -737,6 +617,9 @@ mod tests {
         Program { functions: others }
     }
     fn executable(program: &Program) -> std::path::PathBuf {
+        executable_bytes(&emit(program).unwrap())
+    }
+    fn executable_bytes(bytes: &[u8]) -> std::path::PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::var_os("JCODE_SCRATCH_DIR")
             .map(std::path::PathBuf::from)
@@ -762,7 +645,7 @@ mod tests {
             .mode(0o700)
             .open(&path)
             .unwrap();
-        file.write_all(&emit(program).unwrap()).unwrap();
+        file.write_all(bytes).unwrap();
         drop(file);
         path
     }
@@ -1193,10 +1076,8 @@ mod tests {
         assert_eq!(original.calls, renamed.calls);
         assert_eq!(original.strings, renamed.strings);
         // Both the parameter and shadow binding own a distinct monotonic slot.
-        assert_eq!(
-            i32::from_le_bytes(original.code[7..11].try_into().unwrap()),
-            16
-        );
+        let frame = i32::from_le_bytes(original.code[7..11].try_into().unwrap());
+        assert!(frame >= 16 && frame % 8 == 0);
         assert!(
             original
                 .code
@@ -1457,5 +1338,138 @@ mod tests {
                 .unwrap_err()
                 .contains("limit")
         );
+    }
+
+    #[test]
+    fn cfg_entry_edges_and_aggregate_assignment_snapshot_reads() {
+        fn located<T>(value: T) -> cfg::Located<T> {
+            cfg::Located {
+                value,
+                origin: None,
+            }
+        }
+        fn place(local: usize, fields: &[usize]) -> ir::Place {
+            ir::Place {
+                local: LocalId(local),
+                fields: fields.to_vec(),
+            }
+        }
+        fn constant(value: i32) -> cfg::Operand {
+            cfg::Operand::Constant(cfg::Constant::I32(value))
+        }
+        fn assign(destination: ir::Place, value: cfg::Rvalue) -> cfg::Located<cfg::Statement> {
+            located(cfg::Statement::Assign { destination, value })
+        }
+        let pair = ir::Ty::Tuple(vec![ir::Ty::I32, ir::Ty::I32].into());
+        let mut function = cfg::Function {
+            name: "main".into(),
+            params: vec![],
+            result: ir::Ty::Unit,
+            locals: vec![
+                ir::LocalDecl {
+                    name: "result".into(),
+                    ty: ir::Ty::Unit,
+                    mutable: true,
+                },
+                ir::LocalDecl {
+                    name: "pair".into(),
+                    ty: pair.clone(),
+                    mutable: true,
+                },
+                ir::LocalDecl {
+                    name: "condition".into(),
+                    ty: ir::Ty::Bool,
+                    mutable: true,
+                },
+            ],
+            entry: cfg::BlockId(1),
+            return_local: LocalId(0),
+            blocks: vec![
+                cfg::BasicBlock {
+                    statements: vec![],
+                    terminator: located(cfg::Terminator::Unreachable),
+                },
+                cfg::BasicBlock {
+                    statements: vec![
+                        located(cfg::Statement::StorageLive(LocalId(1))),
+                        assign(
+                            place(1, &[]),
+                            cfg::Rvalue::Aggregate {
+                                ty: pair.clone(),
+                                fields: vec![constant(1), constant(2)],
+                            },
+                        ),
+                    ],
+                    terminator: located(cfg::Terminator::Goto(cfg::BlockId(3))),
+                },
+                cfg::BasicBlock {
+                    statements: vec![
+                        located(cfg::Statement::StorageDead(LocalId(1))),
+                        assign(place(0, &[]), cfg::Rvalue::Println("cfg".into())),
+                    ],
+                    terminator: located(cfg::Terminator::Return),
+                },
+                cfg::BasicBlock {
+                    statements: vec![
+                        // A direct aggregate assignment must snapshot both
+                        // operands before destination field zero is replaced.
+                        assign(
+                            place(1, &[]),
+                            cfg::Rvalue::Aggregate {
+                                ty: pair,
+                                fields: vec![
+                                    cfg::Operand::Copy(place(1, &[1])),
+                                    cfg::Operand::Move(place(1, &[0])),
+                                ],
+                            },
+                        ),
+                        assign(
+                            place(2, &[]),
+                            cfg::Rvalue::Binary {
+                                op: BinaryOp::Eq,
+                                left: cfg::Operand::Copy(place(1, &[0])),
+                                right: constant(2),
+                            },
+                        ),
+                    ],
+                    terminator: located(cfg::Terminator::Switch {
+                        condition: cfg::Operand::Copy(place(2, &[])),
+                        then_block: cfg::BlockId(4),
+                        else_block: cfg::BlockId(0),
+                    }),
+                },
+                cfg::BasicBlock {
+                    statements: vec![assign(
+                        place(2, &[]),
+                        cfg::Rvalue::Binary {
+                            op: BinaryOp::Eq,
+                            left: cfg::Operand::Copy(place(1, &[1])),
+                            right: constant(1),
+                        },
+                    )],
+                    terminator: located(cfg::Terminator::Switch {
+                        condition: cfg::Operand::Copy(place(2, &[])),
+                        then_block: cfg::BlockId(2),
+                        else_block: cfg::BlockId(0),
+                    }),
+                },
+            ],
+        };
+        let object = emit_cfg_function(&function).unwrap();
+        let bytes = link(&[("main".into(), object.clone())]).unwrap();
+        let path = executable_bytes(&bytes);
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"cfg\n");
+        // Provenance is metadata, not a source/type-checking/codegen input.
+        for block in &mut function.blocks {
+            block.terminator.origin = Some(ir::ExprId(usize::MAX));
+            for statement in &mut block.statements {
+                statement.origin = Some(ir::ExprId(usize::MAX));
+            }
+        }
+        assert_eq!(emit_cfg_function(&function).unwrap().code, object.code);
     }
 }

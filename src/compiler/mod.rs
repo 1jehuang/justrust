@@ -1,5 +1,6 @@
 //! Source-to-native compiler built on the fact graph. See COMPILER.md.
 pub mod backend;
+pub mod cfg;
 pub mod frontend;
 pub mod ir;
 pub mod source;
@@ -17,6 +18,7 @@ const CHECK: u32 = 104;
 const BUILD: u32 = 105;
 const RESOLVE: u32 = 106;
 const SOURCE: u32 = 107;
+const LOWER: u32 = 108;
 
 enum Input {
     Text(String),
@@ -30,6 +32,7 @@ struct Snapshot {
     program: OnceLock<frontend::Program>,
     signatures: OnceLock<frontend::Signatures>,
     checked: OnceLock<Vec<OnceLock<ir::CheckedFunction>>>,
+    lowered: OnceLock<Vec<OnceLock<Arc<cfg::Function>>>>,
     objects: OnceLock<Vec<OnceLock<backend::Object>>>,
     executable: OnceLock<Vec<u8>>,
 }
@@ -87,6 +90,13 @@ impl Provider for CompilerProvider {
                     let checked = (0..parsed.program.functions.len())
                         .map(|_| OnceLock::new())
                         .collect();
+                    let lowered = (0..parsed.program.functions.len())
+                        .map(|_| OnceLock::new())
+                        .collect();
+                    this.0
+                        .lowered
+                        .set(lowered)
+                        .map_err(|_| Error::new("duplicate CFG arena"))?;
                     this.0
                         .checked
                         .set(checked)
@@ -122,7 +132,7 @@ impl Provider for CompilerProvider {
                         .set(signatures)
                         .map_err(|_| Error::new("duplicate signatures"))?;
                 }
-                BODY | OBJECT => {
+                BODY | LOWER | OBJECT => {
                     let [index] = key.params.as_slice() else {
                         return Err(Error::new("missing function index"));
                     };
@@ -148,7 +158,7 @@ impl Provider for CompilerProvider {
                             .ok_or_else(|| Error::new("missing checked function slot"))?
                             .set(checked)
                             .map_err(|_| Error::new("duplicate checked function"))?;
-                    } else {
+                    } else if key.kind == LOWER {
                         cx.read(cx.request(function(BODY, index)).get(0)).await?;
                         let item = this
                             .0
@@ -157,7 +167,25 @@ impl Provider for CompilerProvider {
                             .and_then(|v| v.get(index))
                             .and_then(OnceLock::get)
                             .ok_or_else(|| Error::new("missing checked function"))?;
-                        let object = backend::emit_checked_function(item).map_err(Error::new)?;
+                        let lowered = cfg::lower(item).map_err(Error::new)?;
+                        lowered.validate().map_err(Error::new)?;
+                        this.0
+                            .lowered
+                            .get()
+                            .and_then(|v| v.get(index))
+                            .ok_or_else(|| Error::new("missing CFG slot"))?
+                            .set(Arc::new(lowered))
+                            .map_err(|_| Error::new("duplicate CFG fact"))?;
+                    } else {
+                        cx.read(cx.request(function(LOWER, index)).get(0)).await?;
+                        let item = this
+                            .0
+                            .lowered
+                            .get()
+                            .and_then(|v| v.get(index))
+                            .and_then(OnceLock::get)
+                            .ok_or_else(|| Error::new("missing CFG fact"))?;
+                        let object = backend::emit_cfg_function(item).map_err(Error::new)?;
                         this.0
                             .objects
                             .get()
@@ -171,7 +199,7 @@ impl Provider for CompilerProvider {
                     cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
                     let program = this.program()?;
                     // Expose the entire independent function frontier before awaiting.
-                    let kind = if key.kind == BUILD { OBJECT } else { BODY };
+                    let kind = if key.kind == BUILD { OBJECT } else { LOWER };
                     let inputs: Vec<_> = (0..program.functions.len())
                         .map(|i| cx.request(function(kind, i)).get(0))
                         .collect();
@@ -213,6 +241,12 @@ pub struct Compilation {
     pub executable: Option<Vec<u8>>,
     pub report: Report,
     pub functions: usize,
+    /// Explicit control-flow graph counts, distinct from the work dependency graph.
+    pub cfg_blocks: usize,
+    pub cfg_edges: usize,
+    pub cfg_locals: usize,
+    /// Shared CFG facts retained for post-build graph/provenance inspection.
+    pub control_flow: Vec<Arc<cfg::Function>>,
     /// Bytes read from all source files, before external-module expansion.
     pub source_bytes: usize,
     pub source_files: usize,
@@ -264,6 +298,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         program: OnceLock::new(),
         signatures: OnceLock::new(),
         checked: OnceLock::new(),
+        lowered: OnceLock::new(),
         objects: OnceLock::new(),
         executable: OnceLock::new(),
     });
@@ -307,10 +342,38 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
             (loaded.source_bytes, loaded.files)
         }
     };
+    let control_flow: Vec<_> = snapshot
+        .lowered
+        .get()
+        .into_iter()
+        .flatten()
+        .filter_map(OnceLock::get)
+        .cloned()
+        .collect();
+    let mut cfg_blocks = 0;
+    let mut cfg_edges = 0;
+    let mut cfg_locals = 0;
+    for function in &control_flow {
+        cfg_blocks += function.blocks.len();
+        cfg_locals += function.locals.len();
+        cfg_edges += function
+            .blocks
+            .iter()
+            .map(|block| match &block.terminator.value {
+                cfg::Terminator::Goto(_) | cfg::Terminator::Call { .. } => 1,
+                cfg::Terminator::Switch { .. } => 2,
+                cfg::Terminator::Return | cfg::Terminator::Unreachable => 0,
+            })
+            .sum::<usize>();
+    }
     Ok(Compilation {
         executable,
         report,
         functions,
+        cfg_blocks,
+        cfg_edges,
+        cfg_locals,
+        control_flow,
         source_bytes,
         source_files,
     })

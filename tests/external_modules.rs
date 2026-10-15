@@ -428,6 +428,34 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     .collect();
                 assert_eq!(entries.len(), 1, "source operation must be shared");
                 assert_eq!(entries[0].1, 1, "source operation repeated");
+                let mut expected = vec![
+                    Key::new(100, vec![]),
+                    Key::new(106, vec![]),
+                    Key::new(101, vec![]),
+                    Key::new(104, vec![]),
+                    source.clone(),
+                ];
+                for index in 0..2 {
+                    expected.push(Key::new(102, vec![index]));
+                    expected.push(Key::new(108, vec![index]));
+                    if !check {
+                        expected.push(Key::new(103, vec![index]));
+                    }
+                }
+                if !check {
+                    expected.push(Key::new(105, vec![]));
+                }
+                assert_eq!(result.report.node_evaluations.len(), expected.len());
+                for key in expected {
+                    let entries: Vec<_> = result
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(seen, _)| *seen == key)
+                        .collect();
+                    assert_eq!(entries.len(), 1, "missing or duplicated {key:?}");
+                    assert_eq!(entries[0].1, 1, "shared file operation repeated {key:?}");
+                }
                 let error =
                     compiler::compile_file_observed(scratch.path("src/missing.rs"), workers, check)
                         .err()

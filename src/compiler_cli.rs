@@ -109,11 +109,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let report = &compiled.report;
     if let Some(file) = &mut trace_file {
         writeln!(file, "{report:#?}")?;
+        writeln!(file, "control-flow graphs: {:#?}", compiled.control_flow)?;
     }
     println!(
-        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
+        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
         if check { "check" } else { "build" },
         compiled.functions,
+        compiled.cfg_blocks,
+        compiled.cfg_edges,
+        compiled.cfg_locals,
         start.elapsed().as_nanos(),
         report.elapsed_ns,
         report.nodes,

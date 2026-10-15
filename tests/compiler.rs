@@ -638,6 +638,7 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 ];
                 for index in 0..3 {
                     expected.push(Key::new(102, vec![index]));
+                    expected.push(Key::new(108, vec![index]));
                     if !check_only {
                         expected.push(Key::new(103, vec![index]));
                     }
