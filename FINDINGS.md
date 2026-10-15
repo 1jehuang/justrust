@@ -1,5 +1,53 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Verified Linux-cache-cold subset compilation
+
+Charged experiment `compiler-cold-20261015-2309` ran harness revision
+`e060422b47349c845e6c92a07c5f0e83006ede8a` with the unchanged prototype binary
+from `405611808`. Same M8a host, source hashes and stock flags as the warm
+comparison below. Seven samples per source/tool, alternating order, no warmups,
+fresh processes and unique outputs, no Cargo or incremental compilation.
+Every generated executable ran and printed the expected output.
+
+| Source | Stock rustc median (range) | Prototype median (range), 1 worker |
+|---|---:|---:|
+| 6 functions / 391 bytes | 1,456.047 ms (1,453.782 to 1,460.351) | 20.019 ms (19.734 to 21.465) |
+| 258 functions / 22,163 bytes | 1,483.821 ms (1,479.706 to 1,486.052) | 24.491 ms (23.911 to 25.291) |
+
+These are whole-process source-to-executable times, including startup and output
+collection, excluding cache eviction and running the produced executable.
+The earlier 0.323 ms result was warm and in-process, not fully cold latency.
+
+Before **each** timed compilation, the authorized root supervisor called sync,
+wrote `3` to Linux `drop_caches`, and used mincore to verify zero resident pages
+in 32 compiler/sysroot artifacts totaling 410,768,586 bytes plus the input source.
+All 28 samples passed that check. A second sync/drop immediately followed probing
+so its metadata accesses were not retained. The compiler and generated executable
+ran as unprivileged uid 1000, not root. The harness refuses to flush if it sees
+another compiler/linker process, but this is an observational check, not an
+exclusive host reservation. Results remain contended/uncontrolled.
+
+Observed median child major faults were 10 for the prototype, 1,600/1,606 for
+stock rustc. Child block-input accounting was approximately 1.64/1.66 MB versus
+158.77/158.56 MB. Those are Linux I/O accounting observations, not measured
+physical EBS reads. The large cold penalty is consistent with loading the much
+larger stock toolchain/runtime, not evidence that all that time is semantic work.
+
+This is **Linux filesystem-cache cold**, not a claim to flush CPU caches,
+already-mapped shared pages or provider/storage caches. The host was rebooted
+once to activate a temporary, restricted management role, not before every
+sample. That role and instance profile were removed after measurement. Root SSH
+and password authentication remained disabled, sudo policy unchanged, and a
+normal hosted check subsequently passed (`20261015-161040424-545657`).
+
+Raw environment, source/binary hashes, per-file residency checks, fault/I/O
+counts and all 28 samples are retained in
+`experiments/results/20261015-m8a-compiler-cold.jsonl`. Reproduction harness:
+`experiments/compiler_cold.py`, with four offline tests that do not flush the
+machine running those tests. Stock uses its complete frontend, LLVM and standard
+runtime. Our implementation supports only the documented small Rust subset and
+private runtime, so this is not a general Rust compiler performance claim.
+
 ## 2026-10-15: Matched stock rustc timings for the two subset fixtures
 
 Charged experiment `compiler-stock-20261015-2259`, harness revision
