@@ -11,111 +11,73 @@
 
 A faster, vertically integrated Rust build toolchain optimized for agents.
 
-[Website](https://jcode.sh/rust) · [Install](#install) · [Use](#use) · [Remote builds](#remote-builds) · [Goal](#goal) · [Findings](FINDINGS.md) · [Changelog](CHANGELOG.md)
+[Website](https://jcode.sh/rust) · [Status](#status) · [Design](#design) · [Goal](#goal) · [Contributing and license](#contributing-and-license)
 
 </div>
 
 ---
 
-justrust vertically integrates and optimizes the Rust build toolchain to make
-the entire edit, check, and test loop faster. Use it locally or with our remote
-build service.
+justrust is being rewritten from scratch as one integrated system for turning
+Rust source edits into trustworthy build and test results. The rewrite will
+replace the existing internals rather than wrap or extend Cargo and rustc.
 
-[uv benchmarks](docs/readme-uv-benchmark-20261014.md), median of three rounds. Factors are relative to Stock Cargo.
+Your coding agents should spend their time editing and reasoning, not waiting
+for builds. We are designing the whole path around that loop, from reading
+source to running tests and explaining failures.
 
-| Operation | Stock Cargo (local) | justrust (local) | justrust (remote) |
-|---|---:|---:|---:|
-| Fresh checkout, `check --workspace` | 81.2 s | **34.5 s (2.35×)** | **14.3 s (5.66×)** |
-| Fresh checkout, `test -p uv-resolver --no-run` | 85.8 s | **33.3 s (2.58×)** | **15.2 s (5.63×)** |
-| Warm one-line body edit, `check -p uv-resolver` | 0.96 s | 0.85 s (1.13×) | 0.89 s (1.07×) |
+## Status
 
-Your coding agents spend valuable time waiting for Rust checks, builds, and
-tests. Running those operations locally can slow down your machine, drive up
-CPU usage, temperature, and RAM consumption, and fill your disk with build
-artifacts. Our remote service offloads compilation, test execution, and build
-artifact storage to our machines, freeing up yours.
+**This branch is the clean-room rewrite, not a usable replacement yet.**
 
-Each build command also returns actionable diagnostics, showing agents where
-time went, why crates rebuilt, and which bottlenecks to address, so they can
-proactively optimize builds within your codebase.
+The rewrite starts on `clean-room-rewrite`. The previous implementation is
+preserved at the Git tag `pre-clean-room-rewrite-2026-10-15`. Existing source,
+scripts, and documentation are still present during the transition and describe
+the previous system unless explicitly updated.
 
-## Install
+There are no installation or usage instructions for the rewrite yet. The
+published installer and hosted service are not releases of this rewrite.
+Benchmarks from the previous implementation do not establish the rewrite's
+performance. New claims will require measurements of the new system.
 
-```sh
-curl -fsSL https://jcode.sh/rust.sh | sh
-justrust agents
-```
+## Design
 
-Linux and macOS, x86_64 and aarch64. Installs to `~/.local/bin` and starts
-sign-in. `justrust agents` configures your coding agents ([manual setup](docs/AGENTS-snippet.md)).
-From source: `cargo install justrust --locked` (Rust 1.91+).
+**A fresh implementation, not another layer around the old toolchain.**
 
-Prebuilt installs update automatically. Opt out with `justrust update off`;
-disable anonymous telemetry with `justrust telemetry off`.
-[Send feedback](docs/feedback.md) with `justrust feedback "Your suggestion"`.
+The direction is to build our own integrated Rust build system and compiler,
+without Cargo, rustc, their vendored forks, or third-party dependencies in the
+new implementation. That is the target architecture, not a claim that the
+transition is complete or the repository is already dependency-free.
 
-## Use
+We will design compilation, dependency handling, code generation, linking,
+and test execution together. Existing component boundaries are not constraints.
+Local and remote execution should serve the same goal: the shortest reliable
+feedback loop for the agent.
 
-```sh
-justrust check -p my-crate
-justrust test -p my-crate --lib some_module::
-justrust build
-```
-
-`check`, `test`, `build`, `clippy`, and `run` take cargo's arguments and
-return its exit code. Errors and failing tests stay in full, followed by
-a concise result and timing report. Use `justrust log` for the full output
-and `justrust show` for the timing breakdown.
-
-Other cargo commands (`cargo fmt`, `cargo add`, `cargo tree`) stay plain cargo.
-
-## Remote builds
-
-```sh
-justrust login     # approve in the browser
-justrust upgrade   # activate a remote build plan
-justrust check
-```
-
-Signed in, `check`, `clippy`, and `test` use hosted build machines by default
-on Linux. Choose `--local`, `--remote`, or `--auto` (remote only when predicted
-faster). If hosted builds are unavailable, justrust falls back to local builds.
-
-Local builds are free. Hosted plans start at $20/month for 5,000 builds,
-with the first month free and a card required. See [pricing](https://jcode.sh/rust#pricing).
-For agents without a browser, `justrust login --no-wait` prints a sign-in link.
-For CI, set `JCODE_API_KEY` from your [account](https://jcode.sh/account).
-More setup details: [remote builds](docs/remote.md).
+Independence of implementation does not mean dropping support for Rust projects
+that use dependencies. Supported language semantics, project inputs,
+build-script and proc-macro behavior, and platform ABIs are external correctness
+requirements. Support will be documented and tested as it is implemented,
+not assumed from the previous system.
 
 ## Goal
 
 **The shortest possible path from a source edit to a trustworthy test result.**
 
-justrust is building one integrated system across the entire Rust build stack:
-Cargo, rustc, code generation, linking, and test execution, backed by shared
-artifact caches and our own build infrastructure. We optimize the whole loop,
-not just individual compiler stages.
+Optimize the entire edit, check, build, and test loop, not just individual
+compiler stages. Preserve useful diagnostics and make failures visible.
+Measure cold builds and repeated edits on representative workloads, and
+compare against both the previous implementation and stock tools.
 
-Today, that includes our Cargo and rustc forks, prebuilt dependencies, shared
-caches, hosted builds, and test scheduling. The next steps are keeping compiler
-state alive between edits, avoiding unnecessary downstream recompilation, and
-updating test binaries without a full relink.
-
-The goal is for agents to spend their time editing and reasoning, not waiting
-for builds. We will fork tools and run infrastructure wherever that makes the
-loop faster, while preserving build correctness and useful diagnostics.
-We vertically integrate the entire toolchain end to end. Our forks are
-independent development lines that can have completely different internals,
-replace components, or merge them into one system. External correctness is
-the compatibility contract: Rust semantics, existing projects, build scripts,
-proc macros, platform ABIs, and trustworthy build and test results. Internal
-upstream compatibility, upstreamability, small patches, and easy rebases are
-not goals. Upstream is a source of useful fixes and ideas, not a limit on the
-designs we can measure and ship.
-See the [toolchain plan](docs/toolchain.md) for the roadmap.
+A clean-room rewrite is an architectural decision, not evidence of a speedup.
+Correctness tests and reproducible before-and-after measurements will determine
+which designs we keep and what we can claim.
 
 ## Contributing and license
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The client is MIT, and the self-hostable
-cache server in `server/` is FSL-1.1-ALv2. Vendored toolchain sources retain
-their component licenses and third-party notices. See [LICENSING.md](LICENSING.md).
+The rewrite is at its starting point. Existing contribution instructions and
+architecture documents have not yet been updated for it.
+
+The client is MIT. Existing self-hostable server and vendored sources retain
+their applicable licenses and notices while present. See [LICENSE](LICENSE),
+[LICENSING.md](LICENSING.md), and [NOTICE](NOTICE). The rewrite does not change
+the licensing of the preserved implementation.
