@@ -72,6 +72,15 @@ impl Drop for QueryExecutionGuard {
         crate::execution_observer::resume_current_timing(self.previous_recorder.as_ref());
     }
 }
+/// An actual query entry whose receiver cannot establish query CPU ownership.
+/// No active query owner means no clock samples, cursor creation or loss.
+pub(crate) fn suspend_query_execution() -> Option<QueryExecutionGuard> {
+    current_query_recorder()?;
+    let previous_recorder = pause();
+    let previous = suspend_query();
+    crate::execution_observer::resume_current_timing(previous_recorder.as_ref());
+    Some(QueryExecutionGuard { previous, previous_recorder, _not_send: PhantomData })
+}
 pub(crate) fn enter_query(
     recorder: &Arc<Recorder>,
     context: u64,
@@ -546,6 +555,7 @@ mod tests {
     #[test]
     fn legacy_timing_never_enters_query_ownership_or_samples_for_it() {
         let recorder = fake(Vec::new(), 10);
+        assert!(suspend_query_execution().is_none());
         assert!(enter_query(&recorder, 1, 1, "query", None).is_none());
         assert!(!has_active_cursor());
         assert!(current_query_identity().is_none());
@@ -554,6 +564,91 @@ mod tests {
         assert!(!text.contains("query_context"));
         assert!(!text.contains("query_job"));
         assert!(!text.contains("query_name"));
+    }
+    #[test]
+    fn unknown_query_mask_excludes_cpu_and_restores_outer_without_double_counting() {
+        let mut recorder = fake((1..=6).map(|n| sample(n, Some(n))).collect(), 10);
+        Arc::get_mut(&mut recorder).unwrap().query_ownership = true;
+        {
+            let _outer = enter_query(&recorder, 1, 7, "outer", None).unwrap();
+            {
+                let _unknown = suspend_query_execution().unwrap();
+                assert_eq!(current_query_identity(), None);
+            }
+            assert_eq!(current_query_identity(), Some((1, 7)));
+        }
+        let rows = recorder.lock();
+        assert_eq!(
+            rows.rows.iter().map(|row| row.query).collect::<Vec<_>>(),
+            [Some((1, 7, "outer")), None, Some((1, 7, "outer"))]
+        );
+        assert_eq!(
+            rows.rows
+                .iter()
+                .filter(|row| row.query.is_some())
+                .map(|row| row.cpu.unwrap())
+                .sum::<u64>(),
+            2
+        );
+        assert_eq!(rows.rows.iter().map(|row| row.cpu.unwrap()).sum::<u64>(), 3);
+    }
+    #[test]
+    fn no_query_mask_keeps_legacy_cursor_and_does_not_sample() {
+        let recorder = fake(vec![sample(1, Some(4)), sample(2, Some(5))], 10);
+        resume(Some(&recorder), Some(7));
+        assert!(suspend_query_execution().is_none());
+        pause();
+        let rows = recorder.lock();
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows[0].task, Some(7));
+        assert_eq!(rows.rows[0].cpu, Some(1));
+        assert_eq!(recorder.lost.load(Ordering::Relaxed), 0);
+    }
+    #[test]
+    fn query_and_cursor_tls_failures_are_isolated_and_fail_open() {
+        const CHILD: &str = "JR_QUERY_CPU_TLS_FAILURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "execution_timing::tests::query_and_cursor_tls_failures_are_isolated_and_fail_open", "--nocapture"])
+                .env(CHILD, "1")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "isolated TLS failure test: {:?}\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout)
+                    .contains("query CPU TLS fault child verified")
+            );
+            return;
+        }
+        let recorder = Recorder::new_with_query_ownership(Instant::now(), 10);
+        let mut user_work = 0;
+        QUERY_OWNER.with(|owner| {
+            let _held = owner.borrow_mut();
+            assert!(suspend_query().is_none());
+            restore_query(None);
+            assert!(current_query_recorder().is_none());
+            user_work += 1;
+        });
+        CURSOR.with(|cursor| {
+            let _held = cursor.borrow_mut();
+            assert!(pause().is_none());
+            resume(Some(&recorder), None);
+            user_work += 1;
+        });
+        assert_eq!(user_work, 2);
+        assert!(!has_active_cursor());
+        recorder.seal();
+        let text = json(&recorder);
+        assert!(text.contains("\"identity_exhausted\":true"));
+        assert!(text.contains("\"records_complete\":false"));
+        // Never reset TLS_FAILED: the child process is the isolation boundary.
+        assert!(TLS_FAILED.load(Ordering::Relaxed));
+        println!("query CPU TLS fault child verified");
     }
     #[test]
     fn query_cpu_rejects_nonconstant_category_grammar_without_sampling() {

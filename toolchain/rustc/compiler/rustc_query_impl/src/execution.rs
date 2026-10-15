@@ -629,7 +629,8 @@ fn start_query<'tcx, R>(
             .query_system
             .jobs
             .observer()
-            .and_then(|observer| observer.enter_query_execution(job_id.0.get(), query_name));
+            .and_then(|observer| observer.enter_query_execution(job_id.0.get(), query_name))
+            .or_else(rustc_thread_pool::execution_observer::suspend_query_execution);
         tls::enter_context(&icx, compute)
     })
 }

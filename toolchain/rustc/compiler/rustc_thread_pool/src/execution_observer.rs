@@ -508,6 +508,12 @@ pub fn current_context() -> Option<TaskContext> {
     CURRENT.with(|current| current.borrow().as_ref().and_then(|active| active.borrow().clone()))
 }
 
+/// Do not attribute an unobserved/legacy receiving query to an outer observed
+/// query merely because it executes synchronously on the same worker.
+pub fn suspend_query_execution() -> Option<QueryExecutionGuard> {
+    crate::execution_timing::suspend_query_execution()
+}
+
 /// Whether generic dispatch currently masks the worker's lineage. Instrumented
 /// closures may enter their own tasks, but frontend entry must not invent a root
 /// for opaque scheduler work. This does not amend point receipt outcomes.
@@ -731,7 +737,7 @@ impl Fork {
         let id = self.continuation.id;
         active.replace(Some(self.continuation));
         crate::execution_timing::restore_query(self.query.take());
-        crate::execution_timing::resume(self.observer.timing.as_ref(), Some(id.task));
+        resume_current_timing(self.observer.timing.as_ref());
         Ok(id)
     }
 }
@@ -910,7 +916,8 @@ mod tests {
             Instant::now(),
         )
         .unwrap();
-        let root_guard = source.root().unwrap().enter().unwrap();
+        let root = source.root().unwrap();
+        let root_guard = root.enter().unwrap();
         let source_query = source.enter_query_execution(1, 30, "test_query").unwrap();
         {
             let _receiver_query = receiver.enter_query_execution(2, 30, "test_query").unwrap();
@@ -922,6 +929,12 @@ mod tests {
                 &crate::execution_timing::current_query_recorder().unwrap(),
                 receiver.timing.as_ref().unwrap()
             ));
+            let fork = root.fork(2).unwrap();
+            for child in fork.children() {
+                drop(child.enter().unwrap());
+            }
+            fork.resume().ok().unwrap();
+            assert_eq!(current_query_identity(), Some((2, 30)));
         }
         assert_eq!(current_query_identity(), Some((1, 30)));
         drop(source_query);
@@ -930,7 +943,52 @@ mod tests {
         let mut out = Vec::new();
         receiver.write_json(&mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
-        assert_eq!(out.matches("\"task\":null,\"owner_kind\":\"query_execution\"").count(), 3);
+        // Four actual receiver segments: before/inside/after nested query,
+        // and after the foreign pool's fork continuation. TLS identity alone
+        // would miss resuming the wrong recorder for the fourth interval.
+        assert_eq!(out.matches("\"task\":null,\"owner_kind\":\"query_execution\"").count(), 4);
+        assert!(out.contains("\"records_complete\":true"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn query_cpu_absent_and_legacy_receivers_mask_outer_query_but_keep_real_task() {
+        use crate::execution_timing::current_query_identity;
+        let source = ExecutionObserver::new_for_query_with_cpu_ownership(
+            100,
+            "query-unknown-receiver",
+            Instant::now(),
+        )
+        .unwrap();
+        let legacy = ExecutionObserver::new_for_query_with_timing(
+            100,
+            "query-legacy-receiver",
+            Instant::now(),
+        )
+        .unwrap();
+        let root = source.root().unwrap();
+        let root_guard = root.enter().unwrap();
+        let query = source.enter_query_execution(1, 40, "outer").unwrap();
+        for receiver in [None, Some(&legacy)] {
+            {
+                let _unobserved = receiver
+                    .and_then(|receiver| receiver.enter_query_execution(2, 40, "unobserved"))
+                    .or_else(suspend_query_execution)
+                    .unwrap();
+                assert_eq!(current_query_identity(), None);
+                assert_eq!(current_task(), Some(root.id()));
+            }
+            assert_eq!(current_query_identity(), Some((1, 40)));
+        }
+        drop(query);
+        drop(root_guard);
+        source.seal(InterfaceOutcome::Returned);
+        let mut out = Vec::new();
+        source.write_json(&mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.matches("\"owner_kind\":\"query_execution\"").count(), 3);
+        assert_eq!(out.matches("\"query_name\":\"outer\"").count(), 3);
+        assert!(!out.contains("\"query_name\":\"unobserved\""));
         assert!(out.contains("\"records_complete\":true"));
     }
 
