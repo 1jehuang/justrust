@@ -64,7 +64,9 @@ Fresh actual-source evidence root:
 
 `/home/jeremy/.jcode/scratch/dispatch-result-real-final-20261015/`
 
-New-mode cohort `frontend-real-itoa-1ov3ms2y` retains `dispatch-cold-t1-1`, `dispatch-cold-t4-1`, `dispatch-warm-t1-1`, `dispatch-warm-t4-1`, and `dispatch-with-timing` capture directories, public graph outputs, oracle results and artifact/member/consumer hashes. Original failed attempts, if any later occur, must not be overwritten. Compact reports and full graph hashes will be added after the uncontended performance measurement window closes.
+New-mode cohort `frontend-real-itoa-1ov3ms2y` retains `dispatch-cold-t1-1`, `dispatch-cold-t4-1`, `dispatch-warm-t1-1`, `dispatch-warm-t4-1`, and `dispatch-with-timing` capture directories, public graph outputs, oracle results and artifact/member/consumer hashes. Original failed attempts are retained rather than overwritten.
+
+Five compact reports are in `bench/results/dispatch-result-provenance-20261015/{cold-t1,cold-t4,warm-t1,warm-t4,with-timing}.json`. Each records exact original input hashes, full external graph-output SHA-256/byte count, separate cache-call and dispatch-result counters, unresolved reasons and explicit unknown full-pipeline CPU/span/parallelism. On the same cold four-thread capture, cache-call certification covers 153,723 requests and dispatch-result certification covers 17,669 of 231,444 observed requests. These are availability observations, not a semantic dependency-coverage percentage or a parallelism bound.
 
 ## Performance gate still open
 
