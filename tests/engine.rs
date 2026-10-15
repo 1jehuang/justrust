@@ -162,7 +162,7 @@ fn collisions_compare_full_keys_and_versions() {
 
 #[test]
 fn early_output_unblocks_consumer_before_body_finishes() {
-    for workers in [1, 2, 8] {
+    for workers in [1, 2, 8, 96] {
         let engine = Engine::new(Cases);
         let root = engine.request(key(10));
         let report = engine.run(workers).unwrap();
@@ -236,7 +236,7 @@ fn independent_forks_finish_all_required_outputs() {
 
 #[test]
 fn self_wake_stress_never_overlaps_or_strands_a_continuation() {
-    for workers in [1, 2, 8] {
+    for workers in [1, 2, 8, 96] {
         for _ in 0..20 {
             let engine = Engine::new(Cases);
             let root = engine.request(key(20));

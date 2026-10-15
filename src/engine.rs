@@ -1192,7 +1192,13 @@ impl Shared {
                 },
             );
             drop(scheduler);
-            self.ready.notify_all();
+            // New tasks and published dependencies notify in schedule/wake_task.
+            // Only a notification deferred during this poll needs a new wake.
+            // The finishing worker loops to detect quiescence and broadcasts
+            // shutdown there. Broadcasting on every poll causes a wake herd.
+            if requeue {
+                self.ready.notify_one();
+            }
         }
     }
 

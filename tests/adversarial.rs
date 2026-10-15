@@ -160,7 +160,7 @@ fn invalid_output_indices_are_errors_without_corrupting_valid_slots() {
 
 #[test]
 fn fork_failure_preserves_early_fact_but_fails_producer_completion() {
-    for workers in [1, 2, 8] {
+    for workers in [1, 2, 8, 96] {
         let engine = Engine::new(Adversarial { foreign: None });
         let producer = engine.request(key(3));
         let signature_only = engine.request(key(4));
@@ -207,7 +207,7 @@ fn parameter_order_is_semantic_even_with_total_hash_collision() {
 
 #[test]
 fn high_fan_in_readers_all_resume_and_share_one_producer() {
-    for workers in [1, 2, 8] {
+    for workers in [1, 2, 8, 96] {
         for repetition in 0..8 {
             let engine = Engine::new(Adversarial { foreign: None });
             let root = engine.request(key(7));
