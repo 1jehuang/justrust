@@ -190,7 +190,7 @@ def _read_regular(path, remaining, directory_fd=None):
 
 def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_output,
                dispatch_result_provenance=False, query_cpu_ownership=False,
-               observed_task_dag=False, execution_flow_dag=False):
+               observed_task_dag=False, execution_flow_dag=False, latch_readiness_dag=False):
     command = [str(justrust), 'graph', str(snapshot), '--json']
     if large_capture:
         command.append('--large-capture')
@@ -204,7 +204,10 @@ def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_o
         command.append('--observed-task-dag')
     if execution_flow_dag:
         command.append('--execution-flow-dag')
-    if cache_call_provenance or dispatch_result_provenance or query_cpu_ownership or observed_task_dag or execution_flow_dag:
+    if latch_readiness_dag:
+        command.append('--latch-readiness-dag')
+    if (cache_call_provenance or dispatch_result_provenance or query_cpu_ownership
+            or observed_task_dag or execution_flow_dag or latch_readiness_dag):
         # Reserve before invoking the validator, so collisions never overwrite an
         # existing artifact or perform an unnecessary potentially expensive run.
         fd = os.open(graph_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -323,9 +326,10 @@ def _query_cpu_summary(assessment):
                 omitted_query_kinds=max(0, len(ranked_kinds) - 20), issues=cpu['issues'])
 
 
-def _execution_flow_summary(assessment):
+def _execution_flow_summary(assessment, *, field='execution_flow_dag',
+                            scope='observed-query-and-join-control-flow', gate_kinds=()):
     """Bound public known-chain diagnostics, never promote them to full span."""
-    flow = assessment.get('execution_flow_dag')
+    flow = assessment.get(field)
     counts = ('nodes', 'edges', 'scopes', 'active_scopes', 'lost_nodes', 'lost_edges',
               'lost_scopes', 'assigned_cpu_segments', 'unassigned_cpu_segments',
               'missing_measurement_references', 'unavailable_cpu_segments', 'cut_nodes')
@@ -333,7 +337,7 @@ def _execution_flow_summary(assessment):
               'known_task_cpu_ns', 'known_opaque_cpu_ns', 'longest_known_chain_cpu_ns')
     flags = ('records_complete', 'full_pipeline_complete', 'flow_complete')
     if (not isinstance(flow, dict)
-            or flow.get('scope') != 'observed-query-and-join-control-flow'
+            or flow.get('scope') != scope
             or any(type(flow.get(key)) is not bool for key in flags)
             or flow['full_pipeline_complete'] or flow['flow_complete']
             or any(type(flow.get(key)) is not int or flow[key] < 0 for key in counts)
@@ -384,7 +388,7 @@ def _execution_flow_summary(assessment):
         if (not isinstance(step, dict) or type(step.get('node_id')) is not int
                 or step['node_id'] != node
                 or step.get('kind') not in ('cpu_segment', 'scope_enter', 'scope_exit',
-                                            'fork', 'task_enter', 'task_exit', 'join')
+                                            'fork', 'task_enter', 'task_exit', 'join') + gate_kinds
                 or type(step.get('at_ns')) is not int or step['at_ns'] < 0
                 or (previous_at is not None and step['at_ns'] < previous_at)
                 or type(step.get('cpu_ns')) is not int or step['cpu_ns'] < 0
@@ -437,6 +441,39 @@ def _execution_flow_summary(assessment):
                 chain_query_kinds=len(ranked_kinds), top_chain_query_kinds=ranked_kinds[:20],
                 omitted_chain_query_kinds=max(0, len(ranked_kinds) - 20),
                 issues=flow['issues'], limitations=flow['limitations'])
+
+
+def _latch_readiness_summary(assessment):
+    """Retain actual same-latch constraints, not publication latency or full span."""
+    readiness = assessment.get('latch_readiness_dag')
+    flags = ('ready_records_complete', 'wait_records_complete')
+    counts = ('readiness_rows', 'active_readiness', 'lost_readiness', 'wait_attempts',
+              'active_wait_attempts', 'lost_wait_attempts', 'matched_readiness_transfers',
+              'unbound_wait_attempts', 'unavailable_readiness_references')
+    if (not isinstance(readiness, dict)
+            or any(type(readiness.get(key)) is not bool for key in flags)
+            or any(type(readiness.get(key)) is not int or readiness[key] < 0 for key in counts)
+            or readiness['matched_readiness_transfers'] > readiness['wait_attempts']
+            or readiness['unbound_wait_attempts'] > readiness['wait_attempts']):
+        raise ValueError('missing or malformed latch readiness DAG authority')
+    if readiness.get('records_complete') is True and (
+            not all(readiness[key] for key in flags) or any(readiness[key] for key in
+            ('active_readiness', 'lost_readiness', 'active_wait_attempts', 'lost_wait_attempts'))):
+        raise ValueError('complete latch readiness DAG has incomplete independent inventories')
+    summary = _execution_flow_summary(assessment, field='latch_readiness_dag',
+        scope='observed-query-join-and-latch-control-flow',
+        gate_kinds=('readiness_prerequisite', 'wait_begin', 'wait_consumed'))
+    if any(step['kind'] == 'readiness_prerequisite'
+           and any(step[key] is not None for key in
+                   ('scope_id', 'task', 'query_context', 'query_job'))
+           for step in readiness['longest_known_chain_steps']):
+        raise ValueError('readiness prerequisite must not acquire caller query or task attribution')
+    # Matched/unbound are not a partition of attempts. Active, poisoned, cyclic,
+    # unwound or unqualified observations remain distinct native unknowns. One
+    # missing source can invalidate multiple endpoint references. Never infer
+    # zero work, successful wake visibility or invented reason counters.
+    summary.update({key: readiness[key] for key in (*flags, *counts)})
+    return summary
 
 
 def _observed_task_dag_summary(assessment):
@@ -517,10 +554,12 @@ def _observed_task_dag_summary(assessment):
 
 def analyze(directory, justrust, large_capture=False, cache_call_provenance=False,
             graph_output=None, dispatch_result_provenance=False, query_cpu_ownership=False,
-            observed_task_dag=False, execution_flow_dag=False):
+            observed_task_dag=False, execution_flow_dag=False, latch_readiness_dag=False):
     provenance = (cache_call_provenance or dispatch_result_provenance or query_cpu_ownership
-                  or observed_task_dag or execution_flow_dag)
+                  or observed_task_dag or execution_flow_dag or latch_readiness_dag)
     if provenance != (graph_output is not None):
+        if latch_readiness_dag:
+            raise ValueError('--latch-readiness-dag requires companion --graph-output and vice versa')
         raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
                          'or --query-cpu-ownership or --observed-task-dag or --execution-flow-dag requires companion --graph-output and vice versa')
     directory = Path(directory)
@@ -562,7 +601,9 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
     snapshot_names = {name for name, _ in originals}
     for name, content in originals:
         receipt = json.loads(content)
-        if receipt.get('producer') == 'rustc-thread-pool-join' and receipt.get('schema') in (3, 4, 5):
+        if receipt.get('producer') == 'rustc-thread-pool-join' and receipt.get('schema') in (3, 4, 5, 6):
+            if receipt['schema'] == 6 and not latch_readiness_dag:
+                raise ValueError('pool6 requires explicit --latch-readiness-dag')
             if receipt['schema'] == 5 and not execution_flow_dag:
                 raise ValueError('pool5 requires explicit --execution-flow-dag')
             if receipt['schema'] == 4 and not query_cpu_ownership:
@@ -580,7 +621,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
         if capture_id in query_sources:
             raise ValueError('duplicate query source capture identity')
         allowed_schemas = (4, 5, 6) if (dispatch_result_provenance or query_cpu_ownership
-                                               or observed_task_dag or execution_flow_dag) else (4, 5)
+                                               or observed_task_dag or execution_flow_dag or latch_readiness_dag) else (4, 5)
         if type(receipt.get('schema')) is not int or receipt['schema'] not in allowed_schemas:
             raise ValueError('frontend report requires native schema4/5 evidence '
                              'or explicit --dispatch-result-provenance for schema6')
@@ -608,7 +649,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
         assessments, artifact = _run_graph(snapshot, justrust, large_capture,
                                           cache_call_provenance, graph_output,
                                           dispatch_result_provenance, query_cpu_ownership,
-                                          observed_task_dag, execution_flow_dag)
+                                          observed_task_dag, execution_flow_dag, latch_readiness_dag)
         indexed = {}
         pool_indexed = {}
         for assessment in assessments:
@@ -626,7 +667,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             raise ValueError('query source/validated authority mismatch')
         pool_authorities = {}
         timing_ids = {key for key, value in pool_indexed.items()
-                      if value.get('schema') in (3, 4, 5) or value.get('observed_cpu') is not None}
+                      if value.get('schema') in (3, 4, 5, 6) or value.get('observed_cpu') is not None}
         if timing_ids != set(pool_sources):
             raise ValueError('CPU pool source/validated authority mismatch')
         for key, source in pool_sources.items():
@@ -677,9 +718,22 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             if execution_flow_dag:
                 reference = receipt['task_bindings']['pool']
                 pool_authority = pool_indexed.get(reference['capture_id']) if reference else None
-                if pool_authority is None or pool_authority.get('schema') != 5:
-                    raise ValueError('execution flow DAG requires original matching pool5 authority')
-                summary['execution_flow_dag'] = _execution_flow_summary(pool_authority)
+                if (latch_readiness_dag and pool_authority is not None
+                        and pool_authority.get('schema') == 6):
+                    if pool_authority.get('execution_flow_dag') is not None:
+                        raise ValueError('pool6 cannot supply an execution flow DAG v1 projection')
+                else:
+                    if pool_authority is None or pool_authority.get('schema') != 5:
+                        raise ValueError('execution flow DAG requires original matching pool5 authority')
+                    summary['execution_flow_dag'] = _execution_flow_summary(pool_authority)
+            if latch_readiness_dag:
+                reference = receipt['task_bindings']['pool']
+                pool_authority = pool_indexed.get(reference['capture_id']) if reference else None
+                if pool_authority is not None:
+                    if pool_authority.get('schema') == 6:
+                        summary['latch_readiness_dag'] = _latch_readiness_summary(pool_authority)
+                    elif pool_authority.get('latch_readiness_dag') is not None:
+                        raise ValueError('latch readiness DAG requires original pool6 authority')
             summaries.append(summary)
         if not summaries:
             raise ValueError('no native frontend receipt')
@@ -709,15 +763,20 @@ def main():
                         help='Retain explicit native fork/join task DAG and scoped known CPU chains, not full span')
     parser.add_argument('--execution-flow-dag', action='store_true',
                         help='Retain observed query/join flow and known CPU chains, not full span')
+    parser.add_argument('--latch-readiness-dag', action='store_true',
+                        help='Retain observed same-latch readiness constraints, not publication latency or full span')
     parser.add_argument('--graph-output', type=Path,
                         help='Required with any diagnostic opt-in: exclusive full native graph JSON artifact outside the capture directory')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
         provenance = (args.cache_call_provenance or args.dispatch_result_provenance
-                      or args.query_cpu_ownership or args.observed_task_dag or args.execution_flow_dag)
+                      or args.query_cpu_ownership or args.observed_task_dag or args.execution_flow_dag
+                      or args.latch_readiness_dag)
         if provenance or args.graph_output is not None:
             if not provenance or args.graph_output is None:
+                if args.latch_readiness_dag:
+                    raise ValueError('--latch-readiness-dag requires companion --graph-output and vice versa')
                 raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
                                  'or --query-cpu-ownership or --observed-task-dag or --execution-flow-dag requires companion --graph-output and vice versa')
             if args.output.resolve() == args.graph_output.resolve():
@@ -730,7 +789,8 @@ def main():
                              dispatch_result_provenance=args.dispatch_result_provenance,
                              query_cpu_ownership=args.query_cpu_ownership,
                              observed_task_dag=args.observed_task_dag,
-                             execution_flow_dag=args.execution_flow_dag)
+                             execution_flow_dag=args.execution_flow_dag,
+                             latch_readiness_dag=args.latch_readiness_dag)
         else:
             report = analyze(args.capture, args.justrust, args.large_capture)
         encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
