@@ -1,2 +1,0 @@
-# Disable EOL normalization, as it is deliberately denormalized
-normalize-offsets-for-crlf.s -text

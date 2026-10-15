@@ -1,2 +1,0 @@
-error: `-Zno-parallel-backend` is removed, use `--jobs-backend=1` instead
-

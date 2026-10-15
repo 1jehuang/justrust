@@ -1,2 +1,0 @@
-error: invalid `--cfg` argument: `struct` (expected `key` or `key="value"`)
-

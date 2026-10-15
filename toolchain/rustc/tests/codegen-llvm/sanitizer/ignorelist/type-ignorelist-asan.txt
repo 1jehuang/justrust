@@ -1,3 +1,0 @@
-[address]
-type:i32
-type:MyStruct

@@ -1,2 +1,0 @@
-warning: -Zstaticlib-rename-internal-symbols has no effect without `--crate-type staticlib`
-

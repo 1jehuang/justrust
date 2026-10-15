@@ -1,2 +1,0 @@
-warning: -Zassumptions-on-binders unconditionally enables the next trait solver; `-Znext-solver=no` is ignored
-

@@ -1,5 +1,0 @@
-[kcfi]
-fun:*test_kcfi*
-
-[memory]
-fun:*test_memory*

@@ -1,3 +1,0 @@
-
-thread 'NAME' ($TID) panicked at $DIR/splat-fn-ptr-tuple-fail.rs:16:45:
-called `Option::unwrap()` on a `None` value

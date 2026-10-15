@@ -1,2 +1,0 @@
-error: the `--emit=html-static-files` flag is not supported with `--output-format=json`
-
