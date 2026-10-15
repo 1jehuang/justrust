@@ -88,6 +88,47 @@ def unbound_fixture(registered=True):
     return query, pool
 
 
+class WaitHelperRootTests(unittest.TestCase):
+    @staticmethod
+    def helper_fixture():
+        query, pool = fixture()
+        helper = segment(4, 14, 16, 1)
+        helper.update(query_job=2, query_name='mir_built')
+        pool['timing']['segments'].append(helper)
+        pool['timing'].update(expected_segments=4, segment_allocator_high_water=5)
+        flow = pool['execution_flow']
+        flow['nodes'].append(node(14, 'cpu_segment', 14, 4, 2, 1))
+        flow['edges'].append(edge(12, 7, 14, 'strand'))
+        recount(flow)
+        return query, pool
+
+    def test_exact_wait_gap_resumes_real_helper_cpu_without_transfer(self):
+        for kind in ('strand', 'continuation'):
+            query, pool = self.helper_fixture()
+            pool['execution_flow']['edges'][-1]['kind'] = kind
+            result = latch_readiness_oracle(query, pool)
+            self.assertEqual(result['known_cpu_work_ns'], 13)
+            self.assertEqual(result['longest_known_chain_cpu_ns'], 7)
+            self.assertEqual(result['matched_readiness_transfers'], 1)
+            self.assertEqual(result['cut_nodes'], 3)
+            self.assertNotIn(7, result['longest_known_chain_path'])
+
+    def test_helper_role_rejects_foreign_scope_unclaimed_cut_reason_target_and_task(self):
+        mutations = (
+            lambda q, p: p['execution_flow']['nodes'][-1].__setitem__('scope_id', 1),
+            lambda q, p: p['execution_flow']['wait_attempts'][0].__setitem__('wait_gap', 13),
+            lambda q, p: p['execution_flow']['nodes'][6].__setitem__('gap_reason', 'missing_flow'),
+            lambda q, p: p['execution_flow']['edges'][-1].__setitem__('to', 11),
+            lambda q, p: p['execution_flow']['nodes'][-1].__setitem__('task', 99),
+            lambda q, p: p['execution_flow']['edges'][-1].__setitem__('from', 13),
+        )
+        for mutate in mutations:
+            query, pool = self.helper_fixture()
+            mutate(query, pool)
+            with self.assertRaises(ValueError):
+                latch_readiness_oracle(query, pool)
+
+
 class ConservativeUnboundTests(unittest.TestCase):
     def test_explicit_policy_retains_costs_but_never_certifies_waits(self):
         for registered in (True, False):
@@ -301,7 +342,7 @@ class NegativeReadinessTests(unittest.TestCase):
                 item['id'] = index
             recount(flow)
         self.reject(remove, 'two original')
-        self.reject(lambda q, p: p['execution_flow']['edges'][8].__setitem__('from', 7), 'two original')
+        self.reject(lambda q, p: p['execution_flow']['edges'][8].__setitem__('from', 7), 'two original|query wait root')
         self.reject(lambda q, p: p['execution_flow']['wait_attempts'][0].__setitem__('readiness', 2), 'published readiness')
         self.reject(lambda q, p: p['execution_flow']['readiness'][0].__setitem__('query_job', 2), 'latch/producer')
 

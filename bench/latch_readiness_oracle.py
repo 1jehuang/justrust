@@ -174,6 +174,16 @@ def _readiness_authority(query, pool, nodes, edges, scopes, lifetimes, *, allow_
             require(row['consumed'] is None, 'unbound encounter invents successful consumption gate')
         require(gap['task'] is None and not incoming[row['wait_gap']],
                 'wait/help gap must be an independent root, never caller ancestry')
+        # Native restores this exact detached stream root before opening the
+        # first genuine helper CPU interval. Its null task is neutral, not a
+        # caller-prefix or readiness transfer. Generic v1 cuts gain no role.
+        for triple in outgoing[row['wait_gap']]:
+            _, target, kind = triple
+            destination = nodes[target]
+            require(kind in ('strand', 'continuation') and destination['kind'] == 'cpu_segment'
+                    and destination['scope_id'] == scope_id,
+                    'query wait root must resume actual CPU in exact saved caller scope')
+            special.add(triple)
         end_at = wake['at_ns'] if unbound else consumed['at_ns']
         require(begin['at_ns'] <= gap['at_ns'] <= wake['at_ns'] <= end_at,
                 'invalid native wait encounter chronology')
