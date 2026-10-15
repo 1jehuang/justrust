@@ -1,0 +1,261 @@
+{
+  "schema": 1,
+  "scope": "installed-public-query-cpu-original-native-acceptance-not-a-benchmark",
+  "consumer_sha256": "fa071f8e500d8c19a7536cac73a37e8f7680c01bb4ac517e4223aa4835ebcbb0",
+  "cases": [
+    {
+      "case": "query-cpu-cold-1-cpu-only",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership"
+      ],
+      "exit": 0,
+      "stdout_sha256": "962bacbee377388df10fb6ab2b5ade0d93800efc40280c60eaca286dd343a8e6",
+      "stdout_bytes": 2714401,
+      "checks": {
+        "query_schema": 5,
+        "measured_query_segments": 35379,
+        "observed_query_owners": 18199,
+        "query_execution_cpu_ns": 532930074,
+        "task_cpu_ns": 18681657,
+        "opaque_cpu_ns": 4015578,
+        "observed_cpu_ns": 555627309,
+        "every_original_owner_checked": true
+      }
+    },
+    {
+      "case": "query-cpu-cold-1-default-pool4-refusal",
+      "flags": [],
+      "exit": 1,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_bytes": 0,
+      "check": "public refusal: unsupported join protocol"
+    },
+    {
+      "case": "query-cpu-cold-1-combined",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership",
+        "--cache-call-provenance"
+      ],
+      "exit": 0,
+      "stdout_sha256": "3610c7066ac0f098000e0a5fe1b81aa813a591316f8ed25fb34e599b387047b4",
+      "stdout_bytes": 63384411,
+      "checks": {
+        "query_schema": 5,
+        "measured_query_segments": 35379,
+        "observed_query_owners": 18199,
+        "query_execution_cpu_ns": 532930074,
+        "task_cpu_ns": 18681657,
+        "opaque_cpu_ns": 4015578,
+        "observed_cpu_ns": 555627309,
+        "every_original_owner_checked": true
+      }
+    },
+    {
+      "case": "query-cpu-warm-1-cpu-only",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership"
+      ],
+      "exit": 0,
+      "stdout_sha256": "699337132d476db1d56eef3c563e65be958e4ff1f8bcc054d8e00cdacd030fd0",
+      "stdout_bytes": 271299,
+      "checks": {
+        "query_schema": 5,
+        "measured_query_segments": 3190,
+        "observed_query_owners": 1833,
+        "query_execution_cpu_ns": 19811304,
+        "task_cpu_ns": 15138516,
+        "opaque_cpu_ns": 1047598,
+        "observed_cpu_ns": 35997418,
+        "every_original_owner_checked": true
+      }
+    },
+    {
+      "case": "query-cpu-warm-1-default-pool4-refusal",
+      "flags": [],
+      "exit": 1,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_bytes": 0,
+      "check": "public refusal: unsupported join protocol"
+    },
+    {
+      "case": "query-cpu-warm-1-combined",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership",
+        "--cache-call-provenance"
+      ],
+      "exit": 0,
+      "stdout_sha256": "4f2d562c8ac912271990782ada4d05e9c8e4d8989eb04a5463cb6812fb5f2f1a",
+      "stdout_bytes": 1651367,
+      "checks": {
+        "query_schema": 5,
+        "measured_query_segments": 3190,
+        "observed_query_owners": 1833,
+        "query_execution_cpu_ns": 19811304,
+        "task_cpu_ns": 15138516,
+        "opaque_cpu_ns": 1047598,
+        "observed_cpu_ns": 35997418,
+        "every_original_owner_checked": true
+      }
+    },
+    {
+      "case": "query-cpu-with-dispatch-cpu-only",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership"
+      ],
+      "exit": 0,
+      "stdout_sha256": "c883760d24f78051867dc938889947c522455e6e269bfb3c032eec3d8245b1ef",
+      "stdout_bytes": 2713574,
+      "checks": {
+        "query_schema": 6,
+        "measured_query_segments": 35366,
+        "observed_query_owners": 18199,
+        "query_execution_cpu_ns": 471826907,
+        "task_cpu_ns": 18460919,
+        "opaque_cpu_ns": 3942291,
+        "observed_cpu_ns": 494230117,
+        "every_original_owner_checked": true
+      }
+    },
+    {
+      "case": "query-cpu-with-dispatch-default-pool4-refusal",
+      "flags": [],
+      "exit": 1,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_bytes": 0,
+      "check": "public refusal: unsupported join protocol"
+    },
+    {
+      "case": "query-cpu-with-dispatch-cpu-dispatch",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership",
+        "--dispatch-result-provenance"
+      ],
+      "exit": 0,
+      "stdout_sha256": "d85ce2b33dffa8fd1259cde1faf61a5197440508654b4e85589b90dcc6a85b3f",
+      "stdout_bytes": 8965729,
+      "checks": {
+        "query_schema": 6,
+        "measured_query_segments": 35366,
+        "observed_query_owners": 18199,
+        "query_execution_cpu_ns": 471826907,
+        "task_cpu_ns": 18460919,
+        "opaque_cpu_ns": 3942291,
+        "observed_cpu_ns": 494230117,
+        "every_original_owner_checked": true
+      },
+      "dispatch_resolved_requests": 17665
+    },
+    {
+      "case": "query-cpu-with-dispatch-combined",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership",
+        "--dispatch-result-provenance",
+        "--cache-call-provenance"
+      ],
+      "exit": 0,
+      "stdout_sha256": "0c041161f5851c6ab1b6f975064ccf956cd0a9344b1fbe73fc8f894a466a97ed",
+      "stdout_bytes": 69754833,
+      "checks": {
+        "query_schema": 6,
+        "measured_query_segments": 35366,
+        "observed_query_owners": 18199,
+        "query_execution_cpu_ns": 471826907,
+        "task_cpu_ns": 18460919,
+        "opaque_cpu_ns": 3942291,
+        "observed_cpu_ns": 494230117,
+        "every_original_owner_checked": true
+      }
+    },
+    {
+      "case": "missing-query",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership"
+      ],
+      "exit": 0,
+      "stdout_sha256": "ec059f2786d8ab4d73f78e03edde54c0b602292a4856559e3b6bba5f9f943541",
+      "stdout_bytes": 1709,
+      "check": "unknown ownership, no rankings, no scoped/full completeness promotion"
+    },
+    {
+      "case": "foreign-context",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership"
+      ],
+      "exit": 1,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_bytes": 0,
+      "check": "public refusal: not an actual same-capture admitted job"
+    },
+    {
+      "case": "clock-mismatch",
+      "flags": [
+        "--large-capture",
+        "--query-cpu-ownership"
+      ],
+      "exit": 0,
+      "stdout_sha256": "6f43d41f85213f59788a92fcdc7529424dd12229c1cb1b011e0e08ff92d9fb5b",
+      "stdout_bytes": 4450,
+      "check": "unknown ownership, no rankings, no scoped/full completeness promotion"
+    }
+  ],
+  "unchanged_original_input_files": 8,
+  "original_input_inventory_sha256": "edd27aacdd44f70e029e2366bf1a7ede4f199e1e9c6016a19d2d87f2555be8d1",
+  "original_inputs": [
+    {
+      "name": "provenance.json",
+      "bytes": 1864,
+      "sha256": "0ce631e7bb7598e7d3131a9c256aad2c17171df494199776364bd097fdbedc92"
+    },
+    {
+      "name": "query-cpu-acceptance.json",
+      "bytes": 14501323,
+      "sha256": "7ad1c6e1f4e7383fb5bec9da151cc690f4f31a6644e51df96b3fdbaafb241c74"
+    },
+    {
+      "name": "query-cpu-cold-1-capture/1792067423409302303-859906-1-pool.json",
+      "bytes": 9584101,
+      "sha256": "a4916ae4a569d69cf3aa7e5614dd34bf765d70aab5db1d8a1a92627f669e50c2"
+    },
+    {
+      "name": "query-cpu-cold-1-capture/1792067423409302303-859906-1.json",
+      "bytes": 223965061,
+      "sha256": "fa4f2344754f0421f5517c1d9b1af3c8bb956e910c167900415ca75dc78496d6"
+    },
+    {
+      "name": "query-cpu-warm-1-capture/1792067451425631717-863349-1-pool.json",
+      "bytes": 939092,
+      "sha256": "0402808a2ee4472e923b7b9bc37a46b8c302069c6f84cf6894fcd5f24937d552"
+    },
+    {
+      "name": "query-cpu-warm-1-capture/1792067451425631717-863349-1.json",
+      "bytes": 8387862,
+      "sha256": "8d38d46f7bb1a7c6af3950445f3543dd78a12662fa7711790471ecbb4fd452a4"
+    },
+    {
+      "name": "query-cpu-with-dispatch-capture/1792067453175457720-863721-1-pool.json",
+      "bytes": 9561029,
+      "sha256": "0b8ae6cbb52917e294b5f349bfac03e44877a2ad544f6b4dc518d83daec0132e"
+    },
+    {
+      "name": "query-cpu-with-dispatch-capture/1792067453175457720-863721-1.json",
+      "bytes": 241552501,
+      "sha256": "4ead3c2725b29c9f3fb7e442b5684044cf0930cae2f6a7365e2f9551a8198607"
+    }
+  ],
+  "all_checks_passed": true,
+  "limitations": [
+    "Replays actual native receipts, not a compiler rerun or speed benchmark.",
+    "Names identify bounded static query categories, not keys or provider freshness.",
+    "Observed exclusive CPU sums are not full work, a span, an execution DAG or a thread ceiling.",
+    "Compilation/artifact neutrality and analyzer acceptance remain in the native cohort."
+  ]
+}
