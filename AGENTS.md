@@ -4,7 +4,10 @@
 
 This checkout is the explicitly requested `clean-room-rewrite` branch/worktree.
 For this rewrite, this section supersedes conflicting legacy instructions below.
-`ARCHITECTURE.md` and `PROTOTYPE.md` define the current design and first milestone.
+`ARCHITECTURE.md` and `PROTOTYPE.md` define the graph design and first milestone.
+`RUST-COMPATIBILITY.md` defines the full Rust goal and compatibility contract.
+`IMPLEMENTATION.md` tracks the complete open implementation program. Completing a
+subset milestone must not be reported as completing full Rust support.
 Implement in Rust using standard Cargo/rustc/std as bootstrap tools. Selective
 third-party utility crates are permitted; keep dependencies minimal. Do not
 embed the old compiler, Cargo, rustc, LLVM, or their vendored implementations

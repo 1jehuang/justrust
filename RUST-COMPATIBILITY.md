@@ -80,11 +80,13 @@ Resolve forward declarations and imports, distinguish duplicate declaration
 names from legal same-name functions in separate modules, enforce privacy and
 local value shadowing, and retain a root-only entry function identity.
 
-For this slice, reject external `mod name;`, grouped/glob imports, `pub use`,
+For direct string-input library calls, reject external `mod name;` because no
+filesystem root is provided. Filesystem compilation now supports that form through
+source loading before parsing. Continue to reject grouped/glob imports, `pub use`,
 restricted `pub(...)`, block-local imports/items and unsupported namespaces.
-Do not silently ignore their semantics. Existing expression/type restrictions
-remain in COMPILER.md. External file loading is the following source-organization
-slice, not included by describing this one as module support.
+Existing expression/type restrictions remain in COMPILER.md. Source loading is
+bounded and observable but currently expands into one coarse source snapshot;
+original per-file semantic/syntax spans remain a following source-map slice.
 
 ### Graph representation, interim and intended
 

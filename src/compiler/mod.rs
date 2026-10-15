@@ -1,6 +1,9 @@
 //! Source-to-native compiler built on the fact graph. See COMPILER.md.
 pub mod backend;
 pub mod frontend;
+pub mod source;
+
+use std::path::PathBuf;
 
 use crate::{Context, Engine, Error, Key, Provider, Report, TaskFuture};
 use std::sync::{Arc, OnceLock};
@@ -12,9 +15,16 @@ const OBJECT: u32 = 103;
 const CHECK: u32 = 104;
 const BUILD: u32 = 105;
 const RESOLVE: u32 = 106;
+const SOURCE: u32 = 107;
+
+enum Input {
+    Text(String),
+    File(PathBuf),
+}
 
 struct Snapshot {
-    source: String,
+    input: Input,
+    source: OnceLock<source::LoadedSource>,
     parsed: OnceLock<frontend::ParsedProgram>,
     program: OnceLock<frontend::Program>,
     signatures: OnceLock<frontend::Signatures>,
@@ -45,8 +55,30 @@ impl Provider for CompilerProvider {
             let root = |kind| Key::new(kind, vec![]);
             let function = |kind, index| Key::new(kind, vec![index as u64]);
             match key.kind {
+                SOURCE => {
+                    let Input::File(path) = &this.0.input else {
+                        return Err(Error::new("source loading requires file input"));
+                    };
+                    let loaded = source::load(path).map_err(Error::new)?;
+                    this.0
+                        .source
+                        .set(loaded)
+                        .map_err(|_| Error::new("duplicate source snapshot"))?;
+                }
                 PARSE => {
-                    let parsed = frontend::parse_unresolved(&this.0.source).map_err(Error::new)?;
+                    let text = match &this.0.input {
+                        Input::Text(text) => text,
+                        Input::File(_) => {
+                            cx.read(cx.request(root(SOURCE)).get(0)).await?;
+                            &this
+                                .0
+                                .source
+                                .get()
+                                .ok_or_else(|| Error::new("missing source snapshot"))?
+                                .text
+                        }
+                    };
+                    let parsed = frontend::parse_unresolved(text).map_err(Error::new)?;
                     let objects = (0..parsed.program.functions.len())
                         .map(|_| OnceLock::new())
                         .collect();
@@ -163,6 +195,9 @@ pub struct Compilation {
     pub executable: Option<Vec<u8>>,
     pub report: Report,
     pub functions: usize,
+    /// Bytes read from all source files, before external-module expansion.
+    pub source_bytes: usize,
+    pub source_files: usize,
 }
 
 /// Compile an immutable source snapshot. Executable publication is gated on all
@@ -190,8 +225,23 @@ pub fn compile_observed(
     workers: usize,
     check_only: bool,
 ) -> Result<Compilation, Failure> {
+    compile_input(Input::Text(source), workers, check_only)
+}
+
+/// Load a source tree through an observable graph operation before parsing.
+/// File loading currently uses one coarse snapshot node, not per-file nodes.
+pub fn compile_file_observed(
+    path: PathBuf,
+    workers: usize,
+    check_only: bool,
+) -> Result<Compilation, Failure> {
+    compile_input(Input::File(path), workers, check_only)
+}
+
+fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compilation, Failure> {
     let snapshot = Arc::new(Snapshot {
-        source,
+        input,
+        source: OnceLock::new(),
         parsed: OnceLock::new(),
         program: OnceLock::new(),
         signatures: OnceLock::new(),
@@ -228,9 +278,21 @@ pub fn compile_observed(
     }
     let functions = snapshot.program.get().map_or(0, |p| p.functions.len());
     let executable = snapshot.executable.get().cloned();
+    let (source_bytes, source_files) = match &snapshot.input {
+        Input::Text(text) => (text.len(), 1),
+        Input::File(_) => {
+            let loaded = snapshot.source.get().ok_or_else(|| Failure {
+                error: Error::new("missing loaded source accounting"),
+                report: Some(Box::new(report.clone())),
+            })?;
+            (loaded.source_bytes, loaded.files)
+        }
+    };
     Ok(Compilation {
         executable,
         report,
         functions,
+        source_bytes,
+        source_files,
     })
 }

@@ -64,17 +64,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         return Err("native output currently supports Linux x86-64 only".into());
     }
-    // Reading first preserves the complete immutable input even if paths alias.
+    // Source loading is an observed graph operation and retains immutable input.
     let start = Instant::now();
-    let text = std::fs::read_to_string(&source)?;
-    let source_bytes = text.len();
     if let Some(path) = &output
         && path.try_exists()?
     {
         return Err(format!("output already exists: {}", path.display()).into());
     }
+    let compiled = compiler::compile_file_observed(source.clone(), workers, check);
+    // Never create a trace before loading: it might alias a missing module.
     let mut trace_file = trace.as_deref().map(new_file).transpose()?;
-    let compiled = compiler::compile_observed(text, workers, check);
     let compiled = match compiled {
         Ok(compiled) => compiled,
         Err(error) => {
@@ -84,9 +83,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     writeln!(file, "{report:#?}")?;
                 }
             }
-            return Err(format!("{}: {error}", source.display()).into());
+            return Err(format!("{}: {error}\nnote: filesystem modules use temporary inline expansion; frontend line/column positions refer to expanded source, not original module files", source.display()).into());
         }
     };
+    let source_bytes = compiled.source_bytes;
+    let source_files = compiled.source_files;
     let bytes = compiled.executable.as_ref().map_or(0, Vec::len);
     if let (Some(path), Some(data)) = (&output, &compiled.executable) {
         let mut file = new_file(path)?;
@@ -110,7 +111,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(file, "{report:#?}")?;
     }
     println!(
-        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"functions\":{},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
+        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
         if check { "check" } else { "build" },
         compiled.functions,
         start.elapsed().as_nanos(),

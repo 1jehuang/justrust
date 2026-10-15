@@ -1,6 +1,7 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with inline modules, 2026-10-15.
+Status: executable Rust-subset implementation with inline and external modules,
+2026-10-15.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
 
@@ -13,7 +14,9 @@ not a replacement capable of compiling arbitrary Rust projects or itself.
 ## External contract
 
 `jr-rust SOURCE -o NEW_EXECUTABLE [--workers N] [--trace NEW_TRACE]`
-compiles one immutable UTF-8 source file. `--check` validates without generating
+loads a bounded UTF-8 source tree, retaining immutable expanded input once loading
+finishes. Files are read sequentially, not as an atomic filesystem-wide snapshot.
+`--check` validates without generating
 an executable and does not require `-o`. Existing outputs and traces are never
 overwritten. Invalid and unsupported programs fail explicitly. Output is not
 published until every required check and code generation operation succeeds.
@@ -34,7 +37,14 @@ unused imports and call privacy, and canonical function names reach the native
 emitter without external compilation. The entry point currently must be a
 function declared as `main` in the root, not a function imported under that name.
 
-Not supported: crates/manifests, external module files (`mod name;`), grouped or
+External `mod name;` loads `name.rs` or `name/mod.rs`, including nested file and
+inline-module directory rules. Missing, ambiguous, cyclic and oversized source
+trees fail explicitly, including unused modules. Limits are 1,024 file occurrences,
+64 module levels and 8 MiB of input and expanded source. These are prototype
+resource limits, not Rust language limits. `#[path]` is not supported.
+Canonical paths detect active inclusion cycles, not enforce a filesystem sandbox.
+
+Not supported: crates/manifests, grouped or
 glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
 standard-library APIs beyond the documented print form, general macros, traits,
 generics, structs/enums, references/borrowing, strings as values, closures, async,
@@ -45,6 +55,8 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 
 ## Graph operations
 
+- For filesystem inputs, load and expand the source tree once (operation 107),
+  retaining source-file/original-byte accounting and failure events.
 - Parse immutable source into a retained unresolved module/declaration arena.
 - Resolve paths, imports and visibility once, publishing canonical item identities.
 - Validate declarations and publish the callable signatures.
@@ -61,7 +73,9 @@ declarations and body checks. Output facts contain typed-arena handles because
 the prototype runtime currently stores u64 slots. Arenas remain owned by the
 compilation snapshot and are not persistent cache keys.
 
-The parser consumes the source file as one operation. Name resolution,
+Source-tree loading and text expansion currently form one coarse operation.
+String-input library calls retain their original parse-first graph.
+The parser consumes expanded source as one operation. Name resolution,
 declaration validation and executable linking are also initially single
 operations. These are explicit implementation limitations, not architectural
 claims that all
@@ -87,12 +101,17 @@ Use the resulting binary on the machine holding that build artifact:
 /path/to/jr-rust examples/compiler/arithmetic.rs --check --workers 8
 /path/to/jr-rust examples/compiler/modules.rs -o /new/path/modules --workers 8
 /new/path/modules
+/path/to/jr-rust examples/compiler/external/main.rs -o /new/path/external --workers 8
+/new/path/external
 ```
 
 The compiler prints a JSON accounting summary, not the program's output.
 Execute the emitted ELF separately. `--trace NEW_TRACE` writes the full Debug
-report, including failure events on rejected compilations. Syntax diagnostics
-have line/column, while semantic diagnostics currently identify the function,
+report, including failure events on rejected compilations. Trace creation occurs
+after compilation, so a trace path cannot supply a previously missing module.
+Syntax positions currently refer to expanded text, not original multi-file source
+positions. Loading errors identify the source path. Semantic diagnostics identify
+the function,
 not the exact expression span. There is no stable structured diagnostic format
 yet. Native arithmetic/write failures terminate with 101 without unwinding,
 Rust panic messages, or stdio buffering. Stack exhaustion is not yet guarded
