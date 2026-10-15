@@ -1,0 +1,224 @@
+{
+  "schema": 1,
+  "scope": "coherent native toolchain reconstruction and real-project setup acceptance, not performance comparison",
+  "not_byte_identical_reproduction_of_prior_accepted_compilers": true,
+  "comprehensive_synth40_performance_gate": "not run for reconstructed pair",
+  "whole_job_work_span": "unknown, not measured",
+  "source_changes_between_pair": [
+    "toolchain/rustc/compiler/rustc_middle/src/query/calls.rs",
+    "toolchain/rustc/compiler/rustc_middle/src/query/system.rs",
+    "toolchain/rustc/compiler/rustc_query_impl/src/execution.rs",
+    "toolchain/rustc/compiler/rustc_query_impl/src/lib.rs",
+    "toolchain/rustc/compiler/rustc_query_impl/src/query_vtables.rs",
+    "toolchain/rustc/compiler/rustc_session/src/query_admission.rs",
+    "toolchain/rustc/compiler/rustc_session/src/query_reads.rs"
+  ],
+  "source_difference_manifest_sha256": "5f9358fc8728378bbb646f2f1441b54ae21d41073b3791639350fa2acd870378",
+  "build_protocol": {
+    "stage": 1,
+    "mode": "dev",
+    "jobs": 2,
+    "tools": true,
+    "locked_dependencies": true,
+    "watchdog_minutes": 60,
+    "keep_stage_flags": false,
+    "explicit_targets": [
+      "library",
+      "compiler/rustc",
+      "src/tools/rustdoc",
+      "src/tools/clippy"
+    ]
+  },
+  "fixtures_sha256": {
+    "native_consumer.rs": "de06e51ddad70f989129396c0f34fee89ea0324107df500d699d735fd08bc66d",
+    "native_macro.rs": "2722a740aac08d620fc2ac33682fd809bf195b7721de41dcb35e37d18ee00190",
+    "native_test.rs": "4366833c47f86ae3f815b7e7e585abc350a56a0276c1a68ad8b0a95b76f4cc10"
+  },
+  "paired_records": {
+    "A2": {
+      "source_revision": "884fd7ce705b20bc952469014b656113d43f7a26",
+      "source_archive_sha256": "be1d23e3c75c84c7dea26887a2f5eeb943b6e7286a519b7ab75415eb1c1794e4",
+      "source_inventory_sha256": "1e3c0fe05e7ff05acb977c149a475579f8aad72d7151ac29231696d7ed27696e",
+      "cached_toolchain_archives_manifest_sha256": "410c8f16a6bf3deae40fb95747fe10d3ff5002a9de40b31eee3e1da1d36f6765",
+      "build_helper_sha256": "35e62dbd4909931fae653548b3ca5531bb8ae971a594aeb7cdd09e69b0c2ef2a",
+      "stage0_manifest_sha256": "84cb05d6b379ca6409e82a11e2cf19ffe3a4414a36be85de53ad7ecc78181f2f",
+      "ci_llvm_pin_manifest_sha256": "d4f3b0081a65effe76c836acf70d84a6ee0f2da279c5e0836c6ffd945c7dc8bf",
+      "generated_bootstrap_config_sha256": "e149e3a769b6f75028de03990ee6185ed15c9a22aa309047731315163ffc5a0f",
+      "build_log_sha256": "df475aca61cf15d9bd3fbfa931cc212a98e4fb7a614e842f027630af49a2ac87",
+      "build_command_manifest_sha256": "5198a6aa95c7ad20b49dee117465caa5a0eb47cbdac969f2f7cc2075f9c06622",
+      "full_prefix_inventory_sha256": "406eed1924d8a8d916cb77e5476b314ab5f80b7fa24e9ed33599545e290cfb3a",
+      "registered_prefix_inventory_sha256": "63e6308facba108bbe8d064484a422c12a6cdf2bda5dff85114baa52b0f8ae9e",
+      "source_after_audit_sha256": "c38ee52754a1af95e201cc41678bb112a572095d633ee18049fda96dff394e9a",
+      "archived_source_inputs_checked": 66682,
+      "archived_source_changes": [],
+      "lockfiles_checked": 96,
+      "lockfiles_before_sha256": "ea0fccc75ecb2d1076caa6723341aadf729f08fcddc340095cbd30409d127e87",
+      "lockfiles_after_sha256": "ea0fccc75ecb2d1076caa6723341aadf729f08fcddc340095cbd30409d127e87",
+      "registered_original_regular_files_checked": 85,
+      "actual_toolchain_spec": "jr-ad23ba6b2733",
+      "declared_target": "x86_64-unknown-linux-gnu",
+      "actual_six_artifact_sha256": {
+        "rustc": "ccc4da9c5d22f8462a8d1ecf38ffbf0037ce59d087726ca87839c64ac4ebbfca",
+        "cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+        "rustdoc": "b7a51a1d11f3520309a44a98a3336255e7be1c459b3efb8ec8ee73e96227a303",
+        "clippy-driver": "e5ff244ad46ff68751d2445bbf9cfe84373bd11781fe112d881a39f7c98198c8",
+        "cargo-clippy": "e8e18561a78c52528cfd959498631b6ea3fb65dbf1dbf193d0e0be84f23c55eb",
+        "driver": "1d7b6e73ac397ddcbc6fac4ca08040c95146b731c2fa8a623f8546ba3ec698cf"
+      },
+      "toolchain_identity_manifest_sha256": "f3550849871b0ade6dc58e41e25a0f3c9bf69828e383723596fed0ce846af01f",
+      "smoke_gates": {
+        "sysroot": {
+          "exit": 0,
+          "log_sha256": "829f8f1ddee27aac2ea9150b0d935acd87ae3d0c18cc7adebe09420ba0e52d1f"
+        },
+        "version": {
+          "exit": 0,
+          "log_sha256": "2314ab96897641ec3338fab5492b07d80908bc256c7d11dc11af2595331cbef7"
+        },
+        "proc-macro-compile": {
+          "exit": 0,
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "proc-macro-load-consumer": {
+          "exit": 0,
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "proc-macro-consumer-run": {
+          "exit": 0,
+          "log_sha256": "96c9a36519557c75c835a814403a64128f7b6deedc72353f05cf54e3b87a9026"
+        },
+        "libtest-compile": {
+          "exit": 0,
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "libtest-run": {
+          "exit": 0,
+          "log_sha256": "1774cc07ab5b7eb580d123940dc6d5a8db3d28deae53138285e8ddc313724093"
+        }
+      },
+      "workspace_gate": {
+        "run_id": "coherent-a2-workspace-preflight",
+        "cargo_arguments": [
+          "build",
+          "--release",
+          "-p",
+          "jcode-desktop"
+        ],
+        "source_snapshots": {
+          "jcode": "abff94eeb",
+          "jcode-desktop": "7d38fb7"
+        },
+        "execution": "local",
+        "cargo_build_jobs": 2,
+        "exit": 0,
+        "selected_metadata_audit": true,
+        "meta_sha256": "3486215d3359fe12ccb84553c13866367b556f34010560aee967dd438a1378ed",
+        "summary_sha256": "91e82557936fe6ef1648cebe62c1b6545108a2fd2c1b90943a27c8c2104f3a6a",
+        "controls_manifest_sha256": "b8df3a9cbf25629aca5569e3d1a0d0090485b9b294fe6a2e41cf26af637336e8",
+        "identity_audit_sha256": "56e4eabbbb009a1dce1ceb973c802caf603ecbdd85741295a09b1e5d43a34778",
+        "full_log_sha256": "bea22c111abc138b121e047c7de21f9a8caa4a1d92effb8f9f93263fd4203313"
+      },
+      "setup_only_elapsed_seconds": {
+        "native_build": 1451.0225698947906,
+        "workspace_prebuild": 1498.4179985523224
+      },
+      "complete_gate_record_sha256": "cfeb3512c29d7cc35d31bc86e8a48f6be3e551f69f2fc98a4bd1c653dcdb47e4"
+    },
+    "B2": {
+      "source_revision": "8b7398717f9d9313d5101c948f2ce8dc223ed5bf",
+      "source_archive_sha256": "f10e0d7ac3c9ffc1da60f4ddb83e944dfd457137191dce9e820ec24feff89aeb",
+      "source_inventory_sha256": "3fd7e3d274fc21d8b2d4ae9e6f8a5205ea88ada284af4ab7c1773f20048da9e4",
+      "cached_toolchain_archives_manifest_sha256": "410c8f16a6bf3deae40fb95747fe10d3ff5002a9de40b31eee3e1da1d36f6765",
+      "build_helper_sha256": "35e62dbd4909931fae653548b3ca5531bb8ae971a594aeb7cdd09e69b0c2ef2a",
+      "stage0_manifest_sha256": "84cb05d6b379ca6409e82a11e2cf19ffe3a4414a36be85de53ad7ecc78181f2f",
+      "ci_llvm_pin_manifest_sha256": "d4f3b0081a65effe76c836acf70d84a6ee0f2da279c5e0836c6ffd945c7dc8bf",
+      "generated_bootstrap_config_sha256": "e149e3a769b6f75028de03990ee6185ed15c9a22aa309047731315163ffc5a0f",
+      "build_log_sha256": "35c660e0d95c1c0b89015947ea9cac60952b05ed15e711e43efe21ac9efa4166",
+      "build_command_manifest_sha256": "f7b4ac85077fcc45faf34e2b6b67b33aee3dd7598bd6eb32b76914bfa283b56c",
+      "full_prefix_inventory_sha256": "baece76a5e44a337582f8fbc0802c854ecd756120a73439284912362c4775aff",
+      "registered_prefix_inventory_sha256": "7b94161444878e11e1a1769744c37c795275f4150e1e840804e41070feb6b3cd",
+      "source_after_audit_sha256": "18f42f047bfa0257438f2a1b05e3d81ef496b1032d6865fd2ef4ae8fde717338",
+      "archived_source_inputs_checked": 66682,
+      "archived_source_changes": [],
+      "lockfiles_checked": 96,
+      "lockfiles_before_sha256": "ea0fccc75ecb2d1076caa6723341aadf729f08fcddc340095cbd30409d127e87",
+      "lockfiles_after_sha256": "ea0fccc75ecb2d1076caa6723341aadf729f08fcddc340095cbd30409d127e87",
+      "registered_original_regular_files_checked": 85,
+      "actual_toolchain_spec": "jr-c515f6b3476d",
+      "declared_target": "x86_64-unknown-linux-gnu",
+      "actual_six_artifact_sha256": {
+        "rustc": "56372b3520aebbfea39cdf36e1f651fd7f6bd769fcf0ad481f7fe4c0252ad54d",
+        "cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+        "rustdoc": "af34d1375bf8436a322ba175172ba60094e92b6c655889f18b2cba37cc84927b",
+        "clippy-driver": "bf254fe15bad16071b6b15bebd507ecb046cd8d3080345fca96871fb4ed1b500",
+        "cargo-clippy": "b7724e48fb820661e3fd39b5039ea15b295caa18388c2dbe69a44531e3ef2a73",
+        "driver": "1b9358beb897ec29e88a6a9abe056d1458378cf74418df5cfa14fc47d42f90b9"
+      },
+      "toolchain_identity_manifest_sha256": "709f27bf87f30a735f6c1b8e11a326e1f17334d337fee67aa2370f0d80cb7b6c",
+      "smoke_gates": {
+        "sysroot": {
+          "exit": 0,
+          "log_sha256": "5601f0249af3bd5044fbe33e3da23a3cfdf14979cfd11c8673b7e92a26a2ca00"
+        },
+        "version": {
+          "exit": 0,
+          "log_sha256": "6958b314613e77ade3e026dde977322436fc6120bd347a60cf11a981f95f4f53"
+        },
+        "proc-macro-compile": {
+          "exit": 0,
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "proc-macro-load-consumer": {
+          "exit": 0,
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "proc-macro-consumer-run": {
+          "exit": 0,
+          "log_sha256": "96c9a36519557c75c835a814403a64128f7b6deedc72353f05cf54e3b87a9026"
+        },
+        "libtest-compile": {
+          "exit": 0,
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "libtest-run": {
+          "exit": 0,
+          "log_sha256": "1774cc07ab5b7eb580d123940dc6d5a8db3d28deae53138285e8ddc313724093"
+        }
+      },
+      "workspace_gate": {
+        "run_id": "coherent-b2-workspace-preflight",
+        "cargo_arguments": [
+          "build",
+          "--release",
+          "-p",
+          "jcode-desktop"
+        ],
+        "source_snapshots": {
+          "jcode": "abff94eeb",
+          "jcode-desktop": "7d38fb7"
+        },
+        "execution": "local",
+        "cargo_build_jobs": 2,
+        "exit": 0,
+        "selected_metadata_audit": true,
+        "meta_sha256": "13c9230482f9bd64dcf4728c546b8b156595d637d03ce852cf7decb4160d2975",
+        "summary_sha256": "3f5fd6dc49b1c30d67ffe177f495a10404fc58060840929a507805162adbbdde",
+        "controls_manifest_sha256": "37f6d2231f31853a2439f1e27f7ecacca10785a765ad89d4ac29042661f55ec7",
+        "identity_audit_sha256": "e6c7e754516310ce2e244b9f282271a59e253682368d4a337207158acb9c5703",
+        "full_log_sha256": "4396472270132cf7303e87d7e92f8236d26180c11a29e7006e7af5ee70483bb8"
+      },
+      "setup_only_elapsed_seconds": {
+        "native_build": 1281.6572222709656,
+        "workspace_prebuild": 1473.9973998069763
+      },
+      "complete_gate_record_sha256": "f97b0516c3bbcd44dc22397a98dbd63642084e6b30df720babf2c2c8a70baabf"
+    }
+  },
+  "limitations": [
+    "Only declared files and recorded compiler/Cargo selection are attested, not mapped-memory identity.",
+    "All elapsed times here are setup costs, not runtime compiler comparison or speed evidence.",
+    "Original failed incomplete-prefix attempts and their raw noise observations remain unchanged.",
+    "System C toolchain and every external runtime input are not comprehensively attested by this document.",
+    "Pinned recorder raw sampled rustc counts may include zombies. New live-process noise policy applies only to future consistently measured pairs."
+  ]
+}
