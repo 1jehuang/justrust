@@ -427,6 +427,33 @@ asynchronous persistence with completion-only persistence under controlled
 conditions. Exercise crashes, incomplete batches, cancellation, and shared
 consumers. No performance advantage is claimed before those measurements.
 
+## 16. Initial server target and parallel scaling
+
+Initial target: AWS EC2 `m8a.24xlarge`, with 96 physical CPU cores and
+384 GiB RAM. M8a exposes one physical core per vCPU. This is the starting
+measurement platform, not a claim that 96 workers is optimal for every request.
+No instance is provisioned by this decision.
+
+Use worker limits of 1, 2, 4, 8, 16, 32, 48, 64, and 96 to measure scaling.
+Periodically compare with `m8a.48xlarge` at 192 physical cores and 768 GiB RAM.
+Worker limits on the smaller instance do not substitute for measuring the
+larger instance's actual topology, bandwidth, and contention behavior.
+
+Measure single-request latency separately from concurrent-request throughput.
+Track critical-path span, CPU work, scheduler overhead, memory footprint and
+bandwidth pressure, NUMA/locality effects, persistence interference, and cost
+per completed workload. Capture actual CPU topology, affinity, resource limits,
+and competing activity in experiment receipts. Do not assume physical core
+count alone predicts compiler performance.
+
+Keep scheduling adaptive to the work available and memory budget rather than
+hard-coding the initial machine size. Consider memory-optimized alternatives
+only when measurements justify them. Recheck regional availability and pricing
+before provisioning; prices are not architectural constants.
+
+Hardware specification reference: https://aws.amazon.com/ec2/instance-types/m8a/
+(checked 2026-10-15).
+
 ## Open architectural decisions
 
 These requirements do not yet choose the mechanisms below:
