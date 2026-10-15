@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+mod readiness;
+pub use readiness::{LatchReadinessToken, LatchWaitGuard, ReadinessPreparation};
+
 static TLS_FAILED: AtomicBool = AtomicBool::new(false);
 thread_local! {
     static CURRENT: RefCell<Option<Cursor>> = const { RefCell::new(None) };
@@ -42,6 +45,7 @@ struct Scope {
     outcome: &'static str,
 }
 struct Buffer {
+    readiness: Option<readiness::Inventory>,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
     scopes: Vec<Scope>,
@@ -57,6 +61,7 @@ struct Buffer {
     sealed: bool,
 }
 pub(crate) struct Recorder {
+    namespace: Option<u64>,
     epoch: Instant,
     capacity: usize,
     buffer: Mutex<Buffer>,
@@ -110,9 +115,11 @@ fn current() -> Option<Cursor> {
 impl Recorder {
     pub(crate) fn new(epoch: Instant, capacity: usize) -> Arc<Self> {
         Arc::new(Self {
+            namespace: None,
             epoch,
             capacity: capacity.saturating_mul(4).min(4_000_000),
             buffer: Mutex::new(Buffer {
+                readiness: None,
                 nodes: Vec::new(),
                 edges: Vec::new(),
                 scopes: Vec::new(),
@@ -128,6 +135,16 @@ impl Recorder {
                 sealed: false,
             }),
         })
+    }
+    pub(crate) fn new_with_readiness(epoch: Instant, capacity: usize, namespace: u64) -> Arc<Self> {
+        let mut recorder = Self::new(epoch, capacity);
+        let inner = Arc::get_mut(&mut recorder).unwrap();
+        inner.namespace = Some(namespace);
+        inner.buffer.get_mut().unwrap().readiness = Some(readiness::Inventory::new(capacity));
+        recorder
+    }
+    pub(crate) fn readiness_enabled(&self) -> bool {
+        self.namespace.is_some()
     }
     fn lock(&self) -> std::sync::MutexGuard<'_, Buffer> {
         self.buffer.lock().unwrap_or_else(|e| {
@@ -330,7 +347,8 @@ impl Recorder {
         let b = self.lock();
         let tls = TLS_FAILED.load(Ordering::Relaxed) || timing_failed;
         let exhausted = b.exhausted || tls;
-        let complete = b.sealed
+        let complete = b.readiness.as_ref().is_none_or(|r| r.complete())
+            && b.sealed
             && b.active == 0
             && !exhausted
             && !b.overflowed
@@ -342,7 +360,13 @@ impl Recorder {
             && b.scopes.len() as u64 == b.next_scope - 1;
         write!(
             out,
-            ",\"execution_flow\":{{\"schema\":1,\"scope\":\"observed-query-and-join-control-flow\",\"full_pipeline_complete\":false,\"flow_complete\":false,\"sealed\":{},\"records_complete\":{complete},\"identity_exhausted\":{exhausted},\"tls_failed\":{tls},\"active_scopes\":{},\"node_allocator_baseline\":1,\"node_allocator_high_water\":{},\"expected_nodes\":{},\"edge_allocator_baseline\":1,\"edge_allocator_high_water\":{},\"expected_edges\":{},\"scope_allocator_baseline\":1,\"scope_allocator_high_water\":{},\"expected_scopes\":{},\"lost_nodes\":{},\"lost_edges\":{},\"lost_scopes\":{},\"loss_overflowed\":{},\"nodes\":[",
+            ",\"execution_flow\":{{\"schema\":{},\"scope\":\"{}\",\"full_pipeline_complete\":false,\"flow_complete\":false,\"sealed\":{},\"records_complete\":{complete},\"identity_exhausted\":{exhausted},\"tls_failed\":{tls},\"active_scopes\":{},\"node_allocator_baseline\":1,\"node_allocator_high_water\":{},\"expected_nodes\":{},\"edge_allocator_baseline\":1,\"edge_allocator_high_water\":{},\"expected_edges\":{},\"scope_allocator_baseline\":1,\"scope_allocator_high_water\":{},\"expected_scopes\":{},\"lost_nodes\":{},\"lost_edges\":{},\"lost_scopes\":{},\"loss_overflowed\":{},\"nodes\":[",
+            if self.readiness_enabled() { 2 } else { 1 },
+            if self.readiness_enabled() {
+                "observed-query-join-and-latch-control-flow"
+            } else {
+                "observed-query-and-join-control-flow"
+            },
             b.sealed,
             b.active,
             num((!exhausted).then_some(b.next_node)),
@@ -401,7 +425,11 @@ impl Recorder {
                 s.outcome
             )?;
         }
-        write!(out, "]}}")
+        write!(out, "]")?;
+        if let Some(readiness) = &b.readiness {
+            readiness.write_json(out, exhausted)?;
+        }
+        write!(out, "}}")
     }
 }
 pub(crate) struct ScopeGuard {

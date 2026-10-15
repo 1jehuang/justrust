@@ -268,6 +268,16 @@ impl Recorder {
             Some(crate::execution_flow::Recorder::new(epoch, capacity));
         recorder
     }
+    pub(crate) fn new_with_latch_readiness(
+        epoch: Instant,
+        capacity: usize,
+        namespace: u64,
+    ) -> Arc<Self> {
+        let mut recorder = Self::new_with_query_ownership(epoch, capacity);
+        Arc::get_mut(&mut recorder).unwrap().flow =
+            Some(crate::execution_flow::Recorder::new_with_readiness(epoch, capacity, namespace));
+        recorder
+    }
     fn with_clock(
         epoch: Instant,
         capacity: usize,

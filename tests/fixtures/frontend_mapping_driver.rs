@@ -78,9 +78,28 @@ fn main() {
         matches!(execution_flow, "off" | "execution_flow"),
         "invalid execution flow control"
     );
+    let latch_readiness = lines.next().unwrap_or("off");
+    assert!(
+        matches!(latch_readiness, "off" | "latch_readiness"),
+        "invalid latch readiness control"
+    );
     assert!(lines.next().is_none(), "unexpected fixture controls");
     let observer = if capture == "-" {
         None
+    } else if latch_readiness == "latch_readiness" {
+        #[cfg(frontend_latch_readiness_api)]
+        {
+            Some(
+                QueryAdmissionObserver::new_with_event_capacity_and_latch_readiness(
+                    std::path::Path::new(capture),
+                    capacity.parse().expect("numeric readiness capacity"),
+                    dispatch == "dispatch",
+                )
+                .expect("private readiness capture rejected"),
+            )
+        }
+        #[cfg(not(frontend_latch_readiness_api))]
+        panic!("latch readiness requires matching rebuilt private metadata");
     } else if execution_flow == "execution_flow" {
         #[cfg(frontend_execution_flow_api)]
         {

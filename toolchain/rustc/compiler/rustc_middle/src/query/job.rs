@@ -104,11 +104,23 @@ pub struct QueryWaiter<'tcx> {
 #[derive(Clone, Debug)]
 pub struct QueryLatch<'tcx> {
     /// The `Option` is `Some(..)` when the job is active, and `None` once completed.
-    pub waiters: Arc<Mutex<Option<Vec<Arc<QueryWaiter<'tcx>>>>>>,
+    pub waiters: Arc<Mutex<QueryLatchState<'tcx>>>,
+}
+
+#[derive(Debug)]
+pub struct QueryLatchState<'tcx> {
+    pub waiters: Option<Vec<Arc<QueryWaiter<'tcx>>>>,
+    /// Copied under the existing lock. No recorder, clock, or owned allocation.
+    pub readiness: Option<rustc_thread_pool::execution_observer::LatchReadinessToken>,
 }
 
 impl<'tcx> QueryLatch<'tcx> {
     pub fn new() -> Self {
-        QueryLatch { waiters: Arc::new(Mutex::new(Some(Vec::new()))) }
+        QueryLatch {
+            waiters: Arc::new(Mutex::new(QueryLatchState {
+                waiters: Some(Vec::new()),
+                readiness: None,
+            })),
+        }
     }
 }

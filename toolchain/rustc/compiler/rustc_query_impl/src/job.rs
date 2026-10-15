@@ -225,7 +225,7 @@ fn abstracted_waiters_of(job_map: &QueryJobMap<'_>, query: QueryJobId) -> Vec<Ab
 
     // Add the explicit waiters which use condvars and are resumable
     if let Some(latch) = job_map.latch_of(query) {
-        for (i, waiter) in latch.waiters.lock().as_ref().unwrap().iter().enumerate() {
+        for (i, waiter) in latch.waiters.lock().waiters.as_ref().unwrap().iter().enumerate() {
             result.push(AbstractedWaiter {
                 span: waiter.span,
                 parent: waiter.parent,
@@ -413,7 +413,7 @@ fn find_and_process_cycle<'tcx>(
         let waiter = {
             let latch = job_map.latch_of(waitee_query).unwrap();
             let mut waiters_guard = latch.waiters.lock();
-            let waiters = waiters_guard.as_mut().expect("non-empty waiters vec");
+            let waiters = waiters_guard.waiters.as_mut().expect("non-empty waiters vec");
             // Remove the waiter from the list of waiters.
             waiters.remove(waiter_idx)
         };

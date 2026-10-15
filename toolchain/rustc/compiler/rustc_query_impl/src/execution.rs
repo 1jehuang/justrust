@@ -150,11 +150,20 @@ fn handle_cycle<'tcx, C: QueryCache>(
 /// This does nothing for single threaded rustc, as there are no concurrent jobs which could be
 /// waiting on us.
 #[inline]
-fn signal_complete(job: QueryJob<'_>, poison: bool) {
+fn signal_complete(
+    job: QueryJob<'_>,
+    poison: bool,
+    admission: Option<&rustc_session::query_admission::QueryAdmissionJob>,
+) {
     if let Some(latch) = job.latch {
+        // The active-query shard is already released. Only the Copy token below
+        // crosses the existing latch lock, never a recorder/TLS operation.
+        let preparation = admission.and_then(|a| a.prepare_latch_readiness());
+        let readiness = if poison { None } else { preparation.as_ref().and_then(|p| p.token()) };
         // Set the latch and resume all waiters on it.
         let mut waiters_guard = latch.waiters.lock();
-        let waiters = waiters_guard.take().unwrap(); // mark the latch as complete
+        waiters_guard.readiness = readiness;
+        let waiters = waiters_guard.waiters.take().unwrap(); // mark the latch as complete
         let registry = rustc_thread_pool::Registry::current();
         for waiter in waiters {
             rustc_thread_pool::mark_unblocked(&registry);
@@ -163,6 +172,34 @@ fn signal_complete(job: QueryJob<'_>, poison: bool) {
             }
             waiter.condvar.notify_one();
         }
+        drop(waiters_guard);
+        if let Some(preparation) = preparation {
+            preparation.finish(!poison);
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn latch_completion_keeps_none_done_and_already_ready_without_diagnostic_authority() {
+    for poison in [false, true] {
+        let latch = QueryLatch::new();
+        assert!(latch.waiters.lock().waiters.is_some());
+        let job = QueryJob {
+            id: QueryJobId(std::num::NonZero::new(1).unwrap()),
+            span: rustc_span::DUMMY_SP,
+            parent: None,
+            latch: Some(latch.clone()),
+        };
+        signal_complete(job, poison, None);
+        assert!(latch.waiters.lock().waiters.is_none());
+        assert!(latch.waiters.lock().readiness.is_none());
+        let (result, registered, wait_id, readiness) =
+            latch_wait_on(&latch, None, rustc_span::DUMMY_SP, None);
+        assert!(result.is_ok());
+        assert!(!registered);
+        assert!(wait_id.is_none());
+        assert!(readiness.is_none());
     }
 }
 
@@ -205,13 +242,17 @@ where
         let admission = this.admission.take();
 
         // Drop everything without poisoning the query.
-        this.drop_and_maybe_poison(/* poison */ false);
+        this.drop_and_maybe_poison(/* poison */ false, admission.as_ref());
         if let Some(admission) = admission {
             admission.complete();
         }
     }
 
-    fn drop_and_maybe_poison(&mut self, poison: bool) {
+    fn drop_and_maybe_poison(
+        &mut self,
+        poison: bool,
+        admission: Option<&rustc_session::query_admission::QueryAdmissionJob>,
+    ) {
         let status = {
             let mut shard = self.state.active.lock_shard_by_hash(self.key_hash);
             match shard.find_entry(self.key_hash, equivalent_key(self.key)) {
@@ -233,7 +274,7 @@ where
 
         // Also signal the completion of the job, so waiters will continue execution.
         match status {
-            ActiveKeyStatus::Started(job) => signal_complete(job, poison),
+            ActiveKeyStatus::Started(job) => signal_complete(job, poison, admission),
             ActiveKeyStatus::Poisoned => panic!(),
         }
     }
@@ -247,7 +288,9 @@ where
     #[cold]
     fn drop(&mut self) {
         // Poison the query so jobs waiting on it panic.
-        self.drop_and_maybe_poison(/* poison */ true);
+        let admission = self.admission.take();
+        self.drop_and_maybe_poison(/* poison */ true, admission.as_ref());
+        drop(admission);
         // Fields drop normally here, publishing the poisoned terminal outside all locks.
     }
 }
@@ -279,12 +322,19 @@ fn latch_wait_on<'tcx>(
         QueryJobId,
         Option<QueryJobId>,
     )>,
-) -> Result<(), QueryCycle<'tcx>> {
+) -> (
+    Result<(), QueryCycle<'tcx>>,
+    bool,
+    Option<u64>,
+    Option<rustc_thread_pool::execution_observer::LatchReadinessToken>,
+) {
     // Copy authority before acquiring any latch or pool State lock.
     let binding = diagnostic.and_then(|(context, _, _)| context.admission_binding());
     let mut waiters_guard = latch.waiters.lock();
-    let Some(waiters) = &mut *waiters_guard else {
-        return Ok(()); // already complete
+    let Some(waiters) = &mut waiters_guard.waiters else {
+        let readiness = waiters_guard.readiness;
+        drop(waiters_guard);
+        return (Ok(()), false, None, readiness); // already complete
     };
 
     let waiter = Arc::new(QueryWaiter {
@@ -306,8 +356,11 @@ fn latch_wait_on<'tcx>(
     // and the deadlock handler wants to resume this thread we have to be in the `wait` call. This
     // is ensured by the deadlock handler getting the waiters lock.
     let mut condvar_returned = 0;
+    let mut readiness = None;
     let wait = || {
         waiter.condvar.wait(&mut waiters_guard);
+        // Copy only. All v2 recorder work is after this lock and jobserver reacquire.
+        readiness = waiters_guard.readiness;
         if let Some(token) = &waiter.diagnostic_wait {
             condvar_returned = token.now();
         }
@@ -336,10 +389,11 @@ fn latch_wait_on<'tcx>(
     // FIXME: Get rid of this lock. We have ownership of the QueryWaiter although another thread
     // may still have a Arc reference so we cannot use Arc::get_mut.
     let mut cycle = waiter.cycle.lock();
-    match cycle.take() {
+    let result = match cycle.take() {
         None => Ok(()),
         Some(cycle) => Err(cycle),
-    }
+    };
+    (result, true, waiter.diagnostic_wait.as_ref().map(|t| t.wait_id()), readiness)
 }
 
 #[inline(always)]
@@ -375,12 +429,21 @@ fn wait_for_query<'tcx, C: QueryCache>(
             observer.mark_loss();
         }
     }
-    let result = latch_wait_on(
+    let mut readiness_wait = observer.and_then(|observer| {
+        observer.begin_latch_wait(
+            waitee.0.get(),
+            if consumer_matches { current.map(|id| id.0.get()) } else { None },
+        )
+    });
+    let (result, registered, wait_id, readiness) = latch_wait_on(
         &latch,
         current,
         span,
         observer.map(|observer| (observer, waitee, if consumer_matches { current } else { None })),
     );
+    if let Some(guard) = &mut readiness_wait {
+        guard.observed(registered, wait_id, readiness);
+    }
 
     match result {
         Ok(()) => {
@@ -391,7 +454,13 @@ fn wait_for_query<'tcx, C: QueryCache>(
                     let shard = query.state.active.lock_shard_by_hash(key_hash);
                     match shard.find(key_hash, equivalent_key(key)) {
                         // The query we waited on panicked. Continue unwinding here.
-                        Some((_, ActiveKeyStatus::Poisoned)) => FatalError.raise(),
+                        Some((_, ActiveKeyStatus::Poisoned)) => {
+                            drop(shard);
+                            if let Some(guard) = readiness_wait.take() {
+                                guard.failed("poisoned");
+                            }
+                            FatalError.raise()
+                        }
                         _ => panic!(
                             "query '{}' result must be in the cache or the query must be poisoned after a wait",
                             query.name
@@ -400,12 +469,21 @@ fn wait_for_query<'tcx, C: QueryCache>(
                 })
             };
 
+            if let Some(guard) = readiness_wait.take() {
+                guard.consumed();
+            }
+
             tcx.prof.query_cache_hit(index.into());
             query_blocked_prof_timer.finish_with_query_invocation_id(index.into());
 
             (v, Some(index))
         }
-        Err(cycle) => (handle_cycle(query, tcx, key, cycle), None),
+        Err(cycle) => {
+            if let Some(guard) = readiness_wait.take() {
+                guard.failed("cycle");
+            }
+            (handle_cycle(query, tcx, key, cycle), None)
+        }
     }
 }
 

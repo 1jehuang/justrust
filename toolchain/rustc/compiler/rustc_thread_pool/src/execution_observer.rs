@@ -126,6 +126,8 @@ pub struct ExecutionObserver {
     timing: Option<Arc<crate::execution_timing::Recorder>>,
 }
 
+pub use crate::execution_flow::{LatchReadinessToken, LatchWaitGuard, ReadinessPreparation};
+
 impl ExecutionObserver {
     /// Identity exhaustion disables recording, never wraps or affects work.
     pub fn new(capacity: usize) -> Option<Arc<Self>> {
@@ -197,8 +199,49 @@ impl ExecutionObserver {
         Some(observer)
     }
 
-    fn flow(&self) -> Option<&Arc<crate::execution_flow::Recorder>> {
+    pub(crate) fn flow(&self) -> Option<&Arc<crate::execution_flow::Recorder>> {
         self.timing.as_ref().and_then(|t| t.flow.as_ref())
+    }
+    pub fn new_for_query_with_latch_readiness(
+        capacity: usize,
+        query_capture_id: &str,
+        query_epoch: Instant,
+    ) -> Option<Arc<Self>> {
+        let mut observer =
+            Self::new_for_query_with_cpu_ownership(capacity, query_capture_id, query_epoch)?;
+        let (capacity, namespace) = (observer.capacity, observer.id);
+        Arc::get_mut(&mut observer)?.timing =
+            Some(crate::execution_timing::Recorder::new_with_latch_readiness(
+                query_epoch,
+                capacity,
+                namespace,
+            ));
+        Some(observer)
+    }
+    pub fn prepare_latch_readiness(&self, context: u64, job: u64) -> Option<ReadinessPreparation> {
+        let flow = self.flow().filter(|f| f.readiness_enabled())?;
+        crate::execution_timing::pause();
+        let preparation = flow.prepare_readiness(context, job);
+        resume_current_timing(self.timing.as_ref());
+        Some(preparation)
+    }
+    pub fn begin_latch_wait(
+        &self,
+        context: u64,
+        waitee: u64,
+        consumer: Option<u64>,
+    ) -> Option<LatchWaitGuard> {
+        let flow = self.flow().filter(|f| f.readiness_enabled())?;
+        crate::execution_timing::pause();
+        let task = current_context()
+            .filter(|c| std::ptr::eq(c.observer.as_ref(), self))
+            .map(|c| c.id.task);
+        let guard = flow.begin_wait(context, waitee, consumer, task);
+        resume_current_timing(self.timing.as_ref());
+        Some(guard)
+    }
+    pub(crate) fn readiness_task(namespace: Option<u64>) -> Option<u64> {
+        current_context().filter(|c| Some(c.observer.id) == namespace).map(|c| c.id.task)
     }
 
     fn create(
@@ -416,7 +459,9 @@ impl ExecutionObserver {
     /// IDs in events are task-local numbers qualified by the header observer.
     pub fn write_json(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         let receipt = self.snapshot();
-        let schema = if self.flow().is_some() {
+        let schema = if self.flow().is_some_and(|f| f.readiness_enabled()) {
+            6
+        } else if self.flow().is_some() {
             5
         } else if self.timing.as_ref().is_some_and(|t| t.query_ownership_enabled()) {
             4

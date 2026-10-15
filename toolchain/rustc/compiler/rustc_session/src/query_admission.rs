@@ -138,6 +138,7 @@ struct Inner {
     execution_timing: bool,
     query_cpu_ownership: bool,
     execution_flow: Option<usize>,
+    latch_readiness: bool,
     next_context: AtomicU64,
     next_wait: AtomicU64,
     wait_ids_exhausted: AtomicBool,
@@ -187,6 +188,10 @@ impl std::fmt::Debug for QueryWaitToken {
     }
 }
 impl QueryWaitToken {
+    /// Allocated original identity, even when retaining its event later fails.
+    pub fn wait_id(&self) -> u64 {
+        self.0.id
+    }
     pub fn admission_context(&self, phase: AdmissionPhase) -> Option<AdmissionContext> {
         let binding = self.0.admission?;
         Some(AdmissionContext {
@@ -439,7 +444,13 @@ impl QueryAdmissionObserver {
                 return;
             }
             let capture_id = self.0.capture_id.as_deref().unwrap();
-            let observer = if let Some(capacity) = self.0.execution_flow {
+            let observer = if self.0.latch_readiness {
+                ExecutionObserver::new_for_query_with_latch_readiness(
+                    self.0.execution_flow.unwrap(),
+                    capture_id,
+                    self.0.epoch,
+                )
+            } else if let Some(capacity) = self.0.execution_flow {
                 ExecutionObserver::new_for_query_with_execution_flow(
                     capacity,
                     capture_id,
@@ -536,6 +547,7 @@ impl QueryAdmissionObserver {
             dispatch_resolutions,
             false,
             false,
+            false,
         )
     }
 
@@ -552,6 +564,7 @@ impl QueryAdmissionObserver {
             true,
             dispatch_resolutions,
             true,
+            false,
             false,
         )
     }
@@ -570,6 +583,23 @@ impl QueryAdmissionObserver {
             dispatch_resolutions,
             true,
             true,
+            false,
+        )
+    }
+
+    pub fn new_with_event_capacity_and_latch_readiness(
+        directory: &Path,
+        capacity: usize,
+        dispatch_resolutions: bool,
+    ) -> Option<Self> {
+        Self::new_with_diagnostic_options(
+            directory,
+            capacity,
+            true,
+            dispatch_resolutions,
+            true,
+            true,
+            true,
         )
     }
 
@@ -580,6 +610,7 @@ impl QueryAdmissionObserver {
         dispatch_resolutions: bool,
         query_cpu_ownership: bool,
         execution_flow: bool,
+        latch_readiness: bool,
     ) -> Option<Self> {
         if !(1..=crate::query_task_bindings::MAX_EVENT_CAPACITY).contains(&capacity) {
             return None;
@@ -593,6 +624,7 @@ impl QueryAdmissionObserver {
                 dispatch_resolutions,
                 query_cpu_ownership,
                 execution_flow,
+                latch_readiness,
             );
             return None;
         }
@@ -639,6 +671,7 @@ impl QueryAdmissionObserver {
                 execution_timing,
                 query_cpu_ownership,
                 execution_flow: execution_flow.then_some(capacity),
+                latch_readiness,
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -692,6 +725,7 @@ impl QueryAdmissionObserver {
                 execution_timing: false,
                 query_cpu_ownership: false,
                 execution_flow: None,
+                latch_readiness: false,
                 next_context: AtomicU64::new(1),
                 next_wait: AtomicU64::new(1),
                 wait_ids_exhausted: AtomicBool::new(false),
@@ -726,6 +760,17 @@ impl QueryAdmissionObserver {
     }
 }
 impl QueryAdmissionContext {
+    #[cfg(not(test))]
+    pub fn begin_latch_wait(
+        &self,
+        waitee: u64,
+        consumer: Option<u64>,
+    ) -> Option<rustc_thread_pool::execution_observer::LatchWaitGuard> {
+        if !self.observer.0.latch_readiness {
+            return None;
+        }
+        self.observer.0.pool.0.get()?.begin_latch_wait(self.id, waitee, consumer)
+    }
     /// The caller must be entering the actual admitted query job, not inherited TLS.
     #[cfg(not(test))]
     pub fn enter_query_execution(
@@ -824,6 +869,15 @@ impl QueryAdmissionContext {
     }
 }
 impl QueryAdmissionJob {
+    #[cfg(not(test))]
+    pub fn prepare_latch_readiness(
+        &self,
+    ) -> Option<rustc_thread_pool::execution_observer::ReadinessPreparation> {
+        if !self.context.observer.0.latch_readiness {
+            return None;
+        }
+        self.context.observer.0.pool.0.get()?.prepare_latch_readiness(self.context.id, self.id)
+    }
     /// Identifies the admitted job publishing this result, not provider execution.
     /// The cache's own critical section must have returned before calling this.
     pub fn result_produced(&self, index: u32) {
@@ -1663,6 +1717,40 @@ mod tests {
             QueryAdmissionObserver::new_with_event_capacity_and_query_cpu(&path, 7, false).unwrap();
         assert!(!observer.execution_flow_enabled());
         drop(observer);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn latch_readiness_is_explicit_and_preserves_original_query_authority() {
+        for dispatch in [false, true] {
+            let path = private_directory();
+            let observer = QueryAdmissionObserver::new_with_event_capacity_and_latch_readiness(
+                &path, 7, dispatch,
+            )
+            .unwrap();
+            assert!(observer.0.latch_readiness);
+            assert_eq!(observer.0.execution_flow, Some(7));
+            assert!(observer.query_cpu_ownership_enabled());
+            assert!(observer.execution_timing_enabled());
+            let context = observer.context();
+            let token = context.register_wait(1, Some(2), None).unwrap();
+            assert_eq!(token.wait_id(), 1);
+            drop(token);
+            context.snapshot(2);
+            drop(context);
+            drop(observer);
+            let text = receipt(&path);
+            assert!(text.starts_with(if dispatch { "{\"schema\":6," } else { "{\"schema\":5," }));
+            assert!(!text.contains("latch_readiness"));
+            fs::remove_dir_all(path).unwrap();
+        }
+        let path = private_directory();
+        let legacy =
+            QueryAdmissionObserver::new_with_event_capacity_and_execution_flow(&path, 7, false)
+                .unwrap();
+        assert!(!legacy.0.latch_readiness);
+        drop(legacy);
         fs::remove_dir_all(path).unwrap();
     }
 
