@@ -189,6 +189,204 @@ pub(crate) fn assess_with_inventory_limit(
     )
 }
 
+/// Observed result availability only, never an execution DAG or semantic coverage.
+#[derive(Debug, Serialize)]
+pub(crate) struct CacheCallAssessment {
+    pub(crate) scope: &'static str,
+    pub(crate) records_complete: bool,
+    pub(crate) observed_requests: u64,
+    pub(crate) observed_cache_hits: u64,
+    pub(crate) orphan_cache_hits: u64,
+    pub(crate) resolved_requests: u64,
+    pub(crate) unresolved_requests: u64,
+    pub(crate) distinct_publishing_job_relations: u64,
+    pub(crate) lost_events: u64,
+    pub(crate) unresolved_reasons: CacheCallUnresolvedReasons,
+    pub(crate) relations: Vec<CacheCallRelation>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CacheCallRelation {
+    pub(crate) request_id: u64,
+    pub(crate) context_id: u64,
+    pub(crate) consumer_job_id: u64,
+    pub(crate) result_id: u64,
+    pub(crate) producer_job_id: u64,
+    pub(crate) dep_node_index: u32,
+    /// All positions are zero-based indices in the original mutex-ordered stream.
+    pub(crate) request_start_event_index: usize,
+    pub(crate) publication_event_index: usize,
+    pub(crate) cache_hit_event_index: usize,
+    pub(crate) request_terminal_event_index: usize,
+}
+
+/// Exclusive precedence: feed, missing/interrupted terminal, multiple/no hits,
+/// incompatible return route, missing context/consumer, incomplete capture,
+/// absent/later publication, then unavailable endpoints. Admission suppression
+/// applies only to otherwise resolved rows. No later publication binds a hit.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct CacheCallUnresolvedReasons {
+    pub(crate) feed_request: u64,
+    pub(crate) interrupted_request: u64,
+    pub(crate) missing_request_terminal: u64,
+    pub(crate) ambiguous_cache_hits: u64,
+    pub(crate) no_cache_hit: u64,
+    pub(crate) incompatible_cache_hit_route: u64,
+    pub(crate) missing_context_or_consumer: u64,
+    pub(crate) capture_incomplete: u64,
+    pub(crate) no_prior_producer: u64,
+    pub(crate) producer_published_too_late: u64,
+    pub(crate) job_endpoint_unavailable: u64,
+    pub(crate) admission_authority_incomplete: u64,
+}
+
+impl CacheCallAssessment {
+    pub(crate) fn suppress_incomplete_admission_authority(&mut self) {
+        self.unresolved_reasons.admission_authority_incomplete += self.resolved_requests;
+        self.unresolved_requests += self.resolved_requests;
+        self.resolved_requests = 0;
+        self.distinct_publishing_job_relations = 0;
+        self.relations.clear();
+    }
+}
+
+/// Explicit query4/5 analysis. Strict validation runs before any additional maps
+/// are allocated. Maps and relation rows are bounded by the validated event budget,
+/// not allocator high-water values. Loss suppresses certification of uniqueness.
+pub(crate) fn assess_cache_calls_with_inventory_limit(
+    capture: &ReadCapture,
+    admitted: &BTreeSet<(u64, u64)>,
+    expected_contexts: u64,
+    context_high_water: &BTreeMap<u64, Option<u64>>,
+    max_events: usize,
+) -> Result<CacheCallAssessment> {
+    let read = assess_policy(
+        capture,
+        admitted,
+        expected_contexts,
+        Some(context_high_water),
+        max_events,
+    )?;
+    let mut starts = BTreeMap::new();
+    let mut terminals = BTreeMap::new();
+    let mut hits = BTreeMap::<u64, (usize, &ReadEvent, usize)>::new();
+    let mut publications = BTreeMap::new();
+    for (position, event) in capture.events.iter().enumerate() {
+        match event.kind {
+            Kind::RequestStarted => {
+                starts.insert(event.request_id.unwrap(), (position, event));
+            }
+            Kind::RequestFinished | Kind::RequestInterrupted => {
+                terminals.insert(event.request_id.unwrap(), (position, event));
+            }
+            Kind::CacheHit => {
+                hits.entry(event.request_id.unwrap())
+                    .and_modify(|facts| facts.2 += 1)
+                    .or_insert((position, event, 1));
+            }
+            Kind::ResultProduced => {
+                if let (Some(context), Some(index)) = (event.context_id, event.dep_node_index) {
+                    publications.insert((context, index), (position, event));
+                }
+            }
+            Kind::DepRead => {}
+        }
+    }
+    let mut report = CacheCallAssessment {
+        scope: "observed-cache-result-availability-not-execution-dag",
+        records_complete: read.records_complete,
+        observed_requests: read.observed_requests,
+        observed_cache_hits: read.cache_hits,
+        orphan_cache_hits: hits
+            .iter()
+            .filter(|(id, _)| !starts.contains_key(id))
+            .map(|(_, facts)| facts.2 as u64)
+            .sum(),
+        resolved_requests: 0,
+        unresolved_requests: 0,
+        distinct_publishing_job_relations: 0,
+        lost_events: read.lost_events,
+        unresolved_reasons: CacheCallUnresolvedReasons::default(),
+        relations: Vec::new(),
+    };
+    let mut job_relations = BTreeSet::new();
+    for (&request_id, &(start_position, start)) in &starts {
+        let reasons = &mut report.unresolved_reasons;
+        let reason = if start.mode == Some(Mode::Feed) {
+            Some(&mut reasons.feed_request)
+        } else if !terminals.contains_key(&request_id) {
+            Some(&mut reasons.missing_request_terminal)
+        } else {
+            let &(terminal_position, terminal) = &terminals[&request_id];
+            let hit = hits.get(&request_id);
+            if terminal.kind == Kind::RequestInterrupted {
+                Some(&mut reasons.interrupted_request)
+            } else if hit.is_some_and(|facts| facts.2 > 1) {
+                Some(&mut reasons.ambiguous_cache_hits)
+            } else if let Some(&(hit_position, hit, _)) = hit {
+                let route = matches!(
+                    (start.mode, terminal.outcome),
+                    (Some(Mode::Get), Some(Outcome::Value))
+                        | (
+                            Some(Mode::EnsureOk | Mode::EnsureResult),
+                            Some(Outcome::Ensured)
+                        )
+                );
+                if !route || !(start_position < hit_position && hit_position < terminal_position) {
+                    Some(&mut reasons.incompatible_cache_hit_route)
+                } else if let (Some(context), Some(consumer)) =
+                    (start.context_id, start.consumer_job_id)
+                {
+                    if !read.records_complete {
+                        Some(&mut reasons.capture_incomplete)
+                    } else if let Some(&(publication_position, publication)) =
+                        publications.get(&(context, hit.dep_node_index.unwrap()))
+                    {
+                        if publication_position >= hit_position {
+                            Some(&mut reasons.producer_published_too_late)
+                        } else if let Some(producer) =
+                            publication.producer_job_id.filter(|producer| {
+                                admitted.contains(&(context, *producer))
+                                    && admitted.contains(&(context, consumer))
+                            })
+                        {
+                            job_relations.insert((context, producer, consumer));
+                            report.relations.push(CacheCallRelation {
+                                request_id,
+                                context_id: context,
+                                consumer_job_id: consumer,
+                                result_id: publication.result_id.unwrap(),
+                                producer_job_id: producer,
+                                dep_node_index: hit.dep_node_index.unwrap(),
+                                request_start_event_index: start_position,
+                                publication_event_index: publication_position,
+                                cache_hit_event_index: hit_position,
+                                request_terminal_event_index: terminal_position,
+                            });
+                            None
+                        } else {
+                            Some(&mut reasons.job_endpoint_unavailable)
+                        }
+                    } else {
+                        Some(&mut reasons.no_prior_producer)
+                    }
+                } else {
+                    Some(&mut reasons.missing_context_or_consumer)
+                }
+            } else {
+                Some(&mut reasons.no_cache_hit)
+            }
+        };
+        if let Some(reason) = reason {
+            *reason += 1;
+        }
+    }
+    report.resolved_requests = report.relations.len() as u64;
+    report.unresolved_requests = report.observed_requests - report.resolved_requests;
+    report.distinct_publishing_job_relations = job_relations.len() as u64;
+    Ok(report)
+}
+
 fn assess_policy(
     capture: &ReadCapture,
     admitted: &BTreeSet<(u64, u64)>,
@@ -535,6 +733,229 @@ mod tests {
         end["kind"] = json!("request_finished");
         end["outcome"] = json!("value");
         json!({"schema":1,"records_complete":true,"semantic_complete":false,"full_pipeline_complete":false,"dep_node_namespace":"current-context","request_high_water":2,"read_high_water":2,"result_high_water":2,"expected_requests":1,"expected_reads":1,"expected_results":1,"lost_events":0,"opaque_boundaries":BOUNDARIES,"events":[start,produced,read,end]})
+    }
+    fn call_fixture() -> Value {
+        let mut value = fixture();
+        value["events"][2]["kind"] = json!("cache_hit");
+        value["events"][2]["read_id"] = Value::Null;
+        value["events"][2]["mode"] = json!("get");
+        value["events"][2]["outcome"] = Value::Null;
+        value["expected_reads"] = json!(0);
+        value["read_high_water"] = json!(1);
+        value
+    }
+    fn calls(value: Value, admitted: BTreeSet<(u64, u64)>) -> Result<CacheCallAssessment> {
+        assess_cache_calls_with_inventory_limit(
+            &serde_json::from_value(value)?,
+            &admitted,
+            1,
+            &BTreeMap::from([(1, Some(3))]),
+            MAX_EVENTS,
+        )
+    }
+    fn call_partition(report: &CacheCallAssessment) {
+        let reasons = serde_json::to_value(&report.unresolved_reasons).unwrap();
+        let total: u64 = reasons
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|v| v.as_u64().unwrap())
+            .sum();
+        assert_eq!(total, report.unresolved_requests);
+        assert_eq!(total + report.resolved_requests, report.observed_requests);
+        assert_eq!(report.resolved_requests, report.relations.len() as u64);
+    }
+    #[test]
+    fn cache_calls_publish_during_request_and_allow_forward_self_relation() {
+        for producer in [1, 2] {
+            let mut value = call_fixture();
+            value["events"][1]["producer_job_id"] = json!(producer);
+            let mut report = calls(value, BTreeSet::from([(1, 1), (1, 2)])).unwrap();
+            call_partition(&report);
+            assert_eq!(report.resolved_requests, 1);
+            let row = &report.relations[0];
+            assert_eq!(
+                (
+                    row.request_start_event_index,
+                    row.publication_event_index,
+                    row.cache_hit_event_index,
+                    row.request_terminal_event_index
+                ),
+                (0, 1, 2, 3)
+            );
+            assert_eq!(
+                (
+                    row.request_id,
+                    row.result_id,
+                    row.context_id,
+                    row.producer_job_id,
+                    row.consumer_job_id,
+                    row.dep_node_index
+                ),
+                (1, 1, 1, producer, 2, 42)
+            );
+            report.suppress_incomplete_admission_authority();
+            report.suppress_incomplete_admission_authority();
+            call_partition(&report);
+            assert_eq!(report.unresolved_reasons.admission_authority_incomplete, 1);
+            assert_eq!(report.distinct_publishing_job_relations, 0);
+        }
+    }
+    #[test]
+    fn cache_call_unresolved_reasons_partition_adversarial_routes() {
+        for reason in [
+            "feed_request",
+            "missing_request_terminal",
+            "interrupted_request",
+            "ambiguous_cache_hits",
+            "no_cache_hit",
+            "incompatible_cache_hit_route",
+            "missing_context_or_consumer",
+            "capture_incomplete",
+            "no_prior_producer",
+            "producer_published_too_late",
+            "job_endpoint_unavailable",
+        ] {
+            let mut value = call_fixture();
+            let mut admitted = BTreeSet::from([(1, 1), (1, 2)]);
+            match reason {
+                "feed_request" => {
+                    for i in [0, 2, 3] {
+                        value["events"][i]["mode"] = json!("feed");
+                    }
+                    value["events"][3]["outcome"] = json!("fed");
+                }
+                "missing_request_terminal" => {
+                    value["events"].as_array_mut().unwrap().pop();
+                    value["records_complete"] = json!(false);
+                }
+                "interrupted_request" => {
+                    value["events"][3]["kind"] = json!("request_interrupted");
+                    value["events"][3]["outcome"] = json!("interrupted");
+                }
+                "ambiguous_cache_hits" => {
+                    let hit = value["events"][2].clone();
+                    value["events"].as_array_mut().unwrap().insert(3, hit);
+                }
+                "no_cache_hit" => {
+                    value["events"].as_array_mut().unwrap().remove(2);
+                }
+                "incompatible_cache_hit_route" => {
+                    for i in [0, 2, 3] {
+                        value["events"][i]["mode"] = json!("ensure_ok");
+                    }
+                    value["events"][3]["outcome"] = json!("green_ensure");
+                }
+                "missing_context_or_consumer" => {
+                    for i in [0, 2, 3] {
+                        value["events"][i]["consumer_job_id"] = Value::Null;
+                    }
+                }
+                "capture_incomplete" => {
+                    value["records_complete"] = json!(false);
+                    value["lost_events"] = json!(1);
+                }
+                "no_prior_producer" => {
+                    value["events"].as_array_mut().unwrap().remove(1);
+                    value["expected_results"] = json!(0);
+                    value["result_high_water"] = json!(1);
+                }
+                "producer_published_too_late" => {
+                    value["events"].as_array_mut().unwrap().swap(1, 2);
+                }
+                "job_endpoint_unavailable" => {
+                    admitted.remove(&(1, 1));
+                }
+                _ => unreachable!(),
+            }
+            let report = calls(value, admitted).unwrap();
+            call_partition(&report);
+            assert_eq!(report.resolved_requests, 0, "{reason}");
+            assert_eq!(
+                serde_json::to_value(report.unresolved_reasons).unwrap()[reason],
+                json!(1),
+                "{reason}"
+            );
+        }
+    }
+    #[test]
+    fn cache_calls_preserve_strict_duplicate_producer_and_endpoint_checks() {
+        let mut value = call_fixture();
+        let mut duplicate = value["events"][1].clone();
+        duplicate["result_id"] = json!(2);
+        value["events"].as_array_mut().unwrap().insert(2, duplicate);
+        value["expected_results"] = json!(2);
+        value["result_high_water"] = json!(3);
+        assert!(calls(value, BTreeSet::from([(1, 1), (1, 2)])).is_err());
+        let mut value = call_fixture();
+        value["events"][2]["consumer_job_id"] = json!(1);
+        assert!(calls(value, BTreeSet::from([(1, 1), (1, 2)])).is_err());
+        let mut value = call_fixture();
+        value["events"][1]["producer_job_id"] = json!(3);
+        assert!(calls(value, BTreeSet::from([(1, 1), (1, 2)])).is_err());
+    }
+    #[test]
+    fn cache_calls_multiple_requests_preserve_rows_but_count_distinct_job_relations() {
+        for mode in ["get", "ensure_ok", "ensure_result"] {
+            let mut value = call_fixture();
+            for i in [0, 2, 3] {
+                value["events"][i]["mode"] = json!(mode);
+            }
+            value["events"][3]["outcome"] = json!(if mode == "get" { "value" } else { "ensured" });
+            let additional: Vec<_> = [0, 2, 3]
+                .into_iter()
+                .map(|i| {
+                    let mut event = value["events"][i].clone();
+                    event["request_id"] = json!(2);
+                    event
+                })
+                .collect();
+            value["events"].as_array_mut().unwrap().extend(additional);
+            value["expected_requests"] = json!(2);
+            value["request_high_water"] = json!(3);
+            let report = calls(value, BTreeSet::from([(1, 1), (1, 2)])).unwrap();
+            call_partition(&report);
+            assert_eq!(report.resolved_requests, 2);
+            assert_eq!(report.distinct_publishing_job_relations, 1);
+            assert_eq!(report.relations[1].request_id, 2);
+            assert_eq!(report.relations[1].publication_event_index, 1);
+            assert_eq!(report.relations[1].cache_hit_event_index, 5);
+        }
+    }
+    #[test]
+    fn cache_calls_orphan_hits_and_policy_bounds_fail_closed() {
+        let mut value = call_fixture();
+        value["events"].as_array_mut().unwrap().remove(0);
+        value["records_complete"] = json!(false);
+        value["lost_events"] = json!(1);
+        let report = calls(value, BTreeSet::from([(1, 1), (1, 2)])).unwrap();
+        call_partition(&report);
+        assert_eq!(report.orphan_cache_hits, 1);
+        assert_eq!(report.observed_requests, 0);
+        assert!(report.relations.is_empty());
+        let capture = serde_json::from_value(call_fixture()).unwrap();
+        for budget in [0, 3, 1_000_001] {
+            assert!(
+                assess_cache_calls_with_inventory_limit(
+                    &capture,
+                    &BTreeSet::from([(1, 1), (1, 2)]),
+                    1,
+                    &BTreeMap::from([(1, Some(3))]),
+                    budget
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            assess_cache_calls_with_inventory_limit(
+                &capture,
+                &BTreeSet::from([(1, 1), (1, 2)]),
+                1,
+                &BTreeMap::from([(1, Some(3))]),
+                4
+            )
+            .is_ok()
+        );
     }
     fn run(value: Value) -> Result<ReadAssessment> {
         let capture: ReadCapture = serde_json::from_value(value)?;

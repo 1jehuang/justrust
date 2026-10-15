@@ -216,6 +216,9 @@ enum Command {
         /// Opt in to bounded 512 MiB captures with up to one million read/binding events.
         #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
         large_capture: bool,
+        /// Derive bounded first-cache call provenance, not an execution dependency graph.
+        #[arg(long, conflicts_with_all = ["manifest", "compiler_manifest"])]
+        cache_call_provenance: bool,
         #[arg(long)]
         json: bool,
     },
@@ -776,16 +779,18 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             manifest,
             compiler_manifest,
             large_capture,
+            cache_call_provenance,
             json,
         } => {
             if let Some(manifest) = compiler_manifest {
                 execution_graph_compiler_cli::command(&path, &manifest, json)?;
             } else {
-                execution_graph::command_with_policy(
+                execution_graph::command_with_analysis(
                     &path,
                     json,
                     manifest.as_deref(),
                     large_capture,
+                    cache_call_provenance,
                 )?;
             }
         }
@@ -955,6 +960,39 @@ mod passthrough_tests {
                     "--large-capture",
                     manifest,
                     "owner.json"
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn graph_cache_call_provenance_is_explicit_and_manifest_exclusive() {
+        for (extra, expected, large) in [
+            (vec![], false, false),
+            (vec!["--cache-call-provenance"], true, false),
+            (
+                vec!["--cache-call-provenance", "--large-capture"],
+                true,
+                true,
+            ),
+        ] {
+            let mut args = vec!["justrust", "graph", "captures"];
+            args.extend(extra);
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.command, Command::Graph {
+                cache_call_provenance, large_capture, ..
+            } if cache_call_provenance == expected && large_capture == large));
+        }
+        for manifest in ["--manifest", "--compiler-manifest"] {
+            assert!(
+                Cli::try_parse_from([
+                    "justrust",
+                    "graph",
+                    "captures",
+                    "--cache-call-provenance",
+                    manifest,
+                    "owner.json",
                 ])
                 .is_err()
             );

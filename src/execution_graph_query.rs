@@ -520,6 +520,9 @@ pub struct QueryAssessment {
     pub waits: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) query_reads: Option<crate::execution_graph_reads::ReadAssessment>,
+    /// Explicitly requested first-cache availability observations, never execution DAG edges.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cache_call_provenance: Option<crate::execution_graph_reads::CacheCallAssessment>,
     /// None for schemas 1/2/3: legacy absence is unknown, never zero lineage.
     pub task_bindings: Option<crate::execution_graph_task_bindings::BindingAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -546,6 +549,15 @@ pub(crate) fn collect_bytes_with_policy(
     bytes: &[u8],
     policy: CapturePolicy,
 ) -> Result<CollectedQuery> {
+    collect_bytes_with_analysis(bytes, policy, false)
+}
+
+/// Analysis is explicit and never changes capture limits or legacy collectors.
+pub(crate) fn collect_bytes_with_analysis(
+    bytes: &[u8],
+    policy: CapturePolicy,
+    cache_call_provenance: bool,
+) -> Result<CollectedQuery> {
     if policy.max_bytes > 512 * 1024 * 1024 || policy.max_points > 1_000_000 {
         bail!("query capture policy exceeds hard bounds");
     }
@@ -558,14 +570,19 @@ pub(crate) fn collect_bytes_with_policy(
     }
     let version: Version =
         serde_json::from_slice(bytes).context("invalid query receipt version")?;
+    if cache_call_provenance && !matches!(version.schema, 4 | 5) {
+        bail!(
+            "--cache-call-provenance requires query schema4 or schema5 with independent endpoint inventory"
+        );
+    }
     let assessment = match version.schema {
         1 => assess_admissions(
             serde_json::from_slice(bytes).context("invalid query admission receipt")?,
         ),
         2 => assess_waits(serde_json::from_slice(bytes).context("invalid query wait receipt")?),
         3 => assess_reads(serde_json::from_slice(bytes).context("invalid query read receipt")?),
-        4 => return collect_bindings(bytes, policy),
-        5 => return collect_clock_bindings(bytes, policy),
+        4 => return collect_bindings(bytes, policy, cache_call_provenance),
+        5 => return collect_clock_bindings(bytes, policy, cache_call_provenance),
         _ => bail!("unsupported query receipt schema"),
     }?;
     Ok(CollectedQuery {
@@ -604,19 +621,27 @@ struct ReadPointEvent {
     result_id: Option<u64>,
 }
 
-fn collect_bindings(bytes: &[u8], policy: CapturePolicy) -> Result<CollectedQuery> {
+fn collect_bindings(
+    bytes: &[u8],
+    policy: CapturePolicy,
+    cache_call_provenance: bool,
+) -> Result<CollectedQuery> {
     let r: ReceiptV4 =
         serde_json::from_slice(bytes).context("invalid query task-binding receipt")?;
-    collect_bindings_base(r, bytes, policy)
+    collect_bindings_base(r, bytes, policy, cache_call_provenance)
 }
 
-fn collect_clock_bindings(bytes: &[u8], policy: CapturePolicy) -> Result<CollectedQuery> {
+fn collect_clock_bindings(
+    bytes: &[u8],
+    policy: CapturePolicy,
+    cache_call_provenance: bool,
+) -> Result<CollectedQuery> {
     let r: ReceiptV5 = serde_json::from_slice(bytes).context("invalid query clock receipt")?;
     if r.schema != 5 {
         bail!("unsupported query clock receipt schema");
     }
     let (base, clock) = r.into_base();
-    let mut query = collect_bindings_base(base, bytes, policy)?;
+    let mut query = collect_bindings_base(base, bytes, policy, cache_call_provenance)?;
     query.assessment.schema = 5;
     query.execution_clock = clock;
     // Standalone collection has no validated reciprocal pool authority. Never
@@ -629,6 +654,7 @@ fn collect_bindings_base(
     r: ReceiptV4,
     bytes: &[u8],
     policy: CapturePolicy,
+    cache_call_provenance: bool,
 ) -> Result<CollectedQuery> {
     use crate::execution_graph_task_bindings::{QuerySourceInventory, Source};
     if r.schema != 4 {
@@ -764,6 +790,7 @@ fn collect_bindings_base(
         },
         true,
         policy,
+        cache_call_provenance,
     )?;
     let bindings = crate::execution_graph_task_bindings::assess_with_limit(
         r.task_bindings,
@@ -1000,6 +1027,7 @@ fn assess_admissions_policy(r: Receipt, large_inventory: bool) -> Result<QueryAs
         wait_structural_complete: None,
         waits: None,
         query_reads: None,
+        cache_call_provenance: None,
         issues: issues.into_iter().collect(),
         opaque_boundaries: r.opaque_boundaries,
         cpu_work_ns: None,
@@ -1016,13 +1044,14 @@ struct WaitLifecycle {
 }
 
 fn assess_reads(r: ReceiptV3) -> Result<QueryAssessment> {
-    assess_reads_policy(r, false, CapturePolicy::strict())
+    assess_reads_policy(r, false, CapturePolicy::strict(), false)
 }
 
 fn assess_reads_policy(
     r: ReceiptV3,
     large_inventory: bool,
     policy: CapturePolicy,
+    cache_call_provenance: bool,
 ) -> Result<QueryAssessment> {
     if r.schema != 3 {
         bail!("unsupported query read receipt schema");
@@ -1088,11 +1117,25 @@ fn assess_reads_policy(
     } else {
         crate::execution_graph_reads::assess(&r.query_reads, &admitted, expected_contexts)?
     };
+    let admission_authority_complete = assessment.structural_complete;
     if !reads.records_complete {
         assessment.structural_complete = false;
         assessment
             .issues
             .push("query read records are incomplete or invalid".into());
+    }
+    if cache_call_provenance {
+        let mut calls = crate::execution_graph_reads::assess_cache_calls_with_inventory_limit(
+            &r.query_reads,
+            &admitted,
+            expected_contexts,
+            &context_high_water,
+            policy.max_points,
+        )?;
+        if !admission_authority_complete {
+            calls.suppress_incomplete_admission_authority();
+        }
+        assessment.cache_call_provenance = Some(calls);
     }
     assessment.query_reads = Some(reads);
     Ok(assessment)
@@ -1903,6 +1946,139 @@ pub(crate) mod tests {
             "pool":{"capture_id":"pool-1","observer":1},"unavailable_reason":null,
             "events":sources.into_iter().map(|source| json!({"source":source,"target":{"task":1,"at_pool_ns":10},"unbound_reason":null})).collect::<Vec<_>>()});
         v
+    }
+
+    pub(crate) fn cache_call_fixture() -> Value {
+        let mut v = task_binding_fixture();
+        let mut hit = v["query_reads"]["events"][0].clone();
+        hit["kind"] = json!("cache_hit");
+        hit["dep_node_index"] = json!(42);
+        v["query_reads"]["events"]
+            .as_array_mut()
+            .unwrap()
+            .insert(2, hit);
+        v
+    }
+
+    #[test]
+    fn cache_call_provenance_is_explicit_and_preserves_legacy_assessments() {
+        for schema in [4, 5] {
+            let mut v = cache_call_fixture();
+            if schema == 5 {
+                v["schema"] = json!(5);
+                v["execution_clock"] = Value::Null;
+            }
+            let bytes = serde_json::to_vec(&v).unwrap();
+            let legacy = collect_bytes(&bytes).unwrap().assessment;
+            let explicit_off = collect_bytes_with_analysis(&bytes, CapturePolicy::strict(), false)
+                .unwrap()
+                .assessment;
+            assert_eq!(
+                serde_json::to_vec(&legacy).unwrap(),
+                serde_json::to_vec(&explicit_off).unwrap()
+            );
+            let legacy_json = serde_json::to_value(&legacy).unwrap();
+            assert!(legacy_json.get("cache_call_provenance").is_none());
+            for policy in [CapturePolicy::strict(), CapturePolicy::large()] {
+                let mut analyzed = serde_json::to_value(
+                    collect_bytes_with_analysis(&bytes, policy, true)
+                        .unwrap()
+                        .assessment,
+                )
+                .unwrap();
+                let calls = analyzed
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("cache_call_provenance")
+                    .unwrap();
+                assert_eq!(calls["resolved_requests"], 1);
+                assert_eq!(calls["relations"][0]["publication_event_index"], 1);
+                assert_eq!(calls["relations"][0]["cache_hit_event_index"], 2);
+                assert_eq!(calls["relations"][0]["request_terminal_event_index"], 4);
+                assert_eq!(analyzed, legacy_json);
+                assert_eq!(analyzed["cpu_work_ns"], Value::Null);
+                assert_eq!(analyzed["execution_span_ns"], Value::Null);
+            }
+        }
+        for v in [fixture(), wait_fixture(), read_fixture()] {
+            let bytes = serde_json::to_vec(&v).unwrap();
+            assert!(collect_bytes(&bytes).is_ok());
+            assert!(
+                collect_bytes_with_analysis(&bytes, CapturePolicy::strict(), true)
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("requires query schema4 or schema5")
+            );
+        }
+    }
+
+    #[test]
+    fn cache_call_provenance_reuses_original_bytes_and_independent_authority() {
+        let v = cache_call_fixture();
+        let text = serde_json::to_string(&v).unwrap();
+        let bounded = CapturePolicy {
+            max_bytes: text.len(),
+            max_points: 7,
+        };
+        assert!(collect_bytes_with_analysis(text.as_bytes(), bounded, true).is_ok());
+        for policy in [
+            CapturePolicy {
+                max_bytes: text.len() - 1,
+                ..bounded
+            },
+            CapturePolicy {
+                max_points: 4,
+                ..bounded
+            },
+            CapturePolicy {
+                max_points: 1_000_001,
+                ..bounded
+            },
+        ] {
+            assert!(collect_bytes_with_analysis(text.as_bytes(), policy, true).is_err());
+        }
+        for duplicate in [
+            text.replacen("\"schema\":4", "\"schema\":4,\"schema\":4", 1),
+            text.replacen(
+                "\"kind\":\"cache_hit\"",
+                "\"kind\":\"cache_hit\",\"kind\":\"cache_hit\"",
+                1,
+            ),
+        ] {
+            assert_ne!(duplicate, text);
+            assert!(
+                collect_bytes_with_analysis(duplicate.as_bytes(), CapturePolicy::large(), true)
+                    .is_err()
+            );
+        }
+        let mut incomplete = v.clone();
+        incomplete["capture_complete"] = json!(false);
+        incomplete["lost_events"] = json!(1);
+        let a = collect_bytes_with_analysis(
+            &serde_json::to_vec(&incomplete).unwrap(),
+            CapturePolicy::strict(),
+            true,
+        )
+        .unwrap()
+        .assessment;
+        let calls = serde_json::to_value(a.cache_call_provenance.unwrap()).unwrap();
+        assert_eq!(calls["resolved_requests"], 0);
+        assert_eq!(calls["relations"], json!([]));
+        assert_eq!(
+            calls["unresolved_reasons"]["admission_authority_incomplete"],
+            1
+        );
+        let mut invalid = v;
+        invalid["query_reads"]["events"][2]["consumer_job_id"] = json!(99);
+        assert!(
+            collect_bytes_with_analysis(
+                &serde_json::to_vec(&invalid).unwrap(),
+                CapturePolicy::large(),
+                true
+            )
+            .is_err()
+        );
     }
 
     fn clock_fixture() -> Value {
