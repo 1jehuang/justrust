@@ -33,6 +33,85 @@ fn equivalent_key<K: Eq, V>(k: K) -> impl Fn(&(K, V)) -> bool {
     move |x| x.0 == k
 }
 
+/// Record an already obtained result before its cache entry can be observed.
+///
+/// The callback runs outside cache/query locks. Its record associates the result
+/// with this job, not necessarily a fresh provider invocation or a successfully
+/// published cache entry. If cache completion panics, the active job is still
+/// armed and poisons the query; the failed root cannot certify complete coverage.
+/// Cache insertion must still precede removal of the active job and waiter wakeup.
+#[inline(always)]
+fn complete_query_cache<C: QueryCache>(
+    cache: &C,
+    key: C::Key,
+    value: C::Value,
+    index: DepNodeIndex,
+    before_visibility: impl FnOnce(),
+) {
+    before_visibility();
+    cache.complete(key, value, index);
+}
+
+#[cfg(test)]
+mod cache_publication_tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use rustc_middle::dep_graph::DepNodeIndex;
+    use rustc_middle::query::{QueryCache, SingleCache};
+    use rustc_session::query_reads::{DepReadOutcome, QueryReadObserver};
+
+    use super::complete_query_cache;
+
+    #[test]
+    fn racing_cache_hit_cannot_precede_result_provenance() {
+        let cache = SingleCache::<u32>::default();
+        let observer = QueryReadObserver::default();
+        let index = DepNodeIndex::from_u32(42);
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let timeout = Duration::from_secs(10);
+
+        std::thread::scope(|scope| {
+            let publisher_cache = &cache;
+            let publisher_observer = &observer;
+            let publisher = scope.spawn(move || {
+                complete_query_cache(publisher_cache, (), 123, index, || {
+                    // Stop before recording provenance. A cache hit here would
+                    // deterministically expose the old publication-before-record race.
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(timeout).unwrap();
+                    publisher_observer.result_produced(1, 1, index.as_u32());
+                });
+            });
+            entered_rx.recv_timeout(timeout).unwrap();
+            let early_hit = cache.lookup(&());
+            // Release and join before asserting, including on the failing old order.
+            release_tx.send(()).unwrap();
+            publisher.join().unwrap();
+            assert!(early_hit.is_none(), "cache became visible before result provenance");
+            assert_eq!(cache.lookup(&()), Some((123, index)));
+            observer.read(Some(1), Some(2), None, index.as_u32(), DepReadOutcome::TrackedNew);
+        });
+
+        let mut receipt = String::new();
+        observer.append_json(&mut receipt);
+        let produced = receipt.find("\"kind\":\"result_produced\"").unwrap();
+        let read = receipt.find("\"kind\":\"dep_read\"").unwrap();
+        assert!(produced < read, "cache hit must follow its producer association");
+        assert!(receipt.contains("\"records_complete\":true"));
+        assert!(receipt.contains("\"semantic_complete\":false"));
+    }
+
+    #[test]
+    fn absent_capture_preserves_cache_value_and_index() {
+        let cache = SingleCache::<u32>::default();
+        let index = DepNodeIndex::from_u32(42);
+        complete_query_cache(&cache, (), 123, index, || {});
+        assert_eq!(cache.lookup(&()), Some((123, index)));
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn handle_cycle<'tcx, C: QueryCache>(
@@ -112,12 +191,14 @@ where
     where
         C: QueryCache<Key = K>,
     {
-        // Mark as complete before we remove the job from the active state
-        // so no other thread can re-execute this query.
-        cache.complete(self.key, value, dep_node_index);
-        if let Some(admission) = &self.admission {
-            admission.result_produced(dep_node_index.as_u32());
-        }
+        // The value and dep-node index are already computed. Publish their producer
+        // association before making the value visible to racing cache lookups.
+        // Neither the active-query shard nor the cache is locked here.
+        complete_query_cache(cache, self.key, value, dep_node_index, || {
+            if let Some(admission) = &self.admission {
+                admission.result_produced(dep_node_index.as_u32());
+            }
+        });
 
         // Keep the resource-owning token outside ManuallyDrop even if latch signaling panics.
         let mut this = ManuallyDrop::new(self);

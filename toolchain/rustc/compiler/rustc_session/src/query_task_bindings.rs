@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 const MAX_EVENTS: usize = 100_000;
+pub(crate) const MAX_EVENT_CAPACITY: usize = 1_000_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Source {
     Admitted { context_id: u64, job_id: u64 },
@@ -61,6 +62,7 @@ pub struct TaskBindings {
     sampler: IntoDynSyncSend<Arc<dyn Sampler>>,
     #[cfg(test)]
     sampler: Arc<dyn Sampler>,
+    event_capacity: usize,
     capped: AtomicBool,
     lost: AtomicU64,
     unknown_inventory: AtomicBool,
@@ -69,16 +71,28 @@ pub struct TaskBindings {
 }
 impl TaskBindings {
     pub fn new(sampler: Arc<dyn Sampler>) -> Self {
+        Self::with_event_capacity(sampler, MAX_EVENTS).expect("default event capacity is valid")
+    }
+    /// Opt-in diagnostic capacity only. Invalid budgets are refused, never clamped.
+    pub fn with_event_capacity(sampler: Arc<dyn Sampler>, capacity: usize) -> Option<Self> {
+        if !(1..=MAX_EVENT_CAPACITY).contains(&capacity) {
+            return None;
+        }
         #[cfg(not(test))]
         let sampler = IntoDynSyncSend(sampler);
-        Self {
+        Some(Self {
             sampler,
+            event_capacity: capacity,
             capped: AtomicBool::new(false),
             lost: AtomicU64::new(0),
             unknown_inventory: AtomicBool::new(false),
             overflow: AtomicBool::new(false),
             events: Mutex::new(Vec::new()),
-        }
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn event_capacity(&self) -> usize {
+        self.event_capacity
     }
     /// Mark allocator wrap permanently, even if later allocations restore a plausible high water.
     pub fn allocator_id(&self, id: u64) {
@@ -107,9 +121,9 @@ impl TaskBindings {
             self.loss();
             error.into_inner()
         });
-        if events.len() < MAX_EVENTS && events.try_reserve(1).is_ok() {
+        if events.len() < self.event_capacity && events.try_reserve(1).is_ok() {
             events.push((source, point.unwrap()));
-            if events.len() == MAX_EVENTS {
+            if events.len() == self.event_capacity {
                 self.capped.store(true, Ordering::Relaxed);
             }
         } else {
@@ -289,6 +303,47 @@ mod tests {
         let mut out = String::new();
         recorder.append_json(&mut out, contexts, count, highs);
         out
+    }
+    #[test]
+    fn explicit_event_capacity_is_bounded_and_keeps_default() {
+        assert!(TaskBindings::with_event_capacity(Arc::new(UnavailableSampler), 0).is_none());
+        assert!(
+            TaskBindings::with_event_capacity(Arc::new(UnavailableSampler), 1_000_001).is_none()
+        );
+        assert_eq!(TaskBindings::new(Arc::new(UnavailableSampler)).event_capacity, 100_000);
+        for capacity in [1, 3, 100_001, 1_000_000] {
+            let recorder =
+                TaskBindings::with_event_capacity(Arc::new(UnavailableSampler), capacity).unwrap();
+            assert_eq!(recorder.event_capacity, capacity);
+            assert!(recorder.events.lock().unwrap().is_empty());
+        }
+        let recorder = TaskBindings::with_event_capacity(Arc::new(UnavailableSampler), 2).unwrap();
+        recorder.record(Source::DepRead { read_id: 1 });
+        recorder.record(Source::DepRead { read_id: 2 });
+        assert!(json(&recorder, &[], Some(0), [1, 3, 1, 1]).contains("\"records_complete\":true"));
+        recorder.record(Source::DepRead { read_id: 3 });
+        assert_eq!(recorder.events.lock().unwrap().len(), 2);
+        let out = json(&recorder, &[], Some(0), [1, 4, 1, 1]);
+        assert!(out.contains("\"expected_points\":3"));
+        assert!(out.contains("\"lost_events\":1"));
+        assert!(out.contains("\"records_complete\":false"));
+        let capacity = MAX_EVENTS + 1;
+        let recorder =
+            TaskBindings::with_event_capacity(Arc::new(UnavailableSampler), capacity).unwrap();
+        for read_id in 1..=capacity as u64 {
+            recorder.record(Source::DepRead { read_id });
+        }
+        assert_eq!(recorder.events.lock().unwrap().len(), capacity);
+        assert!(
+            json(&recorder, &[], Some(0), [1, capacity as u64 + 1, 1, 1])
+                .contains("\"records_complete\":true")
+        );
+        recorder.record(Source::DepRead { read_id: capacity as u64 + 1 });
+        assert_eq!(recorder.lost.load(Ordering::Relaxed), 1);
+        assert!(
+            json(&recorder, &[], Some(0), [1, capacity as u64 + 2, 1, 1])
+                .contains("\"records_complete\":false")
+        );
     }
     #[test]
     fn checked_expected_inventory_is_not_derived_from_events() {

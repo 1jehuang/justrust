@@ -2,7 +2,7 @@
 //! Only explicitly instrumented joins are covered. Dequeue order is not a causal
 //! edge, and these receipts make no CPU, span, or full-pipeline coverage claim.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -35,6 +35,9 @@ fn allocate_id(counter: &AtomicU64, limit: u64) -> Option<u64> {
 type Active = Rc<RefCell<Option<TaskContext>>>;
 thread_local! {
     static CURRENT: RefCell<Option<Active>> = const { RefCell::new(None) };
+    // Independent of CURRENT: opaque dispatch and an actually empty slot both
+    // report NoActiveTask, but only the latter can admit a new frontend root.
+    static DISPATCH_MASKED: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -432,24 +435,34 @@ pub fn current_context() -> Option<TaskContext> {
     CURRENT.with(|current| current.borrow().as_ref().and_then(|active| active.borrow().clone()))
 }
 
+/// Whether generic dispatch currently masks the worker's lineage. Instrumented
+/// closures may enter their own tasks, but frontend entry must not invent a root
+/// for opaque scheduler work. This does not amend point receipt outcomes.
+pub fn is_dispatch_masked() -> bool {
+    DISPATCH_MASKED.with(Cell::get)
+}
+
 /// Generic dispatch is not a lineage edge. Hide the helping invocation's exact
 /// active slot until the dispatched job returns. Instrumented closures enter
 /// their own contexts, while opaque work stays unbound. Never finish or replace
 /// the suspended slot's contents, including an in-progress fork's None state.
 pub(crate) fn suspend_for_dispatch() -> DispatchGuard {
     let previous = CURRENT.with(|current| current.replace(None));
-    DispatchGuard { previous, _not_send: PhantomData }
+    let previous_mask = DISPATCH_MASKED.with(|masked| masked.replace(true));
+    DispatchGuard { previous, previous_mask, _not_send: PhantomData }
 }
 
 /// Worker-local restoration, including when a dispatched closure unwinds.
 pub(crate) struct DispatchGuard {
     previous: Option<Active>,
+    previous_mask: bool,
     _not_send: PhantomData<Rc<()>>,
 }
 
 impl Drop for DispatchGuard {
     fn drop(&mut self) {
         CURRENT.with(|current| current.replace(self.previous.take()));
+        DISPATCH_MASKED.with(|masked| masked.set(self.previous_mask));
     }
 }
 
@@ -736,6 +749,82 @@ mod tests {
         let mut output = Vec::new();
         observer.write_json(&mut output).unwrap();
         assert!(!String::from_utf8(output).unwrap().contains("\"dropped_events\":0"));
+    }
+
+    #[test]
+    fn dispatch_mask_nesting_and_unwind_restore_exact_worker_state() {
+        let observer = ExecutionObserver::new_for_query(100, "query-mask").unwrap();
+        assert!(!is_dispatch_masked());
+        let root = observer.root().unwrap();
+        let guard = root.enter().unwrap();
+        let before = observer.current_point().unwrap().task;
+        {
+            let _outer = suspend_for_dispatch();
+            assert!(is_dispatch_masked());
+            assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+            {
+                let _inner = suspend_for_dispatch();
+                assert!(is_dispatch_masked());
+                assert!(current_context().is_none());
+            }
+            assert!(is_dispatch_masked());
+            let panicked = std::panic::catch_unwind(|| {
+                let _inner = suspend_for_dispatch();
+                assert!(is_dispatch_masked());
+                panic!("nested dispatch unwind");
+            });
+            assert!(panicked.is_err());
+            assert!(is_dispatch_masked());
+            assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+        }
+        assert!(!is_dispatch_masked());
+        assert_eq!(observer.current_point().unwrap().task, before);
+        let fork = root.fork(2).unwrap();
+        assert_eq!(observer.current_point(), Err(PoolPointUnbound::SuspendedTask));
+        let panicked = std::panic::catch_unwind(|| {
+            let _dispatch = suspend_for_dispatch();
+            assert!(is_dispatch_masked());
+            assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+            panic!("suspended dispatch unwind");
+        });
+        assert!(panicked.is_err());
+        assert!(!is_dispatch_masked());
+        assert_eq!(observer.current_point(), Err(PoolPointUnbound::SuspendedTask));
+        for child in fork.children() {
+            let _child = child.enter().unwrap();
+        }
+        let continuation = fork.resume().ok().unwrap();
+        assert_eq!(observer.current_point().unwrap().task, continuation.task);
+        drop(guard);
+        assert!(!is_dispatch_masked());
+        assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+    }
+
+    #[test]
+    fn dispatch_mask_does_not_prevent_explicit_instrumented_child_entry() {
+        let observer = ExecutionObserver::new_for_query(100, "query-child-mask").unwrap();
+        let root = observer.root().unwrap();
+        let root_guard = root.enter().unwrap();
+        let fork = root.fork(2).unwrap();
+        {
+            let _dispatch = suspend_for_dispatch();
+            let before = observer.snapshot().task_allocator_high_water;
+            assert!(is_dispatch_masked());
+            assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+            for child in fork.children() {
+                let child_guard = child.enter().unwrap();
+                assert!(is_dispatch_masked());
+                assert_eq!(observer.current_point().unwrap().task, child.id().task);
+                drop(child_guard);
+                assert!(is_dispatch_masked());
+                assert_eq!(observer.current_point(), Err(PoolPointUnbound::NoActiveTask));
+            }
+            assert_eq!(observer.snapshot().task_allocator_high_water, before);
+        }
+        assert!(!is_dispatch_masked());
+        assert_eq!(observer.current_point(), Err(PoolPointUnbound::SuspendedTask));
+        assert!(fork.resume().is_ok());
+        drop(root_guard);
     }
 
     #[test]

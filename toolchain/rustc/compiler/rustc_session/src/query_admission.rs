@@ -110,13 +110,19 @@ impl Sampler for PoolSampler {
     }
 }
 #[cfg(not(test))]
-fn new_bindings() -> (Arc<TaskBindings>, Arc<PoolSampler>) {
+fn new_bindings(capacity: usize) -> Option<(Arc<TaskBindings>, Arc<PoolSampler>)> {
     let pool = Arc::new(PoolSampler::default());
-    (Arc::new(TaskBindings::new(pool.clone())), pool)
+    Some((Arc::new(TaskBindings::with_event_capacity(pool.clone(), capacity)?), pool))
 }
 #[cfg(test)]
-fn new_bindings() -> (Arc<TaskBindings>, ()) {
-    (Arc::new(TaskBindings::new(Arc::new(crate::query_task_bindings::UnavailableSampler))), ())
+fn new_bindings(capacity: usize) -> Option<(Arc<TaskBindings>, ())> {
+    Some((
+        Arc::new(TaskBindings::with_event_capacity(
+            Arc::new(crate::query_task_bindings::UnavailableSampler),
+            capacity,
+        )?),
+        (),
+    ))
 }
 
 #[derive(Clone)]
@@ -442,11 +448,40 @@ impl QueryAdmissionObserver {
         }
     }
 
+    /// Enter a genuine frontend task only on this observer's attached registry.
+    /// Existing active, suspended, or foreign task slots and opaque dispatch
+    /// masks remain untouched. The owned guard must leave before sealing.
+    #[cfg(not(test))]
+    pub fn enter_frontend_scope(&self) -> Option<rustc_thread_pool::execution_observer::TaskGuard> {
+        use rustc_thread_pool::execution_observer::{PoolPointUnbound, is_dispatch_masked};
+        if is_dispatch_masked() {
+            return None;
+        }
+        let pool = self.0.pool.0.get()?;
+        let registry = rustc_thread_pool::Registry::current();
+        if !Arc::ptr_eq(registry.execution_observer()?, pool)
+            || pool.current_point() != Err(PoolPointUnbound::NoActiveTask)
+        {
+            return None;
+        }
+        pool.root()?.enter()
+    }
+
     /// Requires a private directory. Unsupported platforms fail open by disabling capture.
     pub fn new(directory: &Path) -> Option<Self> {
+        Self::new_with_event_capacity(directory, MAX_EVENTS)
+    }
+    /// Explicit diagnostic budget for direct reads and task-point bindings only.
+    /// Admission, waits, and native pool capture retain their default budgets.
+    /// Invalid budgets are refused before touching the directory. This API does
+    /// not change compiler flags, environment, cache keys, or receipt semantics.
+    pub fn new_with_event_capacity(directory: &Path, capacity: usize) -> Option<Self> {
+        if !(1..=crate::query_task_bindings::MAX_EVENT_CAPACITY).contains(&capacity) {
+            return None;
+        }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = directory;
+            let _ = (directory, capacity);
             return None;
         }
         #[cfg(target_os = "linux")]
@@ -481,7 +516,7 @@ impl QueryAdmissionObserver {
                 return None;
             }
             let capture_id = Some(mint_capture_id());
-            let (bindings, _pool) = new_bindings();
+            let (bindings, _pool) = new_bindings(capacity)?;
             Some(Self(Arc::new(Inner {
                 _directory_handle: handle,
                 capture_id,
@@ -494,7 +529,10 @@ impl QueryAdmissionObserver {
                 wait_ids_exhausted: AtomicBool::new(false),
                 #[cfg(test)]
                 wait_id_ceiling: u64::MAX - 1,
-                reads: crate::query_reads::QueryReadObserver::with_bindings(Arc::clone(&bindings)),
+                reads: crate::query_reads::QueryReadObserver::with_bindings_and_event_capacity(
+                    Arc::clone(&bindings),
+                    capacity,
+                )?,
                 bindings,
                 returned: AtomicBool::new(false),
                 #[cfg(not(test))]
@@ -527,7 +565,7 @@ impl QueryAdmissionObserver {
             {
                 return None;
             }
-            let (bindings, _pool) = new_bindings();
+            let (bindings, _pool) = new_bindings(MAX_EVENTS)?;
             Some(Self(Arc::new(Inner {
                 _directory_handle: directory,
                 capture_id: Some(capture_id),
@@ -1379,6 +1417,71 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777, 0o600);
         text
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn explicit_event_capacity_refuses_invalid_before_directory_creation() {
+        for capacity in [0, 1_000_001] {
+            let path = private_directory();
+            assert!(QueryAdmissionObserver::new_with_event_capacity(&path, capacity).is_none());
+            assert!(!path.exists());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn default_and_transport_constructors_keep_read_and_binding_budgets() {
+        let path = private_directory();
+        let default = QueryAdmissionObserver::new(&path).unwrap();
+        assert_eq!(default.0.reads.event_capacity(), 100_000);
+        assert_eq!(default.0.bindings.event_capacity(), 100_000);
+        let transport = QueryAdmissionObserver::new_from_directory(
+            default.0._directory_handle.try_clone().unwrap(),
+            "capacity-transport-default".into(),
+        )
+        .unwrap();
+        assert_eq!(transport.0.reads.event_capacity(), 100_000);
+        assert_eq!(transport.0.bindings.event_capacity(), 100_000);
+        drop((transport, default));
+        fs::remove_dir_all(path).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn explicit_capacity_only_changes_read_and_binding_budgets() {
+        for capacity in [1, 1_000_000] {
+            let path = private_directory();
+            let observer =
+                QueryAdmissionObserver::new_with_event_capacity(&path, capacity).unwrap();
+            assert_eq!(observer.0.reads.event_capacity(), capacity);
+            assert_eq!(observer.0.bindings.event_capacity(), capacity);
+            let context = observer.context();
+            for id in 1..=2 {
+                context.admit(id, None, Instant::now()).complete();
+                let wait = context.register_wait(id, None, None).unwrap();
+                wait.notify("completed");
+                wait.resumed(wait.now());
+                observer.reads().read(
+                    None,
+                    None,
+                    None,
+                    id as u32,
+                    crate::query_reads::DepReadOutcome::Disabled,
+                );
+            }
+            context.snapshot(3);
+            {
+                let data = observer.0.data.lock().unwrap();
+                assert_eq!(data.events.len(), 4);
+                assert_eq!(data.waits.len(), 2);
+                assert_eq!(data.lost, 0);
+            }
+            assert_eq!(MAX_EVENTS, 100_000);
+            observer.finalize_interface_returned();
+            drop((context, observer));
+            let text = receipt(&path);
+            assert!(text.contains("\"semantic_complete\":false"));
+            assert!(text.contains("\"full_pipeline_complete\":false"));
+            fs::remove_dir_all(path).unwrap();
+        }
     }
     #[cfg(target_os = "linux")]
     #[test]

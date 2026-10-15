@@ -472,6 +472,15 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
                     attach_resource_capture(observer, admission_attachment, capture);
                 }
             }
+            // Own this actual interface invocation, not merely its inner joins.
+            // The guard lives on this worker through drop(compiler) and finishes
+            // before the outer pool/interface seal. Opaque dispatched work still
+            // suspends its context rather than inheriting fabricated ancestry.
+            let _frontend_scope = if sess.opts.jobs.frontend.is_some() {
+                sess.query_admission.as_ref().and_then(|observer| observer.enter_frontend_scope())
+            } else {
+                None
+            };
 
             // STACK_SIZE is setup in run_in_thread_pool_with_globals, before arriving here.
             sess.opts.recommended_stack_size = *util::STACK_SIZE.get().unwrap();

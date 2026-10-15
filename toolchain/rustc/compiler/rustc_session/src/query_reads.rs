@@ -85,7 +85,8 @@ pub struct QueryReadObserver {
     results: AtomicU64,
     lost: AtomicU64,
     lost_overflowed: AtomicBool,
-    // Monotonic: set only once MAX_EVENTS have actually been accepted under the mutex.
+    // Monotonic: set only once event_capacity events have been accepted under the mutex.
+    event_capacity: usize,
     capped: AtomicBool,
     events: Mutex<Vec<Event>>,
 }
@@ -98,14 +99,32 @@ impl Default for QueryReadObserver {
             results: AtomicU64::new(1),
             lost: AtomicU64::new(0),
             lost_overflowed: AtomicBool::new(false),
+            event_capacity: MAX_EVENTS,
             capped: AtomicBool::new(false),
             events: Mutex::new(Vec::new()),
         }
     }
 }
 impl QueryReadObserver {
+    /// Opt-in diagnostic capacity only. No allocation occurs until events arrive.
+    pub fn with_event_capacity(capacity: usize) -> Option<Self> {
+        if !(1..=crate::query_task_bindings::MAX_EVENT_CAPACITY).contains(&capacity) {
+            return None;
+        }
+        Some(Self { event_capacity: capacity, ..Self::default() })
+    }
+    pub fn with_bindings_and_event_capacity(
+        bindings: Arc<TaskBindings>,
+        capacity: usize,
+    ) -> Option<Self> {
+        Some(Self { bindings: Some(bindings), ..Self::with_event_capacity(capacity)? })
+    }
     pub fn with_bindings(bindings: Arc<TaskBindings>) -> Self {
         Self { bindings: Some(bindings), ..Self::default() }
+    }
+    #[cfg(test)]
+    pub(crate) fn event_capacity(&self) -> usize {
+        self.event_capacity
     }
     pub fn high_waters(&self) -> [u64; 3] {
         [
@@ -141,9 +160,9 @@ impl QueryReadObserver {
                 error.into_inner()
             }
         };
-        if events.len() < MAX_EVENTS && events.try_reserve(1).is_ok() {
+        if events.len() < self.event_capacity && events.try_reserve(1).is_ok() {
             events.push(event);
-            if events.len() == MAX_EVENTS {
+            if events.len() == self.event_capacity {
                 self.capped.store(true, Ordering::Relaxed);
             }
         } else {
@@ -367,6 +386,75 @@ fn inventory_matches(events: &[Event], requests: u64, reads: u64, results: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_event_capacity_is_bounded_and_defaults_are_unchanged() {
+        assert!(QueryReadObserver::with_event_capacity(0).is_none());
+        assert!(QueryReadObserver::with_event_capacity(1_000_001).is_none());
+        assert_eq!(QueryReadObserver::default().event_capacity, 100_000);
+        for capacity in [1, 3, 100_001, 1_000_000] {
+            let observer = QueryReadObserver::with_event_capacity(capacity).unwrap();
+            assert_eq!(observer.event_capacity, capacity);
+            assert!(observer.events.lock().unwrap().is_empty());
+        }
+        let observer = QueryReadObserver::with_event_capacity(2).unwrap();
+        observer.result_produced(1, 1, 1);
+        observer.result_produced(1, 1, 2);
+        assert!(json(&observer).contains("\"records_complete\":true"));
+        observer.result_produced(1, 1, 3);
+        assert_eq!(observer.events.lock().unwrap().len(), 2);
+        assert_eq!(observer.high_waters(), [1, 1, 4]);
+        let out = json(&observer);
+        assert!(out.contains("\"lost_events\":1"));
+        assert!(out.contains("\"expected_results\":3"));
+        assert!(out.contains("\"records_complete\":false"));
+        for capacity in [MAX_EVENTS, MAX_EVENTS + 1] {
+            let observer = QueryReadObserver::with_event_capacity(capacity).unwrap();
+            for index in 0..capacity {
+                observer.result_produced(1, 1, index as u32);
+            }
+            assert_eq!(observer.events.lock().unwrap().len(), capacity);
+            assert!(json(&observer).contains("\"records_complete\":true"));
+            observer.result_produced(1, 1, capacity as u32);
+            assert_eq!(observer.events.lock().unwrap().len(), capacity);
+            assert_eq!(observer.high_waters(), [1, 1, capacity as u64 + 2]);
+            let out = json(&observer);
+            assert!(out.contains("\"lost_events\":1"));
+            assert!(out.contains("\"records_complete\":false"));
+        }
+    }
+    #[test]
+    fn unequal_capacities_keep_read_and_binding_loss_independent() {
+        for (read_capacity, binding_capacity) in [(1, 3), (3, 1)] {
+            let bindings = Arc::new(
+                TaskBindings::with_event_capacity(
+                    Arc::new(crate::query_task_bindings::UnavailableSampler),
+                    binding_capacity,
+                )
+                .unwrap(),
+            );
+            assert!(
+                QueryReadObserver::with_bindings_and_event_capacity(bindings.clone(), 0).is_none()
+            );
+            let observer = QueryReadObserver::with_bindings_and_event_capacity(
+                bindings.clone(),
+                read_capacity,
+            )
+            .unwrap();
+            for index in 0..3 {
+                observer.read(None, None, None, index, DepReadOutcome::Disabled);
+            }
+            assert_eq!(observer.high_waters(), [1, 4, 1]);
+            assert_eq!(observer.events.lock().unwrap().len(), read_capacity);
+            let out = json(&observer);
+            assert!(out.contains(&format!("\"lost_events\":{}", 3 - read_capacity)));
+            assert!(out.contains("\"expected_reads\":3"));
+            let mut binding_out = String::new();
+            bindings.append_json(&mut binding_out, &[], Some(0), [1, 4, 1, 1]);
+            assert!(binding_out.contains(&format!("\"lost_events\":{}", 3 - binding_capacity)));
+            assert!(binding_out.contains("\"expected_points\":3"));
+            assert_eq!(binding_out.matches("\"read_id\":").count(), binding_capacity);
+        }
+    }
     #[test]
     fn task_binding_inventory_is_independent_of_read_record_loss() {
         let bindings =
