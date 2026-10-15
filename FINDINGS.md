@@ -7322,3 +7322,34 @@ This closes a useful cache-hit provenance slice, not dispatch/result semantics,
 opaque work attribution, weighted critical path, or a 96-core/thread ceiling.
 Recorder stream order is not a chain of execution dependencies. No speedup or
 full semantic dependency coverage is claimed.
+
+## 2026-10-15: exact lexical dispatch-result availability, performance gate open
+
+Explicit root-6/read-2 capture now retains the existing nonincremental dispatch
+return index on its actual lexical request, after normal result conversion.
+It records only `resolved_dispatch`, not fresh-provider, race, blocked-wait or
+cycle classifications. Strict consumer certification requires a unique prior
+publication, exact context, admitted endpoints and complete source authority.
+Cache-hit and dispatch-result assessments remain separate event relations,
+not whole-job execution edges or a complete semantic dependency graph.
+
+Hosted check `20261014-190255435-340799`, six integration tests
+`20261014-190300362-341711`, full test `20261014-190307525-343324`
+(644 passed, three ignored), and warning-free clippy
+`20261014-190329579-347280` passed. Exported summaries are in
+`data/runs/dispatch-result/2026-10.jsonl`. Native primary suites passed
+223 tests with 28 ignored, plus one selected short-ice run-make test.
+The real-source six-test acceptance passed without skips: cold one/four-thread
+captures certified 17,569/17,669 dispatch relations, warm incremental captures
+correctly recorded none for this nonincremental-only feature, and mixed timing
+certified 17,603. Cold whole-archive and warm object/rmeta/consumer neutrality
+passed. Warm whole-archive identity is explicitly not claimed.
+
+The first comprehensive baseline attempt had an incomplete assembled sysroot:
+five preparation builds failed with missing std/core before any valid measured
+samples, then the run stopped with exit 130. Original evidence is preserved.
+A new prefix recovered only matching immutable baseline runtime artifacts;
+both registered toolchains passed a real std compile/link/run smoke test.
+The matched 40-point performance comparison remains open. No speedup, zero
+default overhead, full CPU/span or useful-thread ceiling follows from these
+correctness results. See `docs/dispatch-result-provenance-results-20261015.md`.
