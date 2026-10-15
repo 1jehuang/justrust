@@ -193,8 +193,18 @@ every reuse optimization requires correctness checks.
 
 Observability is part of the execution model, not logging wrapped around it.
 Always-available profiling means bounded, measured overhead, not zero cost.
-Use three levels: compact always-on structural accounting, sampled profiling,
-and selectively enabled deep capture.
+Use one always-on observability system, not three user-facing capture tiers.
+Require exact work identities, dependency records, lifecycle accounting, and
+cache decisions, with automatic profiling and explicit sampling/coverage
+metadata. Exact structural accounting does not require recording every
+instruction or memory access.
+
+Keep retention and buffers bounded. Start with capture enabled in the prototype
+and measure execution, storage, transfer, and scheduling interference against
+controlled instrumentation-disabled runs. Introduce selective deeper capture
+only if measurements demonstrate that a particular measurement is too costly
+to retain continuously. Unexpected slow runs should already have useful
+evidence without requiring the user to reproduce them with profiling enabled.
 
 ### Identity, lifecycle, and causality
 
@@ -224,7 +234,8 @@ compiler task bodies.
 Separate elapsed time, CPU work, dependency waits, queueing, and resource
 contention. Include memory, allocations, I/O, and sampled stacks where supported.
 Attach samples to task context, including task migration and suspension.
-Expensive allocation tracing and high-volume event capture should be targeted.
+Keep allocation and high-volume capture enabled where measured costs permit;
+any sampling or selective capture must report its coverage and justification.
 Label sampled, estimated, unavailable, and directly measured values distinctly.
 
 Track instrumentation coverage, dropped events, dropped samples, incomplete
@@ -249,6 +260,38 @@ Before selecting a telemetry backend, specify the work identity model,
 lifecycle state machine, event schema, and accounting invariants. Include
 logical work versus attempts, shared work attributed to multiple requests,
 overlapping intervals, cancellation, and incomplete captures in those invariants.
+
+### Accounting correctness and architectural comparability
+
+- Test accounting against known small graphs, cache hits, shared demands,
+  failures, retries, cancellation, and incomplete captures. Validate legal
+  transitions and reconcile totals within documented measurement accuracy.
+- Every request, task evaluation, diagnostic, and artifact must identify its
+  immutable input snapshot. Show superseded work, and never present mixed-edit
+  results as one coherent build.
+- Separate semantic dependency edges from scheduling constraints such as locks,
+  memory admission, worker capacity, and transfers. Explain both without
+  misrepresenting a resource wait as a language dependency.
+- Attribute shared work to all beneficiary requests while counting physical
+  execution once. Specify latency attribution separately from cost allocation.
+- Explain memory ownership and lifetimes by representation, cache, and request,
+  including retained state and eviction behavior, not just peak process RSS.
+- Record optimization decisions for reuse, recomputation, placement, batching,
+  speculation, and eviction, including predicted costs and observed outcomes.
+- Support selective compiler-result explanations connecting conclusions to
+  contributing facts and inputs. Detailed semantic proof capture is distinct
+  from the complete structural work graph and must justify its overhead.
+- Keep user-level metrics and workload identities comparable when internal
+  task boundaries change. More tasks or cache hits alone are not progress.
+- Bound telemetry storage and define overflow, collector-failure, retention,
+  redaction, and export policies. Never leak source, environment values, paths,
+  or tenant-sensitive metadata through traces or profiles. Mark lost evidence
+  explicitly rather than silently claiming complete accounting.
+
+Specify worked example traces and accounting invariants before formats or
+dashboards. Rank optimization hypotheses by measured impact and confidence:
+operation duration is not necessarily recoverable request latency. Validate
+critical-path savings through interventions, not just profile percentages.
 
 ### Architecture experiments and bottleneck hill-climbing
 
