@@ -5,10 +5,27 @@ Date: 2026-10-15.
 Parent requirements: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 This specification finalizes what to test first. It does not claim an optimal
-compiler, an implemented runtime, or measured performance. Compiler algorithms,
-bootstrap language, and the exact scope of the no-dependencies restriction are
-not selected here. Resolve bootstrap/build instructions before implementation;
-do not silently restore Cargo, rustc, vendored components, or external packages.
+compiler, an implemented runtime, or measured performance. Implement in Rust
+using standard Cargo, rustc, and the standard library as bootstrap/build tools.
+Do not embed or delegate compiler internals to Cargo, rustc, LLVM, or the old
+vendored implementations. Selective third-party utility crates are allowed;
+minimize dependencies without imposing a zero-crate rule.
+
+## Bootstrap and build workflow
+
+Create a fresh Cargo package for the new implementation, not the deleted legacy
+package or its dependency graph. Record the exact Rust toolchain with the first
+implementation and performance receipts. Use `cargo fmt` and the installed
+stable `justrust check`, `justrust test`, and `justrust clippy` for development
+checks, tests, and lints. That existing client invokes the bootstrap toolchain;
+it is not part of the new engine. Keep hosted experiment binaries, workspaces,
+and caches separate from the stable installation. Do not replace the globally
+installed stable client with this prototype.
+
+A standard-library-only initial skeleton is fine, but utility crates can be
+added when useful. Document their purpose and measure performance-critical
+choices. Exact runnable commands and fixture options accompany implementation;
+there is no remaining bootstrap-policy blocker.
 
 ## Scope
 
@@ -171,7 +188,8 @@ compiler wins.
 
 ## Delivery order
 
-1. Resolve bootstrap language and permitted tooling, then document exact commands.
+1. Create the fresh Rust package using the bootstrap policy above, record the
+   toolchain version, and document exact runnable fixture commands.
 2. Canonical interning, output slots, and single-worker evaluator with accounting.
 3. Suspensions, independent branches, early publication, and race-safe wakeups.
 4. Multicore scheduling, shared demand, failure/cancellation, and cycle fixtures.

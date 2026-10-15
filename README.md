@@ -89,9 +89,11 @@ artifact caches and our own build infrastructure. We optimize the whole loop,
 not just individual compiler stages.
 
 The goal is for agents to spend their time editing and reasoning, not waiting
-for builds. We are rewriting the internals from scratch, without Cargo, rustc,
-or third-party dependencies, while preserving build correctness and useful
-diagnostics. External correctness is the compatibility contract: Rust semantics,
+for builds. We are rewriting the internals from scratch, rather than embedding
+Cargo, rustc, or their vendored implementations, while preserving build correctness
+and useful diagnostics. We use the standard Rust toolchain to build the new
+implementation and keep utility dependencies minimal. External correctness is
+the compatibility contract: Rust semantics,
 existing projects, build scripts, proc macros, platform ABIs, and trustworthy
 build and test results.
 

@@ -1,5 +1,27 @@
 # Agent Instructions for justrust
 
+## Clean-room rewrite worktree policy (2026-10-15)
+
+This checkout is the explicitly requested `clean-room-rewrite` branch/worktree.
+For this rewrite, this section supersedes conflicting legacy instructions below.
+`ARCHITECTURE.md` and `PROTOTYPE.md` define the current design and first milestone.
+Implement in Rust using standard Cargo/rustc/std as bootstrap tools. Selective
+third-party utility crates are permitted; keep dependencies minimal. Do not
+embed the old compiler, Cargo, rustc, LLVM, or their vendored implementations
+as the new compiler's internals. Create a fresh package rather than restoring
+the deleted implementation or its dependency graph.
+
+Use the installed stable justrust client for checks/tests/lints and `cargo fmt`
+for formatting. Do not install this experimental package over the stable client.
+Keep experimental hosted workspaces, binaries and caches separate. Work and
+commit/push on `clean-room-rewrite`, not main. Preserve the stable checkout.
+Legacy toolchain paths, reinstall requirements, benchmark commands and component
+ownership descriptions below describe the old implementation, not requirements
+to recreate it. Retained `bench/`, `docs/`, `data/`, CHANGELOG.md and FINDINGS.md
+are historical/reference material unless explicitly adopted for the new engine.
+Preserve licensing and attribution. No compiler compatibility or speed claims
+follow from synthetic graph fixtures.
+
 justrust is Rust compile as a service for coding agents. Every change should make
 the agent edit, check, and test loop faster or more informative, and be
 backed by measurements.

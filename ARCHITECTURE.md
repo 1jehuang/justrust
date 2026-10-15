@@ -7,9 +7,13 @@ Date: 2026-10-15.
 
 Build a fresh, vertically integrated Rust source-to-test-result system optimized
 for agents. Replace the legacy implementation rather than wrap Cargo, rustc,
-or their vendored forks. The intended implementation has no third-party
-dependencies. How we bootstrap it, and whether that restriction includes the
-bootstrap compiler and standard library, remains an explicit open decision.
+or their vendored forks. Implement the system in Rust, using the standard Rust
+toolchain (Cargo, rustc, and the standard library) to build and test it. These
+are bootstrap tools, not embedded compiler or build-system implementations.
+Third-party utility crates are permitted selectively, not prohibited: keep
+dependencies minimal and justify performance-critical choices with measurements.
+Do not delegate the new compiler's internals to rustc, Cargo, LLVM, or the old
+vendored implementations.
 
 Optimize first for extremely parallel, high-core-count, server-grade remote
 machines. Own compilation, dependency handling, code generation, linking,
@@ -637,14 +641,16 @@ hash-based node interning, semantic API, publication rules, accounting
 invariants, acceptance fixtures, and measurement plan. It is the actionable
 prototype companion to these broader architecture requirements. Parallelism and
 within-build memoization are strong initial designs to validate, not claims of
-proven optimality. Bootstrap tooling remains an explicit pre-implementation
-decision; hosted machine provisioning is a separate operational task.
+proven optimality. Bootstrap tooling is selected as described above; hosted
+machine provisioning is a separate operational task.
 
 ## Open architectural decisions
 
 These requirements do not yet choose the mechanisms below:
 
-1. Bootstrap language/toolchain and the precise scope of no dependencies.
+1. Exact bootstrap toolchain version, recorded with the first implementation
+   and benchmark runs. The implementation language and permitted tooling are
+   already selected above.
 2. Initial supported language subset, target, project inputs, and acceptance
    workload, followed by a compatibility expansion plan.
 3. Stable identities, task granularity, graph representation, and dynamic
