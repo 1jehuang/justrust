@@ -189,6 +189,136 @@ process-boundary removal, higher core utilization, or cache hit rate alone is
 not evidence of a speedup. Every performance claim requires measurements and
 every reuse optimization requires correctness checks.
 
+## 12. Observability as the engine's accounting system
+
+Observability is part of the execution model, not logging wrapped around it.
+Always-available profiling means bounded, measured overhead, not zero cost.
+Use three levels: compact always-on structural accounting, sampled profiling,
+and selectively enabled deep capture.
+
+### Identity, lifecycle, and causality
+
+Distinguish a logical operation from its executions, retries, cache validation,
+and scheduling batches. Connect each operation to source entities, compiler
+operations, generated-code provenance, inputs, outputs, and demand origins.
+
+Specify a lifecycle state machine covering created, dependency-blocked, ready,
+queued, running, suspended, reused, completed, failed, and cancelled work.
+Record transition reasons. Every unfinished operation must have an explainable
+current state, including what it is waiting for. The exact legal transitions
+and handling of concurrent demands remain design work.
+
+Link client requests, coordinator decisions, workers, cache operations, and test
+execution through causal identities. Use monotonic durations within a clock
+domain and expose cross-machine clock uncertainty. Do not infer exact global
+ordering from unsynchronized timestamps.
+
+### Scheduler and resource visibility
+
+Expose ready-queue depth, active and idle workers, concurrency limits, memory
+pressure, placement/locality choices, stealing, priority changes, and why ready
+work did not run. Account for hashing, encoding/decoding, cache validation,
+network transfer, startup, coordination, cleanup, and background work, not just
+compiler task bodies.
+
+Separate elapsed time, CPU work, dependency waits, queueing, and resource
+contention. Include memory, allocations, I/O, and sampled stacks where supported.
+Attach samples to task context, including task migration and suspension.
+Expensive allocation tracing and high-volume event capture should be targeted.
+Label sampled, estimated, unavailable, and directly measured values distinctly.
+
+Track instrumentation coverage, dropped events, dropped samples, incomplete
+captures, and unexplained time. A partial trace must not look complete.
+Historical execution costs attached to cached results are provenance, not CPU
+work or elapsed execution time performed in the current request.
+
+### Questions and interfaces
+
+Provide live state, timeline, dependency and critical-path exploration, sampled
+profiles, and machine-readable exports that can answer:
+
+- What is happening now, and what is blocked or idle?
+- Why am I waiting for this result?
+- Why did this work run, become invalid, or miss the cache?
+- Which request demanded it, and which result depends on it?
+- What was reused, from where, and what did reuse itself cost?
+- What changed between these two runs?
+- Where is time or resource consumption still unexplained?
+
+Before selecting a telemetry backend, specify the work identity model,
+lifecycle state machine, event schema, and accounting invariants. Include
+logical work versus attempts, shared work attributed to multiple requests,
+overlapping intervals, cancellation, and incomplete captures in those invariants.
+
+### Architecture experiments and bottleneck hill-climbing
+
+Store versioned experiment receipts with source snapshot, compiler revision,
+configuration, hardware, cache state, workload, and instrumentation level.
+Record correctness outcomes alongside performance results.
+
+Compare repeated controlled runs on end-to-end latency, critical-path span,
+CPU work, memory, and infrastructure cost. Rank suspected bottlenecks by measured
+impact. Label hypothetical savings and historical avoided-work estimates as
+estimates, not demonstrated speedups. Test one intervention at a time where
+possible, retaining correctness and regression gates across workload types.
+Measure the instrumentation overhead itself so a profiling change cannot be
+mistaken for a compiler improvement or regression.
+
+## 13. One reusable graph across build, check, and test
+
+Build, check, and test request different results from the same reusable work
+graph, not independent pipelines. The target is for a check or test request
+following a build to require almost no repeated compiler work when its inputs
+are already covered. This is a measurement target, not a promise of free work.
+
+- A check reuses completed parsing, expansion, type checking, and borrow checking
+  when semantic inputs and relevant settings match.
+- A test request reuses compatible semantic results and machine code, computing
+  only the missing test-specific work.
+- Explicitly model differences such as `cfg(test)`, feature selection, targets,
+  profiles, test harnesses, instrumentation, and code-generation settings.
+  Ordinary build completion does not prove these variants were computed.
+- Do not key reusable semantic work by command name when the command does not
+  change its meaning. Equally, never omit an input that does change its meaning.
+- Keep test binary reuse distinct from test-result reuse. Executing tests still
+  costs time, and result caching requires an explicit eligibility policy.
+
+Observability must separate reused work, newly required work, validation and
+materialization costs, and actual test execution. Benchmark build-to-check,
+build-to-test, test-to-build, and edit-followed-by-command sequences, not just
+isolated invocations. Verify equivalent results against clean recomputation.
+
+## 14. Reuse across sessions, projects, libraries, and tenants
+
+Reuse must not stop at one command or workspace. Support eligible work from
+this session, earlier builds, other projects, library prebuilds, and authorized
+multitenant shared caches.
+
+Library results and intermediate artifacts require identities derived from
+exact source, complete effective semantic inputs, target, relevant settings,
+and versioned compiler operations/formats. A package name and version alone
+are not sufficient. Intermediate sharing must preserve dependency closure,
+configuration, and provenance, not just reuse a matching-looking final file.
+
+Public inputs can produce work eligible for cross-tenant sharing under an
+explicit policy. Public source alone does not make a result public: private
+inputs, environment, generated data, or dependency results can make the derived
+work private. Keep private work and its metadata tenant-scoped unless explicitly
+shared through an authorized mechanism. Cache keys are not authorization.
+
+Require verified provenance, artifact integrity, poisoning defenses, and
+publication authorization. Do not trust arbitrary tenant-produced results
+merely because their claimed keys match. The trust and verification mechanism
+remains a design decision. Implement multitenant service policy in the separate
+cloud repository, not here.
+
+Report reuse origin: current session, previous build, library prebuild, or
+authorized shared cache. Expose lookup, validation, download, decoding, and
+materialization cost. A hit is not automatically a win: compare net request
+latency and resource cost against recomputation, and label estimates honestly.
+Do not expose another tenant's identity, private inputs, or sensitive cache
+metadata when explaining reuse.
+
 ## Open architectural decisions
 
 These requirements do not yet choose the mechanisms below:
