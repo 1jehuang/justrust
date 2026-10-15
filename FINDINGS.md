@@ -1,5 +1,45 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Avoid redundant worker-wide notifications
+
+Revision `20c3b51e4e20a09197b28da47f4a14672c9802f7` removes the unconditional
+post-poll condition-variable broadcast. Newly scheduled tasks and published
+facts already notify eligible workers. A deferred wake during a running poll
+still notifies one worker when requeued. Quiescence and abort retain broadcasts.
+
+Hosted check `20261015-153937395-313938`, all 30 tests
+`20261015-153938139-314070`, and warning-denied all-target clippy
+`20261015-153939081-313933` passed. Stress coverage now includes 96 workers
+for self-wakes, early publication, fork failure and high fan-in.
+
+Tracked experiment `engine-wake-20261015-2241` repeats the identical 72-point
+matrix, seed, sizes, work counts, reference checks and instrumentation on the
+same shared M8a host. Raw results are in
+`experiments/results/20261015-m8a-wake.jsonl`. All 72 outputs match the baseline
+and sequential references, with complete capture, zero failures and no dropped
+events. No matched point regressed by more than 20% in this single comparison.
+
+| Fixture, work rounds/node, workers | Before engine wall | After engine wall |
+|---|---:|---:|
+| wide, 0, 1 | 9.084 ms | 9.148 ms |
+| wide, 0, 96 | 168.501 ms | 38.499 ms |
+| wide, 1,000, 96 | 172.103 ms | 38.003 ms |
+| wide, 100,000, 1 | 653.824 ms | 654.150 ms |
+| wide, 100,000, 96 | 149.188 ms | 44.516 ms |
+| chain, 1,000, 96 | 34.252 ms | 9.735 ms |
+| diamond, 1,000, 96 | 25.668 ms | 8.919 ms |
+| dynamic, 1,000, 96 | 34.307 ms | 10.928 ms |
+| multi-output, 1,000, 96 | 2.552 ms | 2.381 ms |
+| build-check-test, 1,000, 96 | 2.618 ms | 2.771 ms |
+
+Zero-work wide/96 process CPU fell from 13.472 to 0.130 seconds. That metric
+includes process setup and reference evaluation. Tiny build-check-test/96
+increased by 5.8%, and several other small points also varied. These are one
+sample per point, contended/uncontrolled diagnostic observations, not repeatable
+speedup estimates or a general compiler performance claim. Cheap work is still
+slower at 96 workers than at one. Global queue/accounting locks, worker startup,
+granularity and instrumentation need further measured investigation.
+
 ## 2026-10-15: First clean-room graph engine correctness and M8a baseline
 
 New implementation revision `6c8d80e9050b3f9e30774bc5c22c0cda87b29768`.
