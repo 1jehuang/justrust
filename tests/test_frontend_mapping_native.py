@@ -299,7 +299,8 @@ class FrontendMappingNative(unittest.TestCase):
         }
         if dispatch:
             summary['dispatch'] = self.assert_dispatch_receipts(query, assessments, sink, label,
-                                                               query_cpu=query_cpu)
+                                                               query_cpu=query_cpu,
+                                                               execution_flow=execution_flow)
         if timing:
             summary['timing'] = self.assert_timed_receipts(query, pools, assessments, sink, label,
                                                         large=large, query_cpu=query_cpu,
@@ -925,7 +926,8 @@ class FrontendMappingNative(unittest.TestCase):
         self.assertEqual(original, {p.name: digest(p) for p in sink.glob('*.json')})
         self.assertEqual(digest(self.analyzer), self.analyzer_sha256)
 
-    def assert_dispatch_receipts(self, query, assessments, sink, label, *, query_cpu=False):
+    def assert_dispatch_receipts(self, query, assessments, sink, label, *, query_cpu=False,
+                                 execution_flow=False):
         """Reconstruct every certified row directly from original native events."""
         reads = query['query_reads']
         self.assertEqual(reads['schema'], 2)
@@ -1012,6 +1014,8 @@ class FrontendMappingNative(unittest.TestCase):
                    '--dispatch-result-provenance', '--cache-call-provenance']
         if query_cpu:
             command.append('--query-cpu-ownership')
+        if execution_flow:
+            command.append('--execution-flow-dag')
         both = json.loads(self.logged(command, label + '-both-graph').stdout)
         both_query = next(a for a in both if a['producer'] == 'rustc-query-admission')
         cache = both_query.pop('cache_call_provenance')
@@ -1227,6 +1231,29 @@ class FrontendMappingNative(unittest.TestCase):
 
 
 class FixtureControlSafety(unittest.TestCase):
+    def test_mixed_flow_dispatch_replay_keeps_explicit_flow_flag(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        query = dict(events=[], query_reads=dict(schema=2, records_complete=True,
+                     lost_events=0, semantic_complete=False, events=[]))
+        dispatch = dict(scope='observed-dispatch-result-availability-not-execution-dag',
+                        relations=[], observed_requests=0, observed_dispatch_resolutions=0,
+                        resolved_requests=0, unresolved_requests=0, unresolved_reasons={},
+                        distinct_publishing_job_relations=0, records_complete=True)
+        assessments = [dict(producer='rustc-query-admission', dispatch_result_provenance=dispatch)]
+        both = json.loads(json.dumps(assessments))
+        both[0]['cache_call_provenance'] = dict(observed_cache_hits=1)
+        harness = FrontendMappingNative('test_real_itoa_execution_flow')
+        harness.client = Path('justrust')
+        with patch.object(harness, 'logged', return_value=SimpleNamespace(
+                stdout=json.dumps(both))) as logged:
+            harness.assert_dispatch_receipts(query, assessments, Path('capture'), 'mixed',
+                                             query_cpu=True, execution_flow=True)
+        command = logged.call_args.args[0]
+        for flag in ('--execution-flow-dag', '--query-cpu-ownership',
+                     '--dispatch-result-provenance', '--cache-call-provenance'):
+            self.assertIn(flag, command)
+
     def test_flow_positive_acceptance_refuses_all_unknown(self):
         from bench.test_execution_flow_oracle import fixture
         from bench.execution_flow_oracle import execution_flow_oracle
