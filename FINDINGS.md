@@ -1,5 +1,23 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: retained native task DAG explains only a minority of cold CPU
+
+The installed explicit task-DAG analysis independently replayed the original
+accepted itoa cohort. Cold had 11 genuine tasks and 12 native fork/join edges,
+54.787070 ms attached CPU, and a 45.866307 ms longest recorded task CPU chain.
+It excluded 496.824661 ms task-null named query CPU plus 4.015578 ms opaque CPU.
+Warm attached 33.195573 ms with a 31.137137 ms recorded chain. These are partial
+native-edge diagnostics, not full span, a speedup, or a useful-thread ceiling.
+The cold coverage gap is why invocation-level native query flow must follow,
+rather than stopping at the task topology or summing query categories.
+
+Actual public CLI/analyzer, exact private artifact, original-byte oracle,
+missing-query partial authority and collision controls passed with six original
+files unchanged. Hosted run `20261015-055126359-1004947` passed 664 tests with
+3 ignored, with check and strict clippy passing. Dedicated exports are in
+`data/runs/task-dag-20261015/`; accepted compact evidence and details are in
+`bench/results/task-dag-20261015/` and `docs/observed-task-dag-20261015.md`.
+
 ## 2026-10-15: named query execution CPU now has native authority
 
 Explicit admitted query execution ownership is independent of pool-task identity.
