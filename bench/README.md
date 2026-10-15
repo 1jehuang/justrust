@@ -46,6 +46,47 @@ cold-build, contention, hosted-mode, and correctness checks. See
 blocked, say so explicitly rather than substituting one convenient loop.
 Real-usage trends remain the reality check, not a controlled attribution test.
 
+## Explicit native compiler identity (local synthetic runs)
+
+Use `suite.py run --toolchain SPEC --toolchain-identity PRIVATE_JSON` when two
+owned compiler builds report the same upstream `rustc -vV`. This opt-in requires
+an already registered toolchain in an isolated `JUSTRUST_HOME`, local `--synth`,
+and no `--resume`. It does not change the legacy result format without the flag.
+The bounded (64 KiB) JSON manifest has exactly `schema: 1`, `toolchain: SPEC`, and
+`artifacts`. The latter contains all six roles `rustc`, `cargo`, `driver`,
+`rustdoc`, `clippy-driver`, and `cargo-clippy`, each with exactly `relative_path`
+and a lowercase 64-digit `sha256`. Executables use `bin/<role>`; Cargo may use
+`bin/cargo` or `bin/jr-cargo`; the driver names its `lib/librustc_driver*.so`.
+All resolved files must remain inside the selected installed/staged prefix.
+Manifest paths stay private. Results expose role hashes, marker hash, and hashed
+invocation records, not the manifest's machine-local paths.
+
+Keep A and B in separate private homes and separate `JUSTRUST_BENCH_WORK` and
+`JUSTRUST_VERSUS_WORK` directories, even with the same declared SPEC. Do not
+share target/dependency/workspace caches between different compiler bytes.
+`justrust toolchain jr-install FULL_SYSROOT --cargo-from nightly-2026-10-08
+--no-default` registers a complete matched compiler/helper prefix in the private
+home without changing machine defaults. Copy the trusted official Cargo donor
+into that private home's toolchain registry first. For donor `bin/cargo`, set
+`JUSTRUST_CARGO_FORK=0` on both runs. Do not substitute stock helpers into a
+partial native prefix or invent an installation marker.
+
+The runner hashes declared compiler/driver/helper files before and after each
+invocation, and audits every pre-build, switch build, and measured build's
+`meta.json`: explicit toolchain, local execution, and exact selected compiler and
+Cargo paths. Missing records, fallback, substituted binaries, or loader overrides
+(`LD_LIBRARY_PATH`, `LD_PRELOAD`) reject the demanded run. Results retain overall
+before/after identity plus per-invocation audit hashes. This proves **declared
+prefix files and recorded selection**, not mapped-memory identity or that a
+compiler executed during a no-op/cache hit. Clippy helper hashes likewise do not
+prove a particular helper was loaded.
+
+Hashing is outside measured intervals but warms compiler/driver OS page caches.
+Compare only A/B runs using the same attestation protocol; `suite.py compare`
+rejects attested versus legacy-unattested results. A cold target directory is
+**not a cold OS page cache**. Keep normal seed/40-point/weights/source/mode gates,
+inspect all regressions, and do not overlap measurements with compiler bootstrap.
+
 ## System 1: rolling log, `bench/trend.py`
 
 Mines Jcode session history (`justrust history --dump`) for every foreground

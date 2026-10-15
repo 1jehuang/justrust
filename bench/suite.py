@@ -888,6 +888,195 @@ def toolchain_rustc(spec: str) -> Path:
     return staged if not installed.is_file() and staged.is_file() else installed
 
 
+def bounded_identity_json(path: Path, limit: int) -> dict:
+    """Never follow a manifest symlink or block on a FIFO masquerading as JSON."""
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("bench: duplicate identity input field")
+            value[key] = item
+        return value
+
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise ValueError("bench: identity input must be a regular file")
+            raw = source.read(limit + 1)
+        if len(raw) > limit:
+            raise ValueError("bench: identity input exceeds byte bound")
+        value = json.loads(raw, object_pairs_hook=unique_object)
+        if not isinstance(value, dict):
+            raise ValueError("bench: identity input must be an object")
+        return value
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("bench: cannot read bounded identity input") from error
+
+
+class ToolchainIdentity:
+    """Opt-in file identity and recorded selection, not loaded-memory proof.
+
+    Manifest paths stay private. Published provenance contains only role names,
+    expected hashes, and the marker hash. Helpers must belong to this same
+    controlled prefix. Never infer a fork's identity from upstream rustc -V.
+    """
+    ROLES = {"rustc", "cargo", "driver", "rustdoc", "clippy-driver", "cargo-clippy"}
+
+    def __init__(self, manifest: Path, spec: str):
+        if spec == "system" or not spec:
+            raise ValueError("bench: identity demand requires an explicit toolchain")
+        if JR_HOME.resolve() == (HOME / ".justrust").resolve():
+            raise ValueError("bench: identity demand requires an isolated JUSTRUST_HOME")
+        self.spec = spec
+        self.prefix = toolchain_rustc(spec).parent.parent.resolve()
+        if not self.prefix.is_relative_to(JR_HOME.resolve()):
+            raise ValueError("bench: toolchain prefix escapes isolated home")
+        value = bounded_identity_json(Path(manifest), 65536)
+        if (set(value) != {"schema", "toolchain", "artifacts"}
+                or type(value["schema"]) is not int or value["schema"] != 1
+                or value["toolchain"] != spec or not isinstance(value["artifacts"], dict)
+                or set(value["artifacts"]) != self.ROLES):
+            raise ValueError("bench: invalid toolchain identity manifest")
+        self.paths = {}
+        self.expected = {}
+        for role, artifact in value["artifacts"].items():
+            if not isinstance(artifact, dict) or set(artifact) != {"relative_path", "sha256"}:
+                raise ValueError("bench: invalid toolchain artifact descriptor")
+            relative, digest = artifact["relative_path"], artifact["sha256"]
+            if (not isinstance(relative, str) or not relative or len(relative) > 1024
+                    or "\\" in relative or Path(relative).is_absolute()
+                    or any(part in ("", ".", "..") for part in relative.split("/"))
+                    or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+                raise ValueError("bench: invalid toolchain artifact path or digest")
+            if role == "driver":
+                valid = relative.startswith("lib/") and Path(relative).name.startswith("librustc_driver")
+            elif role == "cargo":
+                valid = relative in ("bin/cargo", "bin/jr-cargo")
+            else:
+                valid = relative == "bin/" + role
+            if not valid:
+                raise ValueError("bench: toolchain artifact has an invalid role location")
+            path = self.prefix / relative
+            if not path.resolve().is_relative_to(self.prefix):
+                raise ValueError("bench: toolchain artifact escapes controlled prefix")
+            self.paths[role] = path
+            self.expected[role] = digest
+        marker = self.prefix / "justrust-toolchain.json"
+        info = bounded_identity_json(marker, 65536)
+        if info.get("id") != spec:
+            raise ValueError("bench: toolchain marker does not match declared toolchain")
+        self.marker = marker
+        self.marker_sha256 = binary_sha256(marker)
+        self.invocations = []
+        self.seen_invocations = set()
+        self.verify_files()
+
+    def verify_files(self) -> dict:
+        if os.environ.get("LD_LIBRARY_PATH") or os.environ.get("LD_PRELOAD"):
+            raise ValueError("bench: loader overrides are incompatible with identity demand")
+        for role, path in self.paths.items():
+            if (not path.resolve().is_relative_to(self.prefix) or not path.is_file()
+                    or (role != "driver" and not os.access(path, os.X_OK))
+                    or binary_sha256(path) != self.expected[role]):
+                raise ValueError("bench: declared toolchain artifact changed or mismatched: " + role)
+        if (not self.marker.resolve().is_relative_to(self.prefix)
+                or binary_sha256(self.marker) != self.marker_sha256):
+            raise ValueError("bench: toolchain marker changed during benchmark")
+        return {"schema": 1, "toolchain": self.spec,
+                "scope": "declared-prefix-files-and-recorded-selection-not-loaded-memory",
+                "page_cache_conditioning": "declared files hashed before/after each invocation, not cold OS cache",
+                "artifacts": dict(self.expected), "marker_sha256": self.marker_sha256}
+
+    def verify_run(self, run_id: str, stage: str) -> dict:
+        self.verify_files()
+        if (not isinstance(run_id, str) or not run_id or len(run_id) > 128
+                or not re.fullmatch(r"[A-Za-z0-9_-]+", run_id)
+                or run_id in self.seen_invocations):
+            raise ValueError("bench: invalid identity invocation run ID")
+        meta = bounded_identity_json(JR_HOME / "runs" / run_id / "meta.json", 1048576)
+        if (meta.get("id") != run_id or meta.get("toolchain") != self.spec
+                or meta.get("place") != "local"):
+            raise ValueError("bench: invocation identity missing or selected fallback/remote toolchain")
+        for role in ("rustc", "cargo"):
+            selected = meta.get("real_" + role)
+            if (not isinstance(selected, str) or not Path(selected).is_absolute()
+                    or Path(selected).resolve() != self.paths[role].resolve()):
+                raise ValueError("bench: invocation selected a substituted " + role)
+        if stage not in ("pre", "prev", "run"):
+            raise ValueError("bench: unexpected identity invocation stage")
+        self.invocations.append({"id": run_id, "stage": stage,
+                                 "meta_sha256": binary_sha256(JR_HOME / "runs" / run_id / "meta.json")})
+        self.seen_invocations.add(run_id)
+        return {"toolchain_identity_verified": True}
+
+
+def toolchain_identity_comparison_issues(a: dict, b: dict) -> list[str]:
+    """Hash-conditioned runs must not be attributed against unconditioned runs."""
+    demanded = ["toolchain_identity" in result for result in (a, b)]
+    if not any(demanded):
+        return []
+    if not all(demanded):
+        return ["different toolchain identity protocol: compare matched attested runs only"]
+    issues = []
+    protocols = []
+    for label, result in (("A", a), ("B", b)):
+        proof = result.get("toolchain_identity")
+        if not isinstance(proof, dict):
+            issues.append(label + ": missing explicit toolchain identity proof")
+            continue
+        before, after = proof.get("before"), proof.get("after")
+        if (not isinstance(before, dict) or before != after
+                or type(before.get("schema")) is not int or before.get("schema") != 1
+                or before.get("scope") != "declared-prefix-files-and-recorded-selection-not-loaded-memory"
+                or before.get("page_cache_conditioning") != "declared files hashed before/after each invocation, not cold OS cache"
+                or not isinstance(before.get("artifacts"), dict)
+                or set(before["artifacts"]) != ToolchainIdentity.ROLES
+                or not isinstance(before.get("marker_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", before["marker_sha256"])
+                or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                       for value in before["artifacts"].values())):
+            issues.append(label + ": incomplete or changed declared toolchain identity")
+            continue
+        protocols.append((before["schema"], before["scope"], before["page_cache_conditioning"]))
+        records = proof.get("invocations")
+        if not isinstance(records, list) or not records:
+            issues.append(label + ": missing recorded invocation identity audits")
+            continue
+        runs = {}
+        for record in records:
+            if (not isinstance(record, dict) or not isinstance(record.get("id"), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", record["id"])
+                    or record["id"] in runs or record.get("stage") not in ("pre", "prev", "run")
+                    or not isinstance(record.get("meta_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", record["meta_sha256"])):
+                issues.append(label + ": malformed invocation identity audit")
+                break
+            runs[record["id"]] = record["stage"]
+        synth = result.get("synth", {})
+        points = synth.get("results") if isinstance(synth, dict) else None
+        if not isinstance(points, list) or not points:
+            issues.append(label + ": identity proof has no synthetic samples")
+            continue
+        for point in points:
+            samples_by_stack = point.get("samples") if isinstance(point, dict) else None
+            if not isinstance(samples_by_stack, dict) or not samples_by_stack:
+                issues.append(label + ": identity proof has no measured stack")
+                continue
+            for samples in samples_by_stack.values():
+                if not isinstance(samples, list) or not samples:
+                    issues.append(label + ": identity proof has no measured sample")
+                    continue
+                for sample in samples:
+                    if (not isinstance(sample, dict) or sample.get("toolchain_identity_verified") is not True
+                            or runs.get(sample.get("id")) != "run"):
+                        issues.append(label + ": measured sample lacks selected invocation identity audit")
+    if len(protocols) == 2 and protocols[0] != protocols[1]:
+        issues.append("different compiler identity cache-conditioning protocol")
+    return issues
+
+
 def workspace_thread_provenance(summary: dict, expected: int | None) -> int | None:
     """Verify the requested wrapper setting on actual compiled UI units.
 
@@ -1078,6 +1267,11 @@ def cmd_run(args) -> None:
     if (RUSTC_THREADS is not None or WORKSPACE_THREADS is not None or PASS_TIMES) and args.synth is not None:
         sys.exit("bench: compiler thread/pass options require named pinned scenarios")
     REMOTE = getattr(args, "remote", False)
+    identity = None
+    if getattr(args, "toolchain_identity", None):
+        if args.synth is None or REMOTE or getattr(args, "resume", False):
+            sys.exit("bench: toolchain identity requires local synthetic run without resume")
+        identity = ToolchainIdentity(Path(args.toolchain_identity), TOOLCHAIN)
     hosted_early = getattr(args, "hosted_early", False)
     if hosted_early and (not REMOTE or args.synth is not None or not getattr(args, "scenarios", None)
                         or any(n not in BY_NAME or not BY_NAME[n].expect_fail for n in args.scenarios)):
@@ -1091,7 +1285,7 @@ def cmd_run(args) -> None:
         # Install up front so the first sample does not include the download.
         subprocess.run([J, "toolchain", "install", TOOLCHAIN], check=True, stdout=subprocess.DEVNULL)
     if args.synth is not None:
-        return cmd_run_synth(args)
+        return cmd_run_synth(args, identity) if identity is not None else cmd_run_synth(args)
     names = args.scenarios or [s.name for s in SCENARIOS if not s.cold
                                and not (REMOTE and s.env.get("JUSTRUST_EARLY") == "1")]
     if args.cold:
@@ -1143,7 +1337,7 @@ def _synth():
     return synth_run, versus
 
 
-def cmd_run_synth(args) -> None:
+def cmd_run_synth(args, identity=None) -> None:
     """The synthetic usage-weighted workload (bench/synth/) on justrust as
     agents run it: one stack, for comparing justrust commits."""
     synth_run, versus = _synth()
@@ -1151,11 +1345,18 @@ def cmd_run_synth(args) -> None:
     controls = synthetic_stack_controls()
     if TOOLCHAIN != "system":
         controls["JUSTRUST_TOOLCHAIN"] = TOOLCHAIN
+    if identity is not None:
+        controls["JUSTRUST_TOOLCHAIN_REQUIRED"] = "1"
     st = versus.Stack("suite" if TOOLCHAIN == "system" else f"suite-{TOOLCHAIN}", "justrust defaults", True,
                       controls, private_cache=True)
     info = env_info()
+    before_identity = identity.verify_files() if identity is not None else None
+    options = {"identity": identity} if identity is not None else {}
     result = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "env": info,
-              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume)}
+              "synth": synth_run.run([st], args.synth, args.points, args.n, args.quiet_wait, partial=RESULTS / "partial" / f"synth{args.synth}.json", resume=args.resume, **options)}
+    if identity is not None:
+        result["toolchain_identity"] = {"before": before_identity, "after": identity.verify_files(),
+                                        "invocations": list(identity.invocations)}
     verify_binary_identity(info)
     result["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     out = Path(args.out) if args.out else RESULTS / (
@@ -1187,7 +1388,7 @@ def cmd_compare(args) -> None:
         if not ("synth" in a and "synth" in b):
             sys.exit("bench: compare a synthetic result with another synthetic result")
         synth_run, _ = _synth()
-        reasons = []
+        reasons = toolchain_identity_comparison_issues(a, b)
         ea, eb = a.get("env"), b.get("env")
         for label, env in (("A", ea), ("B", eb)):
             if not isinstance(env, dict):
@@ -1303,6 +1504,8 @@ def main() -> None:
     r.add_argument("--points", type=int, default=40, help="synthetic points (default 40)")
     r.add_argument("--resume", action="store_true",
                    help="synthetic: keep the points of an interrupted run of the same seed")
+    r.add_argument("--toolchain-identity", type=Path, metavar="PRIVATE_JSON",
+                   help="require declared prefix hashes and actual local synthetic invocation identity")
     r.add_argument("--toolchain", default="system", metavar="SPEC",
                    help="pinned toolchain (nightly-YYYY-MM-DD) via JUSTRUST_TOOLCHAIN, own target dir; "
                         "default: the system rustc")

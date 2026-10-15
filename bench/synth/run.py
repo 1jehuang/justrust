@@ -44,7 +44,7 @@ def _target(st: versus.Stack, snap: str) -> Path:
     return versus.WORK / "target" / snap / st.name
 
 
-def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str) -> dict:
+def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str, identity=None) -> dict:
     root = gen.snapshot_root(plan.snap)
     rid = suite.new_id()
     scen = suite.Scenario(f"synth-{plan.point.i}", plan.snap, cmd, None, "", expect_fail=plan.expect_fail)
@@ -52,8 +52,14 @@ def _run(st: versus.Stack, plan: gen.Plan, cmd: list[str], tag: str) -> dict:
     argv = [suite.J, *cmd] if st.justrust else [versus.STOCK_CARGO, *cmd]
     log = versus.WORK / "logs" / f"synth-{st.name}-{tag}-{rid}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
+    if identity is not None:
+        identity.verify_files()
     load, rustc = suite.foreign_load()
     r = versus.run_counted(argv, root / plan.cwd, env, log)
+    if identity is not None:
+        if not st.justrust:
+            raise ValueError("bench: identity demand cannot attest a stock stack")
+        r.update(identity.verify_run(rid, tag))
     out = log.read_text(errors="replace")
     r["compile_failed"] = "error[E" in out or "error: could not compile" in out
     r["tests_failed"] = sum(int(m) for m in re.findall(r"test result: \w+\. \d+ passed; (\d+) failed", out))
@@ -74,17 +80,18 @@ def _keep_log(r: dict) -> None:
     Path(r.pop("log")).unlink(missing_ok=True)
 
 
-def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
+def run_point(st: versus.Stack, plan: gen.Plan, n: int, identity=None) -> dict:
     """Steps 1-4 for one stack. Returns the measured sample or an error."""
     gen.restore_all(plan.snap)
-    pre = _run(st, plan, plan.pre, "pre")
+    options = {"identity": identity} if identity is not None else {}
+    pre = _run(st, plan, plan.pre, "pre", **options)
     if pre["exit"] != 0:
         return {"error": f"pre-build failed (exit {pre['exit']}), log {pre['log']}"}
     _keep_log(pre)
     created = gen.apply(plan, n)
     try:
         if plan.prev:
-            prev = _run(st, plan, plan.prev, "prev")
+            prev = _run(st, plan, plan.prev, "prev", **options)
             _keep_log(prev)
         # The unmeasured steps above can leave a GB of dirty pages (a
         # depcache restore writes faster than a compile). Without a flush the
@@ -93,7 +100,7 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
         # time between calls, so writeback is done by then; same for every
         # stack.
         os.sync()
-        r = _run(st, plan, plan.cmd, "run")
+        r = _run(st, plan, plan.cmd, "run", **options)
     finally:
         gen.restore(plan, created)
     if r.get("fell_back_local"):
@@ -114,11 +121,14 @@ def run_point(st: versus.Stack, plan: gen.Plan, n: int) -> dict:
 
 
 def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wait: float,
-        partial: Path | None = None, only: set[int] | None = None, resume: bool = False) -> dict:
+        partial: Path | None = None, only: set[int] | None = None, resume: bool = False,
+        identity=None) -> dict:
     """`partial`: rewritten after every point, so a killed run keeps what it measured.
     `only`: run just these point indices (debugging one point; not a comparable result).
     `resume`: keep the points already in `partial` when it is the same seed, size,
     generator and stacks (a spot interruption killed the run), run the rest."""
+    if identity is not None and resume:
+        raise ValueError("bench: identity demand cannot reuse unaudited resumed samples")
     pts, info = gen.sample(seed, points)
     plans = [gen.plan(p, seed) for p in pts]
     if only:
@@ -149,7 +159,8 @@ def run(stacks: list[versus.Stack], seed: int, points: int, reps: int, quiet_wai
                     continue
                 if quiet_wait:
                     suite.wait_quiet(quiet_wait)
-                r = run_point(st, plan, base + k * 10 + rep)
+                options = {"identity": identity} if identity is not None else {}
+                r = run_point(st, plan, base + k * 10 + rep, **options)
                 if "error" in r:
                     errors[st.name] = r["error"]
                     print(f"  synth {k + 1}/{len(plans)} {st.name:12s} ERROR {r['error']}", file=sys.stderr)
