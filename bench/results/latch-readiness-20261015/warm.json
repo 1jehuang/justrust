@@ -1,0 +1,533 @@
+{
+  "captures": [
+    {
+      "admissions_complete": true,
+      "capture_id": "1792074476043950444-1739345-1",
+      "clock_alignment": {
+        "aligned": true,
+        "issues": []
+      },
+      "complete_observed_waits": 0,
+      "cpu_work_ns": null,
+      "execution_span_ns": null,
+      "expected_waits": 0,
+      "full_pipeline_complete": false,
+      "latch_readiness_dag": {
+        "active_readiness": 0,
+        "active_scopes": 0,
+        "active_wait_attempts": 0,
+        "assigned_cpu_segments": 3659,
+        "chain_query_kinds": 25,
+        "cpu_work_ns": null,
+        "cut_nodes": 49,
+        "edges": 7238,
+        "execution_span_ns": null,
+        "flow_complete": false,
+        "full_pipeline_complete": false,
+        "issues": [],
+        "known_cpu_work_ns": 34641187,
+        "known_opaque_cpu_ns": 939831,
+        "known_query_cpu_ns": 18748659,
+        "known_task_cpu_ns": 14952697,
+        "limitations": [
+          "latch publication visibility and wake-to-consume intervals are unknown barriers; other scheduler, I/O, pre-attach and uninstrumented boundaries remain outside this graph"
+        ],
+        "longest_known_chain_cpu_ns": 16342947,
+        "longest_known_chain_cpu_segments": 866,
+        "longest_known_chain_nodes": 1732,
+        "lost_edges": 0,
+        "lost_nodes": 0,
+        "lost_readiness": 0,
+        "lost_scopes": 0,
+        "lost_wait_attempts": 0,
+        "matched_readiness_transfers": 0,
+        "missing_measurement_references": 0,
+        "named_chain_cpu_ns": 11411925,
+        "named_chain_cpu_segments": 864,
+        "nodes": 7412,
+        "omitted_chain_query_kinds": 5,
+        "omitted_named_chain_cpu_segments": 844,
+        "parallelism": null,
+        "pool_capture_id": "1739345-1792074476045021905-1",
+        "pool_observer": 1,
+        "readiness_rows": 0,
+        "ready_records_complete": true,
+        "records_complete": true,
+        "scope": "observed-query-join-and-latch-control-flow",
+        "scopes": 1838,
+        "top_chain_query_kinds": [
+          {
+            "cpu_ns": 5991975,
+            "query_name": "resolver_for_lowering_raw"
+          },
+          {
+            "cpu_ns": 2470884,
+            "query_name": "lower_to_hir"
+          },
+          {
+            "cpu_ns": 901799,
+            "query_name": "module_children"
+          },
+          {
+            "cpu_ns": 494156,
+            "query_name": "early_lint_checks"
+          },
+          {
+            "cpu_ns": 402626,
+            "query_name": "hir_crate_items"
+          },
+          {
+            "cpu_ns": 272034,
+            "query_name": "hir_owner"
+          },
+          {
+            "cpu_ns": 177189,
+            "query_name": "get_lang_items"
+          },
+          {
+            "cpu_ns": 116906,
+            "query_name": "debugger_visualizers"
+          },
+          {
+            "cpu_ns": 116609,
+            "query_name": "index_ast"
+          },
+          {
+            "cpu_ns": 83976,
+            "query_name": "visibility"
+          },
+          {
+            "cpu_ns": 70700,
+            "query_name": "hir_attr_map"
+          },
+          {
+            "cpu_ns": 68178,
+            "query_name": "attrs_for_def"
+          },
+          {
+            "cpu_ns": 52923,
+            "query_name": "generics_of"
+          },
+          {
+            "cpu_ns": 42137,
+            "query_name": "analysis"
+          },
+          {
+            "cpu_ns": 25893,
+            "query_name": "registered_attr_tools"
+          },
+          {
+            "cpu_ns": 25873,
+            "query_name": "resolutions"
+          },
+          {
+            "cpu_ns": 23379,
+            "query_name": "defined_lang_items"
+          },
+          {
+            "cpu_ns": 18013,
+            "query_name": "crate_name"
+          },
+          {
+            "cpu_ns": 15263,
+            "query_name": "def_kind"
+          },
+          {
+            "cpu_ns": 10510,
+            "query_name": "source_span"
+          }
+        ],
+        "top_named_chain_cpu_segments": [
+          {
+            "at_ns": 8364887,
+            "cpu_ns": 2504552,
+            "kind": "cpu_segment",
+            "node_id": 76,
+            "query_context": 1,
+            "query_job": 1,
+            "query_name": "resolver_for_lowering_raw",
+            "scope_id": 1,
+            "segment_id": 38,
+            "task": 1
+          },
+          {
+            "at_ns": 6125879,
+            "cpu_ns": 837599,
+            "kind": "cpu_segment",
+            "node_id": 20,
+            "query_context": 1,
+            "query_job": 1,
+            "query_name": "resolver_for_lowering_raw",
+            "scope_id": 1,
+            "segment_id": 10,
+            "task": 1
+          },
+          {
+            "at_ns": 12703171,
+            "cpu_ns": 727390,
+            "kind": "cpu_segment",
+            "node_id": 448,
+            "query_context": 1,
+            "query_job": 1,
+            "query_name": "resolver_for_lowering_raw",
+            "scope_id": 1,
+            "segment_id": 224,
+            "task": 1
+          },
+          {
+            "at_ns": 11985852,
+            "cpu_ns": 408950,
+            "kind": "cpu_segment",
+            "node_id": 436,
+            "query_context": 1,
+            "query_job": 1,
+            "query_name": "resolver_for_lowering_raw",
+            "scope_id": 1,
+            "segment_id": 218,
+            "task": 1
+          },
+          {
+            "at_ns": 7491988,
+            "cpu_ns": 403631,
+            "kind": "cpu_segment",
+            "node_id": 48,
+            "query_context": 1,
+            "query_job": 1,
+            "query_name": "resolver_for_lowering_raw",
+            "scope_id": 1,
+            "segment_id": 24,
+            "task": 1
+          },
+          {
+            "at_ns": 7057350,
+            "cpu_ns": 333176,
+            "kind": "cpu_segment",
+            "node_id": 34,
+            "query_context": 1,
+            "query_job": 7,
+            "query_name": "module_children",
+            "scope_id": 9,
+            "segment_id": 17,
+            "task": 1
+          },
+          {
+            "at_ns": 13498384,
+            "cpu_ns": 243249,
+            "kind": "cpu_segment",
+            "node_id": 468,
+            "query_context": 1,
+            "query_job": 117,
+            "query_name": "early_lint_checks",
+            "scope_id": 120,
+            "segment_id": 234,
+            "task": 1
+          },
+          {
+            "at_ns": 7960712,
+            "cpu_ns": 196736,
+            "kind": "cpu_segment",
+            "node_id": 56,
+            "query_context": 1,
+            "query_job": 1,
+            "query_name": "resolver_for_lowering_raw",
+            "scope_id": 1,
+            "segment_id": 28,
+            "task": 1
+          },
+          {
+            "at_ns": 12448558,
+            "cpu_ns": 181448,
+            "kind": "cpu_segment",
+            "node_id": 442,
+            "query_context": 1,
+            "query_job": 109,
+            "query_name": "module_children",
+            "scope_id": 111,
+            "segment_id": 221,
+            "task": 1
+          },
+          {
+            "at_ns": 17298384,
+            "cpu_ns": 166776,
+            "kind": "cpu_segment",
+            "node_id": 1582,
+            "query_context": 1,
+            "query_job": 392,
+            "query_name": "lower_to_hir",
+            "scope_id": 397,
+            "segment_id": 791,
+            "task": 1
+          },
+          {
+            "at_ns": 14073670,
+            "cpu_ns": 152108,
+            "kind": "cpu_segment",
+            "node_id": 512,
+            "query_context": 1,
+            "query_job": 124,
+            "query_name": "get_lang_items",
+            "scope_id": 127,
+            "segment_id": 256,
+            "task": 1
+          },
+          {
+            "at_ns": 17130854,
+            "cpu_ns": 134584,
+            "kind": "cpu_segment",
+            "node_id": 1562,
+            "query_context": 1,
+            "query_job": 387,
+            "query_name": "lower_to_hir",
+            "scope_id": 392,
+            "segment_id": 781,
+            "task": 1
+          },
+          {
+            "at_ns": 17491683,
+            "cpu_ns": 118970,
+            "kind": "cpu_segment",
+            "node_id": 1602,
+            "query_context": 1,
+            "query_job": 397,
+            "query_name": "lower_to_hir",
+            "scope_id": 402,
+            "segment_id": 801,
+            "task": 1
+          },
+          {
+            "at_ns": 17784457,
+            "cpu_ns": 117651,
+            "kind": "cpu_segment",
+            "node_id": 1642,
+            "query_context": 1,
+            "query_job": 407,
+            "query_name": "lower_to_hir",
+            "scope_id": 412,
+            "segment_id": 821,
+            "task": 1
+          },
+          {
+            "at_ns": 13891352,
+            "cpu_ns": 117470,
+            "kind": "cpu_segment",
+            "node_id": 492,
+            "query_context": 1,
+            "query_job": 117,
+            "query_name": "early_lint_checks",
+            "scope_id": 120,
+            "segment_id": 246,
+            "task": 1
+          },
+          {
+            "at_ns": 14274754,
+            "cpu_ns": 116906,
+            "kind": "cpu_segment",
+            "node_id": 516,
+            "query_context": 1,
+            "query_job": 129,
+            "query_name": "debugger_visualizers",
+            "scope_id": 132,
+            "segment_id": 258,
+            "task": 1
+          },
+          {
+            "at_ns": 17640716,
+            "cpu_ns": 115244,
+            "kind": "cpu_segment",
+            "node_id": 1622,
+            "query_context": 1,
+            "query_job": 402,
+            "query_name": "lower_to_hir",
+            "scope_id": 407,
+            "segment_id": 811,
+            "task": 1
+          },
+          {
+            "at_ns": 14392420,
+            "cpu_ns": 101528,
+            "kind": "cpu_segment",
+            "node_id": 518,
+            "query_context": 1,
+            "query_job": 116,
+            "query_name": "index_ast",
+            "scope_id": 118,
+            "segment_id": 259,
+            "task": 1
+          },
+          {
+            "at_ns": 10887224,
+            "cpu_ns": 76179,
+            "kind": "cpu_segment",
+            "node_id": 82,
+            "query_context": 1,
+            "query_job": 19,
+            "query_name": "module_children",
+            "scope_id": 21,
+            "segment_id": 41,
+            "task": 1
+          },
+          {
+            "at_ns": 7396162,
+            "cpu_ns": 72154,
+            "kind": "cpu_segment",
+            "node_id": 36,
+            "query_context": 1,
+            "query_job": 1,
+            "query_name": "resolver_for_lowering_raw",
+            "scope_id": 1,
+            "segment_id": 18,
+            "task": 1
+          }
+        ],
+        "unassigned_cpu_segments": 0,
+        "unassigned_known_cpu_ns": 0,
+        "unavailable_cpu_segments": 0,
+        "unavailable_readiness_references": 0,
+        "unbound_wait_attempts": 0,
+        "wait_attempts": 0,
+        "wait_records_complete": true
+      },
+      "limitations": [
+        "Wait intervals overlap and include waiting/descheduling, not CPU work.",
+        "Post-condvar elapsed can include resource reacquisition but is not attributed resource cost.",
+        "Independent useful work may execute during a wait, so wait length is not critical-path cost.",
+        "Native clock alignment does not establish CPU coverage or an execution span; query and pool intervals are not merged.",
+        "Resolved publishing-job edges do not imply fresh provider execution.",
+        "Unbound/lost reads, nonquery work and incomplete task/resource coverage prevent a frontend span.",
+        "Semantic constraints and current implementation ordering are not interchangeable."
+      ],
+      "notification_reasons": {},
+      "observed_cpu": {
+        "active_segments": 0,
+        "clock_bridge": {
+          "pool_capture_id": "1739345-1792074476045021905-1",
+          "pool_epoch_in_query_ns": 0,
+          "pool_observer": 1,
+          "query_capture_id": "1792074476043950444-1739345-1"
+        },
+        "clock_failures": 0,
+        "cpu_clock": "linux-thread-cpu",
+        "expected_segments": 3659,
+        "failed_segments": 0,
+        "issues": [],
+        "lost_segments": 0,
+        "measured_segments": 3659,
+        "observed_cpu_ns": 34641187,
+        "observed_threads": 4,
+        "opaque_cpu_ns": 939831,
+        "query_clock_aligned": true,
+        "query_execution_cpu_ns": 18748659,
+        "records_complete": true,
+        "scope": "observed-exclusive-thread-segments",
+        "task_cpu_ns": 14952697
+      },
+      "observed_read_records": 31514,
+      "query_clock_wait_intervals": {
+        "post_condvar": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "post_notification": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "producer_notification": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "total": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        }
+      },
+      "read_coverage": {
+        "cache_hits": 5713,
+        "endpoints_complete": true,
+        "green_ensures": 471,
+        "lost_events": 0,
+        "observed_reads": 7892,
+        "observed_requests": 8038,
+        "observed_results": 1833,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": true,
+        "resolved_job_edges": 15,
+        "resolved_reads": 77,
+        "semantic_complete": false,
+        "tracked_reads": 82,
+        "unbound_read_reasons": {
+          "disabled": 0,
+          "eval_always": 6157,
+          "ignore": 1653,
+          "job_endpoint_unavailable": 0,
+          "missing_context": 0,
+          "no_prior_producer": 5,
+          "producer_published_too_late": 0,
+          "tracked_missing_context_or_consumer": 0
+        },
+        "unbound_reads": 7815
+      },
+      "scope": "validated-native-frontend-evidence-not-an-execution-span",
+      "task_binding_coverage": {
+        "all_targets_bound": false,
+        "bound_points": 17024,
+        "expected_points": 19596,
+        "graph_binding_complete": false,
+        "graph_binding_valid": true,
+        "issues": [
+          "task-binding targets declared incomplete"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 2572
+      },
+      "theoretical_parallelism": null,
+      "waits_complete": true
+    }
+  ],
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "full_pipeline_complete": false,
+  "graph_output": {
+    "bytes": 556277,
+    "format": "justrust-graph-json-stdout",
+    "name": "readiness-warm-1-flow-public.json",
+    "sha256": "d3bf74731eb6196ca7f09e115bf1c55cb403bb65874c39f1c66a54d51863d87a"
+  },
+  "inputs": [
+    {
+      "bytes": 2479839,
+      "name": "1792074476043950444-1739345-1-pool.json",
+      "sha256": "f29d80872573eca516a4d4927025279bb73d1c5b298658809705dcefda96c9e4"
+    },
+    {
+      "bytes": 8387977,
+      "name": "1792074476043950444-1739345-1.json",
+      "sha256": "953b36a533bae8a1fd401e565daf3c361622417af027e5c935af8c7e026e6e43"
+    }
+  ],
+  "large_capture": true,
+  "schema": 1,
+  "scope": "native-frontend-capture-diagnostics",
+  "theoretical_parallelism": null
+}

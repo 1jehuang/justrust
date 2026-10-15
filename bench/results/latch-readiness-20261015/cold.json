@@ -1,0 +1,537 @@
+{
+  "captures": [
+    {
+      "admissions_complete": true,
+      "capture_id": "1792074442600078869-1735528-1",
+      "clock_alignment": {
+        "aligned": true,
+        "issues": []
+      },
+      "complete_observed_waits": 134,
+      "cpu_work_ns": null,
+      "execution_span_ns": null,
+      "expected_waits": 134,
+      "full_pipeline_complete": false,
+      "latch_readiness_dag": {
+        "active_readiness": 0,
+        "active_scopes": 0,
+        "active_wait_attempts": 0,
+        "assigned_cpu_segments": 36736,
+        "chain_query_kinds": 38,
+        "cpu_work_ns": null,
+        "cut_nodes": 511,
+        "edges": 73538,
+        "execution_span_ns": null,
+        "flow_complete": false,
+        "full_pipeline_complete": false,
+        "issues": [
+          "execution flow records or independent measurement/admission authority are incomplete"
+        ],
+        "known_cpu_work_ns": 513291338,
+        "known_opaque_cpu_ns": 4832458,
+        "known_query_cpu_ns": 488839966,
+        "known_task_cpu_ns": 19618914,
+        "limitations": [
+          "latch publication visibility and wake-to-consume intervals are unknown barriers; other scheduler, I/O, pre-attach and uninstrumented boundaries remain outside this graph"
+        ],
+        "longest_known_chain_cpu_ns": 20787135,
+        "longest_known_chain_cpu_segments": 1671,
+        "longest_known_chain_nodes": 3342,
+        "lost_edges": 0,
+        "lost_nodes": 0,
+        "lost_readiness": 0,
+        "lost_scopes": 0,
+        "lost_wait_attempts": 0,
+        "matched_readiness_transfers": 138,
+        "missing_measurement_references": 0,
+        "named_chain_cpu_ns": 20787135,
+        "named_chain_cpu_segments": 1671,
+        "nodes": 74024,
+        "omitted_chain_query_kinds": 18,
+        "omitted_named_chain_cpu_segments": 1651,
+        "parallelism": null,
+        "pool_capture_id": "1735528-1792074442601292520-1",
+        "pool_observer": 1,
+        "readiness_rows": 80,
+        "ready_records_complete": true,
+        "records_complete": false,
+        "scope": "observed-query-join-and-latch-control-flow",
+        "scopes": 18199,
+        "top_chain_query_kinds": [
+          {
+            "cpu_ns": 17556408,
+            "query_name": "typeck_root"
+          },
+          {
+            "cpu_ns": 810641,
+            "query_name": "impl_super_outlives"
+          },
+          {
+            "cpu_ns": 796283,
+            "query_name": "clauses_of"
+          },
+          {
+            "cpu_ns": 366116,
+            "query_name": "associated_items"
+          },
+          {
+            "cpu_ns": 162068,
+            "query_name": "associated_item"
+          },
+          {
+            "cpu_ns": 147903,
+            "query_name": "evaluate_root_goal_for_proof_tree_raw"
+          },
+          {
+            "cpu_ns": 126568,
+            "query_name": "trait_impls_of"
+          },
+          {
+            "cpu_ns": 125109,
+            "query_name": "method_autoderef_steps"
+          },
+          {
+            "cpu_ns": 91544,
+            "query_name": "generics_of"
+          },
+          {
+            "cpu_ns": 90513,
+            "query_name": "explicit_clauses_of"
+          },
+          {
+            "cpu_ns": 61082,
+            "query_name": "impl_trait_header"
+          },
+          {
+            "cpu_ns": 50344,
+            "query_name": "def_kind"
+          },
+          {
+            "cpu_ns": 49866,
+            "query_name": "inferred_outlives_of"
+          },
+          {
+            "cpu_ns": 49847,
+            "query_name": "adt_def"
+          },
+          {
+            "cpu_ns": 42983,
+            "query_name": "defaultness"
+          },
+          {
+            "cpu_ns": 38161,
+            "query_name": "adt_sizedness_constraint"
+          },
+          {
+            "cpu_ns": 23782,
+            "query_name": "implementations_of_trait"
+          },
+          {
+            "cpu_ns": 22550,
+            "query_name": "opaque_types_defined_by"
+          },
+          {
+            "cpu_ns": 21253,
+            "query_name": "impl_item_implementor_ids"
+          },
+          {
+            "cpu_ns": 17308,
+            "query_name": "expn_that_defined"
+          }
+        ],
+        "top_named_chain_cpu_segments": [
+          {
+            "at_ns": 74444050,
+            "cpu_ns": 9811205,
+            "kind": "cpu_segment",
+            "node_id": 40418,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 20015,
+            "task": null
+          },
+          {
+            "at_ns": 71378864,
+            "cpu_ns": 2420125,
+            "kind": "cpu_segment",
+            "node_id": 40240,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 19926,
+            "task": null
+          },
+          {
+            "at_ns": 68312896,
+            "cpu_ns": 1155776,
+            "kind": "cpu_segment",
+            "node_id": 39276,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 19444,
+            "task": null
+          },
+          {
+            "at_ns": 70817456,
+            "cpu_ns": 487744,
+            "kind": "cpu_segment",
+            "node_id": 40204,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 19908,
+            "task": null
+          },
+          {
+            "at_ns": 74042061,
+            "cpu_ns": 318055,
+            "kind": "cpu_segment",
+            "node_id": 40402,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 20007,
+            "task": null
+          },
+          {
+            "at_ns": 60645545,
+            "cpu_ns": 129759,
+            "kind": "cpu_segment",
+            "node_id": 32268,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 15942,
+            "task": null
+          },
+          {
+            "at_ns": 65205266,
+            "cpu_ns": 117463,
+            "kind": "cpu_segment",
+            "node_id": 36454,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 18033,
+            "task": null
+          },
+          {
+            "at_ns": 66623632,
+            "cpu_ns": 112534,
+            "kind": "cpu_segment",
+            "node_id": 37960,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 18786,
+            "task": null
+          },
+          {
+            "at_ns": 64613864,
+            "cpu_ns": 112170,
+            "kind": "cpu_segment",
+            "node_id": 35879,
+            "query_context": 1,
+            "query_job": 8721,
+            "query_name": "evaluate_root_goal_for_proof_tree_raw",
+            "scope_id": 8721,
+            "segment_id": 17745,
+            "task": null
+          },
+          {
+            "at_ns": 64824671,
+            "cpu_ns": 79189,
+            "kind": "cpu_segment",
+            "node_id": 36015,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 17813,
+            "task": null
+          },
+          {
+            "at_ns": 66541240,
+            "cpu_ns": 76869,
+            "kind": "cpu_segment",
+            "node_id": 37902,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 18757,
+            "task": null
+          },
+          {
+            "at_ns": 65940199,
+            "cpu_ns": 72358,
+            "kind": "cpu_segment",
+            "node_id": 37188,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 18400,
+            "task": null
+          },
+          {
+            "at_ns": 85540781,
+            "cpu_ns": 72218,
+            "kind": "cpu_segment",
+            "node_id": 42492,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 21048,
+            "task": null
+          },
+          {
+            "at_ns": 65821705,
+            "cpu_ns": 70475,
+            "kind": "cpu_segment",
+            "node_id": 37090,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 18351,
+            "task": null
+          },
+          {
+            "at_ns": 64424217,
+            "cpu_ns": 61000,
+            "kind": "cpu_segment",
+            "node_id": 35841,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 17725,
+            "task": null
+          },
+          {
+            "at_ns": 63757815,
+            "cpu_ns": 59465,
+            "kind": "cpu_segment",
+            "node_id": 35269,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 17440,
+            "task": null
+          },
+          {
+            "at_ns": 64157573,
+            "cpu_ns": 56291,
+            "kind": "cpu_segment",
+            "node_id": 35538,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 17574,
+            "task": null
+          },
+          {
+            "at_ns": 74381393,
+            "cpu_ns": 55166,
+            "kind": "cpu_segment",
+            "node_id": 40416,
+            "query_context": 1,
+            "query_job": 9858,
+            "query_name": "method_autoderef_steps",
+            "scope_id": 9858,
+            "segment_id": 20014,
+            "task": null
+          },
+          {
+            "at_ns": 64311939,
+            "cpu_ns": 51050,
+            "kind": "cpu_segment",
+            "node_id": 35753,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 17682,
+            "task": null
+          },
+          {
+            "at_ns": 65022802,
+            "cpu_ns": 50847,
+            "kind": "cpu_segment",
+            "node_id": 36196,
+            "query_context": 1,
+            "query_job": 7813,
+            "query_name": "typeck_root",
+            "scope_id": 7813,
+            "segment_id": 17903,
+            "task": null
+          }
+        ],
+        "unassigned_cpu_segments": 0,
+        "unassigned_known_cpu_ns": 0,
+        "unavailable_cpu_segments": 0,
+        "unavailable_readiness_references": 0,
+        "unbound_wait_attempts": 1,
+        "wait_attempts": 139,
+        "wait_records_complete": false
+      },
+      "limitations": [
+        "Wait intervals overlap and include waiting/descheduling, not CPU work.",
+        "Post-condvar elapsed can include resource reacquisition but is not attributed resource cost.",
+        "Independent useful work may execute during a wait, so wait length is not critical-path cost.",
+        "Native clock alignment does not establish CPU coverage or an execution span; query and pool intervals are not merged.",
+        "Resolved publishing-job edges do not imply fresh provider execution.",
+        "Unbound/lost reads, nonquery work and incomplete task/resource coverage prevent a frontend span.",
+        "Semantic constraints and current implementation ordering are not interchangeable."
+      ],
+      "notification_reasons": {
+        "completed": 134
+      },
+      "observed_cpu": {
+        "active_segments": 0,
+        "clock_bridge": {
+          "pool_capture_id": "1735528-1792074442601292520-1",
+          "pool_epoch_in_query_ns": 0,
+          "pool_observer": 1,
+          "query_capture_id": "1792074442600078869-1735528-1"
+        },
+        "clock_failures": 0,
+        "cpu_clock": "linux-thread-cpu",
+        "expected_segments": 36736,
+        "failed_segments": 0,
+        "issues": [],
+        "lost_segments": 0,
+        "measured_segments": 36736,
+        "observed_cpu_ns": 513291338,
+        "observed_threads": 4,
+        "opaque_cpu_ns": 4832458,
+        "query_clock_aligned": true,
+        "query_execution_cpu_ns": 488839966,
+        "records_complete": true,
+        "scope": "observed-exclusive-thread-segments",
+        "task_cpu_ns": 19618914
+      },
+      "observed_read_records": 910483,
+      "query_clock_wait_intervals": {
+        "post_condvar": {
+          "count": 134,
+          "max_elapsed_ns": 60399,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 1267292,
+          "union_elapsed_ns": 963200
+        },
+        "post_notification": {
+          "count": 134,
+          "max_elapsed_ns": 77233,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 1975489,
+          "union_elapsed_ns": 1255134
+        },
+        "producer_notification": {
+          "count": 134,
+          "max_elapsed_ns": 4147056,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 10214610,
+          "union_elapsed_ns": 8081744
+        },
+        "total": {
+          "count": 134,
+          "max_elapsed_ns": 4163934,
+          "peak_overlapping_intervals": 3,
+          "sum_elapsed_ns": 12190099,
+          "union_elapsed_ns": 9310848
+        }
+      },
+      "read_coverage": {
+        "cache_hits": 212643,
+        "endpoints_complete": true,
+        "green_ensures": 0,
+        "lost_events": 0,
+        "observed_reads": 217033,
+        "observed_requests": 231304,
+        "observed_results": 18199,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": true,
+        "resolved_job_edges": 0,
+        "resolved_reads": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_read_reasons": {
+          "disabled": 217033,
+          "eval_always": 0,
+          "ignore": 0,
+          "job_endpoint_unavailable": 0,
+          "missing_context": 0,
+          "no_prior_producer": 0,
+          "producer_published_too_late": 0,
+          "tracked_missing_context_or_consumer": 0
+        },
+        "unbound_reads": 217033
+      },
+      "scope": "validated-native-frontend-evidence-not-an-execution-span",
+      "task_binding_coverage": {
+        "all_targets_bound": false,
+        "bound_points": 93518,
+        "expected_points": 485003,
+        "graph_binding_complete": false,
+        "graph_binding_valid": true,
+        "issues": [
+          "task-binding targets declared incomplete"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 391485
+      },
+      "theoretical_parallelism": null,
+      "waits_complete": true
+    }
+  ],
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "full_pipeline_complete": false,
+  "graph_output": {
+    "bytes": 1095919,
+    "format": "justrust-graph-json-stdout",
+    "name": "readiness-cold-1-flow-public.json",
+    "sha256": "ca625fdd1466c5bc824fc382d553d25807c8683d9865bb0271c218b5879e0d05"
+  },
+  "inputs": [
+    {
+      "bytes": 25784410,
+      "name": "1792074442600078869-1735528-1-pool.json",
+      "sha256": "702046b44d859e0a54f63c7632990b8dfc6b06855d914a080566f186d7ed52cb"
+    },
+    {
+      "bytes": 223869652,
+      "name": "1792074442600078869-1735528-1.json",
+      "sha256": "fc51cce9e64b310c3af2db12fa36712b9d786c450e16c4735011a676f2af744f"
+    }
+  ],
+  "large_capture": true,
+  "schema": 1,
+  "scope": "native-frontend-capture-diagnostics",
+  "theoretical_parallelism": null
+}
