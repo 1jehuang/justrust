@@ -1005,7 +1005,11 @@ fn collect_path_with_policy(
     }
     // Collect exact authorities from original bytes before flattening any row.
     let resource_attachments =
-        crate::execution_graph_resource_attachment::collect_documents(&documents, None)?;
+        crate::execution_graph_resource_attachment::collect_documents_with_scan_budget(
+            &documents,
+            None,
+            policy.max_bytes,
+        )?;
     let pools = collect_pool_inventories(&documents)?;
     for bytes in &documents {
         let mut assessment = assess_receipt_bytes_with_policy(bytes, &pools, policy)?;

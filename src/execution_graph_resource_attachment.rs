@@ -180,11 +180,24 @@ pub fn collect_documents(
     documents: &[Vec<u8>],
     selected_queries: Option<&BTreeSet<String>>,
 ) -> Result<AttachmentAssessment> {
+    collect_documents_with_scan_budget(documents, selected_queries, 64 * 1024 * 1024)
+}
+
+/// Increase only the bytes scanned for candidate identities. Authority parsers
+/// below retain their own strict byte/event limits, including query receipts.
+pub(crate) fn collect_documents_with_scan_budget(
+    documents: &[Vec<u8>],
+    selected_queries: Option<&BTreeSet<String>>,
+    max_scan_bytes: usize,
+) -> Result<AttachmentAssessment> {
+    if !(1..=512 * 1024 * 1024).contains(&max_scan_bytes) {
+        bail!("resource scan policy outside hard byte bounds");
+    }
     if documents.len() > 20_000
         || documents
             .iter()
             .try_fold(0usize, |n, d| n.checked_add(d.len()))
-            .is_none_or(|n| n > 64 * 1024 * 1024)
+            .is_none_or(|n| n > max_scan_bytes)
     {
         bail!("resource aggregate budget exceeded");
     }
@@ -496,6 +509,65 @@ pub(crate) mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn large_capture_scan_budget_is_explicit_and_hard_bounded() {
+        let docs = documents()
+            .iter()
+            .map(|d| serde_json::to_vec(d).unwrap())
+            .collect::<Vec<_>>();
+        let total = docs.iter().map(Vec::len).sum::<usize>();
+        assert_eq!(
+            collect_documents_with_scan_budget(&docs, None, total)
+                .unwrap()
+                .state,
+            "validated"
+        );
+        assert!(collect_documents_with_scan_budget(&docs, None, total - 1).is_err());
+        assert!(collect_documents_with_scan_budget(&[], None, 0).is_err());
+        assert!(collect_documents_with_scan_budget(&docs, None, 512 * 1024 * 1024 + 1).is_err());
+        // File-count bounds must not be relaxed with the aggregate scan policy.
+        assert!(
+            collect_documents_with_scan_budget(&vec![Vec::new(); 20_001], None, 512 * 1024 * 1024)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn large_capture_scan_never_promotes_oversized_query_authority() {
+        let mut docs = documents()
+            .iter()
+            .map(|d| serde_json::to_vec(d).unwrap())
+            .collect::<Vec<_>>();
+        // A syntactically valid schema4 query with padding exceeds the strict
+        // authority budget, while remaining within the explicit scan budget.
+        docs[0].resize(64 * 1024 * 1024 + 1, b' ');
+        assert!(collect_documents(&docs, None).is_err());
+        assert!(crate::execution_graph_query::collect_bytes(&docs[0]).is_err());
+        let assessment =
+            collect_documents_with_scan_budget(&docs, None, 512 * 1024 * 1024).unwrap();
+        assert_ne!(assessment.state, "validated");
+        assert_eq!(assessment.attachments.len(), 1);
+        let attachment = &assessment.attachments[0];
+        assert!(!attachment.context_links_valid && !attachment.context_links_complete);
+        assert!(attachment.cross_wait_edges.is_empty());
+        assert!(
+            attachment
+                .issues
+                .iter()
+                .any(|s| s == "missing reciprocal query4/pool2 authority")
+        );
+        // Individual resource parser budget remains independent as well.
+        docs[2].resize(resource::MAX_BYTES + 1, b' ');
+        let assessment =
+            collect_documents_with_scan_budget(&docs, None, 512 * 1024 * 1024).unwrap();
+        assert!(
+            assessment
+                .documents
+                .iter()
+                .any(|d| d.producer == "rustc-frontend-allowance" && !d.valid)
+        );
+    }
+
     #[test]
     fn exact_three_roles_and_native_return_chain() {
         let a = collect(&documents());
