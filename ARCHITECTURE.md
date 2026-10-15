@@ -571,6 +571,65 @@ concurrent requests, recursive facts, and worker failure. Verify against clean
 recomputation and known small graphs. Use the prototype to settle granularity
 and scheduler choices before treating them as the compiler's final architecture.
 
+## 18. Within-build memoization and node vocabulary
+
+For the initial model, focus on one build against an immutable input snapshot.
+Cross-build persistence and cross-tenant reuse remain longer-term requirements,
+but are not prerequisites for validating this in-memory execution model.
+
+A logical work node can contain both its computation description and its result
+slots, directly or through owned references. Separate operation and fact
+allocations are not required. A node does not need to change identity when its
+result becomes available: pending computation becomes an available result while
+producer identity, dependencies, and execution history remain inspectable.
+
+A fact is a published result, not a second kind of work. In the simplest case,
+one node computes one result. Multiple independently finalized output slots
+allow consumers to proceed before all of a producer's work is finished.
+
+### Reuse guarantee
+
+Target one shared evaluation per demanded node within the snapshot. Concurrent
+consumers join the same evaluation; after an output is finalized, they read its
+retained in-memory value rather than recomputing that node's completed work.
+Graph-owned references keep published outputs accessible while needed.
+
+Requesting or reading a node is not the same as executing it again. A
+computation can suspend and resume before finalization, and several consumers
+can inspect the same result. Failure/retry and recursive convergence need
+explicit protocols rather than a blanket assertion that a node is visited only
+once. The compute-once statement assumes successful evaluation and retained
+results; crash recovery or reclamation can require recomputation.
+
+Fully cached means the node's published outputs, not every temporary variable
+or instruction used to produce them. Suspension is not a completed cached
+result. Retention versus recomputation under memory pressure remains a measured
+policy decision; keeping all results forever is not assumed optimal.
+
+### Combined results and canonical identities
+
+Results need not be atomic. If node C computes a result from A and B, retain C's
+combined result just as any other output. There is no need to enumerate every
+combination of available facts. Merely packaging A and B is different from
+avoiding repeated computation over them.
+
+Equivalent computations must resolve to the same logical node to share their
+evaluation. Define identities using operation semantics, parameters, and
+relevant context, with snapshot-specific evaluations distinguished from stable
+lookup identities. Canonicalization must never merge computations whose inputs
+or authorization differ.
+
+Repeated work hidden inside different nodes is not automatically eliminated.
+Coarse boundaries can hide reusable subcomputations; excessively fine ones can
+increase coordination and memory costs. These are practical design risks, not
+merely mathematical edge cases.
+
+The precise claim is complete memoization of completed outputs explicitly
+represented by shared nodes within the build. This is a strong starting point,
+not a proof of globally optimal or near-optimal caching. Validate deduplication,
+identity correctness, retained memory, and overhead before making stronger
+claims. Extend this model to cross-build validation separately.
+
 ## Open architectural decisions
 
 These requirements do not yet choose the mechanisms below:
