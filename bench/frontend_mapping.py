@@ -190,7 +190,7 @@ def _read_regular(path, remaining, directory_fd=None):
 
 def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_output,
                dispatch_result_provenance=False, query_cpu_ownership=False,
-               observed_task_dag=False):
+               observed_task_dag=False, execution_flow_dag=False):
     command = [str(justrust), 'graph', str(snapshot), '--json']
     if large_capture:
         command.append('--large-capture')
@@ -202,7 +202,9 @@ def _run_graph(snapshot, justrust, large_capture, cache_call_provenance, graph_o
         command.append('--query-cpu-ownership')
     if observed_task_dag:
         command.append('--observed-task-dag')
-    if cache_call_provenance or dispatch_result_provenance or query_cpu_ownership or observed_task_dag:
+    if execution_flow_dag:
+        command.append('--execution-flow-dag')
+    if cache_call_provenance or dispatch_result_provenance or query_cpu_ownership or observed_task_dag or execution_flow_dag:
         # Reserve before invoking the validator, so collisions never overwrite an
         # existing artifact or perform an unnecessary potentially expensive run.
         fd = os.open(graph_output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -321,6 +323,122 @@ def _query_cpu_summary(assessment):
                 omitted_query_kinds=max(0, len(ranked_kinds) - 20), issues=cpu['issues'])
 
 
+def _execution_flow_summary(assessment):
+    """Bound public known-chain diagnostics, never promote them to full span."""
+    flow = assessment.get('execution_flow_dag')
+    counts = ('nodes', 'edges', 'scopes', 'active_scopes', 'lost_nodes', 'lost_edges',
+              'lost_scopes', 'assigned_cpu_segments', 'unassigned_cpu_segments',
+              'missing_measurement_references', 'unavailable_cpu_segments', 'cut_nodes')
+    totals = ('unassigned_known_cpu_ns', 'known_cpu_work_ns', 'known_query_cpu_ns',
+              'known_task_cpu_ns', 'known_opaque_cpu_ns', 'longest_known_chain_cpu_ns')
+    flags = ('records_complete', 'full_pipeline_complete', 'flow_complete')
+    if (not isinstance(flow, dict)
+            or flow.get('scope') != 'observed-query-and-join-control-flow'
+            or any(type(flow.get(key)) is not bool for key in flags)
+            or flow['full_pipeline_complete'] or flow['flow_complete']
+            or any(type(flow.get(key)) is not int or flow[key] < 0 for key in counts)
+            or any(key not in flow or (flow[key] is not None and
+                   (type(flow[key]) is not int or flow[key] < 0)) for key in totals)
+            or any(key not in flow or flow[key] is not None for key in
+                   ('cpu_work_ns', 'execution_span_ns', 'parallelism'))
+            or any(not isinstance(flow.get(key), list) for key in
+                   ('longest_known_chain_path', 'longest_known_chain_steps', 'issues', 'limitations'))
+            or any(not isinstance(text, str) for key in ('issues', 'limitations') for text in flow[key])
+            or not isinstance(flow.get('pool_capture_id'), str) or not flow['pool_capture_id']
+            or flow['pool_capture_id'] != assessment.get('capture_id')
+            or type(flow.get('pool_observer')) is not int or flow['pool_observer'] <= 0):
+        raise ValueError('missing or malformed execution flow DAG authority')
+    cpu = assessment.get('observed_cpu')
+    bridge = cpu.get('clock_bridge') if isinstance(cpu, dict) else None
+    if (not isinstance(bridge, dict) or flow['pool_observer'] != bridge.get('pool_observer')
+            or type(bridge.get('pool_observer')) is not int
+            or flow['pool_capture_id'] != bridge.get('pool_capture_id')):
+        raise ValueError('execution flow qualified pool identity mismatch')
+    if (flow['assigned_cpu_segments'] > flow['nodes']
+            or flow['cut_nodes'] > flow['nodes']
+            or flow['unavailable_cpu_segments'] > flow['assigned_cpu_segments']):
+        raise ValueError('execution flow inventory mismatch')
+    if flow['records_complete'] and (flow['issues'] or any(flow[key] for key in
+            ('active_scopes', 'lost_nodes', 'lost_edges', 'lost_scopes',
+             'unassigned_cpu_segments', 'missing_measurement_references', 'unavailable_cpu_segments'))):
+        raise ValueError('complete execution flow has incomplete authority')
+    categories = [flow[key] for key in ('known_query_cpu_ns', 'known_task_cpu_ns', 'known_opaque_cpu_ns')]
+    known = flow['known_cpu_work_ns']
+    if ((known is None and any(value is not None for value in categories))
+            or (known is not None and (all(value is None for value in categories)
+                or sum(value for value in categories if value is not None) != known))):
+        raise ValueError('execution flow known CPU partition mismatch')
+    path, steps = flow['longest_known_chain_path'], flow['longest_known_chain_steps']
+    chain = flow['longest_known_chain_cpu_ns']
+    if (len(path) != len(steps) or len(path) > flow['nodes']
+            or any(type(node) is not int or node <= 0 for node in path)
+            or len(set(path)) != len(path) or max(0, len(path) - 1) > flow['edges']
+            or (chain is None) != (known is None)
+            or (chain is None and path) or (chain is not None and not path)):
+        raise ValueError('invalid execution flow chain path')
+    segments = set()
+    named = []
+    kinds = collections.Counter()
+    previous_at = None
+    for node, step in zip(path, steps):
+        if (not isinstance(step, dict) or type(step.get('node_id')) is not int
+                or step['node_id'] != node
+                or step.get('kind') not in ('cpu_segment', 'scope_enter', 'scope_exit',
+                                            'fork', 'task_enter', 'task_exit', 'join')
+                or type(step.get('at_ns')) is not int or step['at_ns'] < 0
+                or (previous_at is not None and step['at_ns'] < previous_at)
+                or type(step.get('cpu_ns')) is not int or step['cpu_ns'] < 0
+                or any(key not in step or (step[key] is not None and
+                       (type(step[key]) is not int or step[key] <= 0)) for key in
+                       ('segment_id', 'scope_id', 'task', 'query_context', 'query_job'))):
+            raise ValueError('invalid execution flow chain step')
+        previous_at = step['at_ns']
+        if (step['query_context'] is None) != (step['query_job'] is None):
+            raise ValueError('invalid execution flow qualified query identity')
+        if step['query_context'] is not None and step['scope_id'] is None:
+            raise ValueError('execution flow query lacks scope identity')
+        if step['kind'] == 'cpu_segment':
+            if step['segment_id'] is None or step['segment_id'] in segments:
+                raise ValueError('invalid execution flow segment identity')
+            segments.add(step['segment_id'])
+        elif step['segment_id'] is not None or step['cpu_ns'] != 0:
+            raise ValueError('execution flow gate has CPU measurement')
+        if 'query_name' not in step:
+            raise ValueError('execution flow name must be explicitly nullable')
+        name = step['query_name']
+        if name is not None:
+            if (step['kind'] != 'cpu_segment' or step['query_context'] is None
+                    or not isinstance(name, str) or not 1 <= len(name) <= 128
+                    or not name.isascii() or not name.isidentifier()):
+                raise ValueError('invalid execution flow query name authority')
+            named.append({key: step[key] for key in ('node_id', 'kind', 'at_ns',
+                'segment_id', 'scope_id', 'task', 'query_context', 'query_job', 'query_name', 'cpu_ns')})
+            kinds[name] += step['cpu_ns']
+    if (len(segments) > flow['assigned_cpu_segments']
+            or (chain is not None and not segments)
+            or (named and (flow['known_query_cpu_ns'] is None
+                           or sum(kinds.values()) > flow['known_query_cpu_ns']))
+            or (chain is not None and (sum(step['cpu_ns'] for step in steps) != chain
+                or (known is None and segments) or (known is not None and chain > known)))):
+        raise ValueError('execution flow chain CPU mismatch')
+    ranked = sorted(named, key=lambda row: (-row['cpu_ns'], row['node_id']))
+    ranked_kinds = [dict(query_name=name, cpu_ns=cost)
+                    for name, cost in sorted(kinds.items(), key=lambda row: (-row[1], row[0]))]
+    return dict(scope=flow['scope'], pool_capture_id=flow['pool_capture_id'],
+                pool_observer=flow['pool_observer'],
+                **{key: flow[key] for key in (*flags, *counts, *totals)},
+                cpu_work_ns=None, execution_span_ns=None, parallelism=None,
+                longest_known_chain_nodes=len(path),
+                longest_known_chain_cpu_segments=len(segments),
+                named_chain_cpu_segments=len(ranked),
+                named_chain_cpu_ns=sum(kinds.values()) if chain is not None else None,
+                top_named_chain_cpu_segments=ranked[:20],
+                omitted_named_chain_cpu_segments=max(0, len(ranked) - 20),
+                chain_query_kinds=len(ranked_kinds), top_chain_query_kinds=ranked_kinds[:20],
+                omitted_chain_query_kinds=max(0, len(ranked_kinds) - 20),
+                issues=flow['issues'], limitations=flow['limitations'])
+
+
 def _observed_task_dag_summary(assessment):
     """Retain only the public validator's scoped causal task diagnostics."""
     dag = assessment.get('observed_task_dag')
@@ -399,12 +517,12 @@ def _observed_task_dag_summary(assessment):
 
 def analyze(directory, justrust, large_capture=False, cache_call_provenance=False,
             graph_output=None, dispatch_result_provenance=False, query_cpu_ownership=False,
-            observed_task_dag=False):
+            observed_task_dag=False, execution_flow_dag=False):
     provenance = (cache_call_provenance or dispatch_result_provenance or query_cpu_ownership
-                  or observed_task_dag)
+                  or observed_task_dag or execution_flow_dag)
     if provenance != (graph_output is not None):
         raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
-                         'or --query-cpu-ownership or --observed-task-dag requires companion --graph-output and vice versa')
+                         'or --query-cpu-ownership or --observed-task-dag or --execution-flow-dag requires companion --graph-output and vice versa')
     directory = Path(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('capture must be a nonsymlink directory')
@@ -444,7 +562,9 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
     snapshot_names = {name for name, _ in originals}
     for name, content in originals:
         receipt = json.loads(content)
-        if receipt.get('producer') == 'rustc-thread-pool-join' and receipt.get('schema') in (3, 4):
+        if receipt.get('producer') == 'rustc-thread-pool-join' and receipt.get('schema') in (3, 4, 5):
+            if receipt['schema'] == 5 and not execution_flow_dag:
+                raise ValueError('pool5 requires explicit --execution-flow-dag')
             if receipt['schema'] == 4 and not query_cpu_ownership:
                 raise ValueError('pool4 requires explicit --query-cpu-ownership')
             capture_id = receipt['capture_id']
@@ -460,7 +580,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
         if capture_id in query_sources:
             raise ValueError('duplicate query source capture identity')
         allowed_schemas = (4, 5, 6) if (dispatch_result_provenance or query_cpu_ownership
-                                               or observed_task_dag) else (4, 5)
+                                               or observed_task_dag or execution_flow_dag) else (4, 5)
         if type(receipt.get('schema')) is not int or receipt['schema'] not in allowed_schemas:
             raise ValueError('frontend report requires native schema4/5 evidence '
                              'or explicit --dispatch-result-provenance for schema6')
@@ -488,7 +608,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
         assessments, artifact = _run_graph(snapshot, justrust, large_capture,
                                           cache_call_provenance, graph_output,
                                           dispatch_result_provenance, query_cpu_ownership,
-                                          observed_task_dag)
+                                          observed_task_dag, execution_flow_dag)
         indexed = {}
         pool_indexed = {}
         for assessment in assessments:
@@ -506,7 +626,7 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
             raise ValueError('query source/validated authority mismatch')
         pool_authorities = {}
         timing_ids = {key for key, value in pool_indexed.items()
-                      if value.get('schema') in (3, 4) or value.get('observed_cpu') is not None}
+                      if value.get('schema') in (3, 4, 5) or value.get('observed_cpu') is not None}
         if timing_ids != set(pool_sources):
             raise ValueError('CPU pool source/validated authority mismatch')
         for key, source in pool_sources.items():
@@ -554,6 +674,12 @@ def analyze(directory, justrust, large_capture=False, cache_call_provenance=Fals
                 if pool_authority is None:
                     raise ValueError('observed task DAG requires original matching pool authority')
                 summary['observed_task_dag'] = _observed_task_dag_summary(pool_authority)
+            if execution_flow_dag:
+                reference = receipt['task_bindings']['pool']
+                pool_authority = pool_indexed.get(reference['capture_id']) if reference else None
+                if pool_authority is None or pool_authority.get('schema') != 5:
+                    raise ValueError('execution flow DAG requires original matching pool5 authority')
+                summary['execution_flow_dag'] = _execution_flow_summary(pool_authority)
             summaries.append(summary)
         if not summaries:
             raise ValueError('no native frontend receipt')
@@ -581,17 +707,19 @@ def main():
                         help='Opt in to validated exclusive query-execution CPU ownership, not a critical path')
     parser.add_argument('--observed-task-dag', action='store_true',
                         help='Retain explicit native fork/join task DAG and scoped known CPU chains, not full span')
+    parser.add_argument('--execution-flow-dag', action='store_true',
+                        help='Retain observed query/join flow and known CPU chains, not full span')
     parser.add_argument('--graph-output', type=Path,
-                        help='Required with provenance or query CPU ownership: exclusive full native graph JSON artifact outside the capture directory')
+                        help='Required with any diagnostic opt-in: exclusive full native graph JSON artifact outside the capture directory')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
         provenance = (args.cache_call_provenance or args.dispatch_result_provenance
-                      or args.query_cpu_ownership or args.observed_task_dag)
+                      or args.query_cpu_ownership or args.observed_task_dag or args.execution_flow_dag)
         if provenance or args.graph_output is not None:
             if not provenance or args.graph_output is None:
                 raise ValueError('--cache-call-provenance or --dispatch-result-provenance '
-                                 'or --query-cpu-ownership or --observed-task-dag requires companion --graph-output and vice versa')
+                                 'or --query-cpu-ownership or --observed-task-dag or --execution-flow-dag requires companion --graph-output and vice versa')
             if args.output.resolve() == args.graph_output.resolve():
                 raise ValueError('report and graph output paths must differ')
             if os.path.lexists(args.output):
@@ -601,7 +729,8 @@ def main():
                              graph_output=args.graph_output,
                              dispatch_result_provenance=args.dispatch_result_provenance,
                              query_cpu_ownership=args.query_cpu_ownership,
-                             observed_task_dag=args.observed_task_dag)
+                             observed_task_dag=args.observed_task_dag,
+                             execution_flow_dag=args.execution_flow_dag)
         else:
             report = analyze(args.capture, args.justrust, args.large_capture)
         encoded = (json.dumps(report, sort_keys=True, indent=2) + '\n').encode()
