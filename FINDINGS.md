@@ -1,5 +1,21 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Desktop diagram verification still pays shared-crate rebuild costs
+
+Desktop diagram and macOS input fixes used hosted workspace test run
+`20261015-115639936-2736661`: 1,854 tests passed, with 1.53 s of build-directory
+lock wait, 2.93 s compilation and 3.22 s tests. The report attributed 2.8 s
+to downstream rebuilding after shared harness, UI and SDK changes. Concurrent
+focused and workspace verification serialized on the same hosted target.
+
+The native screenshot build `20261015-115650783-2737617` needed a runnable local
+artifact and took 9.2 s, including 6.7 s recompiling the 125k-line UI crate and
+1.6 s relinking Desktop. Its source-directory build-script input invalidates
+the entire UI after small edits. Keep targeted checks serialized, reuse current
+binaries with screenshot `--no-build`, and consider a small leaf crate for that
+build-script input rather than restructuring Desktop during a bug fix. These
+are observed costs and opportunities, not a claimed speedup.
+
 ## 2026-10-15: final mapping feedback closes on real outputs and same-input coverage
 
 The final whole-result rerun passed the complete 14-test native/safety harness,
