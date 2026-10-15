@@ -1,0 +1,17 @@
+[package]
+name = "justrust-engine"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+name = "justrust_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jr-prototype"
+path = "src/main.rs"
+
+[profile.release]
+debug = 1

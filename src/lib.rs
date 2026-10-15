@@ -1,0 +1,11 @@
+//! The first in-memory, std-only graph engine.
+//!
+//! The global ready queue is a correctness baseline, not a scalability claim.
+//! See [`engine`] for the snapshot, cancellation, and execution contract.
+
+pub mod engine;
+pub mod fixtures;
+
+pub use engine::{
+    Context, Demand, Engine, Error, Event, Handle, Key, Outputs, Provider, Report, TaskFuture,
+};
