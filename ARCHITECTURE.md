@@ -362,6 +362,71 @@ latency and resource cost against recomputation, and label estimates honestly.
 Do not expose another tenant's identity, private inputs, or sensitive cache
 metadata when explaining reuse.
 
+## 15. Memory-first compilation and asynchronous persistence
+
+Agreed initial design candidate, subject to correctness and performance tests.
+Compilation is memory-first, not a sequence of disk-mediated compiler phases.
+
+Keep the complete active project's graph, dependency indexes, and live execution
+state resident in memory. Keep compiler representations, intermediate results,
+and newly produced artifacts in RAM while useful. Pass results directly between
+operations without serializing and reloading merely to cross phase boundaries.
+Full active-graph residency does not mean retaining the entire fleet's cache,
+every tenant's history, or all historical result payloads in RAM.
+
+Release dead intermediates when safe rather than retaining everything until the
+request ends. Memory accounting must distinguish active computation, reusable
+resident state, pending persistence, and reclaimable data. Any move toward
+partial graph residency must be justified by measured capacity or latency,
+not assumed as an architectural requirement.
+
+### Publication and durability are separate
+
+Publish completed immutable results immediately to authorized in-memory
+consumers. Persist immutable batches asynchronously instead of waiting until
+the entire build finishes. This allows checkpointing during long builds and
+persistent edit sessions without making disk the normal communication path.
+
+Track computed, persisted, and available-remotely states separately. In-memory
+publication does not claim crash durability or remote availability. A remote
+consumer needs an authorized transfer or a published remote artifact, not just
+a local completion event. Persisted manifests must never reference incomplete
+or unavailable payloads as if they were durable.
+
+Persistence should not block dependent computation unless durability or
+cross-machine availability is required. Bound pending writes and account for
+persistence CPU, memory, bandwidth, and I/O interference. Define backpressure
+and safe reclamation rules so an asynchronous queue cannot grow indefinitely
+or discard the only copy of a result promised for persistence.
+
+Provide an explicit request-completion flush/checkpoint boundary. Distinguish
+result-ready latency from durable-checkpoint completion and define which one a
+command's completion contract promises. The exact flush policy remains design
+work, not an implicit requirement that every request synchronously uploads all
+results. On a crash, unpersisted work may be lost and recomputed; persisted work
+must recover consistently without treating partial writes as completed results.
+
+### Initial data-model proposal
+
+Use explicit operation, snapshot evaluation, dependency edge, result, execution
+attempt, and demand records linked by IDs. Keep semantic dependencies separate
+from scheduling waits and execution history. Reverse-dependency indexes are
+rebuildable acceleration structures. Handle cycles explicitly rather than
+assuming all compiler relationships form a DAG.
+
+Compact IDs, chunked tables and adjacency storage, identity hash indexes, and
+partitioned ownership are initial layout candidates, not settled choices.
+Avoid assuming a single global graph lock or per-node heap allocation.
+
+### Validation
+
+Measure bytes per node/edge, graph and payload residency, peak total memory,
+persistence interference, pending-write growth, loading/recovery cost, and
+end-to-end request latency across core counts and concurrent projects. Compare
+asynchronous persistence with completion-only persistence under controlled
+conditions. Exercise crashes, incomplete batches, cancellation, and shared
+consumers. No performance advantage is claimed before those measurements.
+
 ## Open architectural decisions
 
 These requirements do not yet choose the mechanisms below:
