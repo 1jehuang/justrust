@@ -181,7 +181,7 @@ def main():
 
     def pool_flow(values):
         rows = [row for row in values if row['producer'] == 'rustc-thread-pool-join']
-        require(rows, 'public replay omitted pool assessment')
+        require(len(rows) == 1, 'public replay requires one original pool assessment')
         return rows[0]['execution_flow_dag']
 
     def no_full(values):
@@ -242,7 +242,9 @@ def main():
             execute(label + '-artifact-collision', collision_command, refusal=True)
             require(digest(artifact) == artifact_hash and not Path(collision_command[-1]).exists(),
                     'artifact collision overwrote stdout or created report')
-            analyzer_record['compact_rankings_artifact_hash_mode_and_collisions_checked'] = True
+            analyzer_record.update(compact_rankings_artifact_hash_mode_and_collisions_checked=True,
+                                   artifact_sha256=artifact_hash, artifact_bytes=artifact.stat().st_size,
+                                   compact_sha256=output_hash)
             if label == 'flow-warm-1':
                 warm = query_path, query, pool_path, pool
 
@@ -266,9 +268,10 @@ def main():
                 private_write(directory / 'scheduler.json', json.dumps(scheduler).encode())
             values, record = graph(variant, directory, ['--execution-flow-dag'])
             no_full(values)
-            for row in values:
-                if row['producer'] != 'rustc-thread-pool-join':
-                    continue
+            pool_rows = [row for row in values if row['producer'] == 'rustc-thread-pool-join']
+            require(len(pool_rows) == (2 if variant == 'duplicate-pool' else 1),
+                    'negative replay omitted an original pool or a duplicate copy')
+            for row in pool_rows:
                 partial = row['execution_flow_dag']
                 scoped(partial)
                 require(partial['records_complete'] is False and partial['issues'],
