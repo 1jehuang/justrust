@@ -7210,6 +7210,29 @@ Capture remains opt-in and scoped: full-pipeline completeness is false,
 CPU-work/span are null, wrappers and early-reply cache paths remain unsupported,
 and no speedup or thread ceiling follows from these receipts.
 
+## 2026-10-14: jcode v0.98 CI repair exposes oversized-crate edit costs
+
+Hosted run `20261014-122252729-514803` (`check --locked -p jcode-app-core
+--tests`, exit 0) spent 13.09s in Cargo, including 7.59s for app-core's test
+unit (168k source lines) and 3.52s for base. The corresponding isolated
+retention-readiness test run `20261014-122325267-519971` passed 3 tests but
+compiled a 1,609-test binary: app-core took 17.8s and base 6.8s. The remote
+invocation took 69.7s, of which sync took 43.176s, so compiler timing alone
+does not describe the user-visible delay. No before/after speedup is claimed.
+These are project crate-boundary costs, not a reason to bypass hosted routing.
+The jcode coordinator was notified. Moving helpers between files for LOC
+ratchets does not itself reduce the Rust crate's recompilation scope.
+
+Follow-up hosted owned-source validation: run `20261014-123933366-699221`
+passed all-target/all-feature checks in 17.9s but reported 12.9s shared Cargo
+lock wait during concurrent owner checks. Run `20261014-124321736-736356`
+passed 1,249 tests across 16 binaries in 6.2s hosted wall time, including
+0.5s downstream rebuild cost for doctor/companion after provider/voice edits.
+SDK integration run `20261014-124327969-737152` passed 26 tests in 13.2s hosted
+wall time, dominated by two existing 10.00s tests. These point to coordinating
+aggregate snapshots and narrowing test fixtures rather than bypassing hosted
+routing. No speedup is claimed.
+
 ## 2026-10-14: explicit native query-to-task point authority
 
 Query schema 4 and pool schema 2 now bind direct admission, request, read,
