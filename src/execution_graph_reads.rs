@@ -91,6 +91,316 @@ struct ReadEvent {
     #[serde(deserialize_with = "nullable")]
     outcome: Option<Outcome>,
 }
+
+/// Explicit opt-in wire grammar. Do not flatten the legacy event: duplicate,
+/// unknown, and missing nullable fields must be rejected on original bytes.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReadCaptureV2 {
+    schema: u32,
+    records_complete: bool,
+    semantic_complete: bool,
+    full_pipeline_complete: bool,
+    dep_node_namespace: String,
+    request_high_water: u64,
+    read_high_water: u64,
+    result_high_water: u64,
+    expected_requests: u64,
+    expected_reads: u64,
+    expected_results: u64,
+    lost_events: u64,
+    opaque_boundaries: Vec<String>,
+    events: Vec<ReadEventV2>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadEventV2 {
+    kind: Kind,
+    #[serde(deserialize_with = "nullable")]
+    request_id: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    read_id: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    result_id: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    context_id: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    consumer_job_id: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    producer_job_id: Option<u64>,
+    #[serde(deserialize_with = "nullable")]
+    dep_node_index: Option<u32>,
+    #[serde(deserialize_with = "nullable")]
+    mode: Option<Mode>,
+    #[serde(deserialize_with = "nullable")]
+    outcome: Option<Outcome>,
+    #[serde(deserialize_with = "nullable")]
+    resolution: Option<DispatchResolution>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchResolution {
+    source: DispatchResolutionSource,
+    #[serde(deserialize_with = "nullable")]
+    dep_node_index: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DispatchResolutionSource {
+    ResolvedDispatch,
+}
+
+/// Actual terminal result availability, not fresh execution, prerequisites, or
+/// a whole-job DAG. Record completeness describes only the read event stream.
+#[derive(Debug, Serialize)]
+pub(crate) struct DispatchResultAssessment {
+    pub(crate) scope: &'static str,
+    pub(crate) records_complete: bool,
+    pub(crate) observed_requests: u64,
+    pub(crate) observed_dispatch_resolutions: u64,
+    pub(crate) resolved_requests: u64,
+    pub(crate) unresolved_requests: u64,
+    pub(crate) distinct_publishing_job_relations: u64,
+    pub(crate) lost_events: u64,
+    pub(crate) unresolved_reasons: DispatchResultUnresolvedReasons,
+    pub(crate) relations: Vec<DispatchResultRelation>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DispatchResultRelation {
+    pub(crate) request_id: u64,
+    pub(crate) context_id: u64,
+    pub(crate) consumer_job_id: u64,
+    pub(crate) result_id: u64,
+    pub(crate) producer_job_id: u64,
+    pub(crate) dep_node_index: u32,
+    /// Zero-based indices in the original, unchanged single event stream.
+    pub(crate) request_start_event_index: usize,
+    pub(crate) publication_event_index: usize,
+    pub(crate) request_terminal_event_index: usize,
+}
+
+/// Mutually exclusive partition of observed request starts, in field order.
+/// Forbidden resolution metadata is a grammar error, not an unresolved route.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct DispatchResultUnresolvedReasons {
+    pub(crate) feed_request: u64,
+    pub(crate) interrupted_request: u64,
+    pub(crate) missing_request_terminal: u64,
+    pub(crate) cache_hit_request: u64,
+    pub(crate) no_dispatch_resolution: u64,
+    pub(crate) null_dep_node_index: u64,
+    pub(crate) missing_context_or_consumer: u64,
+    pub(crate) capture_incomplete: u64,
+    pub(crate) no_prior_producer: u64,
+    pub(crate) producer_published_too_late: u64,
+    pub(crate) job_endpoint_unavailable: u64,
+    pub(crate) admission_authority_incomplete: u64,
+}
+
+impl DispatchResultAssessment {
+    pub(crate) fn suppress_incomplete_admission_authority(&mut self) {
+        self.unresolved_reasons.admission_authority_incomplete += self.resolved_requests;
+        self.unresolved_requests += self.resolved_requests;
+        self.resolved_requests = 0;
+        self.distinct_publishing_job_relations = 0;
+        self.relations.clear();
+    }
+}
+
+impl ReadCaptureV2 {
+    /// Validate original typed rows, then move every legacy field into the base
+    /// grammar without filtering, reordering, or a serialization roundtrip.
+    pub(crate) fn into_base_and_assess(
+        self,
+        admitted: &BTreeSet<(u64, u64)>,
+        expected_contexts: u64,
+        context_high_water: &BTreeMap<u64, Option<u64>>,
+        max_events: usize,
+    ) -> Result<(ReadCapture, DispatchResultAssessment)> {
+        ensure!(self.schema == 2, "unsupported dispatch query-read schema");
+        ensure!(
+            (1..=1_000_000).contains(&max_events),
+            "query-read event budget outside safety range 1..=1000000"
+        );
+        ensure!(
+            self.events.len() <= max_events,
+            "query-read event bound exceeded"
+        );
+        let mut events = Vec::with_capacity(self.events.len());
+        let mut resolutions = Vec::with_capacity(self.events.len());
+        for event in self.events {
+            resolutions.push(event.resolution);
+            events.push(ReadEvent {
+                kind: event.kind,
+                request_id: event.request_id,
+                read_id: event.read_id,
+                result_id: event.result_id,
+                context_id: event.context_id,
+                consumer_job_id: event.consumer_job_id,
+                producer_job_id: event.producer_job_id,
+                dep_node_index: event.dep_node_index,
+                mode: event.mode,
+                outcome: event.outcome,
+            });
+        }
+        let base = ReadCapture {
+            schema: 1,
+            records_complete: self.records_complete,
+            semantic_complete: self.semantic_complete,
+            full_pipeline_complete: self.full_pipeline_complete,
+            dep_node_namespace: self.dep_node_namespace,
+            request_high_water: self.request_high_water,
+            read_high_water: self.read_high_water,
+            result_high_water: self.result_high_water,
+            expected_requests: self.expected_requests,
+            expected_reads: self.expected_reads,
+            expected_results: self.expected_results,
+            lost_events: self.lost_events,
+            opaque_boundaries: self.opaque_boundaries,
+            events,
+        };
+        let read = assess_with_inventory_limit(
+            &base,
+            admitted,
+            expected_contexts,
+            context_high_water,
+            max_events,
+        )?;
+        let mut starts = BTreeMap::new();
+        let mut terminals = BTreeMap::new();
+        let mut hits = BTreeSet::new();
+        let mut publications = BTreeMap::new();
+        for (position, event) in base.events.iter().enumerate() {
+            match event.kind {
+                Kind::RequestStarted => {
+                    starts.insert(event.request_id.unwrap(), (position, event));
+                }
+                Kind::RequestFinished | Kind::RequestInterrupted => {
+                    terminals.insert(event.request_id.unwrap(), (position, event));
+                }
+                Kind::CacheHit => {
+                    hits.insert(event.request_id.unwrap());
+                }
+                Kind::ResultProduced => {
+                    publications.insert(
+                        (event.context_id.unwrap(), event.dep_node_index.unwrap()),
+                        (position, event),
+                    );
+                }
+                Kind::DepRead => {}
+            }
+        }
+        let mut observed_dispatch_resolutions = 0;
+        for (position, resolution) in resolutions.iter().enumerate() {
+            if let Some(resolution) = resolution {
+                match resolution.source {
+                    DispatchResolutionSource::ResolvedDispatch => {}
+                }
+                let event = &base.events[position];
+                ensure!(
+                    event.kind == Kind::RequestFinished
+                        && matches!(
+                            (event.mode, event.outcome),
+                            (Some(Mode::Get), Some(Outcome::Value))
+                                | (
+                                    Some(Mode::EnsureOk | Mode::EnsureResult),
+                                    Some(Outcome::Ensured)
+                                )
+                        ),
+                    "dispatch resolution on incompatible event or return route"
+                );
+                ensure!(
+                    !hits.contains(&event.request_id.unwrap()),
+                    "dispatch resolution coexists with cache hit"
+                );
+                observed_dispatch_resolutions += 1;
+            }
+        }
+        let mut report = DispatchResultAssessment {
+            scope: "observed-dispatch-result-availability-not-execution-dag",
+            records_complete: read.records_complete,
+            observed_requests: read.observed_requests,
+            observed_dispatch_resolutions,
+            resolved_requests: 0,
+            unresolved_requests: 0,
+            distinct_publishing_job_relations: 0,
+            lost_events: read.lost_events,
+            unresolved_reasons: DispatchResultUnresolvedReasons::default(),
+            relations: Vec::new(),
+        };
+        let mut job_relations = BTreeSet::new();
+        for (&request_id, &(start_position, start)) in &starts {
+            let reasons = &mut report.unresolved_reasons;
+            let reason = if start.mode == Some(Mode::Feed) {
+                Some(&mut reasons.feed_request)
+            } else if let Some(&(terminal_position, terminal)) = terminals.get(&request_id) {
+                if terminal.kind == Kind::RequestInterrupted {
+                    Some(&mut reasons.interrupted_request)
+                } else if hits.contains(&request_id) {
+                    Some(&mut reasons.cache_hit_request)
+                } else if let Some(resolution) = &resolutions[terminal_position] {
+                    if let Some(index) = resolution.dep_node_index {
+                        if let (Some(context), Some(consumer)) =
+                            (start.context_id, start.consumer_job_id)
+                        {
+                            if !read.records_complete {
+                                Some(&mut reasons.capture_incomplete)
+                            } else if let Some(&(publication_position, publication)) =
+                                publications.get(&(context, index))
+                            {
+                                if publication_position >= terminal_position {
+                                    Some(&mut reasons.producer_published_too_late)
+                                } else if let Some(producer) =
+                                    publication.producer_job_id.filter(|producer| {
+                                        admitted.contains(&(context, *producer))
+                                            && admitted.contains(&(context, consumer))
+                                    })
+                                {
+                                    job_relations.insert((context, producer, consumer));
+                                    report.relations.push(DispatchResultRelation {
+                                        request_id,
+                                        context_id: context,
+                                        consumer_job_id: consumer,
+                                        result_id: publication.result_id.unwrap(),
+                                        producer_job_id: producer,
+                                        dep_node_index: index,
+                                        request_start_event_index: start_position,
+                                        publication_event_index: publication_position,
+                                        request_terminal_event_index: terminal_position,
+                                    });
+                                    None
+                                } else {
+                                    Some(&mut reasons.job_endpoint_unavailable)
+                                }
+                            } else {
+                                Some(&mut reasons.no_prior_producer)
+                            }
+                        } else {
+                            Some(&mut reasons.missing_context_or_consumer)
+                        }
+                    } else {
+                        Some(&mut reasons.null_dep_node_index)
+                    }
+                } else {
+                    Some(&mut reasons.no_dispatch_resolution)
+                }
+            } else {
+                Some(&mut reasons.missing_request_terminal)
+            };
+            if let Some(reason) = reason {
+                *reason += 1;
+            }
+        }
+        report.resolved_requests = report.relations.len() as u64;
+        report.unresolved_requests = report.observed_requests - report.resolved_requests;
+        report.distinct_publishing_job_relations = job_relations.len() as u64;
+        Ok((base, report))
+    }
+}
 #[derive(Debug, Serialize)]
 pub(crate) struct ReadAssessment {
     pub(crate) records_complete: bool,
@@ -733,6 +1043,426 @@ mod tests {
         end["kind"] = json!("request_finished");
         end["outcome"] = json!("value");
         json!({"schema":1,"records_complete":true,"semantic_complete":false,"full_pipeline_complete":false,"dep_node_namespace":"current-context","request_high_water":2,"read_high_water":2,"result_high_water":2,"expected_requests":1,"expected_reads":1,"expected_results":1,"lost_events":0,"opaque_boundaries":BOUNDARIES,"events":[start,produced,read,end]})
+    }
+    fn dispatch_fixture() -> Value {
+        let mut value = fixture();
+        value["schema"] = json!(2);
+        for event in value["events"].as_array_mut().unwrap() {
+            event["resolution"] = Value::Null;
+        }
+        value["events"][3]["resolution"] =
+            json!({"source":"resolved_dispatch","dep_node_index":42});
+        value
+    }
+    fn dispatch(
+        value: Value,
+        admitted: BTreeSet<(u64, u64)>,
+    ) -> Result<(ReadCapture, DispatchResultAssessment)> {
+        serde_json::from_value::<ReadCaptureV2>(value)?.into_base_and_assess(
+            &admitted,
+            1,
+            &BTreeMap::from([(1, Some(3))]),
+            MAX_EVENTS,
+        )
+    }
+    fn dispatch_partition(report: &DispatchResultAssessment) {
+        let reasons = serde_json::to_value(&report.unresolved_reasons).unwrap();
+        let total: u64 = reasons
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|v| v.as_u64().unwrap())
+            .sum();
+        assert_eq!(total, report.unresolved_requests);
+        assert_eq!(total + report.resolved_requests, report.observed_requests);
+        assert_eq!(report.resolved_requests, report.relations.len() as u64);
+    }
+    #[test]
+    fn dispatch_result_projection_preserves_legacy_metrics_and_original_ordinals() {
+        let admitted = BTreeSet::from([(1, 1), (1, 2)]);
+        let old = assess(&serde_json::from_value(fixture()).unwrap(), &admitted, 1).unwrap();
+        let (base, mut report) = dispatch(dispatch_fixture(), admitted.clone()).unwrap();
+        assert_eq!(base.events.len(), 4);
+        let projected = assess(&base, &admitted, 1).unwrap();
+        assert_eq!(
+            serde_json::to_value(old).unwrap(),
+            serde_json::to_value(projected).unwrap()
+        );
+        dispatch_partition(&report);
+        assert_eq!(report.observed_dispatch_resolutions, 1);
+        assert_eq!(report.resolved_requests, 1);
+        assert_eq!(
+            report.scope,
+            "observed-dispatch-result-availability-not-execution-dag"
+        );
+        let row = &report.relations[0];
+        assert_eq!(
+            (
+                row.request_start_event_index,
+                row.publication_event_index,
+                row.request_terminal_event_index
+            ),
+            (0, 1, 3)
+        );
+        assert_eq!(
+            (
+                row.request_id,
+                row.context_id,
+                row.consumer_job_id,
+                row.result_id,
+                row.producer_job_id,
+                row.dep_node_index
+            ),
+            (1, 1, 2, 1, 1, 42)
+        );
+        report.suppress_incomplete_admission_authority();
+        report.suppress_incomplete_admission_authority();
+        dispatch_partition(&report);
+        assert_eq!(report.unresolved_reasons.admission_authority_incomplete, 1);
+        assert_eq!(report.distinct_publishing_job_relations, 0);
+    }
+    #[test]
+    fn dispatch_result_nullable_fields_are_mandatory_and_wire_is_strict() {
+        for position in 0..4 {
+            let mut value = dispatch_fixture();
+            value["events"][position]
+                .as_object_mut()
+                .unwrap()
+                .remove("resolution");
+            assert!(serde_json::from_value::<ReadCaptureV2>(value).is_err());
+        }
+        for field in ["source", "dep_node_index"] {
+            let mut value = dispatch_fixture();
+            value["events"][3]["resolution"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(serde_json::from_value::<ReadCaptureV2>(value).is_err());
+        }
+        for field in [
+            "request_id",
+            "read_id",
+            "result_id",
+            "context_id",
+            "consumer_job_id",
+            "producer_job_id",
+            "dep_node_index",
+            "mode",
+            "outcome",
+        ] {
+            let mut value = dispatch_fixture();
+            value["events"][0].as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<ReadCaptureV2>(value).is_err());
+        }
+        for (pointer, replacement) in [
+            ("/events/3/resolution/source", json!("fresh_provider")),
+            ("/events/3/resolution/extra", json!(null)),
+            ("/events/0/extra", json!(null)),
+            ("/extra", json!(null)),
+            ("/events/3/resolution/dep_node_index", json!(-1)),
+            ("/events/3/resolution/dep_node_index", json!(4294967296_u64)),
+        ] {
+            let mut value = dispatch_fixture();
+            let (parent, key) = pointer.rsplit_once('/').unwrap();
+            value
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), replacement);
+            assert!(
+                serde_json::from_value::<ReadCaptureV2>(value).is_err(),
+                "{pointer}"
+            );
+        }
+        let raw = serde_json::to_string(&dispatch_fixture()).unwrap();
+        for (needle, replacement) in [
+            (
+                "\"resolution\":null",
+                "\"resolution\":null,\"resolution\":null",
+            ),
+            (
+                "\"source\":\"resolved_dispatch\"",
+                "\"source\":\"resolved_dispatch\",\"source\":\"resolved_dispatch\"",
+            ),
+            (
+                "\"dep_node_index\":42",
+                "\"dep_node_index\":42,\"dep_node_index\":42",
+            ),
+        ] {
+            let duplicate = raw.replacen(needle, replacement, 1);
+            assert_ne!(raw, duplicate);
+            assert!(serde_json::from_str::<ReadCaptureV2>(&duplicate).is_err());
+        }
+        assert!(
+            serde_json::from_str::<DispatchResolution>(
+                r#"{"source":"resolved_dispatch","dep_node_index":42,"dep_node_index":43}"#
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_value::<ReadCapture>(dispatch_fixture()).is_err());
+    }
+    #[test]
+    fn dispatch_result_forbidden_metadata_routes_are_errors_even_with_loss() {
+        for position in [0, 1, 2] {
+            let mut value = dispatch_fixture();
+            value["events"][position]["resolution"] = value["events"][3]["resolution"].clone();
+            assert!(dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).is_err());
+        }
+        for route in ["feed", "interrupted", "green_ensure", "cache_hit"] {
+            let mut value = dispatch_fixture();
+            match route {
+                "feed" => {
+                    value["events"][0]["mode"] = json!("feed");
+                    value["events"][3]["mode"] = json!("feed");
+                    value["events"][3]["outcome"] = json!("fed");
+                }
+                "interrupted" => {
+                    value["events"][3]["kind"] = json!("request_interrupted");
+                    value["events"][3]["outcome"] = json!("interrupted");
+                }
+                "green_ensure" => {
+                    value["events"][0]["mode"] = json!("ensure_ok");
+                    value["events"][3]["mode"] = json!("ensure_ok");
+                    value["events"][3]["outcome"] = json!("green_ensure");
+                }
+                "cache_hit" => {
+                    let mut hit = value["events"][0].clone();
+                    hit["kind"] = json!("cache_hit");
+                    hit["dep_node_index"] = json!(42);
+                    value["events"].as_array_mut().unwrap().insert(3, hit);
+                }
+                _ => unreachable!(),
+            }
+            value["records_complete"] = json!(false);
+            value["lost_events"] = json!(1);
+            assert!(
+                dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).is_err(),
+                "{route}"
+            );
+        }
+    }
+    #[test]
+    fn dispatch_result_unresolved_reasons_partition_observed_requests() {
+        for reason in [
+            "feed_request",
+            "interrupted_request",
+            "missing_request_terminal",
+            "cache_hit_request",
+            "no_dispatch_resolution",
+            "null_dep_node_index",
+            "missing_context_or_consumer",
+            "capture_incomplete",
+            "no_prior_producer",
+            "producer_published_too_late",
+            "job_endpoint_unavailable",
+        ] {
+            let mut value = dispatch_fixture();
+            let mut admitted = BTreeSet::from([(1, 1), (1, 2)]);
+            match reason {
+                "feed_request" => {
+                    value["events"][0]["mode"] = json!("feed");
+                    value["events"][3]["mode"] = json!("feed");
+                    value["events"][3]["outcome"] = json!("fed");
+                    value["events"][3]["resolution"] = Value::Null;
+                }
+                "interrupted_request" => {
+                    value["events"][3]["kind"] = json!("request_interrupted");
+                    value["events"][3]["outcome"] = json!("interrupted");
+                    value["events"][3]["resolution"] = Value::Null;
+                }
+                "missing_request_terminal" => {
+                    value["events"].as_array_mut().unwrap().pop();
+                    value["records_complete"] = json!(false);
+                }
+                "cache_hit_request" => {
+                    value["events"][3]["resolution"] = Value::Null;
+                    let mut hit = value["events"][0].clone();
+                    hit["kind"] = json!("cache_hit");
+                    hit["dep_node_index"] = json!(42);
+                    value["events"].as_array_mut().unwrap().insert(3, hit);
+                }
+                "no_dispatch_resolution" => value["events"][3]["resolution"] = Value::Null,
+                "null_dep_node_index" => {
+                    value["events"][3]["resolution"]["dep_node_index"] = Value::Null
+                }
+                "missing_context_or_consumer" => {
+                    for i in [0, 2, 3] {
+                        value["events"][i]["consumer_job_id"] = Value::Null;
+                    }
+                }
+                "capture_incomplete" => {
+                    value["records_complete"] = json!(false);
+                    value["lost_events"] = json!(1);
+                }
+                "no_prior_producer" => {
+                    value["events"][3]["resolution"]["dep_node_index"] = json!(43)
+                }
+                "producer_published_too_late" => {
+                    let publication = value["events"].as_array_mut().unwrap().remove(1);
+                    value["events"].as_array_mut().unwrap().push(publication);
+                }
+                "job_endpoint_unavailable" => {
+                    admitted.remove(&(1, 1));
+                }
+                _ => unreachable!(),
+            }
+            let (_, report) = dispatch(value, admitted).unwrap();
+            dispatch_partition(&report);
+            assert_eq!(report.resolved_requests, 0, "{reason}");
+            assert_eq!(
+                serde_json::to_value(report.unresolved_reasons).unwrap()[reason],
+                json!(1),
+                "{reason}"
+            );
+        }
+    }
+    #[test]
+    fn dispatch_results_interleaved_terminals_bind_their_own_exact_index() {
+        for mode in ["get", "ensure_ok", "ensure_result"] {
+            let mut value = dispatch_fixture();
+            let mut start1 = value["events"][0].clone();
+            start1["mode"] = json!(mode);
+            let mut start2 = start1.clone();
+            start2["request_id"] = json!(2);
+            let pub1 = value["events"][1].clone();
+            let mut pub2 = pub1.clone();
+            pub2["result_id"] = json!(2);
+            pub2["dep_node_index"] = json!(43);
+            pub2["producer_job_id"] = json!(2);
+            let mut end1 = value["events"][3].clone();
+            end1["mode"] = json!(mode);
+            end1["outcome"] = json!(if mode == "get" { "value" } else { "ensured" });
+            let mut end2 = end1.clone();
+            end2["request_id"] = json!(2);
+            end2["resolution"]["dep_node_index"] = json!(43);
+            value["events"] = json!([start1, start2, pub1, pub2, end2, end1]);
+            value["expected_requests"] = json!(2);
+            value["request_high_water"] = json!(3);
+            value["expected_reads"] = json!(0);
+            value["read_high_water"] = json!(1);
+            value["expected_results"] = json!(2);
+            value["result_high_water"] = json!(3);
+            let (_, report) = dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).unwrap();
+            dispatch_partition(&report);
+            assert_eq!(report.resolved_requests, 2);
+            assert_eq!(report.distinct_publishing_job_relations, 2);
+            let a = &report.relations[0];
+            let b = &report.relations[1];
+            assert_eq!(
+                (
+                    a.request_id,
+                    a.dep_node_index,
+                    a.publication_event_index,
+                    a.request_terminal_event_index
+                ),
+                (1, 42, 2, 5)
+            );
+            assert_eq!(
+                (
+                    b.request_id,
+                    b.dep_node_index,
+                    b.publication_event_index,
+                    b.request_terminal_event_index
+                ),
+                (2, 43, 3, 4)
+            );
+            assert_eq!(b.producer_job_id, b.consumer_job_id); // Event relation, not a whole-job loop.
+        }
+    }
+    #[test]
+    fn dispatch_result_duplicate_authority_foreign_context_and_bounds_fail_closed() {
+        let mut value = dispatch_fixture();
+        let mut duplicate = value["events"][1].clone();
+        duplicate["result_id"] = json!(2);
+        value["events"].as_array_mut().unwrap().insert(2, duplicate);
+        value["expected_results"] = json!(2);
+        value["result_high_water"] = json!(3);
+        assert!(dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).is_err());
+        for position in [0, 1, 2, 3] {
+            let mut value = dispatch_fixture();
+            value["events"][position]["context_id"] = json!(2);
+            assert!(dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).is_err());
+        }
+        for budget in [0, 3, 1_000_001] {
+            let source: ReadCaptureV2 = serde_json::from_value(dispatch_fixture()).unwrap();
+            assert!(
+                source
+                    .into_base_and_assess(
+                        &BTreeSet::from([(1, 1), (1, 2)]),
+                        1,
+                        &BTreeMap::from([(1, Some(3))]),
+                        budget
+                    )
+                    .is_err()
+            );
+        }
+        for schema in [1, 3] {
+            let mut value = dispatch_fixture();
+            value["schema"] = json!(schema);
+            assert!(dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).is_err());
+        }
+    }
+    #[test]
+    fn dispatch_projection_keeps_cache_calls_separate_and_unchanged() {
+        let admitted = BTreeSet::from([(1, 1), (1, 2)]);
+        let old = calls(call_fixture(), admitted.clone()).unwrap();
+        let mut value = call_fixture();
+        value["schema"] = json!(2);
+        for event in value["events"].as_array_mut().unwrap() {
+            event["resolution"] = Value::Null;
+        }
+        let (base, report) = dispatch(value, admitted.clone()).unwrap();
+        assert_eq!(report.observed_dispatch_resolutions, 0);
+        assert_eq!(report.resolved_requests, 0);
+        assert_eq!(report.unresolved_reasons.cache_hit_request, 1);
+        dispatch_partition(&report);
+        let projected = assess_cache_calls_with_inventory_limit(
+            &base,
+            &admitted,
+            1,
+            &BTreeMap::from([(1, Some(3))]),
+            MAX_EVENTS,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(old).unwrap(),
+            serde_json::to_value(projected).unwrap()
+        );
+    }
+    #[test]
+    fn dispatch_results_do_not_borrow_other_context_or_partial_authority() {
+        let mut value = dispatch_fixture();
+        value["events"][1]["context_id"] = json!(2);
+        let source: ReadCaptureV2 = serde_json::from_value(value).unwrap();
+        let (_, report) = source
+            .into_base_and_assess(
+                &BTreeSet::from([(1, 1), (1, 2), (2, 1)]),
+                2,
+                &BTreeMap::from([(1, Some(3)), (2, Some(2))]),
+                MAX_EVENTS,
+            )
+            .unwrap();
+        dispatch_partition(&report);
+        assert_eq!(report.resolved_requests, 0);
+        assert_eq!(report.unresolved_reasons.no_prior_producer, 1);
+
+        let mut value = dispatch_fixture();
+        value["records_complete"] = json!(false);
+        let (_, report) = dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).unwrap();
+        dispatch_partition(&report);
+        assert_eq!(report.unresolved_reasons.capture_incomplete, 1);
+
+        let mut value = dispatch_fixture();
+        value["events"].as_array_mut().unwrap().remove(0);
+        value["records_complete"] = json!(false);
+        value["lost_events"] = json!(1);
+        let (_, report) = dispatch(value, BTreeSet::from([(1, 1), (1, 2)])).unwrap();
+        dispatch_partition(&report);
+        assert_eq!(report.observed_dispatch_resolutions, 1);
+        assert_eq!(report.observed_requests, 0);
+        assert!(report.relations.is_empty());
+        assert!(!report.records_complete);
     }
     fn call_fixture() -> Value {
         let mut value = fixture();
