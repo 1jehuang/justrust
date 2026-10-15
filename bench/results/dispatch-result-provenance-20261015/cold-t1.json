@@ -1,0 +1,183 @@
+{
+  "captures": [
+    {
+      "admissions_complete": true,
+      "cache_call_provenance": {
+        "distinct_publishing_job_relations": 45391,
+        "lost_events": 0,
+        "observed_cache_hits": 211925,
+        "observed_requests": 230444,
+        "orphan_cache_hits": 0,
+        "records_complete": true,
+        "resolved_requests": 153215,
+        "scope": "observed-cache-result-availability-not-execution-dag",
+        "stored_relation_rows": 153215,
+        "unresolved_reasons": {
+          "admission_authority_incomplete": 0,
+          "ambiguous_cache_hits": 0,
+          "capture_incomplete": 0,
+          "feed_request": 322,
+          "incompatible_cache_hit_route": 0,
+          "interrupted_request": 0,
+          "job_endpoint_unavailable": 0,
+          "missing_context_or_consumer": 20973,
+          "missing_request_terminal": 0,
+          "no_cache_hit": 18199,
+          "no_prior_producer": 37735,
+          "producer_published_too_late": 0
+        },
+        "unresolved_requests": 77229
+      },
+      "capture_id": "1792030148787587033-404673-1",
+      "clock_alignment": {
+        "aligned": false,
+        "issues": [
+          "query execution clock unavailable"
+        ]
+      },
+      "complete_observed_waits": 0,
+      "cpu_work_ns": null,
+      "dispatch_result_provenance": {
+        "distinct_publishing_job_relations": 17569,
+        "lost_events": 0,
+        "observed_dispatch_resolutions": 18199,
+        "observed_requests": 230444,
+        "records_complete": true,
+        "resolved_requests": 17569,
+        "scope": "observed-dispatch-result-availability-not-execution-dag",
+        "stored_relation_rows": 17569,
+        "unresolved_reasons": {
+          "admission_authority_incomplete": 0,
+          "cache_hit_request": 211923,
+          "capture_incomplete": 0,
+          "feed_request": 322,
+          "interrupted_request": 0,
+          "job_endpoint_unavailable": 0,
+          "missing_context_or_consumer": 630,
+          "missing_request_terminal": 0,
+          "no_dispatch_resolution": 0,
+          "no_prior_producer": 0,
+          "null_dep_node_index": 0,
+          "producer_published_too_late": 0
+        },
+        "unresolved_requests": 212875
+      },
+      "execution_span_ns": null,
+      "expected_waits": 0,
+      "full_pipeline_complete": false,
+      "limitations": [
+        "Wait intervals overlap and include waiting/descheduling, not CPU work.",
+        "Post-condvar elapsed can include resource reacquisition but is not attributed resource cost.",
+        "Independent useful work may execute during a wait, so wait length is not critical-path cost.",
+        "Native clock alignment does not establish CPU coverage or an execution span; query and pool intervals are not merged.",
+        "Resolved publishing-job edges do not imply fresh provider execution.",
+        "Unbound/lost reads, nonquery work and incomplete task/resource coverage prevent a frontend span.",
+        "Semantic constraints and current implementation ordering are not interchangeable."
+      ],
+      "notification_reasons": {},
+      "observed_read_records": 907318,
+      "query_clock_wait_intervals": {
+        "post_condvar": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "post_notification": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "producer_notification": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "total": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        }
+      },
+      "read_coverage": {
+        "cache_hits": 211925,
+        "endpoints_complete": true,
+        "green_ensures": 0,
+        "lost_events": 0,
+        "observed_reads": 216306,
+        "observed_requests": 230444,
+        "observed_results": 18199,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": true,
+        "resolved_job_edges": 0,
+        "resolved_reads": 0,
+        "semantic_complete": false,
+        "tracked_reads": 0,
+        "unbound_read_reasons": {
+          "disabled": 216306,
+          "eval_always": 0,
+          "ignore": 0,
+          "job_endpoint_unavailable": 0,
+          "missing_context": 0,
+          "no_prior_producer": 0,
+          "producer_published_too_late": 0,
+          "tracked_missing_context_or_consumer": 0
+        },
+        "unbound_reads": 216306
+      },
+      "scope": "validated-native-frontend-evidence-not-an-execution-span",
+      "task_binding_coverage": {
+        "all_targets_bound": false,
+        "bound_points": 0,
+        "expected_points": 483148,
+        "graph_binding_complete": false,
+        "graph_binding_valid": false,
+        "issues": [
+          "task-binding targets declared incomplete",
+          "task-binding pool unavailable"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 483148
+      },
+      "theoretical_parallelism": null,
+      "waits_complete": true
+    }
+  ],
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "full_pipeline_complete": false,
+  "graph_output": {
+    "bytes": 66722398,
+    "format": "justrust-graph-json-stdout",
+    "name": "cold-t1-graph.json",
+    "sha256": "b904c5085bddfeae9920d79cef84e5965369f862e0cbf96d3fde180fa35a1ced"
+  },
+  "inputs": [
+    {
+      "bytes": 241582440,
+      "name": "1792030148787587033-404673-1.json",
+      "sha256": "d4aa5a4afe590cf03c5990504d7a297a7b8f5b7e2e6a7fa0873016e8a89e1e5c"
+    }
+  ],
+  "large_capture": true,
+  "schema": 1,
+  "scope": "native-frontend-capture-diagnostics",
+  "theoretical_parallelism": null
+}
