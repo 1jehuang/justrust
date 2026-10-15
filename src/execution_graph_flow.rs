@@ -473,6 +473,7 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
     let mut known_measurements = 0usize;
     let mut category_cpu = [0u64; 3];
     let mut category_measurements = [0usize; 3];
+    let mut task_roles = BTreeSet::new();
     for node in &capture.nodes {
         if let Some(task) = node.task {
             ensure!(
@@ -497,6 +498,18 @@ pub(crate) fn assess(capture: FlowCapture, context: FlowContext<'_>) -> Result<F
                     NodeKind::Fork | NodeKind::TaskEnter | NodeKind::TaskExit | NodeKind::Join
                 ),
                 "task control gate lacks genuine task identity"
+            );
+        }
+        if matches!(
+            node.kind,
+            NodeKind::TaskEnter | NodeKind::TaskExit | NodeKind::Fork | NodeKind::Join
+        ) {
+            ensure!(
+                task_roles.insert((
+                    node.task.expect("validated task control gate"),
+                    node.kind.label()
+                )),
+                "duplicate flow lifecycle role for one original task"
             );
         }
         ensure!(
@@ -1656,6 +1669,18 @@ pub(crate) mod tests {
             a.longest_known_chain_steps
                 .iter()
                 .any(|s| s.query_name.as_deref() == Some("type_of") && s.cpu_ns == Some(2))
+        );
+        let mut duplicate = v.clone();
+        let mut extra = duplicate["nodes"][1].clone();
+        extra["id"] = json!(12);
+        duplicate["nodes"].as_array_mut().unwrap().push(extra);
+        duplicate["expected_nodes"] = json!(12);
+        duplicate["node_allocator_high_water"] = json!(13);
+        assert!(
+            run(duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate flow lifecycle role")
         );
         v["edges"].as_array_mut().unwrap().remove(7);
         for (i, edge) in v["edges"].as_array_mut().unwrap().iter_mut().enumerate() {
