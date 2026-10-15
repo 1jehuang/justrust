@@ -238,6 +238,16 @@ impl Recorder {
         }
         self.append("cpu_segment", at, Some(segment), scope, task, None, None);
     }
+    /// A timing attempt without an identity cannot leave a pending call/return
+    /// token live. Never reuse its predecessor or manufacture segment zero.
+    pub(crate) fn unavailable_cpu(&self) {
+        take();
+        let mut b = self.lock();
+        let Buffer { next_node, exhausted, .. } = &mut *b;
+        let _ = id(next_node, exhausted);
+        let Buffer { lost_nodes, overflowed, .. } = &mut *b;
+        loss(lost_nodes, overflowed);
+    }
     pub(crate) fn gate(
         self: &Arc<Self>,
         kind: &'static str,
@@ -509,7 +519,7 @@ fn string(s: Option<&str>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::execution_observer::{self as observed, ExecutionObserver, InterfaceOutcome};
 
@@ -526,7 +536,7 @@ mod tests {
         observer.write_json(&mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
-    fn check_edges(recorder: &Recorder) {
+    pub(crate) fn check_edges(recorder: &Recorder) {
         let b = recorder.lock();
         for edge in &b.edges {
             let source = b.nodes.iter().find(|n| n.id == edge.from).unwrap();
@@ -534,6 +544,7 @@ mod tests {
             assert!(source.at <= target.at, "{} {} -> {}", edge.kind, source.kind, target.kind);
             if edge.kind == "sync_call" {
                 assert_eq!(target.kind, "scope_enter");
+                assert_ne!(source.kind, "scope_exit");
             }
             if edge.kind == "sync_return" {
                 assert_eq!(source.kind, "scope_exit");

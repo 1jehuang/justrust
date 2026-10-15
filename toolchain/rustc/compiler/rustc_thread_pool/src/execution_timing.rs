@@ -347,8 +347,12 @@ impl Recorder {
             },
             start: self.clock.sample(self.epoch),
         };
-        if let (Some(flow), Some(id)) = (&self.flow, cursor.id) {
-            flow.cpu(id, cursor.start.before, task, cursor.query.is_some());
+        if let Some(flow) = &self.flow {
+            if let Some(id) = cursor.id {
+                flow.cpu(id, cursor.start.before, task, cursor.query.is_some());
+            } else {
+                flow.unavailable_cpu();
+            }
         }
         Some(cursor)
     }
@@ -799,6 +803,37 @@ mod tests {
         resume(Some(&recorder), None);
         assert!(!has_active_cursor());
         assert!(json(&recorder).contains("\"lost_segments\":1"));
+    }
+    #[test]
+    fn flow_timing_identity_exhaustion_cuts_pending_return_before_next_query() {
+        use crate::execution_observer::{ExecutionObserver, InterfaceOutcome};
+        let observer = ExecutionObserver::new_for_query_with_execution_flow(
+            100,
+            "query-exhaustion-native",
+            Instant::now(),
+        )
+        .unwrap();
+        let outer = observer.enter_query_execution(1, 1, "outer").unwrap();
+        let recorder = current_query_recorder().unwrap();
+        let inner = observer.enter_query_execution(1, 2, "inner").unwrap();
+        recorder.next.store(u64::MAX, Ordering::Relaxed);
+        drop(inner); // Its return must not survive the failed caller CPU identity.
+        {
+            let _next = observer.enter_query_execution(1, 3, "next").unwrap();
+        }
+        drop(outer);
+        observer.seal(InterfaceOutcome::Returned);
+        crate::execution_flow::tests::check_edges(recorder.flow.as_ref().unwrap());
+        let mut out = Vec::new();
+        observer.write_json(&mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\"identity_exhausted\":true"));
+        assert!(text.contains("\"lost_nodes\":3"));
+        assert!(text.contains("\"records_complete\":false"));
+        assert!(!text.contains("\"segment_id\":0"));
+        if let Some(path) = std::env::var_os("JR_FLOW_EXHAUSTION_PACKET") {
+            std::fs::write(path, text).unwrap();
+        }
     }
     #[test]
     fn checked_segment_allocator_refuses_wraparound() {
