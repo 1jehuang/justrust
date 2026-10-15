@@ -747,7 +747,7 @@ class FrontendMappingNative(unittest.TestCase):
                                          execution_flow=True, dispatch=True)[1])
         for evidence in observations:
             self.assert_execution_flow_analyzer(evidence)
-        self.assert_execution_flow_clock_offset(observations[1])
+        self.assert_unsupported_flow_clock_offset_refused(observations[1])
         self.assert_execution_flow_loss(cold[1][2])
         self.assertEqual(self.source_hashes, {
             str(p.relative_to(self.source_root)): digest(p)
@@ -757,8 +757,8 @@ class FrontendMappingNative(unittest.TestCase):
             'warm_rmeta_object_consumer_identity': True, 'full_pipeline_complete': False,
             'cpu_work_ns': None, 'execution_span_ns': None}, indent=2))
 
-    def assert_execution_flow_clock_offset(self, evidence):
-        """Translate query-relative time, never pool-local gates or binding points."""
+    def assert_unsupported_flow_clock_offset_refused(self, evidence):
+        """The frozen public protocol admits reciprocal same-epoch zero only."""
         original = self.root / (evidence['label'] + '-capture')
         hashes = {p.name: digest(p) for p in original.glob('*.json')}
         copied = self.root / 'flow-nonzero-offset-copy'
@@ -774,15 +774,11 @@ class FrontendMappingNative(unittest.TestCase):
                 value['timing']['clock_bridge']['pool_epoch_in_query_ns'] = offset
             (copied / path.name).write_text(json.dumps(value))
         result = self.logged([self.client, 'graph', copied, '--json', '--large-capture',
-                              '--execution-flow-dag'], 'flow-nonzero-offset-graph')
-        public = json.loads(result.stdout)
-        query = next(a for a in public if a['producer'] == 'rustc-query-admission')
-        self.assertTrue(query['clock_alignment']['aligned'])
-        flow = next(a for a in public if a['producer'] == 'rustc-thread-pool-join')['execution_flow_dag']
-        expected = next(a for a in evidence['public']
-                        if a['producer'] == 'rustc-thread-pool-join')['execution_flow_dag']
-        self.assertEqual(flow, expected, 'clock-coordinate translation changed causal CPU evidence')
+                              '--execution-flow-dag'], 'flow-nonzero-offset-graph', expected=None)
+        self.assertNotEqual(result.returncode, 0, 'unsupported nonzero epoch acquired authority')
+        self.assertIn('same-epoch', result.stderr)
         self.assertEqual(hashes, {p.name: digest(p) for p in original.glob('*.json')})
+        return dict(unsupported_nonzero_epoch_refused=True)
 
     def assert_execution_flow_loss(self, compiler_args):
         sink = self.root / 'flow-bounded-loss-capture'
@@ -1231,6 +1227,25 @@ class FrontendMappingNative(unittest.TestCase):
 
 
 class FixtureControlSafety(unittest.TestCase):
+    def test_public_flow_epoch_mutation_must_be_refused(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from bench.test_execution_flow_oracle import fixture
+        query, pool = fixture()
+        query['wait_events'] = []
+        with tempfile.TemporaryDirectory() as directory:
+            harness = FrontendMappingNative('test_real_itoa_execution_flow')
+            harness.root = Path(directory)
+            harness.client = Path('justrust')
+            source = harness.root / 'warm-capture'
+            source.mkdir()
+            (source / 'query.json').write_text(json.dumps(query))
+            (source / 'pool.json').write_text(json.dumps(pool))
+            with patch.object(harness, 'logged', return_value=SimpleNamespace(
+                    returncode=1, stderr='same-epoch pool/query authority')):
+                result = harness.assert_unsupported_flow_clock_offset_refused(dict(label='warm'))
+            self.assertTrue(result['unsupported_nonzero_epoch_refused'])
+
     def test_mixed_flow_dispatch_replay_keeps_explicit_flow_flag(self):
         from unittest.mock import patch
         from types import SimpleNamespace
