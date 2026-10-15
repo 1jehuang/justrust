@@ -454,6 +454,123 @@ before provisioning; prices are not architectural constants.
 Hardware specification reference: https://aws.amazon.com/ec2/instance-types/m8a/
 (checked 2026-10-15).
 
+## 17. Fact-driven execution without global phase barriers
+
+Agreed starting model, not an implemented or performance-validated runtime.
+One integrated graph covers project discovery, dependency handling, compilation,
+linking, and tests. There is no separate Cargo-like orchestration pipeline and
+no global frontend/backend phase transition. Those responsibilities still
+exist, but become producers and consumers in the same graph.
+
+### Three distinct units
+
+- A fact/result is an independently identifiable output that consumers can
+  request, observe, and potentially reuse.
+- An operation computes and publishes facts. One operation may publish several
+  outputs independently, before its remaining work finishes.
+- A runnable segment is the portion of a computation a worker executes before
+  completion or suspension on a missing fact. Runtime continuations implement
+  resumptions. Execution batches may contain several logical operations.
+
+These boundaries need not coincide. Do not require consumers to wait for an
+entire producer when their required output is already finalized.
+
+### Dynamic discovery and readiness
+
+Compiler logic expresses computations, fact requests, and independent branches.
+The runtime creates/finds producers, records observed dependencies, and grows
+the demanded graph dynamically. Reading a finalized fact continues execution.
+Requesting an unavailable fact registers a continuation, demands its producer,
+and suspends only the dependent branch, releasing the worker.
+
+Expose independent prerequisites together instead of awaiting one before
+requesting another that could run concurrently. Publish finalized outputs as
+soon as available. Readiness follows satisfied dependencies, while resource
+admission and priority determine which ready work executes now.
+
+This constructs runtime work instances and discovers readiness automatically.
+It does not invent the semantic computation, infer independence from arbitrary
+sequential code, or prove that our fact boundaries are optimal.
+
+### Structural rules
+
+- No blocking waits on worker threads or implicit cross-operation phase order.
+- Access dependencies through engine-visible fact handles, not another
+  operation's hidden mutable state.
+- Missing inputs suspend only the branches that require them. Independent
+  branches remain eligible to progress.
+- Separate partial progress from speculation. Stable partial outputs may be
+  published, but provisional conclusions must not masquerade as final facts or
+  verified shared-cache results. Speculation needs validation and invalidation.
+- Model recursive analysis with explicit convergence/fixed-point protocols.
+  Model genuine completeness requirements as explicit facts, such as discovery
+  of all declarations relevant to a lookup. Do not assume every semantic
+  relationship forms an acyclic graph.
+- Distinguish semantic prerequisites from locks, memory admission, worker
+  capacity, transfer waits, and other scheduling constraints.
+- Execution batching must not impose a whole-batch publication barrier on
+  independently completed outputs.
+
+### Compiler frontier and example dependencies
+
+Available source files provide parallel entry work for syntax processing.
+Generated sources, configuration, module discovery, and macro expansion can
+reveal more work later. Maintain a continuously expanding ready frontier,
+not a mandatory complete-project scan followed by compilation phases.
+
+Candidate fact boundaries include parsed syntax, discovered items, resolved
+references, callable signatures, typed bodies, correctness results, concrete
+type layouts, lowered function instances, machine-code fragments/relocations,
+linked artifacts, test discovery, and test outcomes. Exact boundaries remain
+subject to semantic design and measurements.
+
+Code generation for a ready function instance can overlap semantic work on
+unrelated functions. It needs the body's necessary semantic facts, layouts,
+and calling conventions, not every unrelated body or callee's final machine
+code. Optional inlining and other transformations may introduce additional
+real dependencies, which must be explicit. Generating provisional executable
+artifacts is distinct from reporting success: all mandated correctness checks
+must pass before a successful result is released under the build contract.
+
+### Parallelism guarantee and limits
+
+Target no implicit precedence beyond declared semantic dependencies and explicit
+resource constraints. Every exposed, demanded operation whose prerequisites
+are satisfied must become eligible to run. Verify that readiness propagation
+cannot lose wakeups or strand runnable work.
+
+This is not a guarantee of globally maximum parallelism. Coarse facts,
+unnecessary edges, delayed publication, sequential prerequisite discovery,
+overly broad recursive groups, and different algorithm choices can all lengthen
+the graph's dependency chains. A chain is successive work whose outputs are
+needed by the next operation. Under a fixed-duration, unlimited-worker,
+zero-overhead model, the longest chain's duration bounds completion and starting
+all ready work immediately attains that graph's bound. Real 96-core scheduling,
+memory effects, and overhead do not satisfy those ideal assumptions.
+
+### Granularity strategy and prototype gate
+
+Start with precise logical facts and early publication. Keep dependency and
+reuse granularity separate from execution size. Do not assume coordination is
+free, but do not coarsen facts preemptively to avoid unmeasured overhead.
+A logical fact need not require its own heap allocation, queued task, or disk
+record. Batch/fuse execution where measurements justify it while preserving
+observable dependencies and independently available results.
+
+Measure identity/index lookup, edge recording, waiter registration/wakeup,
+queueing, publication, allocation, contention, and always-on recording costs
+against useful computation at 1 through 96 workers. Inspect ready-frontier
+width, dependency span, idle-worker reasons, synchronization, memory pressure,
+and linking/test startup. Optimize latency and reuse, not task count or core
+utilization alone.
+
+Before implementing the prototype, specify the fact/operation API, state
+transitions, output-finality and publication rules, snapshot/invalidation rules,
+and worked traces. Cover build-to-check-to-test reuse, body and interface edits,
+concurrent requests, recursive facts, and worker failure. Verify against clean
+recomputation and known small graphs. Use the prototype to settle granularity
+and scheduler choices before treating them as the compiler's final architecture.
+
 ## Open architectural decisions
 
 These requirements do not yet choose the mechanisms below:
