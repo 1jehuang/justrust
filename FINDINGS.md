@@ -1,5 +1,41 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Copy tuples and caller-owned aggregate snapshots
+
+Revision `c37ba8c90973b07e8a2e88de448ff34205f82037` adds nested tuple types,
+construction, projections, mutable local-rooted field assignment and aggregate
+values through calls, returns and control-flow joins. Structural Copy semantics
+are limited to existing scalar/unit/tuple fields. Named structs are not silently
+made Copy. Checked types use cheap shared tuple field arrays, not source rechecks.
+
+Each aggregate expression owns a frame snapshot. Tuple arguments pass pointers
+to these snapshots and are copied into callee locals before body execution.
+Tuple returns copy into a hidden caller destination, returning that destination
+rather than a dangling callee-frame pointer. All current leaf slots occupy eight
+bytes in this private ABI, not the platform Rust ABI. Aggregate/frame sizes have
+a checked 1 MiB limit. Runtime stack exhaustion remains an explicit gap.
+
+Initial hosted gates passed check `20261015-165033688-859052`, 163 tests
+`20261015-165034280-859178`, strict Clippy `20261015-165035940-859253`.
+Six additional frontend regressions then passed the final 169-test gate
+`20261015-165140490-874198`, check `20261015-165139822-874099` and strict
+Clippy `20261015-165142156-874598`. All six summaries are exported in
+`data/runs/prototype-bootstrap/2026-10-tuples.jsonl`.
+
+Charged M8a experiment `compiler-tuples-20261015-2351` tested the exact committed
+revision against Rust 1.99.0 edition 2024: 24 accepted parity cases, 10 invalid
+rejections and 4 legal-unsupported boundaries passed at workers 1/8 through
+build and check. The separate 28-case Never corpus also passed unchanged.
+Coverage includes argument snapshots before mutation, nested projections,
+recursive/mutual aggregate returns, caller-buffer lifetime, abrupt control
+transfers, unit-field side effects and a 20-field tuple. The four-function
+903-byte example also compiled at 96 workers and printed all three expected
+success lines. Receipts are `experiments/results/20261015-m8a-tuples-differential.jsonl`
+and `experiments/results/20261015-m8a-tuples-never-regression.jsonl`.
+These are bounded correctness checks, not representative compiler benchmarks
+or proof of full Rust support. Destructuring, tuple comparisons, non-Copy data,
+ownership and borrowing remain open.
+
 ## 2026-10-15: Loop values and semantic Never typing, validated on M8a
 
 Revision `c39c6402acc55653ef5f7bccb9c4e55c53311156` implements unlabelled

@@ -1974,6 +1974,146 @@ mod typed_tests {
     }
 
     #[test]
+    fn tuple_grouping_and_singleton_syntax_are_distinct() {
+        let program = parse("fn f(x:((i32)),y:(bool,))->((i32,bool),()) { ((x,y.0),()) } fn main(){let a=(1);let b=(1,);}").unwrap();
+        let f = &program.functions[0];
+        assert_eq!(f.params[0].1, Type::I32);
+        assert_eq!(f.params[1].1, Type::Tuple(vec![Type::Bool]));
+        assert_eq!(
+            f.result,
+            Type::Tuple(vec![Type::Tuple(vec![Type::I32, Type::Bool]), Type::Unit])
+        );
+        check(&program).unwrap();
+        let f = typed("fn main(){let a=(1);let b=(1,);let z=((),((),));}", 0);
+        assert_eq!(f.locals[0].ty, ir::Ty::I32);
+        assert_eq!(f.locals[1].ty, ir::Ty::Tuple(vec![ir::Ty::I32].into()));
+        assert_eq!(
+            f.locals[2].ty,
+            ir::Ty::Tuple(vec![ir::Ty::Unit, ir::Ty::Tuple(vec![ir::Ty::Unit].into())].into())
+        );
+    }
+
+    #[test]
+    fn tuple_places_resolve_parenthesized_local_roots_and_shadowing() {
+        let f = typed(
+            "fn main(){let mut x=((1,true),());((x)).0.1=false;let mut x=(2,);x.0=3;}",
+            0,
+        );
+        let places = f
+            .body
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                ir::Stmt::AssignPlace { place, .. } => Some(place),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(places[0].local, ir::LocalId(0));
+        assert_eq!(places[0].fields, vec![0, 1]);
+        assert_eq!(places[1].local, ir::LocalId(1));
+        assert_eq!(places[1].fields, vec![0]);
+        assert_eq!(f.locals[0].name, f.locals[1].name);
+    }
+
+    #[test]
+    fn tuple_aggregate_flows_preserve_each_actual_type_and_projection_completion() {
+        let f = typed("fn f()->i32 {({return 3;},0).1} fn main(){}", 0);
+        let projected = &f.exprs[f.body.tail.unwrap().0];
+        assert_eq!(projected.ty, ir::Ty::I32);
+        assert_eq!(projected.completion, ir::Completion::Never);
+        let ir::ExprKind::Field { base, .. } = projected.kind else {
+            panic!("expected projection")
+        };
+        assert_eq!(
+            f.exprs[base.0].ty,
+            ir::Ty::Tuple(vec![ir::Ty::Never, ir::Ty::I32].into())
+        );
+        let f = typed("fn main(){let x:(bool,i32)=({return;},0);}", 0);
+        assert_eq!(
+            f.locals[0].ty,
+            ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::I32].into())
+        );
+        let f = typed("fn main(){let x=({return;false},0);}", 0);
+        assert_eq!(
+            f.locals[0].ty,
+            ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::I32].into())
+        );
+        for source in [
+            "fn main(){let x:(i32,i32)=({return;false},0);}",
+            "fn main(){let x=if true {({return;false},0)} else {(1,0)};}",
+            "fn main(){let x=loop {break ({return;false},0);break (1,0);};}",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn tuple_calls_and_loop_breaks_keep_structural_signatures() {
+        let f = typed(
+            "mod m {pub fn f(x:(i32,bool))->(i32,bool){x}} fn main(){let t=loop {break if true {m::f((1,true))} else {(2,false)};};}",
+            1,
+        );
+        let call = f
+            .exprs
+            .iter()
+            .find(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+            .unwrap();
+        let ty = ir::Ty::Tuple(vec![ir::Ty::I32, ir::Ty::Bool].into());
+        assert_eq!(call.ty, ty);
+        let ir::ExprKind::Call {
+            name, signature, ..
+        } = &call.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(name, "m::f");
+        assert_eq!(signature.params, vec![ty.clone()]);
+        assert_eq!(signature.result, ty);
+        assert_eq!(f.locals[0].ty, ty);
+    }
+
+    #[test]
+    fn tuple_invalid_fields_assignments_and_operators_are_rejected() {
+        for source in [
+            "fn main(){let x=(1,);x.0=2;}",
+            "fn main(){let mut x=(1,);x.0=true;}",
+            "fn main(){let mut x=(1,);x.1=2;}",
+            "fn main(){let x=(1,);let y=x.0.0;}",
+            "fn main(){let x=().0;}",
+            "fn main(){let x=(1,)==(1,);}",
+            "fn main(){let x=(1,)<(2,);}",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "{source}");
+        }
+        for source in [
+            "fn main(){(1,).0=2;}",
+            "fn main(){let x=(1,).00;}",
+            "fn main(){let x=(1,).0usize;}",
+            "fn main(){let x=(1,).-1;}",
+            "fn main(){let (x,y)=(1,2);}",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn tuple_type_nesting_and_nested_inference_are_checked() {
+        let nested = format!("{}i32{}", "(".repeat(140), ",)".repeat(140));
+        assert!(
+            parse(&format!("fn f(x:{nested}){{}}fn main(){{}}"))
+                .unwrap_err()
+                .contains("nesting")
+        );
+        let mut program = parse("fn f(x:(i32,)){}fn main(){}").unwrap();
+        program.functions[0].params[0].1 = Type::Tuple(vec![Type::Infer]);
+        assert!(
+            signature_table(&program)
+                .unwrap_err()
+                .contains("cannot be inferred")
+        );
+    }
+
+    #[test]
     fn loop_control_has_distinct_resolved_targets_and_scalar_types() {
         let f = typed(
             "fn main(){ let x=loop { while true { continue; break; } loop { break; } break 3; }; let y=loop { break true; }; }",
