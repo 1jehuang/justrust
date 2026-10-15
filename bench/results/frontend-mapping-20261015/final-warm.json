@@ -1,0 +1,124 @@
+{
+  "captures": [
+    {
+      "admissions_complete": true,
+      "capture_id": "1792025689283687105-3999959-1",
+      "complete_observed_waits": 0,
+      "cpu_work_ns": null,
+      "execution_span_ns": null,
+      "expected_waits": 0,
+      "full_pipeline_complete": false,
+      "limitations": [
+        "Wait intervals overlap and include waiting/descheduling, not CPU work.",
+        "Post-condvar elapsed can include resource reacquisition but is not attributed resource cost.",
+        "Independent useful work may execute during a wait, so wait length is not critical-path cost.",
+        "Query and pool timestamps use separate epochs and are not merged.",
+        "Resolved publishing-job edges do not imply fresh provider execution.",
+        "Unbound/lost reads, nonquery work and incomplete task/resource coverage prevent a frontend span.",
+        "Semantic constraints and current implementation ordering are not interchangeable."
+      ],
+      "notification_reasons": {},
+      "observed_read_records": 31514,
+      "query_clock_wait_intervals": {
+        "post_condvar": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "post_notification": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "producer_notification": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        },
+        "total": {
+          "count": 0,
+          "max_elapsed_ns": 0,
+          "peak_overlapping_intervals": 0,
+          "sum_elapsed_ns": 0,
+          "union_elapsed_ns": 0
+        }
+      },
+      "read_coverage": {
+        "cache_hits": 5713,
+        "endpoints_complete": true,
+        "green_ensures": 471,
+        "lost_events": 0,
+        "observed_reads": 7892,
+        "observed_requests": 8038,
+        "observed_results": 1833,
+        "opaque_boundaries": [
+          "execution-request-read-binding",
+          "previous-session-promotion",
+          "feed-producer-provenance",
+          "missing-consumer-context",
+          "no-implicit-context-reads",
+          "nonquery"
+        ],
+        "records_complete": true,
+        "resolved_job_edges": 15,
+        "resolved_reads": 77,
+        "semantic_complete": false,
+        "tracked_reads": 82,
+        "unbound_read_reasons": {
+          "disabled": 0,
+          "eval_always": 6157,
+          "ignore": 1653,
+          "job_endpoint_unavailable": 0,
+          "missing_context": 0,
+          "no_prior_producer": 5,
+          "producer_published_too_late": 0,
+          "tracked_missing_context_or_consumer": 0
+        },
+        "unbound_reads": 7815
+      },
+      "scope": "validated-native-frontend-evidence-not-an-execution-span",
+      "task_binding_coverage": {
+        "all_targets_bound": false,
+        "bound_points": 17024,
+        "expected_points": 19596,
+        "graph_binding_complete": false,
+        "graph_binding_valid": true,
+        "issues": [
+          "task-binding targets declared incomplete"
+        ],
+        "loss_overflowed": false,
+        "lost_events": 0,
+        "records_complete": true,
+        "source_endpoints_complete": true,
+        "unbound_points": 2572
+      },
+      "theoretical_parallelism": null,
+      "waits_complete": true
+    }
+  ],
+  "cpu_work_ns": null,
+  "execution_span_ns": null,
+  "full_pipeline_complete": false,
+  "inputs": [
+    {
+      "bytes": 3435,
+      "name": "1792025689283687105-3999959-1-pool.json",
+      "sha256": "2ac026a0da18f258858728eb76d729f3d76be70751578832c124314e004cd01b"
+    },
+    {
+      "bytes": 8388136,
+      "name": "1792025689283687105-3999959-1.json",
+      "sha256": "543e65fcbdc9b4ada0c05c5b0761830afd6c65b65ad850f37e50737d5d81534a"
+    }
+  ],
+  "large_capture": false,
+  "schema": 1,
+  "scope": "native-frontend-capture-diagnostics",
+  "theoretical_parallelism": null
+}
