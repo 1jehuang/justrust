@@ -7297,3 +7297,28 @@ query-call provenance or establish a weighted critical path/thread ceiling.
 Reports, exact hashes, acceptance controls and replay commands are in
 `docs/frontend-cpu-timing-20261015.md`; four cited client run exports are in
 `data/runs/frontend-timing/2026-10.jsonl`. Full CPU work/span remain unknown.
+
+## 2026-10-15: actual cache-result availability graph, not an execution DAG
+
+The opt-in consumer `graph --cache-call-provenance` maps existing original
+publication/cache-hit/request events without changing native compilation or
+legacy semantic-read metrics. Real retained cold/warm inputs produced 154,017
+and 3,580 certified event relations, with 77,734 and 4,458 unresolved requests.
+All rows were independently checked against original stream positions and
+admitted endpoints. Default reports replay exactly and input hashes are unchanged.
+The analyzer retains full private graph stdout outside the source capture and
+commits compact reports with exact artifact hashes in
+`bench/results/cache-call-provenance-20261015/`.
+
+Hosted check `20261014-184331332-213278`, full test
+`20261014-184334962-213547` (630 passed, three ignored), and warning-free clippy
+`20261014-184359637-215503` passed. Forty analyzer tests and nine actual retained
+acceptance/oracle tests passed, with no acceptance skips. Slim run summaries
+are in `data/runs/cache-call/2026-10.jsonl`. Exact artifact paths, SHA-256 values,
+reason partitions, controls and reproduction command are in
+`docs/cache-call-provenance-20261015.md`.
+
+This closes a useful cache-hit provenance slice, not dispatch/result semantics,
+opaque work attribution, weighted critical path, or a 96-core/thread ceiling.
+Recorder stream order is not a chain of execution dependencies. No speedup or
+full semantic dependency coverage is claimed.

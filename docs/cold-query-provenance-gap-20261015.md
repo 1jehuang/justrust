@@ -36,3 +36,5 @@ Use actual call/return event or continuation nodes for the future execution DAG.
 Use real nonincremental and incremental source builds without adding `-C incremental` solely to improve the graph. Exercise direct and racing cache hits, true provider execution, waiting/helping, cycles, feeds, green promotion and unobserved boundaries. Verify one terminal resolution per actual request, independent allocator/loss accounting, no future-producer edges, unchanged diagnostics and exit status, and artifact-neutrality controls. A malformed or partial capture must not become a complete graph.
 
 This document is an implementation design and source-inspection result. These dispatch hooks have not yet been implemented. The independent CPU/clock instrumentation work does not close this semantic provenance gap.
+
+The implemented consumer-only follow-up is documented in `cache-call-provenance-20261015.md`: actual cache-hit publication relations, retained cold/warm graphs, and exact replay gates. It does not implement the dispatch hooks above or establish a weighted execution DAG.
