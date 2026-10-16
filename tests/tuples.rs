@@ -451,10 +451,25 @@ fn tuple_destructuring_is_no_longer_a_milestone_boundary() {
 }
 
 #[test]
+fn tuple_reference_is_no_longer_a_milestone_boundary() {
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let compiled = justrust_engine::compiler::compile(
+                "fn main(){let x=(1,2);let y=&x;}".to_owned(),
+                workers,
+                check,
+            )
+            .unwrap();
+            assert_eq!(compiled.executable.is_none(), check);
+            assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
+        }
+    }
+}
+
+#[test]
 fn tuple_milestone_unsupported_features_reject_explicitly() {
     // Some are valid stock Rust, but outside this native tuple milestone.
     for (label, source) in [
-        ("tuple reference", "fn main(){let x=(1,2);let y=&x;}"),
         ("tuple equality", "fn main(){let x=(1,2)==(1,2);}"),
         ("tuple ordering", "fn main(){let x=(1,2)<(2,3);}"),
         ("tuple arithmetic", "fn main(){let x=(1,2)+(3,4);}"),

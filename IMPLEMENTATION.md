@@ -57,6 +57,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Genuine nonescaping local references are implemented under `BORROWING.md`, with
+canonical issuance-time loan origins, explicit reborrows, backward carrier
+liveness and native thin-pointer addressing. The frozen 35-case external oracle
+contains 17 accepted programs, 14 invalid programs and four later-stage boundaries.
+All 701 hosted tests, strict all-target lint, formatting and final peak-memory
+accounting review pass. Tracked native receipts remain pending. Reference parameters,
+implicit expected-site reborrows, escaping/reference results, general regions and
+reference-containing aggregates remain open B2/B3 work. This does not close the
+ownership or full-Rust checklist.
+
 Genuine unsigned 64-bit `usize` and runtime array indexing now pass 647 hosted
 tests and strict all-target lint. `USIZE.md` records ordered index/readiness
 operations, owning RHS snapshots, full-width arithmetic/bounds, direct ignored
@@ -65,7 +75,7 @@ non-Copy indexing and conservative selection-proof invalidation. The dedicated
 explicit exit-101 runtime cases and two legal-unsupported boundaries. The exact
 prior array runtime-index boundary is promoted unchanged to accepted. Backward
 numeric inference, chained dynamic places, slices, broader primitives and
-references/borrowing remain open. Tracked M8a validation passed 537 cases across
+general references/borrowing remain open. Tracked M8a validation passed 537 cases across
 twelve corpora: 326 accepted parity, 156 invalid rejections, nine declared runtime
 exit-101 cases and 46 explicit legal-unsupported boundaries. The full-width native
 example executed at 96 workers with complete capture; raw receipts are retained.

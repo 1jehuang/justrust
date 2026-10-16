@@ -173,12 +173,36 @@ impl<'a> Emitter<'a> {
             .copied()
             .ok_or_else(|| "invalid CFG local".to_string())
     }
-    fn place(&self, place: &ir::Place) -> Result<(i32, &'a ir::Ty), String> {
+    // Materialize the current address, never substitute a loan's original
+    // referent for a carrier that may have been reassigned at runtime.
+    // Only rax is clobbered, allowing stores to preserve their RHS in r9.
+    fn place_address(&mut self, place: &ir::Place) -> Result<&'a ir::Ty, String> {
         let mut offset = self.local_offset(place.local)?;
         let mut ty: &'a ir::Ty = &self.function.locals[place.local.0].ty;
+        let mut indirect_base = false;
         let mut projections = place.projection.iter();
         while let Some(projection) = projections.next() {
             let (field, next) = match projection {
+                ir::Projection::Deref => {
+                    let ir::Ty::Ref { referent, .. } = ty else {
+                        return Err("dereference requires reference storage".into());
+                    };
+                    if indirect_base {
+                        if offset != 0 {
+                            self.bytes(&[0x48, 0x05]);
+                            self.i32(offset);
+                        }
+                    } else {
+                        self.address(offset);
+                    }
+                    // Physical capability transport, not a semantic Copy of
+                    // the potentially non-Copy mutable-reference carrier.
+                    self.bytes(&[0x48, 0x8b, 0x00]);
+                    indirect_base = true;
+                    offset = 0;
+                    ty = referent;
+                    continue;
+                }
                 ir::Projection::Field(index) => field_offset(ty, *index)?,
                 ir::Projection::ConstantIndex(index) => array_offset(ty, *index)?,
                 ir::Projection::Downcast(variant) => {
@@ -216,14 +240,18 @@ impl<'a> Emitter<'a> {
                 .ok_or("projection offset too large")?;
             ty = next;
         }
-        Ok((offset, ty))
+        if indirect_base {
+            if offset != 0 {
+                self.bytes(&[0x48, 0x05]);
+                self.i32(offset);
+            }
+        } else {
+            self.address(offset);
+        }
+        Ok(ty)
     }
     fn address(&mut self, offset: i32) {
         self.bytes(&[0x48, 0x8d, 0x85]);
-        self.i32(offset);
-    }
-    fn load(&mut self, offset: i32) {
-        self.bytes(&[0x8b, 0x85]);
         self.i32(offset);
     }
     fn copy_pointer_value(&mut self, size: i32) {
@@ -256,6 +284,25 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
+    // rax holds the value/snapshot pointer and rdi the destination address.
+    fn store_address_value(&mut self, ty: &ir::Ty) -> Result<(), String> {
+        if indirect(ty) {
+            self.bytes(&[0x48, 0x89, 0xc6]);
+            self.copy_pointer_value(value_size(ty)?);
+            self.bytes(&[0x48, 0x89, 0xf8]);
+        } else {
+            self.bytes(&[0x48, 0x89, 0x07]);
+        }
+        Ok(())
+    }
+    fn store_place(&mut self, place: &ir::Place) -> Result<(), String> {
+        // Rust assignment evaluates the complete owning RHS first. Resolve a
+        // dereference's CURRENT carrier only after that evaluation/snapshot.
+        self.bytes(&[0x49, 0x89, 0xc1]); // r9 = RHS
+        let ty = self.place_address(place)?;
+        self.bytes(&[0x48, 0x89, 0xc7, 0x4c, 0x89, 0xc8]);
+        self.store_address_value(ty)
+    }
     fn operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
         match operand {
             cfg::Operand::Constant(cfg::Constant::Usize(value)) => {
@@ -286,14 +333,12 @@ impl<'a> Emitter<'a> {
     // Physical transport only. Ownership permissions were established by 109,
     // so returning a non-Copy aggregate must not invent a Copy operand.
     fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
-        let (offset, ty) = self.place(place)?;
-        if indirect(ty) {
-            self.address(offset);
-        } else {
-            if *ty == ir::Ty::Usize {
+        let ty = self.place_address(place)?;
+        if !indirect(ty) {
+            if matches!(ty, ir::Ty::Usize | ir::Ty::Ref { .. }) {
                 self.bytes(&[0x48]);
             }
-            self.load(offset);
+            self.bytes(&[0x8b, 0x00]);
         }
         Ok(())
     }
@@ -302,7 +347,7 @@ impl<'a> Emitter<'a> {
         array: &ir::Place,
         index: &cfg::Operand,
     ) -> Result<&'a ir::Ty, String> {
-        let (offset, ty) = self.place(array)?;
+        let ty = self.function.place_ty(array)?;
         let ir::Ty::Array { element, len } = ty else {
             return Err("runtime index requires array storage".into());
         };
@@ -318,9 +363,9 @@ impl<'a> Emitter<'a> {
         if *len != 0 {
             self.bytes(&[0x48, 0x69, 0xc0]); // rax *= physical element stride
             self.i32(value_size(element)?);
-            self.bytes(&[0x48, 0x8d, 0x8d]); // rcx = original static array place
-            self.i32(offset);
-            self.bytes(&[0x48, 0x01, 0xc8]);
+            self.bytes(&[0x49, 0x89, 0xc0]); // r8 = checked byte offset
+            self.place_address(array)?;
+            self.bytes(&[0x4c, 0x01, 0xc0]);
         }
         Ok(element)
     }
@@ -526,6 +571,14 @@ impl<'a> Emitter<'a> {
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::Borrow(loan) => {
+                let site = self
+                    .function
+                    .loan_sites
+                    .get(loan.0)
+                    .ok_or("invalid checked loan site")?;
+                self.place_address(&site.place)?;
+            }
             cfg::Rvalue::IndexCopy { array, index } => {
                 let element = self.index_address(array, index)?;
                 if !indirect(element) {
@@ -547,8 +600,8 @@ impl<'a> Emitter<'a> {
                 // Observing a tag is not a semantic Copy or Move of its enum.
                 // The tag is always the first word, regardless of scalar or
                 // indirect enum transport and any enclosing aggregate layout.
-                let (offset, _) = self.place(place)?;
-                self.load(offset);
+                self.place_address(place)?;
+                self.bytes(&[0x8b, 0x00]);
             }
             cfg::Rvalue::Unary { op, value } => {
                 let usize = self.function.operand_ty(value)? == ir::Ty::Usize;
@@ -621,17 +674,12 @@ impl<'a> Emitter<'a> {
                 let element = self.index_address(array, index)?;
                 self.bytes(&[0x49, 0x89, 0xc1]); // r9 = checked destination
                 self.operand(value)?;
-                if indirect(element) {
-                    self.bytes(&[0x48, 0x89, 0xc6, 0x4c, 0x89, 0xcf]);
-                    self.copy_pointer_value(value_size(element)?);
-                } else {
-                    self.bytes(&[0x49, 0x89, 0x01]); // full scalar word, including usize
-                }
+                self.bytes(&[0x4c, 0x89, 0xcf]);
+                self.store_address_value(element)?;
             }
             cfg::Statement::Assign { destination, value } => {
                 self.rvalue(value)?;
-                let (offset, ty) = self.place(destination)?;
-                self.store_value(offset, ty)?;
+                self.store_place(destination)?;
             }
         }
         Ok(())
@@ -648,7 +696,7 @@ impl<'a> Emitter<'a> {
                 // Raw discriminant inspection grants no semantic Copy of the
                 // enum. The true edge's selected-variant proof is established
                 // by CFG validation and ownership analysis, not by codegen.
-                let (offset, ty) = self.place(place)?;
+                let ty = self.function.place_ty(place)?;
                 let ir::Ty::Enum(enum_ty) = ty else {
                     return Err("variant switch requires enum storage".into());
                 };
@@ -664,7 +712,8 @@ impl<'a> Emitter<'a> {
                     self.edge(&[0xe9], *then_block);
                     return Ok(());
                 }
-                self.load(offset);
+                self.place_address(place)?;
+                self.bytes(&[0x8b, 0x00]);
                 self.bytes(&[0x3d]);
                 self.i32(
                     i32::try_from(variant.index)
@@ -698,9 +747,8 @@ impl<'a> Emitter<'a> {
                     self.bytes(&[0x50]);
                 }
                 let aggregate = indirect(&signature.result);
-                let (offset, ty) = self.place(destination)?;
                 if aggregate {
-                    self.address(offset);
+                    self.place_address(destination)?;
                     self.bytes(&[0x50]);
                 }
                 let at = self.jump(&[0xe8]);
@@ -710,10 +758,8 @@ impl<'a> Emitter<'a> {
                     self.bytes(&[0x48, 0x81, 0xc4]);
                     self.i32((words * 8) as i32);
                 }
-                if aggregate {
-                    self.address(offset);
-                } else {
-                    self.store_value(offset, ty)?;
+                if !aggregate {
+                    self.store_place(destination)?;
                 }
                 self.edge(&[0xe9], *next);
             }
@@ -1177,6 +1223,138 @@ mod tests {
     }
 
     #[test]
+    fn borrowing_checked_emission_rejects_loan_conflicts_before_pointer_codegen() {
+        let program = frontend::parse(
+            r#"
+            fn main() {
+                let mut value = 1;
+                let reference = &mut value;
+                value = 2;
+                let observed = *reference;
+            }
+        "#,
+        )
+        .unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let checked = frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let lowered = cfg::lower(&checked).unwrap();
+        assert!(!ownership::analyze(&lowered).passed());
+        assert!(emit_checked_function(&checked).is_err());
+        assert!(emit(&program).is_err());
+    }
+
+    #[test]
+    fn borrowing_thin_shared_copies_and_mutable_move_preserve_usize64() {
+        let p = frontend::parse(
+            r#"
+            fn main() {
+                let mut value = 9223372036854775808usize;
+                {
+                    let reference = &value;
+                    let copied = reference;
+                    if *copied != 9223372036854775808usize { 1 / 0; }
+                }
+                {
+                    let reference = &mut value;
+                    let moved = reference;
+                    *moved = 18446744073709551615usize;
+                    if *moved != 18446744073709551615usize { 1 / 0; }
+                }
+                if value != 18446744073709551615usize { 1 / 0; }
+                println!("thin-references");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"thin-references\n");
+    }
+
+    #[test]
+    fn borrowing_write_resolves_current_carrier_after_rhs_and_child_keeps_pointer() {
+        let p = frontend::parse(
+            r#"
+            fn main() {
+                let mut x = 1;
+                let mut y = 2;
+                {
+                    let mut reference = &mut x;
+                    *reference = { reference = &mut y; 3 };
+                }
+                if x != 1 { 1 / 0; }
+                if y != 3 { 1 / 0; }
+                {
+                    let mut parent = &mut x;
+                    let child = &mut *parent;
+                    parent = &mut y;
+                    *child = 11;
+                    *parent = 22;
+                }
+                if x != 11 { 1 / 0; }
+                if y != 22 { 1 / 0; }
+                let child: &mut i32;
+                {
+                    let parent = &mut x;
+                    child = &mut *parent;
+                }
+                *child = 33;
+                if *child != 33 { 1 / 0; }
+                println!("current-carrier");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"current-carrier\n");
+    }
+
+    #[test]
+    fn borrowing_aggregate_fields_arrays_dynamic_indices_and_call_results() {
+        let p = frontend::parse(
+            r#"
+            struct Record { before: i32, values: [usize; 9], after: i32 }
+            enum Flag { Off, On }
+            fn large() -> [usize; 9] { [9223372036854775808usize; 9] }
+            fn scalar() -> usize { 18446744073709551615usize }
+            fn main() {
+                let mut record = Record { before: 17, values: [0usize; 9], after: 29 };
+                {
+                    let reference = &mut record;
+                    (*reference).values = large();
+                    (*reference).values[1] = scalar();
+                    let copy = (*reference).values;
+                    if copy[8] != 9223372036854775808usize { 1 / 0; }
+                    if copy[1] != 18446744073709551615usize { 1 / 0; }
+                    if (*reference).before != 17 { 1 / 0; }
+                    if (*reference).after != 29 { 1 / 0; }
+                }
+                let mut array = [0usize; 9];
+                {
+                    let reference = &mut array;
+                    *reference = large();
+                    (*reference)[2] = scalar();
+                    let copied = *reference;
+                    if copied[2usize] != 18446744073709551615usize { 1 / 0; }
+                }
+                let flag = Flag::On;
+                {
+                    let reference = &flag;
+                }
+                let n = match flag { Flag::Off => 0, Flag::On => 1 };
+                if n != 1 { 1 / 0; }
+                println!("reference-aggregate");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"reference-aggregate\n");
+    }
+
+    #[test]
     fn usize_full_width_arithmetic_complement_and_all_transports() {
         let p = frontend::parse(
             r#"
@@ -1322,6 +1500,7 @@ mod tests {
             len: 0,
         };
         let function = cfg::Function {
+            loan_sites: vec![],
             name: "main".into(),
             params: vec![],
             result: ir::Ty::Unit,
@@ -1517,6 +1696,7 @@ mod tests {
                 terminator: located(cfg::Terminator::Return),
             };
             let function = cfg::Function {
+                loan_sites: vec![],
                 name: "main".into(),
                 params: vec![],
                 result: ir::Ty::Unit,
@@ -1563,6 +1743,24 @@ mod tests {
                 "moved={moved}: {:?}",
                 analysis.diagnostics
             );
+            let mut branch = Emitter {
+                object: Object {
+                    code: vec![],
+                    calls: vec![],
+                    strings: vec![],
+                },
+                function: &function,
+                locals: vec![],
+                aggregate_scratch: 0,
+                returns: vec![],
+                traps: vec![],
+                edges: vec![],
+            };
+            branch
+                .terminator(&function.blocks[0].terminator.value)
+                .unwrap();
+            assert_eq!(branch.object.code, [0xe9, 0, 0, 0, 0]);
+            assert_eq!(branch.edges, [(1, cfg::BlockId(1))]);
             let object = emit_cfg_function(&function).unwrap();
             // The root follows the eight-byte unit return slot in the frame.
             // Aggregate moves address it but must never load its tag into eax.
@@ -1622,6 +1820,7 @@ mod tests {
         assert!(indirect(&ir::Ty::Enum(ty.clone())));
         assert_eq!(value_size(&ir::Ty::Enum(ty.clone())).unwrap(), 32);
         let function = cfg::Function {
+            loan_sites: vec![],
             name: "main".into(),
             params: vec![],
             result: ir::Ty::Unit,
@@ -2133,14 +2332,14 @@ mod tests {
         assert!(
             original
                 .code
-                .windows(6)
-                .any(|bytes| bytes == [0x89, 0x85, 0xf8, 0xff, 0xff, 0xff])
+                .windows(7)
+                .any(|bytes| bytes == [0x48, 0x8d, 0x85, 0xf8, 0xff, 0xff, 0xff])
         );
         assert!(
             original
                 .code
-                .windows(6)
-                .any(|bytes| bytes == [0x89, 0x85, 0xf0, 0xff, 0xff, 0xff])
+                .windows(7)
+                .any(|bytes| bytes == [0x48, 0x8d, 0x85, 0xf0, 0xff, 0xff, 0xff])
         );
     }
 
@@ -2414,6 +2613,7 @@ mod tests {
         }
         let pair = ir::Ty::Tuple(vec![ir::Ty::I32, ir::Ty::I32].into());
         let mut function = cfg::Function {
+            loan_sites: vec![],
             name: "main".into(),
             params: vec![],
             result: ir::Ty::Unit,

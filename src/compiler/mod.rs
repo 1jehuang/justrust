@@ -1,5 +1,6 @@
 //! Source-to-native compiler built on the fact graph. See COMPILER.md.
 pub mod backend;
+mod borrow;
 pub mod cfg;
 pub mod frontend;
 pub mod ir;

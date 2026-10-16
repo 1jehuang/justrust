@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
+Status: executable Rust-subset implementation with local references, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -76,7 +76,7 @@ glob imports, public re-exports, restricted `pub(...)`, block-local items/import
 standard-library APIs beyond the documented print form, general macros, traits,
 generics, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
-references/borrowing, strings as values, closures, async,
+reference parameters/results, escaping references, general lifetimes, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
 positions, or other targets.
 This list does not turn unsupported syntax into permission to accept programs
@@ -97,7 +97,7 @@ implemented boundary. Semantic coverage must be expanded explicitly.
   (operation 108), with ordered value snapshots, branches, loop edges and calls.
   Publishing the CFG does not imply it passed initialization analysis.
 - Analyze each CFG once (operation 109), validating structure and running bounded
-  definite-initialization, storage-lifetime and move-path dataflow to a fixed point.
+  definite-initialization, storage-lifetime, move-path and local-loan dataflow to fixed points.
   Both check and emission require this successful immutable analysis fact.
 - Emit each function from that exact cached CFG fact without repeating lowering
   or waiting for other bodies.
@@ -166,7 +166,15 @@ constant-true CFG switches whose imaginary successor is analysis-reachable but
 never executed. Tuples
 are Copy exactly when every component is Copy. Source consumption lowers to
 Copy or Move of the projected place, never an accidental move of its parent.
-This is not loan, reference, lifetime, destructor or borrow checking.
+Local nonescaping references now add bounded forward provenance and backward
+carrier liveness to the same analysis gate. Loan targets and parent authority are
+frozen at issuance, so reassigning a carrier does not retarget existing children.
+Shared aliases, mutable-handle moves, explicit reborrows and last-use permission
+checks operate on canonical storage places. An immutable binding holding a mutable
+reference may write its referent. Thin native addresses are emitted only after
+the exact CFG passes initialization and loan checks. Reference parameters/results,
+reference-containing aggregates, temporary lifetime extension and general Rust
+regions remain unsupported. See `BORROWING.md` for B1 boundaries and B2/B3 work.
 
 ## Aggregate implementation boundary
 
@@ -182,8 +190,10 @@ moves only the selected place. Scalar field reads leave the containing struct
 available, partial moves preserve siblings, and mutable field reinitialization
 restores the selected subtree. Joins and loops must retain definite initialization.
 Assignments evaluate their full RHS before writing and require mutable roots
-except for a first whole-local initialization. Aggregate comparisons, references,
-derives and destructors remain unsupported.
+except for a first whole-local initialization or a write through an authorized
+mutable reference. Borrowing an owned aggregate does not copy it; Copy fields can
+be read through references without moving the containing value. Aggregate
+comparisons, reference-containing aggregates, derives and destructors remain unsupported.
 Let patterns support nested tuples/structs, renamed or shorthand fields, wildcard
 and struct `..`, with whole-pattern annotations and independent mutable binders.
 Tuple-rest patterns, ref/ref mut, @, or/refutable patterns, parameter patterns,

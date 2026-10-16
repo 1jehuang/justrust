@@ -62,6 +62,7 @@ fn function(decls: Vec<(Ty, bool)>, blocks: Vec<BasicBlock>) -> cfg::Function {
     );
     let mut function = cfg::Function {
         name: "synthetic".into(),
+        loan_sites: vec![],
         params: vec![],
         result: Ty::Unit,
         locals,

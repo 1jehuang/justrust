@@ -7,6 +7,7 @@
 use super::frontend::{BinaryOp, UnaryOp};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+pub const MAX_LOAN_SITES: usize = 4096;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Process-local namespace for one validated declaration environment. IDs must
@@ -143,6 +144,13 @@ pub enum Projection {
     Field(usize),
     Downcast(VariantId),
     ConstantIndex(usize),
+    Deref,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum BorrowKind {
+    Shared,
+    Mut,
 }
 
 /// Checks structural typing, not the runtime proof needed to read a payload.
@@ -150,10 +158,29 @@ pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, Str
     if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
         return Err("projection depth exceeds limit 128".into());
     }
+    if path.iter().any(|part| matches!(part, Projection::Deref))
+        && (!matches!(path.first(), Some(Projection::Deref))
+            || path
+                .iter()
+                .filter(|part| matches!(part, Projection::Deref))
+                .count()
+                != 1
+            || path
+                .iter()
+                .any(|part| matches!(part, Projection::Downcast(_))))
+    {
+        return Err("unsupported: dereference must be first and cannot contain downcasts".into());
+    }
     let mut ty = root;
     let mut path = path.iter();
     while let Some(projection) = path.next() {
         ty = match *projection {
+            Projection::Deref => {
+                let Ty::Ref { referent, .. } = ty else {
+                    return Err("dereference requires reference type".into());
+                };
+                referent
+            }
             Projection::ConstantIndex(index) => {
                 let Ty::Array { element, len } = ty else {
                     return Err("constant index requires array type".into());
@@ -274,6 +301,10 @@ pub struct LoopId(pub usize);
 pub enum Ty {
     I32,
     Usize,
+    Ref {
+        kind: BorrowKind,
+        referent: Arc<Ty>,
+    },
     Bool,
     Unit,
     /// Nonempty structural tuple. The empty tuple is canonically Unit.
@@ -309,6 +340,7 @@ impl Ty {
 
     pub fn is_copy(&self) -> bool {
         match self {
+            Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
             Self::I32 | Self::Usize | Self::Bool | Self::Unit | Self::Never => true,
             Self::Struct(_) | Self::Enum(_) => false,
             Self::Tuple(_) | Self::Array { .. } => {
@@ -317,6 +349,10 @@ impl Ty {
                 let mut arrays = std::collections::HashSet::new();
                 while let Some(ty) = pending.pop() {
                     match ty {
+                        Self::Ref {
+                            kind: BorrowKind::Mut,
+                            ..
+                        } => return false,
                         Self::Struct(_) | Self::Enum(_) => return false,
                         Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
                             pending.extend(fields.iter());
@@ -430,6 +466,20 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             return Err("pattern type comparison depth exceeds limit 128".into());
         }
         match (a, b) {
+            (
+                Ty::Ref {
+                    kind: ak,
+                    referent: a,
+                },
+                Ty::Ref {
+                    kind: bk,
+                    referent: b,
+                },
+            ) if ak == bk => {
+                if !Arc::ptr_eq(a, b) {
+                    pending.push((a, b, depth + 1));
+                }
+            }
             (Ty::I32, Ty::I32)
             | (Ty::Usize, Ty::Usize)
             | (Ty::Bool, Ty::Bool)
@@ -531,6 +581,13 @@ pub struct MatchArm {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind {
+    Borrow {
+        kind: BorrowKind,
+        place: Place,
+    },
+    Deref {
+        value: ExprId,
+    },
     Usize(u64),
     DynamicIndex {
         base: ExprId,
@@ -779,6 +836,30 @@ impl CheckedFunction {
         let mut blocks = vec![&self.body];
         for value in &self.exprs {
             match &value.kind {
+                ExprKind::Borrow { kind, place } => {
+                    let root = &self
+                        .locals
+                        .get(place.local.0)
+                        .ok_or("invalid borrow local")?
+                        .ty;
+                    let referent = projected_ty(root, &place.projection)?;
+                    let expected = Ty::Ref {
+                        kind: *kind,
+                        referent: Arc::new(referent.clone()),
+                    };
+                    if !pattern_types_equal(&value.ty, &expected, &mut 0)? {
+                        return Err("borrow result type mismatch".into());
+                    }
+                }
+                ExprKind::Deref { value: source } => {
+                    expr(*source)?;
+                    let Ty::Ref { referent, .. } = &self.exprs[source.0].ty else {
+                        return Err("dereference requires reference type".into());
+                    };
+                    if !pattern_types_equal(&value.ty, referent, &mut 0)? {
+                        return Err("dereference result type mismatch".into());
+                    }
+                }
                 ExprKind::DynamicIndex { base, index } => {
                     expr(*base)?;
                     expr(*index)?;
@@ -968,6 +1049,27 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reference_copy_and_projection_contract() {
+        use super::*;
+        let shared = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Tuple(Arc::from([Ty::I32]))),
+        };
+        let mutable = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::I32),
+        };
+        assert!(shared.is_copy());
+        assert!(!mutable.is_copy());
+        assert_eq!(
+            projected_ty(&shared, &[Projection::Deref, Projection::Field(0)]).unwrap(),
+            &Ty::I32
+        );
+        assert!(projected_ty(&shared, &[Projection::Deref, Projection::Deref]).is_err());
+        assert!(projected_ty(&Ty::I32, &[Projection::Deref]).is_err());
+        assert!(!Ty::Tuple(Arc::from([mutable])).is_copy());
+    }
     use super::*;
 
     #[test]

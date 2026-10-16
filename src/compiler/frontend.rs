@@ -88,12 +88,17 @@ pub struct FieldDecl {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FieldSelector {
+    Deref,
     ConstantIndex(usize),
     Tuple(usize),
     Named(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
+    Ref {
+        kind: ir::BorrowKind,
+        referent: Box<Type>,
+    },
     Array(Box<Type>, usize),
     I32,
     Usize,
@@ -181,6 +186,13 @@ pub enum Stmt {
 }
 #[derive(Clone, Debug)]
 pub enum Expr {
+    Borrow {
+        kind: ir::BorrowKind,
+        place: Place,
+    },
+    Deref {
+        value: Box<Expr>,
+    },
     Usize(u64),
     Unsuffixed(u64),
     DynamicIndex {
@@ -491,6 +503,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | "<="
                     | ">"
                     | ">="
+                    | "&"
                     | "&&"
                     | "||"
             ) {
@@ -583,8 +596,22 @@ impl Parser {
         result
     }
     fn ty_inner(&mut self) -> Result<Type, String> {
+        if self.is("&&") {
+            return Err(self.error("nested reference types are unsupported in B1"));
+        }
         if self.is("_") || self.is("!") {
             return Err(self.error("inferred and never source type annotations are unsupported"));
+        }
+        if self.eat("&") {
+            let kind = if self.eat("mut") {
+                ir::BorrowKind::Mut
+            } else {
+                ir::BorrowKind::Shared
+            };
+            return Ok(Type::Ref {
+                kind,
+                referent: Box::new(self.ty()?),
+            });
         }
         if self.eat("[") {
             let element = self.ty()?;
@@ -923,6 +950,9 @@ impl Parser {
         result
     }
     fn pattern_inner(&mut self) -> Result<Pattern, String> {
+        if self.is("&") || self.is("&&") {
+            return Err(self.error("reference patterns and match ergonomics are unsupported in B1"));
+        }
         if self.eat("true") {
             return Ok(Pattern::Bool(true));
         }
@@ -1100,7 +1130,7 @@ impl Parser {
                 let body = self.block()?;
                 statements.push(Stmt::While { condition, body });
             } else {
-                let expr = self.expr(0)?;
+                let expr = self.statement_expr()?;
                 if self.eat("=") {
                     let value = self.expr(0)?;
                     self.expect(";")?;
@@ -1145,6 +1175,7 @@ impl Parser {
         loop {
             match expr {
                 Expr::Var(local) => { fields.reverse(); return Ok(Place { local, fields }); }
+                Expr::Deref {value}=>{fields.push(FieldSelector::Deref);expr = *value;}
                 Expr::Field { base, field } => { fields.push(field); expr = *base; }
                 Expr::Index { base,index } => {fields.push(FieldSelector::ConstantIndex(index));expr = *base;}
                 _ => return Err(self.error("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported")),
@@ -1174,8 +1205,38 @@ impl Parser {
         self.nesting -= 1;
         result
     }
+    fn statement_expr(&mut self) -> Result<Expr, String> {
+        if self.nesting >= 128 {
+            return Err(self.error("syntax nesting exceeds limit128"));
+        }
+        self.nesting += 1;
+        let result = self.expr_inner_mode(0, true);
+        self.nesting -= 1;
+        result
+    }
     fn expr_inner(&mut self, min: u8) -> Result<Expr, String> {
-        let mut left = if self.eat("-") {
+        self.expr_inner_mode(min, false)
+    }
+    fn expr_inner_mode(&mut self, min: u8, statement: bool) -> Result<Expr, String> {
+        let statement_blocklike =
+            statement && matches!(self.token().text.as_str(), "if" | "match" | "loop" | "{");
+        if self.is("&&") {
+            return Err(self.error("nested reference borrows are unsupported in B1"));
+        }
+        let mut left = if self.eat("&") {
+            let kind = if self.eat("mut") {
+                ir::BorrowKind::Mut
+            } else {
+                ir::BorrowKind::Shared
+            };
+            let value = self.expr(7)?;
+            let place=self.assignment_place(value).map_err(|_|self.error("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
+            Expr::Borrow { kind, place }
+        } else if self.eat("*") {
+            Expr::Deref {
+                value: Box::new(self.expr(7)?),
+            }
+        } else if self.eat("-") {
             if self.is("2147483648") || self.is("2147483648i32") {
                 self.at += 1;
                 Expr::Int(i32::MIN)
@@ -1255,7 +1316,11 @@ impl Parser {
                 if self.is("if") {
                     Block {
                         statements: Vec::new(),
-                        tail: Some(Box::new(self.expr(0)?)),
+                        tail: Some(Box::new(if statement {
+                            self.statement_expr()?
+                        } else {
+                            self.expr(0)?
+                        })),
                     }
                 } else {
                     self.block()?
@@ -1397,6 +1462,15 @@ impl Parser {
         };
         let mut compared = false;
         loop {
+            if statement_blocklike
+                && matches!(
+                    left,
+                    Expr::If { .. } | Expr::Match { .. } | Expr::Loop { .. } | Expr::Block(_)
+                )
+                && self.is("[")
+            {
+                break;
+            }
             if self.eat("[") {
                 let literal = self.token().text.clone();
                 let constant = !self.token().string
@@ -1450,6 +1524,14 @@ impl Parser {
                 };
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
                 continue;
+            }
+            if statement_blocklike
+                && matches!(
+                    left,
+                    Expr::If { .. } | Expr::Match { .. } | Expr::Loop { .. } | Expr::Block(_)
+                )
+            {
+                break;
             }
             let (precedence, op) = match self.token().text.as_str() {
                 "||" => (1, BinaryOp::Or),
@@ -1729,6 +1811,7 @@ impl Resolver<'_> {
     }
     fn ty(&mut self, ty: &mut Type, module: &str) -> Result<(), String> {
         match ty {
+            Type::Ref { referent, .. } => self.ty(referent, module)?,
             Type::Array(element, _) => self.ty(element, module)?,
             Type::Named(name) => {
                 let item = self
@@ -1917,6 +2000,8 @@ impl Resolver<'_> {
                     self.expr(e, module, locals)?;
                 }
             }
+            Expr::Deref { value } => self.expr(value, module, locals)?,
+            Expr::Borrow { .. } => {}
             Expr::Repeat { value, .. } => self.expr(value, module, locals)?,
             Expr::DynamicIndex { base, index } => {
                 self.expr(base, module, locals)?;
@@ -2112,6 +2197,7 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
         }
         let mut push = |node| stack.push((node, depth + 1));
         match node {
+            DepthNode::Type(Type::Ref { referent, .. }) => push(DepthNode::Type(referent)),
             DepthNode::Type(Type::Array(element, _)) => push(DepthNode::Type(element)),
             DepthNode::Type(Type::Tuple(fields)) => {
                 for field in fields {
@@ -2149,6 +2235,7 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                         push(DepthNode::Expr(e));
                     }
                 }
+                Expr::Deref { value } => push(DepthNode::Expr(value)),
                 Expr::Repeat { value, .. } => push(DepthNode::Expr(value)),
                 Expr::DynamicIndex { base, index } => {
                     push(DepthNode::Expr(base));
@@ -2352,6 +2439,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         let mut deps = Vec::new();
         while let Some(ty) = pending.pop() {
             match ty {
+                Type::Ref{..}=>return Err("references in function signatures and aggregate declarations are unsupported in B1".into()),
                 Type::Array(element, len) => {
                     if *len > ir::MAX_ARRAY_LEN {
                         return Err("array length exceeds supported limit".into());
@@ -2594,13 +2682,25 @@ impl Flow {
     }
 }
 fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
+    checked_ty_at(ty, env, true)
+}
+fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, String> {
     match ty {
+        Type::Ref { kind, referent } => {
+            if !allow_ref || matches!(referent.as_ref(), Type::Never | Type::Infer) {
+                return Err("nested or aggregate reference types are unsupported in B1".into());
+            }
+            Ok(ir::Ty::Ref {
+                kind: *kind,
+                referent: std::sync::Arc::new(checked_ty_at(referent, env, false)?),
+            })
+        }
         Type::Array(element, len) => {
             if *len > ir::MAX_ARRAY_LEN {
                 return Err("array length exceeds supported limit".into());
             }
             Ok(ir::Ty::Array {
-                element: std::sync::Arc::new(checked_ty(element, env)?),
+                element: std::sync::Arc::new(checked_ty_at(element, env, false)?),
                 len: *len,
             })
         }
@@ -2611,7 +2711,7 @@ fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
         Type::Never => Ok(ir::Ty::Never),
         Type::Tuple(fields) if !fields.is_empty() => fields
             .iter()
-            .map(|ty| checked_ty(ty, env))
+            .map(|ty| checked_ty_at(ty, env, false))
             .collect::<Result<Vec<_>, _>>()
             .map(|fields| ir::Ty::Tuple(fields.into())),
         Type::Tuple(_) => Err("empty tuple types must use ()".into()),
@@ -2739,6 +2839,10 @@ impl<'a> Checker<'a> {
         }
     }
     fn require(&self, got: &Flow, want: &ir::Ty) -> Result<(), String> {
+        if matches!((&got.ty,want),(ir::Ty::Ref{kind:ir::BorrowKind::Mut,referent:a},ir::Ty::Ref{kind:ir::BorrowKind::Shared,referent:b}) if a==b)
+        {
+            return Err("implicit mutable-to-shared reference coercion/reborrowing is unsupported; use an explicit &*r reborrow".into());
+        }
         if !coerces(&got.ty, want) {
             Err(format!("expected {want:?}, got {:?}", got.ty))
         } else {
@@ -2785,6 +2889,7 @@ impl<'a> Checker<'a> {
         let mut work = vec![ty];
         while let Some(ty) = work.pop() {
             match ty {
+                ir::Ty::Ref { referent, .. } => work.push(referent),
                 ir::Ty::Array { element, .. } => work.push(element),
                 ir::Ty::Tuple(fields) => work.extend(fields.iter()),
                 ir::Ty::Enum(ty)
@@ -2810,11 +2915,86 @@ impl<'a> Checker<'a> {
         }
         Ok(())
     }
+    fn checked_place(&self, place: &Place) -> Result<(ir::Place, ir::Ty, bool), String> {
+        if place.fields.len() > 128 {
+            return Err("place projection nesting exceeds limit128".into());
+        }
+        let local = self.lookup(&place.local)?;
+        let declaration = &self.locals[local.0];
+        let mut ty = declaration.ty.clone();
+        let mut writable = declaration.mutable;
+        let mut derefs = 0;
+        let mut projection = Vec::with_capacity(place.fields.len());
+        for selector in &place.fields {
+            match selector {
+                FieldSelector::Deref => {
+                    derefs += 1;
+                    if derefs > 1 {
+                        return Err("multiple dereferences in one B1 place are unsupported".into());
+                    }
+                    let ir::Ty::Ref { kind, referent } = &ty else {
+                        return Err("dereference requires a reference".into());
+                    };
+                    writable = *kind == ir::BorrowKind::Mut;
+                    ty = referent.as_ref().clone();
+                    projection.push(ir::Projection::Deref);
+                }
+                FieldSelector::ConstantIndex(index) => {
+                    ty = self.index_type(&ty, *index)?;
+                    projection.push(ir::Projection::ConstantIndex(*index));
+                }
+                _ => {
+                    let (index, field) = self.field_type(&ty, selector)?;
+                    ty = field;
+                    projection.push(ir::Projection::Field(index));
+                }
+            }
+        }
+        self.accessible(&ty)?;
+        Ok((ir::Place { local, projection }, ty, writable))
+    }
+    fn reference_site(expected: Option<&ir::Ty>, value: &Expr) -> Result<(), String> {
+        if matches!(
+            expected,
+            Some(ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                ..
+            })
+        ) && !matches!(value, Expr::Borrow { .. })
+        {
+            return Err("implicit mutable-reference expected-site reborrowing/coercion is unsupported; use an explicit borrow/reborrow".into());
+        }
+        Ok(())
+    }
+    fn reject_aggregate_ref(ty: &ir::Ty) -> Result<(), String> {
+        let mut work = vec![ty];
+        while let Some(ty) = work.pop() {
+            match ty {
+                ir::Ty::Ref { .. } => {
+                    return Err(
+                        "reference aggregate elements and nested references are unsupported in B1"
+                            .into(),
+                    );
+                }
+                ir::Ty::Array { element, .. } => work.push(element),
+                ir::Ty::Tuple(fields) => work.extend(fields.iter()),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     fn require_index(&self, flow: &Flow) -> Result<(), String> {
         self.require(flow,&ir::Ty::Usize).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
     }
     fn scalar_hint(&self, e: &Expr) -> Option<ir::Ty> {
         match e {
+            Expr::Deref { value } => self.scalar_hint(value).and_then(|ty| {
+                if let ir::Ty::Ref { referent, .. } = ty {
+                    Some(referent.as_ref().clone())
+                } else {
+                    None
+                }
+            }),
             Expr::Usize(_) => Some(ir::Ty::Usize),
             Expr::Int(_) => Some(ir::Ty::I32),
             Expr::Var(name) => self
@@ -2846,6 +3026,15 @@ impl<'a> Checker<'a> {
             _ => None,
         }
     }
+    fn deref_source(e: &Expr) -> bool {
+        match e {
+            Expr::Deref { .. } => true,
+            Expr::Index { base, .. }
+            | Expr::Field { base, .. }
+            | Expr::DynamicIndex { base, .. } => Self::deref_source(base),
+            _ => false,
+        }
+    }
     fn dynamic_place(e: &Expr) -> bool {
         match e {
             Expr::DynamicIndex { .. } => true,
@@ -2854,6 +3043,9 @@ impl<'a> Checker<'a> {
         }
     }
     fn index_type(&self, ty: &ir::Ty, index: usize) -> Result<ir::Ty, String> {
+        if matches!(ty, ir::Ty::Ref { .. }) {
+            return Err("implicit reference autodereference is unsupported in B1; use an explicit (*r) place".into());
+        }
         let ir::Ty::Array { element, len } = ty else {
             return Err("indexing requires an array".into());
         };
@@ -2866,6 +3058,9 @@ impl<'a> Checker<'a> {
         Ok(element.as_ref().clone())
     }
     fn field_type(&self, ty: &ir::Ty, field: &FieldSelector) -> Result<(usize, ir::Ty), String> {
+        if matches!(ty, ir::Ty::Ref { .. }) {
+            return Err("implicit reference autodereference is unsupported in B1; use an explicit (*r) place".into());
+        }
         let (index, projected) = match (ty, field) {
             (ir::Ty::Tuple(fields), FieldSelector::Tuple(index)) => fields
                 .get(*index)
@@ -2905,6 +3100,13 @@ impl<'a> Checker<'a> {
     }
     /// Recover only concrete pattern shape, without a general inference engine.
     fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
+        if matches!(ty, ir::Ty::Ref { .. })
+            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
+        {
+            return Err(
+                "reference patterns and implicit match ergonomics are unsupported in B1".into(),
+            );
+        }
         match pattern {
             Pattern::Path(name) | Pattern::Variant { name,.. } => {
                 let (enumeration, _) = self.enum_variant(name)?;
@@ -3186,6 +3388,7 @@ impl<'a> Checker<'a> {
                     } else {
                         Some(checked_ty(ty, self.signatures)?)
                     };
+                    Self::reference_site(annotation.as_ref(), value)?;
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     let f = self.flow(value);
                     let t = if *ty == Type::Infer {
@@ -3206,8 +3409,16 @@ impl<'a> Checker<'a> {
                     } else {
                         Some(checked_ty(ty, self.signatures)?)
                     };
+                    if Self::deref_source(value)
+                        && matches!(pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                    {
+                        return Err(
+                            "enum downcasts after a dereference are unsupported in B1".into()
+                        );
+                    }
                     let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
+                    Self::reference_site(annotation.as_ref(), value)?;
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     let flow = self.flow(value);
                     if direct_dynamic && !flow.ty.is_copy() && !direct_wildcard {
@@ -3255,6 +3466,7 @@ impl<'a> Checker<'a> {
                     let local = self.lookup(name)?;
                     let declaration = &self.locals[local.0];
                     let t = declaration.ty.clone();
+                    Self::reference_site(Some(&t), value)?;
                     let value = self.expr_expected(value, Some(&t))?;
                     let f = self.flow(value);
                     self.require(&f, &t)?;
@@ -3265,22 +3477,12 @@ impl<'a> Checker<'a> {
                     index,
                     value,
                 } => {
-                    let local = self.lookup(&array.local)?;
-                    let declaration = &self.locals[local.0];
-                    if !declaration.mutable {
-                        return Err(format!("assignment to immutable local {}", array.local));
+                    let (array, ty, writable) = self.checked_place(array)?;
+                    if array.projection.contains(&ir::Projection::Deref) {
+                        return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
                     }
-                    let mut ty = declaration.ty.clone();
-                    let mut projection = Vec::with_capacity(array.fields.len());
-                    for field in &array.fields {
-                        if let FieldSelector::ConstantIndex(i) = field {
-                            ty = self.index_type(&ty, *i)?;
-                            projection.push(ir::Projection::ConstantIndex(*i));
-                        } else {
-                            let (i, t) = self.field_type(&ty, field)?;
-                            ty = t;
-                            projection.push(ir::Projection::Field(i));
-                        }
+                    if !writable {
+                        return Err("runtime index assignment requires a mutable place".into());
                     }
                     let ir::Ty::Array { element, .. } = &ty else {
                         return Err("runtime index assignment requires an array".into());
@@ -3297,7 +3499,7 @@ impl<'a> Checker<'a> {
                     self.require_index(&index_flow)?;
                     (
                         ir::Stmt::AssignIndex {
-                            array: ir::Place { local, projection },
+                            array,
                             index,
                             value,
                         },
@@ -3305,36 +3507,21 @@ impl<'a> Checker<'a> {
                     )
                 }
                 Stmt::AssignPlace { place, value } => {
-                    let local = self.lookup(&place.local)?;
-                    let declaration = &self.locals[local.0];
-                    if !declaration.mutable && !place.fields.is_empty() {
-                        return Err(format!("assignment to immutable local {}", place.local));
+                    let (place, ty, writable) = self.checked_place(place)?;
+                    if !place.projection.is_empty()
+                        && !writable
+                        && !place.projection.contains(&ir::Projection::Deref)
+                    {
+                        return Err(
+                            "assignment requires a mutable place; shared references cannot write"
+                                .into(),
+                        );
                     }
-                    let mut ty = declaration.ty.clone();
-                    let mut fields = Vec::with_capacity(place.fields.len());
-                    for field in &place.fields {
-                        if let FieldSelector::ConstantIndex(index) = field {
-                            ty = self.index_type(&ty, *index)?;
-                            fields.push(ir::Projection::ConstantIndex(*index));
-                        } else {
-                            let (index, field_ty) = self.field_type(&ty, field)?;
-                            ty = field_ty;
-                            fields.push(ir::Projection::Field(index));
-                        }
-                    }
+                    Self::reference_site(Some(&ty), value)?;
                     let value = self.expr_expected(value, Some(&ty))?;
                     let flow = self.flow(value);
                     self.require(&flow, &ty)?;
-                    (
-                        ir::Stmt::AssignPlace {
-                            place: ir::Place {
-                                local,
-                                projection: fields,
-                            },
-                            value,
-                        },
-                        flow.completes,
-                    )
+                    (ir::Stmt::AssignPlace { place, value }, flow.completes)
                 }
                 Stmt::Expr(e) | Stmt::ImplicitExpr(e) => {
                     let value = self.expr(e)?;
@@ -3403,6 +3590,36 @@ impl<'a> Checker<'a> {
     }
     fn expr_expected(&mut self, e: &Expr, expected: Option<&ir::Ty>) -> Result<ir::ExprId, String> {
         let (kind, flow) = match e {
+            Expr::Borrow { kind, place } => {
+                let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
+                Self::reject_aggregate_ref(&referent)?;
+                (
+                    ir::ExprKind::Borrow { kind: *kind, place },
+                    Flow::value(ir::Ty::Ref {
+                        kind: *kind,
+                        referent: std::sync::Arc::new(referent),
+                    }),
+                )
+            }
+            Expr::Deref { value } => {
+                if !matches!(value.as_ref(), Expr::Var(_)) {
+                    return Err("non-local-root dereference carriers and borrowed rvalues are unsupported in B1".into());
+                }
+                let value = self.expr(value)?;
+                let flow = self.flow(value);
+                let ir::Ty::Ref { referent, .. } = &flow.ty else {
+                    return Err("dereference requires a reference".into());
+                };
+                let ty = referent.as_ref().clone();
+                self.accessible(&ty)?;
+                (
+                    ir::ExprKind::Deref { value },
+                    Flow {
+                        ty,
+                        completes: flow.completes,
+                    },
+                )
+            }
             Expr::Array(elements) => {
                 if elements.len() > ir::MAX_ARRAY_LEN {
                     return Err("array literal exceeds supported length".into());
@@ -3469,6 +3686,9 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::DynamicIndex { base, index } => {
+                if Self::deref_source(base) {
+                    return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
+                }
                 if Self::dynamic_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
@@ -3580,6 +3800,13 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Match { scrutinee, arms } => {
+                if Self::deref_source(scrutinee)
+                    && arms.iter().any(|arm| {
+                        matches!(arm.pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                    })
+                {
+                    return Err("enum downcasts after a dereference are unsupported in B1".into());
+                }
                 if arms.len() > 4096 {
                     return Err("match arm count exceeds limit 4096".into());
                 }
@@ -3606,6 +3833,16 @@ impl<'a> Checker<'a> {
                     }
                 }
                 self.accessible(&domain)?;
+                if matches!(domain, ir::Ty::Ref { .. })
+                    && arms.iter().any(|arm| {
+                        !matches!(arm.pattern, Pattern::Wildcard | Pattern::Binding { .. })
+                    })
+                {
+                    return Err(
+                        "reference patterns and implicit match ergonomics are unsupported in B1"
+                            .into(),
+                    );
+                }
                 let mut catchall = false;
                 let mut covered = std::collections::HashSet::<i64>::new();
                 let mut checked = Vec::with_capacity(arms.len());
@@ -3909,6 +4146,9 @@ impl<'a> Checker<'a> {
                 )?;
                 let l = self.flow(left);
                 let r = self.flow(right);
+                if matches!(l.ty, ir::Ty::Ref { .. }) || matches!(r.ty, ir::Ty::Ref { .. }) {
+                    return Err("reference comparisons and arithmetic are unsupported in B1".into());
+                }
                 if matches!(l.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
                     || matches!(r.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
                 {
@@ -4056,6 +4296,9 @@ impl<'a> Checker<'a> {
             }
         };
         self.accessible(&flow.ty)?;
+        if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
+            Self::reject_aggregate_ref(&flow.ty)?;
+        }
         let id = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {
             ty: flow.ty,
@@ -4159,6 +4402,71 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn blocklike_statements_do_not_consume_a_following_deref_as_multiplication() {
+        for source in [
+            "fn choose(b:bool)->i32{let x=3;let y=7;let r:&i32;if b{r=&x;}else{r=&y;}*r}fn main(){let n=choose(true);}",
+            "fn run()->i32{let mut x=3;let s:&mut i32;{let r=&mut x;s=&mut *r;}*s=7;x}fn main(){let n=run();}",
+            "fn main(){let x=1;let r=&x;if true{}else if false{}else{} *r;}",
+            "fn main(){let x={1}*2;({1})*2;let a=({[1]})[0];}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn b1_types_explicit_borrows_reborrows_and_static_deref_projections() {
+        let program=parse("struct S{x:i32,y:i32}fn main(){let mut s=S{x:1,y:2};let r:&mut S=&mut s;(*r).x=3;let c=(*r).x;let p=&mut (*r).y;*p=4;let q=&*r;let z=(*q).x;let mut a=[1,2];let ar=&mut a;(*ar)[0]=3;let n=(*ar)[0];let owner=1;let sh=&owner;let copied=sh;let shared_s=S{x:7,y:8};let shared_r=&shared_s;let shared_n=(*shared_r).x;let moved=r;}").unwrap();
+        let env = signature_table(&program).unwrap();
+        let typed = type_function_with_signatures(&program, 0, &env).unwrap();
+        assert!(typed.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::Field(0)])));
+        assert!(typed.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::ConstantIndex(0)])));
+        assert!(typed.exprs.iter().any(|e|matches!(&e.kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Shared,place} if place.projection==vec![ir::Projection::Deref])));
+        for source in [
+            "fn main(){let mut x=1;let r=&mut x;let moved=r;let _=*r;match *r{_=>()};}",
+            "fn main(){let r:&i32;let _=*r;match *r{_=>()};}",
+            "fn main(){let x=1;return;let _=&mut x;}",
+            "fn main(){let x=1;let r=&x;return;*r=2;}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn b1_rejects_forbidden_reference_locations_authority_and_implicit_coercions() {
+        for source in [
+            "fn main(){let x=1;let _=&mut x;}",
+            "fn main(){let x=1;let r=&x;*r=2;}",
+            "fn main(){let mut x=1;let r=&x;let p=&mut *r;}",
+        ] {
+            let p = parse(source).unwrap();
+            let env = signature_table(&p).unwrap();
+            type_function_with_signatures(&p, 0, &env).unwrap();
+            assert!(check(&p).is_err(), "analysis accepted {source}");
+        }
+        for source in [
+            "fn unused(x:&i32){}fn main(){}",
+            "fn unused()->&i32{loop{}}fn main(){}",
+            "struct S{x:(&i32,)}fn main(){}",
+            "enum E{V([&i32;0])}fn main(){}",
+            "fn main(){let x=1;let r=&x;let a=[r;0];}",
+            "fn main(){let x=1;let r=&x;let t=(r,);}",
+            "fn main(){let x=1;let r=&x;let nested=&r;}",
+            "fn main(){let r=&1;}",
+            "fn main(){let mut x=1;let r=&mut x;let s:&mut i32=r;}",
+            "fn main(){let mut x=1;let mut y=2;let mut r=&mut x;let s=&mut y;r=s;}",
+            "fn main(){let x=1;let a=&x;let b=&x;let eq=a==b;}",
+            "fn main(){let a=[1];let i=0usize;let p=&a[i];}",
+            "fn main(){let a=[1];let p=&a;let i=0usize;let n=(*p)[i];}",
+        ] {
+            let result = parse(source).and_then(|p| {
+                let env = signature_table(&p)?;
+                type_function_with_signatures(&p, p.functions.len() - 1, &env).map(|_| ())
+            });
+            assert!(result.is_err(), "accepted {source}");
+        }
+    }
 
     #[test]
     fn usize_retains_full_width_and_uses_forward_and_binary_peer_contexts() {

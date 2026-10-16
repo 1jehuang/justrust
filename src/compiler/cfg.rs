@@ -9,6 +9,16 @@ use super::ir::{self, ExprId, LocalId, LoopId, Place, Projection, Ty};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LoanId(pub usize);
+
+#[derive(Clone, Debug)]
+pub struct LoanSite {
+    pub kind: ir::BorrowKind,
+    pub place: Place,
+    pub origin: Option<ExprId>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Located<T> {
     pub value: T,
@@ -17,6 +27,7 @@ pub struct Located<T> {
 
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub loan_sites: Vec<LoanSite>,
     pub name: String,
     /// Parameters are implicitly live and initialized on entry, before the
     /// first statement. All other locals require explicit StorageLive.
@@ -74,6 +85,7 @@ pub enum Operand {
 
 #[derive(Clone, Debug)]
 pub enum Rvalue {
+    Borrow(LoanId),
     IndexCopy {
         array: Place,
         index: Operand,
@@ -169,6 +181,12 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
             return Err("CFG type nesting exceeds limit 128".into());
         }
         match ty {
+            Ty::Ref { referent, .. } => {
+                if depth != 0 {
+                    return Err("unsupported: nested or aggregate references".into());
+                }
+                pending.push((referent, depth + 1));
+            }
             Ty::Array { element, len } => {
                 if *len > ir::MAX_ARRAY_LEN {
                     return Err("CFG array length exceeds limit 4096".into());
@@ -248,12 +266,13 @@ impl Function {
             Operand::Move(place) => {
                 let ty = self.place_ty(place)?;
                 if !ty.is_copy()
-                    && place
-                        .projection
-                        .iter()
-                        .any(|part| matches!(part, Projection::ConstantIndex(_)))
+                    && place.projection.iter().any(|part| {
+                        matches!(part, Projection::ConstantIndex(_) | Projection::Deref)
+                    })
                 {
-                    return Err("cannot move non-Copy value out of array index".into());
+                    return Err(
+                        "cannot move non-Copy value out of array index or dereference".into(),
+                    );
                 }
                 Ok(ty.clone())
             }
@@ -281,6 +300,17 @@ impl Function {
 
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         match value {
+            Rvalue::Borrow(id) => {
+                let site = self.loan_sites.get(id.0).ok_or("invalid CFG loan site")?;
+                let referent = self.place_ty(&site.place)?;
+                if matches!(referent, Ty::Ref { .. }) {
+                    return Err("unsupported: reference to reference".into());
+                }
+                Ok(Ty::Ref {
+                    kind: site.kind,
+                    referent: std::sync::Arc::new(referent.clone()),
+                })
+            }
             Rvalue::IndexCopy { array, index } => {
                 let element = self.indexed_element_ty(array, index)?;
                 if !element.is_copy() {
@@ -372,7 +402,7 @@ impl Function {
                     Ty::I32
                 };
                 if operand_ty.field_count().is_some()
-                    || matches!(operand_ty, Ty::Enum(_) | Ty::Array { .. })
+                    || matches!(operand_ty, Ty::Enum(_) | Ty::Array { .. } | Ty::Ref { .. })
                 {
                     return Err("CFG aggregate comparison is unsupported".into());
                 }
@@ -424,12 +454,24 @@ impl Function {
             validate_type(&local.ty, 0)?;
         }
         validate_type(&self.result, 0)?;
+        if matches!(self.result, Ty::Ref { .. }) {
+            return Err("unsupported: reference result".into());
+        }
+        if self.loan_sites.len() > ir::MAX_LOAN_SITES {
+            return Err("CFG loan site limit exceeded".into());
+        }
+        let mut loan_uses = vec![0usize; self.loan_sites.len()];
+        for site in &self.loan_sites {
+            self.place_ty(&site.place)?;
+        }
         if self.place_ty(&place(self.return_local))? != &self.result {
             return Err("CFG return local type mismatch".into());
         }
         let mut params = std::collections::HashSet::new();
         for &param in &self.params {
-            self.place_ty(&place(param))?;
+            if matches!(self.place_ty(&place(param))?, Ty::Ref { .. }) {
+                return Err("unsupported: reference parameter".into());
+            }
             if !params.insert(param) {
                 return Err("duplicate CFG parameter".into());
             }
@@ -458,6 +500,13 @@ impl Function {
                         self.place_ty(&place(*local))?;
                     }
                     Statement::Assign { destination, value } => {
+                        if let Rvalue::Borrow(id) = value {
+                            let count = loan_uses.get_mut(id.0).ok_or("invalid CFG loan site")?;
+                            *count += 1;
+                            if *count != 1 {
+                                return Err("CFG loan site used more than once".into());
+                            }
+                        }
                         let got = self.rvalue_ty(value)?;
                         let want = self.place_ty(destination)?;
                         if !coerces(&got, want) {
@@ -505,8 +554,14 @@ impl Function {
                     }
                     for ty in &signature.params {
                         validate_type(ty, 0)?;
+                        if matches!(ty, Ty::Ref { .. }) {
+                            return Err("unsupported: reference call parameter".into());
+                        }
                     }
                     validate_type(&signature.result, 0)?;
+                    if matches!(signature.result, Ty::Ref { .. }) {
+                        return Err("unsupported: reference call result".into());
+                    }
                     for (arg, ty) in args.iter().zip(&signature.params) {
                         self.require_operand(arg, ty)?;
                     }
@@ -518,6 +573,9 @@ impl Function {
                 }
                 Terminator::Return | Terminator::Unreachable => {}
             }
+        }
+        if loan_uses.iter().any(|count| *count != 1) {
+            return Err("CFG loan site must have exactly one borrow instruction".into());
         }
         Ok(())
     }
@@ -544,6 +602,8 @@ struct LoopTarget {
 }
 
 struct Lowerer<'a> {
+    loans: Vec<Option<LoanId>>,
+    used_loans: std::collections::HashSet<LoanId>,
     source: &'a ir::CheckedFunction,
     result: Function,
     expressions: Vec<LocalId>,
@@ -789,6 +849,13 @@ impl Lowerer<'_> {
                 .ok_or("invalid pattern initializer expression")?;
             match &expression.kind {
                 ir::ExprKind::Local(local) => break place(*local),
+                ir::ExprKind::Deref { value } => {
+                    if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        return Err("dereference projection depth exceeds limit 128".into());
+                    }
+                    projection.push(Projection::Deref);
+                    root = *value;
+                }
                 ir::ExprKind::DynamicIndex { .. }
                     if projection
                         .iter()
@@ -1040,6 +1107,25 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
+            ir::ExprKind::Borrow { place, .. } => {
+                let loan = self
+                    .loans
+                    .get(id.0)
+                    .copied()
+                    .flatten()
+                    .ok_or("missing borrow site")?;
+                if !self.used_loans.insert(loan) {
+                    return Err("unsupported: repeated borrow expression materialization".into());
+                }
+                self.inspect_index_prefixes(place, origin)?;
+                self.assign(destination.clone(), Rvalue::Borrow(loan), origin);
+            }
+            ir::ExprKind::Deref { .. } => {
+                let source = self.pattern_source(id)?;
+                let operand = self.consume(source)?;
+                self.result.operand_ty(&operand)?;
+                self.assign(destination.clone(), Rvalue::Use(operand), origin);
+            }
             ir::ExprKind::Usize(value) => self.assign(
                 destination.clone(),
                 Rvalue::Use(Operand::Constant(Constant::Usize(*value))),
@@ -1362,6 +1448,21 @@ impl Lowerer<'_> {
 /// Lower without modifying the checked input. Each value transfer selects Copy
 /// or Move from its projected type. The result still requires ownership analysis.
 pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
+    let mut loan_sites = Vec::new();
+    let mut loans = vec![None; source.exprs.len()];
+    for (index, expression) in source.exprs.iter().enumerate() {
+        if let ir::ExprKind::Borrow { kind, place } = &expression.kind {
+            if loan_sites.len() >= ir::MAX_LOAN_SITES {
+                return Err("CFG loan site limit exceeded".into());
+            }
+            loans[index] = Some(LoanId(loan_sites.len()));
+            loan_sites.push(LoanSite {
+                kind: *kind,
+                place: place.clone(),
+                origin: Some(ExprId(index)),
+            });
+        }
+    }
     let mut locals = source.locals.clone();
     let expressions = source
         .exprs
@@ -1384,8 +1485,11 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
         mutable: true,
     });
     let mut lowerer = Lowerer {
+        loans,
+        used_loans: std::collections::HashSet::new(),
         source,
         result: Function {
+            loan_sites,
             name: source.name.clone(),
             params: source.params.clone(),
             result: source.result.clone(),
@@ -1431,6 +1535,110 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn borrowed_place_site_preserves_origin_and_unique_instruction() {
+        let reference = Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: std::sync::Arc::new(Ty::I32),
+        };
+        let mut source = with_root(
+            Ty::I32,
+            vec![
+                expr(
+                    reference.clone(),
+                    ir::ExprKind::Borrow {
+                        kind: ir::BorrowKind::Mut,
+                        place: place(LocalId(0)),
+                    },
+                ),
+                expr(reference.clone(), ir::ExprKind::Local(LocalId(1))),
+                expr(Ty::I32, ir::ExprKind::Deref { value: ExprId(1) }),
+            ],
+            vec![
+                ir::Stmt::Let {
+                    local: LocalId(1),
+                    value: ExprId(0),
+                },
+                ir::Stmt::Expr(ExprId(2)),
+            ],
+        );
+        source.locals.push(ir::LocalDecl {
+            name: "carrier".into(),
+            ty: reference,
+            mutable: false,
+        });
+        let function = nominal_lowered(&source);
+        assert_eq!(function.loan_sites.len(), 1);
+        assert_eq!(function.loan_sites[0].origin, Some(ExprId(0)));
+        assert_eq!(function.loan_sites[0].place, place(LocalId(0)));
+        assert!(function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value,
+            Statement::Assign { value: Rvalue::Use(Operand::Copy(place)), .. } if place.local == LocalId(1) && place.projection == [Projection::Deref]
+        )));
+        assert!(!function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value,
+            Statement::Assign { value: Rvalue::Use(Operand::Move(place)), .. } if place.local == LocalId(1)
+        )));
+        let mut repeated = source.clone();
+        repeated.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+        assert!(lower(&repeated).unwrap_err().contains("repeated borrow"));
+        let mut invalid = function.clone();
+        invalid.loan_sites.push(invalid.loan_sites[0].clone());
+        assert!(invalid.validate().unwrap_err().contains("exactly one"));
+        invalid.loan_sites = vec![function.loan_sites[0].clone(); ir::MAX_LOAN_SITES + 1];
+        assert!(invalid.validate().unwrap_err().contains("loan site limit"));
+        assert!(
+            validate_type(
+                &Ty::Tuple(std::sync::Arc::from([function.locals[1].ty.clone()])),
+                0
+            )
+            .is_err()
+        );
+        let mut signature_escape = function.clone();
+        signature_escape.params.push(LocalId(1));
+        assert!(
+            signature_escape
+                .validate()
+                .unwrap_err()
+                .contains("reference parameter")
+        );
+        assert!(
+            function
+                .rvalue_ty(&Rvalue::Binary {
+                    op: BinaryOp::Eq,
+                    left: Operand::Move(place(LocalId(1))),
+                    right: Operand::Move(place(LocalId(1)))
+                })
+                .is_err()
+        );
+        let mut ignored = with_root(
+            function.locals[1].ty.clone(),
+            vec![
+                expr(
+                    function.locals[1].ty.clone(),
+                    ir::ExprKind::Local(LocalId(0)),
+                ),
+                expr(Ty::I32, ir::ExprKind::Deref { value: ExprId(0) }),
+            ],
+            vec![
+                ir::Stmt::Declare { local: LocalId(0) },
+                ir::Stmt::LetPattern {
+                    value: ExprId(1),
+                    ty: Ty::I32,
+                    bindings: vec![],
+                },
+            ],
+        );
+        ignored.params.clear();
+        let ignored = nominal_lowered(&ignored);
+        assert!(root_reads(&ignored).is_empty());
+        assert!(
+            !ignored
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(|statement| matches!(statement.value, Statement::Inspect(_)))
+        );
+    }
 
     fn nominal(fields: Vec<Ty>) -> ir::StructTy {
         ir::StructTy::new(ir::StructDef {
@@ -2825,6 +3033,12 @@ mod tests {
                     Statement::Assign { destination, value } => {
                         assert!(live[destination.local.0], "destination local is not live");
                         match value {
+                            Rvalue::Borrow(loan) => {
+                                assert!(
+                                    live[function.loan_sites[loan.0].place.local.0],
+                                    "borrow of dead storage"
+                                );
+                            }
                             Rvalue::IndexCopy { array, index } => {
                                 live_operand(index, &live);
                                 assert!(live[array.local.0], "dynamic index reads dead array");

@@ -8304,3 +8304,36 @@ with complete capture and zero failures/dropped events, producing the expected
 full-width indexing marker. Its observed total was 10,003,467 ns and engine
 2,925,755 ns, explicitly contended/uncontrolled, not a cold benchmark.
 No speedup, fully cold timing or full Rust compatibility claim is made.
+
+## 2026-10-16: genuine nonescaping local references
+
+Implemented local shared/mutable references, explicit reborrows and thin native
+addresses behind the exact cached initialization-and-loan analysis gate. Loan
+origins and parent authority freeze canonical targets at issuance; overwriting
+a carrier does not retarget existing children. Backward carrier liveness allows
+last-use owner mutation, while mutable-handle moves with live descendants reject.
+Ambiguous writes require every target initialized and authorized, preserve init
+bits and invalidate all affected selection proofs. No static Deref move child or
+unchecked pointer capability substitutes for analysis.
+
+Final hosted check `20261016-004456319-2218301`, full test
+`20261016-004457049-2218386` (701 passed) and strict all-target clippy
+`20261016-004458685-2218282` passed, with formatting and diff checks clean.
+Exact redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-borrowing.jsonl`. Peak access scratch,
+solver state and target memberships are bounded before allocation. Focused tests
+cover same-assignment last-use, candidate-specific authority, parent retargeting,
+child/storage lifetimes, unused issuance permission and resource exhaustion.
+
+The independent frozen 35-case stock corpus separates 17 successful programs,
+14 invalid programs and four explicit later-stage boundaries. Valid block/if
+statements followed by dereference exposed parser context bugs, fixed without
+rewriting fixtures. After-return mutability permissions are deferred to reachable
+analysis, while ignored dereferences add no reads, as verified by stock Rust.
+The exact historical tuple-reference source is promoted unchanged to acceptance.
+
+Reference parameters/results, implicit expected-site reborrows, aggregate refs,
+temporary lifetime extension, general regions and Drop remain open. SCC-born
+loans carried across backedges explicitly reject as unsupported. This is B1,
+not a complete Rust borrow checker or full Rust compatibility. Tracked native
+thirteen-corpus comparison follows the implementation commit.

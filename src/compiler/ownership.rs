@@ -1,8 +1,9 @@
 //! Reachable-CFG storage and definite-initialization analysis.
 //!
-//! This is not borrow checking, Drop elaboration, or permission to admit new
-//! source types. Private `Move` operands consume even Copy-typed places so that
+//! Includes bounded B1 local-reference checking, not general Rust borrowing or
+//! Drop elaboration. Private `Move` operands consume even Copy-typed places so that
 //! move-path analysis can be tested before non-Copy syntax is supported.
+use super::borrow::{self, Access, Phase, Problem, Target};
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
 use super::ir::{ExprId, LocalId, Place, Projection, Ty};
 use std::collections::VecDeque;
@@ -39,6 +40,9 @@ pub enum ErrorKind {
     VariantNotDefinitelySelected,
     WriteIntoUninitializedAggregate,
     ImmutableReassignment,
+    BorrowConflict(String),
+    InvalidReference(String),
+    UnsupportedBorrowing(String),
     ResourceLimit,
 }
 
@@ -89,10 +93,10 @@ impl Default for Limits {
     }
 }
 #[derive(Debug)]
-struct Exhausted;
-struct Budget(usize);
+pub(super) struct Exhausted;
+pub(super) struct Budget(pub(super) usize);
 impl Budget {
-    fn spend(&mut self, amount: usize) -> Result<(), Exhausted> {
+    pub(super) fn spend(&mut self, amount: usize) -> Result<(), Exhausted> {
         self.0 = self.0.checked_sub(amount).ok_or(Exhausted)?;
         Ok(())
     }
@@ -101,7 +105,10 @@ impl Budget {
 /// Bound type traversal before calling the full structural verifier, including
 /// repeated shared aggregate types that could otherwise expand exponentially.
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
-    if f.blocks.len() > limits.blocks || f.locals.len() > limits.locals {
+    if f.blocks.len() > limits.blocks
+        || f.locals.len() > limits.locals
+        || f.loan_sites.len() > super::ir::MAX_LOAN_SITES
+    {
         return Err(Exhausted);
     }
     fn place_type(f: &cfg::Function, place: &Place, budget: &mut Budget) -> Result<(), Exhausted> {
@@ -119,6 +126,12 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                     Some(field) => field,
                     None => return Ok(()),
                 },
+                Projection::Deref => {
+                    let Ty::Ref { referent, .. } = ty else {
+                        return Ok(());
+                    };
+                    referent
+                }
                 Projection::ConstantIndex(index) => {
                     let Ty::Array { element, len } = ty else {
                         return Ok(());
@@ -154,6 +167,9 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     budget.spend(f.params.len())?;
     for local in &f.locals {
         preflight_ty(&local.ty, 0, &mut budget)?;
+    }
+    for site in &f.loan_sites {
+        place_type(f, &site.place, &mut budget)?;
     }
     preflight_ty(&f.result, 0, &mut budget)?;
     let operand = |op: &Operand, budget: &mut Budget| -> Result<(), Exhausted> {
@@ -192,6 +208,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
             if let Statement::Assign { destination, value } = &item.value {
                 place_type(f, destination, &mut budget)?;
                 match value {
+                    Rvalue::Borrow(_) => budget.spend(1)?,
                     Rvalue::Discriminant(place) => place_type(f, place, &mut budget)?,
                     Rvalue::IndexCopy { array, index } => {
                         place_type(f, array, &mut budget)?;
@@ -255,6 +272,9 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
     budget.spend(depth + 1)?;
     if depth > 128 {
         return Err(Exhausted);
+    }
+    if let Ty::Ref { referent, .. } = ty {
+        preflight_ty(referent, depth + 1, budget)?;
     }
     if let Ty::Array { element, len } = ty {
         if *len > super::ir::MAX_ARRAY_LEN {
@@ -356,6 +376,9 @@ impl Paths {
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             let index = match step {
+                Projection::Deref => {
+                    unreachable!("deref must be resolved through canonical loan provenance")
+                }
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     let Some(Projection::Field(index)) = projection.next() else {
@@ -506,6 +529,8 @@ struct Transfer<'a> {
     statement: Option<usize>,
     origin: Option<ExprId>,
     diagnostic_limit: usize,
+    loans: Option<&'a borrow::Plan>,
+    phase: Phase,
 }
 struct Report {
     stats: AnalysisStats,
@@ -513,6 +538,114 @@ struct Report {
     complete: bool,
 }
 impl Transfer<'_> {
+    fn problem(&mut self, problem: Problem, place: Place) {
+        let kind = match problem {
+            Problem::Conflict(message) => ErrorKind::BorrowConflict(message),
+            Problem::Invalid(message) => ErrorKind::InvalidReference(message),
+            Problem::Unsupported(message) => ErrorKind::UnsupportedBorrowing(message),
+        };
+        self.diagnostic(kind, place);
+    }
+    fn targets(&mut self, place: &Place) -> Result<Vec<Target>, Exhausted> {
+        if let Some(loans) = self.loans {
+            match loans.resolve(place, self.block, self.statement, self.phase, self.budget)? {
+                Ok(targets) => Ok(targets),
+                Err(problem) => {
+                    self.problem(problem, place.clone());
+                    Ok(vec![])
+                }
+            }
+        } else {
+            Ok(vec![Target {
+                place: place.clone(),
+                authority: vec![],
+            }])
+        }
+    }
+    fn check_access(&mut self, target: &Target, access: Access) -> Result<(), Exhausted> {
+        if let Some(loans) = self.loans
+            && let Some(problem) = loans.check(
+                target,
+                access,
+                self.block,
+                self.statement,
+                self.phase,
+                self.budget,
+            )?
+        {
+            self.problem(problem, target.place.clone());
+        }
+        Ok(())
+    }
+    fn carrier_read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        if place.projection.first() == Some(&Projection::Deref) {
+            self.read_raw(state, &root_place(place.local))?;
+        }
+        Ok(())
+    }
+    fn mut_authority(&mut self, place: &Place) {
+        if !matches!(
+            self.f.locals[place.local.0].ty,
+            Ty::Ref {
+                kind: super::ir::BorrowKind::Mut,
+                ..
+            }
+        ) {
+            self.problem(
+                Problem::Invalid("mutation requires mutable reference authority".into()),
+                place.clone(),
+            );
+        }
+    }
+    fn read_mode(
+        &mut self,
+        state: &mut State,
+        place: &Place,
+        access: Access,
+    ) -> Result<(), Exhausted> {
+        if self.loans.is_none() {
+            return self.read_raw(state, place);
+        }
+        self.carrier_read(state, place)?;
+        for target in self.targets(place)? {
+            self.check_access(&target, access)?;
+            self.read_raw(state, &target.place)?;
+        }
+        Ok(())
+    }
+    fn read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.read_mode(state, place, Access::Read)
+    }
+    fn write(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        if self.loans.is_none() {
+            return self.write_raw(state, place);
+        }
+        let deref = place.projection.first() == Some(&Projection::Deref);
+        self.carrier_read(state, place)?;
+        if deref {
+            self.mut_authority(place);
+        }
+        if deref {
+            self.budget.spend(1)?;
+            if let Some(report) = &mut self.report {
+                report.stats.writes += 1;
+            }
+        }
+        for target in self.targets(place)? {
+            self.check_access(&target, Access::Write)?;
+            if deref {
+                // Every alternative must already be initialized. A may-alias
+                // write must never initialize every possible referent.
+                self.read_raw(state, &target.place)?;
+                let node = self.paths.resolve(&target.place);
+                self.kill_proofs(state, node)?;
+                self.mark_written(state, node)?;
+            } else {
+                self.write_raw(state, &target.place)?;
+            }
+        }
+        Ok(())
+    }
     fn authorize(&mut self, state: &State, place: &Place) -> Result<bool, Exhausted> {
         // Cover this traversal and the subsequent resolve traversals for reads,
         // moves and writes. Structural typing was checked for every CFG block.
@@ -522,6 +655,9 @@ impl Transfer<'_> {
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             let index = match step {
+                Projection::Deref => {
+                    unreachable!("deref must be canonicalized before authorization")
+                }
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     if let Some(report) = &mut self.report {
@@ -589,7 +725,7 @@ impl Transfer<'_> {
         state.must_init.range(node, end, value, self.budget)?;
         state.may_init.range(node, end, value, self.budget)
     }
-    fn read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+    fn read_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
         self.budget.spend(1)?;
         if !self.authorize(state, place)? {
             return Ok(());
@@ -637,17 +773,43 @@ impl Transfer<'_> {
             }
         }
         if let Operand::Copy(place) | Operand::Move(place) = op {
-            self.read(state, place)?;
+            if matches!(op, Operand::Move(_)) {
+                if matches!(
+                    self.f.locals[place.local.0].ty,
+                    Ty::Ref {
+                        kind: super::ir::BorrowKind::Mut,
+                        ..
+                    }
+                ) && place.projection.is_empty()
+                    && let Some(loans) = self.loans
+                    && let Some(problem) = loans.check_handle_move(
+                        place.local,
+                        self.block,
+                        self.statement,
+                        self.budget,
+                    )?
+                {
+                    self.problem(problem, place.clone());
+                }
+                if place.projection.contains(&Projection::Deref) {
+                    self.mut_authority(place);
+                }
+                self.read_mode(state, place, Access::Move)?;
+            } else {
+                self.read(state, place)?;
+            }
             if matches!(op, Operand::Move(_)) {
                 if let Some(report) = &mut self.report {
                     report.stats.moves += 1;
                 }
-                self.initialize(state, self.paths.resolve(place), false)?;
+                for target in self.targets(place)? {
+                    self.initialize(state, self.paths.resolve(&target.place), false)?;
+                }
             }
         }
         Ok(())
     }
-    fn write(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+    fn write_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
         self.budget.spend(1)?;
         if let Some(report) = &mut self.report {
             report.stats.writes += 1;
@@ -686,18 +848,64 @@ impl Transfer<'_> {
         }
         // An unknown slot can only replace an element of an already ready
         // array. Never initialize a guessed child or resurrect missing bits.
-        self.read(state, array)?;
-        let node = self.paths.resolve(array);
-        let root = self.paths.roots[array.local.0];
-        if !self.f.locals[array.local.0].mutable && state.ever_written.get(root) {
-            self.diagnostic(ErrorKind::ImmutableReassignment, array.clone());
+        self.carrier_read(state, array)?;
+        let deref = array.projection.first() == Some(&Projection::Deref);
+        if deref {
+            self.mut_authority(array);
         }
-        // Kill every contained proof, but leave any enclosing enum proof alone.
-        self.kill_proofs(state, node)?;
-        self.mark_written(state, node)
+        for target in self.targets(array)? {
+            self.check_access(&target, Access::Write)?;
+            self.read_raw(state, &target.place)?;
+            let node = self.paths.resolve(&target.place);
+            let root = self.paths.roots[target.place.local.0];
+            if !deref
+                && !self.f.locals[target.place.local.0].mutable
+                && state.ever_written.get(root)
+            {
+                self.diagnostic(ErrorKind::ImmutableReassignment, target.place.clone());
+            }
+            self.kill_proofs(state, node)?;
+            self.mark_written(state, node)?;
+        }
+        Ok(())
     }
     fn rvalue(&mut self, state: &mut State, value: &Rvalue) -> Result<(), Exhausted> {
         match value {
+            Rvalue::Borrow(id) => {
+                let site = &self.f.loan_sites[id.0];
+                let source = site.place.clone();
+                let kind = site.kind;
+                self.carrier_read(state, &source)?;
+                if kind == super::ir::BorrowKind::Mut {
+                    if source.projection.first() == Some(&Projection::Deref) {
+                        self.mut_authority(&source);
+                    } else if !self.f.locals[source.local.0].mutable {
+                        self.diagnostic(ErrorKind::ImmutableReassignment, source.clone());
+                    }
+                }
+                let targets = if let Some(loans) = self.loans {
+                    loans.issued(*id, self.budget)?
+                } else {
+                    vec![]
+                };
+                if targets.is_empty() {
+                    self.problem(
+                        Problem::Invalid("borrow issuance has no canonical provenance".into()),
+                        source,
+                    );
+                }
+                for target in targets {
+                    self.check_access(
+                        &target,
+                        if kind == super::ir::BorrowKind::Mut {
+                            Access::MutBorrow
+                        } else {
+                            Access::SharedBorrow
+                        },
+                    )?;
+                    self.read_raw(state, &target.place)?;
+                }
+            }
             // Reading a tag does not copy or move the non-Copy enum, but does
             // require the entire enum, including active payloads, initialized.
             Rvalue::Discriminant(place) => self.read(state, place)?,
@@ -726,6 +934,7 @@ impl Transfer<'_> {
             self.budget.spend(1)?;
             self.statement = Some(index);
             self.origin = item.origin;
+            self.phase = Phase::Read;
             match &item.value {
                 Statement::Inspect(place) => self.read(state, place)?,
                 Statement::IndexInspect { array, index } => {
@@ -741,9 +950,17 @@ impl Transfer<'_> {
                     // Preserve that owning-value-before-index transfer order.
                     self.operand(state, value)?;
                     self.operand(state, index)?;
+                    self.phase = Phase::Write;
                     self.index_write(state, array)?;
                 }
                 Statement::StorageLive(local) => {
+                    self.check_access(
+                        &Target {
+                            place: root_place(*local),
+                            authority: vec![],
+                        },
+                        Access::StorageEnd,
+                    )?;
                     if let Some(report) = &mut self.report {
                         report.stats.storage_events += 1;
                     }
@@ -762,6 +979,13 @@ impl Transfer<'_> {
                     )?;
                 }
                 Statement::StorageDead(local) => {
+                    self.check_access(
+                        &Target {
+                            place: root_place(*local),
+                            authority: vec![],
+                        },
+                        Access::StorageEnd,
+                    )?;
                     if let Some(report) = &mut self.report {
                         report.stats.storage_events += 1;
                     }
@@ -774,11 +998,13 @@ impl Transfer<'_> {
                 }
                 Statement::Assign { destination, value } => {
                     self.rvalue(state, value)?;
+                    self.phase = Phase::Write;
                     self.write(state, destination)?;
                 }
             }
         }
         self.statement = None;
+        self.phase = Phase::Read;
         self.origin = self.f.blocks[self.block.0].terminator.origin;
         match &self.f.blocks[self.block.0].terminator.value {
             Terminator::Switch { condition, .. } => self.operand(state, condition)?,
@@ -799,6 +1025,7 @@ impl Transfer<'_> {
                 for arg in args {
                     self.operand(state, arg)?;
                 }
+                self.phase = Phase::Write;
                 self.write(state, destination)?;
             }
             Terminator::Return => {
@@ -879,6 +1106,43 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
         if bytes > limits.state_bytes {
             return Err(Exhausted);
         }
+        let loans = if !f.loan_sites.is_empty()
+            || f.locals
+                .iter()
+                .any(|local| matches!(local.ty, Ty::Ref { .. }))
+        {
+            Some(borrow::Plan::build(
+                f,
+                &mut budget,
+                limits.state_bytes - bytes,
+            )?)
+        } else {
+            None
+        };
+        if let Some(loans) = &loans {
+            if bytes.checked_add(loans.bytes).ok_or(Exhausted)? > limits.state_bytes {
+                return Err(Exhausted);
+            }
+            for (block, statement, problem) in &loans.problems {
+                if report.diagnostics.len() >= limits.diagnostics {
+                    return Err(Exhausted);
+                }
+                let kind = match problem {
+                    Problem::Conflict(message) => ErrorKind::BorrowConflict(message.clone()),
+                    Problem::Invalid(message) => ErrorKind::InvalidReference(message.clone()),
+                    Problem::Unsupported(message) => {
+                        ErrorKind::UnsupportedBorrowing(message.clone())
+                    }
+                };
+                report.diagnostics.push(Diagnostic {
+                    kind,
+                    block: *block,
+                    statement: *statement,
+                    origin: None,
+                    place: None,
+                });
+            }
+        }
         for local in &f.params {
             seed.must_live.set(local.0, true);
             seed.may_live.set(local.0, true);
@@ -912,6 +1176,8 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
                 statement: None,
                 origin: None,
                 diagnostic_limit: limits.diagnostics,
+                loans: loans.as_ref(),
+                phase: Phase::Read,
             }
             .block(&mut output)?;
             for target in successors(&f.blocks[block.0].terminator.value)
@@ -974,6 +1240,8 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
                     statement: None,
                     origin: None,
                     diagnostic_limit: limits.diagnostics,
+                    loans: loans.as_ref(),
+                    phase: Phase::Read,
                 }
                 .block(&mut state)?;
                 if matches!(
@@ -1015,6 +1283,128 @@ mod tests {
     };
     use super::*;
     use cfg::{BasicBlock, Constant, Located};
+
+    fn borrowed_source(source: &str) -> cfg::Function {
+        let program = super::super::frontend::parse(&format!("{source} fn main(){{}}")).unwrap();
+        let signatures = super::super::frontend::signature_table(&program).unwrap();
+        let checked =
+            super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
+                .unwrap();
+        cfg::lower(&checked).unwrap()
+    }
+
+    #[test]
+    fn borrowing_last_shared_read_ends_before_same_assignment_write() {
+        let mut f = borrowed_source("fn f()->i32{let mut x=1;let r=&x;x=*r;x}");
+        let x = LocalId(f.locals.iter().position(|local| local.name == "x").unwrap());
+        let r = LocalId(f.locals.iter().position(|local| local.name == "r").unwrap());
+        // Source lowering may snapshot the RHS. Force the private CFG's last
+        // reference use into the owner assignment itself to test both phases.
+        let value = f
+            .blocks
+            .iter_mut()
+            .rev()
+            .flat_map(|block| block.statements.iter_mut().rev())
+            .find_map(|statement| match &mut statement.value {
+                Statement::Assign { destination, value } if destination.local == x => Some(value),
+                _ => None,
+            })
+            .unwrap();
+        *value = Rvalue::Use(Operand::Copy(Place {
+            local: r,
+            projection: vec![Projection::Deref],
+        }));
+        f.validate().unwrap();
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn borrowing_unused_issuance_checks_initialization_and_mutability() {
+        for source in [
+            "fn f(){let x:i32;let _=&x;}",
+            "fn f(){let x=1;let _=&mut x;}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(!result.passed(), "accepted {source}");
+        }
+    }
+
+    #[test]
+    fn borrowing_parent_retarget_and_storage_end_preserve_child_target() {
+        for source in [
+            "fn f()->i32{let mut x=1;let mut y=2;let mut r=&mut x;let c=&mut *r;r=&mut y;*c=3;*r=4;x+y}",
+            "fn f()->i32{let mut x=1;let c:&mut i32;{let r=&mut x;c=&mut *r;}*c=2;x}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn borrowing_live_child_blocks_parent_move_and_owner_end() {
+        for source in [
+            "fn f()->i32{let mut x=1;let r=&mut x;let c=&mut *r;let moved=r;*c=2;*moved}",
+            "fn f()->i32{let c:&mut i32;{let mut x=1;let r=&mut x;c=&mut *r;}*c=2;0}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_))),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn borrowing_child_authority_is_candidate_specific() {
+        let shared =
+            borrowed_source("fn f()->i32{let mut x=1;let r=&mut x;let c=&*r;let n=*r;n+*c}");
+        let result = analyze(&shared);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        let unique =
+            borrowed_source("fn f()->i32{let mut x=1;let r=&mut x;let c=&mut *r;let n=*r;n+*c}");
+        let result = analyze(&unique);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_)))
+        );
+    }
+
+    #[test]
+    fn borrowing_preflight_and_scratch_caps_fail_closed() {
+        let f = borrowed_source("fn f()->i32{let mut x=1;let r=&mut x;let c=&mut *r;*c=2;x}");
+        let mut budget = Budget(32 * 1024 * 1024);
+        let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+        assert!(plan.bytes > 4096);
+        let mut budget = Budget(32 * 1024 * 1024);
+        assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
+        let result = analyze_with_limits(
+            &f,
+            Limits {
+                state_bytes: 1,
+                ..Limits::default()
+            },
+        );
+        assert!(!result.complete);
+        assert!(!result.passed());
+        let result = analyze_with_limits(
+            &f,
+            Limits {
+                work: 1,
+                ..Limits::default()
+            },
+        );
+        assert!(!result.complete);
+        assert!(!result.passed());
+    }
 
     fn located<T>(value: T) -> Located<T> {
         Located {
@@ -1064,6 +1454,7 @@ mod tests {
             locals: vec![local(Ty::Unit)],
             entry: BlockId(0),
             return_local: LocalId(0),
+            loan_sites: vec![],
             blocks: vec![BasicBlock {
                 statements: vec![
                     located(Statement::StorageLive(LocalId(0))),
@@ -1446,6 +1837,8 @@ mod tests {
             statement: None,
             origin: None,
             diagnostic_limit: 10,
+            loans: None,
+            phase: Phase::Read,
         }
         .index_write(&mut state, &place(1))
         .unwrap();
@@ -2264,6 +2657,8 @@ mod tests {
             statement: None,
             origin: None,
             diagnostic_limit: 10,
+            loans: None,
+            phase: Phase::Read,
         };
         transfer.initialize(&mut state, sibling, true).unwrap();
         assert_eq!(state.selected[outer_node], 0);

@@ -82,10 +82,23 @@ reinitialization and control-flow joins. Field privacy includes the accessibilit
 of inferred and intermediate projected types, not only field names.
 
 The private aggregate ABI is not a platform representation contract. Empty/unit/
-tuple structs, struct update/shorthand, derives, references, loans,
-lifetimes, destructors and general Rust data/abstraction features remain
+tuple structs, struct update/shorthand, derives, general reference regions,
+escaping loans, destructors and general Rust data/abstraction features remain
 open. Compact shared declaration DAGs and diagnostics have explicit resource
 bounds. This slice does not complete ownership or full Rust compatibility.
+
+## Current follow-on: local references
+
+`BORROWING.md` defines the implemented B1 nonescaping local-reference boundary.
+Shared references copy, mutable reference handles move, explicit reborrows retain
+issuance-time parent authority, and carrier last use determines loan activity.
+Native pointers do not substitute for provenance or lifetime verification.
+Standalone reference locals can address initialized owned storage and perform
+Copy reads or authorized replacements. Reference parameters/results, aggregate
+reference fields, temporary lifetime extension and general Rust regions remain
+B2/B3 work. Loans born within an SCC and carried over a backedge receive an
+explicit unsupported diagnostic. Current acceptance does not establish full Rust
+borrow-checker compatibility.
 
 ## Current follow-on: irrefutable let patterns
 
