@@ -3,8 +3,11 @@
 Status: implemented with the frozen 30-case stock corpus and four retained
 workers1/8 graph tests passing. All 888 hosted tests pass, and both independent
 actual-code soundness/resource reviews are clear. Final strict all-target lint
-and formatting also pass. Tracked seventeen-corpus native verification remains
-the delivery gate.
+and formatting also pass. Tracked M8a run
+`compiler-projected-reference-returns-20261016-0859` at `9048f4a33` passed all
+692 cases across seventeen corpora: 411 accepted, 205 invalid rejected, nine
+declared runtime-101 traps and 67 legal-unsupported boundaries. Eighteen raw
+receipts include the successful private-field recursive 96-worker example.
 Mutable whole-parameter returns passed 844 hosted tests and all 662 tracked native
 cases at implementation `49a1ae343`, with raw evidence pushed in `68c2b7258`.
 Full Rust remains open.

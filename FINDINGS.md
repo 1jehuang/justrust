@@ -8541,3 +8541,20 @@ profiles are retained in
 private-field recursive projected-return example passes the external stock
 oracle. Tracked seventeen-corpus native verification follows after commit. These
 are correctness gates, not speedup or full-Rust-completion claims.
+
+### Projected input returns: 692-case native evidence retained
+
+Tracked run `compiler-projected-reference-returns-20261016-0859` at exact revision
+`9048f4a3370b72e91a0f50b685e12ce21e296751` passed all 692 cases across seventeen
+corpora: 411 accepted, 205 invalid rejected, nine declared runtime-101 traps and
+67 legal-unsupported boundaries. Independently parsed all fifteen summary receipts
+and all 128 generated scalar/loop records, checking exact parity and every compile
+and runtime exit. The new frozen projected corpus contributes 17 accepted, nine
+invalid and four boundaries. Historical source bytes/classifications are unchanged.
+
+All seventeen raw corpus receipts plus the example observation are retained in
+`experiments/results/20261016-m8a-projected-reference-returns-*.jsonl`. The
+96-worker private-field/tuple/array/recursive example compiled and executed with
+exact expected stdout, complete capture, 26 nodes, 35 edges, zero failures and
+zero dropped events. Observed 15.262 ms total and 3.637 ms engine time are
+contended/uncontrolled, not speedup evidence. Full Rust remains open.

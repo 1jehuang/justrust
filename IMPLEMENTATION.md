@@ -64,8 +64,10 @@ source-specific candidate/argument correlation, private-field privacy separation
 and bounded occurrence enumeration. All 888 hosted tests, the frozen 30-case stock
 corpus and four workers1/8 graph acceptance tests pass. Both independent actual-code
 soundness/resource reviews, strict all-target lint and formatting pass. Tracked
-seventeen-corpus native verification remains required before delivery. Full Rust
-is open.
+M8a run `compiler-projected-reference-returns-20261016-0859` at `9048f4a33` passed
+all 692 cases across seventeen corpora: 411 accepted, 205 invalid rejected, nine
+declared runtime-101 traps and 67 legal-unsupported boundaries. Raw receipts and
+the executed private-field 96-worker example are retained. Full Rust is open.
 
 Mutable whole-parameter reference returns are implemented under
 `MUTABLE-REFERENCE-RETURNS.md`, with exact kind contracts, one unique returned
