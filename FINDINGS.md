@@ -9207,3 +9207,32 @@ The new32 corpus is unchanged. Independent cumulative native evidence is the
 next separate gate. Canonical Copy/Clone, borrowed receivers, Drop, generic trait
 items, defaults, associated types, libraries and existing-project acceptance
 remain open. No experimental install, default promotion or speedup is claimed.
+
+## 2026-10-16: independently verified1020-case trait checkpoint
+
+Tracked metered campaign compiler-traits-20261016-1401 ran exact pushed revision
+d0e3b7330b1daadc4645ac641f00a077c5573759. Independent parsing of29 raw corpora
+verifies1020 cases:612 accepted parity,35 declared runtime101,288 invalid
+rejected,84 legal unsupported and1 distinct resource rejection. All968 ordinary
+worker runtime comparisons,70 trap-worker runs and128 generated compile/runtime
+exit checks pass with matching source hashes and complete successful graphs.
+Receipts consistently identify binary SHA256
+3486663106f0465534d295f2b8b5b7176107b24afcdccc4f522b3577c93329f3.
+The new32 raw sources/stdout/hash values match the frozen corrected stock
+artifact exactly, including invalid diagnostic multiplicities. The sole
+historical trait-dispatch promotion is included in these cumulative counts.
+
+The30 raw corpus/actual-example receipts are retained under
+experiments/results/20261016-m8a-traits-*. The actual96-worker example executes
+exit0 with exact expected stdout, source SHA256
+e1d2238f45d63c1e4fbc09f635c0b3e2bff903f7d715c875f1696bfacee1cc99,
+complete69-node/145-edge graph and zero failures/drops. The initial tracked
+attempt timed out connecting to an idle host, with failed status preserved in
+its lifecycle receipt. Refreshing the signed-in metered remote environment
+started the host, and the second tracked lifecycle reports done/exit0 and
+lifecycle_ok. No billing or tenant-isolation bypass was used.
+
+Observed31,851,391ns total/7,189,597ns engine time is contended functional
+evidence, not a pinned-suite speedup measurement. Full Rust, canonical
+Copy/Clone language items, borrowed receivers, Drop, libraries and existing
+project acceptance remain open and autonomous work continues.
