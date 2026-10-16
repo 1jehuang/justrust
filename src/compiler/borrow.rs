@@ -2,7 +2,10 @@
 //! Runtime pointers are never used as provenance. Canonical targets and parent
 //! authority are frozen at issuance, independently of later carrier rebinding.
 use super::cfg::{self, BlockId, LoanId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{BorrowKind, FactsCtx, LocalId, Place, Projection, ReturnContract, Ty};
+use super::ir::{
+    BorrowKind, FactsCtx, InputReference, LocalId, Place, Projection, ReferencePosition,
+    ReturnContract, Ty,
+};
 use super::ownership::{Budget, Exhausted};
 use std::collections::VecDeque;
 use std::mem::size_of;
@@ -35,7 +38,7 @@ pub(super) enum Problem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CanonicalRoot {
     Owned(LocalId),
-    ParameterReferent(LocalId),
+    ParameterReferent(LocalId, ReferencePosition),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CanonicalPlace {
@@ -52,7 +55,7 @@ impl CanonicalPlace {
     /// Diagnostic coordinates only. External roots are never CFG stack places.
     pub fn diagnostic(&self) -> Place {
         let local = match self.root {
-            CanonicalRoot::Owned(local) | CanonicalRoot::ParameterReferent(local) => local,
+            CanonicalRoot::Owned(local) | CanonicalRoot::ParameterReferent(local, _) => local,
         };
         Place {
             local,
@@ -76,7 +79,7 @@ pub(super) struct Target {
 
 fn return_inputs(
     contract: &ReturnContract,
-) -> impl Iterator<Item = (usize, &[Projection], TargetPrecision)> {
+) -> impl Iterator<Item = (InputReference, &[Projection], TargetPrecision)> {
     let (paths, envelopes): (&[super::ir::InputPath], &[super::ir::InputEnvelope]) = match contract
     {
         ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
@@ -88,11 +91,11 @@ fn return_inputs(
     };
     paths
         .iter()
-        .map(|p| (p.param, p.projection.as_ref(), TargetPrecision::Exact))
+        .map(|p| (p.input, p.projection.as_ref(), TargetPrecision::Exact))
         .chain(
             envelopes
                 .iter()
-                .map(|p| (p.param, &[][..], TargetPrecision::Subtree)),
+                .map(|p| (p.input, &[][..], TargetPrecision::Subtree)),
         )
 }
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -148,6 +151,35 @@ impl Set {
     }
 }
 type Origins = Vec<Set>;
+#[derive(Clone, Copy)]
+struct CarrierSlot {
+    local: LocalId,
+    position: ReferencePosition,
+}
+
+pub(super) fn dereference_count(place: &Place) -> usize {
+    place
+        .projection
+        .iter()
+        .take_while(|p| **p == Projection::Deref)
+        .count()
+}
+
+fn carrier_index(
+    refs: &[[Option<usize>; 2]],
+    place: &Place,
+    position: ReferencePosition,
+) -> Option<usize> {
+    let depth = dereference_count(place);
+    if depth != place.projection.len() {
+        return None;
+    }
+    refs.get(place.local.0)?
+        .get(depth.checked_add(usize::from(position.depth))?)
+        .copied()
+        .flatten()
+}
+
 struct Point {
     origins: Origins,
     live: Set,
@@ -155,7 +187,7 @@ struct Point {
 }
 
 pub(super) struct Plan {
-    refs: Vec<Option<usize>>,
+    refs: Vec<[Option<usize>; 2]>,
     offsets: Vec<usize>,
     points: Vec<Option<Point>>,
     outgoing: Vec<Option<Point>>,
@@ -224,7 +256,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
 }
 fn point_uses(
     f: &cfg::Function,
-    refs: &[Option<usize>],
+    refs: &[[Option<usize>; 2]],
     block: usize,
     statement: usize,
     r: usize,
@@ -232,7 +264,7 @@ fn point_uses(
     let mut uses = Set::new(r);
     let mut defs = Set::new(r);
     let mut visit = |place: &Place, moved: bool| {
-        if let Some(index) = refs[place.local.0] {
+        for index in refs[place.local.0].iter().flatten().copied() {
             uses.insert(index);
             if moved && place.projection.is_empty() {
                 defs.insert(index);
@@ -246,15 +278,15 @@ fn point_uses(
                 if destination.projection.contains(&Projection::Deref) {
                     visit(destination, false);
                 }
-                if destination.projection.is_empty()
-                    && let Some(index) = refs[destination.local.0]
-                {
-                    defs.insert(index);
+                if destination.projection.is_empty() {
+                    for index in refs[destination.local.0].iter().flatten() {
+                        defs.insert(*index);
+                    }
                 }
             }
             Statement::StorageLive(local) | Statement::StorageDead(local) => {
-                if let Some(index) = refs[local.0] {
-                    defs.insert(index);
+                for index in refs[local.0].iter().flatten() {
+                    defs.insert(*index);
                 }
             }
             Statement::Inspect(place) => visit(place, false),
@@ -291,10 +323,10 @@ fn point_uses(
                 if destination.projection.contains(&Projection::Deref) {
                     visit(destination, false);
                 }
-                if destination.projection.is_empty()
-                    && let Some(carrier) = refs[destination.local.0]
-                {
-                    defs.insert(carrier);
+                if destination.projection.is_empty() {
+                    for carrier in refs[destination.local.0].iter().flatten() {
+                        defs.insert(*carrier);
+                    }
                 }
             }
             Terminator::Return => visit(
@@ -311,7 +343,7 @@ fn point_uses(
 }
 fn origin_step(
     f: &cfg::Function,
-    refs: &[Option<usize>],
+    refs: &[[Option<usize>; 2]],
     state: &mut Origins,
     item: &Statement,
     loans: usize,
@@ -320,46 +352,57 @@ fn origin_step(
     budget.spend(mul(state.len(), loans.div_ceil(64))? + 1)?;
     match item {
         Statement::StorageLive(local) | Statement::StorageDead(local) => {
-            if let Some(index) = refs[local.0] {
-                state[index].clear();
+            for index in refs[local.0].iter().flatten() {
+                state[*index].clear();
             }
         }
         Statement::Assign { destination, value } => {
             if let Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } = value {
                 budget.spend(fields.len())?;
             }
-            let target = if destination.projection.is_empty() {
-                refs[destination.local.0]
-            } else {
-                None
-            };
-            let saved = if target.is_some() {
-                match value {
-                    Rvalue::Borrow(id) => {
-                        let mut set = Set::new(loans);
-                        set.insert(id.0);
-                        Some(set)
+            // Freeze the value before any explicit Move clears its source. Each
+            // nested position transports existing origins, not an outer loan.
+            let mut saved: [Option<Set>; 2] = [None, None];
+            if destination.projection.is_empty() {
+                for (depth, slot) in refs[destination.local.0].iter().enumerate() {
+                    if slot.is_none() {
+                        continue;
                     }
-                    Rvalue::Use(Operand::Copy(source) | Operand::Move(source))
-                        if source.projection.is_empty() =>
-                    {
-                        refs[source.local.0].map(|index| state[index].clone())
-                    }
-                    _ => None,
+                    saved[depth] = match value {
+                        Rvalue::Borrow(id) if depth == 0 => {
+                            let mut set = Set::new(loans);
+                            set.insert(id.0);
+                            Some(set)
+                        }
+                        Rvalue::Borrow(id) => carrier_index(
+                            refs,
+                            &f.loan_sites[id.0].place,
+                            ReferencePosition {
+                                depth: (depth - 1) as u8,
+                            },
+                        )
+                        .map(|index| state[index].clone()),
+                        Rvalue::Use(Operand::Copy(source) | Operand::Move(source)) => {
+                            carrier_index(refs, source, ReferencePosition { depth: depth as u8 })
+                                .map(|index| state[index].clone())
+                        }
+                        _ => None,
+                    };
                 }
-            } else {
-                None
-            };
+            }
             visit_rvalue(f, value, |source, moved| {
-                if moved
-                    && source.projection.is_empty()
-                    && let Some(index) = refs[source.local.0]
-                {
-                    state[index].clear();
+                if moved && source.projection.is_empty() {
+                    for index in refs[source.local.0].iter().flatten() {
+                        state[*index].clear();
+                    }
                 }
             });
-            if let Some(target) = target {
-                state[target] = saved.unwrap_or_else(|| Set::new(loans));
+            if destination.projection.is_empty() {
+                for (index, saved) in refs[destination.local.0].iter().zip(saved) {
+                    if let Some(index) = index {
+                        state[*index] = saved.unwrap_or_else(|| Set::new(loans));
+                    }
+                }
             }
         }
         _ => {}
@@ -367,11 +410,11 @@ fn origin_step(
     Ok(())
 }
 fn origin_terminator(
-    refs: &[Option<usize>],
+    refs: &[[Option<usize>; 2]],
     state: &mut Origins,
     term: &Terminator,
     loans: usize,
-    call_return: Option<usize>,
+    call_returns: &[Option<usize>; 2],
     budget: &mut Budget,
 ) -> Result<(), Exhausted> {
     if let Terminator::Call {
@@ -382,15 +425,20 @@ fn origin_terminator(
         for arg in args {
             if let Operand::Move(place) = arg
                 && place.projection.is_empty()
-                && let Some(carrier) = refs[place.local.0]
             {
-                state[carrier].clear();
+                for carrier in refs[place.local.0].iter().flatten() {
+                    state[*carrier].clear();
+                }
             }
         }
-        if let Some(origin) = call_return {
-            let carrier = refs[destination.local.0].expect("reference result carrier");
-            state[carrier].clear();
-            state[carrier].insert(origin);
+        for (depth, origin) in call_returns.iter().enumerate() {
+            if let Some(origin) = origin {
+                let carrier =
+                    carrier_index(refs, destination, ReferencePosition { depth: depth as u8 })
+                        .expect("reference result carrier");
+                state[carrier].clear();
+                state[carrier].insert(*origin);
+            }
         }
     }
     Ok(())
@@ -480,44 +528,62 @@ impl Plan {
         budget: &mut Budget,
         max_bytes: usize,
     ) -> Result<Self, Exhausted> {
-        budget.reserve_bytes(add(mul(f.locals.len(), 32)?, mul(f.blocks.len() + 1, 64)?)?)?;
-        let parameter_origins: Vec<_> = f
-            .params
-            .iter()
-            .copied()
-            .filter(|local| matches!(f.locals[local.0].ty, Ty::Ref { .. }))
-            .collect();
+        let metadata_bytes = add(mul(f.locals.len(), 96)?, mul(f.blocks.len() + 1, 96)?)?;
+        if metadata_bytes > max_bytes {
+            return Err(Exhausted);
+        }
+        budget.reserve_bytes(metadata_bytes)?;
+        budget.spend(f.locals.len() + f.params.len() + f.blocks.len())?;
+        let mut parameter_origins = Vec::new();
+        for &local in &f.params {
+            for depth in
+                0..super::ir::reference_layers(&f.locals[local.0].ty).map_err(|_| Exhausted)?
+            {
+                parameter_origins.push(CarrierSlot {
+                    local,
+                    position: ReferencePosition { depth: depth as u8 },
+                });
+            }
+        }
         let base = add(f.loan_sites.len(), parameter_origins.len())?;
-        let call_count = f
-            .blocks
-            .iter()
-            .filter(|block| {
-                matches!(&block.terminator.value,
-                    Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. })
-                )
-            })
-            .count();
+        let mut call_count = 0;
+        for block in &f.blocks {
+            if let Terminator::Call { signature, .. } = &block.terminator.value {
+                call_count = add(
+                    call_count,
+                    super::ir::reference_layers(&signature.result).map_err(|_| Exhausted)?,
+                )?;
+            }
+        }
         let loans = add(base, call_count)?;
         if loans > MAX_LOANS {
             return Err(Exhausted);
         }
-        let mut refs = vec![None; f.locals.len()];
+        let mut refs = vec![[None; 2]; f.locals.len()];
         let mut r = 0;
         for (index, local) in f.locals.iter().enumerate() {
-            if matches!(local.ty, Ty::Ref { .. }) {
-                refs[index] = Some(r);
+            for slot in refs[index]
+                .iter_mut()
+                .take(super::ir::reference_layers(&local.ty).map_err(|_| Exhausted)?)
+            {
+                *slot = Some(r);
                 r += 1;
             }
         }
         let b = f.blocks.len();
         let mut next_call = base;
-        let call_rows: Vec<_> = f.blocks.iter().map(|block| {
-            if matches!(&block.terminator.value, Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. })) {
-                let row = next_call;
-                next_call += 1;
-                Some(row)
-            } else { None }
-        }).collect();
+        let mut call_rows = vec![[None; 2]; b];
+        for (block, body) in f.blocks.iter().enumerate() {
+            if let Terminator::Call { signature, .. } = &body.terminator.value {
+                for slot in call_rows[block]
+                    .iter_mut()
+                    .take(super::ir::reference_layers(&signature.result).map_err(|_| Exhausted)?)
+                {
+                    *slot = Some(next_call);
+                    next_call += 1;
+                }
+            }
+        }
         let mut offsets = Vec::with_capacity(b + 1);
         offsets.push(0usize);
         for block in &f.blocks {
@@ -532,8 +598,11 @@ impl Plan {
         // Peak includes solver entry states, point snapshots, scratch and sets
         // used by the backward solver. Check before the dense products allocate.
         let mut bytes = add(
-            mul(add(add(p, mul(b, 2)?)?, 2)?, origin_size)?,
-            mul(add(mul(p, 3)?, add(mul(b, 3)?, 4)?)?, live_size)?,
+            metadata_bytes,
+            add(
+                mul(add(add(p, mul(b, 2)?)?, 2)?, origin_size)?,
+                mul(add(mul(p, 3)?, add(mul(b, 3)?, 4)?)?, live_size)?,
+            )?,
         )?;
         bytes = add(
             bytes,
@@ -541,7 +610,7 @@ impl Plan {
                 mul(b, 256)?,
                 add(
                     mul(p, 128)?,
-                    mul(f.locals.len(), size_of::<Option<usize>>())?,
+                    mul(f.locals.len(), size_of::<[Option<usize>; 2]>())?,
                 )?,
             )?,
         )?;
@@ -569,7 +638,7 @@ impl Plan {
         if bytes > max_bytes {
             return Err(Exhausted);
         }
-        budget.reserve_bytes(bytes)?;
+        budget.reserve_bytes(bytes - metadata_bytes)?;
         budget.spend(add(
             mul(add(p, b)?, mul(r, loans.div_ceil(64))?)?,
             mul(add(mul(p, 3)?, mul(b, 2)?)?, r.div_ceil(64))?,
@@ -633,9 +702,10 @@ impl Plan {
         let empty = || vec![Set::new(loans); r];
         let mut entries = vec![None; b];
         let mut entry = empty();
-        for (index, local) in parameter_origins.iter().enumerate() {
-            entry[refs[local.0].expect("reference parameter carrier")]
-                .insert(f.loan_sites.len() + index);
+        for (index, slot) in parameter_origins.iter().enumerate() {
+            entry[refs[slot.local.0][usize::from(slot.position.depth)]
+                .expect("reference parameter carrier")]
+            .insert(f.loan_sites.len() + index);
         }
         entries[f.entry.0] = Some(entry);
         let mut queue = VecDeque::from([f.entry.0]);
@@ -654,7 +724,7 @@ impl Plan {
                 &mut out,
                 &f.blocks[block].terminator.value,
                 loans,
-                call_rows[block],
+                &call_rows[block],
                 budget,
             )?;
             for next in successors(&f.blocks[block].terminator.value)
@@ -723,7 +793,7 @@ impl Plan {
                     origin_step(f, &refs, &mut state, &item.value, loans, budget)?;
                 }
             }
-            if let Some(row) = call_rows[block] {
+            for &row in call_rows[block].iter().flatten() {
                 births[row] = Some((block, f.blocks[block].statements.len()));
             }
             origin_terminator(
@@ -731,7 +801,7 @@ impl Plan {
                 &mut state,
                 &f.blocks[block].terminator.value,
                 loans,
-                call_rows[block],
+                &call_rows[block],
                 budget,
             )?;
             memberships = add(memberships, state.iter().map(Set::count).sum())?;
@@ -748,8 +818,10 @@ impl Plan {
         let mut parents = vec![Set::new(loans); loans];
         for (loan, site) in f.loan_sites.iter().enumerate() {
             if site.place.projection.first() == Some(&Projection::Deref)
-                && let (Some((block, statement)), Some(carrier)) =
-                    (births[loan], refs[site.place.local.0])
+                && let (Some((block, statement)), Some(carrier)) = (
+                    births[loan],
+                    refs[site.place.local.0][dereference_count(&site.place) - 1],
+                )
             {
                 parents[loan] =
                     points[offsets[block] + statement].as_ref().unwrap().origins[carrier].clone();
@@ -757,8 +829,7 @@ impl Plan {
             }
         }
         let mut lifetime_deps = parents.clone();
-        for (block, row) in call_rows.iter().enumerate() {
-            let Some(row) = *row else { continue };
+        for (block, rows) in call_rows.iter().enumerate() {
             let Some(point) = &points[offsets[block + 1] - 1] else {
                 continue;
             };
@@ -766,47 +837,45 @@ impl Plan {
                 args, signature, ..
             } = &f.blocks[block].terminator.value
             else {
-                unreachable!()
+                continue;
             };
             let contract = &signature.ref_contract;
             let regions = usize::from(contract.region_count);
             budget.spend(
                 regions * regions
-                    + contract.param_regions.len()
+                    + contract.input_regions.len()
                     + contract.outlives.len() * 2
                     + args.len()
                     + 1,
             )?;
             let closure = contract.closure().expect("validated reference contract");
-            let result = contract.result_region.expect("reference result region");
-            let candidate_count = match &contract.returns {
-                ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
-                    paths.len()
+            for (depth, &row) in rows.iter().enumerate() {
+                let Some(row) = row else { continue };
+                let result = &contract.results[depth];
+                for input in contract.input_regions.iter() {
+                    let (Operand::Copy(place) | Operand::Move(place)) = &args[input.input.param]
+                    else {
+                        unreachable!()
+                    };
+                    let actual = &point.origins[carrier_index(&refs, place, input.input.position)
+                        .expect("reference actual position")];
+                    let mut selected = false;
+                    for (candidate, _, _) in return_inputs(&result.returns) {
+                        budget.spend(1)?;
+                        selected |= candidate == input.input;
+                    }
+                    if selected {
+                        parents[row].union(actual, budget)?;
+                    }
+                    if closure[input.region.0 as usize] & (1u64 << result.region.0) != 0 {
+                        lifetime_deps[row].union(actual, budget)?;
+                    }
                 }
-                ReturnContract::SharedInputEnvelopes(inputs)
-                | ReturnContract::MutInputEnvelopes(inputs) => inputs.len(),
-                ReturnContract::NoReference => 0,
-            };
-            for (index, arg) in args.iter().enumerate() {
-                let Some(region) = contract.param_regions[index] else {
-                    continue;
-                };
-                let (Operand::Copy(place) | Operand::Move(place)) = arg else {
-                    unreachable!()
-                };
-                let actual = &point.origins[refs[place.local.0].expect("reference actual")];
-                budget.spend(candidate_count)?;
-                if return_inputs(&contract.returns).any(|(param, _, _)| param == index) {
-                    parents[row].union(actual, budget)?;
-                }
-                if closure[region.0 as usize] & (1u64 << result.0) != 0 {
-                    lifetime_deps[row].union(actual, budget)?;
-                }
+                memberships = add(
+                    memberships,
+                    parents[row].count() + lifetime_deps[row].count(),
+                )?;
             }
-            memberships = add(
-                memberships,
-                parents[row].count() + lifetime_deps[row].count(),
-            )?;
         }
         memberships = add(
             memberships,
@@ -821,14 +890,14 @@ impl Plan {
         }
         let mut targets: Vec<Vec<Target>> = vec![vec![]; loans];
         let mut ready = vec![false; loans];
-        for (block, row) in call_rows.iter().enumerate() {
-            if let Some(row) = row
-                && !reachable[block]
-            {
-                ready[*row] = true;
+        for (block, rows) in call_rows.iter().enumerate() {
+            if !reachable[block] {
+                for &row in rows.iter().flatten() {
+                    ready[row] = true;
+                }
             }
         }
-        for (index, local) in parameter_origins.iter().enumerate() {
+        for (index, slot) in parameter_origins.iter().enumerate() {
             let row = f.loan_sites.len() + index;
             let old_bytes = bytes;
             bytes = add(
@@ -842,7 +911,7 @@ impl Plan {
             budget.reserve_bytes(bytes - old_bytes)?;
             targets[row].push(Target {
                 place: CanonicalPlace {
-                    root: CanonicalRoot::ParameterReferent(*local),
+                    root: CanonicalRoot::ParameterReferent(slot.local, slot.position),
                     projection: vec![],
                 },
                 precision: TargetPrecision::Exact,
@@ -875,7 +944,7 @@ impl Plan {
                             let path_len = add(
                                 target.place.projection.len(),
                                 if target.precision == TargetPrecision::Exact {
-                                    site.place.projection.len() - 1
+                                    site.place.projection.len() - dereference_count(&site.place)
                                 } else {
                                     0
                                 },
@@ -910,9 +979,9 @@ impl Plan {
                             budget.reserve_bytes(bytes - old_bytes)?;
                             let mut place = target.place.clone();
                             if target.precision == TargetPrecision::Exact {
-                                place
-                                    .projection
-                                    .extend_from_slice(&site.place.projection[1..]);
+                                place.projection.extend_from_slice(
+                                    &site.place.projection[dereference_count(&site.place)..],
+                                );
                             }
                             let mut authority = target.authority.clone();
                             if let Err(position) = authority.binary_search(&parent) {
@@ -966,47 +1035,52 @@ impl Plan {
                 changed = true;
             }
             budget.spend(call_rows.len())?;
-            for (block, row) in call_rows.iter().enumerate() {
-                let Some(row) = *row else { continue };
-                if ready[row] || lifetime_deps[row].members().any(|parent| !ready[parent]) {
-                    continue;
-                }
-                budget.spend(lifetime_deps[row].0.len() + parents[row].0.len() + 1)?;
+            for (block, rows) in call_rows.iter().enumerate() {
                 let Terminator::Call {
                     args, signature, ..
                 } = &f.blocks[block].terminator.value
                 else {
-                    unreachable!()
-                };
-                let Some(point) = &points[offsets[block + 1] - 1] else {
                     continue;
                 };
-                let mut next = vec![];
-                for (param, projection, precision) in return_inputs(&signature.ref_contract.returns)
-                {
-                    budget.spend(projection.len() + 1)?;
-                    let (Operand::Copy(actual) | Operand::Move(actual)) = &args[param] else {
-                        unreachable!()
+                for (depth, &row) in rows.iter().enumerate() {
+                    let Some(row) = row else { continue };
+                    if ready[row] || lifetime_deps[row].members().any(|parent| !ready[parent]) {
+                        continue;
+                    }
+                    budget.spend(lifetime_deps[row].0.len() + parents[row].0.len() + 1)?;
+                    let Some(point) = &points[offsets[block + 1] - 1] else {
+                        continue;
                     };
-                    let actual = &point.origins[refs[actual.local.0].expect("reference actual")];
-                    budget.spend(actual.0.len())?;
-                    for parent in actual.members() {
-                        for target in &targets[parent] {
-                            append_target(
-                                &mut next,
-                                target,
-                                projection,
-                                precision,
-                                parent,
-                                (&mut bytes, &mut memberships, max_bytes),
-                                budget,
-                            )?;
+                    let mut next = vec![];
+                    for (input, projection, precision) in
+                        return_inputs(&signature.ref_contract.results[depth].returns)
+                    {
+                        budget.spend(projection.len() + 1)?;
+                        let (Operand::Copy(actual) | Operand::Move(actual)) = &args[input.param]
+                        else {
+                            unreachable!()
+                        };
+                        let actual = &point.origins[carrier_index(&refs, actual, input.position)
+                            .expect("reference actual position")];
+                        budget.spend(actual.0.len())?;
+                        for parent in actual.members() {
+                            for target in &targets[parent] {
+                                append_target(
+                                    &mut next,
+                                    target,
+                                    projection,
+                                    precision,
+                                    parent,
+                                    (&mut bytes, &mut memberships, max_bytes),
+                                    budget,
+                                )?;
+                            }
                         }
                     }
+                    targets[row] = next;
+                    ready[row] = true;
+                    changed = true;
                 }
-                targets[row] = next;
-                ready[row] = true;
-                changed = true;
             }
             if !changed {
                 break;
@@ -1046,20 +1120,23 @@ impl Plan {
                 .loan_sites
                 .iter()
                 .map(|site| site.kind)
-                .chain(parameter_origins.iter().map(|local| {
-                    let Ty::Ref { kind, .. } = f.locals[local.0].ty else {
-                        unreachable!()
-                    };
-                    kind
+                .chain(parameter_origins.iter().map(|slot| {
+                    super::ir::reference_at(&f.locals[slot.local.0].ty, slot.position)
+                        .expect("validated formal position")
+                        .0
                 }))
-                .chain(f.blocks.iter().filter_map(|block| {
-                    let Terminator::Call { signature, .. } = &block.terminator.value else {
-                        return None;
-                    };
-                    let Ty::Ref { kind, .. } = &signature.result else {
-                        return None;
-                    };
-                    Some(*kind)
+                .chain(f.blocks.iter().flat_map(|block| {
+                    let mut kinds = [None; 2];
+                    if let Terminator::Call { signature, .. } = &block.terminator.value {
+                        for result in signature.ref_contract.results.iter() {
+                            kinds[usize::from(result.position.depth)] = Some(
+                                super::ir::reference_at(&signature.result, result.position)
+                                    .expect("validated result position")
+                                    .0,
+                            );
+                        }
+                    }
+                    kinds.into_iter().flatten()
                 }))
                 .collect(),
             two_phase,
@@ -1325,7 +1402,8 @@ impl Plan {
                 authority: vec![],
             }]));
         }
-        let Some(carrier) = self.refs[place.local.0] else {
+        let depth = dereference_count(place);
+        let Some(carrier) = self.refs[place.local.0].get(depth - 1).copied().flatten() else {
             return Ok(Err(Problem::Invalid(
                 "dereference has no reference carrier".into(),
             )));
@@ -1345,7 +1423,7 @@ impl Plan {
                 if next.precision == TargetPrecision::Exact {
                     next.place
                         .projection
-                        .extend_from_slice(&place.projection[1..]);
+                        .extend_from_slice(&place.projection[depth..]);
                 }
                 if next.place.projection.len() > 128 {
                     return Err(Exhausted);
@@ -1384,13 +1462,25 @@ impl Plan {
         facts: FactsCtx<'_>,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
-        if matches!(f.ref_contract.returns, ReturnContract::NoReference) {
-            return Ok(None);
+        for result in f.ref_contract.results.iter() {
+            if let Some(problem) = self.check_return_position(f, block, result, facts, budget)? {
+                return Ok(Some(problem));
+            }
         }
+        Ok(None)
+    }
+    fn check_return_position(
+        &self,
+        f: &cfg::Function,
+        block: BlockId,
+        result: &super::ir::ResultReference,
+        facts: FactsCtx<'_>,
+        budget: &mut Budget,
+    ) -> Result<Option<Problem>, Exhausted> {
         let regions = usize::from(f.ref_contract.region_count);
         budget.spend(
             regions * regions
-                + f.ref_contract.param_regions.len()
+                + f.ref_contract.input_regions.len()
                 + f.ref_contract.outlives.len() * 2
                 + 1,
         )?;
@@ -1398,12 +1488,9 @@ impl Plan {
             .ref_contract
             .closure()
             .expect("validated universal contract");
-        let result = f
-            .ref_contract
-            .result_region
-            .expect("reference result region");
         let (origins, _) = self.point(block, None, Phase::Read);
-        let carrier = self.refs[f.return_local.0].expect("reference return carrier");
+        let carrier = self.refs[f.return_local.0][usize::from(result.position.depth)]
+            .expect("reference return position");
         budget.spend(origins[carrier].0.len())?;
         if origins[carrier].count() == 0 {
             return Ok(Some(Problem::Invalid(
@@ -1420,7 +1507,7 @@ impl Plan {
             }
             for target in &self.targets[origin] {
                 budget.spend(f.params.len() + target.place.projection.len() + 1)?;
-                let CanonicalRoot::ParameterReferent(local) = target.place.root else {
+                let CanonicalRoot::ParameterReferent(local, position) = target.place.root else {
                     return Ok(Some(Problem::Invalid(
                         "cannot return a reference to owned frame storage".into(),
                     )));
@@ -1429,12 +1516,12 @@ impl Plan {
                 // one existing expected path, never reclassifies the canonical
                 // signature or turns the target into Exact for other accesses.
                 let singleton = target.precision == TargetPrecision::Subtree
-                    && Self::scalar_return_footprint(f, target, facts, budget)?;
+                    && Self::scalar_return_footprint(f, target, result.position, facts, budget)?;
                 let mut contained = false;
                 let mut declared_input = false;
-                for (param, projection, precision) in return_inputs(&f.ref_contract.returns) {
+                for (input, projection, precision) in return_inputs(&result.returns) {
                     budget.spend(projection.len() + 1)?;
-                    if f.params[param] == local {
+                    if f.params[input.param] == local && input.position == position {
                         declared_input = true;
                         contained |= precision == TargetPrecision::Subtree
                             || ((target.precision == TargetPrecision::Exact || singleton)
@@ -1458,19 +1545,25 @@ impl Plan {
             budget.spend(self.lifetime_deps[origin].0.len() + 1)?;
             for target in &self.targets[origin] {
                 budget.spend(f.params.len() + 1)?;
-                let CanonicalRoot::ParameterReferent(local) = target.place.root else {
+                let CanonicalRoot::ParameterReferent(local, position) = target.place.root else {
                     return Ok(Some(Problem::Invalid(
                         "returned reference lifetime depends on owned frame storage".into(),
                     )));
                 };
-                let position = f
+                let param = f
                     .params
                     .iter()
                     .position(|param| *param == local)
                     .expect("formal canonical root");
-                let region =
-                    f.ref_contract.param_regions[position].expect("named reference input region");
-                if closure[region.0 as usize] & (1u64 << result.0) == 0 {
+                budget.spend(f.ref_contract.input_regions.len())?;
+                let region = f
+                    .ref_contract
+                    .input_regions
+                    .iter()
+                    .find(|row| row.input == InputReference { param, position })
+                    .expect("named reference input position")
+                    .region;
+                if closure[region.0 as usize] & (1u64 << result.region.0) == 0 {
                     return Ok(Some(Problem::Invalid(
                         "reference return requires an undeclared universal outlives bound".into(),
                     )));
@@ -1489,25 +1582,20 @@ impl Plan {
     fn scalar_return_footprint(
         f: &cfg::Function,
         target: &Target,
+        result_position: ReferencePosition,
         facts: FactsCtx<'_>,
         budget: &mut Budget,
     ) -> Result<bool, Exhausted> {
         let FactsCtx::Validated(authority) = facts else {
             return Ok(false);
         };
-        let CanonicalRoot::ParameterReferent(local) = target.place.root else {
+        let CanonicalRoot::ParameterReferent(local, position) = target.place.root else {
             return Ok(false);
         };
-        let Ty::Ref {
-            referent: input, ..
-        } = &f.locals[local.0].ty
-        else {
+        let Ok((_, input)) = super::ir::reference_at(&f.locals[local.0].ty, position) else {
             return Ok(false);
         };
-        let Ty::Ref {
-            referent: output, ..
-        } = &f.result
-        else {
+        let Ok((_, output)) = super::ir::reference_at(&f.result, result_position) else {
             return Ok(false);
         };
         budget.spend(target.place.projection.len() + 1)?;
@@ -1523,7 +1611,7 @@ impl Plan {
             Err(error) if error.is_resource() => return Err(Exhausted),
             Err(_) => return Ok(false),
         };
-        Ok(match (anchor, output.as_ref()) {
+        Ok(match (anchor, output) {
             (Ty::Int(a), Ty::Int(b)) => a == b,
             (Ty::Bool, Ty::Bool) => true,
             _ => false,
@@ -1577,7 +1665,7 @@ impl Plan {
         statement: Option<usize>,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
-        let Some(carrier) = self.refs[local.0] else {
+        let Some(carrier) = self.refs[local.0][0] else {
             return Ok(None);
         };
         let (origins, live) = self.point(block, statement, Phase::Read);

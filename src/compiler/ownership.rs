@@ -7,7 +7,10 @@ use super::borrow::{
     self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target, TargetPrecision,
 };
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, Ty};
+use super::ir::{
+    CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, ReferencePosition,
+    Ty,
+};
 use super::traits::{FactsPhase, ValidatedFacts};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -353,50 +356,75 @@ fn preflight_with_plan(
         contract: &super::ir::RefContract,
         budget: &mut Budget,
     ) -> Result<Option<super::ir::PlanReservation>, Exhausted> {
-        let (candidates, envelopes): (&[super::ir::InputPath], &[super::ir::InputEnvelope]) =
-            match &contract.returns {
-                super::ir::ReturnContract::NoReference => (&[], &[]),
-                super::ir::ReturnContract::SharedInputPaths(paths)
-                | super::ir::ReturnContract::MutInputPaths(paths) => (paths, &[]),
-                super::ir::ReturnContract::SharedInputEnvelopes(inputs)
-                | super::ir::ReturnContract::MutInputEnvelopes(inputs) => (&[], inputs),
-            };
-        if candidates
-            .len()
-            .checked_add(envelopes.len())
-            .ok_or(Exhausted)?
-            > 4096
-        {
+        let mut candidate_count = 0usize;
+        let mut envelope_count = 0usize;
+        let mut steps = 0usize;
+        if contract.results.len() > 2 || contract.input_regions.len() > 4096 {
             return Err(Exhausted);
         }
-        budget.spend(candidates.len() + envelopes.len() + 1)?;
-        let mut steps = 0usize;
-        for candidate in candidates {
-            if candidate.projection.len() > 128 {
+        budget.spend(contract.results.len() + contract.input_regions.len() + 1)?;
+        for result in contract.results.iter() {
+            let (candidates, envelopes): (&[super::ir::InputPath], &[super::ir::InputEnvelope]) =
+                match &result.returns {
+                    super::ir::ReturnContract::NoReference => (&[], &[]),
+                    super::ir::ReturnContract::SharedInputPaths(paths)
+                    | super::ir::ReturnContract::MutInputPaths(paths) => (paths, &[]),
+                    super::ir::ReturnContract::SharedInputEnvelopes(inputs)
+                    | super::ir::ReturnContract::MutInputEnvelopes(inputs) => (&[], inputs),
+                };
+            candidate_count = candidate_count
+                .checked_add(candidates.len())
+                .ok_or(Exhausted)?;
+            envelope_count = envelope_count
+                .checked_add(envelopes.len())
+                .ok_or(Exhausted)?;
+            if candidate_count
+                .checked_add(envelope_count)
+                .ok_or(Exhausted)?
+                > 4096
+            {
                 return Err(Exhausted);
             }
-            steps = steps
-                .checked_add(candidate.projection.len())
-                .ok_or(Exhausted)?;
-            if steps > 131072 {
-                return Err(Exhausted);
+            budget.spend(candidates.len() + envelopes.len() + 1)?;
+            for candidate in candidates {
+                if candidate.projection.len() > 128 {
+                    return Err(Exhausted);
+                }
+                steps = steps
+                    .checked_add(candidate.projection.len())
+                    .ok_or(Exhausted)?;
+                if steps > 131072 {
+                    return Err(Exhausted);
+                }
             }
         }
         budget.spend(steps)?;
-        let provided_bytes = candidates
-            .len()
+        let provided_bytes = candidate_count
             .checked_mul(std::mem::size_of::<super::ir::InputPath>())
             .and_then(|n| n.checked_add(steps.checked_mul(std::mem::size_of::<Projection>())?))
             .and_then(|n| {
                 n.checked_add(
-                    envelopes
+                    envelope_count.checked_mul(std::mem::size_of::<super::ir::InputEnvelope>())?,
+                )
+            })
+            .and_then(|n| {
+                n.checked_add(
+                    contract
+                        .input_regions
                         .len()
-                        .checked_mul(std::mem::size_of::<super::ir::InputEnvelope>())?,
+                        .checked_mul(std::mem::size_of::<super::ir::InputRegion>())?,
+                )
+            })
+            .and_then(|n| {
+                n.checked_add(
+                    contract
+                        .results
+                        .len()
+                        .checked_mul(std::mem::size_of::<super::ir::ResultReference>())?,
                 )
             })
             .ok_or(Exhausted)?;
-        let generated_bytes = if matches!(contract.returns, super::ir::ReturnContract::NoReference)
-        {
+        let generated_bytes = if contract.results.is_empty() {
             0
         } else {
             // Expanded preceding type visits bound occurrence count. Reserve
@@ -460,24 +488,31 @@ fn preflight_with_plan(
     let mut budget = Budget::for_plan(limits.operations, plan);
     budget.spend(f.params.len())?;
     budget.spend(f.blocks.len())?;
-    let call_origins = f
-        .blocks
-        .iter()
-        .filter(|block| {
-            matches!(&block.terminator.value,
-                Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. })
-            )
-        })
-        .count();
-    let formal_origins = f
-        .params
-        .iter()
-        .filter(|local| {
-            f.locals
-                .get(local.0)
-                .is_some_and(|local| matches!(local.ty, Ty::Ref { .. }))
-        })
-        .count();
+    let mut call_origins = 0usize;
+    for block in &f.blocks {
+        if let Terminator::Call { signature, .. } = &block.terminator.value {
+            let mut ty = &signature.result;
+            for _ in 0..2 {
+                budget.spend(1)?;
+                let Ty::Ref { referent, .. } = ty else { break };
+                call_origins = call_origins.checked_add(1).ok_or(Exhausted)?;
+                ty = referent;
+            }
+        }
+    }
+    let mut formal_origins = 0usize;
+    for local in &f.params {
+        let Some(local) = f.locals.get(local.0) else {
+            continue;
+        };
+        let mut ty = &local.ty;
+        for _ in 0..2 {
+            budget.spend(1)?;
+            let Ty::Ref { referent, .. } = ty else { break };
+            formal_origins = formal_origins.checked_add(1).ok_or(Exhausted)?;
+            ty = referent;
+        }
+    }
     if f.blocks.len() > limits.blocks
         || f.locals.len() > limits.locals
         || f.loan_sites
@@ -854,7 +889,7 @@ struct PathNode {
 }
 struct Paths {
     roots: Vec<usize>,
-    external: Vec<Option<usize>>,
+    external: Vec<[Option<usize>; 2]>,
     nodes: Vec<PathNode>,
 }
 impl Paths {
@@ -927,7 +962,14 @@ impl Paths {
             count(&local.ty, facts, budget, limit, 0, &mut counts)?;
         }
         for local in &f.params {
-            if let Ty::Ref { referent, .. } = &f.locals[local.0].ty {
+            for depth in
+                0..super::ir::reference_layers(&f.locals[local.0].ty).map_err(|_| Exhausted)?
+            {
+                let (_, referent) = super::ir::reference_at(
+                    &f.locals[local.0].ty,
+                    ReferencePosition { depth: depth as u8 },
+                )
+                .map_err(|_| Exhausted)?;
                 count(referent, facts, budget, limit, 0, &mut counts)?;
             }
         }
@@ -942,7 +984,7 @@ impl Paths {
             })
             .and_then(|n| {
                 n.checked_add(f.locals.len().checked_mul(
-                    4 * std::mem::size_of::<usize>() + std::mem::size_of::<Option<usize>>(),
+                    4 * std::mem::size_of::<usize>() + std::mem::size_of::<[Option<usize>; 2]>(),
                 )?)
             })
             .ok_or(Exhausted)?;
@@ -1006,7 +1048,7 @@ impl Paths {
         }
         let mut result = Self {
             roots: Vec::new(),
-            external: vec![None; f.locals.len()],
+            external: vec![[None; 2]; f.locals.len()],
             nodes: Vec::new(),
         };
         for local in &f.locals {
@@ -1014,9 +1056,16 @@ impl Paths {
             result.roots.push(root);
         }
         for local in &f.params {
-            if let Ty::Ref { referent, .. } = &f.locals[local.0].ty {
+            for depth in
+                0..super::ir::reference_layers(&f.locals[local.0].ty).map_err(|_| Exhausted)?
+            {
+                let (_, referent) = super::ir::reference_at(
+                    &f.locals[local.0].ty,
+                    ReferencePosition { depth: depth as u8 },
+                )
+                .map_err(|_| Exhausted)?;
                 let root = add(&mut result, referent, None, limit, facts, budget)?;
-                result.external[local.0] = Some(root);
+                result.external[local.0][depth] = Some(root);
             }
         }
         Ok(result)
@@ -1027,8 +1076,8 @@ impl Paths {
     fn canonical_root(&self, root: &CanonicalRoot) -> usize {
         match root {
             CanonicalRoot::Owned(local) => self.roots[local.0],
-            CanonicalRoot::ParameterReferent(local) => {
-                self.external[local.0].expect("formal referent path")
+            CanonicalRoot::ParameterReferent(local, position) => {
+                self.external[local.0][usize::from(position.depth)].expect("formal referent path")
             }
         }
     }
@@ -1243,8 +1292,22 @@ impl Transfer<'_> {
         Ok(())
     }
     fn carrier_read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
-        if place.projection.first() == Some(&Projection::Deref) {
+        let depth = borrow::dereference_count(place);
+        if depth != 0 {
             self.read_raw(state, &root_place(place.local))?;
+            // Every intermediate reference value is an actual checked read.
+            // Its loan authorizes this load only, not the inner value's lifetime.
+            for count in 1..depth {
+                self.budget.spend(count + 1)?;
+                let carrier = Place {
+                    local: place.local,
+                    projection: vec![Projection::Deref; count],
+                };
+                for target in self.targets(&carrier)? {
+                    self.check_access(&target, Access::Read)?;
+                    self.read_canonical(state, &target.place)?;
+                }
+            }
         }
         Ok(())
     }
@@ -1804,10 +1867,8 @@ impl Transfer<'_> {
                         let (Operand::Copy(carrier) | Operand::Move(carrier)) = arg else {
                             unreachable!("validated reference argument")
                         };
-                        let deref = Place {
-                            local: carrier.local,
-                            projection: vec![Projection::Deref],
-                        };
+                        let mut deref = carrier.clone();
+                        deref.projection.push(Projection::Deref);
                         self.carrier_read(state, &deref)?;
                         for target in self.targets(&deref)? {
                             self.check_access(
@@ -2025,7 +2086,7 @@ fn analyze_with_facts(
                 .range(root, paths.nodes[root].end, true, &mut budget)?;
             seed.ever_written
                 .range(root, paths.nodes[root].end, true, &mut budget)?;
-            if let Some(root) = paths.external[local.0] {
+            for &root in paths.external[local.0].iter().flatten() {
                 seed.must_init
                     .range(root, paths.nodes[root].end, true, &mut budget)?;
                 seed.may_init
@@ -2159,6 +2220,17 @@ fn analyze_with_facts(
 
 #[cfg(test)]
 mod tests {
+    fn input_reference(param: usize) -> super::super::ir::InputReference {
+        super::super::ir::InputReference {
+            param,
+            position: super::ReferencePosition { depth: 0 },
+        }
+    }
+    fn first_return(
+        contract: &mut std::sync::Arc<super::super::ir::RefContract>,
+    ) -> &mut super::super::ir::ResultReference {
+        &mut std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(contract).results)[0]
+    }
     use super::super::ir::{
         DeclId, EnumDef, EnumTy, FieldDef, IntTy, IntValue, LocalDecl, NominalAppId, SnapshotId,
         StructDef, StructTy, VariantDef, VariantId, VariantShape,
@@ -2287,6 +2359,147 @@ mod tests {
     }
 
     #[test]
+    fn nested_references_positioned_identity_inner_load_and_generic_calls() {
+        for source in [
+            "fn f<'a,'b>(p:&'a &'b i32)->&'b i32{*p}",
+            "fn f<'a,'b>(p:&'a &'b i32)->&'a &'b i32{p}",
+            "fn f<'a,'b>(p:&'a &'b i32)->&'b i32{inner(p)} fn inner<'a,'b>(p:&'a &'b i32)->&'b i32{*p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        let f = borrowed_source("fn f<'a,'b>(p:&'a &'b i32)->&'a &'b i32{p}");
+        let paths = Paths::new(&f, Limits::default().paths).unwrap();
+        assert_ne!(
+            paths.external[f.params[0].0][0],
+            paths.external[f.params[0].0][1]
+        );
+        let mut budget = Budget::new(Limits::default().work);
+        let plan = borrow::Plan::build(&f, &mut budget, Limits::default().state_bytes).unwrap();
+        let block = BlockId(
+            f.blocks
+                .iter()
+                .position(|b| matches!(b.terminator.value, Terminator::Return))
+                .unwrap(),
+        );
+        for depth in 0..2 {
+            let place = Place {
+                local: f.return_local,
+                projection: vec![Projection::Deref; depth + 1],
+            };
+            let targets = plan
+                .resolve(&place, block, None, Phase::Read, &mut budget)
+                .unwrap()
+                .unwrap();
+            assert!(!targets.is_empty());
+            assert!(targets.iter().all(|t| t.place.root
+                == CanonicalRoot::ParameterReferent(
+                    f.params[0],
+                    ReferencePosition { depth: depth as u8 }
+                )));
+        }
+        let source = "fn inner<'a,'b,T>(p:&'a &'b T)->&'b T{*p} fn f<'a,'b,T>(p:&'a &'b T)->&'b T{inner(p)} fn main(){}";
+        let template = reference_template(source, "f");
+        assert!(verify_template(template).is_ok());
+    }
+
+    #[test]
+    fn nested_references_snapshots_last_use_and_original_referent_conflicts() {
+        for source in [
+            "fn f()->i32{let mut x=1;let r:&i32;{let q=&x;let rr=&q;r=*rr;}let n=*r;x=2;n+x}",
+            "fn f()->i32{let x=1;let y=2;let mut r=&x;let rr=&r;let s=*rr;r=&y;*s+*r}",
+            "fn f(b:bool)->i32{let x=1;let y=2;let a=&x;let c=&y;let rr=if b{&a}else{&c};let s=*rr;*s}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        for source in [
+            "fn f()->i32{let mut x=1;let r=&x;let rr=&r;let s=*rr;x=2;*s}",
+            "fn f()->i32{let x=1;let y=2;let mut r=&x;let rr=&r;r=&y;**rr}",
+            "fn f()->i32{let mut x=1;let r=&x;let rr=&r;let s=*rr;let m=&mut x;*m=2;*s}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete, "{source}: {:?}", result.diagnostics);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_))),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn nested_references_forged_dead_positions_and_dense_budget_fail_closed() {
+        let f = borrowed_source("fn f<'a,'b>(p:&'a &'b i32)->&'a &'b i32{p}");
+        for input in [false, true] {
+            let mut forged = f.clone();
+            let contract = Arc::make_mut(&mut forged.ref_contract);
+            if input {
+                Arc::make_mut(&mut contract.input_regions)[1]
+                    .input
+                    .position
+                    .depth = 0;
+            } else {
+                Arc::make_mut(&mut contract.results)[1].position.depth = 0;
+            }
+            let result = analyze(&forged);
+            assert!(result.complete);
+            assert!(matches!(
+                result.diagnostics[0].kind,
+                ErrorKind::InvalidCfg(_)
+            ));
+        }
+        let mut dead = borrowed_source(
+            "fn f<'a,'b>(p:&'a &'b i32)->&'b i32{inner(p)} fn inner<'a,'b>(p:&'a &'b i32)->&'b i32{*p}",
+        );
+        let mut terminator = dead
+            .blocks
+            .iter()
+            .find(|b| matches!(b.terminator.value, Terminator::Call { .. }))
+            .unwrap()
+            .terminator
+            .clone();
+        let Terminator::Call { signature, .. } = &mut terminator.value else {
+            unreachable!()
+        };
+        first_return(&mut signature.ref_contract).position.depth = 1;
+        dead.blocks.push(BasicBlock {
+            statements: vec![],
+            terminator,
+        });
+        let result = analyze(&dead);
+        assert!(result.complete);
+        assert!(matches!(
+            result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
+        let mut budget = Budget::new(Limits::default().work);
+        assert!(borrow::Plan::build(&f, &mut budget, 0).is_err());
+        let mut budget = Budget::new(Limits::default().work);
+        let plan = borrow::Plan::build(&f, &mut budget, Limits::default().state_bytes).unwrap();
+        let mut budget = Budget::new(Limits::default().work);
+        assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
+        let template =
+            reference_template("fn f<'a,'b>(p:&'a &'b i32)->&'b i32{*p} fn main(){}", "f");
+        let proof = verify_template(template).unwrap();
+        let foreign = super::super::ir::PlanBudget::default();
+        let result = analyze_with_facts(
+            proof.function(),
+            Limits::default(),
+            FactsCtx::Validated(proof.facts()),
+            Some(&foreign),
+        );
+        assert!(result.complete);
+        assert!(matches!(
+            result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
+    }
+
+    #[test]
     fn generic_references_two_phase_activation_explicit_borrows_and_loop_reset() {
         for source in [
             "struct Cell{n:i32} impl Cell{fn read(&self)->i32{self.n} fn bump(&mut self,n:i32){self.n=self.n+n;}} fn main(){let mut s=Cell{n:1};s.bump(s.read());}",
@@ -2333,7 +2546,7 @@ mod tests {
         let source = "struct Inner{a:i32,b:i32} struct Outer{pad:bool,inner:Inner} trait View{fn view(&self)->&Inner;} impl View for Outer{fn view(&self)->&Inner{&self.inner}} fn forward<T:View>(x:&T)->&i32{let v=x.view();&v.b} fn main(){}";
         let template = reference_template(source, "forward");
         assert!(
-            matches!(&template.function().ref_contract.returns, ReturnContract::SharedInputEnvelopes(inputs) if inputs.as_ref() == [InputEnvelope { param: 0 }])
+            matches!(&template.function().ref_contract.results[0].returns, ReturnContract::SharedInputEnvelopes(inputs) if inputs.as_ref() == [InputEnvelope { input: input_reference(0) }])
         );
         let proof = verify_template(template).unwrap();
         let f = proof.function();
@@ -2346,14 +2559,22 @@ mod tests {
             targets
                 .iter()
                 .all(|t| t.precision == TargetPrecision::Subtree
-                    && t.place.root == CanonicalRoot::ParameterReferent(f.params[0])
+                    && t.place.root
+                        == CanonicalRoot::ParameterReferent(
+                            f.params[0],
+                            ReferencePosition { depth: 0 }
+                        )
                     && t.place.projection.is_empty())
         );
         // `Inner.b` is not `Outer` field1, nor a field of opaque T. The
         // conservative input anchor must not acquire the returned view suffix.
         let mut forged = f.as_ref().clone();
-        Arc::make_mut(&mut forged.ref_contract).returns =
-            ReturnContract::SharedInputEnvelopes(vec![InputEnvelope { param: 1 }].into());
+        first_return(&mut forged.ref_contract).returns = ReturnContract::SharedInputEnvelopes(
+            vec![InputEnvelope {
+                input: input_reference(1),
+            }]
+            .into(),
+        );
         let failure = analyze_with_facts(
             &forged,
             Limits::default(),
@@ -3680,15 +3901,15 @@ mod tests {
         let source = "fn f()->i32{let mut x=1;let r=&mut x;let q=view(r);let n=*r;n+*q} fn view(p:&mut i32)->&i32{p}";
         assert!(!analyze(&borrowed_source(source)).passed());
         let mut forged = borrowed_source("fn f<'a>(p:&'a i32,q:&'a mut i32)->&'a mut i32{q}");
-        std::sync::Arc::make_mut(&mut forged.ref_contract).returns =
+        first_return(&mut forged.ref_contract).returns =
             super::super::ir::ReturnContract::MutInputPaths(
                 vec![
                     super::super::ir::InputPath {
-                        param: 0,
+                        input: input_reference(0),
                         projection: vec![].into(),
                     },
                     super::super::ir::InputPath {
-                        param: 1,
+                        input: input_reference(1),
                         projection: vec![].into(),
                     },
                 ]
@@ -3777,16 +3998,26 @@ mod tests {
             signature: Signature {
                 ref_contract: std::sync::Arc::new(RefContract {
                     region_count: 1,
-                    param_regions: vec![Some(RegionParamId(0)); 2].into(),
-                    result_region: Some(RegionParamId(0)),
-                    outlives: vec![].into(),
-                    returns: ReturnContract::SharedInputPaths(
-                        vec![InputPath {
-                            param: 1,
-                            projection: vec![].into(),
-                        }]
+                    input_regions: (0..2)
+                        .map(|param| super::super::ir::InputRegion {
+                            input: input_reference(param),
+                            region: RegionParamId(0),
+                        })
+                        .collect::<Vec<_>>()
                         .into(),
-                    ),
+                    outlives: vec![].into(),
+                    results: vec![super::super::ir::ResultReference {
+                        position: ReferencePosition { depth: 0 },
+                        region: RegionParamId(0),
+                        returns: ReturnContract::SharedInputPaths(
+                            vec![InputPath {
+                                input: input_reference(1),
+                                projection: vec![].into(),
+                            }]
+                            .into(),
+                        ),
+                    }]
+                    .into(),
                 }),
                 params: vec![mutable, shared.clone()],
                 result: shared,
@@ -3861,7 +4092,7 @@ mod tests {
         assert_eq!(targets.len(), 2);
         for (param, field) in [(f.params[0], 0), (f.params[1], 1)] {
             assert!(targets.iter().any(|target| target.place.root
-                == CanonicalRoot::ParameterReferent(param)
+                == CanonicalRoot::ParameterReferent(param, ReferencePosition { depth: 0 })
                 && target.place.projection == [Projection::Field(field)]));
         }
         assert!(targets[0].authority != targets[1].authority);
@@ -3907,10 +4138,10 @@ mod tests {
         for (count, depth) in [(4097, 0), (1025, 128), (1, 129)] {
             let mut f = borrowed_source("fn f<'a>(p:&'a i32)->&'a i32{p}");
             let path = InputPath {
-                param: 0,
+                input: input_reference(0),
                 projection: vec![Projection::Field(0); depth].into(),
             };
-            std::sync::Arc::make_mut(&mut f.ref_contract).returns =
+            first_return(&mut f.ref_contract).returns =
                 ReturnContract::SharedInputPaths(vec![path; count].into());
             let result = analyze(&f);
             assert!(
@@ -3921,9 +4152,9 @@ mod tests {
             assert_eq!(result.diagnostics[0].kind, ErrorKind::ResourceLimit);
         }
         let mut f = borrowed_source("fn f<'a>(p:&'a i32)->&'a i32{p}");
-        std::sync::Arc::make_mut(&mut f.ref_contract).returns = ReturnContract::SharedInputPaths(
+        first_return(&mut f.ref_contract).returns = ReturnContract::SharedInputPaths(
             vec![InputPath {
-                param: 0,
+                input: input_reference(0),
                 projection: vec![Projection::Deref].into(),
             }]
             .into(),
@@ -4230,7 +4461,7 @@ mod tests {
         assert_eq!(after.len(), 1);
         assert_eq!(
             after[0].place.root,
-            CanonicalRoot::ParameterReferent(f.params[0])
+            CanonicalRoot::ParameterReferent(f.params[0], ReferencePosition { depth: 0 })
         );
         let mut budget = Budget::new(32 * 1024 * 1024);
         assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
@@ -4280,8 +4511,7 @@ mod tests {
         assert!(!result.complete);
         assert!(!result.passed());
         let mut malformed = f;
-        std::sync::Arc::make_mut(&mut malformed.ref_contract).result_region =
-            Some(super::super::ir::RegionParamId(4));
+        first_return(&mut malformed.ref_contract).region = super::super::ir::RegionParamId(4);
         let result = analyze(&malformed);
         assert!(result.complete);
         assert!(matches!(
@@ -4314,8 +4544,9 @@ mod tests {
         // diverging fixture deliberately introduces a distinct output region,
         // so declare that region before assigning its canonical ID.
         contract.region_count = 2;
-        contract.result_region = Some(super::super::ir::RegionParamId(1));
-        contract.returns = super::super::ir::ReturnContract::SharedInputPaths(vec![].into());
+        let result = &mut std::sync::Arc::make_mut(&mut contract.results)[0];
+        result.region = super::super::ir::RegionParamId(1);
+        result.returns = super::super::ir::ReturnContract::SharedInputPaths(vec![].into());
         f.blocks = vec![BasicBlock {
             statements: vec![],
             terminator: located(Terminator::Goto(BlockId(0))),

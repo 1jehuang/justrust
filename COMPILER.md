@@ -62,11 +62,18 @@ non-Copy values. Demanded concrete instances substitute checked typed metadata,
 then lower and analyze again before sealed native emission. Exact instance
 recursion is deduplicated, while growing instantiations fail boundedly. Generic
 signatures and bodies admit standalone shared/mutable reference carriers with
-reference-free referents, including rigid parameters. Recursively expanded type
+reference-free referents, including rigid parameters. Shared carriers additionally
+admit two reference layers, with position-qualified lifetime and origin mappings.
+Loading the inner reference transports its stored value provenance independently
+of the temporary outer handle. Nested mutable chains, deeper shared chains and
+reference-containing aggregates remain explicit boundaries. Recursively expanded type
 arguments remain reference-free. Positive local trait bounds use the canonical
 obligation foundation below. Const generics and generic function values remain
 unsupported. See `GENERIC-REFERENCES.md` for transported reference contracts,
-borrowed receivers and genuine bounded two-phase loans. See `GENERICS.md` for the universal/concrete trust boundary and shared
+borrowed receivers and genuine bounded two-phase loans. See
+`NESTED-REFERENCES.md` for the common two-layer shared-reference foundation,
+position-qualified contracts and preserved high-arity legacy admission.
+See `GENERICS.md` for the universal/concrete trust boundary and shared
 planning limits, and `GENERIC-INFERENCE.md` for the private evidence grammar,
 fallible no-fallback hints and exactly-once ordinary elaboration. This foundation
 is not full Rust generic compatibility.

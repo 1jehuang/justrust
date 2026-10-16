@@ -16,18 +16,27 @@ fn elided_projected_returns_share_canonical_cfg_and_analysis() {
                 let contract = &function.ref_contract;
                 assert_eq!(contract.region_count, 1);
                 assert_eq!(
-                    contract.param_regions.as_ref(),
-                    [Some(compiler::ir::RegionParamId(0))]
+                    contract.input_regions.as_ref(),
+                    [compiler::ir::InputRegion {
+                        input: compiler::ir::InputReference {
+                            param: 0,
+                            position: compiler::ir::ReferencePosition { depth: 0 },
+                        },
+                        region: compiler::ir::RegionParamId(0),
+                    }]
                 );
-                assert_eq!(contract.result_region, Some(compiler::ir::RegionParamId(0)));
+                assert_eq!(contract.results.len(), 1);
+                assert_eq!(contract.results[0].position.depth, 0);
+                assert_eq!(contract.results[0].region, compiler::ir::RegionParamId(0));
                 assert!(contract.outlives.is_empty());
-                let paths = match &contract.returns {
+                let paths = match &contract.results[0].returns {
                     compiler::ir::ReturnContract::SharedInputPaths(paths) if index == 0 => paths,
                     compiler::ir::ReturnContract::MutInputPaths(paths) if index != 0 => paths,
                     _ => panic!("expected normalized shared/mutable projected contract"),
                 };
                 assert_eq!(paths.len(), 1);
-                assert_eq!(paths[0].param, 0);
+                assert_eq!(paths[0].input.param, 0);
+                assert_eq!(paths[0].input.position.depth, 0);
                 assert_eq!(
                     paths[0].projection.as_ref(),
                     [compiler::ir::Projection::Field(1)]

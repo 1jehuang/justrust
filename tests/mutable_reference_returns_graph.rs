@@ -15,8 +15,8 @@ fn mutable_returns_share_exact_cfg_and_consuming_analysis() {
             for function in &compiled.control_flow[..2] {
                 assert_eq!(function.ref_contract.region_count, 1);
                 assert!(matches!(
-                    &function.ref_contract.returns,
-                    compiler::ir::ReturnContract::MutInputPaths(paths) if paths.len() == 1 && paths[0].param == 0 && paths[0].projection.is_empty()
+                    &function.ref_contract.results[0].returns,
+                    compiler::ir::ReturnContract::MutInputPaths(paths) if paths.len() == 1 && paths[0].input.param == 0 && paths[0].projection.is_empty()
                 ));
             }
             for index in 0..3 {

@@ -461,13 +461,13 @@ fn main() { if run() == 7 { println!("borrow oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_to_reference() {
-    // Stock accepts and runs this fixture, outside this bounded B1 slice.
-    rejects(
-        "reference_to_reference",
+fn accepts_reference_to_reference() {
+    // Unchanged source independently passes stock and native workers 1/8.
+    runs(
         r#"fn run()->i32{let x=7;let r=&x;let rr=&r;**rr}
 fn main() { if run() == 7 { println!("borrow oracle ok"); } }
 "#,
+        "borrow oracle ok\n",
     );
 }
 

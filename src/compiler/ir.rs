@@ -1216,18 +1216,25 @@ pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, Str
     if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
         return Err("projection depth exceeds limit 128".into());
     }
-    if path.iter().any(|part| matches!(part, Projection::Deref))
-        && (!matches!(path.first(), Some(Projection::Deref))
-            || path
+    let derefs = path
+        .iter()
+        .filter(|part| matches!(part, Projection::Deref))
+        .count();
+    if derefs != 0
+        && (derefs
+            != path
                 .iter()
-                .filter(|part| matches!(part, Projection::Deref))
+                .take_while(|part| matches!(part, Projection::Deref))
                 .count()
-                != 1
+            || derefs > reference_layers(root)?
             || path
                 .iter()
                 .any(|part| matches!(part, Projection::Downcast(_))))
     {
-        return Err("unsupported: dereference must be first and cannot contain downcasts".into());
+        return Err(
+            "unsupported: dereference must be a leading typed chain and cannot contain downcasts"
+                .into(),
+        );
     }
     let mut ty = root;
     let mut path = path.iter();
@@ -1492,7 +1499,19 @@ impl<'f> FactsCtx<'f> {
                     if depth != 0 {
                         return Err("nested or aggregate references are unsupported".into());
                     }
-                    walk(facts, referent, depth + 1, work, budget)?;
+                    let layers = reference_layers(ty)?;
+                    let mut inner = referent.as_ref();
+                    for _ in 1..layers {
+                        let Ty::Ref { referent, .. } = inner else {
+                            unreachable!()
+                        };
+                        inner = referent;
+                        *work += 1;
+                        if let Some(budget) = budget {
+                            budget.charge_work(1)?;
+                        }
+                    }
+                    walk(facts, inner, depth + layers, work, budget)?;
                 }
                 Ty::Tuple(fields) => {
                     for child in fields.iter() {
@@ -1608,15 +1627,63 @@ pub const MAX_INPUT_PATHS: usize = 4096;
 pub const MAX_INPUT_PATH_STEPS: usize = 131_072;
 pub const MAX_INPUT_PATH_OCCURRENCES: usize = 131_072;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ReferencePosition {
+    pub depth: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InputReference {
+    pub param: usize,
+    pub position: ReferencePosition,
+}
+
+/// Number of root reference-value layers, not memory projections.
+pub fn reference_layers(ty: &Ty) -> Result<usize, String> {
+    let mut current = ty;
+    let mut count = 0;
+    let mut mutable = false;
+    while let Ty::Ref { kind, referent } = current {
+        count += 1;
+        mutable |= *kind == BorrowKind::Mut;
+        if count > 2 || (count > 1 && mutable) {
+            return Err(
+                "unsupported: nested or aggregate references: mutable nesting or depth greater than two".into(),
+            );
+        }
+        current = referent;
+    }
+    Ok(count)
+}
+
+/// Returns the reference kind and its authoritative referent at a value position.
+pub fn reference_at(ty: &Ty, position: ReferencePosition) -> Result<(BorrowKind, &Ty), String> {
+    let layers = reference_layers(ty)?;
+    if usize::from(position.depth) >= layers {
+        return Err("reference position is outside typed carrier".into());
+    }
+    let mut current = ty;
+    for _ in 0..position.depth {
+        let Ty::Ref { referent, .. } = current else {
+            unreachable!()
+        };
+        current = referent;
+    }
+    let Ty::Ref { kind, referent } = current else {
+        unreachable!()
+    };
+    Ok((*kind, referent))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct InputPath {
-    pub param: usize,
+    pub input: InputReference,
     pub projection: Arc<[Projection]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct InputEnvelope {
-    pub param: usize,
+    pub input: InputReference,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -1632,27 +1699,59 @@ pub enum ReturnContract {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct RefContract {
     pub region_count: u16,
-    pub param_regions: Arc<[Option<RegionParamId>]>,
-    pub result_region: Option<RegionParamId>,
+    pub input_regions: Arc<[InputRegion]>,
+    pub results: Arc<[ResultReference]>,
     pub outlives: Arc<[(RegionParamId, RegionParamId)]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputRegion {
+    pub input: InputReference,
+    pub region: RegionParamId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResultReference {
+    pub position: ReferencePosition,
+    pub region: RegionParamId,
     pub returns: ReturnContract,
 }
 
 fn contract_rows(contract: &RefContract, budget: &PlanBudget) -> Result<[u64; 64], String> {
     let count = usize::from(contract.region_count);
-    if count > 64
+    if count > MAX_REGION_PARAMS
         || contract.outlives.len() > 4096
-        || contract.param_regions.len() > MAX_PATTERN_PROJECTION_WORK
+        || contract.input_regions.len() > MAX_PATTERN_PROJECTION_WORK
+        || contract.results.len() > 2
     {
         return Err("reference region resource limit exceeded".into());
     }
-    budget
-        .charge_work(contract.param_regions.len() + contract.outlives.len() + count * count + 64)?;
+    budget.charge_work(
+        contract.input_regions.len()
+            + contract.results.len()
+            + contract.outlives.len()
+            + count * count * count
+            + 64,
+    )?;
+    let mut previous = None;
+    for row in contract.input_regions.iter() {
+        if row.input.position.depth > 1 || previous.is_some_and(|old| old >= row.input) {
+            return Err("noncanonical input reference position order".into());
+        }
+        previous = Some(row.input);
+    }
+    let mut previous = None;
+    for row in contract.results.iter() {
+        if row.position.depth > 1 || previous.is_some_and(|old| old >= row.position) {
+            return Err("noncanonical result reference position order".into());
+        }
+        previous = Some(row.position);
+    }
     for region in contract
-        .param_regions
+        .input_regions
         .iter()
-        .flatten()
-        .chain(contract.result_region.iter())
+        .map(|row| row.region)
+        .chain(contract.results.iter().map(|row| row.region))
     {
         if usize::from(region.0) >= count {
             return Err("reference region is outside declaration".into());
@@ -1668,6 +1767,11 @@ fn contract_rows(contract: &RefContract, budget: &PlanBudget) -> Result<[u64; 64
         }
         rows[usize::from(longer.0)] |= 1u64 << shorter.0;
     }
+    close_region_rows(&mut rows, count);
+    Ok(rows)
+}
+
+fn close_region_rows(rows: &mut [u64; 64], count: usize) {
     for via in 0..count {
         for from in 0..count {
             if rows[from] & (1u64 << via) != 0 {
@@ -1675,43 +1779,54 @@ fn contract_rows(contract: &RefContract, budget: &PlanBudget) -> Result<[u64; 64
             }
         }
     }
-    Ok(rows)
 }
 
 fn stored_candidate_work(contract: &RefContract, budget: &PlanBudget) -> Result<(), String> {
-    match &contract.returns {
-        ReturnContract::NoReference => Ok(()),
-        ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
-            if paths.len() > MAX_INPUT_PATHS {
-                return Err("reference return candidate limit exceeded".into());
+    let mut candidates = 0usize;
+    let mut steps = 0usize;
+    for result in contract.results.iter() {
+        match &result.returns {
+            ReturnContract::NoReference => {}
+            ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
+                candidates = candidates
+                    .checked_add(paths.len())
+                    .ok_or("input candidate overflow")?;
+                for path in paths.iter() {
+                    if path.projection.len() > MAX_PATTERN_PROJECTION_DEPTH {
+                        return Err("input path depth resource limit exceeded".into());
+                    }
+                    steps = steps
+                        .checked_add(path.projection.len())
+                        .ok_or("input path step overflow")?;
+                    if steps > MAX_INPUT_PATH_STEPS {
+                        return Err("input path step resource limit exceeded".into());
+                    }
+                    budget.charge_work(1 + path.projection.len())?;
+                    if path.input.position.depth > 1
+                        || path.projection.iter().any(|step| {
+                            !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                        })
+                    {
+                        return Err("forbidden input path projection or reference position".into());
+                    }
+                }
             }
-            let mut steps = 0usize;
-            for path in paths.iter() {
-                if path.projection.len() > MAX_PATTERN_PROJECTION_DEPTH {
-                    return Err("input path depth resource limit exceeded".into());
-                }
-                steps = steps
-                    .checked_add(path.projection.len())
-                    .ok_or("input path step overflow")?;
-                if steps > MAX_INPUT_PATH_STEPS {
-                    return Err("input path step resource limit exceeded".into());
-                }
-                budget.charge_work(1 + path.projection.len())?;
-                if path.projection.iter().any(|step| {
-                    !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
-                }) {
-                    return Err("forbidden input path projection".into());
+            ReturnContract::SharedInputEnvelopes(paths)
+            | ReturnContract::MutInputEnvelopes(paths) => {
+                candidates = candidates
+                    .checked_add(paths.len())
+                    .ok_or("input candidate overflow")?;
+                budget.charge_work(paths.len())?;
+                if paths.iter().any(|path| path.input.position.depth > 1) {
+                    return Err("invalid input reference position".into());
                 }
             }
-            Ok(())
         }
-        ReturnContract::SharedInputEnvelopes(paths) | ReturnContract::MutInputEnvelopes(paths) => {
-            if paths.len() > MAX_INPUT_PATHS {
-                return Err("reference return candidate limit exceeded".into());
-            }
-            budget.charge_work(paths.len())
+        if candidates > MAX_INPUT_PATHS {
+            return Err("reference return candidate limit exceeded".into());
         }
     }
+    Ok(())
 }
 
 /// Pure metadata normalization. It grants neither declaration nor body authority.
@@ -1719,24 +1834,33 @@ pub fn normalize_ref_contract(
     raw: &RefContract,
     budget: &PlanBudget,
 ) -> Result<Arc<RefContract>, String> {
-    let _scratch = budget.reserve_bytes(
-        64 * 12
-            + raw
-                .param_regions
-                .len()
-                .checked_mul(4)
-                .ok_or("region storage overflow")?,
-    )?;
-    let rows = contract_rows(raw, budget)?;
+    let _scratch = budget.reserve_bytes(64 * 12)?;
+    let mut rows = contract_rows(raw, budget)?;
     stored_candidate_work(raw, budget)?;
+    for pair in raw.input_regions.windows(2) {
+        if pair[0].input.param == pair[1].input.param
+            && pair[0].input.position.depth == 0
+            && pair[1].input.position.depth == 1
+        {
+            rows[usize::from(pair[1].region.0)] |= 1u64 << pair[0].region.0;
+        }
+    }
+    if let [outer, inner] = raw.results.as_ref()
+        && outer.position.depth == 0
+        && inner.position.depth == 1
+    {
+        rows[usize::from(inner.region.0)] |= 1u64 << outer.region.0;
+    }
+    budget.charge_work(usize::from(raw.region_count).pow(3))?;
+    close_region_rows(&mut rows, usize::from(raw.region_count));
     let mut map = [None; 64];
     let mut old = [0usize; 64];
     let mut count = 0usize;
     for region in raw
-        .param_regions
+        .input_regions
         .iter()
-        .flatten()
-        .chain(raw.result_region.iter())
+        .map(|row| row.region)
+        .chain(raw.results.iter().map(|row| row.region))
     {
         budget.charge_work(1)?;
         let index = usize::from(region.0);
@@ -1746,7 +1870,7 @@ pub fn normalize_ref_contract(
             count += 1;
         }
     }
-    budget.charge_work(count * count * 2 + raw.param_regions.len())?;
+    budget.charge_work(count * count * 2 + raw.input_regions.len() + raw.results.len())?;
     let edges = (0..count)
         .map(|from| {
             (0..count)
@@ -1756,7 +1880,8 @@ pub fn normalize_ref_contract(
         .sum::<usize>();
     budget.retain_bytes(
         std::mem::size_of::<RefContract>()
-            + raw.param_regions.len() * 2 * std::mem::size_of::<Option<RegionParamId>>()
+            + raw.input_regions.len() * 2 * std::mem::size_of::<InputRegion>()
+            + raw.results.len() * 2 * std::mem::size_of::<ResultReference>()
             + edges * 2 * std::mem::size_of::<(RegionParamId, RegionParamId)>()
             + 8 * std::mem::size_of::<usize>(),
     )?;
@@ -1771,19 +1896,32 @@ pub fn normalize_ref_contract(
             }
         }
     }
+    let mut input_regions = Vec::new();
+    input_regions
+        .try_reserve_exact(raw.input_regions.len())
+        .map_err(|_| "region normalization allocation failed")?;
+    for row in raw.input_regions.iter() {
+        input_regions.push(InputRegion {
+            input: row.input,
+            region: map[usize::from(row.region.0)].expect("used region"),
+        });
+    }
+    let mut results = Vec::new();
+    results
+        .try_reserve_exact(raw.results.len())
+        .map_err(|_| "region normalization allocation failed")?;
+    for row in raw.results.iter() {
+        results.push(ResultReference {
+            position: row.position,
+            region: map[usize::from(row.region.0)].expect("used region"),
+            returns: row.returns.clone(),
+        });
+    }
     Ok(Arc::new(RefContract {
         region_count: count as u16,
-        param_regions: raw
-            .param_regions
-            .iter()
-            .map(|region| region.map(|region| map[usize::from(region.0)].expect("used region")))
-            .collect::<Vec<_>>()
-            .into(),
-        result_region: raw
-            .result_region
-            .map(|region| map[usize::from(region.0)].expect("used result region")),
+        input_regions: input_regions.into(),
+        results: results.into(),
         outlives: outlives.into(),
-        returns: raw.returns.clone(),
     }))
 }
 
@@ -1830,7 +1968,11 @@ fn ref_type_walk(
                 if !root {
                     return Err("nested or aggregate references are unsupported".into());
                 }
-                child(referent)?;
+                reference_layers(ty)?;
+                let (is_opaque, child_height) =
+                    walk(referent, true, budget, depth + 1, visits, memo)?;
+                opaque |= is_opaque;
+                height = height.max(child_height + 1);
             }
             Ty::Tuple(fields) => {
                 for field in fields.iter() {
@@ -1962,373 +2104,338 @@ fn ref_types_equal(
     .map(|(equal, _)| equal)
 }
 
-/// Derive declaration authority only on rigid schemas, never on an instance.
-pub fn derive_return_contract(
-    params: &[Ty],
-    result: &Ty,
-    regions: &RefContract,
-    budget: &PlanBudget,
-) -> Result<ReturnContract, String> {
-    let rows = contract_rows(regions, budget)?;
-    let mut visits = 0usize;
-    let result_opaque = ref_type_walk(result, true, budget, 0, &mut visits)?;
-    for param in params {
-        ref_type_walk(param, true, budget, 0, &mut visits)?;
-    }
-    let Ty::Ref {
-        kind: output_kind,
-        referent: output,
-    } = result
-    else {
-        return Ok(ReturnContract::NoReference);
-    };
-    if regions.param_regions.len() != params.len() {
-        return Err("reference contract parameter arity mismatch".into());
-    }
-    let output_region = regions
-        .result_region
-        .ok_or("missing reference result region")?;
-    let _scratch = budget.reserve_bytes(
-        params
-            .len()
-            .checked_mul(2 * std::mem::size_of::<usize>())
-            .ok_or("input candidate storage overflow")?,
-    )?;
-    let mut eligible = Vec::new();
-    eligible
-        .try_reserve_exact(params.len().min(MAX_INPUT_PATHS))
-        .map_err(|_| "input candidate allocation failed")?;
-    let mut opaque = result_opaque;
-    for (index, (param, region)) in params.iter().zip(regions.param_regions.iter()).enumerate() {
-        budget.charge_work(1)?;
-        if let Ty::Ref { kind, referent } = param {
-            let region = region.ok_or("missing reference parameter region")?;
-            if (*output_kind == BorrowKind::Shared || *kind == BorrowKind::Mut)
-                && rows[usize::from(region.0)] & (1u64 << output_region.0) != 0
-            {
-                if eligible.len() == MAX_INPUT_PATHS {
-                    return Err("reference return candidate limit exceeded".into());
-                }
-                eligible.push(index);
-                opaque |= ref_type_walk(referent, false, budget, 0, &mut visits)?;
-            }
-        } else if region.is_some() {
-            return Err("nonreference parameter has reference region".into());
-        }
-    }
-    if opaque {
-        budget.retain_bytes(
-            eligible.len() * 2 * std::mem::size_of::<InputEnvelope>()
-                + 4 * std::mem::size_of::<usize>(),
-        )?;
-        let candidates = eligible
-            .into_iter()
-            .map(|param| InputEnvelope { param })
-            .collect::<Vec<_>>()
-            .into();
-        return Ok(if *output_kind == BorrowKind::Mut {
-            ReturnContract::MutInputEnvelopes(candidates)
-        } else {
-            ReturnContract::SharedInputEnvelopes(candidates)
-        });
-    }
-    fn collect(
-        ty: &Ty,
-        output: &Ty,
-        param: usize,
-        path: &mut Vec<Projection>,
-        out: &mut Vec<InputPath>,
-        counts: &mut (usize, usize),
-        budget: &PlanBudget,
-    ) -> Result<(), String> {
-        budget.check_depth(path.len())?;
-        budget.charge_work(1)?;
-        counts.1 += 1;
-        if counts.1 > MAX_INPUT_PATH_OCCURRENCES {
-            return Err("input path occurrence resource limit exceeded".into());
-        }
-        if ref_types_equal(ty, output, budget, 0)? {
-            if out.len() == MAX_INPUT_PATHS {
-                return Err("reference return candidate limit exceeded".into());
-            }
-            counts.0 = counts
-                .0
-                .checked_add(path.len())
-                .ok_or("input path storage overflow")?;
-            if counts.0 > MAX_INPUT_PATH_STEPS {
-                return Err("input path step resource limit exceeded".into());
-            }
-            budget.retain_bytes(
-                2 * std::mem::size_of::<InputPath>()
-                    + path.len() * 2 * std::mem::size_of::<Projection>()
-                    + 4 * std::mem::size_of::<usize>(),
-            )?;
-            out.try_reserve_exact(1)
-                .map_err(|_| "input path allocation failed")?;
-            out.push(InputPath {
-                param,
-                projection: path.clone().into(),
-            });
-        }
-        let count = if let Ty::Array { len, .. } = ty {
-            *len
-        } else {
-            ty.field_count().unwrap_or(0)
-        };
-        for index in 0..count {
-            if path.len() >= MAX_PATTERN_PROJECTION_DEPTH {
-                return Err("input path depth resource limit exceeded".into());
-            }
-            let (step, child) = if let Ty::Array { element, .. } = ty {
-                (Projection::ConstantIndex(index), element.as_ref())
-            } else {
-                (
-                    Projection::Field(index),
-                    ty.field_ty(index).ok_or("invalid input field")?,
-                )
-            };
-            path.push(step);
-            collect(child, output, param, path, out, counts, budget)?;
-            path.pop();
-        }
-        Ok(())
-    }
-    let _path_scratch =
-        budget.reserve_bytes(MAX_PATTERN_PROJECTION_DEPTH * std::mem::size_of::<Projection>())?;
-    let mut path = Vec::new();
-    path.try_reserve_exact(MAX_PATTERN_PROJECTION_DEPTH)
-        .map_err(|_| "input path allocation failed")?;
-    let mut candidates = Vec::new();
-    let mut counts = (0, 0);
-    for index in eligible {
-        let Ty::Ref { referent, .. } = &params[index] else {
-            unreachable!()
-        };
-        collect(
-            referent,
-            output,
-            index,
-            &mut path,
-            &mut candidates,
-            &mut counts,
-            budget,
-        )?;
-    }
-    Ok(if *output_kind == BorrowKind::Mut {
-        ReturnContract::MutInputPaths(candidates.into())
-    } else {
-        ReturnContract::SharedInputPaths(candidates.into())
-    })
-}
-
-/// Internal structural half of canonical validation. Call only after the world
-/// has established exact subject/schema agreement. It never derives candidates.
-pub(super) fn validate_stored_ref_contract(
+/// Exact typed position coverage. The erased form is structural only here:
+/// canonical declaration authority must authorize it before production use.
+fn validate_position_rows(
     params: &[Ty],
     result: &Ty,
     contract: &RefContract,
     budget: &PlanBudget,
 ) -> Result<(), String> {
     let rows = contract_rows(contract, budget)?;
-    stored_candidate_work(contract, budget)?;
     let mut visits = 0;
     ref_type_walk(result, true, budget, 0, &mut visits)?;
     for param in params {
         ref_type_walk(param, true, budget, 0, &mut visits)?;
     }
-    if contract.param_regions.len() != params.len()
-        && !(contract.param_regions.is_empty()
-            && matches!(contract.returns, ReturnContract::NoReference))
-    {
-        return Err("reference contract parameter arity mismatch".into());
-    }
-    for (param, region) in params.iter().zip(contract.param_regions.iter()) {
-        if region.is_some() && !matches!(param, Ty::Ref { .. }) {
-            return Err("nonreference parameter has reference region".into());
-        }
-        if contract.region_count != 0 && matches!(param, Ty::Ref { .. }) && region.is_none() {
-            return Err("missing reference parameter region".into());
-        }
-    }
-    let (kind, output) = if let Ty::Ref { kind, referent } = result {
-        (*kind, referent.as_ref())
-    } else {
-        if !matches!(contract.returns, ReturnContract::NoReference)
-            || contract.result_region.is_some()
-        {
-            return Err("reference contract/result mismatch".into());
-        }
+    let erased = contract.region_count == 0
+        && contract.input_regions.is_empty()
+        && contract.results.is_empty()
+        && contract.outlives.is_empty();
+    if erased && reference_layers(result)? == 0 {
         return Ok(());
-    };
-    let region = contract
-        .result_region
-        .ok_or("missing reference result region")?;
-    let eligible = |index: usize| -> Result<&Ty, String> {
-        let Ty::Ref {
-            kind: input_kind,
-            referent,
-        } = params.get(index).ok_or("invalid return input index")?
-        else {
-            return Err("return input must be reference".into());
-        };
-        let input = contract
-            .param_regions
-            .get(index)
-            .copied()
-            .flatten()
-            .ok_or("missing reference input region")?;
-        if (kind == BorrowKind::Mut && *input_kind != BorrowKind::Mut)
-            || rows[usize::from(input.0)] & (1u64 << region.0) == 0
+    }
+    let mut cursor = 0;
+    for (param, ty) in params.iter().enumerate() {
+        for depth in 0..reference_layers(ty)? {
+            budget.charge_work(1)?;
+            let input = InputReference {
+                param,
+                position: ReferencePosition { depth: depth as u8 },
+            };
+            let row = contract.input_regions.get(cursor).ok_or(
+                "invalid noescape reference contract: missing reference parameter region position",
+            )?;
+            if row.input != input {
+                return Err("invalid noescape reference contract: missing reference parameter region at expected position".into());
+            }
+            if depth != 0 {
+                let outer = &contract.input_regions[cursor - 1];
+                if rows[usize::from(row.region.0)] & (1u64 << outer.region.0) == 0 {
+                    return Err("nested reference requires inner outlives outer".into());
+                }
+            }
+            cursor += 1;
+        }
+    }
+    if cursor != contract.input_regions.len() {
+        return Err("extra reference parameter region position".into());
+    }
+    let layers = reference_layers(result)?;
+    if contract.results.len() != layers {
+        return Err(
+            "invalid noescape reference contract: reference result position coverage mismatch"
+                .into(),
+        );
+    }
+    for (depth, row) in contract.results.iter().enumerate() {
+        if usize::from(row.position.depth) != depth {
+            return Err(
+                "invalid noescape reference contract: reference result position coverage mismatch"
+                    .into(),
+            );
+        }
+        if depth != 0
+            && rows[usize::from(row.region.0)] & (1u64 << contract.results[depth - 1].region.0) == 0
         {
-            return Err("return input kind or region mismatch".into());
+            return Err("nested reference requires inner outlives outer".into());
         }
-        Ok(referent)
+    }
+    Ok(())
+}
+
+/// Derive declaration authority only on rigid schemas, never on an instance.
+pub fn derive_return_contracts(
+    params: &[Ty],
+    result: &Ty,
+    regions: &RefContract,
+    budget: &PlanBudget,
+) -> Result<Arc<[ResultReference]>, String> {
+    validate_position_rows(params, result, regions, budget)?;
+    let rows = contract_rows(regions, budget)?;
+    budget.retain_bytes(
+        regions.results.len() * 2 * std::mem::size_of::<ResultReference>()
+            + 4 * std::mem::size_of::<usize>(),
+    )?;
+    let mut results = Vec::new();
+    results
+        .try_reserve_exact(regions.results.len())
+        .map_err(|_| "reference result allocation failed")?;
+    let mut counts = (0usize, 0usize, 0usize);
+    for result_row in regions.results.iter() {
+        let (output_kind, output) = reference_at(result, result_row.position)?;
+        let _scratch = budget.reserve_bytes(
+            regions
+                .input_regions
+                .len()
+                .checked_mul(2 * std::mem::size_of::<InputReference>())
+                .ok_or("input candidate storage overflow")?,
+        )?;
+        let mut eligible = Vec::new();
+        eligible
+            .try_reserve_exact(regions.input_regions.len().min(MAX_INPUT_PATHS))
+            .map_err(|_| "input candidate allocation failed")?;
+        let mut visits = 0;
+        let mut opaque = ref_type_walk(output, true, budget, 0, &mut visits)?;
+        for row in regions.input_regions.iter() {
+            budget.charge_work(1)?;
+            let (kind, referent) = reference_at(
+                params
+                    .get(row.input.param)
+                    .ok_or("invalid input parameter")?,
+                row.input.position,
+            )?;
+            if (output_kind == BorrowKind::Shared || kind == BorrowKind::Mut)
+                && rows[usize::from(row.region.0)] & (1u64 << result_row.region.0) != 0
+            {
+                if eligible.len() == MAX_INPUT_PATHS {
+                    return Err("reference return candidate limit exceeded".into());
+                }
+                eligible.push(row.input);
+                opaque |= ref_type_walk(referent, true, budget, 0, &mut visits)?;
+            }
+        }
+        let returns = if opaque {
+            counts.2 = counts
+                .2
+                .checked_add(eligible.len())
+                .ok_or("input candidate overflow")?;
+            if counts.2 > MAX_INPUT_PATHS {
+                return Err("reference return candidate limit exceeded".into());
+            }
+            budget.retain_bytes(
+                eligible.len() * 2 * std::mem::size_of::<InputEnvelope>()
+                    + 4 * std::mem::size_of::<usize>(),
+            )?;
+            let mut candidates = Vec::new();
+            candidates
+                .try_reserve_exact(eligible.len())
+                .map_err(|_| "input envelope allocation failed")?;
+            for input in eligible {
+                candidates.push(InputEnvelope { input });
+            }
+            if output_kind == BorrowKind::Mut {
+                ReturnContract::MutInputEnvelopes(candidates.into())
+            } else {
+                ReturnContract::SharedInputEnvelopes(candidates.into())
+            }
+        } else {
+            let _path_scratch = budget
+                .reserve_bytes(MAX_PATTERN_PROJECTION_DEPTH * std::mem::size_of::<Projection>())?;
+            let mut path = Vec::new();
+            path.try_reserve_exact(MAX_PATTERN_PROJECTION_DEPTH)
+                .map_err(|_| "input path allocation failed")?;
+            let mut candidates = Vec::new();
+            for input in eligible {
+                let (_, referent) = reference_at(&params[input.param], input.position)?;
+                collect_input_paths(
+                    referent,
+                    output,
+                    input,
+                    &mut path,
+                    &mut candidates,
+                    &mut counts,
+                    budget,
+                )?;
+            }
+            if output_kind == BorrowKind::Mut {
+                ReturnContract::MutInputPaths(candidates.into())
+            } else {
+                ReturnContract::SharedInputPaths(candidates.into())
+            }
+        };
+        results.push(ResultReference {
+            position: result_row.position,
+            region: result_row.region,
+            returns,
+        });
+    }
+    Ok(results.into())
+}
+
+fn collect_input_paths(
+    ty: &Ty,
+    output: &Ty,
+    input: InputReference,
+    path: &mut Vec<Projection>,
+    out: &mut Vec<InputPath>,
+    counts: &mut (usize, usize, usize),
+    budget: &PlanBudget,
+) -> Result<(), String> {
+    budget.check_depth(path.len())?;
+    budget.charge_work(1)?;
+    counts.1 += 1;
+    if counts.1 > MAX_INPUT_PATH_OCCURRENCES {
+        return Err("input path occurrence resource limit exceeded".into());
+    }
+    if ref_types_equal(ty, output, budget, 0)? {
+        counts.2 = counts.2.checked_add(1).ok_or("input candidate overflow")?;
+        counts.0 = counts
+            .0
+            .checked_add(path.len())
+            .ok_or("input path storage overflow")?;
+        if counts.2 > MAX_INPUT_PATHS {
+            return Err("input path candidate limit exceeded".into());
+        }
+        if counts.0 > MAX_INPUT_PATH_STEPS {
+            return Err("input path step resource limit exceeded".into());
+        }
+        budget.retain_bytes(
+            3 * std::mem::size_of::<InputPath>()
+                + path.len() * 2 * std::mem::size_of::<Projection>()
+                + 4 * std::mem::size_of::<usize>(),
+        )?;
+        budget.charge_work(path.len())?;
+        if out.len() == out.capacity() {
+            // Geometric growth bounds total relocation work by the final size.
+            // Charge each relocated row before the allocator can move it.
+            budget.charge_work(out.len())?;
+            let additional = out.capacity().max(1).min(MAX_INPUT_PATHS - out.len());
+            out.try_reserve_exact(additional)
+                .map_err(|_| "input path allocation failed")?;
+        }
+        out.push(InputPath {
+            input,
+            projection: path.clone().into(),
+        });
+    }
+    let count = if let Ty::Array { len, .. } = ty {
+        *len
+    } else {
+        ty.field_count().unwrap_or(0)
     };
-    match &contract.returns {
-        ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
-            if matches!(contract.returns, ReturnContract::MutInputPaths(_))
-                != (kind == BorrowKind::Mut)
+    for index in 0..count {
+        if path.len() >= MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("input path depth resource limit exceeded".into());
+        }
+        let (step, child) = if let Ty::Array { element, .. } = ty {
+            (Projection::ConstantIndex(index), element.as_ref())
+        } else {
+            (
+                Projection::Field(index),
+                ty.field_ty(index).ok_or("invalid input field")?,
+            )
+        };
+        path.push(step);
+        collect_input_paths(child, output, input, path, out, counts, budget)?;
+        path.pop();
+    }
+    Ok(())
+}
+
+/// Structural stored validation only, after canonical world subject agreement.
+/// This does NOT rederive declaration origin authority after specialization.
+pub(super) fn validate_stored_ref_contract(
+    params: &[Ty],
+    result: &Ty,
+    contract: &RefContract,
+    budget: &PlanBudget,
+) -> Result<(), String> {
+    validate_position_rows(params, result, contract, budget)?;
+    stored_candidate_work(contract, budget)?;
+    let rows = contract_rows(contract, budget)?;
+    for result_row in contract.results.iter() {
+        let (kind, output) = reference_at(result, result_row.position)?;
+        let eligible = |input: InputReference| -> Result<&Ty, String> {
+            budget.charge_work(
+                1 + usize::BITS as usize - contract.input_regions.len().leading_zeros() as usize,
+            )?;
+            let (input_kind, referent) = reference_at(
+                params
+                    .get(input.param)
+                    .ok_or("invalid return input index")?,
+                input.position,
+            )?;
+            let index = contract
+                .input_regions
+                .binary_search_by_key(&input, |row| row.input)
+                .map_err(|_| "missing reference input region")?;
+            let region = contract.input_regions[index].region;
+            if (kind == BorrowKind::Mut && input_kind != BorrowKind::Mut)
+                || rows[usize::from(region.0)] & (1u64 << result_row.region.0) == 0
             {
-                return Err("reference return kind mismatch".into());
+                return Err("return input kind or region mismatch".into());
             }
-            for path in paths.iter() {
-                let selected = projected_ty(eligible(path.param)?, &path.projection)?;
-                if !ref_types_equal(selected, output, budget, 0)? {
-                    return Err("return input path type mismatch".into());
+            Ok(referent)
+        };
+        match &result_row.returns {
+            ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
+                if matches!(result_row.returns, ReturnContract::MutInputPaths(_))
+                    != (kind == BorrowKind::Mut)
+                {
+                    return Err("reference return kind mismatch".into());
+                }
+                for path in paths.iter() {
+                    let selected = projected_ty(eligible(path.input)?, &path.projection)?;
+                    if !ref_types_equal(selected, output, budget, 0)? {
+                        return Err("return input path type mismatch".into());
+                    }
                 }
             }
-        }
-        ReturnContract::SharedInputEnvelopes(paths) | ReturnContract::MutInputEnvelopes(paths) => {
-            if matches!(contract.returns, ReturnContract::MutInputEnvelopes(_))
-                != (kind == BorrowKind::Mut)
-            {
-                return Err("reference return kind mismatch".into());
-            }
-            let mut previous = None;
-            for path in paths.iter() {
-                eligible(path.param)?;
-                if previous.is_some_and(|old| old >= path.param) {
-                    return Err("noncanonical return envelope order".into());
+            ReturnContract::SharedInputEnvelopes(paths)
+            | ReturnContract::MutInputEnvelopes(paths) => {
+                if matches!(result_row.returns, ReturnContract::MutInputEnvelopes(_))
+                    != (kind == BorrowKind::Mut)
+                {
+                    return Err("reference return kind mismatch".into());
                 }
-                previous = Some(path.param);
+                let mut previous = None;
+                for path in paths.iter() {
+                    eligible(path.input)?;
+                    if previous.is_some_and(|old| old >= path.input) {
+                        return Err("noncanonical return envelope order".into());
+                    }
+                    previous = Some(path.input);
+                }
             }
-        }
-        ReturnContract::NoReference => {
-            return Err("reference result requires return contract".into());
+            ReturnContract::NoReference => {
+                return Err("reference result requires return contract".into());
+            }
         }
     }
     Ok(())
 }
 
 impl RefContract {
-    fn validate_shapes(params: &[Ty], result: &Ty) -> Result<usize, String> {
-        if params.len() >= MAX_PATTERN_PROJECTION_WORK {
-            return Err("reference contract type work limit exceeded".into());
-        }
-        let mut pending: Vec<_> = params
-            .iter()
-            .chain(std::iter::once(result))
-            .map(|ty| (ty, 0usize))
-            .collect();
-        let mut work = 0;
-        let mut seen = std::collections::HashSet::new();
-        let mut structs = std::collections::HashSet::new();
-        let mut enums = std::collections::HashSet::new();
-        while let Some((ty, depth)) = pending.pop() {
-            work += 1;
-            if work > MAX_PATTERN_PROJECTION_WORK || depth > MAX_PATTERN_PROJECTION_DEPTH {
-                return Err("reference contract type resource limit exceeded".into());
-            }
-            match ty {
-                Ty::Ref { referent, .. } => {
-                    if depth != 0 {
-                        return Err("unsupported: nested or aggregate references".into());
-                    }
-                    pending.push((referent, depth + 1));
-                }
-                Ty::Tuple(fields) if seen.insert((0, fields.as_ptr() as usize)) => {
-                    if fields.len()
-                        > MAX_PATTERN_PROJECTION_WORK.saturating_sub(work + pending.len())
-                    {
-                        return Err("reference contract type work limit exceeded".into());
-                    }
-                    pending.extend(fields.iter().map(|ty| (ty, depth + 1)));
-                }
-                Ty::Array { element, .. } if seen.insert((1, Arc::as_ptr(element) as usize)) => {
-                    pending.push((element, depth + 1))
-                }
-                Ty::Struct(ty) if structs.insert(ty.def().id) => {
-                    if ty.def().fields.len()
-                        > MAX_PATTERN_PROJECTION_WORK.saturating_sub(work + pending.len())
-                    {
-                        return Err("reference contract type work limit exceeded".into());
-                    }
-                    pending.extend(ty.def().fields.iter().map(|field| (&field.ty, depth + 1)));
-                }
-                Ty::Enum(ty) if enums.insert(ty.def().id) => {
-                    if ty.def().variants.len() > MAX_ENUM_VARIANTS
-                        || ty.def().variants.len() > MAX_PATTERN_PROJECTION_WORK - work
-                    {
-                        return Err("reference contract enum work limit exceeded".into());
-                    }
-                    work += ty.def().variants.len();
-                    for variant in ty.def().variants.iter() {
-                        if variant.fields.len()
-                            > MAX_PATTERN_PROJECTION_WORK.saturating_sub(work + pending.len())
-                        {
-                            return Err("reference contract type work limit exceeded".into());
-                        }
-                        pending.extend(variant.fields.iter().map(|field| (&field.ty, depth + 1)));
-                    }
-                }
-                _ => {}
-            }
-            if pending.len() > MAX_PATTERN_PROJECTION_WORK - work {
-                return Err("reference contract type work limit exceeded".into());
-            }
-        }
-        Ok(work)
-    }
-    /// Reflexive declaration closure only. Body universals never infer edges.
+    /// Bounded structural convenience for fixtures, not a declaration proof.
     pub fn closure(&self) -> Result<Vec<u64>, String> {
-        let count = usize::from(self.region_count);
-        if count > MAX_REGION_PARAMS || self.outlives.len() > MAX_REGION_PARAMS * MAX_REGION_PARAMS
-        {
-            return Err("reference contract region resource limit exceeded".into());
-        }
-        if self.param_regions.len() > MAX_PATTERN_PROJECTION_WORK {
-            return Err("reference contract parameter resource limit exceeded".into());
-        }
-        for region in self
-            .param_regions
-            .iter()
-            .flatten()
-            .chain(self.result_region.iter())
-        {
-            if usize::from(region.0) >= count {
-                return Err("invalid reference contract region ID".into());
-            }
-        }
-        for (longer, shorter) in self.outlives.iter() {
-            if usize::from(longer.0) >= count || usize::from(shorter.0) >= count {
-                return Err("invalid reference contract outlives region ID".into());
-            }
-        }
-        let mut rows: Vec<u64> = (0..count).map(|index| 1u64 << index).collect();
-        for (longer, shorter) in self.outlives.iter() {
-            rows[usize::from(longer.0)] |= 1u64 << shorter.0;
-        }
-        for middle in 0..count {
-            let reachable = rows[middle];
-            for row in &mut rows {
-                if *row & (1u64 << middle) != 0 {
-                    *row |= reachable;
-                }
-            }
-        }
-        Ok(rows)
+        let budget = PlanBudget::new(PlanLimits {
+            work: MAX_PATTERN_PROJECTION_WORK,
+            ..PlanLimits::default()
+        });
+        let rows = contract_rows(self, &budget)?;
+        Ok(rows[..usize::from(self.region_count)].to_vec())
     }
-
     pub fn outlives_region(
         &self,
         longer: RegionParamId,
@@ -2340,229 +2447,55 @@ impl RefContract {
         }
         Ok(rows[usize::from(longer.0)] & (1u64 << shorter.0) != 0)
     }
-
+    /// Legacy first-result exact-path convenience, used by structural fixtures.
     pub fn eligible_input_paths(
         &self,
         params: &[Ty],
         result: &Ty,
     ) -> Result<Vec<InputPath>, String> {
-        self.eligible_input_paths_counted(params, result)
-            .map(|(params, _)| params)
-    }
-
-    fn metadata_work(&self) -> usize {
-        let count = usize::from(self.region_count);
-        self.param_regions.len() * 2 + self.outlives.len() * 2 + count * count + count + 1
-    }
-
-    fn eligible_input_paths_counted(
-        &self,
-        params: &[Ty],
-        result: &Ty,
-    ) -> Result<(Vec<InputPath>, usize), String> {
-        let shape_work = Self::validate_shapes(params, result)?;
-        let rows = self.closure()?;
-        if self.param_regions.len() != params.len() {
-            return Err("reference contract parameter arity mismatch".into());
+        let budget = PlanBudget::new(PlanLimits {
+            work: MAX_PATTERN_PROJECTION_WORK,
+            ..PlanLimits::default()
+        });
+        let expected = derive_return_contracts(params, result, self, &budget)?;
+        match expected.first().map(|row| &row.returns) {
+            Some(
+                ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths),
+            ) => Ok(paths.to_vec()),
+            _ => Err("exact reference return contract requires reference result".into()),
         }
-        let Ty::Ref {
-            kind: result_kind,
-            referent: output,
-        } = result
-        else {
-            return Err("reference return contract requires reference result".into());
-        };
-        let region = self
-            .result_region
-            .ok_or("missing reference result region")?;
-        let mut eligible = Vec::new();
-        let mut work = 0;
-        let mut occurrences = 0usize;
-        let mut stored_steps = 0usize;
-        let mut path = Vec::new();
-        let mut frames: Vec<(&Ty, usize)> = Vec::new();
-        let children = |ty: &Ty| -> usize {
-            if let Ty::Array { len, .. } = ty {
-                *len
-            } else {
-                ty.field_count().unwrap_or(0)
-            }
-        };
-        fn child(ty: &Ty, index: usize) -> Result<(Projection, &Ty), String> {
-            if let Ty::Array { element, len } = ty {
-                if *len > MAX_ARRAY_LEN || index >= *len {
-                    return Err("invalid input path array index".into());
-                }
-                Ok((Projection::ConstantIndex(index), element))
-            } else {
-                Ok((
-                    Projection::Field(index),
-                    ty.field_ty(index).ok_or("invalid input path field")?,
-                ))
-            }
-        }
-        for (index, (ty, param_region)) in params.iter().zip(self.param_regions.iter()).enumerate()
-        {
-            match ty {
-                Ty::Ref { kind, referent } => {
-                    let input = param_region.ok_or("missing reference parameter region")?;
-                    if (*result_kind == BorrowKind::Shared || *kind == BorrowKind::Mut)
-                        && rows[usize::from(input.0)] & (1u64 << region.0) != 0
-                    {
-                        occurrences += 1;
-                        if occurrences > MAX_INPUT_PATH_OCCURRENCES {
-                            return Err("input path occurrence resource limit exceeded".into());
-                        }
-                        let mut current = referent.as_ref();
-                        'walk: loop {
-                            if pattern_types_equal(current, output, &mut work)? {
-                                if eligible.len() >= MAX_INPUT_PATHS {
-                                    return Err("reference return candidate limit exceeded".into());
-                                }
-                                stored_steps = stored_steps
-                                    .checked_add(path.len())
-                                    .ok_or("input path step resource limit exceeded")?;
-                                if stored_steps > MAX_INPUT_PATH_STEPS {
-                                    return Err("input path step resource limit exceeded".into());
-                                }
-                                eligible.push(InputPath {
-                                    param: index,
-                                    projection: path.clone().into(),
-                                });
-                            }
-                            let count = children(current);
-                            if count != 0 {
-                                if path.len() >= MAX_PATTERN_PROJECTION_DEPTH {
-                                    return Err("input path depth resource limit exceeded".into());
-                                }
-                                occurrences = occurrences
-                                    .checked_add(count)
-                                    .ok_or("input path occurrence resource limit exceeded")?;
-                                if occurrences > MAX_INPUT_PATH_OCCURRENCES {
-                                    return Err(
-                                        "input path occurrence resource limit exceeded".into()
-                                    );
-                                }
-                                let (step, next) = child(current, 0)?;
-                                frames.push((current, 1));
-                                path.push(step);
-                                current = next;
-                                continue;
-                            }
-                            while let Some((parent, next_index)) = frames.last_mut() {
-                                let parent = *parent;
-                                if *next_index < children(parent) {
-                                    let (step, next) = child(parent, *next_index)?;
-                                    *next_index += 1;
-                                    *path.last_mut().ok_or("invalid input path traversal")? = step;
-                                    current = next;
-                                    continue 'walk;
-                                }
-                                frames.pop();
-                                path.pop();
-                            }
-                            break;
-                        }
-                    }
-                }
-                _ if param_region.is_some() => {
-                    return Err("nonreference parameter has reference region".into());
-                }
-                _ => {}
-            }
-        }
-        Ok((
-            eligible,
-            shape_work + self.metadata_work() + params.len() + work + occurrences + stored_steps,
-        ))
     }
-
     pub fn validate(&self, params: &[Ty], result: &Ty) -> Result<(), String> {
         self.validation_work(params, result).map(|_| ())
     }
-
-    /// Work for this exact structural validation, for the caller's shared
-    /// preflight budget. Charge before repeating validation/publication.
+    /// Legacy structural completeness, never used as production signature authority.
     pub fn validation_work(&self, params: &[Ty], result: &Ty) -> Result<usize, String> {
-        let mut supplied_work = 0usize;
-        if let ReturnContract::SharedInputPaths(candidates)
-        | ReturnContract::MutInputPaths(candidates) = &self.returns
-        {
-            if candidates.len() > MAX_INPUT_PATHS {
-                return Err("reference return candidate limit exceeded".into());
-            }
-            let mut steps = 0usize;
-            for candidate in candidates.iter() {
-                if candidate.projection.len() > MAX_PATTERN_PROJECTION_DEPTH {
-                    return Err("input path depth resource limit exceeded".into());
-                }
-                steps = steps
-                    .checked_add(candidate.projection.len())
-                    .ok_or("input path step resource limit exceeded")?;
-                if steps > MAX_INPUT_PATH_STEPS {
-                    return Err("input path step resource limit exceeded".into());
-                }
-            }
-            for candidate in candidates.iter() {
-                let Ty::Ref { referent, .. } = params
-                    .get(candidate.param)
-                    .ok_or("invalid input path parameter index")?
-                else {
-                    return Err("input path parameter requires reference type".into());
-                };
-                if candidate.projection.iter().any(|step| {
-                    !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
-                }) {
-                    return Err("forbidden input path projection".into());
-                }
-                projected_ty(referent, &candidate.projection)?;
-            }
-            supplied_work = candidates.len() * 2 + steps * 2;
+        let budget = PlanBudget::new(PlanLimits {
+            work: MAX_PATTERN_PROJECTION_WORK,
+            ..PlanLimits::default()
+        });
+        validate_stored_ref_contract(params, result, self, &budget)?;
+        if self.results.iter().any(|row| {
+            matches!(
+                row.returns,
+                ReturnContract::SharedInputEnvelopes(_) | ReturnContract::MutInputEnvelopes(_)
+            )
+        }) {
+            return Err("envelope contract requires canonical signature authority".into());
         }
-        let mut work = Self::validate_shapes(params, result)?;
-        self.closure()?;
-        work += self.metadata_work() + supplied_work;
-        match &self.returns {
-            ReturnContract::SharedInputEnvelopes(_) | ReturnContract::MutInputEnvelopes(_) => {
-                return Err("envelope contract requires canonical signature authority".into());
-            }
-            ReturnContract::NoReference => {
-                if matches!(result, Ty::Ref { .. })
-                    || self.region_count != 0
-                    || self.result_region.is_some()
-                    || !self.outlives.is_empty()
-                    || self.param_regions.iter().any(Option::is_some)
-                    || (!self.param_regions.is_empty() && self.param_regions.len() != params.len())
-                {
-                    return Err("invalid noescape reference contract".into());
-                }
-            }
-            ReturnContract::SharedInputPaths(candidates)
-            | ReturnContract::MutInputPaths(candidates) => {
-                let expected_kind = if matches!(self.returns, ReturnContract::MutInputPaths(_)) {
-                    BorrowKind::Mut
-                } else {
-                    BorrowKind::Shared
-                };
-                if !matches!(result, Ty::Ref { kind, .. } if *kind == expected_kind) {
-                    return Err("reference return contract/result kind mismatch".into());
-                }
-                let (eligible, candidate_work) =
-                    self.eligible_input_paths_counted(params, result)?;
-                work += candidate_work
-                    + candidates.len()
-                    + candidates
-                        .iter()
-                        .map(|candidate| candidate.projection.len())
-                        .sum::<usize>();
-                if candidates.as_ref() != eligible.as_slice() {
-                    return Err("reference return candidates must equal complete declaration-derived parameters".into());
-                }
-            }
+        let expected = derive_return_contracts(params, result, self, &budget)?;
+        // The stored metadata scan above has charged every compared candidate/step.
+        if self.results.as_ref() != expected.as_ref() {
+            return Err(
+                "reference return candidates must equal complete declaration-derived parameters"
+                    .into(),
+            );
         }
-        if work > MAX_PATTERN_PROJECTION_WORK {
-            return Err("reference contract validation work limit exceeded".into());
-        }
+        let work = budget
+            .usage
+            .lock()
+            .map_err(|_| "generic planning budget poisoned")?
+            .work;
         Ok(work)
     }
 }
@@ -3642,26 +3575,304 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn nested_reference_positions_normalize_and_reject_malformed_rows() {
+        let budget = PlanBudget::default();
+        let shared = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let outer = ReferencePosition { depth: 0 };
+        let inner = ReferencePosition { depth: 1 };
+        let input = |position| InputReference { param: 0, position };
+        let raw = RefContract {
+            region_count: 2,
+            input_regions: Arc::from([
+                InputRegion {
+                    input: input(outer),
+                    region: RegionParamId(0),
+                },
+                InputRegion {
+                    input: input(inner),
+                    region: RegionParamId(1),
+                },
+            ]),
+            results: Arc::from([ResultReference {
+                position: outer,
+                region: RegionParamId(1),
+                returns: ReturnContract::NoReference,
+            }]),
+            outlives: Arc::from([]),
+        };
+        let mut contract = normalize_ref_contract(&raw, &budget)
+            .unwrap()
+            .as_ref()
+            .clone();
+        assert!(
+            contract
+                .outlives_region(RegionParamId(1), RegionParamId(0))
+                .unwrap()
+        );
+        assert!(
+            !contract
+                .outlives_region(RegionParamId(0), RegionParamId(1))
+                .unwrap()
+        );
+        let params = [shared(shared(Ty::Int(IntTy::I32)))];
+        let result = shared(Ty::Int(IntTy::I32));
+        contract.results = derive_return_contracts(&params, &result, &contract, &budget).unwrap();
+        assert_eq!(
+            contract.results[0].returns,
+            ReturnContract::SharedInputPaths(Arc::from([InputPath {
+                input: input(inner),
+                projection: Arc::from([])
+            }]))
+        );
+        validate_stored_ref_contract(&params, &result, &contract, &budget).unwrap();
+        assert_eq!(
+            reference_at(&params[0], inner).unwrap().1,
+            &Ty::Int(IntTy::I32)
+        );
+        assert_eq!(
+            projected_ty(&params[0], &[Projection::Deref, Projection::Deref]).unwrap(),
+            &Ty::Int(IntTy::I32)
+        );
+        for rows in [
+            vec![contract.input_regions[0].clone()],
+            vec![
+                contract.input_regions[1].clone(),
+                contract.input_regions[0].clone(),
+            ],
+            vec![
+                contract.input_regions[0].clone(),
+                contract.input_regions[0].clone(),
+            ],
+        ] {
+            let malformed = RefContract {
+                input_regions: rows.into(),
+                ..contract.clone()
+            };
+            assert!(validate_stored_ref_contract(&params, &result, &malformed, &budget).is_err());
+        }
+        let missing_wf = RefContract {
+            outlives: Arc::from([]),
+            ..contract.clone()
+        };
+        assert!(validate_stored_ref_contract(&params, &result, &missing_wf, &budget).is_err());
+        let mut wrong = contract.clone();
+        Arc::make_mut(&mut wrong.results)[0].position = inner;
+        assert!(validate_stored_ref_contract(&params, &result, &wrong, &budget).is_err());
+        Arc::make_mut(&mut wrong.results)[0].position = outer;
+        Arc::make_mut(&mut wrong.results)[0].returns = ReturnContract::NoReference;
+        assert!(validate_stored_ref_contract(&params, &result, &wrong, &budget).is_err());
+        assert!(reference_layers(&shared(shared(shared(Ty::Bool)))).is_err());
+        assert!(
+            reference_layers(&shared(Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Bool)
+            }))
+            .is_err()
+        );
+        let tiny = PlanBudget::new(PlanLimits {
+            work: 1,
+            ..PlanLimits::default()
+        });
+        assert!(normalize_ref_contract(&raw, &tiny).is_err());
+    }
+
+    #[test]
+    fn nested_reference_result_rows_preserve_rigid_envelopes_and_combined_caps() {
+        let budget = PlanBudget::default();
+        let opaque = Ty::Param(ParamId {
+            owner: BinderId {
+                declaration: test_decl(),
+            },
+            index: 0,
+        });
+        let shared = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let input = |depth| InputReference {
+            param: 0,
+            position: ReferencePosition { depth },
+        };
+        let raw = RefContract {
+            region_count: 2,
+            input_regions: Arc::from([
+                InputRegion {
+                    input: input(0),
+                    region: RegionParamId(0),
+                },
+                InputRegion {
+                    input: input(1),
+                    region: RegionParamId(1),
+                },
+            ]),
+            results: Arc::from([
+                ResultReference {
+                    position: ReferencePosition { depth: 0 },
+                    region: RegionParamId(0),
+                    returns: ReturnContract::NoReference,
+                },
+                ResultReference {
+                    position: ReferencePosition { depth: 1 },
+                    region: RegionParamId(1),
+                    returns: ReturnContract::NoReference,
+                },
+            ]),
+            outlives: Arc::from([]),
+        };
+        let mut contract = normalize_ref_contract(&raw, &budget)
+            .unwrap()
+            .as_ref()
+            .clone();
+        let template = shared(shared(opaque));
+        contract.results = derive_return_contracts(
+            std::slice::from_ref(&template),
+            &template,
+            &contract,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            contract.results[0].returns,
+            ReturnContract::SharedInputEnvelopes(Arc::from([
+                InputEnvelope { input: input(0) },
+                InputEnvelope { input: input(1) }
+            ]))
+        );
+        assert_eq!(
+            contract.results[1].returns,
+            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope { input: input(1) }]))
+        );
+        let concrete = shared(shared(Ty::Int(IntTy::I32)));
+        validate_stored_ref_contract(
+            std::slice::from_ref(&concrete),
+            &concrete,
+            &contract,
+            &budget,
+        )
+        .unwrap();
+        assert_ne!(
+            derive_return_contracts(
+                std::slice::from_ref(&concrete),
+                &concrete,
+                &contract,
+                &budget
+            )
+            .unwrap(),
+            contract.results
+        );
+        let mut oversized = contract.clone();
+        Arc::make_mut(&mut oversized.results)[0].returns = ReturnContract::SharedInputEnvelopes(
+            vec![InputEnvelope { input: input(0) }; MAX_INPUT_PATHS].into(),
+        );
+        assert!(
+            validate_stored_ref_contract(
+                std::slice::from_ref(&concrete),
+                &concrete,
+                &oversized,
+                &budget
+            )
+            .unwrap_err()
+            .contains("candidate limit")
+        );
+    }
+
+    fn fixture_input(param: usize) -> super::InputReference {
+        super::InputReference {
+            param,
+            position: super::ReferencePosition { depth: 0 },
+        }
+    }
+    fn fixture_input_regions(
+        regions: std::sync::Arc<[Option<super::RegionParamId>]>,
+    ) -> std::sync::Arc<[super::InputRegion]> {
+        regions
+            .iter()
+            .enumerate()
+            .filter_map(|(param, region)| {
+                region.map(|region| super::InputRegion {
+                    input: fixture_input(param),
+                    region,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into()
+    }
+    fn fixture_parameter_regions(
+        contract: &super::RefContract,
+    ) -> Vec<Option<super::RegionParamId>> {
+        contract
+            .input_regions
+            .iter()
+            .map(|row| Some(row.region))
+            .collect()
+    }
+    fn fixture_result_regions(
+        region: Option<super::RegionParamId>,
+        returns: super::ReturnContract,
+    ) -> std::sync::Arc<[super::ResultReference]> {
+        region
+            .map(|region| super::ResultReference {
+                position: super::ReferencePosition { depth: 0 },
+                region,
+                returns,
+            })
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into()
+    }
+    fn fixture_set_returns(contract: &mut super::RefContract, returns: super::ReturnContract) {
+        if let Some(row) = std::sync::Arc::make_mut(&mut contract.results).first_mut() {
+            row.returns = returns;
+        } else {
+            assert!(matches!(returns, super::ReturnContract::NoReference));
+        }
+    }
+    fn fixture_derive_return_contract(
+        params: &[super::Ty],
+        result: &super::Ty,
+        contract: &super::RefContract,
+        budget: &super::PlanBudget,
+    ) -> Result<super::ReturnContract, String> {
+        let rows = super::derive_return_contracts(params, result, contract, budget)?;
+        Ok(rows
+            .first()
+            .map_or(super::ReturnContract::NoReference, |row| {
+                row.returns.clone()
+            }))
+    }
+
+    #[test]
     fn generic_reference_regions_normalize_mediators_and_preserve_named_noescape() {
         use super::*;
         let budget = PlanBudget::default();
         let mut raw = RefContract {
+            results: fixture_result_regions(
+                Some(RegionParamId(0)),
+                ReturnContract::SharedInputPaths(Arc::from([])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([
+                Some(RegionParamId(2)),
+                Some(RegionParamId(2)),
+            ])),
             region_count: 4,
-            param_regions: Arc::from([Some(RegionParamId(2)), Some(RegionParamId(2))]),
-            result_region: Some(RegionParamId(0)),
             outlives: Arc::from([
                 (RegionParamId(2), RegionParamId(3)),
                 (RegionParamId(3), RegionParamId(0)),
             ]),
-            returns: ReturnContract::SharedInputPaths(Arc::from([])),
         };
         let normalized = normalize_ref_contract(&raw, &budget).unwrap();
         assert_eq!(normalized.region_count, 2);
         assert_eq!(
-            normalized.param_regions.as_ref(),
+            fixture_parameter_regions(&normalized).as_slice(),
             &[Some(RegionParamId(0)), Some(RegionParamId(0))]
         );
-        assert_eq!(normalized.result_region, Some(RegionParamId(1)));
+        assert_eq!(
+            normalized.results.first().map(|row| row.region),
+            Some(RegionParamId(1))
+        );
         assert_eq!(
             normalized.outlives.as_ref(),
             &[(RegionParamId(0), RegionParamId(1))]
@@ -3672,20 +3883,23 @@ mod tests {
         };
         let params = [reference.clone(), reference.clone()];
         let ReturnContract::SharedInputPaths(paths) =
-            derive_return_contract(&params, &reference, &normalized, &budget).unwrap()
+            fixture_derive_return_contract(&params, &reference, &normalized, &budget).unwrap()
         else {
             panic!("concrete declarations retain exact paths");
         };
         assert_eq!(
-            paths.iter().map(|path| path.param).collect::<Vec<_>>(),
+            paths
+                .iter()
+                .map(|path| path.input.param)
+                .collect::<Vec<_>>(),
             vec![0, 1]
         );
-        raw.result_region = None;
-        raw.returns = ReturnContract::NoReference;
+        raw.results = Arc::from([]);
+        fixture_set_returns(&mut raw, ReturnContract::NoReference);
         let normalized = normalize_ref_contract(&raw, &budget).unwrap();
         assert_eq!(normalized.region_count, 1);
         assert_eq!(
-            derive_return_contract(&params, &Ty::Unit, &normalized, &budget).unwrap(),
+            fixture_derive_return_contract(&params, &Ty::Unit, &normalized, &budget).unwrap(),
             ReturnContract::NoReference
         );
         validate_stored_ref_contract(&params, &Ty::Unit, &normalized, &budget).unwrap();
@@ -3700,11 +3914,11 @@ mod tests {
             shared = Ty::Tuple(node);
         }
         let erased = RefContract {
-            param_regions: Arc::from([None]),
+            input_regions: fixture_input_regions(Arc::from([None])),
             ..RefContract::default()
         };
         assert_eq!(
-            derive_return_contract(&[shared], &Ty::Unit, &erased, &budget).unwrap(),
+            fixture_derive_return_contract(&[shared], &Ty::Unit, &erased, &budget).unwrap(),
             ReturnContract::NoReference
         );
     }
@@ -3725,13 +3939,15 @@ mod tests {
         };
         let scalar = Ty::Int(IntTy::I32);
         let mut contract = RefContract {
+            results: fixture_result_regions(Some(RegionParamId(0)), ReturnContract::NoReference),
+            input_regions: fixture_input_regions(Arc::from([
+                Some(RegionParamId(0)),
+                Some(RegionParamId(0)),
+            ])),
             region_count: 1,
-            param_regions: Arc::from([Some(RegionParamId(0)), Some(RegionParamId(0))]),
-            result_region: Some(RegionParamId(0)),
             outlives: Arc::from([]),
-            returns: ReturnContract::NoReference,
         };
-        contract.returns = derive_return_contract(
+        contract.results = derive_return_contracts(
             &[reference(opaque.clone()), reference(scalar.clone())],
             &reference(scalar.clone()),
             &contract,
@@ -3739,10 +3955,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            contract.returns,
+            contract.results[0].returns,
             ReturnContract::SharedInputEnvelopes(Arc::from([
-                InputEnvelope { param: 0 },
-                InputEnvelope { param: 1 }
+                InputEnvelope {
+                    input: fixture_input(0),
+                },
+                InputEnvelope {
+                    input: fixture_input(1),
+                }
             ]))
         );
         validate_stored_ref_contract(
@@ -3760,8 +3980,8 @@ mod tests {
                 )
                 .is_err()
         );
-        contract.param_regions = Arc::from([Some(RegionParamId(0))]);
-        contract.returns = derive_return_contract(
+        contract.input_regions = fixture_input_regions(Arc::from([Some(RegionParamId(0))]));
+        contract.results = derive_return_contracts(
             &[reference(scalar.clone())],
             &reference(opaque),
             &contract,
@@ -3769,19 +3989,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            contract.returns,
-            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope { param: 0 }]))
+            contract.results[0].returns,
+            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope {
+                input: fixture_input(0),
+            }]))
         );
         let nested = Ty::Array {
             element: Arc::new(reference(scalar)),
             len: 0,
         };
         assert!(
-            derive_return_contract(
+            fixture_derive_return_contract(
                 &[nested],
                 &Ty::Unit,
                 &RefContract {
-                    param_regions: Arc::from([None]),
+                    input_regions: fixture_input_regions(Arc::from([None])),
                     ..RefContract::default()
                 },
                 &budget
@@ -4468,11 +4690,13 @@ mod tests {
             referent: Arc::new(ty),
         };
         let contract = RefContract {
+            results: fixture_result_regions(
+                Some(RegionParamId(0)),
+                ReturnContract::SharedInputPaths(Arc::from([])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([Some(RegionParamId(0))])),
             region_count: 1,
-            param_regions: Arc::from([Some(RegionParamId(0))]),
-            result_region: Some(RegionParamId(0)),
             outlives: Arc::from([]),
-            returns: ReturnContract::SharedInputPaths(Arc::from([])),
         };
         let output = reference(Ty::Int(IntTy::I32));
         let array = Ty::Array {
@@ -4522,12 +4746,15 @@ mod tests {
                 .contains("occurrence resource")
         );
         let oversized = InputPath {
-            param: 0,
+            input: fixture_input(0),
             projection: vec![Projection::Field(0); 128].into(),
         };
         let malformed = RefContract {
-            returns: ReturnContract::SharedInputPaths(
-                vec![oversized; MAX_INPUT_PATH_STEPS / 128 + 1].into(),
+            results: fixture_result_regions(
+                contract.results.first().map(|row| row.region),
+                ReturnContract::SharedInputPaths(
+                    vec![oversized; MAX_INPUT_PATH_STEPS / 128 + 1].into(),
+                ),
             ),
             ..contract.clone()
         };
@@ -4538,15 +4765,18 @@ mod tests {
                 .contains("step resource")
         );
         let malformed = RefContract {
-            returns: ReturnContract::SharedInputPaths(
-                vec![
-                    InputPath {
-                        param: usize::MAX,
-                        projection: Arc::from([])
-                    };
-                    MAX_INPUT_PATHS + 1
-                ]
-                .into(),
+            results: fixture_result_regions(
+                contract.results.first().map(|row| row.region),
+                ReturnContract::SharedInputPaths(
+                    vec![
+                        InputPath {
+                            input: fixture_input(usize::MAX),
+                            projection: Arc::from([]),
+                        };
+                        MAX_INPUT_PATHS + 1
+                    ]
+                    .into(),
+                ),
             ),
             ..contract
         };
@@ -4606,14 +4836,20 @@ mod tests {
         ];
         let result = reference(Ty::Int(IntTy::I32));
         let mut contract = RefContract {
+            results: fixture_result_regions(
+                Some(RegionParamId(0)),
+                ReturnContract::SharedInputPaths(Arc::from([])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([
+                None,
+                Some(RegionParamId(0)),
+                Some(RegionParamId(0)),
+            ])),
             region_count: 1,
-            param_regions: Arc::from([None, Some(RegionParamId(0)), Some(RegionParamId(0))]),
-            result_region: Some(RegionParamId(0)),
             outlives: Arc::from([]),
-            returns: ReturnContract::SharedInputPaths(Arc::from([])),
         };
         let candidate = |param, projection: Vec<Projection>| InputPath {
-            param,
+            input: fixture_input(param),
             projection: projection.into(),
         };
         let expected = vec![
@@ -4657,7 +4893,10 @@ mod tests {
             contract.eligible_input_paths(&params, &result).unwrap(),
             expected
         );
-        contract.returns = ReturnContract::SharedInputPaths(expected.clone().into());
+        fixture_set_returns(
+            &mut contract,
+            ReturnContract::SharedInputPaths(expected.clone().into()),
+        );
         contract.validate(&params, &result).unwrap();
         for mut malformed in [
             expected[..6].to_vec(),
@@ -4672,8 +4911,10 @@ mod tests {
                 paths
             },
         ] {
-            contract.returns =
-                ReturnContract::SharedInputPaths(std::mem::take(&mut malformed).into());
+            fixture_set_returns(
+                &mut contract,
+                ReturnContract::SharedInputPaths(std::mem::take(&mut malformed).into()),
+            );
             assert!(contract.validate(&params, &result).is_err());
         }
         for path in [
@@ -4685,7 +4926,10 @@ mod tests {
             vec![Projection::Field(99)],
             vec![Projection::ConstantIndex(0)],
         ] {
-            contract.returns = ReturnContract::SharedInputPaths(Arc::from([candidate(1, path)]));
+            fixture_set_returns(
+                &mut contract,
+                ReturnContract::SharedInputPaths(Arc::from([candidate(1, path)])),
+            );
             assert!(contract.validate(&params, &result).is_err());
         }
         let Ty::Struct(root_type) = &root else {
@@ -4725,7 +4969,7 @@ mod tests {
         params
             .iter()
             .map(|param| InputPath {
-                param: *param,
+                input: fixture_input(*param),
                 projection: Arc::from([]),
             })
             .collect::<Vec<_>>()
@@ -4746,21 +4990,23 @@ mod tests {
             reference(BorrowKind::Mut, Ty::Bool),
         ];
         let path = |param| InputPath {
-            param,
+            input: fixture_input(param),
             projection: Arc::from([Projection::Field(0)]),
         };
         let mut contract = RefContract {
-            region_count: 2,
-            param_regions: Arc::from([
+            results: fixture_result_regions(
+                Some(RegionParamId(0)),
+                ReturnContract::SharedInputPaths(Arc::from([path(1), path(2)])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([
                 None,
                 Some(RegionParamId(0)),
                 Some(RegionParamId(0)),
                 Some(RegionParamId(1)),
                 Some(RegionParamId(0)),
-            ]),
-            result_region: Some(RegionParamId(0)),
+            ])),
+            region_count: 2,
             outlives: Arc::from([]),
-            returns: ReturnContract::SharedInputPaths(Arc::from([path(1), path(2)])),
         };
         let shared_result = reference(BorrowKind::Shared, Ty::Int(IntTy::I32));
         assert_eq!(
@@ -4776,13 +5022,19 @@ mod tests {
             vec![path(1), path(2), path(2)],
         ] {
             let forged = RefContract {
-                returns: ReturnContract::SharedInputPaths(candidates.into()),
+                results: fixture_result_regions(
+                    contract.results.first().map(|row| row.region),
+                    ReturnContract::SharedInputPaths(candidates.into()),
+                ),
                 ..contract.clone()
             };
             assert!(forged.validate(&params, &shared_result).is_err());
         }
         let mutable_result = reference(BorrowKind::Mut, Ty::Int(IntTy::I32));
-        contract.returns = ReturnContract::MutInputPaths(Arc::from([path(2)]));
+        fixture_set_returns(
+            &mut contract,
+            ReturnContract::MutInputPaths(Arc::from([path(2)])),
+        );
         assert_eq!(
             contract
                 .eligible_input_paths(&params, &mutable_result)
@@ -4792,7 +5044,10 @@ mod tests {
         contract.validate(&params, &mutable_result).unwrap();
         for candidates in [vec![path(1)], vec![path(1), path(2)], vec![]] {
             let forged = RefContract {
-                returns: ReturnContract::MutInputPaths(candidates.into()),
+                results: fixture_result_regions(
+                    contract.results.first().map(|row| row.region),
+                    ReturnContract::MutInputPaths(candidates.into()),
+                ),
                 ..contract.clone()
             };
             assert!(forged.validate(&params, &mutable_result).is_err());
@@ -4812,18 +5067,18 @@ mod tests {
                 path(1),
                 path(2),
                 InputPath {
-                    param: 3,
-                    projection: Arc::from([])
+                    input: fixture_input(3),
+                    projection: Arc::from([]),
                 }
             ]
         );
-        contract.param_regions = Arc::from([
+        contract.input_regions = fixture_input_regions(Arc::from([
             None,
             None,
             Some(RegionParamId(0)),
             Some(RegionParamId(1)),
             Some(RegionParamId(0)),
-        ]);
+        ]));
         assert!(
             contract
                 .eligible_input_paths(&params, &mutable_result)
@@ -4844,11 +5099,13 @@ mod tests {
         };
         let shared_result = reference(BorrowKind::Shared, Ty::Int(IntTy::I32));
         let mut contract = RefContract {
+            results: fixture_result_regions(
+                Some(RegionParamId(0)),
+                ReturnContract::SharedInputPaths(Arc::from([])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([Some(RegionParamId(0))])),
             region_count: 1,
-            param_regions: Arc::from([Some(RegionParamId(0))]),
-            result_region: Some(RegionParamId(0)),
             outlives: Arc::from([]),
-            returns: ReturnContract::SharedInputPaths(Arc::from([])),
         };
         let params = [reference(BorrowKind::Mut, array.clone())];
         let candidates = contract
@@ -4859,7 +5116,10 @@ mod tests {
             candidates[MAX_INPUT_PATHS - 1].projection.as_ref(),
             [Projection::ConstantIndex(MAX_INPUT_PATHS - 1)]
         );
-        contract.returns = ReturnContract::SharedInputPaths(candidates.into());
+        fixture_set_returns(
+            &mut contract,
+            ReturnContract::SharedInputPaths(candidates.into()),
+        );
         contract.validate(&params, &shared_result).unwrap();
         let overflow = [reference(
             BorrowKind::Mut,
@@ -4873,7 +5133,7 @@ mod tests {
         );
         let shared_params = [reference(BorrowKind::Shared, array)];
         let mutable_result = reference(BorrowKind::Mut, Ty::Int(IntTy::I32));
-        contract.returns = ReturnContract::MutInputPaths(Arc::from([]));
+        fixture_set_returns(&mut contract, ReturnContract::MutInputPaths(Arc::from([])));
         contract.validate(&shared_params, &mutable_result).unwrap();
         assert!(
             contract
@@ -4897,16 +5157,18 @@ mod tests {
         ];
         let result = mutable(Ty::Int(IntTy::I32));
         let contract = RefContract {
-            region_count: 2,
-            param_regions: Arc::from([
+            results: fixture_result_regions(
+                Some(RegionParamId(1)),
+                ReturnContract::MutInputPaths(empty_input_paths(&[2, 3])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([
                 None,
                 Some(RegionParamId(0)),
                 Some(RegionParamId(0)),
                 Some(RegionParamId(1)),
-            ]),
-            result_region: Some(RegionParamId(1)),
+            ])),
+            region_count: 2,
             outlives: Arc::from([(RegionParamId(0), RegionParamId(1))]),
-            returns: ReturnContract::MutInputPaths(empty_input_paths(&[2, 3])),
         };
         contract.validate(&params, &result).unwrap();
         assert_eq!(
@@ -4922,13 +5184,19 @@ mod tests {
             vec![usize::MAX],
         ] {
             let malformed = RefContract {
-                returns: ReturnContract::MutInputPaths(empty_input_paths(&candidates)),
+                results: fixture_result_regions(
+                    contract.results.first().map(|row| row.region),
+                    ReturnContract::MutInputPaths(empty_input_paths(&candidates)),
+                ),
                 ..contract.clone()
             };
             assert!(malformed.validate(&params, &result).is_err());
         }
         let forged = RefContract {
-            returns: ReturnContract::SharedInputPaths(empty_input_paths(&[2, 3])),
+            results: fixture_result_regions(
+                contract.results.first().map(|row| row.region),
+                ReturnContract::SharedInputPaths(empty_input_paths(&[2, 3])),
+            ),
             ..contract.clone()
         };
         assert!(
@@ -4955,11 +5223,13 @@ mod tests {
         contract.validate(&mixed, &result).unwrap();
         RefContract::default().validate(&mixed, &Ty::Unit).unwrap();
         let divergent = RefContract {
+            results: fixture_result_regions(
+                Some(RegionParamId(0)),
+                ReturnContract::MutInputPaths(empty_input_paths(&[])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([])),
             region_count: 1,
-            param_regions: Arc::from([]),
-            result_region: Some(RegionParamId(0)),
             outlives: Arc::from([]),
-            returns: ReturnContract::MutInputPaths(empty_input_paths(&[])),
         };
         divergent.validate(&[], &result).unwrap();
     }
@@ -4979,19 +5249,21 @@ mod tests {
         ];
         let result = shared(Ty::Int(IntTy::I32));
         let contract = RefContract {
-            region_count: 3,
-            param_regions: Arc::from([
+            results: fixture_result_regions(
+                Some(RegionParamId(2)),
+                ReturnContract::SharedInputPaths(empty_input_paths(&[2, 3])),
+            ),
+            input_regions: fixture_input_regions(Arc::from([
                 None,
                 Some(RegionParamId(0)),
                 Some(RegionParamId(0)),
                 Some(RegionParamId(1)),
-            ]),
-            result_region: Some(RegionParamId(2)),
+            ])),
+            region_count: 3,
             outlives: Arc::from([
                 (RegionParamId(0), RegionParamId(1)),
                 (RegionParamId(1), RegionParamId(2)),
             ]),
-            returns: ReturnContract::SharedInputPaths(empty_input_paths(&[2, 3])),
         };
         contract.validate(&params, &result).unwrap();
         assert!(
@@ -5010,15 +5282,24 @@ mod tests {
         );
         assert!(contract.validation_work(&params, &result).unwrap() >= params.len());
         let mut invalid = contract.clone();
-        invalid.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[2]));
+        fixture_set_returns(
+            &mut invalid,
+            ReturnContract::SharedInputPaths(empty_input_paths(&[2])),
+        );
         assert!(invalid.validate(&params, &result).is_err());
-        invalid.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[3, 2]));
+        fixture_set_returns(
+            &mut invalid,
+            ReturnContract::SharedInputPaths(empty_input_paths(&[3, 2])),
+        );
         assert!(invalid.validate(&params, &result).is_err());
-        invalid.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[2, 2, 3]));
+        fixture_set_returns(
+            &mut invalid,
+            ReturnContract::SharedInputPaths(empty_input_paths(&[2, 2, 3])),
+        );
         assert!(invalid.validate(&params, &result).is_err());
         for region in [3, u16::MAX] {
             let mut invalid = contract.clone();
-            invalid.result_region = Some(RegionParamId(region));
+            Arc::make_mut(&mut invalid.results)[0].region = RegionParamId(region);
             assert!(invalid.validate(&params, &result).is_err());
             assert!(
                 contract
@@ -5033,11 +5314,14 @@ mod tests {
         invalid.outlives = Arc::from([(RegionParamId(0), RegionParamId(63))]);
         assert!(invalid.closure().is_err());
         invalid = contract.clone();
-        invalid.param_regions = Arc::from([Some(RegionParamId(0))]);
+        invalid.input_regions = fixture_input_regions(Arc::from([Some(RegionParamId(0))]));
         assert!(invalid.validate(&params, &result).is_err());
         let mut no_edges = contract.clone();
         no_edges.outlives = Arc::from([]);
-        no_edges.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[]));
+        fixture_set_returns(
+            &mut no_edges,
+            ReturnContract::SharedInputPaths(empty_input_paths(&[])),
+        );
         no_edges.validate(&params, &result).unwrap();
         assert!(
             !no_edges
@@ -5058,7 +5342,7 @@ mod tests {
         assert!(RefContract::default().validate(&params, &result).is_err());
         RefContract::default().validate(&params, &Ty::Unit).unwrap();
         let canonical = RefContract {
-            param_regions: vec![None; params.len()].into(),
+            input_regions: fixture_input_regions(vec![None; params.len()].into()),
             ..Default::default()
         };
         canonical.validate(&params, &Ty::Unit).unwrap();

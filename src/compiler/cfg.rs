@@ -351,7 +351,16 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
                 if depth != 0 {
                     return Err("unsupported: nested or aggregate references".into());
                 }
-                pending.push((referent, depth + 1));
+                let layers = ir::reference_layers(ty)?;
+                let mut inner = referent.as_ref();
+                for _ in 1..layers {
+                    let Ty::Ref { referent, .. } = inner else {
+                        unreachable!()
+                    };
+                    inner = referent;
+                    work += 1;
+                }
+                pending.push((inner, depth + layers));
             }
             Ty::Array { element, len } => {
                 if *len > ir::MAX_ARRAY_LEN {
@@ -971,13 +980,13 @@ impl Function {
             Rvalue::Borrow(id) => {
                 let site = self.loan_sites.get(id.0).ok_or("invalid CFG loan site")?;
                 let referent = self.place_ty(&site.place)?;
-                if matches!(referent, Ty::Ref { .. }) {
-                    return Err("unsupported: reference to reference".into());
-                }
-                Ok(Ty::Ref {
+                let ty = Ty::Ref {
                     kind: site.kind,
                     referent: std::sync::Arc::new(referent.clone()),
-                })
+                };
+                ir::reference_layers(&ty)?;
+                facts.validate_ty(&ty)?;
+                Ok(ty)
             }
             Rvalue::IndexCopy { array, index } => {
                 let element = self.indexed_element_ty(array, index, facts)?;
@@ -1135,17 +1144,18 @@ impl Function {
         }
         let mut origins = self.loan_sites.len();
         for param in &self.params {
-            if matches!(self.place_ty(&place(*param))?, Ty::Ref { .. }) {
-                origins += 1;
-                if origins > ir::MAX_LOAN_SITES {
-                    return Err("CFG combined reference origin limit exceeded".into());
-                }
+            origins = origins
+                .checked_add(ir::reference_layers(self.place_ty(&place(*param))?)?)
+                .ok_or("reference origin overflow")?;
+            if origins > ir::MAX_LOAN_SITES {
+                return Err("CFG combined reference origin limit exceeded".into());
             }
         }
         for block in &self.blocks {
-            if matches!(&block.terminator.value, Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. }))
-            {
-                origins += 1;
+            if let Terminator::Call { signature, .. } = &block.terminator.value {
+                origins = origins
+                    .checked_add(ir::reference_layers(&signature.result)?)
+                    .ok_or("reference origin overflow")?;
                 if origins > ir::MAX_LOAN_SITES {
                     return Err("CFG combined reference origin limit exceeded".into());
                 }
@@ -2204,11 +2214,12 @@ impl Lowerer<'_> {
                 args,
                 signature,
             } => {
-                if matches!(signature.result, Ty::Ref { .. }) {
-                    if self.origins >= ir::MAX_LOAN_SITES {
-                        return Err("CFG combined reference origin limit exceeded".into());
-                    }
-                    self.origins += 1;
+                self.origins = self
+                    .origins
+                    .checked_add(ir::reference_layers(&signature.result)?)
+                    .ok_or("reference origin overflow")?;
+                if self.origins > ir::MAX_LOAN_SITES {
+                    return Err("CFG combined reference origin limit exceeded".into());
                 }
                 let args = args
                     .iter()
@@ -2374,19 +2385,19 @@ fn lower_internal(
             .get(param.0)
             .ok_or("invalid reference parameter local")?
             .ty;
-        if matches!(ty, Ty::Ref { .. }) {
-            formal_origins += 1;
-            if formal_origins > ir::MAX_LOAN_SITES {
-                return Err("CFG combined reference origin limit exceeded".into());
-            }
+        formal_origins = formal_origins
+            .checked_add(ir::reference_layers(ty)?)
+            .ok_or("reference origin overflow")?;
+        if formal_origins > ir::MAX_LOAN_SITES {
+            return Err("CFG combined reference origin limit exceeded".into());
         }
     }
     let formal_parameter_origins = formal_origins;
     for expression in &source.exprs {
-        if matches!(expression.kind, ir::ExprKind::Call { .. })
-            && matches!(expression.ty, Ty::Ref { .. })
-        {
-            formal_origins += 1;
+        if matches!(expression.kind, ir::ExprKind::Call { .. }) {
+            formal_origins = formal_origins
+                .checked_add(ir::reference_layers(&expression.ty)?)
+                .ok_or("reference origin overflow")?;
             if formal_origins > ir::MAX_LOAN_SITES {
                 return Err("CFG combined reference origin limit exceeded".into());
             }
@@ -2526,6 +2537,68 @@ fn lower_internal(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nested_shared_carriers_lower_typed_dereferences_and_bound_formal_origins() {
+        let scalar = Ty::Int(IntTy::I32);
+        let shared = |referent: Ty| Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: std::sync::Arc::new(referent),
+        };
+        let inner = shared(scalar.clone());
+        let outer = shared(inner.clone());
+        let mut source = with_root(
+            outer.clone(),
+            vec![
+                expr(outer, ir::ExprKind::Local(LocalId(0))),
+                expr(inner.clone(), ir::ExprKind::Deref { value: ExprId(0) }),
+                expr(scalar.clone(), ir::ExprKind::Deref { value: ExprId(1) }),
+            ],
+            vec![ir::Stmt::Expr(ExprId(1)), ir::Stmt::Expr(ExprId(2))],
+        );
+        source.ref_contract = ir::normalize_ref_contract(
+            &ir::RefContract {
+                region_count: 2,
+                input_regions: (0..2)
+                    .map(|depth| ir::InputRegion {
+                        input: ir::InputReference {
+                            param: 0,
+                            position: ir::ReferencePosition { depth },
+                        },
+                        region: ir::RegionParamId(depth.into()),
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                results: std::sync::Arc::from([]),
+                outlives: std::sync::Arc::from([]),
+            },
+            &ir::PlanBudget::default(),
+        )
+        .unwrap();
+        let function = nominal_lowered(&source);
+        assert_eq!(
+            function
+                .place_ty(&Place {
+                    local: LocalId(0),
+                    projection: vec![Projection::Deref]
+                })
+                .unwrap(),
+            &inner
+        );
+        assert_eq!(
+            function
+                .place_ty(&Place {
+                    local: LocalId(0),
+                    projection: vec![Projection::Deref, Projection::Deref]
+                })
+                .unwrap(),
+            &scalar
+        );
+        let mut oversized = source;
+        oversized.params = vec![LocalId(0); ir::MAX_LOAN_SITES / 2 + 1];
+        assert!(lower(&oversized).is_err());
+        assert!(validate_type(&shared(shared(shared(scalar))), 0).is_err());
+    }
+
     fn template_facts(
         source: &ir::CheckedFunction,
         env: std::sync::Arc<ir::GenericEnv>,
@@ -3047,7 +3120,7 @@ mod tests {
             &callee.ref_contract
         ));
         assert!(matches!(
-            callee.ref_contract.returns,
+            callee.ref_contract.results[0].returns,
             ir::ReturnContract::MutInputPaths(_)
         ));
         assert!(callee.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { destination, value: Rvalue::Use(Operand::Move(_)) } if destination.local == callee.return_local)));
@@ -3068,9 +3141,12 @@ mod tests {
         assert!(malformed.validate().unwrap_err().contains("Copy type"));
         let mut forged = callee.clone();
         let mut contract = forged.ref_contract.as_ref().clone();
-        contract.returns =
+        std::sync::Arc::make_mut(&mut contract.results)[0].returns =
             ir::ReturnContract::SharedInputPaths(std::sync::Arc::from([ir::InputPath {
-                param: 0,
+                input: ir::InputReference {
+                    param: 0,
+                    position: ir::ReferencePosition { depth: 0 },
+                },
                 projection: std::sync::Arc::from([]),
             }]));
         forged.ref_contract = std::sync::Arc::new(contract);
@@ -3111,7 +3187,7 @@ mod tests {
             &lowered.ref_contract
         ));
         assert!(matches!(
-            lowered.ref_contract.returns,
+            lowered.ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(_)
         ));
         let source =
@@ -3283,7 +3359,10 @@ mod tests {
                 },
                 Ty::Ref {
                     kind,
-                    referent: std::sync::Arc::new(reference.clone()),
+                    referent: std::sync::Arc::new(Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: std::sync::Arc::new(reference.clone()),
+                    }),
                 },
             ] {
                 let mut invalid = function.clone();

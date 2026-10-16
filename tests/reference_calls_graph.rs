@@ -99,12 +99,17 @@ fn unused_elided_reference_return_is_analyzed_and_accepted() {
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             let contract = &compiled.control_flow[0].ref_contract;
             assert_eq!(contract.region_count, 1);
-            assert_eq!(contract.result_region, Some(compiler::ir::RegionParamId(0)));
-            let compiler::ir::ReturnContract::SharedInputPaths(paths) = &contract.returns else {
+            assert_eq!(contract.results.len(), 1);
+            assert_eq!(contract.results[0].position.depth, 0);
+            assert_eq!(contract.results[0].region, compiler::ir::RegionParamId(0));
+            let compiler::ir::ReturnContract::SharedInputPaths(paths) =
+                &contract.results[0].returns
+            else {
                 panic!("expected normalized shared return contract");
             };
             assert_eq!(paths.len(), 1);
-            assert_eq!(paths[0].param, 0);
+            assert_eq!(paths[0].input.param, 0);
+            assert_eq!(paths[0].input.position.depth, 0);
             assert!(paths[0].projection.is_empty());
         }
     }

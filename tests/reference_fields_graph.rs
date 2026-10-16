@@ -14,13 +14,13 @@ fn implicit_reference_fields_retain_real_deref_and_shared_graph_facts() {
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             for (index, function) in compiled.control_flow[..3].iter().enumerate() {
                 assert_eq!(function.ref_contract.region_count, 1);
-                let paths = match &function.ref_contract.returns {
+                let paths = match &function.ref_contract.results[0].returns {
                     compiler::ir::ReturnContract::SharedInputPaths(paths) if index == 0 => paths,
                     compiler::ir::ReturnContract::MutInputPaths(paths) if index != 0 => paths,
                     _ => panic!("expected canonical projected return contract"),
                 };
                 assert_eq!(paths.len(), 1);
-                assert_eq!(paths[0].param, 0);
+                assert_eq!(paths[0].input.param, 0);
                 assert_eq!(
                     paths[0].projection.as_ref(),
                     [compiler::ir::Projection::Field(1)]

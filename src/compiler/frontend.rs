@@ -935,7 +935,13 @@ impl Parser {
             return Err(self.error("quoted tokens are not types"));
         }
         if self.is("&&") {
-            return Err(self.error("nested reference types are unsupported in B1"));
+            self.tokens[self.at].text = "&".into();
+            self.tokens[self.at].column += 1;
+            return Ok(Type::Ref {
+                kind: ir::BorrowKind::Shared,
+                region: None,
+                referent: Box::new(self.ty()?),
+            });
         }
         if self.is("_") || self.is("!") {
             return Err(self.error("inferred and never source type annotations are unsupported"));
@@ -1078,6 +1084,12 @@ impl Parser {
         loop {
             if params.len() >= 32 {
                 return Err(self.error("generic parameter resource limit 32"));
+            }
+            if !self.token().string && self.token().text.starts_with('\'') {
+                self.lifetime()?;
+                return Err(self.error(
+                    "lifetime parameters on nominal and impl declarations are unsupported",
+                ));
             }
             let name = self.ident()?;
             if params.contains(&name) {
@@ -3681,6 +3693,7 @@ pub struct NominalInterner {
 struct PlanState {
     schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
     functions: HashMap<ir::DeclId, tr::GenericSchema>,
+    region_modes: HashMap<ir::DeclId, tr::RegionContractMode>,
     nominals: NominalInterner,
     contexts: HashMap<ir::DeclId, CallableContext>,
     reservations: Vec<ir::PlanReservation>,
@@ -3767,6 +3780,7 @@ impl PlanCtx {
         };
         let mut state = PlanState {
             schemas: HashMap::new(),
+            region_modes: HashMap::new(),
             functions: HashMap::new(),
             nominals: NominalInterner::default(),
             contexts: HashMap::new(),
@@ -4189,12 +4203,21 @@ impl PlanCtx {
                     validate_root_carrier(ty, caller, budget)?;
                 }
             }
+            let region_mode = source_region_mode(
+                &f.regions,
+                &f.params,
+                &f.result,
+                matches!(registry.callable_sources[index], CallableSource::Free(_)),
+                budget,
+            )?;
+            state.retain(budget, 128)?;
+            state.region_modes.insert(id, region_mode);
             let signature = ir::Signature {
                 ref_contract: canonical_ref_contract(
                     &f.regions,
                     &f.params,
                     &f.result,
-                    context.receiver,
+                    (context.receiver, region_mode),
                     &params,
                     &result,
                     budget,
@@ -4267,7 +4290,7 @@ impl PlanCtx {
                                 &h.regions,
                                 &h.params,
                                 &h.result,
-                                item.receiver,
+                                (item.receiver, tr::RegionContractMode::Positioned),
                                 &params,
                                 &result,
                                 budget,
@@ -4521,6 +4544,7 @@ impl PlanCtx {
             .functions
             .get(&id)
             .ok_or("unknown function declaration")?;
+        self.budget.charge_work(schema.signature.params.len() + 1)?;
         self.budget.retain_bytes(
             schema
                 .signature
@@ -4859,7 +4883,21 @@ impl tr::SchemaCx for SchemaAdapter {
             module: d.path.module.clone(),
             public: d.public,
             receiver,
+            region_contract_mode: self
+                .state
+                .lock()
+                .map_err(|_| self.error("schema state lock poisoned".into()))?
+                .region_modes
+                .get(&id)
+                .copied()
+                .unwrap_or(tr::RegionContractMode::Positioned),
         })
+    }
+    fn declaration_schema(&self, id: ir::DeclId) -> Result<tr::GenericSchema, tr::FactsError> {
+        self.registry.declaration(id).map_err(|e| self.error(e))?;
+        self.raw_plan()
+            .and_then(|plan| plan.raw_schema(id))
+            .map_err(|e| self.error(e))
     }
     fn instantiate_schema(
         &self,
@@ -5001,11 +5039,8 @@ impl tr::SchemaCx for SchemaAdapter {
                     }
                     child(element)?;
                 }
-                ir::Ty::Ref { referent, .. } => {
-                    if depth != 0 {
-                        return Err("nested/aggregate reference metadata is unsupported".into());
-                    }
-                    child(referent)?;
+                ir::Ty::Ref { .. } => {
+                    return Err("aggregate reference metadata is unsupported".into());
                 }
                 _ => {}
             }
@@ -5015,7 +5050,14 @@ impl tr::SchemaCx for SchemaAdapter {
             }
             Ok(height)
         }
-        walk(self, ty, env, budget, 0, &mut HashMap::new())
+        let layers = ir::reference_layers(ty).map_err(|e| self.error(e))?;
+        let mut inner = ty;
+        for _ in 0..layers {
+            if let ir::Ty::Ref { referent, .. } = inner {
+                inner = referent;
+            }
+        }
+        walk(self, inner, env, budget, layers, &mut HashMap::new())
             .map(|_| ())
             .map_err(|e| self.error(e))
     }
@@ -5542,10 +5584,14 @@ fn validate_root_carrier(
     caller: ir::FactsCtx<'_>,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
-    match ty {
-        ir::Ty::Ref { referent, .. } => validate_argument(referent, caller, budget, 0),
-        _ => validate_argument(ty, caller, budget, 0),
+    let layers = ir::reference_layers(ty)?;
+    let mut inner = ty;
+    for _ in 0..layers {
+        if let ir::Ty::Ref { referent, .. } = inner {
+            inner = referent;
+        }
     }
+    validate_argument(inner, caller, budget, layers)
 }
 fn validate_argument(
     ty: &ir::Ty,
@@ -5727,17 +5773,19 @@ impl PlanState {
                 if !allow_ref {
                     return Err("references in generic or aggregate types are unsupported".into());
                 }
+                let layers = source_reference_layers(ty)?;
+                let inner = self.source_ty(
+                    registry,
+                    referent,
+                    bindings,
+                    caller,
+                    budget,
+                    depth + 1,
+                    layers == 2,
+                )?;
                 ir::Ty::Ref {
                     kind: *kind,
-                    referent: Arc::new(self.source_ty(
-                        registry,
-                        referent,
-                        bindings,
-                        caller,
-                        budget,
-                        depth + 1,
-                        false,
-                    )?),
+                    referent: Arc::new(inner),
                 }
             }
             Type::Array(element, len) => {
@@ -6770,6 +6818,21 @@ impl Checker<'_> {
                 Ok(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
                 Err(_) => self.infer_node(InferKind::Unknown(false))?,
             },
+            Expr::Borrow { kind, place } => {
+                plan.budget.charge_work(place.fields.len() + 1)?;
+                self.infer_storage(place.fields.len() + 1)?;
+                let (_, referent, _) = self.checked_place(place)?;
+                Self::validate_borrow_referent(*kind, &referent)?;
+                let inner = self.infer_type_term(&referent, None, depth + 1)?;
+                self.infer_node(InferKind::Ref(*kind, inner))?
+            }
+            Expr::Deref { value } => {
+                let carrier = self.inference_evidence(value, depth + 1)?;
+                match carrier.as_ref() {
+                    InferKind::Ref(_, inner) => inner.clone(),
+                    _ => self.infer_node(InferKind::Unknown(false))?,
+                }
+            }
             Expr::Tuple(fields) => {
                 self.infer_storage(fields.len())?;
                 self.infer_node(InferKind::Tuple(
@@ -7152,40 +7215,65 @@ impl Flow {
         }
     }
 }
+fn source_region_mode(
+    regions: &RegionDecls,
+    params: &[(String, Type)],
+    result: &Type,
+    free: bool,
+    budget: &ir::PlanBudget,
+) -> Result<tr::RegionContractMode, String> {
+    budget.charge_work(params.len() + 1)?;
+    let legacy = free
+        && regions.params.is_empty()
+        && regions.outlives.is_empty()
+        && regions.receiver.is_none()
+        && !matches!(result, Type::Ref { .. })
+        && params.iter().all(|(_, ty)| match ty {
+            Type::Ref {
+                region, referent, ..
+            } => region.is_none() && !matches!(referent.as_ref(), Type::Ref { .. }),
+            _ => true,
+        });
+    Ok(if legacy {
+        tr::RegionContractMode::LegacyUnnamedFreeNoReturn
+    } else {
+        tr::RegionContractMode::Positioned
+    })
+}
 fn canonical_ref_contract(
     regions: &RegionDecls,
     source_params: &[(String, Type)],
     source_result: &Type,
-    receiver: ReceiverKind,
+    source: (ReceiverKind, tr::RegionContractMode),
     params: &[ir::Ty],
     result: &ir::Ty,
     budget: &ir::PlanBudget,
 ) -> Result<Arc<ir::RefContract>, String> {
+    let (receiver, mode) = source;
     if regions.params.len() > 64 || regions.outlives.len() > 4096 {
         return Err("declared lifetime resource limit exceeded".into());
     }
     budget.charge_work(regions.params.len() + regions.outlives.len() + source_params.len() + 1)?;
-    let _scratch = budget.reserve_bytes(
-        regions
-            .params
-            .len()
-            .checked_mul(256)
-            .and_then(|n| {
-                source_params
-                    .len()
-                    .checked_mul(64)
-                    .and_then(|m| n.checked_add(m))
-            })
-            .and_then(|n| {
-                regions
-                    .outlives
-                    .len()
-                    .checked_mul(32)
-                    .and_then(|e| n.checked_add(e))
-            })
-            .and_then(|n| n.checked_add(1024))
-            .ok_or("region allocation overflow")?,
-    )?;
+    let bytes = regions
+        .params
+        .len()
+        .checked_mul(256)
+        .and_then(|n| {
+            source_params
+                .len()
+                .checked_mul(256)
+                .and_then(|m| n.checked_add(m))
+        })
+        .and_then(|n| {
+            regions
+                .outlives
+                .len()
+                .checked_mul(32)
+                .and_then(|m| n.checked_add(m))
+        })
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("region allocation overflow")?;
+    let _scratch = budget.reserve_bytes(bytes)?;
     let mut ids = HashMap::new();
     for (i, name) in regions.params.iter().enumerate() {
         budget.charge_work(name.len() + 1)?;
@@ -7202,37 +7290,12 @@ fn canonical_ref_contract(
             .copied()
             .ok_or_else(|| format!("undeclared lifetime {name}"))
     };
-    let mut edges = Vec::with_capacity(regions.outlives.len());
+    let mut edges = Vec::with_capacity(regions.outlives.len() + 128);
     for (long, short) in &regions.outlives {
         edges.push((lookup(long)?, lookup(short)?));
     }
-    let legacy = !matches!(result, ir::Ty::Ref { .. })
-        && !matches!(receiver, ReceiverKind::Borrowed { .. })
-        && regions.params.is_empty()
-        && !source_params.iter().any(|(_, t)| {
-            matches!(
-                t,
-                Type::Ref {
-                    region: Some(_),
-                    ..
-                }
-            )
-        });
-    if legacy {
-        budget.retain_bytes(
-            params
-                .len()
-                .checked_mul(std::mem::size_of::<Option<ir::RegionParamId>>())
-                .and_then(|n| n.checked_add(128))
-                .ok_or("region allocation overflow")?,
-        )?;
-        return ir::normalize_ref_contract(
-            &ir::RefContract {
-                param_regions: vec![None; params.len()].into(),
-                ..Default::default()
-            },
-            budget,
-        );
+    if mode == tr::RegionContractMode::LegacyUnnamedFreeNoReturn {
+        return ir::normalize_ref_contract(&ir::RefContract::default(), budget);
     }
     let mut count = ids.len();
     let mut fresh = |name: Option<&str>| -> Result<ir::RegionParamId, String> {
@@ -7250,77 +7313,133 @@ fn canonical_ref_contract(
         .len()
         .checked_sub(source_params.len())
         .ok_or("source parameter arity mismatch")?;
-    let mut param_regions = Vec::with_capacity(params.len());
-    let receiver_region = if matches!(receiver, ReceiverKind::Borrowed { .. }) {
-        Some(fresh(regions.receiver.as_deref())?)
-    } else {
-        None
-    };
     if injected > 1 || (injected == 0 && receiver != ReceiverKind::None) {
         return Err("invalid injected receiver arity".into());
     }
-    if injected == 1 {
-        param_regions.push(receiver_region);
-    }
-    for (_, ty) in source_params {
-        param_regions.push(match ty {
-            Type::Ref { region, .. } => Some(fresh(region.as_deref())?),
-            _ => None,
+    let mut inputs = Vec::with_capacity(params.len().saturating_mul(2));
+    let receiver_region = if matches!(receiver, ReceiverKind::Borrowed { .. }) {
+        let region = fresh(regions.receiver.as_deref())?;
+        inputs.push(ir::InputRegion {
+            input: ir::InputReference {
+                param: 0,
+                position: ir::ReferencePosition { depth: 0 },
+            },
+            region,
         });
+        Some(region)
+    } else {
+        None
+    };
+    for (index, (_, source_ty)) in source_params.iter().enumerate() {
+        let mut ty = source_ty;
+        let mut previous = None;
+        let mut depth = 0;
+        while let Type::Ref {
+            region, referent, ..
+        } = ty
+        {
+            if depth >= 2 {
+                return Err("reference depth exceeds supported limit2".into());
+            }
+            let region = fresh(region.as_deref())?;
+            if let Some(outer) = previous {
+                edges.push((region, outer));
+            }
+            inputs.push(ir::InputRegion {
+                input: ir::InputReference {
+                    param: index + injected,
+                    position: ir::ReferencePosition { depth },
+                },
+                region,
+            });
+            previous = Some(region);
+            depth += 1;
+            ty = referent;
+        }
     }
-    let result_region = if matches!(result, ir::Ty::Ref { .. }) {
-        let Type::Ref { region, .. } = source_result else {
-            return Err("reference result requires source reference type".into());
-        };
-        Some(if let Some(name) = region {
+    let mut results = Vec::with_capacity(2);
+    let mut ty = source_result;
+    let mut previous = None;
+    while let Type::Ref {
+        region, referent, ..
+    } = ty
+    {
+        if results.len() >= 2 {
+            return Err("reference depth exceeds supported limit2".into());
+        }
+        let region = if let Some(name) = region {
             lookup(name)?
         } else if let Some(region) = receiver_region {
             region
         } else {
-            let mut used = param_regions.iter().flatten();
-            let first = *used
-                .next()
-                .ok_or("missing lifetime specifier: no input reference position")?;
-            if used.next().is_some() {
+            if inputs.len() != 1 {
                 return Err("missing lifetime specifier: elided reference output requires exactly one input reference lifetime position".into());
             }
-            first
-        })
-    } else {
-        None
-    };
+            inputs[0].region
+        };
+        if let Some(outer) = previous {
+            edges.push((region, outer));
+        }
+        results.push(ir::ResultReference {
+            position: ir::ReferencePosition {
+                depth: results.len() as u8,
+            },
+            region,
+            returns: ir::ReturnContract::NoReference,
+        });
+        previous = Some(region);
+        ty = referent;
+    }
     budget.retain_bytes(
-        param_regions
+        inputs
             .len()
-            .checked_mul(16)
-            .and_then(|n| edges.len().checked_mul(16).and_then(|e| n.checked_add(e)))
-            .and_then(|n| n.checked_add(256))
+            .checked_mul(64)
+            .and_then(|n| edges.len().checked_mul(32).and_then(|m| n.checked_add(m)))
+            .and_then(|n| n.checked_add(512))
             .ok_or("region allocation overflow")?,
     )?;
     let raw = ir::RefContract {
         region_count: count as u16,
-        param_regions: param_regions.into(),
-        result_region,
+        input_regions: inputs.into(),
+        results: results.into(),
         outlives: edges.into(),
-        returns: ir::ReturnContract::NoReference,
     };
     let normalized = ir::normalize_ref_contract(&raw, budget)?;
-    let returns = ir::derive_return_contract(params, result, &normalized, budget)?;
+    let results = ir::derive_return_contracts(params, result, &normalized, budget)?;
     budget.retain_bytes(std::mem::size_of::<ir::RefContract>() + 64)?;
     Ok(Arc::new(ir::RefContract {
-        returns,
+        results,
         ..(*normalized).clone()
     }))
 }
 
-fn checked_local_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
-    if matches!(
-        ty,
-        Type::Ref {
-            region: Some(_),
-            ..
+fn source_reference_layers(ty: &Type) -> Result<usize, String> {
+    let mut inner = ty;
+    let mut layers = 0;
+    let mut mutable = false;
+    while let Type::Ref { kind, referent, .. } = inner {
+        layers += 1;
+        mutable |= *kind == ir::BorrowKind::Mut;
+        if layers > 2 || (layers > 1 && mutable) {
+            return Err("only shared nested references of depth2 are supported".into());
         }
-    ) {
+        inner = referent;
+    }
+    Ok(layers)
+}
+fn checked_local_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
+    let mut inner = ty;
+    let mut named = false;
+    for _ in 0..source_reference_layers(ty)? {
+        if let Type::Ref {
+            region, referent, ..
+        } = inner
+        {
+            named |= region.is_some();
+            inner = referent;
+        }
+    }
+    if named {
         return Err("named lifetime annotations on locals are unsupported; use an elided local reference annotation".into());
     }
     checked_ty(ty, env)
@@ -7353,7 +7472,11 @@ fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, St
             }
             Ok(ir::Ty::Ref {
                 kind: *kind,
-                referent: std::sync::Arc::new(checked_ty_at(referent, env, false)?),
+                referent: std::sync::Arc::new(checked_ty_at(
+                    referent,
+                    env,
+                    source_reference_layers(ty)? == 2,
+                )?),
             })
         }
         Type::Array(element, len) => {
@@ -7745,8 +7868,8 @@ impl<'a> Checker<'a> {
             match selector {
                 FieldSelector::Deref => {
                     derefs += 1;
-                    if derefs > 1 {
-                        return Err("multiple dereferences in one B1 place are unsupported".into());
+                    if derefs > 2 {
+                        return Err("reference dereference depth exceeds limit2".into());
                     }
                     let ir::Ty::Ref { kind, referent } = &ty else {
                         return Err("dereference requires a reference".into());
@@ -7761,7 +7884,7 @@ impl<'a> Checker<'a> {
                 }
                 _ => {
                     if let ir::Ty::Ref { kind, referent } = &ty {
-                        if derefs != 0 {
+                        if derefs >= 2 {
                             return Err(
                                 "multiple dereferences in one field place are unsupported".into()
                             );
@@ -8869,13 +8992,27 @@ impl<'a> Checker<'a> {
         }
         self.expr_without_cast(e, expectation)
     }
+    fn validate_borrow_referent(kind: ir::BorrowKind, referent: &ir::Ty) -> Result<(), String> {
+        if let ir::Ty::Ref {
+            kind: inner_kind,
+            referent: inner,
+        } = referent
+        {
+            if kind != ir::BorrowKind::Shared || *inner_kind != ir::BorrowKind::Shared {
+                return Err("mutable nested reference chains are unsupported".into());
+            }
+            Self::reject_aggregate_ref(inner)
+        } else {
+            Self::reject_aggregate_ref(referent)
+        }
+    }
     fn borrow_expression(
         &mut self,
         kind: ir::BorrowKind,
         place: ir::Place,
     ) -> Result<ir::ExprId, String> {
         let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
-        Self::reject_aggregate_ref(&referent)?;
+        Self::validate_borrow_referent(kind, &referent)?;
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
@@ -9193,7 +9330,7 @@ impl<'a> Checker<'a> {
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
-                Self::reject_aggregate_ref(&referent)?;
+                Self::validate_borrow_referent(*kind, &referent)?;
                 (
                     ir::ExprKind::Borrow {
                         kind: *kind,
@@ -9207,8 +9344,17 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Deref { value } => {
-                if !matches!(value.as_ref(), Expr::Var(_)) && !genuine_call(value) {
-                    return Err("non-local-root dereference carriers are unsupported except genuine reference call results".into());
+                let mut root = value.as_ref();
+                let mut depth = 1;
+                while let Expr::Deref { value } = root {
+                    depth += 1;
+                    root = value;
+                }
+                if depth > 2 || (!matches!(root, Expr::Var(_)) && !genuine_call(root)) {
+                    return Err(
+                        "dereference requires a bounded local or genuine reference call carrier"
+                            .into(),
+                    );
                 }
                 let value = self.expr(value)?;
                 let flow = self.flow(value);
@@ -10280,6 +10426,180 @@ pub fn check(program: &Program) -> Result<(), String> {
 mod typed_tests {
     use super::*;
 
+    fn input_region(param: usize, region: u16) -> ir::InputRegion {
+        ir::InputRegion {
+            input: ir::InputReference {
+                param,
+                position: ir::ReferencePosition { depth: 0 },
+            },
+            region: ir::RegionParamId(region),
+        }
+    }
+
+    #[test]
+    fn nested_shared_contracts_preserve_positions_aliases_and_implied_outlives() {
+        let p = parse("fn inner<'a,'b>(rr:&'a &'b i32)->&'b i32{*rr}fn renamed<'z,'w>(rr:&'z &'w i32)->&'w i32{*rr}fn id<'a,'b>(rr:&'a &'b i32)->&'a &'b i32{rr}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        let inner = &env.functions["inner"].ref_contract;
+        assert_eq!(inner, &env.functions["renamed"].ref_contract);
+        assert_eq!(
+            inner.input_regions.as_ref(),
+            &[
+                input_region(0, 0),
+                ir::InputRegion {
+                    input: ir::InputReference {
+                        param: 0,
+                        position: ir::ReferencePosition { depth: 1 }
+                    },
+                    region: ir::RegionParamId(1)
+                },
+            ]
+        );
+        assert_eq!(
+            inner.outlives.as_ref(),
+            &[(ir::RegionParamId(1), ir::RegionParamId(0))]
+        );
+        assert_eq!(inner.results[0].region, ir::RegionParamId(1));
+        assert_eq!(
+            inner.results[0].returns,
+            ir::ReturnContract::SharedInputPaths(
+                vec![ir::InputPath {
+                    input: ir::InputReference {
+                        param: 0,
+                        position: ir::ReferencePosition { depth: 1 }
+                    },
+                    projection: Arc::from([])
+                }]
+                .into()
+            )
+        );
+        let id = &env.functions["id"].ref_contract;
+        assert_eq!(id.results.len(), 2);
+        for depth in 0..2 {
+            assert_eq!(id.results[depth].position.depth, depth as u8);
+            assert_eq!(
+                id.results[depth].returns,
+                ir::ReturnContract::SharedInputPaths(
+                    vec![ir::InputPath {
+                        input: ir::InputReference {
+                            param: 0,
+                            position: ir::ReferencePosition { depth: depth as u8 }
+                        },
+                        projection: Arc::from([])
+                    }]
+                    .into()
+                )
+            );
+        }
+        for index in 0..p.functions.len() {
+            check_function_with_signatures(&p, index, &env).unwrap();
+        }
+    }
+
+    #[test]
+    fn nested_shared_source_authority_and_closed_boundaries_remain_distinct() {
+        let p = parse("trait Read{fn inner<'a,'b>(rr:&'a &'b i32)->&'b i32;}fn legacy(r:&i32){}fn named<'a>(r:&i32){}fn nested<'a,'b>(r:&'a &'b i32){}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let adapter = SchemaAdapter {
+            registry: plan.registry.clone(),
+            state: plan.state.clone(),
+            budget: budget.clone(),
+        };
+        for (index, mode) in [
+            (0, tr::RegionContractMode::LegacyUnnamedFreeNoReturn),
+            (1, tr::RegionContractMode::Positioned),
+            (2, tr::RegionContractMode::Positioned),
+        ] {
+            let decl = plan.function_decl(index).unwrap();
+            assert_eq!(
+                tr::SchemaCx::declaration_info(&adapter, decl)
+                    .unwrap()
+                    .region_contract_mode,
+                mode
+            );
+            assert_eq!(
+                tr::SchemaCx::declaration_schema(&adapter, decl)
+                    .unwrap()
+                    .signature,
+                plan.raw_schema(decl).unwrap().signature
+            );
+        }
+        let item = plan.registry.trait_items[0][0];
+        assert_eq!(
+            tr::SchemaCx::declaration_info(&adapter, item)
+                .unwrap()
+                .region_contract_mode,
+            tr::RegionContractMode::Positioned
+        );
+        assert_eq!(
+            tr::SchemaCx::declaration_schema(&adapter, item)
+                .unwrap()
+                .signature
+                .ref_contract
+                .input_regions
+                .len(),
+            2
+        );
+        for source in [
+            "fn f(x:&&i32)->&i32{*x}fn main(){}",
+            "fn f<'a>(x:&'a &'a i32)->&i32{*x}fn main(){}",
+        ] {
+            assert!(
+                signature_table(&parse(source).unwrap())
+                    .unwrap_err()
+                    .contains("missing lifetime specifier")
+            );
+        }
+        assert!(
+            parse("struct Holder<'a>{r:&'a i32}fn main(){}")
+                .unwrap_err()
+                .contains("lifetime parameters on nominal and impl declarations are unsupported")
+        );
+        assert!(
+            parse("struct Holder<'fn>{r:i32}fn main(){}")
+                .unwrap_err()
+                .contains("keyword lifetime names")
+        );
+        for source in [
+            "fn f(x:&&mut i32){}fn main(){}",
+            "fn f(x:&mut &i32){}fn main(){}",
+            "fn f(x:&&&i32){}fn main(){}",
+            "struct S{x:&&i32}fn main(){}",
+            "fn f<T>(x:T){}fn main(){let x=1;let r=&x;f::<&i32>(r);}",
+            "fn main(){let x=1;let r=&x;let rr=(&r,);}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_shared_real_call_loads_are_once_only_and_named_locals_stay_excluded() {
+        check(&parse("fn nested<'o,'i,T>(x:&'o &'i T)->&'o &'i T{x}fn main(){let x=11;let r=&x;let rr=nested(&r);let n=**rr;}").unwrap()).unwrap();
+        let p = parse("fn inner<'a,'b>(rr:&'a &'b i32)->&'b i32{*rr}fn id<'a,'b>(rr:&'a &'b i32)->&'a &'b i32{rr}fn main(){let x=7;let r=&x;let n=*inner(&r);let m=**id(&r);let rr:&&i32=&r;let copied=*rr;let y=*copied;}").unwrap();
+        let env = signature_table(&p).unwrap();
+        let main = type_function_with_signatures(&p, 2, &env).unwrap();
+        assert_eq!(
+            main.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            2
+        );
+        assert!(main.exprs.iter().any(|e| matches!(e.kind, ir::ExprKind::Deref { value } if matches!(main.exprs[value.0].kind, ir::ExprKind::Deref { .. }))));
+        check_function_with_signatures(&p, 2, &env).unwrap();
+        let p = parse("fn bad<'a>(x:&'a i32){let r:&&'a i32=&x;}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        assert!(
+            type_function_with_signatures(&p, 0, &env)
+                .unwrap_err()
+                .contains("named lifetime annotations on locals")
+        );
+    }
+
     #[test]
     fn generic_reference_declarations_keep_rigid_envelopes_and_canonical_regions() {
         check(&parse("fn id<T>(x:&T)->&T{x}fn wrap(x:&i32)->&i32{id(x)}fn main(){let x=7;let r=wrap(&x);let n=*r;}").unwrap()).unwrap();
@@ -10296,7 +10616,7 @@ mod typed_tests {
                 .ref_contract
         );
         assert!(
-            matches!(&schema.signature.ref_contract.returns,ir::ReturnContract::SharedInputEnvelopes(rows) if rows.len()==1&&rows[0].param==0)
+            matches!(&schema.signature.ref_contract.results[0].returns,ir::ReturnContract::SharedInputEnvelopes(rows) if rows.len()==1&&rows[0].input.param==0)
         );
         let closed = plan
             .instantiate_signature(
@@ -10318,7 +10638,12 @@ mod typed_tests {
             "fn bad<T>(x:&&T){}fn main(){}",
             "struct W<T>{x:T}fn main(){let x=1;let w=W::<&i32>{x:&x};}",
         ] {
-            assert!(parse(source).and_then(|p| check(&p)).is_err());
+            let result = parse(source).and_then(|p| check(&p));
+            if source == "fn bad<T>(x:&&T){}fn main(){}" {
+                result.unwrap();
+            } else {
+                assert!(result.is_err(), "accepted {source}");
+            }
         }
     }
     #[test]
@@ -11440,28 +11765,31 @@ mod typed_tests {
         let p=parse("fn weaken<'a>(r:&'a mut i32)->&'a i32{r}fn mix<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{s}else{m}}fn mut_target<'a>(s:&'a i32,m:&'a mut i32)->&'a mut i32{m}fn no_mut_target<'a>(s:&'a i32)->&'a mut i32{loop{}}fn pin<'a>(m:&'a mut bool,s:&'a i32)->&'a i32{s}fn main(){}").unwrap();
         let env = signature_table(&p).unwrap();
         let empty = |param| ir::InputPath {
-            param,
+            input: ir::InputReference {
+                param,
+                position: ir::ReferencePosition { depth: 0 },
+            },
             projection: vec![].into(),
         };
         assert_eq!(
-            env.functions["mix"].ref_contract.returns,
+            env.functions["mix"].ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(vec![empty(0), empty(1)].into())
         );
         assert_eq!(
-            env.functions["mut_target"].ref_contract.returns,
+            env.functions["mut_target"].ref_contract.results[0].returns,
             ir::ReturnContract::MutInputPaths(vec![empty(1)].into())
         );
         assert_eq!(
-            env.functions["no_mut_target"].ref_contract.returns,
+            env.functions["no_mut_target"].ref_contract.results[0].returns,
             ir::ReturnContract::MutInputPaths(vec![].into())
         );
         assert_eq!(
-            env.functions["pin"].ref_contract.returns,
+            env.functions["pin"].ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(vec![empty(1)].into())
         );
         assert_eq!(
-            env.functions["pin"].ref_contract.param_regions.as_ref(),
-            &[Some(ir::RegionParamId(0)), Some(ir::RegionParamId(0))]
+            env.functions["pin"].ref_contract.input_regions.as_ref(),
+            &[input_region(0, 0), input_region(1, 0)]
         );
         assert!(matches!(
             env.functions["weaken"].params[0],
@@ -11504,12 +11832,12 @@ mod typed_tests {
         let p = parse("fn rigid<'a>(s:&bool,m:&mut i32)->&'a i32{&*m}fn main(){}").unwrap();
         let env = signature_table(&p).unwrap();
         assert_eq!(
-            env.functions["rigid"].ref_contract.param_regions.as_ref(),
-            &[Some(ir::RegionParamId(0)), Some(ir::RegionParamId(1))]
+            env.functions["rigid"].ref_contract.input_regions.as_ref(),
+            &[input_region(0, 0), input_region(1, 1)]
         );
         assert_eq!(
-            env.functions["rigid"].ref_contract.result_region,
-            Some(ir::RegionParamId(2))
+            env.functions["rigid"].ref_contract.results[0].region,
+            ir::RegionParamId(2)
         );
         assert!(check_function_with_signatures(&p, 0, &env).is_err());
         let names = (0..63)
@@ -11654,17 +11982,17 @@ mod typed_tests {
         );
         let unused = &env.functions["unused_names"].ref_contract;
         assert_eq!(unused.region_count, 1);
-        assert_eq!(unused.param_regions.as_ref(), &[Some(ir::RegionParamId(0))]);
-        assert_eq!(unused.result_region, Some(ir::RegionParamId(0)));
+        assert_eq!(unused.input_regions.as_ref(), &[input_region(0, 0)]);
+        assert_eq!(unused.results[0].region, ir::RegionParamId(0));
         let rigid = &env.functions["rigid"].ref_contract;
         assert_eq!(
-            rigid.param_regions.as_ref(),
-            &[Some(ir::RegionParamId(0)), Some(ir::RegionParamId(1))]
+            rigid.input_regions.as_ref(),
+            &[input_region(0, 0), input_region(1, 1)]
         );
-        assert_eq!(rigid.result_region, Some(ir::RegionParamId(2)));
+        assert_eq!(rigid.results[0].region, ir::RegionParamId(2));
         assert!(rigid.outlives.is_empty());
         assert_eq!(
-            rigid.returns,
+            rigid.results[0].returns,
             ir::ReturnContract::SharedInputPaths(vec![].into())
         );
         type_function_with_signatures(&p, 5, &env).unwrap();
@@ -11709,8 +12037,8 @@ mod typed_tests {
         let env = signature_table(&p).unwrap();
         assert_eq!(env.functions["at_limit"].ref_contract.region_count, 1);
         assert_eq!(
-            env.functions["at_limit"].ref_contract.result_region,
-            Some(ir::RegionParamId(0))
+            env.functions["at_limit"].ref_contract.results[0].region,
+            ir::RegionParamId(0)
         );
         let p = parse(&format!(
             "fn over_limit<{}>(x:&i32)->&i32{{x}}fn main(){{}}",
@@ -11726,9 +12054,10 @@ mod typed_tests {
         let env = signature_table(&p).unwrap();
         let contract = &env.functions["erased"].ref_contract;
         assert_eq!(contract.region_count, 0);
-        assert_eq!(contract.param_regions.len(), 4096);
-        assert!(contract.param_regions.iter().all(Option::is_none));
-        assert_eq!(contract.returns, ir::ReturnContract::NoReference);
+        assert!(contract.input_regions.is_empty());
+        assert!(contract.results.is_empty());
+        assert!(contract.outlives.is_empty());
+        assert_eq!(env.functions["erased"].params.len(), 4096);
     }
 
     #[test]
@@ -11736,7 +12065,10 @@ mod typed_tests {
         let p=parse("mod m{pub struct S{nested:([i32;1],)}pub fn get<'a>(p:&'a S)->&'a i32{&(*p).nested.0[0]}pub fn get_mut<'a>(p:&'a mut S)->&'a mut i32{&mut (*p).nested.0[0]}pub fn make()->S{S{nested:([7],)}}}fn choose<'a>(flag:bool,a:&'a(i32,bool),b:&'a(bool,i32))->&'a i32{if flag{&(*a).0}else{&(*b).1}}fn main(){let mut s=m::make();let r=m::get(&s);let n=*r;let q=m::get_mut(&mut s);*q=9;}").unwrap();
         let env = signature_table(&p).unwrap();
         let nested = ir::InputPath {
-            param: 0,
+            input: ir::InputReference {
+                param: 0,
+                position: ir::ReferencePosition { depth: 0 },
+            },
             projection: vec![
                 ir::Projection::Field(0),
                 ir::Projection::Field(0),
@@ -11745,23 +12077,29 @@ mod typed_tests {
             .into(),
         };
         assert_eq!(
-            env.functions["m::get"].ref_contract.returns,
+            env.functions["m::get"].ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(vec![nested.clone()].into())
         );
         assert_eq!(
-            env.functions["m::get_mut"].ref_contract.returns,
+            env.functions["m::get_mut"].ref_contract.results[0].returns,
             ir::ReturnContract::MutInputPaths(vec![nested].into())
         );
         assert_eq!(
-            env.functions["choose"].ref_contract.returns,
+            env.functions["choose"].ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(
                 vec![
                     ir::InputPath {
-                        param: 1,
+                        input: ir::InputReference {
+                            param: 1,
+                            position: ir::ReferencePosition { depth: 0 }
+                        },
                         projection: vec![ir::Projection::Field(0)].into()
                     },
                     ir::InputPath {
-                        param: 2,
+                        input: ir::InputReference {
+                            param: 2,
+                            position: ir::ReferencePosition { depth: 0 }
+                        },
                         projection: vec![ir::Projection::Field(1)].into()
                     },
                 ]
@@ -11785,15 +12123,21 @@ mod typed_tests {
         let p=parse("fn pick<'a>(flag:bool,s:&'a mut bool,x:&'a mut i32,y:&'a mut i32)->&'a mut i32{if flag{x}else{y}}fn moved<'a>(r:&'a mut i32)->&'a mut i32{let moved=r;moved}fn main(){}").unwrap();
         let env = signature_table(&p).unwrap();
         assert_eq!(
-            env.functions["pick"].ref_contract.returns,
+            env.functions["pick"].ref_contract.results[0].returns,
             ir::ReturnContract::MutInputPaths(
                 vec![
                     ir::InputPath {
-                        param: 2,
+                        input: ir::InputReference {
+                            param: 2,
+                            position: ir::ReferencePosition { depth: 0 }
+                        },
                         projection: vec![].into()
                     },
                     ir::InputPath {
-                        param: 3,
+                        input: ir::InputReference {
+                            param: 3,
+                            position: ir::ReferencePosition { depth: 0 }
+                        },
                         projection: vec![].into()
                     }
                 ]
@@ -11882,24 +12226,25 @@ mod typed_tests {
         let first = &env.functions["pick"];
         assert_eq!(first.ref_contract, env.functions["renamed"].ref_contract);
         assert_eq!(
-            first.ref_contract.param_regions.as_ref(),
-            &[
-                None,
-                Some(ir::RegionParamId(0)),
-                Some(ir::RegionParamId(0)),
-                Some(ir::RegionParamId(0))
-            ]
+            first.ref_contract.input_regions.as_ref(),
+            &[input_region(1, 0), input_region(2, 0), input_region(3, 0)]
         );
         assert_eq!(
-            first.ref_contract.returns,
+            first.ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(
                 vec![
                     ir::InputPath {
-                        param: 2,
+                        input: ir::InputReference {
+                            param: 2,
+                            position: ir::ReferencePosition { depth: 0 }
+                        },
                         projection: vec![].into()
                     },
                     ir::InputPath {
-                        param: 3,
+                        input: ir::InputReference {
+                            param: 3,
+                            position: ir::ReferencePosition { depth: 0 }
+                        },
                         projection: vec![].into()
                     }
                 ]
@@ -11911,7 +12256,7 @@ mod typed_tests {
             &first.ref_contract,
             &checked.ref_contract
         ));
-        assert_eq!(env.functions["main"].ref_contract.param_regions.len(), 0);
+        assert_eq!(env.functions["main"].ref_contract.input_regions.len(), 0);
     }
 
     #[test]
@@ -11919,17 +12264,20 @@ mod typed_tests {
         let p=parse("struct S{x:i32}fn id<'a>(x:&'a S)->&'a S{x}fn short<'a,'b>(x:&'a i32)->&'b i32 where 'a:'b{x}fn missing<'a,'b>(x:&'a i32)->&'b i32{x}fn main(){let s=S{x:7};let n=(*id(&s)).x;}").unwrap();
         let env = signature_table(&p).unwrap();
         assert_eq!(
-            env.functions["short"].ref_contract.returns,
+            env.functions["short"].ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(
                 vec![ir::InputPath {
-                    param: 0,
+                    input: ir::InputReference {
+                        param: 0,
+                        position: ir::ReferencePosition { depth: 0 }
+                    },
                     projection: vec![].into()
                 }]
                 .into()
             )
         );
         assert_eq!(
-            env.functions["missing"].ref_contract.returns,
+            env.functions["missing"].ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputPaths(vec![].into())
         );
         let checked = type_function_with_signatures(&p, 3, &env).unwrap();
@@ -12022,6 +12370,10 @@ mod typed_tests {
             "fn read(r:&i32){}fn main(){let mut x=1;read(&mut x);}",
             "fn main(){let mut x=1;let r=&mut x;let q:&mut i32=loop{break r;};}",
         ] {
+            if source == "fn unused(r:&&i32){}fn main(){}" {
+                check(&parse(source).unwrap()).unwrap();
+                continue;
+            }
             assert!(
                 parse(source)
                     .and_then(|p| {
@@ -12092,7 +12444,12 @@ mod typed_tests {
                 let env = signature_table(&p)?;
                 type_function_with_signatures(&p, p.functions.len() - 1, &env).map(|_| ())
             });
-            assert!(result.is_err(), "accepted {source}");
+            if source == "fn main(){let x=1;let r=&x;let nested=&r;}" {
+                result.unwrap();
+                check(&parse(source).unwrap()).unwrap();
+            } else {
+                assert!(result.is_err(), "accepted {source}");
+            }
         }
     }
 

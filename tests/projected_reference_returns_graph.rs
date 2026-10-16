@@ -15,12 +15,12 @@ fn projected_returns_retain_exact_contract_cfg_and_analysis() {
             for function in &compiled.control_flow[..2] {
                 assert_eq!(function.ref_contract.region_count, 1);
                 let compiler::ir::ReturnContract::MutInputPaths(paths) =
-                    &function.ref_contract.returns
+                    &function.ref_contract.results[0].returns
                 else {
                     panic!("expected canonical projected mutable result");
                 };
                 assert_eq!(paths.len(), 1);
-                assert_eq!(paths[0].param, 0);
+                assert_eq!(paths[0].input.param, 0);
                 assert_eq!(
                     paths[0].projection.as_ref(),
                     [compiler::ir::Projection::Field(1)]

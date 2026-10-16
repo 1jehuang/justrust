@@ -17,13 +17,13 @@ fn mixed_capabilities_retain_actual_input_kinds_and_result_authority() {
                 } else {
                     compiler::ir::BorrowKind::Mut
                 };
-                let paths = match &function.ref_contract.returns {
+                let paths = match &function.ref_contract.results[0].returns {
                     compiler::ir::ReturnContract::SharedInputPaths(paths) if index == 0 => paths,
                     compiler::ir::ReturnContract::MutInputPaths(paths) if index == 1 => paths,
                     _ => panic!("expected result-capability contract"),
                 };
                 assert_eq!(paths.len(), 1);
-                assert_eq!(paths[0].param, 0);
+                assert_eq!(paths[0].input.param, 0);
                 assert_eq!(
                     paths[0].projection.as_ref(),
                     [compiler::ir::Projection::Field(1)]

@@ -9354,3 +9354,63 @@ This completes the bounded generic-reference milestone, not full Rust.
 Canonical Copy/Clone, destructors, broader reference shapes, associated types,
 generic trait items, macros, core/std and existing-project acceptance remain open.
 Autonomous work toward the complete independent compiler continues.
+
+## 2026-10-16: position-qualified shared nested-reference foundation
+
+Implemented the frozen `NESTED-REFERENCES.md` contract committed as9fed953b5.
+Two shared reference layers use explicit input/result positions, separate typed
+carrier slots and formal/call-result origins in the SAME ownership/borrow Plan.
+An inner load checks outer read authority but transports the stored inner value's
+original origins and dependencies. It does not fabricate a dependency on the
+outer handle or append returned-view coordinates to a Subtree footprint.
+Root Copy/Move, storage death, joins, calls and returns carry every typed slot.
+Existing mutable/two-phase behavior, sealed facts, all-body proof barrier,
+4096 total origins and1M membership caps remain unchanged.
+
+Canonical contracts are derived only at rigid declarations and transported
+unchanged through specialization. The world independently compares HeaderSet
+schemas with `SchemaCx::declaration_schema` before publication. Source-derived
+`SchemaDecl.region_contract_mode` permits the exact old zero-row unnamed free
+single-layer/non-reference-return compatibility case, while runtime carrier
+slots remain type-derived. Named/nested/receiver/reference-return subjects need
+dense position rows. E1 elision still counts occurrences, not distinct IDs.
+Candidate collection now uses metered geometric growth rather than quadratic
+relocation, with the full old-plus-new buffer peak charged before allocation.
+No old resource admission assertion or cap was weakened.
+
+Independent stock classification froze16 positives,12 invalids and4 legal
+exclusions, then independently repeated all64 BUILD/CHECK compiles and20 valid
+BUILD runtimes. CHECK emitted genuine metadata only. The observed corpus SHA256
+is0554a1035124644fb649691423b3706888c4aa6395437f92c493c298a6b49432.
+N26/N27 preserve exact code-less structured lifetime errors. Original sources
+and authorized wrapper-only corrections remain separately recorded in the
+contract. The supplied candidate subsequently passes all32 native cases at
+workers1/8 in BUILD/CHECK, including exact positive stdout and semantic negative
+rejections, with4 explicit unsupported boundaries. No oracle bytes were changed
+to repair implementation failures.
+
+Final hosted acceptance: all-target check20261016-090206471-2017752,
+1437 tests20261016-090222972-2019689, and strict all-target clippy
+20261016-090226429-2019687 all pass. `cargo fmt --check` and `git diff --check`
+pass. Exact path-redacted summaries are retained in
+`data/runs/prototype-bootstrap/2026-10-nested-references.jsonl`.
+A transient hosted timeout caused some earlier plain-default owner commands to
+fall back locally. These are not mislabeled as hosted: the final three root
+verification commands explicitly forced remote and confirmed hosted execution.
+Independent actual-source and resource review remain separate from runtime
+acceptance. No timing here is a pinned before/after speedup claim.
+
+Two historical legal boundaries, `reference_to_reference` and
+`reference_to_reference_parameter`, were independently proven unchanged against
+stock and native worker1/8 BUILD/CHECK/runtime before classification-only
+promotion. Every original source/stdout/expected value and other dictionary is
+unchanged. The new real example loads an inner Pair reference through genuine
+calls, lets its temporary outer handle die, and executes with8 workers, exact
+stdout `nested references compiled correctly\n`. Explicit type arguments keep
+nested omitted-application inference outside this example's scope.
+
+Nested mutable chains, depth greater than two, aggregate reference fields and
+ordinary reference type actuals remain explicit unsupported boundaries.
+Canonical Copy/catalog/Clone, mutable nested carrier stores, destructors,
+core/std and full existing-project acceptance remain later work. No experimental
+package was installed and no default or complete-Rust claim is made.

@@ -241,7 +241,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "borrow oracle ok\n",
     "full_source": "fn run()->i32{let x=7;let r=&x;let rr=&r;**rr}\nfn main() { if run() == 7 { println!(\"borrow oracle ok\"); } }\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "reference_to_reference",
     "source": "fn run()->i32{let x=7;let r=&x;let rr=&r;**rr}"
   },

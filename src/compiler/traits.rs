@@ -246,6 +246,12 @@ pub struct SchemaDecl {
     pub module: Arc<[String]>,
     pub public: bool,
     pub receiver: ReceiverMode,
+    pub region_contract_mode: RegionContractMode,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegionContractMode {
+    Positioned,
+    LegacyUnnamedFreeNoReturn,
 }
 #[derive(Clone, Debug)]
 pub struct InstantiatedSchema {
@@ -256,6 +262,7 @@ pub trait SchemaCx {
     fn budget(&self) -> &PlanBudget;
     fn registry_snapshot(&self) -> SnapshotId;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
+    fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
     fn instantiate_schema(
         &self,
         schema: &GenericSchema,
@@ -507,7 +514,7 @@ struct ReturnRefinementProof {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TypeUse {
     Root,
-    Referent,
+    Referent { depth: u8, shared: bool },
     Aggregate,
     Actual,
 }
@@ -889,7 +896,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 if Some(*param) == maybe_unsized
-                    && !matches!(usage, TypeUse::Root | TypeUse::Referent)
+                    && !matches!(usage, TypeUse::Root | TypeUse::Referent { .. })
                 {
                     return Err(FactsError::unsupported(
                         &self.budget,
@@ -931,14 +938,27 @@ impl ValidatedTraitWorld {
                     },
                 )?;
             }
-            Ty::Ref { referent, .. } => {
-                if usage != TypeUse::Root {
-                    return Err(FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: nested, aggregate or type-actual reference",
-                    ));
-                }
-                child(referent, TypeUse::Referent)?;
+            Ty::Ref { kind, referent } => {
+                let depth = match usage {
+                    TypeUse::Root => 1,
+                    TypeUse::Referent {
+                        depth: 1,
+                        shared: true,
+                    } if *kind == ir::BorrowKind::Shared => 2,
+                    _ => {
+                        return Err(FactsError::unsupported(
+                            &self.budget,
+                            "unsupported: nested mutable, deep, aggregate or type-actual reference",
+                        ));
+                    }
+                };
+                child(
+                    referent,
+                    TypeUse::Referent {
+                        depth,
+                        shared: *kind == ir::BorrowKind::Shared,
+                    },
+                )?;
             }
             Ty::Struct(t) => {
                 if t.def().id.snapshot != self.registry
@@ -1015,10 +1035,40 @@ impl ValidatedTraitWorld {
     }
     fn validate_schema_signature(
         &self,
+        declaration: DeclId,
         signature: &Signature,
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
     ) -> Result<()> {
+        let info = self.info(declaration)?;
+        if info.region_contract_mode == RegionContractMode::LegacyUnnamedFreeNoReturn {
+            let c = &signature.ref_contract;
+            if info.kind != DeclKind::Function
+                || info.owner.is_some()
+                || info.receiver != ReceiverMode::None
+                || matches!(signature.result, Ty::Ref { .. })
+                || c.region_count != 0
+                || !c.input_regions.is_empty()
+                || !c.results.is_empty()
+                || !c.outlives.is_empty()
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "legacy erased reference contract does not qualify for its declaration",
+                ));
+            }
+            for ty in &signature.params {
+                charged(&self.budget, self.budget.charge_work(3))?;
+                if charged(&self.budget, ir::reference_layers(ty))? > 1 {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "legacy erased declaration contains a nested reference",
+                    ));
+                }
+            }
+            return self.validate_signature_shape(signature, env, maybe_unsized);
+        }
+        self.validate_position_coverage(signature)?;
         let normalized = charged(
             &self.budget,
             ir::normalize_ref_contract(&signature.ref_contract, &self.budget),
@@ -1031,22 +1081,94 @@ impl ValidatedTraitWorld {
         }
         let derived = charged(
             &self.budget,
-            ir::derive_return_contract(
+            ir::derive_return_contracts(
                 &signature.params,
                 &signature.result,
                 &normalized,
                 &self.budget,
             ),
         )?;
-        self.charge_returns(&derived)?;
-        self.charge_returns(&signature.ref_contract.returns)?;
-        if derived != signature.ref_contract.returns {
+        for row in derived.iter().chain(signature.ref_contract.results.iter()) {
+            self.charge_returns(&row.returns)?;
+        }
+        charged(
+            &self.budget,
+            self.budget.charge_work(derived.len().saturating_add(1)),
+        )?;
+        if derived != signature.ref_contract.results {
             return Err(FactsError::invalid(
                 &self.budget,
                 "declaration return origins are not the complete rigid canonical contract",
             ));
         }
         self.validate_signature_shape(signature, env, maybe_unsized)
+    }
+    fn validate_declaration_schema(
+        &self,
+        declaration: DeclId,
+        header: &GenericSchema,
+    ) -> Result<()> {
+        let canonical = self.schema.declaration_schema(declaration)?;
+        if !self.same_env(&canonical.env, &header.env)?
+            || !self.eq_signature(&canonical.signature, &header.signature)?
+            || canonical.predicates.len() != header.predicates.len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "header disagrees with authoritative original declaration schema",
+            ));
+        }
+        for (a, b) in canonical.predicates.iter().zip(header.predicates.iter()) {
+            if !self.eq_predicate(a, b)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "header predicates disagree with original declaration schema",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn validate_position_coverage(&self, signature: &Signature) -> Result<()> {
+        let contract = &signature.ref_contract;
+        let mut row = 0usize;
+        for (param, ty) in signature.params.iter().enumerate() {
+            charged(&self.budget, self.budget.charge_work(3))?;
+            let count = charged(&self.budget, ir::reference_layers(ty))?;
+            for depth in 0..count {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                let expected = ir::InputReference {
+                    param,
+                    position: ir::ReferencePosition { depth: depth as u8 },
+                };
+                if contract.input_regions.get(row).map(|r| r.input) != Some(expected) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "reference contract input positions are not exact and dense",
+                    ));
+                }
+                row += 1;
+            }
+        }
+        charged(&self.budget, self.budget.charge_work(3))?;
+        let results = charged(&self.budget, ir::reference_layers(&signature.result))?;
+        if row != contract.input_regions.len() || results != contract.results.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "reference contract has missing or extra positions",
+            ));
+        }
+        for (depth, result) in contract.results.iter().enumerate() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if usize::from(result.position.depth) != depth
+                || matches!(result.returns, ir::ReturnContract::NoReference)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "reference result position is duplicate, missing or has no origin mapping",
+                ));
+            }
+        }
+        Ok(())
     }
     fn charge_returns(&self, returns: &ir::ReturnContract) -> Result<()> {
         use ir::ReturnContract::*;
@@ -1073,33 +1195,42 @@ impl ValidatedTraitWorld {
         charged(
             &self.budget,
             self.budget.charge_work(
-                ca.param_regions
+                ca.input_regions
                     .len()
-                    .saturating_add(cb.param_regions.len())
+                    .saturating_add(cb.input_regions.len())
+                    .saturating_add(ca.results.len())
+                    .saturating_add(cb.results.len())
                     .saturating_add(ca.outlives.len())
                     .saturating_add(cb.outlives.len())
                     .saturating_add(1),
             ),
         )?;
-        self.charge_returns(&ca.returns)?;
-        self.charge_returns(&cb.returns)?;
+        for row in ca.results.iter().chain(cb.results.iter()) {
+            self.charge_returns(&row.returns)?;
+        }
         Ok(ca == cb)
     }
     fn same_regions(&self, a: &ir::RefContract, b: &ir::RefContract) -> Result<bool> {
         charged(
             &self.budget,
             self.budget.charge_work(
-                a.param_regions
+                a.input_regions
                     .len()
-                    .saturating_add(b.param_regions.len())
+                    .saturating_add(b.input_regions.len())
+                    .saturating_add(a.results.len())
+                    .saturating_add(b.results.len())
                     .saturating_add(a.outlives.len())
                     .saturating_add(b.outlives.len())
                     .saturating_add(1),
             ),
         )?;
         Ok(a.region_count == b.region_count
-            && a.param_regions == b.param_regions
-            && a.result_region == b.result_region
+            && a.input_regions == b.input_regions
+            && a.results.len() == b.results.len()
+            && a.results
+                .iter()
+                .zip(b.results.iter())
+                .all(|(a, b)| a.position == b.position && a.region == b.region)
             && a.outlives == b.outlives)
     }
     fn return_refines(
@@ -1107,48 +1238,57 @@ impl ValidatedTraitWorld {
         required: &ir::RefContract,
         provided: &ir::RefContract,
     ) -> Result<bool> {
-        use ir::ReturnContract::*;
         if !self.same_regions(required, provided)? {
             return Ok(false);
         }
-        self.charge_returns(&required.returns)?;
-        self.charge_returns(&provided.returns)?;
-        let allowed = match &required.returns {
+        for (required, provided) in required.results.iter().zip(provided.results.iter()) {
+            if !self.return_origin_refines(&required.returns, &provided.returns)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    fn return_origin_refines(
+        &self,
+        required: &ir::ReturnContract,
+        provided: &ir::ReturnContract,
+    ) -> Result<bool> {
+        use ir::ReturnContract::*;
+        self.charge_returns(required)?;
+        self.charge_returns(provided)?;
+        let allowed = match required {
             SharedInputEnvelopes(inputs)
-                if matches!(
-                    &provided.returns,
-                    SharedInputPaths(_) | SharedInputEnvelopes(_)
-                ) =>
+                if matches!(provided, SharedInputPaths(_) | SharedInputEnvelopes(_)) =>
             {
                 inputs
             }
             MutInputEnvelopes(inputs)
-                if matches!(&provided.returns, MutInputPaths(_) | MutInputEnvelopes(_)) =>
+                if matches!(provided, MutInputPaths(_) | MutInputEnvelopes(_)) =>
             {
                 inputs
             }
-            _ => return Ok(required.returns == provided.returns),
+            _ => return Ok(required == provided),
         };
-        let contains = |param: usize| -> Result<bool> {
+        let contains = |reference: ir::InputReference| -> Result<bool> {
             for input in allowed.iter() {
                 charged(&self.budget, self.budget.charge_work(1))?;
-                if input.param == param {
+                if input.input == reference {
                     return Ok(true);
                 }
             }
             Ok(false)
         };
-        match &provided.returns {
+        match provided {
             SharedInputPaths(paths) | MutInputPaths(paths) => {
                 for path in paths.iter() {
-                    if !contains(path.param)? {
+                    if !contains(path.input)? {
                         return Ok(false);
                     }
                 }
             }
             SharedInputEnvelopes(inputs) | MutInputEnvelopes(inputs) => {
                 for input in inputs.iter() {
-                    if !contains(input.param)? {
+                    if !contains(input.input)? {
                         return Ok(false);
                     }
                 }
@@ -1293,7 +1433,9 @@ impl ValidatedTraitWorld {
                     "required trait item schema/owner mismatch",
                 ));
             }
+            self.validate_declaration_schema(item.declaration, &item.schema)?;
             self.validate_schema_signature(
+                item.declaration,
                 &item.schema.signature,
                 &item.schema.env,
                 Some(trait_header.self_param),
@@ -1332,7 +1474,13 @@ impl ValidatedTraitWorld {
                     "callable schema disagrees with registry",
                 ));
             }
-            self.validate_schema_signature(&callable.schema.signature, &callable.schema.env, None)?;
+            self.validate_declaration_schema(callable.declaration, &callable.schema)?;
+            self.validate_schema_signature(
+                callable.declaration,
+                &callable.schema.signature,
+                &callable.schema.env,
+                None,
+            )?;
             if let ReceiverMode::Borrowed { kind } = info.receiver
                 && !matches!(callable.schema.signature.params.first(),
                     Some(Ty::Ref { kind: actual, .. }) if *actual == kind)
@@ -2462,6 +2610,7 @@ pub(crate) mod test_support {
         registry: SnapshotId,
         budget: PlanBudget,
         declarations: Vec<SchemaDecl>,
+        schemas: Vec<(DeclId, GenericSchema)>,
         nominals: Vec<Ty>,
     }
     impl FixtureSchema {
@@ -2509,6 +2658,7 @@ pub(crate) mod test_support {
                     module: Arc::from([]),
                     public: false,
                     receiver,
+                    region_contract_mode: RegionContractMode::Positioned,
                 },
             )
         }
@@ -2621,6 +2771,7 @@ pub(crate) mod test_support {
             registry,
             budget: budget.clone(),
             declarations: Vec::new(),
+            schemas: Vec::new(),
             nominals: Vec::new(),
         };
         for h in headers.traits.iter() {
@@ -2721,6 +2872,15 @@ pub(crate) mod test_support {
         for ty in types {
             schema.gather(ty, 0)?;
         }
+        for h in headers
+            .callables
+            .iter()
+            .map(|h| (h.declaration, &h.schema))
+            .chain(headers.items.iter().map(|h| (h.declaration, &h.schema)))
+        {
+            retain::<Ty>(budget, h.1.signature.params.len())?;
+            push(budget, &mut schema.schemas, (h.0, h.1.clone()))?;
+        }
         retain::<FixtureSchema>(budget, 1)?;
         Ok(Arc::new(schema))
     }
@@ -2741,6 +2901,23 @@ pub(crate) mod test_support {
             Err(FactsError::invalid(
                 &self.budget,
                 "fixture declaration is unregistered",
+            ))
+        }
+        fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema> {
+            for (declaration, schema) in &self.schemas {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if *declaration == id {
+                    retain::<Ty>(&self.budget, schema.signature.params.len())?;
+                    charged(
+                        &self.budget,
+                        self.budget.charge_work(schema.signature.params.len()),
+                    )?;
+                    return Ok(schema.clone());
+                }
+            }
+            Err(FactsError::invalid(
+                &self.budget,
+                "fixture has no original declaration schema",
             ))
         }
         fn instantiate_schema(
@@ -2925,6 +3102,7 @@ pub(crate) mod test_support {
             registry,
             budget: budget.clone(),
             declarations: Vec::new(),
+            schemas: Vec::new(),
             nominals: Vec::new(),
         };
         for ty in types
@@ -2962,6 +3140,12 @@ pub(crate) mod test_support {
             env,
             None,
             ReceiverMode::None,
+        )?;
+        retain::<Ty>(budget, callable.schema.signature.params.len())?;
+        push(
+            budget,
+            &mut raw.schemas,
+            (declaration, callable.schema.clone()),
         )?;
         let headers = HeaderSet {
             callables: Arc::from([callable]),
@@ -3007,10 +3191,7 @@ mod tests {
     }
     fn sig(params: Vec<Ty>, result: Ty) -> Signature {
         Signature {
-            ref_contract: Arc::new(RefContract {
-                param_regions: vec![None; params.len()].into(),
-                ..RefContract::default()
-            }),
+            ref_contract: Arc::new(RefContract::default()),
             params,
             result,
         }
@@ -3195,17 +3376,45 @@ mod tests {
     }
 
     fn reference_signature(params: Vec<Ty>, result: Ty, budget: &PlanBudget) -> Signature {
+        let mut input_regions = Vec::new();
+        for (param, ty) in params.iter().enumerate() {
+            for depth in 0..ir::reference_layers(ty).unwrap() {
+                push(
+                    budget,
+                    &mut input_regions,
+                    ir::InputRegion {
+                        input: ir::InputReference {
+                            param,
+                            position: ir::ReferencePosition { depth: depth as u8 },
+                        },
+                        region: ir::RegionParamId(0),
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let mut results = Vec::new();
+        for depth in 0..ir::reference_layers(&result).unwrap() {
+            push(
+                budget,
+                &mut results,
+                ir::ResultReference {
+                    position: ir::ReferencePosition { depth: depth as u8 },
+                    region: ir::RegionParamId(0),
+                    returns: ir::ReturnContract::NoReference,
+                },
+            )
+            .unwrap();
+        }
         let raw = RefContract {
             region_count: 1,
-            param_regions: params
-                .iter()
-                .map(|ty| matches!(ty, Ty::Ref { .. }).then_some(ir::RegionParamId(0)))
-                .collect(),
-            result_region: matches!(result, Ty::Ref { .. }).then_some(ir::RegionParamId(0)),
+            input_regions: input_regions.into(),
+            results: results.into(),
             ..RefContract::default()
         };
         let mut contract = (*ir::normalize_ref_contract(&raw, budget).unwrap()).clone();
-        contract.returns = ir::derive_return_contract(&params, &result, &contract, budget).unwrap();
+        contract.results =
+            ir::derive_return_contracts(&params, &result, &contract, budget).unwrap();
         Signature {
             params,
             result,
@@ -3231,6 +3440,218 @@ mod tests {
             &c.budget,
         );
         c
+    }
+
+    fn nested_header(budget: &PlanBudget) -> CallableHeader {
+        let declaration = DeclId {
+            snapshot: SnapshotId::allocate().unwrap(),
+            index: 0,
+        };
+        let binder = scope(declaration, 1, budget);
+        let environment = env(std::slice::from_ref(&binder), budget);
+        let parameter = Ty::Param(ParamId {
+            owner: binder.binder(),
+            index: 0,
+        });
+        let nested = reference(reference(parameter));
+        let inputs = [0u8, 1].map(|depth| ir::InputRegion {
+            input: ir::InputReference {
+                param: 0,
+                position: ir::ReferencePosition { depth },
+            },
+            region: ir::RegionParamId(u16::from(depth)),
+        });
+        let results = [0u8, 1].map(|depth| ir::ResultReference {
+            position: ir::ReferencePosition { depth },
+            region: ir::RegionParamId(u16::from(depth)),
+            returns: ir::ReturnContract::NoReference,
+        });
+        let raw = RefContract {
+            region_count: 2,
+            input_regions: Arc::from(inputs),
+            results: Arc::from(results),
+            outlives: Arc::from([(ir::RegionParamId(1), ir::RegionParamId(0))]),
+        };
+        let mut contract = (*ir::normalize_ref_contract(&raw, budget).unwrap()).clone();
+        contract.results =
+            ir::derive_return_contracts(std::slice::from_ref(&nested), &nested, &contract, budget)
+                .unwrap();
+        CallableHeader {
+            declaration,
+            schema: GenericSchema {
+                env: environment,
+                signature: Signature {
+                    params: vec![nested.clone()],
+                    result: nested,
+                    ref_contract: Arc::new(contract),
+                },
+                predicates: Arc::from([]),
+            },
+        }
+    }
+
+    #[test]
+    fn nested_reference_world_positioned_schema_and_canonical_transport() {
+        let budget = PlanBudget::default();
+        let header = nested_header(&budget);
+        let declaration = header.declaration;
+        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let universal = world.callable_facts(declaration).unwrap();
+        universal
+            .validate_signature(SignatureSubject::Body, &header.schema.signature)
+            .unwrap();
+        let target = CallTarget {
+            declaration,
+            type_args: Arc::from([Ty::Int(IntTy::I32)]),
+        };
+        let closed = world.instance_facts(&target).unwrap();
+        let proof = world.discharge_direct(&target, &closed).unwrap();
+        assert_eq!(
+            proof.signature().ref_contract,
+            header.schema.signature.ref_contract
+        );
+        assert_eq!(proof.signature().ref_contract.results.len(), 2);
+        closed
+            .validate_signature(SignatureSubject::Body, proof.signature())
+            .unwrap();
+        let mut forged = proof.signature().clone();
+        let contract = Arc::make_mut(&mut forged.ref_contract);
+        Arc::make_mut(&mut contract.results)[1].returns =
+            ir::ReturnContract::SharedInputEnvelopes(Arc::from([ir::InputEnvelope {
+                input: ir::InputReference {
+                    param: 0,
+                    position: ir::ReferencePosition { depth: 0 },
+                },
+            }]));
+        assert!(
+            closed
+                .validate_signature(SignatureSubject::Body, &forged)
+                .is_err()
+        );
+        let mut omitted = header.schema.signature.clone();
+        Arc::make_mut(&mut omitted.ref_contract).results = Arc::from([]);
+        assert!(world.validate_position_coverage(&omitted).is_err());
+    }
+
+    #[test]
+    fn nested_reference_world_original_schema_and_legacy_subject_authority() {
+        use crate::compiler::frontend;
+        let budget = PlanBudget::default();
+        let program = frontend::parse(
+            "fn legacy(x: &i32) -> i32 { *x } fn named<'a>(x: &'a i32) -> i32 { *x } fn main() {}",
+        )
+        .unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let legacy = plan.callable_decl(0).unwrap();
+        let named = plan.callable_decl(1).unwrap();
+        assert_eq!(
+            world.info(legacy).unwrap().region_contract_mode,
+            RegionContractMode::LegacyUnnamedFreeNoReturn
+        );
+        assert_eq!(
+            world.info(named).unwrap().region_contract_mode,
+            RegionContractMode::Positioned
+        );
+        let original = world.callable_header(legacy).unwrap();
+        assert!(
+            original
+                .schema
+                .signature
+                .ref_contract
+                .input_regions
+                .is_empty()
+        );
+        world
+            .callable_facts(legacy)
+            .unwrap()
+            .validate_signature(SignatureSubject::Body, &original.schema.signature)
+            .unwrap();
+        let mut forged = world.headers.clone();
+        let named_header = Arc::make_mut(&mut forged.callables)
+            .iter_mut()
+            .find(|h| h.declaration == named)
+            .unwrap();
+        named_header.schema.signature.ref_contract = Arc::new(RefContract::default());
+        assert!(
+            matches!(ValidatedTraitWorld::build(forged, world.schema.clone(), &budget), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        let declaration = DeclId {
+            snapshot: SnapshotId::allocate().unwrap(),
+            index: 0,
+        };
+        let empty = env(&[], &budget);
+        let raw = CallableHeader {
+            declaration,
+            schema: GenericSchema {
+                env: empty,
+                signature: sig(vec![reference(Ty::Int(IntTy::I32))], Ty::Unit),
+                predicates: Arc::from([]),
+            },
+        };
+        assert!(test_support::world(&[raw], &budget).is_err());
+    }
+
+    #[test]
+    fn nested_reference_world_per_position_refinement_and_type_use_context() {
+        let budget = PlanBudget::default();
+        let header = nested_header(&budget);
+        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let facts = world.callable_facts(header.declaration).unwrap();
+        let required = &header.schema.signature.ref_contract;
+        let mut provided = (**required).clone();
+        Arc::make_mut(&mut provided.results)[1].returns =
+            ir::ReturnContract::SharedInputPaths(Arc::from([ir::InputPath {
+                input: ir::InputReference {
+                    param: 0,
+                    position: ir::ReferencePosition { depth: 1 },
+                },
+                projection: Arc::from([]),
+            }]));
+        assert!(world.return_refines(required, &provided).unwrap());
+        Arc::make_mut(&mut provided.results)[1].returns =
+            ir::ReturnContract::SharedInputPaths(Arc::from([ir::InputPath {
+                input: ir::InputReference {
+                    param: 0,
+                    position: ir::ReferencePosition { depth: 0 },
+                },
+                projection: Arc::from([]),
+            }]));
+        assert!(!world.return_refines(required, &provided).unwrap());
+        let nested = header.schema.signature.params[0].clone();
+        let mut walk = TypeWalk::default();
+        world
+            .validate_ty_inner(&nested, facts.env(), 0, TypeUse::Root, &mut walk)
+            .unwrap();
+        assert!(
+            world
+                .validate_ty_inner(
+                    &nested,
+                    facts.env(),
+                    0,
+                    TypeUse::Referent {
+                        depth: 1,
+                        shared: true
+                    },
+                    &mut walk
+                )
+                .is_err()
+        );
+        assert!(facts.validate_ty(&reference(nested.clone())).is_err());
+        assert!(world.validate_actual(&nested, facts.env()).is_err());
+        let mutable = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(reference(Ty::Int(IntTy::I32))),
+        };
+        assert!(facts.validate_ty(&mutable).is_err());
+        assert!(
+            facts
+                .validate_ty(&Ty::Array {
+                    element: Arc::new(nested),
+                    len: 0
+                })
+                .is_err()
+        );
     }
 
     #[test]
@@ -3276,21 +3697,27 @@ mod tests {
         let closed = world.instance_facts(&target).unwrap();
         let canonical = world.discharge_direct(&target, &closed).unwrap();
         assert!(matches!(
-            canonical.signature().ref_contract.returns,
+            canonical.signature().ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputEnvelopes(_)
         ));
         closed
             .validate_signature(SignatureSubject::Body, canonical.signature())
             .unwrap();
         let mut forged = canonical.signature().clone();
-        Arc::make_mut(&mut forged.ref_contract).returns =
+        Arc::make_mut(&mut Arc::make_mut(&mut forged.ref_contract).results)[0].returns =
             ir::ReturnContract::SharedInputPaths(Arc::from([
                 ir::InputPath {
-                    param: 0,
+                    input: ir::InputReference {
+                        param: 0,
+                        position: ir::ReferencePosition { depth: 0 },
+                    },
                     projection: Arc::from([]),
                 },
                 ir::InputPath {
-                    param: 1,
+                    input: ir::InputReference {
+                        param: 1,
+                        position: ir::ReferencePosition { depth: 0 },
+                    },
                     projection: Arc::from([]),
                 },
             ]));
@@ -3341,7 +3768,7 @@ mod tests {
         // Generic implementation declaration origins stay abstract even when
         // this particular instantiation has fully concrete actuals.
         assert!(matches!(
-            resolved.signature().ref_contract.returns,
+            resolved.signature().ref_contract.results[0].returns,
             ir::ReturnContract::SharedInputEnvelopes(_)
         ));
         assert_eq!(
@@ -3385,12 +3812,16 @@ mod tests {
         assert!(schema.must_copy(&reference(Ty::Int(IntTy::I32))).is_err());
         let required = &c.headers.items[0].schema.signature.ref_contract;
         let mut narrowed = (**required).clone();
-        narrowed.returns = ir::ReturnContract::SharedInputPaths(Arc::from([ir::InputPath {
-            param: 0,
-            projection: Arc::from([]),
-        }]));
+        Arc::make_mut(&mut narrowed.results)[0].returns =
+            ir::ReturnContract::SharedInputPaths(Arc::from([ir::InputPath {
+                input: ir::InputReference {
+                    param: 0,
+                    position: ir::ReferencePosition { depth: 0 },
+                },
+                projection: Arc::from([]),
+            }]));
         assert!(world.return_refines(required, &narrowed).unwrap());
-        Arc::make_mut(&mut narrowed.param_regions)[0] = None;
+        Arc::make_mut(&mut narrowed.input_regions)[0].region = ir::RegionParamId(1);
         assert!(!world.return_refines(required, &narrowed).unwrap());
         Arc::make_mut(&mut c.headers.items)[0].receiver = ReceiverMode::Borrowed {
             kind: BorrowKind::Mut,
@@ -3488,6 +3919,9 @@ mod tests {
             declaration: DeclId,
         }
         impl SchemaCx for ErasedScope {
+            fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema> {
+                self.raw.declaration_schema(id)
+            }
             fn budget(&self) -> &PlanBudget {
                 self.raw.budget()
             }

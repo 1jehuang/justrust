@@ -457,13 +457,13 @@ fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_to_reference_parameter() {
-    // Stock accepts and runs this fixture, outside this bounded B2 slice.
-    rejects(
-        "reference_to_reference_parameter",
+fn accepts_reference_to_reference_parameter() {
+    // Unchanged source independently passes stock and native workers 1/8.
+    runs(
         r#"fn read(r:&&i32)->i32{**r} fn run()->i32{let x=7;let r=&x;read(&r)}
 fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
 "#,
+        "borrow params oracle ok\n",
     );
 }
 
