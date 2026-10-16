@@ -33,6 +33,18 @@ execution-parity fixture with its original source preserved. Independent source
 fixtures cover wildcard versus underscore bindings, ignored moved fields,
 initializer effects/order, shadowing, privacy and selected-path move failures.
 
+Charged M8a run `compiler-patterns-20261016-0604`, source revision `4ea263270`,
+passed all **352 fixtures** across seven corpora: 237 accepted execution-parity
+cases, 95 invalid rejections and 20 explicitly legal-unsupported boundaries.
+The new pattern corpus contributes 31 accepted cases, 20 invalid rejections and
+six boundaries. Unsupported boundaries are not claims of language support.
+Complete source-bearing receipts are retained in
+`experiments/results/20261016-m8a-patterns-*.jsonl`.
+The 96-worker native example compiled and executed successfully: three functions,
+two structs, 11 CFG blocks, 81 analysis move paths and six moves. Its graph had
+18 nodes and 23 edges, with zero failures or dropped events and complete capture.
+Recorded timings are contended/uncontrolled, not cold measurements or a speed claim.
+
 Tuple rest, ref/ref mut, @, refutable/match patterns, destructuring assignment,
 parameter patterns, let-else, general backward inference, borrowing and destruction
 remain open. No full-Rust or performance claim follows from this milestone.

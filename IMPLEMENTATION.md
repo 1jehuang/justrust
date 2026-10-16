@@ -61,7 +61,9 @@ This milestone passed 278 hosted tests and all 295 M8a source fixtures, includin
 legal-unsupported nominal boundaries.
 
 Nested irrefutable let patterns now pass 356 hosted tests, including independent
-source acceptance and rejected-move graph retention. Pattern matching/exhaustiveness,
+source acceptance and rejected-move graph retention, plus 352 M8a differential
+fixtures: 237 accepted parity cases, 95 invalid rejections and 20 explicitly
+legal-unsupported boundaries. Pattern matching/exhaustiveness,
 remaining types/control flow and references/loans/destruction remain following
 slices. `PATTERNS.md` records the exact implemented contract and explicit gaps.
 
