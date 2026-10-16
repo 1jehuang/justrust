@@ -1,5 +1,16 @@
 # Findings: where agent build time goes
 
+## 2026-10-16: hosted selfdev artifact retrieval stalls after successful compilation
+
+Jcode acceptance required a runnable binary. Explicit hosted build
+`20261016-142514110-131517` (`justrust build --remote --profile selfdev --bin
+jcode`) compiled successfully in 21.8 s on hosted, but never completed artifact
+retrieval. The caller remained in an SSH child without a zstd process and the
+local executable retained its old version. After 166 s total, the agent cancelled
+only its own task and used a documented local selfdev build for isolated-daemon
+acceptance. Follow up on artifact transfer timeouts and progress reporting. This
+is an observed blocker, not a diagnosed root cause or a claimed fix.
+
 ## 2026-10-16: Jcode Sol Ultrafast shared-core edit rebuilds oversized base
 
 Hosted runtime regression run `20261016-142011228-63792` passed both targeted
