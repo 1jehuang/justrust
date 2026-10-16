@@ -8831,3 +8831,18 @@ Its initial use of unsupported panic syntax was removed before acceptance,
 not treated as native support. Independent tracked23corpus validation follows
 the implementation commit. No speedup or full Rust claim is made. Shifts,
 compound assignments, wider numerics and full library/project support remain.
+
+Tracked run `compiler-bitwise-20261016-1040` on implementation
+`e42ad72efda5196857cc92cb77f22017f9b5855e` passes836cases across23corpora:
+511accepted parity,238invalid rejected,18declared runtime101 and69legal
+unsupported. Independent receipt parsing verifies every source/process hash,
+case/summary outcome,766accepted workers1/8 runtime comparisons,36trap worker
+runs and128generated compile/runtime exit sets. Successful observations have
+complete capture, zero failed facts and zero dropped events; CHECK emits no
+executable. Raw24corpus/example receipts are retained under
+`experiments/results/20261016-m8a-bitwise-*`.
+
+The actual96worker example executed with exact expected stdout,1,129source
+bytes,12,326ELF bytes,42CFG blocks,101locals,117move paths,18graph nodes and
+23edges. Total25,384,224ns and engine4,415,349ns are contended/uncontrolled
+observations, not a speedup comparison. No experimental installation occurred.

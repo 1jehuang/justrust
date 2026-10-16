@@ -123,5 +123,7 @@ tests, strict all-target Clippy, formatting and both actual-code reviews pass.
 The real high-bit/reference/eager-Boolean example executes with exact stock
 stdout parity. Final hosted runs: check20261016-033737817-3594778,
 tests20261016-033749376-3596675 and
-lint20261016-033750943-3596876. The independent23corpus campaign remains pending
-this implementation commit. No speedup or full Rust claim is made.
+lint20261016-033750943-3596876. Independent tracked23corpus campaign
+compiler-bitwise-20261016-1040 passes all836cases on e42ad72ef:511accepted,
+238invalid,18declared traps and69legal-unsupported. Raw24corpus/example receipts
+are retained. No speedup or full Rust claim is made.
