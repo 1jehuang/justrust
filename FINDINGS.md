@@ -1,5 +1,18 @@
 # Findings: where agent build time goes
 
+## 2026-10-16: Jcode Sol Ultrafast shared-core edit rebuilds oversized base
+
+Hosted runtime regression run `20261016-142011228-63792` passed both targeted
+Ultrafast tests. It spent 9.94 s compiling, including 6.10 s rebuilding the
+142k-line `jcode_base` after upstream provider-core/config changes. Justrust
+estimated 5.2 s of oversized-crate waste and 1.8 s of low-parallelism cost.
+This is a project crate-boundary opportunity, not a justrust correctness bug.
+Avoid restructuring Jcode during the provider feature change. A subsequent
+fresh-cache full runtime run `20261016-142046358-70207` compiled zero units and
+passed 170 tests with 3 ignored in 0.73 s test time, but hosted synchronization
+still took 9.224 s of its 10.3 s wall time. These are observations, not a claimed
+optimization or measured speedup.
+
 ## 2026-10-15: Desktop diagram verification still pays shared-crate rebuild costs
 
 Desktop diagram and macOS input fixes used hosted workspace test run
