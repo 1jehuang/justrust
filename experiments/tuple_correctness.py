@@ -67,7 +67,9 @@ def corpus():
         ("tuple_ordering", "fn main(){if (1,2)<(2,1){println!(\"ok\");}}"),
         ("tuple_reference", "fn main(){let t=(1,true);let p=&t;if p.0==1 && p.1 {println!(\"ok\");}}"),
     ]:
-        yield Case(name, "boundary", source, "ok\n")
+        # E2 native-pass promotion only. Exact historical source/stdout retained.
+        kind = "valid" if name == "tuple_reference" else "boundary"
+        yield Case(name, kind, source, "ok\n")
 
 
 def stock_case(case, index, directory, rustc, compile_timeout, run_timeout):
