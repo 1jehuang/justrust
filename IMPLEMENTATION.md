@@ -65,11 +65,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 The full requested outcome is not reached. Latest hosted evidence is 1,021 tests
 and 784 independently verified native cases for bounded Linux x86-64 features. There is no successful
 core/alloc/std build, broad existing-project acceptance or representative full-Rust
-performance comparison. The next substantive foundation is now authorized under
-INTEGER-TYPES.md: all signed/unsigned integer primitives up to 64 bits, typed
-literals/patterns and existing operators with checked native transport. Casts and
-additional operators are explicit follow-through work, not guessed into this
-migration. Full Rust completion remains the goal, not this bounded milestone.
+performance comparison. INTEGER-TYPES.md now records delivered signed/unsigned
+primitives through64 bits, typed literals/patterns and existing checked operations.
+The next substantive work is integer casts under INTEGER-CASTS.md, with source
+inference grounded in primary semantics before conversion. Additional operators
+are separate follow-through work, not silently claimed by the foundation.
+Full Rust completion remains the goal, not this bounded milestone.
 Integer128, floats, generics/traits/methods, Drop,
 reference-containing values, libraries and project integration remain open.
 
