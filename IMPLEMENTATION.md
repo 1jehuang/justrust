@@ -63,7 +63,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 ## Active work and evidence limits
 
 The full requested outcome is not reached. Latest hosted evidence is 1,021 tests
-and the last retained native campaign covers 752 cases for bounded Linux x86-64 features. There is no successful
+and 784 independently verified native cases for bounded Linux x86-64 features. There is no successful
 core/alloc/std build, broad existing-project acceptance or representative full-Rust
 performance comparison. The next substantive foundation is now authorized under
 INTEGER-TYPES.md: all signed/unsigned integer primitives up to 64 bits, typed
@@ -85,8 +85,9 @@ patterns, contextual radix literals and signed minima. The width-driven native
 kernel checks overflow, division and remainder while preserving the private
 eight-byte scalar ABI. All 1,021 hosted tests, strict all-target lint and formatting
 pass. Exact 32 stock/native fixtures and four graph tests pass, including nine
-explicit runtime-101 cases. A tracked full native campaign follows the source
-commit. Casts and the other numeric gaps remain open.
+explicit runtime-101 cases. All 784 tracked twenty-one-corpus native outcomes
+pass, with 22 raw corpus/example receipts retained. Casts and the other numeric
+gaps remain open.
 
 Mixed-capability reference-result inputs are implemented under
 `MIXED-REFERENCE-RETURNS.md`. Shared outputs derive from shared or mutable input

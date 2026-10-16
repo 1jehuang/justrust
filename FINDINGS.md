@@ -8736,3 +8736,22 @@ full-suite regression found and closed physical operations on unreachable Never
 values. Quoted numeric patterns reject rather than becoming integer patterns.
 Tracked full native campaign follows the source commit. No speedup or full Rust
 completion claim follows from these correctness gates.
+
+### Independent twenty-one-corpus integer native evidence
+
+Tracked run `compiler-integer-types-20261016-1006` verified pushed revision
+`4957a0e7d25529c4b9eeb559adb5d94299d68b30`. All 784 cases pass: 470 accepted
+parity, 231 invalid rejections, 18 declared runtime-101 cases and 65 explicit
+legal unsupported boundaries. Root independently parsed every case and summary,
+source and process-output hashes, 128 generated compile/runtime exit sets,
+684 accepted worker runtime comparisons and 36 declared trap worker runs.
+Successful check/build observations have complete capture, zero failed facts and
+zero dropped events. Twenty-two raw corpus/example receipts are retained under
+`experiments/results/20261016-m8a-integer-types-*`.
+
+The actual 96-worker integer example printed `integer types compiled correctly`.
+Its 1,250-byte source produced a 12,321-byte ELF with four functions, 45 CFG blocks,
+97 locals, 192 move paths, 22 graph nodes and 29 edges. Capture is complete with
+zero failures/dropped events. Observed total 19,270,229 ns and engine 3,577,317 ns
+are contended/uncontrolled, not a speedup claim. Full Rust, casts, wider numerics,
+libraries and real-project acceptance remain open.
