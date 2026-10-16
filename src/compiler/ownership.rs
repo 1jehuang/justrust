@@ -4,7 +4,7 @@
 //! source types. Private `Move` operands consume even Copy-typed places so that
 //! move-path analysis can be tested before non-Copy syntax is supported.
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{ExprId, LocalId, Place, Ty};
+use super::ir::{ExprId, LocalId, Place, Projection, Ty};
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug, Default)]
@@ -22,6 +22,12 @@ pub struct AnalysisStats {
     pub writes: usize,
     pub storage_events: usize,
     pub diagnostics_suppressed: usize,
+    /// Downcast authorizations in final diagnostic replay, including singleton proofs.
+    pub variant_proof_checks: usize,
+    /// Reachable SwitchVariant true edges, independent of worklist iteration order.
+    pub variant_refinements: usize,
+    /// Known descendant proofs invalidated in final diagnostic replay.
+    pub variant_proofs_killed: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +36,7 @@ pub enum ErrorKind {
     StorageAlreadyLive,
     StorageNotDefinitelyLive,
     ReadNotDefinitelyInitialized,
+    VariantNotDefinitelySelected,
     WriteIntoUninitializedAggregate,
     ImmutableReassignment,
     ResourceLimit,
@@ -98,18 +105,39 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         return Err(Exhausted);
     }
     fn place_type(f: &cfg::Function, place: &Place, budget: &mut Budget) -> Result<(), Exhausted> {
-        budget.spend(place.fields.len() + 1)?;
+        budget.spend(place.projection.len() + 1)?;
         // Invalid references are diagnosed by the verifier after this bounded
         // preflight, rather than indexing untrusted input here.
         let Some(local) = f.locals.get(place.local.0) else {
             return Ok(());
         };
         let mut ty = &local.ty;
-        for &index in &place.fields {
-            let Some(field) = ty.field_ty(index) else {
-                return Ok(());
+        let mut projection = place.projection.iter();
+        while let Some(step) = projection.next() {
+            ty = match step {
+                Projection::Field(index) => match ty.field_ty(*index) {
+                    Some(field) => field,
+                    None => return Ok(()),
+                },
+                Projection::Downcast(variant) => {
+                    let Ty::Enum(enumeration) = ty else {
+                        return Ok(());
+                    };
+                    if enumeration.def().id != variant.owner {
+                        return Ok(());
+                    }
+                    let Some(def) = enumeration.def().variants.get(variant.index) else {
+                        return Ok(());
+                    };
+                    let Some(Projection::Field(index)) = projection.next() else {
+                        return Ok(());
+                    };
+                    let Some(field) = def.fields.get(*index) else {
+                        return Ok(());
+                    };
+                    &field.ty
+                }
             };
-            ty = field;
         }
         preflight_ty(ty, 0, budget)
     }
@@ -151,12 +179,19 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                             operand(field, &mut budget)?;
                         }
                     }
+                    Rvalue::EnumVariant { ty, fields, .. } => {
+                        preflight_ty(&Ty::Enum(ty.clone()), 0, &mut budget)?;
+                        for field in fields {
+                            operand(field, &mut budget)?;
+                        }
+                    }
                     Rvalue::Println(_) => {}
                 }
             }
         }
         match &block.terminator.value {
             Terminator::Switch { condition, .. } => operand(condition, &mut budget)?,
+            Terminator::SwitchVariant { place, .. } => place_type(f, place, &mut budget)?,
             Terminator::Call {
                 signature,
                 args,
@@ -186,9 +221,12 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
         return Err(Exhausted);
     }
     if let Ty::Enum(ty) = ty {
-        // Enums have no move-path children, but validation examines their
-        // variant metadata, including when supplied only by a constant.
         budget.spend(ty.def().variants.len())?;
+        for variant in ty.def().variants.iter() {
+            for field in variant.fields.iter() {
+                preflight_ty(&field.ty, depth + 1, budget)?;
+            }
+        }
     }
     if let Some(count) = ty.field_count() {
         for index in 0..count {
@@ -201,6 +239,8 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
 struct PathNode {
     parent: Option<usize>,
     children: Vec<usize>,
+    /// Enum variants select disjoint groups in `children`. Empty for non-enums.
+    variant_offsets: Vec<usize>,
     /// Preorder interval [self, end) covers this place's entire subtree.
     end: usize,
 }
@@ -223,12 +263,23 @@ impl Paths {
             paths.nodes.push(PathNode {
                 parent,
                 children: Vec::new(),
+                variant_offsets: Vec::new(),
                 end: 0,
             });
             if let Some(count) = ty.field_count() {
                 for index in 0..count {
                     let child = add(paths, ty.field_ty(index).ok_or(Exhausted)?, Some(id), limit)?;
                     paths.nodes[id].children.push(child);
+                }
+            }
+            if let Ty::Enum(enumeration) = ty {
+                for variant in enumeration.def().variants.iter() {
+                    let offset = paths.nodes[id].children.len();
+                    paths.nodes[id].variant_offsets.push(offset);
+                    for field in variant.fields.iter() {
+                        let child = add(paths, &field.ty, Some(id), limit)?;
+                        paths.nodes[id].children.push(child);
+                    }
                 }
             }
             paths.nodes[id].end = paths.nodes.len();
@@ -246,8 +297,18 @@ impl Paths {
     }
     fn resolve(&self, place: &Place) -> usize {
         let mut node = self.roots[place.local.0];
-        for field in &place.fields {
-            node = self.nodes[node].children[*field];
+        let mut projection = place.projection.iter();
+        while let Some(step) = projection.next() {
+            let index = match step {
+                Projection::Field(index) => *index,
+                Projection::Downcast(variant) => {
+                    let Some(Projection::Field(index)) = projection.next() else {
+                        unreachable!("validated downcast has a field")
+                    };
+                    self.nodes[node].variant_offsets[variant.index] + index
+                }
+            };
+            node = self.nodes[node].children[index];
         }
         node
     }
@@ -343,6 +404,9 @@ struct State {
     must_init: Bits,
     may_init: Bits,
     ever_written: Bits,
+    /// Variant index or usize::MAX (unknown), indexed by actual enum path.
+    /// Owner identity is fixed by the structurally verified path type.
+    selected: Vec<usize>,
 }
 impl State {
     fn new(locals: usize, paths: usize) -> Self {
@@ -352,10 +416,11 @@ impl State {
             must_init: Bits::new(paths),
             may_init: Bits::new(paths),
             ever_written: Bits::new(paths),
+            selected: vec![usize::MAX; paths],
         }
     }
     fn words(&self) -> usize {
-        self.must_live.0.len() * 2 + self.must_init.0.len() * 3
+        self.must_live.0.len() * 2 + self.must_init.0.len() * 3 + self.selected.len()
     }
     fn merge(&mut self, other: &Self, budget: &mut Budget) -> Result<bool, Exhausted> {
         let mut changed = self.must_live.merge(&other.must_live, true, budget)?;
@@ -365,6 +430,13 @@ impl State {
         changed |= self
             .ever_written
             .merge(&other.ever_written, false, budget)?;
+        budget.spend(self.selected.len())?;
+        for (ours, theirs) in self.selected.iter_mut().zip(&other.selected) {
+            if *ours != *theirs && *ours != usize::MAX {
+                *ours = usize::MAX;
+                changed = true;
+            }
+        }
         Ok(changed)
     }
 }
@@ -385,6 +457,36 @@ struct Report {
     complete: bool,
 }
 impl Transfer<'_> {
+    fn authorize(&mut self, state: &State, place: &Place) -> Result<bool, Exhausted> {
+        // Cover this traversal and the subsequent resolve traversals for reads,
+        // moves and writes. Structural typing was checked for every CFG block.
+        self.budget
+            .spend(place.projection.len().checked_mul(3).ok_or(Exhausted)? + 1)?;
+        let mut node = self.paths.roots[place.local.0];
+        let mut projection = place.projection.iter();
+        while let Some(step) = projection.next() {
+            let index = match step {
+                Projection::Field(index) => *index,
+                Projection::Downcast(variant) => {
+                    if let Some(report) = &mut self.report {
+                        report.stats.variant_proof_checks += 1;
+                    }
+                    if self.paths.nodes[node].variant_offsets.len() != 1
+                        && state.selected[node] != variant.index
+                    {
+                        self.diagnostic(ErrorKind::VariantNotDefinitelySelected, place.clone());
+                        return Ok(false);
+                    }
+                    let Some(Projection::Field(index)) = projection.next() else {
+                        unreachable!("validated downcast has a field")
+                    };
+                    self.paths.nodes[node].variant_offsets[variant.index] + index
+                }
+            };
+            node = self.paths.nodes[node].children[index];
+        }
+        Ok(true)
+    }
     fn diagnostic(&mut self, kind: ErrorKind, place: Place) {
         if let Some(report) = &mut self.report {
             if report.diagnostics.len() < self.diagnostic_limit {
@@ -414,11 +516,23 @@ impl Transfer<'_> {
     }
     fn initialize(&mut self, state: &mut State, node: usize, value: bool) -> Result<(), Exhausted> {
         let end = self.paths.nodes[node].end;
+        self.budget.spend(end - node)?;
+        for selected in &mut state.selected[node..end] {
+            if *selected != usize::MAX {
+                if let Some(report) = &mut self.report {
+                    report.stats.variant_proofs_killed += 1;
+                }
+                *selected = usize::MAX;
+            }
+        }
         state.must_init.range(node, end, value, self.budget)?;
         state.may_init.range(node, end, value, self.budget)
     }
     fn read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
         self.budget.spend(1)?;
+        if !self.authorize(state, place)? {
+            return Ok(());
+        }
         if !state.must_live.get(place.local.0) {
             self.diagnostic(ErrorKind::StorageNotDefinitelyLive, place.clone());
         } else {
@@ -454,6 +568,7 @@ impl Transfer<'_> {
         if let Some(report) = &mut self.report {
             report.stats.writes += 1;
         }
+        self.authorize(state, place)?;
         let node = self.paths.resolve(place);
         let root = self.paths.roots[place.local.0];
         if !state.must_live.get(place.local.0) {
@@ -479,15 +594,15 @@ impl Transfer<'_> {
     }
     fn rvalue(&mut self, state: &mut State, value: &Rvalue) -> Result<(), Exhausted> {
         match value {
-            // Reading a tag does not copy or move the non-Copy enum. Unit
-            // enums still require their root to be definitely initialized.
+            // Reading a tag does not copy or move the non-Copy enum, but does
+            // require the entire enum, including active payloads, initialized.
             Rvalue::Discriminant(place) => self.read(state, place)?,
             Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => self.operand(state, op)?,
             Rvalue::Binary { left, right, .. } => {
                 self.operand(state, left)?;
                 self.operand(state, right)?;
             }
-            Rvalue::Aggregate { fields, .. } => {
+            Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
                 for field in fields {
                     self.operand(state, field)?;
                 }
@@ -541,6 +656,17 @@ impl Transfer<'_> {
         self.origin = self.f.blocks[self.block.0].terminator.origin;
         match &self.f.blocks[self.block.0].terminator.value {
             Terminator::Switch { condition, .. } => self.operand(state, condition)?,
+            Terminator::SwitchVariant { place, .. } => {
+                self.budget.spend(place.projection.len() + 1)?;
+                let node = self.paths.resolve(place);
+                if self.paths.nodes[node].variant_offsets.len() == 1 {
+                    // A singleton pattern does not inspect storage or a tag.
+                    // Payload bindings still perform their normal full reads.
+                    self.authorize(state, place)?;
+                } else {
+                    self.read(state, place)?;
+                }
+            }
             Terminator::Call {
                 args, destination, ..
             } => {
@@ -560,13 +686,18 @@ impl Transfer<'_> {
 fn root_place(local: LocalId) -> Place {
     Place {
         local,
-        fields: Vec::new(),
+        projection: Vec::new(),
     }
 }
 fn successors(terminator: &Terminator) -> [Option<BlockId>; 2] {
     match terminator {
         Terminator::Goto(next) | Terminator::Call { next, .. } => [Some(*next), None],
         Terminator::Switch {
+            then_block,
+            else_block,
+            ..
+        }
+        | Terminator::SwitchVariant {
             then_block,
             else_block,
             ..
@@ -659,8 +790,26 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
             .block(&mut output)?;
             for target in successors(&f.blocks[block.0].terminator.value)
                 .into_iter()
-                .flatten()
+                .enumerate()
             {
+                let (edge, Some(target)) = target else {
+                    continue;
+                };
+                let previous = if edge == 0 {
+                    if let Terminator::SwitchVariant { place, variant, .. } =
+                        &f.blocks[block.0].terminator.value
+                    {
+                        budget.spend(place.projection.len() + 1)?;
+                        let node = paths.resolve(place);
+                        let old = output.selected[node];
+                        output.selected[node] = variant.index;
+                        Some((node, old))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let changed = if let Some(entry) = &mut entries[target.0] {
                     entry.merge(&output, &mut budget)?
                 } else {
@@ -669,6 +818,9 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
                     report.stats.blocks_reachable += 1;
                     true
                 };
+                if let Some((node, old)) = previous {
+                    output.selected[node] = old;
+                }
                 if changed {
                     report.stats.state_changes += 1;
                     if !queued[target.0] {
@@ -698,6 +850,12 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
                     diagnostic_limit: limits.diagnostics,
                 }
                 .block(&mut state)?;
+                if matches!(
+                    f.blocks[index].terminator.value,
+                    Terminator::SwitchVariant { .. }
+                ) {
+                    report.stats.variant_refinements += 1;
+                }
             }
         }
         Ok(())
@@ -726,7 +884,8 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
 #[cfg(test)]
 mod tests {
     use super::super::ir::{
-        DefId, EnumDef, EnumTy, FieldDef, LocalDecl, SnapshotId, StructDef, StructTy,
+        DefId, EnumDef, EnumTy, FieldDef, LocalDecl, SnapshotId, StructDef, StructTy, VariantDef,
+        VariantId, VariantShape,
     };
     use super::*;
     use cfg::{BasicBlock, Constant, Located};
@@ -740,7 +899,7 @@ mod tests {
     fn place(local: usize) -> Place {
         Place {
             local: LocalId(local),
-            fields: vec![],
+            projection: vec![],
         }
     }
     fn local(ty: Ty) -> LocalDecl {
@@ -801,7 +960,15 @@ mod tests {
             name: "Tag".into(),
             module: String::new(),
             public: false,
-            variants: vec!["A".into(), "B".into()].into(),
+            variants: ["A", "B"]
+                .into_iter()
+                .map(|name| VariantDef {
+                    name: name.into(),
+                    shape: VariantShape::Unit,
+                    fields: vec![].into(),
+                })
+                .collect::<Vec<_>>()
+                .into(),
         })
     }
 
@@ -823,6 +990,339 @@ mod tests {
             destination: place(2),
             value: Rvalue::Discriminant(place(1)),
         })
+    }
+
+    fn payload_enum(variants: Vec<Vec<Ty>>) -> EnumTy {
+        EnumTy::new(EnumDef {
+            id: DefId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "Payload".into(),
+            module: String::new(),
+            public: false,
+            variants: variants
+                .into_iter()
+                .enumerate()
+                .map(|(variant, fields)| VariantDef {
+                    name: format!("V{variant}"),
+                    shape: VariantShape::Tuple,
+                    fields: fields
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, ty)| FieldDef {
+                            name: index.to_string(),
+                            ty,
+                            public: false,
+                        })
+                        .collect::<Vec<_>>()
+                        .into(),
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        })
+    }
+
+    fn variant(ty: &EnumTy, index: usize) -> VariantId {
+        VariantId {
+            owner: ty.def().id,
+            index,
+        }
+    }
+
+    fn payload_field(ty: &EnumTy, selected: usize, field: usize) -> Place {
+        Place {
+            local: LocalId(1),
+            projection: vec![
+                Projection::Downcast(variant(ty, selected)),
+                Projection::Field(field),
+            ],
+        }
+    }
+
+    fn payload_fixture(ty: &EnumTy) -> cfg::Function {
+        let mut f = fixture();
+        f.locals
+            .extend([local(Ty::Enum(ty.clone())), local(Ty::I32)]);
+        f.params.push(LocalId(1));
+        f.blocks[0]
+            .statements
+            .push(located(Statement::StorageLive(LocalId(2))));
+        f
+    }
+
+    fn read_payload(source: Place) -> Located<Statement> {
+        located(Statement::Assign {
+            destination: place(2),
+            value: Rvalue::Use(Operand::Copy(source)),
+        })
+    }
+
+    fn split_payload(f: &mut cfg::Function, ty: &EnumTy) {
+        f.blocks[0].terminator = located(Terminator::SwitchVariant {
+            place: place(1),
+            variant: variant(ty, 0),
+            then_block: BlockId(1),
+            else_block: BlockId(2),
+        });
+        f.blocks.extend([
+            BasicBlock {
+                statements: vec![],
+                terminator: located(Terminator::Return),
+            },
+            BasicBlock {
+                statements: vec![],
+                terminator: located(Terminator::Return),
+            },
+        ]);
+    }
+
+    #[test]
+    fn payload_downcast_requires_successful_edge_proof() {
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let mut f = payload_fixture(&ty);
+        f.blocks[0]
+            .statements
+            .push(read_payload(payload_field(&ty, 0, 0)));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::VariantNotDefinitelySelected
+        );
+
+        let mut f = payload_fixture(&ty);
+        split_payload(&mut f, &ty);
+        f.blocks[1]
+            .statements
+            .push(read_payload(payload_field(&ty, 0, 0)));
+        assert!(analyze(&f).passed());
+        f.blocks[2]
+            .statements
+            .push(read_payload(payload_field(&ty, 0, 0)));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(result.diagnostics[0].block, BlockId(2));
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::VariantNotDefinitelySelected
+        );
+    }
+
+    #[test]
+    fn payload_proof_intersects_for_shared_targets_and_joins() {
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        for shared_target in [false, true] {
+            let mut f = payload_fixture(&ty);
+            split_payload(&mut f, &ty);
+            f.blocks.push(BasicBlock {
+                statements: vec![read_payload(payload_field(&ty, 0, 0))],
+                terminator: located(Terminator::Return),
+            });
+            if shared_target {
+                f.blocks[0].terminator = located(Terminator::SwitchVariant {
+                    place: place(1),
+                    variant: variant(&ty, 0),
+                    then_block: BlockId(3),
+                    else_block: BlockId(3),
+                });
+            } else {
+                f.blocks[1].terminator = located(Terminator::Goto(BlockId(3)));
+                f.blocks[2].terminator = located(Terminator::Goto(BlockId(3)));
+            }
+            let result = analyze(&f);
+            assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+            assert_eq!(
+                result.diagnostics[0].kind,
+                ErrorKind::VariantNotDefinitelySelected
+            );
+        }
+    }
+
+    #[test]
+    fn whole_enum_assignment_kills_stale_variant_proof() {
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let mut f = payload_fixture(&ty);
+        split_payload(&mut f, &ty);
+        f.blocks[1].statements.extend([
+            located(Statement::Assign {
+                destination: place(1),
+                value: Rvalue::EnumVariant {
+                    ty: ty.clone(),
+                    variant: 1,
+                    fields: vec![Operand::Constant(Constant::I32(9))],
+                },
+            }),
+            read_payload(payload_field(&ty, 0, 0)),
+        ]);
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::VariantNotDefinitelySelected
+        );
+        assert_eq!(result.stats.variant_proofs_killed, 1);
+        assert_eq!(result.stats.variant_proof_checks, 1);
+        assert_eq!(result.stats.variant_refinements, 1);
+    }
+
+    #[test]
+    fn payload_destination_requires_proof_even_when_inactive_bits_are_true() {
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let mut f = payload_fixture(&ty);
+        f.blocks[0].statements.push(located(Statement::Assign {
+            destination: payload_field(&ty, 0, 0),
+            value: Rvalue::Use(Operand::Constant(Constant::I32(3))),
+        }));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::VariantNotDefinitelySelected
+        );
+    }
+
+    #[test]
+    fn singleton_switch_does_not_read_partially_moved_or_uninitialized_root() {
+        let ty = payload_enum(vec![vec![Ty::I32, Ty::I32]]);
+        let mut f = payload_fixture(&ty);
+        f.blocks[0].statements.push(located(Statement::Assign {
+            destination: place(2),
+            value: Rvalue::Use(Operand::Move(payload_field(&ty, 0, 0))),
+        }));
+        split_payload(&mut f, &ty);
+        f.blocks[1]
+            .statements
+            .push(read_payload(payload_field(&ty, 0, 1)));
+        assert!(analyze(&f).passed(), "{:?}", analyze(&f).diagnostics);
+        f.blocks[1]
+            .statements
+            .push(read_payload(payload_field(&ty, 0, 0)));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+
+        let mut f = payload_fixture(&ty);
+        f.params.clear();
+        f.blocks[0]
+            .statements
+            .push(located(Statement::StorageLive(LocalId(1))));
+        split_payload(&mut f, &ty);
+        assert!(analyze(&f).passed());
+        f.blocks[1]
+            .statements
+            .push(read_payload(payload_field(&ty, 0, 0)));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+    }
+
+    #[test]
+    fn selected_variant_refinement_never_restores_initialization() {
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let mut f = payload_fixture(&ty);
+        f.params.clear();
+        f.blocks[0]
+            .statements
+            .push(located(Statement::StorageLive(LocalId(1))));
+        split_payload(&mut f, &ty);
+        f.blocks[1]
+            .statements
+            .push(read_payload(payload_field(&ty, 0, 0)));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+        );
+    }
+
+    #[test]
+    fn payload_move_retains_outer_proof_but_full_enum_read_fails() {
+        let ty = payload_enum(vec![vec![Ty::I32, Ty::I32], vec![Ty::I32]]);
+        let mut f = payload_fixture(&ty);
+        split_payload(&mut f, &ty);
+        f.blocks[1].statements.extend([
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(payload_field(&ty, 0, 0))),
+            }),
+            read_payload(payload_field(&ty, 0, 1)),
+        ]);
+        assert!(analyze(&f).passed());
+        f.blocks[1].statements.push(discriminant());
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+    }
+
+    #[test]
+    fn nested_proof_invalidation_is_subtree_scoped() {
+        let inner = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let outer = payload_enum(vec![vec![Ty::Enum(inner), Ty::I32], vec![Ty::I32]]);
+        let f = payload_fixture(&outer);
+        let paths = Paths::new(&f, 100).unwrap();
+        let outer_node = paths.resolve(&place(1));
+        let inner_node = paths.resolve(&payload_field(&outer, 0, 0));
+        let sibling = paths.resolve(&payload_field(&outer, 0, 1));
+        let mut state = State::new(f.locals.len(), paths.nodes.len());
+        state.selected[outer_node] = 0;
+        state.selected[inner_node] = 0;
+        let mut budget = Budget(1000);
+        let mut transfer = Transfer {
+            f: &f,
+            paths: &paths,
+            budget: &mut budget,
+            report: None,
+            block: BlockId(0),
+            statement: None,
+            origin: None,
+            diagnostic_limit: 10,
+        };
+        transfer.initialize(&mut state, sibling, true).unwrap();
+        assert_eq!(state.selected[outer_node], 0);
+        assert_eq!(state.selected[inner_node], 0);
+        transfer.initialize(&mut state, inner_node, false).unwrap();
+        assert_eq!(state.selected[outer_node], 0);
+        assert_eq!(state.selected[inner_node], usize::MAX);
+        state.selected[inner_node] = 0;
+        transfer.initialize(&mut state, outer_node, true).unwrap();
+        assert_eq!(state.selected[outer_node], usize::MAX);
+        assert_eq!(state.selected[inner_node], usize::MAX);
+    }
+
+    #[test]
+    fn payload_metadata_and_proof_storage_are_resource_bounded() {
+        let ty = payload_enum(vec![vec![Ty::I32; 10], vec![Ty::I32; 10]]);
+        assert!(preflight_ty(&Ty::Enum(ty.clone()), 0, &mut Budget(40)).is_err());
+        let f = payload_fixture(&ty);
+        let paths = Paths::new(&f, 23).unwrap();
+        assert_eq!(paths.nodes.len(), 23);
+        assert!(Paths::new(&f, 22).is_err());
+        let old_words =
+            Bits::new(f.locals.len()).0.len() * 2 + Bits::new(paths.nodes.len()).0.len() * 3;
+        let old_state_bytes = old_words * 8 + std::mem::size_of::<State>();
+        let result = analyze_with_limits(
+            &f,
+            Limits {
+                state_bytes: old_state_bytes * (f.blocks.len() + 3),
+                ..Limits::default()
+            },
+        );
+        assert!(!result.complete);
+        assert_eq!(result.stats.worklist_pops, 0);
+        assert_eq!(result.diagnostics[0].kind, ErrorKind::ResourceLimit);
     }
 
     #[test]
@@ -973,7 +1473,7 @@ mod tests {
         f.params.push(LocalId(1));
         let field = |index| Place {
             local: LocalId(1),
-            fields: vec![index],
+            projection: vec![Projection::Field(index)],
         };
         f.blocks[0].statements.extend([
             located(Statement::StorageLive(LocalId(2))),
@@ -1115,13 +1615,23 @@ mod tests {
 
     #[test]
     fn diagnostic_replay_exhaustion_cannot_report_success() {
-        let result = analyze_with_limits(
-            &fixture(),
-            Limits {
-                work: 31,
-                ..Limits::default()
-            },
-        );
+        // Search a small fixed bound rather than pinning an internal operation
+        // count. Extra proof accounting must not turn this into a solver-only
+        // exhaustion test or let replay exhaustion masquerade as success.
+        let result = (0..=256)
+            .map(|work| {
+                analyze_with_limits(
+                    &fixture(),
+                    Limits {
+                        work,
+                        ..Limits::default()
+                    },
+                )
+            })
+            .find(|result| {
+                !result.complete && result.stats.worklist_pops == 1 && result.stats.writes == 1
+            })
+            .expect("bounded work budget must exercise mid-replay exhaustion");
         assert!(!result.complete);
         assert!(!result.passed());
         assert_eq!(result.stats.worklist_pops, 1);
@@ -1179,9 +1689,9 @@ mod tests {
         let paths = Paths::new(&f, 10).unwrap();
         assert_eq!(paths.nodes.len(), 10);
         assert!(Paths::new(&f, 9).is_err());
-        let projected = |fields| Place {
+        let projected = |fields: Vec<usize>| Place {
             local: LocalId(1),
-            fields,
+            projection: fields.into_iter().map(Projection::Field).collect(),
         };
         assert_eq!(paths.resolve(&projected(vec![1, 0, 0])), 5);
         assert_eq!(paths.resolve(&projected(vec![1, 1, 0])), 8);

@@ -20,6 +20,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
+- [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -54,13 +55,21 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Payload enums now pass 533 hosted tests plus strict all-target lint.
+`PAYLOAD-ENUMS.md` defines tuple/braced/unit construction, selected payload
+patterns, typed downcasts and separate must-selected-variant proofs. The exact
+historical payload fixture is promoted unchanged to accepted. The independent
+44-case corpus separates 23 accepted programs, 15 invalid programs and six
+legal-unsupported boundaries. Full Rust remains open, including arrays/numerics,
+general patterns, references/borrows/destruction, abstractions and project support.
+
 Typed deferred initialization now passes 465 hosted tests, including branch/match
 first writes, loop assignment history, fresh-shadow reads and graph failure
 analysis retention. `DEFERRED.md` records the contract. The exact historical
 wildcard/uninitialized match fixture is now accepted rather than unsupported.
 The dedicated differential corpus contains 10 accepted cases, seven invalid
-programs and three explicit inference/pattern boundaries. Payload enums remain
-the next design/implementation slice, not a completed capability. The M8a run
+programs and three explicit inference/pattern boundaries. Payload enums are
+the subsequent implemented slice above. The M8a run
 passed 431 fixtures across nine corpora: 274 accepted parity cases, 122 invalid
 rejections and 35 explicitly unsupported legal programs, with raw receipts retained.
 

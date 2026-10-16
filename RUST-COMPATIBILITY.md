@@ -83,7 +83,7 @@ of inferred and intermediate projected types, not only field names.
 
 The private aggregate ABI is not a platform representation contract. Empty/unit/
 tuple structs, struct update/shorthand, derives, references, loans,
-lifetimes, destructors, payload enums and general Rust data/abstraction features remain
+lifetimes, destructors and general Rust data/abstraction features remain
 open. Compact shared declaration DAGs and diagnostics have explicit resource
 bounds. This slice does not complete ownership or full Rust compatibility.
 
@@ -101,10 +101,21 @@ fixtures are promoted to accepted cases only with native execution evidence.
 i32 literal matches with a catchall, wildcard and whole-binding arm semantics.
 Enums remain non-Copy. Runtime selection and static ownership reachability are
 separate: dead arms remain checked, while wildcard-only and singleton patterns
-avoid unnecessary discriminant reads. Payload variants, sum-aware projections,
-guards, or/range patterns, general nested refutable patterns, derives, explicit
+avoid unnecessary discriminant reads. Payload variants and sum-aware projections
+are the subsequent slice below. Guards, or/range patterns, general nested
+refutable patterns, derives, explicit
 discriminants and empty enums remain open. This does not complete Rust enums,
 match, ownership or the full language.
+
+## Current follow-on: payload enums
+
+`PAYLOAD-ENUMS.md` defines unit/tuple/braced variants, typed downcast projections,
+selected field extraction and the tagged private aggregate ABI. Inactive variant
+initialization is logical only: a separate must-selected proof authorizes payload
+reads. Whole writes/moves invalidate proofs and joins intersect them. Check and
+emission retain the same cached analysis gate. Tuple-variant rest, nested
+refutable patterns, guards, derives, Drop/references and public layout remain
+open. This does not complete Rust sum types or general pattern matching.
 
 ## Current follow-on: typed deferred initialization
 

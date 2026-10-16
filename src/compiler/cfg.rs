@@ -4,7 +4,7 @@
 //! module selects Copy/Move operands from projected semantic types. Ownership
 //! dataflow is established separately by the analyzer before native emission.
 use super::frontend::{BinaryOp, UnaryOp};
-use super::ir::{self, ExprId, LocalId, LoopId, Place, Ty};
+use super::ir::{self, ExprId, LocalId, LoopId, Place, Projection, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
@@ -58,6 +58,11 @@ pub enum Operand {
 
 #[derive(Clone, Debug)]
 pub enum Rvalue {
+    EnumVariant {
+        ty: ir::EnumTy,
+        variant: usize,
+        fields: Vec<Operand>,
+    },
     /// Reads an initialized enum tag without moving the enum value.
     Discriminant(Place),
     Use(Operand),
@@ -79,6 +84,12 @@ pub enum Rvalue {
 
 #[derive(Clone, Debug)]
 pub enum Terminator {
+    SwitchVariant {
+        place: Place,
+        variant: ir::VariantId,
+        then_block: BlockId,
+        else_block: BlockId,
+    },
     Goto(BlockId),
     Switch {
         condition: Operand,
@@ -110,21 +121,48 @@ fn coerces(got: &Ty, want: &Ty) -> bool {
 }
 
 fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
-    if let Ty::Enum(ty) = ty {
-        ty.validate()?;
-    }
-    if depth > 128 {
-        return Err("CFG type nesting exceeds limit 128".into());
-    }
-    if let Some(count) = ty.field_count() {
-        if count == 0 {
-            return Err("empty CFG aggregates are unsupported; empty tuples must be Unit".into());
+    let mut pending = vec![(ty, depth)];
+    let mut work = 0usize;
+    let mut nominals = std::collections::HashSet::new();
+    let mut tuples = std::collections::HashSet::new();
+    while let Some((ty, depth)) = pending.pop() {
+        work += 1;
+        if work > ir::MAX_PATTERN_PROJECTION_WORK {
+            return Err("CFG type work limit exceeded".into());
         }
-        for index in 0..count {
-            validate_type(
-                ty.field_ty(index).ok_or("invalid CFG aggregate field")?,
-                depth + 1,
-            )?;
+        if depth > 128 {
+            return Err("CFG type nesting exceeds limit 128".into());
+        }
+        match ty {
+            Ty::Enum(ty) if nominals.insert((true, ty.def().id)) => {
+                ty.validate()?;
+                for variant in ty.def().variants.iter() {
+                    pending.extend(variant.fields.iter().map(|field| (&field.ty, depth + 1)));
+                }
+            }
+            Ty::Struct(ty) if nominals.insert((false, ty.def().id)) => {
+                if ty.def().fields.is_empty() {
+                    return Err(
+                        "empty CFG aggregates are unsupported; empty tuples must be Unit".into(),
+                    );
+                }
+                pending.extend(ty.def().fields.iter().map(|field| (&field.ty, depth + 1)));
+            }
+            Ty::Tuple(fields) if tuples.insert(fields.as_ptr()) => {
+                if fields.is_empty() {
+                    return Err(
+                        "empty CFG aggregates are unsupported; empty tuples must be Unit".into(),
+                    );
+                }
+                if fields.len() > ir::MAX_PATTERN_PROJECTION_WORK {
+                    return Err("CFG type work limit exceeded".into());
+                }
+                pending.extend(fields.iter().map(|field| (field, depth + 1)));
+            }
+            _ => {}
+        }
+        if pending.len() > ir::MAX_PATTERN_PROJECTION_WORK - work {
+            return Err("CFG type work limit exceeded".into());
         }
     }
     Ok(())
@@ -132,20 +170,12 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
 
 impl Function {
     pub fn place_ty(&self, place: &Place) -> Result<&Ty, String> {
-        let mut ty = &self
+        let ty = &self
             .locals
             .get(place.local.0)
             .ok_or("invalid CFG local")?
             .ty;
-        for &index in &place.fields {
-            if ty.field_count().is_none() {
-                return Err("CFG projection requires an aggregate".into());
-            }
-            ty = ty
-                .field_ty(index)
-                .ok_or("CFG projection index out of bounds")?;
-        }
-        Ok(ty)
+        ir::projected_ty(ty, &place.projection)
     }
 
     pub fn operand_ty(&self, operand: &Operand) -> Result<Ty, String> {
@@ -157,6 +187,9 @@ impl Function {
                 ty.validate()?;
                 if *variant >= ty.def().variants.len() {
                     return Err("invalid CFG enum variant".into());
+                }
+                if ty.has_payload() || ty.def().variants[*variant].shape != ir::VariantShape::Unit {
+                    return Err("CFG enum constant requires unit-only enum".into());
                 }
                 Ok(Ty::Enum(ty.clone()))
             }
@@ -182,6 +215,25 @@ impl Function {
 
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         match value {
+            Rvalue::EnumVariant {
+                ty,
+                variant,
+                fields,
+            } => {
+                validate_type(&Ty::Enum(ty.clone()), 0)?;
+                let def = ty
+                    .def()
+                    .variants
+                    .get(*variant)
+                    .ok_or("invalid CFG enum variant")?;
+                if fields.len() != def.fields.len() {
+                    return Err("CFG enum initializer arity mismatch".into());
+                }
+                for (field, declaration) in fields.iter().zip(def.fields.iter()) {
+                    self.require_operand(field, &declaration.ty)?;
+                }
+                Ok(Ty::Enum(ty.clone()))
+            }
             Rvalue::Discriminant(place) => {
                 let Ty::Enum(ty) = self.place_ty(place)? else {
                     return Err("CFG discriminant requires enum place".into());
@@ -301,6 +353,22 @@ impl Function {
                 }
             }
             match &item.terminator.value {
+                Terminator::SwitchVariant {
+                    place,
+                    variant,
+                    then_block,
+                    else_block,
+                } => {
+                    let Ty::Enum(ty) = self.place_ty(place)? else {
+                        return Err("CFG variant switch requires enum place".into());
+                    };
+                    ty.validate()?;
+                    if variant.owner != ty.def().id || variant.index >= ty.def().variants.len() {
+                        return Err("invalid CFG variant switch identity".into());
+                    }
+                    block(*then_block)?;
+                    block(*else_block)?;
+                }
                 Terminator::Goto(next) => block(*next)?,
                 Terminator::Switch {
                     condition,
@@ -344,7 +412,7 @@ impl Function {
 fn place(local: LocalId) -> Place {
     Place {
         local,
-        fields: Vec::new(),
+        projection: Vec::new(),
     }
 }
 
@@ -407,16 +475,25 @@ impl Lowerer<'_> {
                 ir::MatchPattern::Int(value) => {
                     Some((Operand::Copy(source.clone()), Constant::I32(*value)))
                 }
-                ir::MatchPattern::EnumVariant { ty, variant, .. }
-                    if completes && ty.def().variants.len() > 1 =>
-                {
-                    let tag = self.temporary(Ty::I32, Some(id));
-                    self.assign(tag.clone(), Rvalue::Discriminant(source.clone()), Some(id));
-                    Some((Operand::Copy(tag), Constant::I32(*variant as i32)))
-                }
                 _ => None,
             };
-            if let Some((left, right)) = comparison.filter(|_| completes) {
+            if let ir::MatchPattern::EnumVariant { ty, variant, .. } = &arm.pattern
+                && completes
+                && ty.def().variants.len() > 1
+            {
+                self.terminate(
+                    Terminator::SwitchVariant {
+                        place: source.clone(),
+                        variant: ir::VariantId {
+                            owner: ty.def().id,
+                            index: *variant,
+                        },
+                        then_block: selected,
+                        else_block: next,
+                    },
+                    Some(id),
+                )?;
+            } else if let Some((left, right)) = comparison.filter(|_| completes) {
                 let condition = self.temporary(Ty::Bool, Some(id));
                 self.assign(
                     condition.clone(),
@@ -464,6 +541,23 @@ impl Lowerer<'_> {
                         Rvalue::Use(self.consume(source.clone())?),
                         Some(id),
                     );
+                }
+            }
+            if let ir::MatchPattern::EnumVariant { bindings, .. } = &arm.pattern {
+                for binding in bindings {
+                    if binding.local == source.local {
+                        return Err("enum binding aliases scrutinee storage".into());
+                    }
+                    self.live(binding.local, Some(id));
+                    if completes {
+                        let mut selected = source.clone();
+                        selected.projection.extend_from_slice(&binding.projection);
+                        self.assign(
+                            place(binding.local),
+                            Rvalue::Use(self.consume(selected)?),
+                            Some(id),
+                        );
+                    }
                 }
             }
             let value = self.expression(arm.body)?;
@@ -538,7 +632,7 @@ impl Lowerer<'_> {
             ir::ExprKind::Local(local) => Some(place(*local)),
             ir::ExprKind::Field { base, index } => {
                 let mut p = self.expression_place(*base)?;
-                p.fields.push(*index);
+                p.projection.push(Projection::Field(*index));
                 Some(p)
             }
             _ => None,
@@ -577,7 +671,9 @@ impl Lowerer<'_> {
                 _ => break self.materialize_expression(root)?,
             }
         };
-        source.fields.extend(fields.into_iter().rev());
+        source
+            .projection
+            .extend(fields.into_iter().rev().map(Projection::Field));
         // Static metadata validation is not a value read. Moved and partially
         // initialized places are deliberately addressable in pattern context.
         self.result.place_ty(&source)?;
@@ -622,7 +718,7 @@ impl Lowerer<'_> {
                         self.live(binding.local, Some(*value));
                         if completes {
                             let mut selected = source.clone();
-                            selected.fields.extend_from_slice(&binding.fields);
+                            selected.projection.extend_from_slice(&binding.projection);
                             let operand = self.consume(selected)?;
                             self.assign(place(binding.local), Rvalue::Use(operand), Some(*value));
                         }
@@ -750,17 +846,35 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
-            ir::ExprKind::EnumVariant { ty, variant } => {
+            ir::ExprKind::EnumVariant {
+                ty,
+                variant,
+                fields,
+            } => {
                 ty.validate()?;
                 if expression.ty != Ty::Enum(ty.clone()) || *variant >= ty.def().variants.len() {
                     return Err("invalid checked enum variant expression".into());
                 }
+                let mut operands = vec![None; ty.def().variants[*variant].fields.len()];
+                for &(index, value) in fields {
+                    if index >= operands.len() || operands[index].is_some() {
+                        return Err("invalid checked enum initializer field".into());
+                    }
+                    operands[index] = Some(self.expression(value)?);
+                }
+                let fields = operands
+                    .into_iter()
+                    .map(|value| {
+                        value.ok_or_else(|| "missing checked enum initializer field".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 self.assign(
                     destination.clone(),
-                    Rvalue::Use(Operand::Constant(Constant::Enum {
+                    Rvalue::EnumVariant {
                         ty: ty.clone(),
                         variant: *variant,
-                    })),
+                        fields,
+                    },
                     origin,
                 );
             }
@@ -787,7 +901,7 @@ impl Lowerer<'_> {
                     p
                 } else {
                     let mut p = self.materialize_expression(*base)?;
-                    p.fields.push(*index);
+                    p.projection.push(Projection::Field(*index));
                     p
                 };
                 self.assign(destination.clone(), Rvalue::Use(self.consume(p)?), origin);
@@ -1183,9 +1297,9 @@ mod tests {
         let function = nominal_lowered(&source);
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 3);
-        assert!(matches!(reads[0], Operand::Copy(p) if p.fields == [0]));
-        assert!(matches!(reads[1], Operand::Copy(p) if p.fields == [0]));
-        assert!(matches!(reads[2], Operand::Move(p) if p.fields.is_empty()));
+        assert!(matches!(reads[0], Operand::Copy(p) if p.projection == [0].map(Projection::Field)));
+        assert!(matches!(reads[1], Operand::Copy(p) if p.projection == [0].map(Projection::Field)));
+        assert!(matches!(reads[2], Operand::Move(p) if p.projection.is_empty()));
         assert!(super::super::ownership::analyze(&function).passed());
     }
 
@@ -1217,8 +1331,8 @@ mod tests {
         let function = nominal_lowered(&source);
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 2);
-        assert!(matches!(reads[0], Operand::Move(p) if p.fields == [0]));
-        assert!(matches!(reads[1], Operand::Move(p) if p.fields == [1]));
+        assert!(matches!(reads[0], Operand::Move(p) if p.projection == [0].map(Projection::Field)));
+        assert!(matches!(reads[1], Operand::Move(p) if p.projection == [1].map(Projection::Field)));
         assert!(super::super::ownership::analyze(&function).passed());
         source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
@@ -1262,7 +1376,7 @@ mod tests {
         let function = nominal_lowered(&source);
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 1);
-        assert!(matches!(reads[0], Operand::Move(p) if p.fields.is_empty()));
+        assert!(matches!(reads[0], Operand::Move(p) if p.projection.is_empty()));
         assert!(super::super::ownership::analyze(&function).passed());
         source.body.statements.push(ir::Stmt::Expr(ExprId(3)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
@@ -1328,6 +1442,150 @@ mod tests {
             matches!(&aggregate[1], Operand::Copy(p) if function.locals[p.local.0].name == "$expr0")
         );
         assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn payload_constructor_evaluates_source_order_then_permutates_snapshots() {
+        let ty = ir::EnumTy::new(ir::EnumDef {
+            id: ir::DefId {
+                snapshot: ir::SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "E".into(),
+            module: String::new(),
+            public: false,
+            variants: vec![
+                ir::VariantDef {
+                    name: "A".into(),
+                    shape: ir::VariantShape::Struct,
+                    fields: vec![
+                        ir::FieldDef {
+                            name: "a".into(),
+                            ty: Ty::I32,
+                            public: true,
+                        },
+                        ir::FieldDef {
+                            name: "b".into(),
+                            ty: Ty::I32,
+                            public: true,
+                        },
+                    ]
+                    .into(),
+                },
+                ir::VariantDef {
+                    name: "B".into(),
+                    shape: ir::VariantShape::Unit,
+                    fields: std::sync::Arc::from([]),
+                },
+            ]
+            .into(),
+        });
+        let call = |name: &str| {
+            expr(
+                Ty::I32,
+                ir::ExprKind::Call {
+                    name: name.into(),
+                    args: vec![],
+                    signature: ir::Signature {
+                        params: vec![],
+                        result: Ty::I32,
+                    },
+                },
+            )
+        };
+        let source = with_root(
+            Ty::I32,
+            vec![
+                call("first"),
+                call("second"),
+                expr(
+                    Ty::Enum(ty.clone()),
+                    ir::ExprKind::EnumVariant {
+                        ty: ty.clone(),
+                        variant: 0,
+                        fields: vec![(1, ExprId(0)), (0, ExprId(1))],
+                    },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(2))],
+        );
+        source.validate().unwrap();
+        let function = nominal_lowered(&source);
+        let calls: Vec<_> = function
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator.value {
+                Terminator::Call { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, ["first", "second"]);
+        let fields = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::EnumVariant { fields, .. },
+                    ..
+                } => Some(fields),
+                _ => None,
+            })
+            .unwrap();
+        let local_name = |operand: &Operand| match operand {
+            Operand::Copy(place) => function.locals[place.local.0].name.as_str(),
+            _ => panic!("expected copied scalar snapshot"),
+        };
+        assert_eq!(local_name(&fields[0]), "$expr1");
+        assert_eq!(local_name(&fields[1]), "$expr0");
+        assert!(
+            function
+                .operand_ty(&Operand::Constant(Constant::Enum { ty, variant: 1 }))
+                .is_err()
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
+    }
+
+    #[test]
+    fn payload_matches_use_variant_switches_and_selected_field_moves() {
+        let source = checked(
+            "struct S{x:i32} enum E{A(S,i32),B} fn f(e:E)->i32{match e{E::A(s,n)=>s.x+n,E::B=>0}} fn main(){}",
+            0,
+        );
+        source.validate().unwrap();
+        let function = nominal_lowered(&source);
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
+                .count(),
+            2
+        );
+        let reads = root_reads(&function);
+        assert!(reads.iter().any(|operand| matches!(operand, Operand::Move(place) if matches!(place.projection.as_slice(), [Projection::Downcast(_), Projection::Field(0)]))));
+        assert!(reads.iter().any(|operand| matches!(operand, Operand::Copy(place) if matches!(place.projection.as_slice(), [Projection::Downcast(_), Projection::Field(1)]))));
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
+    }
+
+    #[test]
+    fn singleton_payload_let_extracts_disjoint_fields_without_tag_read() {
+        let source = checked(
+            "struct S{x:i32} enum E{A(S,S)} fn f(e:E){let E::A(a,_)=e;let E::A(_,b)=e;let E::A(_,_) = e;} fn main(){}",
+            0,
+        );
+        let function = nominal_lowered(&source);
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
+        );
+        assert_eq!(root_reads(&function).len(), 2);
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
     }
 
     #[test]
@@ -1470,16 +1728,7 @@ mod tests {
         let tags = function
             .blocks
             .iter()
-            .flat_map(|b| &b.statements)
-            .filter(|s| {
-                matches!(
-                    s.value,
-                    Statement::Assign {
-                        value: Rvalue::Discriminant(_),
-                        ..
-                    }
-                )
-            })
+            .filter(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
             .count();
         assert_eq!(tags, 1);
     }
@@ -1552,9 +1801,13 @@ mod tests {
             })
             .collect();
         assert_eq!(reads.len(), 3);
-        assert!(matches!(reads[0], Operand::Copy(p) if p.fields == [0, 0]));
-        assert!(matches!(reads[1], Operand::Copy(p) if p.fields == [0, 0]));
-        assert!(matches!(reads[2], Operand::Move(p) if p.fields == [0]));
+        assert!(
+            matches!(reads[0], Operand::Copy(p) if p.projection == [0, 0].map(Projection::Field))
+        );
+        assert!(
+            matches!(reads[1], Operand::Copy(p) if p.projection == [0, 0].map(Projection::Field))
+        );
+        assert!(matches!(reads[2], Operand::Move(p) if p.projection == [0].map(Projection::Field)));
     }
 
     #[test]
@@ -1572,7 +1825,7 @@ mod tests {
         assert!(super::super::ownership::analyze(&function).passed());
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 1);
-        assert!(matches!(reads[0], Operand::Move(p) if p.fields.is_empty()));
+        assert!(matches!(reads[0], Operand::Move(p) if p.projection.is_empty()));
     }
 
     #[test]
@@ -1583,16 +1836,16 @@ mod tests {
         assert!(super::super::ownership::analyze(&function).passed());
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 2);
-        assert!(matches!(reads[0], Operand::Move(p) if p.fields == [0]));
-        assert!(matches!(reads[1], Operand::Move(p) if p.fields == [1]));
+        assert!(matches!(reads[0], Operand::Move(p) if p.projection == [0].map(Projection::Field)));
+        assert!(matches!(reads[1], Operand::Move(p) if p.projection == [1].map(Projection::Field)));
 
         let source = "struct S{x:i32} struct P{first:S,second:S} fn f(p:P){let P{second:b,first:a}=p;} fn main(){}";
         let function = nominal_lowered(&checked(source, 0));
         assert!(super::super::ownership::analyze(&function).passed());
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 2);
-        assert!(matches!(reads[0], Operand::Move(p) if p.fields == [1]));
-        assert!(matches!(reads[1], Operand::Move(p) if p.fields == [0]));
+        assert!(matches!(reads[0], Operand::Move(p) if p.projection == [1].map(Projection::Field)));
+        assert!(matches!(reads[1], Operand::Move(p) if p.projection == [0].map(Projection::Field)));
     }
 
     #[test]
@@ -1626,7 +1879,7 @@ mod tests {
         assert_eq!(root_reads(&function).len(), 1);
         for local in [LocalId(0), LocalId(1)] {
             assert_eq!(function.blocks.iter().flat_map(|block| &block.statements).filter(|statement| {
-                matches!(&statement.value, Statement::Assign {value: Rvalue::Use(Operand::Move(p)), ..} if p.local == local && p.fields.is_empty())
+                matches!(&statement.value, Statement::Assign {value: Rvalue::Use(Operand::Move(p)), ..} if p.local == local && p.projection.is_empty())
             }).count(), 1);
         }
     }
@@ -1637,7 +1890,7 @@ mod tests {
         assert!(super::super::ownership::analyze(&function).passed());
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 1);
-        assert!(matches!(reads[0], Operand::Copy(p) if p.fields.is_empty()));
+        assert!(matches!(reads[0], Operand::Copy(p) if p.projection.is_empty()));
     }
 
     #[test]
@@ -1724,7 +1977,8 @@ mod tests {
                                 live_operand(left, &live);
                                 live_operand(right, &live);
                             }
-                            Rvalue::Aggregate { fields, .. } => {
+                            Rvalue::Aggregate { fields, .. }
+                            | Rvalue::EnumVariant { fields, .. } => {
                                 for value in fields {
                                     live_operand(value, &live);
                                 }
@@ -1738,6 +1992,16 @@ mod tests {
                 }
             }
             match &function.blocks[id.0].terminator.value {
+                Terminator::SwitchVariant {
+                    place,
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    assert!(live[place.local.0], "variant switch reads dead storage");
+                    pending.push((*then_block, live.clone()));
+                    pending.push((*else_block, live));
+                }
                 Terminator::Goto(next) => pending.push((*next, live)),
                 Terminator::Switch {
                     condition,

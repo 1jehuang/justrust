@@ -416,7 +416,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
             .iter()
             .map(|block| match &block.terminator.value {
                 cfg::Terminator::Goto(_) | cfg::Terminator::Call { .. } => 1,
-                cfg::Terminator::Switch { .. } => 2,
+                cfg::Terminator::Switch { .. } | cfg::Terminator::SwitchVariant { .. } => 2,
                 cfg::Terminator::Return | cfg::Terminator::Unreachable => 0,
             })
             .sum::<usize>();

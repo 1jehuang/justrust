@@ -8,7 +8,7 @@ use justrust_engine::compiler::{cfg, ir, ownership};
 fn p(local: usize, fields: &[usize]) -> Place {
     Place {
         local: LocalId(local),
-        fields: fields.to_vec(),
+        projection: fields.iter().copied().map(ir::Projection::Field).collect(),
     }
 }
 fn loc<T>(value: T) -> Located<T> {

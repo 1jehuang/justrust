@@ -124,8 +124,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .sum();
     let analysis_move_paths: usize = compiled.analyses.iter().map(|a| a.stats.move_paths).sum();
     let analysis_moves: usize = compiled.analyses.iter().map(|a| a.stats.moves).sum();
+    let analysis_variant_proof_checks: usize = compiled
+        .analyses
+        .iter()
+        .map(|a| a.stats.variant_proof_checks)
+        .sum();
+    let analysis_variant_refinements: usize = compiled
+        .analyses
+        .iter()
+        .map(|a| a.stats.variant_refinements)
+        .sum();
+    let analysis_variant_proofs_killed: usize = compiled
+        .analyses
+        .iter()
+        .map(|a| a.stats.variant_proofs_killed)
+        .sum();
     println!(
-        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"structs\":{},\"enums\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"analysis_worklist_pops\":{analysis_worklist_pops},\"analysis_move_paths\":{analysis_move_paths},\"analysis_moves\":{analysis_moves},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
+        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"structs\":{},\"enums\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"analysis_worklist_pops\":{analysis_worklist_pops},\"analysis_move_paths\":{analysis_move_paths},\"analysis_moves\":{analysis_moves},\"analysis_variant_proof_checks\":{analysis_variant_proof_checks},\"analysis_variant_refinements\":{analysis_variant_refinements},\"analysis_variant_proofs_killed\":{analysis_variant_proofs_killed},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
         if check { "check" } else { "build" },
         compiled.functions,
         compiled.structs,

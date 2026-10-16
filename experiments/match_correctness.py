@@ -143,7 +143,7 @@ FIXTURES = json.loads(r'''
     "full_source": "enum E { A,A } fn run()->i32 { 1 }\nfn main() { run(); }\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "payload",
     "source": "enum E { A(i32),B } fn run()->i32 { match E::A(4) { E::A(n)=>n,E::B=>0 } }",
     "expected": 4,

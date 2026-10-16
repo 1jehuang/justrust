@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Process-local namespace for one validated declaration environment. IDs must
 /// not be persisted as cache identities or reused by another environment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SnapshotId(u64);
 
 impl SnapshotId {
@@ -34,7 +34,7 @@ impl SnapshotId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DefId {
     pub snapshot: SnapshotId,
     pub index: usize,
@@ -55,9 +55,28 @@ impl EnumTy {
         &self.0
     }
 
+    pub fn has_payload(&self) -> bool {
+        self.0
+            .variants
+            .iter()
+            .any(|variant| variant.shape != VariantShape::Unit)
+    }
+
     pub(super) fn validate(&self) -> Result<(), String> {
         if self.0.variants.is_empty() || self.0.variants.len() > MAX_ENUM_VARIANTS {
             return Err("enum variant count must be between 1 and 4096".into());
+        }
+        let mut fields = 0usize;
+        for variant in self.0.variants.iter() {
+            fields = fields
+                .checked_add(variant.fields.len())
+                .ok_or("enum payload field limit exceeded")?;
+            if fields > MAX_PATTERN_BINDINGS {
+                return Err("enum payload field limit exceeded".into());
+            }
+            if variant.shape == VariantShape::Unit && !variant.fields.is_empty() {
+                return Err("unit enum variant cannot have payload fields".into());
+            }
         }
         Ok(())
     }
@@ -95,7 +114,68 @@ pub struct EnumDef {
     pub name: String,
     pub module: String,
     pub public: bool,
-    pub variants: Arc<[String]>,
+    pub variants: Arc<[VariantDef]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VariantShape {
+    Unit,
+    Tuple,
+    Struct,
+}
+
+#[derive(Clone, Debug)]
+pub struct VariantDef {
+    pub name: String,
+    pub shape: VariantShape,
+    pub fields: Arc<[FieldDef]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VariantId {
+    pub owner: DefId,
+    pub index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Projection {
+    Field(usize),
+    Downcast(VariantId),
+}
+
+/// Checks structural typing, not the runtime proof needed to read a payload.
+pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
+    if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
+        return Err("projection depth exceeds limit 128".into());
+    }
+    let mut ty = root;
+    let mut path = path.iter();
+    while let Some(projection) = path.next() {
+        ty = match *projection {
+            Projection::Field(index) => ty.field_ty(index).ok_or("invalid field projection")?,
+            Projection::Downcast(variant) => {
+                let Ty::Enum(owner) = ty else {
+                    return Err("downcast requires enum type".into());
+                };
+                if owner.def().id != variant.owner {
+                    return Err("downcast enum owner mismatch".into());
+                }
+                let def = owner
+                    .def()
+                    .variants
+                    .get(variant.index)
+                    .ok_or("downcast variant out of bounds")?;
+                let Some(Projection::Field(index)) = path.next() else {
+                    return Err("downcast must be immediately followed by field projection".into());
+                };
+                &def.fields
+                    .get(*index)
+                    .ok_or("invalid variant field projection")?
+                    .ty
+            }
+        };
+    }
+    Ok(ty)
 }
 
 /// Immutable nominal handle. Equality and hashing use declaration identity,
@@ -300,7 +380,7 @@ pub struct Block {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Place {
     pub local: LocalId,
-    pub fields: Vec<usize>,
+    pub projection: Vec<Projection>,
 }
 
 pub const MAX_PATTERN_BINDINGS: usize = 65_536;
@@ -313,7 +393,7 @@ pub const MAX_PATTERN_PROJECTION_WORK: usize = 1_000_000;
 #[derive(Clone, Debug)]
 pub struct PatternBinding {
     pub local: LocalId,
-    pub fields: Vec<usize>,
+    pub projection: Vec<Projection>,
 }
 
 fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String> {
@@ -395,7 +475,11 @@ pub enum MatchPattern {
     Bool(bool),
     Int(i32),
     Unit,
-    EnumVariant { ty: EnumTy, variant: usize },
+    EnumVariant {
+        ty: EnumTy,
+        variant: usize,
+        bindings: Vec<PatternBinding>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -409,6 +493,7 @@ pub enum ExprKind {
     EnumVariant {
         ty: EnumTy,
         variant: usize,
+        fields: Vec<(usize, ExprId)>,
     },
     Match {
         scrutinee: ExprId,
@@ -512,8 +597,25 @@ impl CheckedFunction {
                 MatchPattern::EnumVariant {
                     ty: pattern_ty,
                     variant,
+                    bindings: payload_bindings,
                 } => {
                     pattern_ty.validate()?;
+                    self.validate_pattern_bindings_with_params(
+                        &Ty::Enum(pattern_ty.clone()),
+                        payload_bindings,
+                        parameters,
+                    )?;
+                    let expected = Projection::Downcast(VariantId {
+                        owner: pattern_ty.def().id,
+                        index: *variant,
+                    });
+                    for binding in payload_bindings {
+                        if binding.projection.first() != Some(&expected)
+                            || !bindings.insert(binding.local)
+                        {
+                            return Err("invalid or repeated enum payload binding".into());
+                        }
+                    }
                     *variant < pattern_ty.def().variants.len()
                         && (*ty == Ty::Never || *ty == Ty::Enum(pattern_ty.clone()))
                 }
@@ -554,11 +656,11 @@ impl CheckedFunction {
         let mut locals = std::collections::HashSet::new();
         let mut paths = Vec::with_capacity(bindings.len());
         for binding in bindings {
-            if binding.fields.len() > MAX_PATTERN_PROJECTION_DEPTH {
+            if binding.projection.len() > MAX_PATTERN_PROJECTION_DEPTH {
                 return Err("pattern projection depth exceeds limit 128".into());
             }
             work = work
-                .checked_add(binding.fields.len())
+                .checked_add(binding.projection.len())
                 .ok_or("pattern projection work limit exceeded")?;
             if work > MAX_PATTERN_PROJECTION_WORK {
                 return Err("pattern projection work limit exceeded".into());
@@ -570,16 +672,11 @@ impl CheckedFunction {
             if !locals.insert(binding.local) || parameters.contains(&binding.local) {
                 return Err("pattern binding locals must be distinct fresh locals".into());
             }
-            let mut projected = ty;
-            for &index in &binding.fields {
-                projected = projected
-                    .field_ty(index)
-                    .ok_or("invalid pattern binding projection")?;
-            }
+            let projected = projected_ty(ty, &binding.projection)?;
             if !pattern_types_equal(&local.ty, projected, &mut work)? {
                 return Err("pattern binding local type mismatch".into());
             }
-            paths.push(binding.fields.as_slice());
+            paths.push(binding.projection.as_slice());
         }
         paths.sort_unstable();
         if paths.windows(2).any(|pair| pair[1].starts_with(pair[0])) {
@@ -627,10 +724,25 @@ impl CheckedFunction {
         let mut blocks = vec![&self.body];
         for value in &self.exprs {
             match &value.kind {
-                ExprKind::EnumVariant { ty, variant } => {
+                ExprKind::EnumVariant {
+                    ty,
+                    variant,
+                    fields,
+                } => {
                     ty.validate()?;
                     if *variant >= ty.def().variants.len() || value.ty != Ty::Enum(ty.clone()) {
                         return Err("invalid enum variant expression".into());
+                    }
+                    let def = &ty.def().variants[*variant];
+                    if fields.len() != def.fields.len() {
+                        return Err("enum initializer field count mismatch".into());
+                    }
+                    let mut seen = std::collections::HashSet::new();
+                    for &(index, value) in fields {
+                        if index >= def.fields.len() || !seen.insert(index) {
+                            return Err("invalid enum initializer field".into());
+                        }
+                        expr(value)?;
                     }
                 }
                 ExprKind::Match { scrutinee, arms } => {
@@ -733,6 +845,97 @@ impl CheckedFunction {
 mod tests {
     use super::*;
 
+    fn unit_variant(name: &str) -> VariantDef {
+        VariantDef {
+            name: name.into(),
+            shape: VariantShape::Unit,
+            fields: Arc::from([]),
+        }
+    }
+
+    #[test]
+    fn payload_projection_requires_owner_bound_downcast_field_pair() {
+        let id = DefId {
+            snapshot: SnapshotId::allocate().unwrap(),
+            index: 0,
+        };
+        let ty = EnumTy::new(EnumDef {
+            id,
+            name: "E".into(),
+            module: String::new(),
+            public: false,
+            variants: vec![
+                VariantDef {
+                    name: "A".into(),
+                    shape: VariantShape::Tuple,
+                    fields: vec![FieldDef {
+                        name: "0".into(),
+                        ty: Ty::Tuple(vec![Ty::I32].into()),
+                        public: true,
+                    }]
+                    .into(),
+                },
+                unit_variant("B"),
+            ]
+            .into(),
+        });
+        assert!(ty.has_payload());
+        let root = Ty::Enum(ty);
+        let variant = VariantId {
+            owner: id,
+            index: 0,
+        };
+        assert_eq!(
+            projected_ty(
+                &root,
+                &[
+                    Projection::Downcast(variant),
+                    Projection::Field(0),
+                    Projection::Field(0)
+                ]
+            )
+            .unwrap(),
+            &Ty::I32
+        );
+        for projection in [
+            vec![Projection::Field(0)],
+            vec![Projection::Downcast(variant)],
+            vec![Projection::Downcast(variant), Projection::Downcast(variant)],
+            vec![
+                Projection::Downcast(VariantId {
+                    index: 1,
+                    ..variant
+                }),
+                Projection::Field(0),
+            ],
+            vec![
+                Projection::Downcast(VariantId {
+                    owner: DefId { index: 1, ..id },
+                    ..variant
+                }),
+                Projection::Field(0),
+            ],
+        ] {
+            assert!(projected_ty(&root, &projection).is_err(), "{projection:?}");
+        }
+        let empty_payload = EnumTy::new(EnumDef {
+            id,
+            name: "Empty".into(),
+            module: String::new(),
+            public: false,
+            variants: vec![VariantDef {
+                name: "A".into(),
+                shape: VariantShape::Struct,
+                fields: Arc::from([]),
+            }]
+            .into(),
+        });
+        assert!(
+            empty_payload.has_payload(),
+            "zero-field non-unit shapes retain indirect ABI"
+        );
+    }
+
     #[test]
     fn deferred_declaration_references_require_nonparameter_locals() {
         let mut function = fixture();
@@ -764,14 +967,14 @@ mod tests {
             name: "é".repeat(1000),
             module: String::new(),
             public: false,
-            variants: vec!["A".into()].into(),
+            variants: vec![unit_variant("A")].into(),
         });
         let same_id = EnumTy::new(EnumDef {
             id,
             name: "Other".into(),
             module: String::new(),
             public: true,
-            variants: vec!["B".into()].into(),
+            variants: vec![unit_variant("B")].into(),
         });
         assert_eq!(handle, same_id);
         let mut set = std::collections::HashSet::new();
@@ -790,6 +993,7 @@ mod tests {
             kind: ExprKind::EnumVariant {
                 ty: handle,
                 variant: 1,
+                fields: vec![],
             },
         });
         assert!(function.validate().unwrap_err().contains("enum variant"));
@@ -799,7 +1003,7 @@ mod tests {
                 name: "Invalid".into(),
                 module: String::new(),
                 public: false,
-                variants: vec![String::new(); count].into(),
+                variants: vec![unit_variant(""); count].into(),
             });
             assert!(invalid.validate().is_err());
         }
@@ -861,11 +1065,11 @@ mod tests {
         let bindings = vec![
             PatternBinding {
                 local: LocalId(2),
-                fields: vec![0],
+                projection: vec![0].into_iter().map(Projection::Field).collect(),
             },
             PatternBinding {
                 local: LocalId(1),
-                fields: vec![1],
+                projection: vec![1].into_iter().map(Projection::Field).collect(),
             },
         ];
         function.body.statements = vec![Stmt::LetPattern {
@@ -891,14 +1095,14 @@ mod tests {
                 .contains("fresh")
         );
         invalid[1].local = LocalId(1);
-        invalid[1].fields = vec![2];
+        invalid[1].projection = vec![Projection::Field(2)];
         assert!(
             function
                 .validate_pattern_bindings(&ty, &invalid)
                 .unwrap_err()
                 .contains("projection")
         );
-        invalid[1].fields = vec![0];
+        invalid[1].projection = vec![Projection::Field(0)];
         assert!(
             function
                 .validate_pattern_bindings(&ty, &invalid)
@@ -918,7 +1122,7 @@ mod tests {
                 .contains("overlapping")
         );
         function.locals[3].ty = ty.clone();
-        invalid[1].fields.clear();
+        invalid[1].projection.clear();
         assert!(
             function
                 .validate_pattern_bindings(&ty, &invalid)
@@ -932,7 +1136,7 @@ mod tests {
         let mut function = fixture();
         let binding = PatternBinding {
             local: LocalId(1),
-            fields: vec![],
+            projection: vec![],
         };
         let oversized = vec![binding.clone(); MAX_PATTERN_BINDINGS + 1];
         assert!(
@@ -943,7 +1147,7 @@ mod tests {
         );
         let deep = PatternBinding {
             local: LocalId(1),
-            fields: vec![0; MAX_PATTERN_PROJECTION_DEPTH + 1],
+            projection: vec![Projection::Field(0); MAX_PATTERN_PROJECTION_DEPTH + 1],
         };
         assert!(
             function
@@ -967,7 +1171,7 @@ mod tests {
             });
             bindings.push(PatternBinding {
                 local: LocalId(index + 1),
-                fields: vec![0; MAX_PATTERN_PROJECTION_DEPTH],
+                projection: vec![Projection::Field(0); MAX_PATTERN_PROJECTION_DEPTH],
             });
         }
         assert!(
@@ -992,7 +1196,7 @@ mod tests {
         function.locals[1].ty = a;
         let bindings = [PatternBinding {
             local: LocalId(1),
-            fields: vec![],
+            projection: vec![],
         }];
         assert!(
             function
@@ -1152,7 +1356,7 @@ mod tests {
         value.body.statements.push(Stmt::AssignPlace {
             place: Place {
                 local: LocalId(0),
-                fields: vec![0, 1],
+                projection: vec![0, 1].into_iter().map(Projection::Field).collect(),
             },
             value: ExprId(2),
         });
@@ -1179,7 +1383,7 @@ mod tests {
         value.body.statements.push(Stmt::AssignPlace {
             place: Place {
                 local: LocalId(99),
-                fields: vec![0],
+                projection: vec![0].into_iter().map(Projection::Field).collect(),
             },
             value: ExprId(2),
         });

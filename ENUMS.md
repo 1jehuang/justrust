@@ -1,5 +1,10 @@
 # Enums and match: first native milestone
 
+This records the original fieldless milestone. `PAYLOAD-ENUMS.md` extends it
+with tuple/braced variants, typed projections and selected-variant proofs.
+Statements about payloads being deferred below describe this historical slice,
+not the current combined supported boundary.
+
 This is an implementation slice toward full Rust, not a full enum or pattern
 implementation. Payload variants follow this slice with sum-aware move paths.
 The implementation must not delegate compilation to another compiler.

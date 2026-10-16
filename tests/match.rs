@@ -336,13 +336,13 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_payload() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "payload",
+fn accepts_historical_payload_fixture() {
+    // The original legal-unsupported source is now supported, unchanged.
+    runs(
         r#"enum E { A(i32),B } fn run()->i32 { match E::A(4) { E::A(n)=>n,E::B=>0 } }
 fn main() { if run() == 4 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 

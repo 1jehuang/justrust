@@ -5,10 +5,12 @@
 //! Explicit semicolons discard expression values, while omitted-semicolon
 //! blocklike statements require unit. While loops do not establish return flow.
 //! Numeric literals are decimal i32 only. Unsupported syntax is rejected.
-//! Inline modules, named nonempty braced structs, nonempty fieldless enums, ordinary visibility, and
+//! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
 //! simple module-level imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Match admits scalar literals,
-//! unit variants and whole-value bindings/wildcards with finite exhaustiveness.
+//! top-level variants with irrefutable payload patterns and whole-value
+//! bindings/wildcards with finite exhaustiveness. Nested enum patterns require
+//! a single-variant enum. Tuple-variant rest patterns remain unsupported.
 //! Move checking belongs to CFG analysis, not
 //! this semantic checker. External modules, restricted
 //! visibility, reexports, grouped/glob imports, and block-local items are not
@@ -39,7 +41,7 @@ enum ItemKind {
     Function,
     Struct,
     Enum,
-    Variant,
+    Variant(ir::VariantShape),
     Import(String),
 }
 
@@ -70,7 +72,13 @@ pub struct StructDecl {
 pub struct EnumDecl {
     pub name: String,
     pub public: bool,
-    pub variants: Vec<String>,
+    pub variants: Vec<VariantDecl>,
+}
+#[derive(Clone, Debug)]
+pub struct VariantDecl {
+    pub name: String,
+    pub shape: ir::VariantShape,
+    pub fields: Vec<FieldDecl>,
 }
 #[derive(Clone, Debug)]
 pub struct FieldDecl {
@@ -107,6 +115,12 @@ pub struct Place {
 }
 #[derive(Clone, Debug)]
 pub enum Pattern {
+    Variant {
+        name: String,
+        shape: ir::VariantShape,
+        fields: Vec<(FieldSelector, Pattern)>,
+        rest: bool,
+    },
     Path(String),
     Bool(bool),
     Int(i32),
@@ -159,7 +173,11 @@ pub enum Stmt {
 }
 #[derive(Clone, Debug)]
 pub enum Expr {
-    EnumVariant(String),
+    EnumVariant {
+        name: String,
+        shape: ir::VariantShape,
+        fields: Vec<(FieldSelector, Expr)>,
+    },
     Match {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
@@ -641,15 +659,59 @@ impl Parser {
                     return Err(self.error("generic enums are unsupported"));
                 }
                 self.expect("{")?;
-                let mut variants = Vec::new();
+                let mut variants: Vec<VariantDecl> = Vec::new();
                 while !self.is("}") {
                     let variant = self.ident()?;
-                    if self.is("(") || self.is("{") || self.is("=") {
-                        return Err(
-                            self.error("enum payloads and explicit discriminants are unsupported")
-                        );
+                    let mut fields = Vec::new();
+                    let shape = if self.eat("(") {
+                        while !self.is(")") {
+                            if fields.len() >= 4096 {
+                                return Err(self.error("variant field count exceeds limit 4096"));
+                            }
+                            if self.is("pub") {
+                                return Err(self
+                                    .error("enum variant fields cannot have explicit visibility"));
+                            }
+                            fields.push(FieldDecl {
+                                name: fields.len().to_string(),
+                                ty: self.ty()?,
+                                public: true,
+                            });
+                            if !self.eat(",") {
+                                break;
+                            }
+                        }
+                        self.expect(")")?;
+                        ir::VariantShape::Tuple
+                    } else if self.eat("{") {
+                        while !self.is("}") {
+                            if fields.len() >= 4096 {
+                                return Err(self.error("variant field count exceeds limit 4096"));
+                            }
+                            if self.is("pub") {
+                                return Err(self
+                                    .error("enum variant fields cannot have explicit visibility"));
+                            }
+                            let name = self.ident()?;
+                            self.expect(":")?;
+                            fields.push(FieldDecl {
+                                name,
+                                ty: self.ty()?,
+                                public: true,
+                            });
+                            if !self.eat(",") {
+                                break;
+                            }
+                        }
+                        self.expect("}")?;
+                        ir::VariantShape::Struct
+                    } else {
+                        ir::VariantShape::Unit
+                    };
+                    if self.is("=") {
+                        return Err(self.error("explicit enum discriminants are unsupported"));
                     }
-                    if variants.contains(&variant) {
+                    if variants.iter().any(|v| v.name == variant) {
                         return Err(self.error("duplicate enum variant"));
                     }
                     if variants.len() >= 4096 {
@@ -659,9 +721,13 @@ impl Parser {
                         parsed,
                         &qualify(&qualify(module, &name), &variant),
                         true,
-                        ItemKind::Variant,
+                        ItemKind::Variant(shape),
                     )?;
-                    variants.push(variant);
+                    variants.push(VariantDecl {
+                        name: variant,
+                        shape,
+                        fields,
+                    });
                     if !self.eat(",") {
                         break;
                     }
@@ -854,6 +920,25 @@ impl Parser {
             });
         }
         let name = self.path()?;
+        if self.eat("(") {
+            let mut fields = Vec::new();
+            while !self.is(")") {
+                if self.is("..") {
+                    return Err(self.error("tuple variant rest patterns are unsupported"));
+                }
+                fields.push((FieldSelector::Tuple(fields.len()), self.pattern()?));
+                if !self.eat(",") {
+                    break;
+                }
+            }
+            self.expect(")")?;
+            return Ok(Pattern::Variant {
+                name,
+                shape: ir::VariantShape::Tuple,
+                fields,
+                rest: false,
+            });
+        }
         if !self.eat("{") {
             if name.contains("::") || matches!(name.as_str(), "self" | "super" | "crate") {
                 return Ok(Pattern::Path(name));
@@ -1371,11 +1456,13 @@ impl Resolver<'_> {
                     module: true,
                     kind: ResolvedKind::Enum,
                 }),
-                ItemKind::Variant if !module => Some(ResolvedItem {
-                    path: path.into(),
-                    module: false,
-                    kind: ResolvedKind::Variant,
-                }),
+                ItemKind::Variant(shape) if module || *shape != ir::VariantShape::Struct => {
+                    Some(ResolvedItem {
+                        path: path.into(),
+                        module,
+                        kind: ResolvedKind::Variant,
+                    })
+                }
                 ItemKind::Import(_) => self.import(path, index, module)?,
                 _ => None,
             };
@@ -1484,8 +1571,9 @@ impl Resolver<'_> {
             if !matches!(current.kind, ResolvedKind::Module | ResolvedKind::Enum) {
                 return Err(format!("{} is not a module in path {path}", current.path));
             }
-            // Enums expose only variant values, never a nested module/type scope.
-            if current.kind == ResolvedKind::Enum && (at + 1 != parts.len() || module) {
+            // Enum variants reserve type bindings too, but are neither usable
+            // source types nor traversable nested module scopes.
+            if current.kind == ResolvedKind::Enum && at + 1 != parts.len() {
                 return Ok(None);
             }
             let Some(item) = self.item(
@@ -1529,6 +1617,18 @@ impl Resolver<'_> {
         names: &mut std::collections::HashSet<String>,
     ) -> Result<(), String> {
         match pattern {
+            Pattern::Variant { name, fields, .. } => {
+                let item = self
+                    .path(name, module, false, false)?
+                    .ok_or_else(|| format!("unresolved enum variant {name}"))?;
+                if item.kind != ResolvedKind::Variant {
+                    return Err(format!("{} is not a variant", item.path));
+                }
+                *name = item.path;
+                for (_, pattern) in fields {
+                    self.pattern(pattern, module, names)?;
+                }
+            }
             Pattern::Wildcard => {}
             Pattern::Bool(_) | Pattern::Int(_) => {}
             Pattern::Path(name) => {
@@ -1559,14 +1659,22 @@ impl Resolver<'_> {
                     self.pattern(pattern, module, names)?;
                 }
             }
-            Pattern::Struct { name, fields, .. } => {
-                if let Some(item) = self.path(name, module, false, false)?
+            Pattern::Struct { name, fields, rest } => {
+                if let Some(item) = self.path(name, module, true, false)?
                     && item.kind == ResolvedKind::Variant
                 {
-                    if !fields.is_empty() {
-                        return Err(format!("unit enum variant {} has no fields", item.path));
+                    for (_, pattern) in fields.iter_mut() {
+                        self.pattern(pattern, module, names)?;
                     }
-                    *pattern = Pattern::Path(item.path);
+                    *pattern = Pattern::Variant {
+                        name: item.path,
+                        shape: ir::VariantShape::Struct,
+                        fields: fields
+                            .iter()
+                            .map(|(n, p)| (FieldSelector::Named(n.clone()), p.clone()))
+                            .collect(),
+                        rest: *rest,
+                    };
                     return Ok(());
                 }
                 let item = self
@@ -1669,7 +1777,11 @@ impl Resolver<'_> {
                 if let Some(item) = self.path(name, module, false, false)?
                     && item.kind == ResolvedKind::Variant
                 {
-                    *expr = Expr::EnumVariant(item.path);
+                    *expr = Expr::EnumVariant {
+                        name: item.path,
+                        shape: ir::VariantShape::Unit,
+                        fields: Vec::new(),
+                    };
                 }
             }
             Expr::Match { scrutinee, arms } => {
@@ -1691,6 +1803,21 @@ impl Resolver<'_> {
                 let resolved = self
                     .path(name, module, false, false)?
                     .ok_or_else(|| format!("unresolved function {name}"))?;
+                if resolved.kind == ResolvedKind::Variant {
+                    for arg in args.iter_mut() {
+                        self.expr(arg, module, locals)?;
+                    }
+                    *expr = Expr::EnumVariant {
+                        name: resolved.path,
+                        shape: ir::VariantShape::Tuple,
+                        fields: args
+                            .iter()
+                            .enumerate()
+                            .map(|(i, e)| (FieldSelector::Tuple(i), e.clone()))
+                            .collect(),
+                    };
+                    return Ok(());
+                }
                 if resolved.kind != ResolvedKind::Function {
                     return Err(format!("{} is not callable", resolved.path));
                 }
@@ -1705,13 +1832,20 @@ impl Resolver<'_> {
                 }
             }
             Expr::Struct { name, fields } => {
-                if let Some(item) = self.path(name, module, false, false)?
+                if let Some(item) = self.path(name, module, true, false)?
                     && item.kind == ResolvedKind::Variant
                 {
-                    if !fields.is_empty() {
-                        return Err(format!("unit enum variant {} has no fields", item.path));
+                    for (_, value) in fields.iter_mut() {
+                        self.expr(value, module, locals)?;
                     }
-                    *expr = Expr::EnumVariant(item.path);
+                    *expr = Expr::EnumVariant {
+                        name: item.path,
+                        shape: ir::VariantShape::Struct,
+                        fields: fields
+                            .iter()
+                            .map(|(n, e)| (FieldSelector::Named(n.clone()), e.clone()))
+                            .collect(),
+                    };
                     return Ok(());
                 }
                 let item = self
@@ -1776,6 +1910,14 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver.item(&path, parent(&path), false, false)?;
     }
     let mut program = parsed.program.clone();
+    for enumeration in &mut program.enums {
+        for variant in &mut enumeration.variants {
+            for field in &mut variant.fields {
+                validate_depth(DepthNode::Type(&field.ty))?;
+                resolver.ty(&mut field.ty, parent(&enumeration.name))?;
+            }
+        }
+    }
     for structure in &mut program.structs {
         for field in &mut structure.fields {
             validate_depth(DepthNode::Type(&field.ty))?;
@@ -1829,6 +1971,11 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                     return Err("pattern node count exceeds limit".into());
                 }
                 match pattern {
+                    Pattern::Variant { fields, .. } => {
+                        for (_, p) in fields {
+                            push(DepthNode::Pattern(p));
+                        }
+                    }
                     Pattern::Tuple(fields) => {
                         for pattern in fields {
                             push(DepthNode::Pattern(pattern));
@@ -1843,6 +1990,11 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 }
             }
             DepthNode::Expr(expr) => match expr {
+                Expr::EnumVariant { fields, .. } => {
+                    for (_, e) in fields {
+                        push(DepthNode::Expr(e));
+                    }
+                }
                 Expr::Match { scrutinee, arms } => {
                     push(DepthNode::Expr(scrutinee));
                     for arm in arms {
@@ -1936,106 +2088,136 @@ fn visible_from(owner: &str, requester: &str) -> bool {
 
 /// Validate every declaration, including unused types, before creating any Arc DAG.
 pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
-    let mut enum_declarations = HashMap::new();
-    for declaration in &program.enums {
-        if enum_declarations
-            .insert(declaration.name.clone(), declaration)
-            .is_some()
-        {
-            return Err(format!("duplicate enum {}", declaration.name));
+    enum Decl<'a> {
+        Struct(&'a StructDecl),
+        Enum(&'a EnumDecl),
+    }
+    impl Decl<'_> {
+        fn name(&self) -> &str {
+            match self {
+                Self::Struct(d) => &d.name,
+                Self::Enum(d) => &d.name,
+            }
         }
-        if declaration.variants.is_empty() {
-            return Err("empty enums are unsupported".into());
+        fn public(&self) -> bool {
+            match self {
+                Self::Struct(d) => d.public,
+                Self::Enum(d) => d.public,
+            }
         }
-        if declaration.variants.len() > 4096 {
-            return Err("enum variant count exceeds limit 4096".into());
-        }
-        let mut variants = std::collections::HashSet::new();
-        for variant in &declaration.variants {
-            if !variants.insert(variant) {
-                return Err(format!("duplicate enum variant {variant}"));
+        fn fields(&self) -> Vec<&FieldDecl> {
+            match self {
+                Self::Struct(d) => d.fields.iter().collect(),
+                Self::Enum(d) => d.variants.iter().flat_map(|v| v.fields.iter()).collect(),
             }
         }
     }
-    let mut declarations = HashMap::new();
-    for (index, declaration) in program.structs.iter().enumerate() {
-        if enum_declarations.contains_key(&declaration.name) {
-            return Err(format!("duplicate nominal type {}", declaration.name));
+    let all: Vec<_> = program
+        .structs
+        .iter()
+        .map(Decl::Struct)
+        .chain(program.enums.iter().map(Decl::Enum))
+        .collect();
+    let mut indices = HashMap::new();
+    for (index, decl) in all.iter().enumerate() {
+        if indices.insert(decl.name().to_owned(), index).is_some() {
+            return Err(format!("duplicate nominal type {}", decl.name()));
         }
-        if declarations
-            .insert(declaration.name.clone(), index)
-            .is_some()
-        {
-            return Err(format!("duplicate struct {}", declaration.name));
+        match decl {
+            Decl::Struct(d) => {
+                if d.fields.is_empty() {
+                    return Err(format!("empty struct {} is unsupported", d.name));
+                }
+            }
+            Decl::Enum(d) => {
+                if d.variants.is_empty() {
+                    return Err("empty enums are unsupported".into());
+                }
+                if d.variants.len() > 4096 {
+                    return Err("enum variant count exceeds limit 4096".into());
+                }
+                let mut names = std::collections::HashSet::new();
+                for variant in &d.variants {
+                    if !names.insert(&variant.name) {
+                        return Err(format!("duplicate enum variant {}", variant.name));
+                    }
+                    if variant.fields.len() > 4096 {
+                        return Err("variant field count exceeds limit 4096".into());
+                    }
+                    if variant.shape == ir::VariantShape::Unit && !variant.fields.is_empty() {
+                        return Err("unit variant cannot have fields".into());
+                    }
+                    if variant.shape == ir::VariantShape::Tuple
+                        && variant
+                            .fields
+                            .iter()
+                            .enumerate()
+                            .any(|(i, f)| f.name != i.to_string())
+                    {
+                        return Err("tuple variant fields require positional names".into());
+                    }
+                }
+            }
         }
-        if declaration.fields.is_empty() {
-            return Err(format!("empty struct {} is unsupported", declaration.name));
-        }
-        let mut names = std::collections::HashSet::new();
-        for field in &declaration.fields {
-            if !names.insert(&field.name) {
-                return Err(format!(
-                    "duplicate field {} in {}",
-                    field.name, declaration.name
-                ));
+        let groups = match decl {
+            Decl::Struct(d) => vec![d.fields.as_slice()],
+            Decl::Enum(d) => d.variants.iter().map(|v| v.fields.as_slice()).collect(),
+        };
+        for fields in groups {
+            let mut names = std::collections::HashSet::new();
+            for field in fields {
+                if !names.insert(&field.name) {
+                    return Err(format!("duplicate field {} in {}", field.name, decl.name()));
+                }
             }
         }
     }
     fn dependencies(
         ty: &Type,
-        declarations: &HashMap<String, usize>,
-        structs: &[StructDecl],
-        enums: &HashMap<String, &EnumDecl>,
+        indices: &HashMap<String, usize>,
+        all: &[Decl<'_>],
         module: &str,
     ) -> Result<Vec<usize>, String> {
         validate_depth(DepthNode::Type(ty))?;
-        let mut work = vec![ty];
-        let mut dependencies = Vec::new();
-        while let Some(ty) = work.pop() {
+        let mut pending = vec![ty];
+        let mut deps = Vec::new();
+        while let Some(ty) = pending.pop() {
             match ty {
                 Type::Named(name) => {
-                    if let Some(declaration) = enums.get(name) {
-                        if !declaration.public && !visible_from(parent(name), module) {
-                            return Err(format!("private enum type {name}"));
-                        }
-                        continue;
-                    }
-                    let index = *declarations
+                    let index = *indices
                         .get(name)
-                        .ok_or_else(|| format!("unknown struct type {name}"))?;
-                    let declaration = &structs[index];
-                    if !declaration.public && !visible_from(parent(name), module) {
-                        return Err(format!("private struct type {name}"));
+                        .ok_or_else(|| format!("unknown nominal type {name}"))?;
+                    if !all[index].public() && !visible_from(parent(name), module) {
+                        return Err(format!("private nominal type {name}"));
                     }
-                    dependencies.push(index);
+                    deps.push(index);
                 }
                 Type::Tuple(fields) => {
                     if fields.is_empty() {
                         return Err("empty tuple types must use ()".into());
                     }
-                    work.extend(fields);
+                    pending.extend(fields);
                 }
                 Type::Infer => return Err("signature types cannot be inferred".into()),
                 _ => {}
             }
         }
-        Ok(dependencies)
+        Ok(deps)
     }
-    let mut edges = vec![Vec::new(); program.structs.len()];
-    for (index, declaration) in program.structs.iter().enumerate() {
-        for field in &declaration.fields {
+    let mut edges = vec![Vec::new(); all.len()];
+    for (index, decl) in all.iter().enumerate() {
+        for field in decl.fields() {
             edges[index].extend(dependencies(
                 &field.ty,
-                &declarations,
-                &program.structs,
-                &enum_declarations,
-                parent(&declaration.name),
+                &indices,
+                &all,
+                parent(decl.name()),
             )?);
         }
     }
-    let mut names = std::collections::HashSet::new();
+    let mut functions = std::collections::HashSet::new();
     for function in &program.functions {
-        if !names.insert(&function.name) {
+        if !functions.insert(&function.name) {
             return Err(format!("duplicate function {}", function.name));
         }
         let mut params = std::collections::HashSet::new();
@@ -2049,13 +2231,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         }
         for ty in std::iter::once(&function.result).chain(function.params.iter().map(|(_, ty)| ty))
         {
-            dependencies(
-                ty,
-                &declarations,
-                &program.structs,
-                &enum_declarations,
-                parent(&function.name),
-            )?;
+            dependencies(ty, &indices, &all, parent(&function.name))?;
         }
     }
     if !program
@@ -2065,14 +2241,14 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
     {
         return Err("main must exist, take no arguments and return ()".into());
     }
-    let mut state = vec![0u8; edges.len()];
+    let mut state = vec![0u8; all.len()];
     let mut order = Vec::new();
-    for root in 0..edges.len() {
+    for root in 0..all.len() {
         if state[root] != 0 {
             continue;
         }
-        let mut work = vec![(root, false, 0usize)];
-        while let Some((index, exit, depth)) = work.pop() {
+        let mut pending = vec![(root, false, 0usize)];
+        while let Some((index, exit, depth)) = pending.pop() {
             if exit {
                 state[index] = 2;
                 order.push(index);
@@ -2083,86 +2259,103 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
             }
             if state[index] == 1 {
                 return Err(format!(
-                    "by-value struct cycle involving {}",
-                    program.structs[index].name
+                    "by-value nominal cycle involving {}",
+                    all[index].name()
                 ));
             }
             if depth > 128 {
-                return Err("struct dependency nesting exceeds limit 128".into());
+                return Err("nominal dependency nesting exceeds limit 128".into());
             }
             state[index] = 1;
-            work.push((index, true, depth));
-            for &dependency in edges[index].iter().rev() {
-                work.push((dependency, false, depth + 1));
+            pending.push((index, true, depth));
+            for &dep in edges[index].iter().rev() {
+                pending.push((dep, false, depth + 1));
             }
         }
     }
-    // Declaration order must not bypass the expanded semantic nesting limit.
-    fn type_height(ty: &Type, declarations: &HashMap<String, usize>, heights: &[usize]) -> usize {
+    fn height(ty: &Type, indices: &HashMap<String, usize>, heights: &[usize]) -> usize {
         match ty {
-            Type::Named(name) => declarations.get(name).map_or(1, |index| heights[*index]),
-            Type::Tuple(fields) => {
-                1 + fields
+            Type::Named(n) => heights[indices[n]],
+            Type::Tuple(f) => {
+                1 + f
                     .iter()
-                    .map(|ty| type_height(ty, declarations, heights))
+                    .map(|t| height(t, indices, heights))
                     .max()
                     .unwrap_or(0)
             }
             _ => 1,
         }
     }
-    let mut heights = vec![0usize; program.structs.len()];
+    let mut heights = vec![0usize; all.len()];
     for &index in &order {
-        heights[index] = 1 + program.structs[index]
-            .fields
+        heights[index] = 1 + all[index]
+            .fields()
             .iter()
-            .map(|field| type_height(&field.ty, &declarations, &heights))
+            .map(|f| height(&f.ty, &indices, &heights))
             .max()
             .unwrap_or(0);
         if heights[index] > 128 {
-            return Err("expanded struct type nesting exceeds limit 128".into());
+            return Err("expanded nominal type nesting exceeds limit 128".into());
         }
     }
+    // No nominal Arc is allocated until every declaration and the entire mixed
+    // by-value graph has been validated, including unused declarations.
     let snapshot = ir::SnapshotId::allocate()?;
     let mut env = TypeEnv {
         structs: HashMap::new(),
         enums: HashMap::new(),
         functions: HashMap::new(),
     };
-    for (index, declaration) in program.enums.iter().enumerate() {
-        let ty = ir::EnumTy::new(ir::EnumDef {
-            id: ir::DefId {
-                snapshot,
-                index: program.structs.len() + index,
-            },
-            name: declaration.name.clone(),
-            module: parent(&declaration.name).into(),
-            public: declaration.public,
-            variants: declaration.variants.clone().into(),
-        });
-        env.enums.insert(declaration.name.clone(), ty);
-    }
     for index in order {
-        let declaration = &program.structs[index];
-        let fields = declaration
-            .fields
-            .iter()
-            .map(|field| {
-                Ok(ir::FieldDef {
-                    name: field.name.clone(),
-                    ty: checked_ty(&field.ty, &env)?,
-                    public: field.public,
+        let fields = |fields: &[FieldDecl],
+                      env: &TypeEnv|
+         -> Result<std::sync::Arc<[ir::FieldDef]>, String> {
+            fields
+                .iter()
+                .map(|f| {
+                    Ok(ir::FieldDef {
+                        name: f.name.clone(),
+                        ty: checked_ty(&f.ty, env)?,
+                        public: f.public,
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let ty = ir::StructTy::new(ir::StructDef {
-            id: ir::DefId { snapshot, index },
-            name: declaration.name.clone(),
-            module: parent(&declaration.name).into(),
-            public: declaration.public,
-            fields: fields.into(),
-        });
-        env.structs.insert(declaration.name.clone(), ty);
+                .collect::<Result<Vec<_>, String>>()
+                .map(Into::into)
+        };
+        let id = ir::DefId { snapshot, index };
+        match &all[index] {
+            Decl::Struct(d) => {
+                let ty = ir::StructTy::new(ir::StructDef {
+                    id,
+                    name: d.name.clone(),
+                    module: parent(&d.name).into(),
+                    public: d.public,
+                    fields: fields(&d.fields, &env)?,
+                });
+                env.structs.insert(d.name.clone(), ty);
+            }
+            Decl::Enum(d) => {
+                let variants = d
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        Ok(ir::VariantDef {
+                            name: v.name.clone(),
+                            shape: v.shape,
+                            fields: fields(&v.fields, &env)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                let ty = ir::EnumTy::new(ir::EnumDef {
+                    id,
+                    name: d.name.clone(),
+                    module: parent(&d.name).into(),
+                    public: d.public,
+                    variants: variants.into(),
+                });
+                env.enums.insert(d.name.clone(), ty);
+            }
+        }
     }
     for function in &program.functions {
         let signature = ir::Signature {
@@ -2188,8 +2381,9 @@ struct PatternLocal {
     name: String,
     ty: ir::Ty,
     mutable: bool,
-    fields: Vec<usize>,
+    projection: Vec<ir::Projection>,
 }
+type ResolvedVariantPattern<'p> = (ir::EnumTy, usize, Vec<(usize, &'p Pattern)>);
 struct Checker<'a> {
     signatures: &'a Signatures,
     scopes: Vec<HashMap<String, ir::LocalId>>,
@@ -2438,7 +2632,7 @@ impl<'a> Checker<'a> {
     /// Recover only concrete pattern shape, without a general inference engine.
     fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
         match pattern {
-            Pattern::Path(name) => {
+            Pattern::Path(name) | Pattern::Variant { name,.. } => {
                 let (enumeration, _) = self.enum_variant(name)?;
                 let expected = ir::Ty::Enum(enumeration);
                 if !coerces(ty,&expected) { return Err(format!("enum pattern {name} does not match {ty:?}")); }
@@ -2469,7 +2663,7 @@ impl<'a> Checker<'a> {
         &self,
         pattern: &Pattern,
         ty: &ir::Ty,
-        path: &mut Vec<usize>,
+        path: &mut Vec<ir::Projection>,
         names: &mut std::collections::HashSet<String>,
         pending: &mut Vec<PatternLocal>,
         work: &mut usize,
@@ -2479,17 +2673,33 @@ impl<'a> Checker<'a> {
         }
         match pattern {
             Pattern::Wildcard => {}
-            Pattern::Path(name) => {
-                let (enumeration, _) = self.enum_variant(name)?;
-                if *ty != ir::Ty::Enum(enumeration.clone()) {
-                    return Err(format!("enum pattern {name} does not match {ty:?}"));
-                }
+            Pattern::Path(_) | Pattern::Variant { .. } => {
+                let (enumeration, variant, fields) = self.variant_pattern(pattern, ty)?;
                 if enumeration.def().variants.len() != 1 {
-                    return Err(format!("refutable enum pattern {name} in let binding"));
+                    return Err(
+                        "refutable enum patterns in irrefutable positions are unsupported".into(),
+                    );
+                }
+                for (index, pattern) in fields {
+                    path.push(ir::Projection::Downcast(ir::VariantId {
+                        owner: enumeration.def().id,
+                        index: variant,
+                    }));
+                    path.push(ir::Projection::Field(index));
+                    self.pattern_locals(
+                        pattern,
+                        &enumeration.def().variants[variant].fields[index].ty,
+                        path,
+                        names,
+                        pending,
+                        work,
+                    )?;
+                    path.pop();
+                    path.pop();
                 }
             }
             Pattern::Bool(_) | Pattern::Int(_) => {
-                return Err("refutable literal pattern in let binding".into());
+                return Err("nested refutable literal patterns are unsupported".into());
             }
             Pattern::Binding { name, mutable } => {
                 if name == "_" {
@@ -2512,7 +2722,7 @@ impl<'a> Checker<'a> {
                     name: name.clone(),
                     ty: ty.clone(),
                     mutable: *mutable,
-                    fields: path.clone(),
+                    projection: path.clone(),
                 });
             }
             Pattern::Tuple(patterns) => {
@@ -2526,7 +2736,7 @@ impl<'a> Checker<'a> {
                     return Err("tuple pattern arity mismatch".into());
                 }
                 for (index, (pattern, ty)) in patterns.iter().zip(fields.iter()).enumerate() {
-                    path.push(index);
+                    path.push(ir::Projection::Field(index));
                     self.pattern_locals(pattern, ty, path, names, pending, work)?;
                     path.pop();
                 }
@@ -2548,7 +2758,7 @@ impl<'a> Checker<'a> {
                     if !selected.insert(index) {
                         return Err(format!("duplicate struct pattern field {field}"));
                     }
-                    path.push(index);
+                    path.push(ir::Projection::Field(index));
                     self.pattern_locals(pattern, &field_ty, path, names, pending, work)?;
                     path.pop();
                 }
@@ -2583,9 +2793,67 @@ impl<'a> Checker<'a> {
             .def()
             .variants
             .iter()
-            .position(|name| name == variant)
+            .position(|definition| definition.name == variant)
             .ok_or_else(|| format!("unknown enum variant {name}"))?;
         Ok((ty, index))
+    }
+    fn variant_pattern<'p>(
+        &self,
+        pattern: &'p Pattern,
+        expected: &ir::Ty,
+    ) -> Result<ResolvedVariantPattern<'p>, String> {
+        let (name, shape, fields, rest) = match pattern {
+            Pattern::Path(name) => (name, ir::VariantShape::Unit, &[][..], false),
+            Pattern::Variant {
+                name,
+                shape,
+                fields,
+                rest,
+            } => (name, *shape, fields.as_slice(), *rest),
+            _ => return Err("expected enum variant pattern".into()),
+        };
+        let (ty, variant) = self.enum_variant(name)?;
+        if *expected != ir::Ty::Enum(ty.clone()) {
+            return Err(format!(
+                "variant pattern {name} does not match {expected:?}"
+            ));
+        }
+        let definition = &ty.def().variants[variant];
+        if shape != definition.shape
+            && !(definition.shape == ir::VariantShape::Unit
+                && shape == ir::VariantShape::Struct
+                && fields.is_empty())
+        {
+            return Err(format!(
+                "variant pattern {name} has wrong constructor shape"
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut selected = Vec::new();
+        for (selector, pattern) in fields {
+            let index = match selector {
+                FieldSelector::Tuple(i) if definition.shape == ir::VariantShape::Tuple => *i,
+                FieldSelector::Named(n) => definition
+                    .fields
+                    .iter()
+                    .position(|f| &f.name == n)
+                    .ok_or_else(|| format!("unknown variant field {n}"))?,
+                _ => return Err("invalid variant field selector".into()),
+            };
+            let field = definition
+                .fields
+                .get(index)
+                .ok_or("variant pattern arity mismatch")?;
+            if !seen.insert(index) {
+                return Err("duplicate variant pattern field".into());
+            }
+            self.accessible(&field.ty)?;
+            selected.push((index, pattern));
+        }
+        if !rest && seen.len() != definition.fields.len() {
+            return Err("missing variant pattern fields".into());
+        }
+        Ok((ty, variant, selected))
     }
     fn block_when(&mut self, b: &Block, reachable: bool) -> Result<(ir::Block, Flow), String> {
         let previous = self.reachable;
@@ -2662,7 +2930,7 @@ impl<'a> Checker<'a> {
                         let local = self.local(&binding.name, binding.ty, binding.mutable)?;
                         bindings.push(ir::PatternBinding {
                             local,
-                            fields: binding.fields,
+                            projection: binding.projection,
                         });
                     }
                     (
@@ -2694,14 +2962,17 @@ impl<'a> Checker<'a> {
                     for field in &place.fields {
                         let (index, field_ty) = self.field_type(&ty, field)?;
                         ty = field_ty;
-                        fields.push(index);
+                        fields.push(ir::Projection::Field(index));
                     }
                     let value = self.expr(value)?;
                     let flow = self.flow(value);
                     self.require(&flow, &ty)?;
                     (
                         ir::Stmt::AssignPlace {
-                            place: ir::Place { local, fields },
+                            place: ir::Place {
+                                local,
+                                projection: fields,
+                            },
                             value,
                         },
                         flow.completes,
@@ -2763,14 +3034,67 @@ impl<'a> Checker<'a> {
     }
     fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
         let (kind, flow) = match e {
-            Expr::EnumVariant(name) => {
+            Expr::EnumVariant {
+                name,
+                shape,
+                fields,
+            } => {
                 let (ty, variant) = self.enum_variant(name)?;
+                let definition = &ty.def().variants[variant];
+                if *shape != definition.shape
+                    && !(definition.shape == ir::VariantShape::Unit
+                        && *shape == ir::VariantShape::Struct
+                        && fields.is_empty())
+                {
+                    if *shape == ir::VariantShape::Unit
+                        && definition.shape == ir::VariantShape::Tuple
+                    {
+                        return Err("first-class tuple variant constructors are unsupported".into());
+                    }
+                    return Err(format!("variant constructor {name} has wrong shape"));
+                }
+                let mut seen = std::collections::HashSet::new();
+                let mut values = Vec::new();
+                let mut completes = true;
+                for (selector, value) in fields {
+                    let index = match selector {
+                        FieldSelector::Tuple(i) if definition.shape == ir::VariantShape::Tuple => {
+                            *i
+                        }
+                        FieldSelector::Named(n) => definition
+                            .fields
+                            .iter()
+                            .position(|f| &f.name == n)
+                            .ok_or_else(|| format!("unknown variant field {n}"))?,
+                        _ => return Err("invalid variant constructor selector".into()),
+                    };
+                    let field = definition
+                        .fields
+                        .get(index)
+                        .ok_or("variant constructor arity mismatch")?;
+                    if !seen.insert(index) {
+                        return Err("duplicate variant constructor field".into());
+                    }
+                    self.accessible(&field.ty)?;
+                    let value = self.expr_when(value, self.reachable && completes)?;
+                    let flow = self.flow(value);
+                    self.require(&flow, &field.ty)?;
+                    completes &= flow.completes;
+                    values.push((index, value));
+                }
+                if seen.len() != definition.fields.len() {
+                    return Err("missing variant constructor fields".into());
+                }
                 (
                     ir::ExprKind::EnumVariant {
                         ty: ty.clone(),
                         variant,
+                        fields: values,
                     },
-                    Flow::value(ir::Ty::Enum(ty)),
+                    Flow {
+                        ty: ir::Ty::Enum(ty),
+                        completes,
+                    },
                 )
             }
             Expr::Match { scrutinee, arms } => {
@@ -2785,7 +3109,9 @@ impl<'a> Checker<'a> {
                 if domain == ir::Ty::Never {
                     for arm in arms {
                         let hint = match &arm.pattern {
-                            Pattern::Path(name) => Some(ir::Ty::Enum(self.enum_variant(name)?.0)),
+                            Pattern::Path(name) | Pattern::Variant { name, .. } => {
+                                Some(ir::Ty::Enum(self.enum_variant(name)?.0))
+                            }
                             Pattern::Bool(_) => Some(ir::Ty::Bool),
                             Pattern::Int(_) => Some(ir::Ty::I32),
                             Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
@@ -2835,15 +3161,44 @@ impl<'a> Checker<'a> {
                             }
                             (ir::MatchPattern::Unit, Some(0))
                         }
-                        Pattern::Path(name) => {
-                            let (ty, variant) = self.enum_variant(name)?;
-                            if domain != ir::Ty::Enum(ty.clone()) {
-                                return Err(format!(
-                                    "enum match pattern {name} does not match {domain:?}"
-                                ));
+                        Pattern::Path(_) | Pattern::Variant { .. } => {
+                            let (ty, variant, fields) =
+                                self.variant_pattern(&arm.pattern, &domain)?;
+                            let mut names = std::collections::HashSet::new();
+                            let mut pending = Vec::new();
+                            let mut work = 0;
+                            let mut bindings = Vec::new();
+                            for (index, pattern) in fields {
+                                let mut path = vec![
+                                    ir::Projection::Downcast(ir::VariantId {
+                                        owner: ty.def().id,
+                                        index: variant,
+                                    }),
+                                    ir::Projection::Field(index),
+                                ];
+                                self.pattern_locals(
+                                    pattern,
+                                    &ty.def().variants[variant].fields[index].ty,
+                                    &mut path,
+                                    &mut names,
+                                    &mut pending,
+                                    &mut work,
+                                )?;
+                            }
+                            for binding in pending {
+                                let local =
+                                    self.local(&binding.name, binding.ty, binding.mutable)?;
+                                bindings.push(ir::PatternBinding {
+                                    local,
+                                    projection: binding.projection,
+                                });
                             }
                             (
-                                ir::MatchPattern::EnumVariant { ty, variant },
+                                ir::MatchPattern::EnumVariant {
+                                    ty,
+                                    variant,
+                                    bindings,
+                                },
                                 Some(variant as i64),
                             )
                         }
@@ -3272,6 +3627,95 @@ mod typed_tests {
     use super::*;
 
     #[test]
+    fn payload_variants_preserve_constructor_shape_source_order_and_projection_ids() {
+        let source = "struct S{x:i32} enum E{Unit,Tuple(S,bool),Named{a:i32,b:S},Zero(),Empty{}} use E::Named as Alias;fn main(){let e=Alias{b:S{x:2},a:1};let n=match e{Alias{b:S{x:n},a:_,..}=>n,E::Tuple(S{x:n},_)=>n,E::Unit=>0,E::Zero()=>0,E::Empty{}=>0};let z=E::Zero();let q=E::Empty{};}";
+        let program = parse(source).unwrap();
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        checked.validate().unwrap();
+        let enumeration = &env.enums["E"];
+        assert!(enumeration.has_payload());
+        assert_eq!(enumeration.def().variants[3].shape, ir::VariantShape::Tuple);
+        assert_eq!(
+            enumeration.def().variants[4].shape,
+            ir::VariantShape::Struct
+        );
+        assert!(checked.exprs.iter().any(|e|matches!(&e.kind,ir::ExprKind::EnumVariant{variant:2,fields,..} if fields.iter().map(|(i,_)|*i).collect::<Vec<_>>()==vec![1,0])));
+        let arms = checked
+            .exprs
+            .iter()
+            .find_map(|e| match &e.kind {
+                ir::ExprKind::Match { arms, .. } => Some(arms),
+                _ => None,
+            })
+            .unwrap();
+        let ir::MatchPattern::EnumVariant { bindings, .. } = &arms[0].pattern else {
+            panic!("variant pattern")
+        };
+        assert_eq!(
+            bindings[0].projection,
+            vec![
+                ir::Projection::Downcast(ir::VariantId {
+                    owner: enumeration.def().id,
+                    index: 2
+                }),
+                ir::Projection::Field(1),
+                ir::Projection::Field(0)
+            ]
+        );
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn singleton_payload_let_and_nested_irrefutable_patterns_are_typed() {
+        let source = "enum Inner{One(i32)} enum Outer{One{inner:Inner,flag:bool}}fn main(){let Outer::One{inner:Inner::One(mut n),flag:_}=Outer::One{flag:true,inner:Inner::One(3)};n=4;let e=Outer::One{inner:Inner::One(n),flag:false};let n=match e{Outer::One{inner:Inner::One(n),..}=>n};}";
+        let program = parse(source).unwrap();
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        checked.validate().unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn mixed_nominal_payload_dag_validates_unused_cycles_fields_and_privacy() {
+        for source in [
+            "struct S{x:E}enum E{A(S),B}fn main(){}",
+            "enum A{V(B)}enum B{V(A)}fn main(){}",
+            "enum A{V(Missing)}fn main(){}",
+            "enum A{V{x:i32,x:bool}}fn main(){}",
+            "mod m{struct H{x:i32}}enum E{V(m::H)}fn main(){}",
+            "enum E{V(i32)}fn main(){E::V(true);}",
+            "enum E{V{x:i32}}fn main(){E::V{};}",
+            "enum E{V(i32)}fn main(){match E::V(1){E::V()=>()};}",
+            "enum E{V{i:i32}}fn main(){match E::V{i:1}{E::V{i:x,i:y}=>()};}",
+        ] {
+            assert!(
+                parse(source).and_then(|program| check(&program)).is_err(),
+                "accepted {source}"
+            );
+        }
+        let program =
+            parse("enum E{V(S)}struct S{x:i32}fn main(){let E::V(S{x:n})=E::V(S{x:1});}").unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn variant_imports_reserve_type_namespace_without_becoming_types() {
+        for variant in ["V", "V(i32)", "V{x:i32}"] {
+            for conflict in ["struct A{x:i32}", "enum A{Unit}", "mod A{}"] {
+                let source = format!("{conflict} enum E{{{variant}}}use E::V as A;fn main(){{}}");
+                assert!(parse(&source).is_err(), "accepted {source}");
+            }
+            let source = format!("enum E{{{variant}}}use E::V as A;fn f(x:A){{}}fn main(){{}}");
+            assert!(parse(&source).is_err(), "variant used as type: {source}");
+        }
+        check(&parse("fn A()->i32{1}enum E{V{x:i32}}use E::V as A;fn main(){let n=A();let e=A{x:n};match e{A{x:n}=>{}}}").unwrap()).unwrap();
+        check(&parse("struct A{x:i32}fn A()->i32{1}fn main(){let n=A();let a=A{x:n};}").unwrap())
+            .unwrap();
+        check(&parse("enum E{V{x:i32}}use E::V;fn f(V:i32)->i32{V}fn main(){let V:i32;V=1;let n=f(V);let V=2;let n=V;}").unwrap()).unwrap();
+    }
+
+    #[test]
     fn typed_deferred_declarations_publish_fresh_uninitialized_locals() {
         let source = "enum E{A,B} struct S{e:E} fn main(){let x=1;let x:i32;let mut y:(i32,bool);let s:S;x=2;y=(x,true);s=S{e:E::A};let x=true;match s.e{E::A=>(),E::B=>()};}";
         let program = parse(source).unwrap();
@@ -3431,9 +3875,12 @@ mod typed_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(places[0].local, ir::LocalId(0));
-        assert_eq!(places[0].fields, vec![0, 1]);
+        assert_eq!(
+            places[0].projection,
+            vec![ir::Projection::Field(0), ir::Projection::Field(1)]
+        );
         assert_eq!(places[1].local, ir::LocalId(1));
-        assert_eq!(places[1].fields, vec![0]);
+        assert_eq!(places[1].projection, vec![ir::Projection::Field(0)]);
         assert_eq!(f.locals[0].name, f.locals[1].name);
     }
 
@@ -3845,7 +4292,14 @@ mod tests {
         assert_eq!(
             bindings
                 .iter()
-                .map(|binding| binding.fields.clone())
+                .map(|binding| binding
+                    .projection
+                    .iter()
+                    .map(|p| match p {
+                        ir::Projection::Field(index) => *index,
+                        _ => panic!("unexpected downcast"),
+                    })
+                    .collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
             vec![vec![0, 0], vec![1]]
         );
@@ -3902,7 +4356,14 @@ mod tests {
         assert_eq!(
             bindings
                 .iter()
-                .map(|binding| binding.fields.clone())
+                .map(|binding| binding
+                    .projection
+                    .iter()
+                    .map(|p| match p {
+                        ir::Projection::Field(index) => *index,
+                        _ => panic!("unexpected downcast"),
+                    })
+                    .collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
             vec![vec![1], vec![0, 0]]
         );
@@ -4033,7 +4494,7 @@ mod tests {
         );
         assert!(
             body.body.statements.iter().any(
-                |stmt| matches!(stmt,ir::Stmt::AssignPlace{place,..} if place.fields==vec![0])
+                |stmt| matches!(stmt,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Field(0)])
             )
         );
     }

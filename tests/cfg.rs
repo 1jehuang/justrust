@@ -124,6 +124,11 @@ fn edges(terminator: &cfg::Terminator) -> Vec<cfg::BlockId> {
             then_block,
             else_block,
             ..
+        }
+        | cfg::Terminator::SwitchVariant {
+            then_block,
+            else_block,
+            ..
         } => vec![*then_block, *else_block],
         cfg::Terminator::Call { next, .. } => vec![*next],
         cfg::Terminator::Return | cfg::Terminator::Unreachable => vec![],
@@ -142,7 +147,7 @@ fn reachable(function: &cfg::Function) -> HashSet<cfg::BlockId> {
 fn place(local: usize) -> ir::Place {
     ir::Place {
         local: ir::LocalId(local),
-        fields: vec![],
+        projection: vec![],
     }
 }
 fn located<T>(value: T) -> cfg::Located<T> {
@@ -324,7 +329,7 @@ fn cfg_validator_rejects_malformed_edges_locals_places_and_call_arity() {
                     destination: place(function.return_local.0),
                     value: cfg::Rvalue::Use(cfg::Operand::Copy(ir::Place {
                         local: function.return_local,
-                        fields: vec![0],
+                        projection: vec![ir::Projection::Field(0)],
                     })),
                 }));
             assert!(function.validate().is_err(), "invalid projection accepted");
@@ -393,7 +398,7 @@ fn cfg_return_snapshots_and_abrupt_edges_clean_only_exited_scopes() {
                 if !matches!(block.terminator.value, cfg::Terminator::Return) {
                     continue;
                 }
-                let copied = block.statements.iter().position(|statement| matches!(&statement.value, cfg::Statement::Assign { destination, .. } if destination.local == function.return_local && destination.fields.is_empty())).expect("return value was not snapshotted");
+                let copied = block.statements.iter().position(|statement| matches!(&statement.value, cfg::Statement::Assign { destination, .. } if destination.local == function.return_local && destination.projection.is_empty())).expect("return value was not snapshotted");
                 for (index, statement) in block.statements.iter().enumerate() {
                     if let cfg::Statement::StorageDead(local) = statement.value {
                         assert_ne!(

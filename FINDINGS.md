@@ -1,5 +1,37 @@
 # Findings: where agent build time goes
 
+## 2026-10-16: Payload enums preserve explicit selection and initialization facts
+
+Implemented unit/tuple/braced enum variants, mixed struct/enum declaration DAG
+validation, source-ordered constructor snapshots, top-level variant payload
+patterns and singleton irrefutable destructuring. Typed Field/Downcast projections
+carry nominal owner identity. Cached analysis retains a separate must-selected
+variant proof: true edges establish it, joins intersect it and ancestor writes,
+moves and storage changes invalidate it. Inactive initialization bits are logical
+only and never authorize a physical payload read. Partial multivariant rematches
+remain invalid, while singleton disjoint moves and wildcard no-read stay valid.
+
+Native payload values use a checked private tag plus maximum-payload frame layout
+and aggregate calling convention, including unit variants of mixed declarations.
+Constructors zero all backing before writing tag and fields. Tests poison backing
+and verify every inactive word, exercise recursive aggregate returns and check
+that singleton typed switches never load an uninitialized/moved tag.
+
+Independent review also caught an accepted-invalid imported variant alias/type
+collision. The resolver now distinguishes all variants in the type namespace,
+unit/tuple constructors in the value namespace and braced variants as type-only.
+Stock-confirmed braced variant/function aliases and local bindings remain legal.
+The original historical payload boundary fixture is promoted without source edits.
+The 44-case independent payload corpus has 23 accepted, 15 invalid and six
+explicit legal-unsupported cases, including deferred tuple-variant rest.
+
+Final hosted gates: check `20261015-234538588-1745345`, test
+`20261015-234539387-1745510` (**533 passed**), strict all-target clippy
+`20261015-234541842-1745780`. Formatting and diff checks passed. Profiles are
+in `data/runs/prototype-bootstrap/2026-10-payload.jsonl`. Agent JSON now reports
+variant proof checks, refinements and invalidations, and retained CFG edges include
+typed switches. This is not a performance, platform-layout or full Rust claim.
+
 ## 2026-10-16: Typed deferred initialization uses cached flow analysis
 
 Added explicit `let [mut] name: Type;` declarations with fresh shadow identities.

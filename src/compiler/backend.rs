@@ -6,9 +6,12 @@
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
 //! Aggregate layout is private: each scalar/unit leaf occupies eight bytes,
-//! tuples and nominal structs concatenate their fields. Aggregate arguments
-//! carry snapshot pointers. Aggregate results use a caller-owned destination,
-//! passed last at rbp+16, even for a one-field aggregate.
+//! tuples and nominal structs concatenate their fields. Payload enums contain
+//! an eight-byte tag followed by the largest variant's concatenated fields.
+//! Any non-unit variant shape makes the entire enum use aggregate transport,
+//! including unit variants of that enum and zero-field tuple/struct variants.
+//! Aggregate arguments carry snapshot pointers. Aggregate results use a
+//! caller-owned destination, passed last at rbp+16, even for a one-field aggregate.
 use super::cfg;
 use super::frontend::{self, BinaryOp, Program, UnaryOp};
 use super::ir::{self, LocalId};
@@ -20,7 +23,26 @@ const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
 
+fn indirect(ty: &ir::Ty) -> bool {
+    ty.field_count().is_some() || matches!(ty, ir::Ty::Enum(ty) if ty.has_payload())
+}
+
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
+    if let ir::Ty::Enum(ty) = ty {
+        let payload = ty
+            .def()
+            .variants
+            .iter()
+            .try_fold(0_i32, |largest, variant| {
+                let size = variant.fields.iter().try_fold(0_i32, |size, field| {
+                    size.checked_add(value_size(&field.ty)?)
+                        .filter(|size| *size <= MAX_FRAME_BYTES - 8)
+                        .ok_or_else(|| "enum payload exceeds private frame limit".to_string())
+                })?;
+                Ok::<_, String>(largest.max(size))
+            })?;
+        return Ok(8 + payload);
+    }
     match ty.field_count() {
         Some(fields) => (0..fields).try_fold(0_i32, |size, index| {
             let field = ty
@@ -118,8 +140,40 @@ impl<'a> Emitter<'a> {
     fn place(&self, place: &ir::Place) -> Result<(i32, &'a ir::Ty), String> {
         let mut offset = self.local_offset(place.local)?;
         let mut ty: &'a ir::Ty = &self.function.locals[place.local.0].ty;
-        for &index in &place.fields {
-            let (field, next) = field_offset(ty, index)?;
+        let mut projections = place.projection.iter();
+        while let Some(projection) = projections.next() {
+            let (field, next) = match projection {
+                ir::Projection::Field(index) => field_offset(ty, *index)?,
+                ir::Projection::Downcast(variant) => {
+                    let ir::Ty::Enum(enum_ty) = ty else {
+                        return Err("downcast requires enum storage".into());
+                    };
+                    if variant.owner != enum_ty.def().id {
+                        return Err("downcast enum owner mismatch".into());
+                    }
+                    let definition = enum_ty
+                        .def()
+                        .variants
+                        .get(variant.index)
+                        .ok_or("invalid downcast variant")?;
+                    let Some(ir::Projection::Field(index)) = projections.next() else {
+                        return Err("downcast must be followed by payload field".into());
+                    };
+                    let field = definition
+                        .fields
+                        .get(*index)
+                        .ok_or("invalid downcast payload field")?;
+                    let offset =
+                        definition.fields[..*index]
+                            .iter()
+                            .try_fold(8_i32, |offset, field| {
+                                offset
+                                    .checked_add(value_size(&field.ty)?)
+                                    .ok_or_else(|| "enum projection offset too large".to_string())
+                            })?;
+                    (offset, &field.ty)
+                }
+            };
             offset = offset
                 .checked_add(field)
                 .ok_or("projection offset too large")?;
@@ -145,7 +199,7 @@ impl<'a> Emitter<'a> {
         }
     }
     fn store_value(&mut self, offset: i32, ty: &ir::Ty) -> Result<(), String> {
-        if ty.field_count().is_some() {
+        if indirect(ty) {
             self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
             self.i32(offset);
             self.copy_pointer_value(value_size(ty)?);
@@ -162,8 +216,13 @@ impl<'a> Emitter<'a> {
                 cfg::Constant::I32(value) => *value,
                 cfg::Constant::Bool(value) => i32::from(*value),
                 cfg::Constant::Unit => 0,
-                cfg::Constant::Enum { variant, .. } => i32::try_from(*variant)
-                    .map_err(|_| "enum tag exceeds private scalar representation")?,
+                cfg::Constant::Enum { ty, variant } => {
+                    if ty.has_payload() {
+                        return Err("payload enum constants require constructor storage".into());
+                    }
+                    i32::try_from(*variant)
+                        .map_err(|_| "enum tag exceeds private scalar representation")?
+                }
             }),
             cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
                 self.load_place(place)?;
@@ -175,11 +234,60 @@ impl<'a> Emitter<'a> {
     // so returning a non-Copy aggregate must not invent a Copy operand.
     fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
         let (offset, ty) = self.place(place)?;
-        if ty.field_count().is_some() {
+        if indirect(ty) {
             self.address(offset);
         } else {
             self.load(offset);
         }
+        Ok(())
+    }
+    fn enum_variant(
+        &mut self,
+        ty: &ir::EnumTy,
+        variant: usize,
+        fields: &[cfg::Operand],
+    ) -> Result<(), String> {
+        let definition = ty
+            .def()
+            .variants
+            .get(variant)
+            .ok_or("invalid enum variant")?;
+        if fields.len() != definition.fields.len() {
+            return Err("enum constructor field count mismatch".into());
+        }
+        let tag = i32::try_from(variant).map_err(|_| "enum tag exceeds private representation")?;
+        if !ty.has_payload() {
+            self.immediate(tag);
+            return Ok(());
+        }
+        // Inactive payload storage is still physically transported by this
+        // private ABI. Initialize the entire backing, including tail padding,
+        // before any operand is stored. CFG lowering snapshots operands before
+        // construction, so this scratch cannot alias a constructor input.
+        let scratch = self.aggregate_scratch;
+        let size = value_size(&ir::Ty::Enum(ty.clone()))?;
+        self.immediate(0);
+        for field in (0..size).step_by(8) {
+            self.bytes(&[0x48, 0x89, 0x85]);
+            self.i32(
+                scratch
+                    .checked_add(field)
+                    .ok_or("enum scratch offset too large")?,
+            );
+        }
+        self.immediate(tag);
+        self.store_value(scratch, &ir::Ty::I32)?;
+        let mut offset = scratch
+            .checked_add(8)
+            .ok_or("enum payload offset too large")?;
+        for (operand, field) in fields.iter().zip(definition.fields.iter()) {
+            self.operand(operand)?;
+            self.store_value(offset, &field.ty)?;
+            offset = offset
+                .checked_add(value_size(&field.ty)?)
+                .ok_or("enum payload offset too large")?;
+        }
+        self.address(scratch);
         Ok(())
     }
     fn binary(&mut self, op: BinaryOp) -> Result<(), String> {
@@ -258,10 +366,17 @@ impl<'a> Emitter<'a> {
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::EnumVariant {
+                ty,
+                variant,
+                fields,
+            } => {
+                self.enum_variant(ty, *variant, fields)?;
+            }
             cfg::Rvalue::Discriminant(place) => {
                 // Observing a tag is not a semantic Copy or Move of its enum.
-                // Fieldless enums occupy a private scalar slot, even when the
-                // source place is nested inside a tuple or nominal struct.
+                // The tag is always the first word, regardless of scalar or
+                // indirect enum transport and any enclosing aggregate layout.
                 let (offset, _) = self.place(place)?;
                 self.load(offset);
             }
@@ -315,6 +430,40 @@ impl<'a> Emitter<'a> {
     fn terminator(&mut self, terminator: &cfg::Terminator) -> Result<(), String> {
         match terminator {
             cfg::Terminator::Goto(target) => self.edge(&[0xe9], *target),
+            cfg::Terminator::SwitchVariant {
+                place,
+                variant,
+                then_block,
+                else_block,
+            } => {
+                // Raw discriminant inspection grants no semantic Copy of the
+                // enum. The true edge's selected-variant proof is established
+                // by CFG validation and ownership analysis, not by codegen.
+                let (offset, ty) = self.place(place)?;
+                let ir::Ty::Enum(enum_ty) = ty else {
+                    return Err("variant switch requires enum storage".into());
+                };
+                if variant.owner != enum_ty.def().id
+                    || variant.index >= enum_ty.def().variants.len()
+                {
+                    return Err("variant switch identity mismatch".into());
+                }
+                if enum_ty.def().variants.len() == 1 {
+                    // A singleton's variant is known from its type even when
+                    // its storage is uninitialized or moved. Analysis permits
+                    // this observation without a tag read, so codegen must too.
+                    self.edge(&[0xe9], *then_block);
+                    return Ok(());
+                }
+                self.load(offset);
+                self.bytes(&[0x3d]);
+                self.i32(
+                    i32::try_from(variant.index)
+                        .map_err(|_| "enum tag exceeds private representation")?,
+                );
+                self.edge(&[0x0f, 0x84], *then_block);
+                self.edge(&[0xe9], *else_block);
+            }
             cfg::Terminator::Switch {
                 condition,
                 then_block,
@@ -339,7 +488,7 @@ impl<'a> Emitter<'a> {
                     self.operand(operand)?;
                     self.bytes(&[0x50]);
                 }
-                let aggregate = signature.result.field_count().is_some();
+                let aggregate = indirect(&signature.result);
                 let (offset, ty) = self.place(destination)?;
                 if aggregate {
                     self.address(offset);
@@ -362,7 +511,7 @@ impl<'a> Emitter<'a> {
             cfg::Terminator::Return => {
                 self.load_place(&ir::Place {
                     local: self.function.return_local,
-                    fields: Vec::new(),
+                    projection: Vec::new(),
                 })?;
                 let at = self.jump(&[0xe9]);
                 self.returns.push(at);
@@ -392,12 +541,13 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     let mut scratch_size = 0;
     for block in &function.blocks {
         for statement in &block.statements {
-            if let cfg::Statement::Assign {
-                value: cfg::Rvalue::Aggregate { ty, .. },
-                ..
-            } = &statement.value
-            {
-                scratch_size = scratch_size.max(value_size(ty)?);
+            if let cfg::Statement::Assign { value, .. } = &statement.value {
+                let size = match value {
+                    cfg::Rvalue::Aggregate { ty, .. } => value_size(ty)?,
+                    cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
+                    _ => 0,
+                };
+                scratch_size = scratch_size.max(size);
             }
         }
     }
@@ -406,7 +556,7 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     let aggregate_scratch = -frame_bytes;
-    let aggregate_result = function.result.field_count().is_some();
+    let aggregate_result = indirect(&function.result);
     let result_size = value_size(&function.result)?;
     let mut emitter = Emitter {
         object: Object {
@@ -813,6 +963,306 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn singleton_variant_switch_never_loads_uninitialized_or_moved_tag() {
+        fn located<T>(value: T) -> cfg::Located<T> {
+            cfg::Located {
+                value,
+                origin: None,
+            }
+        }
+        fn place(local: usize) -> ir::Place {
+            ir::Place {
+                local: LocalId(local),
+                projection: vec![],
+            }
+        }
+        let ty = ir::EnumTy::new(ir::EnumDef {
+            id: ir::DefId {
+                snapshot: ir::SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "Singleton".into(),
+            module: String::new(),
+            public: false,
+            variants: vec![ir::VariantDef {
+                name: "Only".into(),
+                shape: ir::VariantShape::Tuple,
+                fields: vec![ir::FieldDef {
+                    name: "0".into(),
+                    ty: ir::Ty::I32,
+                    public: true,
+                }]
+                .into(),
+            }]
+            .into(),
+        });
+        for moved in [false, true] {
+            let mut statements = (0..3)
+                .map(|local| located(cfg::Statement::StorageLive(LocalId(local))))
+                .collect::<Vec<_>>();
+            if moved {
+                statements.push(located(cfg::Statement::Assign {
+                    destination: place(1),
+                    value: cfg::Rvalue::EnumVariant {
+                        ty: ty.clone(),
+                        variant: 0,
+                        fields: vec![cfg::Operand::Constant(cfg::Constant::I32(7))],
+                    },
+                }));
+                statements.push(located(cfg::Statement::Assign {
+                    destination: place(2),
+                    value: cfg::Rvalue::Use(cfg::Operand::Move(place(1))),
+                }));
+            }
+            let output_block = |text: &str| cfg::BasicBlock {
+                statements: vec![located(cfg::Statement::Assign {
+                    destination: place(0),
+                    value: cfg::Rvalue::Println(text.into()),
+                })],
+                terminator: located(cfg::Terminator::Return),
+            };
+            let function = cfg::Function {
+                name: "main".into(),
+                params: vec![],
+                result: ir::Ty::Unit,
+                locals: vec![
+                    ir::LocalDecl {
+                        name: "result".into(),
+                        ty: ir::Ty::Unit,
+                        mutable: true,
+                    },
+                    ir::LocalDecl {
+                        name: "value".into(),
+                        ty: ir::Ty::Enum(ty.clone()),
+                        mutable: true,
+                    },
+                    ir::LocalDecl {
+                        name: "moved".into(),
+                        ty: ir::Ty::Enum(ty.clone()),
+                        mutable: true,
+                    },
+                ],
+                entry: cfg::BlockId(0),
+                return_local: LocalId(0),
+                blocks: vec![
+                    cfg::BasicBlock {
+                        statements,
+                        terminator: located(cfg::Terminator::SwitchVariant {
+                            place: place(1),
+                            variant: ir::VariantId {
+                                owner: ty.def().id,
+                                index: 0,
+                            },
+                            then_block: cfg::BlockId(1),
+                            else_block: cfg::BlockId(2),
+                        }),
+                    },
+                    output_block("singleton-then"),
+                    output_block("wrong-else"),
+                ],
+            };
+            function.validate().unwrap();
+            let analysis = ownership::analyze(&function);
+            assert!(
+                analysis.passed(),
+                "moved={moved}: {:?}",
+                analysis.diagnostics
+            );
+            let object = emit_cfg_function(&function).unwrap();
+            // The root follows the eight-byte unit return slot in the frame.
+            // Aggregate moves address it but must never load its tag into eax.
+            let root_offset = -(8 + value_size(&ir::Ty::Enum(ty.clone())).unwrap());
+            let mut tag_load = vec![0x8b, 0x85];
+            tag_load.extend_from_slice(&root_offset.to_le_bytes());
+            assert!(
+                !object
+                    .code
+                    .windows(tag_load.len())
+                    .any(|bytes| bytes == tag_load),
+                "singleton tag load emitted, moved={moved}"
+            );
+            let path = executable_bytes(&link(&[("main".into(), object)]).unwrap());
+            let output = execute(Command::new(&path).stdout(Stdio::piped()));
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir(path.parent().unwrap()).unwrap();
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert_eq!(output.stdout, b"singleton-then\n");
+        }
+    }
+
+    #[test]
+    fn payload_enum_constructor_zeroes_inactive_backing_words() {
+        let field = |name: &str| ir::FieldDef {
+            name: name.into(),
+            ty: ir::Ty::I32,
+            public: true,
+        };
+        let ty = ir::EnumTy::new(ir::EnumDef {
+            id: ir::DefId {
+                snapshot: ir::SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "Backing".into(),
+            module: String::new(),
+            public: false,
+            variants: vec![
+                ir::VariantDef {
+                    name: "Empty".into(),
+                    shape: ir::VariantShape::Unit,
+                    fields: vec![].into(),
+                },
+                ir::VariantDef {
+                    name: "Small".into(),
+                    shape: ir::VariantShape::Tuple,
+                    fields: vec![field("0")].into(),
+                },
+                ir::VariantDef {
+                    name: "Large".into(),
+                    shape: ir::VariantShape::Tuple,
+                    fields: vec![field("0"), field("1"), field("2")].into(),
+                },
+            ]
+            .into(),
+        });
+        assert!(indirect(&ir::Ty::Enum(ty.clone())));
+        assert_eq!(value_size(&ir::Ty::Enum(ty.clone())).unwrap(), 32);
+        let function = cfg::Function {
+            name: "main".into(),
+            params: vec![],
+            result: ir::Ty::Unit,
+            locals: vec![],
+            blocks: vec![],
+            entry: cfg::BlockId(0),
+            return_local: LocalId(0),
+        };
+        // This test exercises the private constructor emitter directly so it
+        // can inspect inactive physical storage, which source Rust cannot read.
+        let mut emitter = Emitter {
+            object: Object {
+                code: vec![],
+                calls: vec![],
+                strings: vec![],
+            },
+            function: &function,
+            locals: vec![],
+            aggregate_scratch: -32,
+            returns: vec![],
+            traps: vec![],
+            edges: vec![],
+        };
+        emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 32]);
+        for (variant, operands, expected) in [
+            (
+                1,
+                vec![cfg::Operand::Constant(cfg::Constant::I32(7))],
+                [1, 7, 0, 0],
+            ),
+            (0, vec![], [0, 0, 0, 0]),
+        ] {
+            // Poison all eight bytes of every word, not merely its low i32.
+            emitter.bytes(&[0x48, 0xb8]);
+            emitter.bytes(&u64::MAX.to_le_bytes());
+            for offset in [-32, -24, -16, -8] {
+                emitter.bytes(&[0x48, 0x89, 0x85]);
+                emitter.i32(offset);
+            }
+            emitter.enum_variant(&ty, variant, &operands).unwrap();
+            for (index, word) in expected.into_iter().enumerate() {
+                emitter.bytes(&[0x48, 0x8b, 0x85]);
+                emitter.i32(-32 + index as i32 * 8);
+                emitter.bytes(&[0x48, 0x3d]);
+                emitter.i32(word);
+                emitter.trap_if(0x85);
+            }
+        }
+        emitter.bytes(&[0x31, 0xc0, 0xc9, 0xc3]);
+        let trap = emitter.position();
+        emitter.bytes(&[
+            0xbf, 101, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+        ]);
+        for at in std::mem::take(&mut emitter.traps) {
+            emitter.patch(at, trap).unwrap();
+        }
+        let bytes = link(&[("main".into(), emitter.object)]).unwrap();
+        let path = executable_bytes(&bytes);
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+
+    #[test]
+    fn payload_enum_calls_returns_nested_fields_and_source_order() {
+        let p = frontend::parse(
+            r#"
+            struct Boxed { value: i32 }
+            enum Value { Empty, Pair(i32, Boxed), Named { left: i32, right: (i32, bool) } }
+            fn relay(value: Value) -> Value { value }
+            fn make(n: i32) -> Value {
+                if n == 0 { return Value::Empty; }
+                Value::Pair(n, Boxed { value: n + 1 })
+            }
+            fn code(value: Value) -> i32 {
+                match value {
+                    Value::Empty => 3,
+                    Value::Pair(a, Boxed { value: b }) => a * 10 + b,
+                    Value::Named { left, right: (n, ready) } => {
+                        if !ready { 1 / 0; }
+                        left * 10 + n
+                    },
+                }
+            }
+            fn effect(n: i32) -> i32 {
+                if n == 1 { println!("right"); } else { println!("left"); }
+                n
+            }
+            fn main() {
+                if code(relay(make(0))) != 3 { 1 / 0; }
+                if code(relay(make(4))) != 45 { 1 / 0; }
+                let named = Value::Named { right: (effect(1), true), left: effect(2) };
+                if code(relay(named)) != 21 { 1 / 0; }
+                let nested = (17, Value::Pair(5, Boxed { value: 6 }), 29);
+                if code(nested.1) != 56 { 1 / 0; }
+                if nested.0 != 17 { 1 / 0; }
+                if nested.2 != 29 { 1 / 0; }
+                println!("payload-abi");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"right\nleft\npayload-abi\n");
+    }
+
+    #[test]
+    fn payload_enum_zero_field_shapes_use_declaration_wide_indirect_abi() {
+        let p = frontend::parse(
+            r#"
+            enum Empty { Unit, Tuple(), Named {} }
+            fn relay(value: Empty) -> Empty { value }
+            fn code(value: Empty) -> i32 {
+                match value {
+                    Empty::Unit => 1,
+                    Empty::Tuple() => 2,
+                    Empty::Named {} => 3,
+                }
+            }
+            fn main() {
+                if code(relay(Empty::Unit)) != 1 { 1 / 0; }
+                if code(relay(Empty::Tuple())) != 2 { 1 / 0; }
+                if code(relay(Empty::Named {})) != 3 { 1 / 0; }
+                println!("empty-payload-abi");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"empty-payload-abi\n");
     }
 
     #[test]
@@ -1461,7 +1911,7 @@ mod tests {
         fn place(local: usize, fields: &[usize]) -> ir::Place {
             ir::Place {
                 local: LocalId(local),
-                fields: fields.to_vec(),
+                projection: fields.iter().copied().map(ir::Projection::Field).collect(),
             }
         }
         fn constant(value: i32) -> cfg::Operand {

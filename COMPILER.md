@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with nominal structs, fieldless enums and match,
+Status: executable Rust-subset implementation with nominal structs, payload enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -22,17 +22,20 @@ overwritten. Invalid and unsupported programs fail explicitly. Output is not
 published until every required check and code generation operation succeeds.
 
 Initial supported syntax: free functions with `i32`, `bool`, unit, nested tuples
-and nonempty braced named structs or fieldless enums as parameters/results, aggregate literals and
+and nonempty braced named structs or enums as parameters/results, aggregate literals and
 numeric/named field projections,
 local bindings and shadowing, typed deferred local initialization,
 irrefutable tuple/struct let patterns, wildcard,
 per-binding `mut`, struct-pattern `..`, whole-value and local-rooted field assignment,
 integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
 `while`, unlabelled `loop` expressions, `break` with supported value types,
-`continue`, `return`, fieldless-enum/scalar `match`, calls including recursion,
+`continue`, `return`, enum/scalar `match`, calls including recursion,
 and `println!("literal")`. Match supports variant/literal, wildcard and whole-value
 binding arms, with exhaustive bool/unit/enum coverage and an i32 catchall. Guards,
-or/range and nested refutable patterns remain following work. See `ENUMS.md`.
+or/range and nested refutable patterns remain following work. Unit, tuple and
+braced enum variants support source-ordered construction, selected payload
+patterns and single-variant irrefutable let patterns. Tuple-variant rest remains
+unsupported. See `ENUMS.md` and `PAYLOAD-ENUMS.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.
@@ -58,7 +61,7 @@ Canonical paths detect active inclusion cycles, not enforce a filesystem sandbox
 Not supported: crates/manifests, grouped or
 glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
 standard-library APIs beyond the documented print form, general macros, traits,
-generics, payload/empty enums, explicit discriminants, empty/unit/tuple structs,
+generics, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
 references/borrowing, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
@@ -142,7 +145,7 @@ Joins and backedges use a worklist fixed point. Diagnostics are produced from
 converged reachable states, with block, statement, expression-origin and place
 provenance. Structural validation includes unreachable blocks. Resource exhaustion
 fails closed rather than publishing a successful analysis of partial work.
-Source-level named structs and fieldless enums are non-Copy, including scalar-only
+Source-level named structs and enums are non-Copy, including scalar-only
 representations. Enum discriminant inspection does not grant Copy permission.
 Wildcard-only and singleton matches do not require a place read. Unreachable
 match arms still participate in ownership checks and post-match joins through
