@@ -8589,3 +8589,21 @@ actual-code reviews pass. Exact three redacted profiles are retained in
 private-field/high64 example also passes the external stock oracle. Tracked
 eighteen-corpus native verification follows after commit. Full Rust remains open;
 these correctness gates do not establish a speedup.
+
+### Lifetime elision: 712-case native evidence retained
+
+Tracked M8a run `compiler-lifetime-elision-20261016-0915` at exact revision
+`0fe4b3356a3590c2395207eab94cda5e32b00d28` passed all 712 cases across eighteen
+corpora: 425 accepted, 213 invalid rejected, nine declared runtime-101 traps and
+65 legal-unsupported boundaries. Independently parsed all sixteen summary
+receipts and all 128 generated scalar/loop records, requiring exact parity and
+zero compile/runtime exits for every generated case. New elision cases contribute
+ten accepted, eight invalid and two boundaries. The four historical promotions
+retain exact original source, stdout and expected-value bytes.
+
+All eighteen raw corpus receipts plus the native example observation are retained
+in `experiments/results/20261016-m8a-lifetime-elision-*.jsonl`. The 96-worker
+elided recursive/private-field/high64 example executed with exact expected stdout,
+complete capture, 26 nodes, 35 edges, zero failures and zero dropped events.
+Observed 14.397 ms total and 3.334 ms engine time are contended/uncontrolled, not
+speedup evidence. Full Rust remains open.

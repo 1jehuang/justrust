@@ -66,7 +66,10 @@ NoReference call contracts retain their erased B2 behavior. All 915 hosted tests
 strict all-target lint, formatting and both independent actual-code reviews pass.
 The corrected 20-case stock/CLI corpus and four new graph tests pass. Four
 historical CLI sources and one graph source are promoted without source edits.
-Tracked eighteen-corpus native verification follows. Full Rust remains open.
+Tracked run `compiler-lifetime-elision-20261016-0915` at `0fe4b3356` passed all
+712 cases across eighteen corpora: 425 accepted, 213 invalid rejected, nine
+declared runtime-101 traps and 65 legal-unsupported boundaries. All raw receipts
+and the executed 96-worker example are retained. Full Rust remains open.
 
 Projected input reference returns are implemented under
 `PROJECTED-REFERENCE-RETURNS.md`: complete declaration-derived typed static paths,

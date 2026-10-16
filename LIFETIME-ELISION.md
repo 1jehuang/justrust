@@ -3,7 +3,11 @@
 Status: implemented after correcting the initial proposal against stock rustc's
 E0106 oracle. All 915 hosted tests, strict all-target lint, formatting and both
 independent actual-code reviews pass. The frozen 20-case CLI/stock corpus and four
-new graph tests pass. Tracked eighteen-corpus native verification is pending. This extends projected reference
+new graph tests pass. Tracked run `compiler-lifetime-elision-20261016-0915` at
+`0fe4b3356a3590c2395207eab94cda5e32b00d28` passed all 712 cases across eighteen
+corpora: 425 accepted, 213 invalid rejected, nine declared runtime-101 traps and
+65 legal-unsupported boundaries. All raw receipts and the executed 96-worker
+example are retained under `experiments/results/20261016-m8a-lifetime-elision-*`. This extends projected reference
 returns without changing public IR/CFG/provenance APIs. Full Rust remains open.
 
 ## Normalization before body checking
