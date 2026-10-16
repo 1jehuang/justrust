@@ -49,6 +49,11 @@ pub(super) fn counts(
     descriptor: tr::RecipeDescriptor,
     budget: &ir::PlanBudget,
 ) -> Result<RecipePlanCounts, String> {
+    let components = match descriptor {
+        tr::RecipeDescriptor::CloneTuple { arity } => usize::from(arity),
+        tr::RecipeDescriptor::CloneArray { len } => usize::from(len),
+        _ => 0,
+    };
     let mut c = RecipePlanCounts {
         binders: match descriptor {
             tr::RecipeDescriptor::CloneTuple { arity } => usize::from(arity),
@@ -58,14 +63,14 @@ pub(super) fn counts(
         locals: 2,
         blocks: 1,
         formal_origins: if descriptor == tr::RecipeDescriptor::CloneSharedRef {
-            2
-        } else {
-            1
-        },
-        carrier_slots: if descriptor == tr::RecipeDescriptor::CloneSharedRef {
             3
         } else {
-            1
+            1 + components
+        },
+        carrier_slots: if descriptor == tr::RecipeDescriptor::CloneSharedRef {
+            5
+        } else {
+            1 + 2 * components
         },
         path_nodes: match descriptor {
             tr::RecipeDescriptor::CloneTuple { arity } => usize::from(arity) + 4,
@@ -91,25 +96,26 @@ pub(super) fn counts(
         match event {
             Event::Borrow { .. } => {
                 c.loan_sites += 1;
-                c.carrier_slots += 1;
+                c.carrier_slots += 2;
                 c.target_projection_steps += 2;
             }
             Event::Clone => {
                 c.blocks += 1;
+                c.carrier_slots += 1;
             }
             Event::Read => {
                 c.carrier_slots += if descriptor == tr::RecipeDescriptor::CloneSharedRef {
-                    2
+                    3
                 } else {
                     1
                 }
             }
             Event::Load => {
                 if descriptor == tr::RecipeDescriptor::CloneSharedRef {
-                    c.carrier_slots += 1;
+                    c.carrier_slots += 2;
                 }
             }
-            Event::Product { .. } => {}
+            Event::Product { len, .. } => c.carrier_slots += len,
         }
         Ok(())
     })?;
@@ -518,12 +524,15 @@ pub(super) fn checked_body(
             mutable: false,
         }],
         exprs: Vec::new(),
+        call_evidence: Arc::from([]),
+        body_substitution: None,
         body: ir::Block {
             statements: Vec::new(),
             tail: None,
         },
     };
     let mut children = Vec::new();
+    let mut call_evidence = Vec::new();
     let mut last = None;
     let mut emit = |kind, ty| -> Result<ir::ExprId, String> {
         budget.charge_work(1)?;
@@ -600,15 +609,36 @@ pub(super) fn checked_body(
                     .service()
                     .instantiate_trait_signature(&call, facts)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                let argument = last.ok_or("recipe child borrow missing")?;
+                let expectation = match sig.params.first() {
+                    Some(ir::Ty::Ref { kind, .. }) => {
+                        ir::CallExpectation::FirmReference { kind: *kind }
+                    }
+                    _ => ir::CallExpectation::NoFirmReference,
+                };
                 let id = emit(
                     ir::ExprKind::Call {
                         target: ir::Callee::TraitItem(call),
                         name: "clone".into(),
-                        args: vec![last.ok_or("recipe child borrow missing")?],
+                        args: vec![argument],
                         signature: sig,
                     },
                     t,
                 )?;
+                budget.retain_bytes(
+                    4 * std::mem::size_of::<ir::CallEvidence>()
+                        + 4 * std::mem::size_of::<ir::CallArgumentTrace>()
+                        + 128,
+                )?;
+                call_evidence.push(ir::CallEvidence {
+                    call: id,
+                    arguments: Arc::from([ir::CallArgumentTrace {
+                        argument: 0,
+                        value: argument,
+                        expectation,
+                    }]),
+                    type_actual_regions: Arc::from([]),
+                });
                 children.push(id);
                 last = Some(id);
             }
@@ -629,16 +659,17 @@ pub(super) fn checked_body(
         Ok(())
     })?;
     f.body.tail = last;
+    f.call_evidence = call_evidence.into();
     let mut actual_loans = 0usize;
     let mut actual_calls = 0usize;
-    let mut actual_carriers = ir::reference_layers(&f.result)?;
+    let mut actual_carriers = ir::carrier_locations(&f.result, budget)?.len();
     for local in &f.locals {
         budget.charge_work(1)?;
-        actual_carriers += ir::reference_layers(&local.ty)?;
+        actual_carriers += ir::carrier_locations(&local.ty, budget)?.len();
     }
     for expression in &f.exprs {
         budget.charge_work(1)?;
-        actual_carriers += ir::reference_layers(&expression.ty)?;
+        actual_carriers += ir::carrier_locations(&expression.ty, budget)?.len();
         actual_loans += usize::from(matches!(expression.kind, ir::ExprKind::Borrow { .. }));
         actual_calls += usize::from(matches!(expression.kind, ir::ExprKind::Call { .. }));
     }
@@ -651,6 +682,7 @@ pub(super) fn checked_body(
         return Err("recipe footprint/emission mismatch".into());
     }
     let mut cx = plan.clone();
+    ir::validate_call_evidence(&f, facts, budget)?;
     ir::canonicalize_checked_calls(&f, facts, &mut cx, budget)
         .map_err(|e| e.into_legacy_diagnostic(budget))
 }

@@ -524,6 +524,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                     Key::new(113, vec![]),
+                    Key::new(115, vec![]),
                 ];
                 for index in 0..3 {
                     expected.push(Key::new(110, vec![index]));
@@ -560,6 +561,56 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                         }
                         compiler::frontend::CallableProvider::UnavailableProvided { .. } => {
                             panic!("unavailable provider entered body enumeration")
+                        }
+                    }
+                }
+                // Effect publication joins every original body and required universal
+                // proof before the instance plan can publish any concrete work.
+                let discovered = |key: &Key| {
+                    let spelling = format!("{key:?}");
+                    report
+                        .events
+                        .iter()
+                        .find(|event| event.kind == "discovered" && event.detail == spelling)
+                        .expect("required graph node was not discovered")
+                };
+                let published = |node| {
+                    report
+                        .events
+                        .iter()
+                        .find(|event| event.kind == "publish" && event.node == Some(node))
+                        .expect("required graph node did not publish")
+                        .at_ns
+                };
+                let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
+                assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
+                for (key, _) in &report.node_evaluations {
+                    let event = discovered(key);
+                    if matches!(key.kind, 110 | 112) {
+                        assert!(
+                            published(event.node.unwrap()) <= effects,
+                            "effect publication preceded mandatory body proof: {key:?}"
+                        );
+                    }
+                    if matches!(key.kind, 102 | 108 | 109 | 103) {
+                        assert!(
+                            event.at_ns >= effects,
+                            "closed work preceded effects: {key:?}"
+                        );
+                    }
+                }
+                if check_only {
+                    assert!(
+                        !report
+                            .node_evaluations
+                            .iter()
+                            .any(|(key, _)| key.kind == 103)
+                    );
+                } else {
+                    let sealed = published(discovered(&Key::new(114, vec![])).node.unwrap());
+                    for (key, _) in &report.node_evaluations {
+                        if key.kind == 103 {
+                            assert!(discovered(key).at_ns >= sealed);
                         }
                     }
                 }

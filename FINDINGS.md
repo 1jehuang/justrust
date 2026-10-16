@@ -9559,3 +9559,99 @@ still joins every admitted instance before any native object. No installation or
 full-Rust/speed claim is made. The next executable generic-reference foundation
 remains design-only, with indirect reference-bearing stores and call effects an
 explicit unresolved soundness requirement before lifting the actual-type fence.
+
+### Executable generic carriers and current-cell effects, 2026-10-16
+
+Implemented the bounded contract frozen in `GENERIC-CARRIERS.md` at a76400060.
+Source and Recipe share the same carrier layouts, universal family proof,
+current-cell analysis, concrete admission and native seal. Explicit root reference
+actuals and rigid forwarding no longer rely on the old reference-free executable
+fence. This is a Rust subset, not full generic-reference or existing-project
+compatibility.
+
+The world derives typed Fixed/ParamTail channels and conservative entry-value
+return/write envelopes before bodies. Typed reference origins remain distinct
+from nonaddressable family relations. Calls retain original source-stage
+Move/reborrow evidence, fresh occurrence-region graphs and exact
+Universal-to-Closed substitution authority. Body-local nominal transport retains
+original-to-instantiated mappings through checked-body and CFG snapshots, without
+an output-proof cycle or a world-to-body callback.
+
+The SAME ownership Plan now reads current canonical carrier cells rather than
+stale nested-reference snapshots. ENTRY values, OLD destination contents and
+lenses are captured before argument consumption; aliased effects are merged and
+applied simultaneously. Every traversed mutable-parent dependency remains live.
+A shared inner value load does not invent a permanent outer-handle dependency.
+Sealed MustOverwrite transport stops at the written value's ownership boundary:
+`put<T>` with `T=&mut(&mut U)` replaces the outer reference value, not the old
+inner pointee cell. Actual call writes pass the ordinary Write/access check before
+arguments are consumed. Shared barriers are checked at every dereference.
+
+Operation115 joins all source typing and required generic-Source/all-Recipe
+universal proofs, publishing an immutable selected-body effect table before
+instance planning. It has no dependency on closed analysis or the final114 native
+barrier. Nongeneric Source remains closed-only. A missing summary keeps the
+conservative header envelope; foreign authority or exhaustion is an error, not
+summary absence. Original and dead call metadata still require the common proof.
+
+Resource review corrected occurrence-graph retention, Vec relocation/Arc-transfer
+peaks, zero-loan family storage and local/global combined accounting. Canonical
+64-region,4096-origin,1M-membership,depth128 and128MiB state limits are unchanged.
+The occurrence union uses a metered dynamic relation, not a new64-total cap.
+The unchanged4096-scalar-argument workload exposed fictitious128-projection
+padding on each exact owned access. Initial known projections now reserve their
+actual length; derived targets retain the bounded growth allowance. Empty-cell
+reference-liveness work is skipped without skipping ordinary init/move/access
+analysis. The4096 success and4097 rejection assertions remain intact.
+
+Final frozen-source gates:
+- `cargo fmt --check` and `git diff --check` PASS.
+- Hosted `justrust check --all-targets`20261016-160807352-1352794 PASS.
+- Hosted full `justrust test --no-fail-fast`20261016-160812184-1354167:
+  **1471 passed,0failed,0ignored**,72 binaries, including429 library tests.
+- Hosted strict `clippy --all-targets -- -D warnings`
+  20261016-160815408-1354710 PASS with no warnings.
+- Controlled local bootstrap20261016-160450900-1304431 produced a native candidate,
+  not an installation. These four exported, path-redacted profiles are retained
+  in `data/runs/prototype-bootstrap/2026-10-generic-carriers.jsonl`.
+- Immutable generic-carrier32 native worker1/8 BUILD/CHECK/runtime PASS:
+  16accepted parity,12semantic-invalid,4explicit unsupported. Observed dictionary
+  SHA400bf44235e1c5a34ff964a10ab61111696d7765010a3e66bd1d1bcf602f8842
+  and both new fixture files are unchanged. There was no source, expectation,
+  category or dictionary repair after the initial source freeze.
+- The formatted real example executes at96 workers, exit0 and exact
+  `generic carriers ok\n`. Its full trace has72 single-evaluation nodes,
+  162edges, complete capture, zero failures/dropped events. SourceSHA
+  22978df639b2cbd8ed7007379d32024cb06b34bda689127e7dc5657c20552828;
+  local debug candidateSHA
+  6f4883e31238983e74df0bb5a9b2d92f626215c0cbe938e8b66ef0e9ceb6ca76.
+- Independent source/resource reviewers cleared their actual scoped changes.
+  Static review is not represented as an independent runtime rerun.
+
+Six historical boundary sources were promoted only after exact unchanged bytes
+passed stock and native workers1/8 BUILD/CHECK/runtime with literal stdout:
+`nested_mutable_reference_chain`, `ordinary_reference_generic_actual`,
+`shared_reference_depth_greater_than_two`,
+`ordinary_reference_generic_actual_clone_wrapper`,
+`forced_clone_on_double_shared_reference_requires_depth3_receiver`, and
+`direct_reference_substitution`. Python keeps the original frozen dictionaries,
+stock groups and hashes and records separate hash-pinned effective native
+promotions. Rust retains historical test groups and literal source bytes while
+using positive helpers for the observed cases. Exact graph assertions add115 and
+retain source/recipe single evaluation, CHECK-no-object and114-before-object gates.
+The old generic-reference aggregate case containing `&&x` was NOT promoted: its
+nested-borrow source syntax remains unsupported. Explicit source `Wrap<&U>` also
+remains excluded. Semantic uninitialized provenance is now distinguished from an
+incomplete original typed cover, rather than hiding a genuine negative behind a
+derivative Unsupported diagnostic.
+
+The ratified X32 correction occurred BEFORE the first generic-carrier source
+freeze. Recursive MustOverwrite precision remains an honest documented exclusion,
+not a claimed stock witness. The original stock receipts, zero-byte metadata-only
+artifact rule and genuine null-code lifetime errors N19/N21/N26 remain distinct
+from candidate acceptance. Wider affine correlations, multi-target affine stores,
+new inferred reference actuals, unknown cell covers, source lifetime-bearing
+nominals and derived inner nominal-reference executable actuals remain bounded
+exclusions. No stock delegation, raised cap, compiler installation, pinned
+before/after speedup or full-Rust claim is made. Independent committed-revision
+runtime validation follows separately.

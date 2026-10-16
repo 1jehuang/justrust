@@ -434,10 +434,11 @@ fn main(){if run()==7{println!("generic oracle ok");}}"#,
 
 #[test]
 fn rejects_legal_unsupported_direct_reference_substitution() {
-    rejects(
-        "legalunsupported: direct_reference_substitution",
+    // Historical group name retained. The exact source now has native parity evidence.
+    runs(
         r#"fn id<T>(x:T)->T{x}fn run()->i32{let x=7;let r=id::<&i32>(&x);*r}
 fn main(){if run()==7{println!("generic oracle ok");}}"#,
+        "generic oracle ok\n",
     );
 }
 

@@ -4,8 +4,8 @@
 //! claimed successful analysis can manufacture body facts or dispatch evidence.
 use super::ir::{
     self, CallTarget, Callee, DeclId, DeclKind, GenericEnv, ParamEnv, ParamId, PlanBudget,
-    Predicate, Projection, ReceiverMode, Signature, SignatureSubject, SnapshotId, TraitCall,
-    TraitCx, TraitRef, Ty,
+    Predicate, ReceiverMode, Signature, SignatureSubject, SnapshotId, TraitCall, TraitCx, TraitRef,
+    Ty,
 };
 use std::sync::{Arc, Mutex};
 
@@ -202,6 +202,22 @@ fn push<T>(b: &PlanBudget, values: &mut Vec<T>, value: T) -> Result<()> {
     values.push(value);
     Ok(())
 }
+fn reserve_carriers<T>(b: &PlanBudget, values: &mut Vec<T>, additional: usize) -> Result<()> {
+    let capacity = values
+        .len()
+        .checked_add(additional)
+        .ok_or_else(|| FactsError::resource(b, "carrier capacity overflow"))?;
+    retain::<T>(
+        b,
+        capacity
+            .checked_mul(2)
+            .ok_or_else(|| FactsError::resource(b, "carrier peak overflow"))?,
+    )?;
+    charged(b, b.charge_work(values.len()))?;
+    values
+        .try_reserve_exact(additional)
+        .map_err(|_| FactsError::resource(b, "carrier allocation failed"))
+}
 
 #[derive(Clone, Debug)]
 pub struct GenericSchema {
@@ -278,6 +294,7 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>>;
     fn instantiate_schema(
         &self,
         schema: &GenericSchema,
@@ -377,8 +394,28 @@ impl ValidatedFacts {
     pub fn callee_receiver(&self, callee: &Callee) -> Result<ReceiverMode> {
         TraitCx::callee_receiver(self.world.as_ref(), callee, self)
     }
+    pub fn carrier_contract(
+        &self,
+        subject: SignatureSubject<'_>,
+    ) -> Result<Arc<CarrierContractView>> {
+        self.world.carrier_contract(subject, self)
+    }
+    pub fn source_region_env(&self, declaration: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
+        self.world.check_facts(self, false)?;
+        self.world.info(declaration)?;
+        Ok(self
+            .world
+            .declaration_carriers(declaration)?
+            .source_regions
+            .clone())
+    }
     pub fn validate_ty(&self, ty: &Ty) -> Result<()> {
         self.validate_ty_with_budget(ty, self.budget())
+    }
+    pub fn projected_ty<'a>(&self, root: &'a Ty, path: &[ir::Projection]) -> Result<&'a Ty> {
+        self.validate_ty(root)?;
+        charged(self.budget(), self.budget().charge_work(path.len()))?;
+        charged(self.budget(), ir::projected_ty(root, path))
     }
     pub fn validate_ty_with_budget(&self, ty: &Ty, budget: &PlanBudget) -> Result<()> {
         if !self.budget().same_authority(budget) {
@@ -413,11 +450,6 @@ impl ValidatedFacts {
             self.world.prove_goal(&predicate, self)?,
             ProofOutcome::Proved(_)
         ))
-    }
-    pub fn projected_ty<'a>(&self, root: &'a Ty, path: &[Projection]) -> Result<&'a Ty> {
-        self.validate_ty(root)?;
-        charged(self.budget(), self.budget().charge_work(path.len()))?;
-        charged(self.budget(), ir::projected_ty(root, path))
     }
 }
 #[derive(Clone, Debug)]
@@ -543,6 +575,100 @@ struct SignatureTopologyProof {
     budget: PlanBudget,
 }
 
+/// Structural declaration transport only. Actual loans and occurrence-local
+/// region solutions belong to the borrow plan, never this world-owned view.
+#[derive(Debug)]
+pub struct CarrierContractView {
+    world: WorldId,
+    registry: SnapshotId,
+    environment: usize,
+    phase: FactsPhase,
+    declaration: DeclId,
+    arguments: Arc<[Ty]>,
+    original_env: Arc<GenericEnv>,
+    original_contract: ir::CarrierContract,
+    contract: ir::CarrierContract,
+    origin: Arc<ir::SignatureOriginSchema>,
+    fixed: Arc<ir::RefContract>,
+    regions: ir::CarrierRegionSchema,
+    source_regions: Arc<ir::SourceRegionEnv>,
+    components: Arc<[ir::CarrierComponentMapping]>,
+    nominals: Arc<[ir::NominalCarrierMapping]>,
+    budget: PlanBudget,
+}
+impl CarrierContractView {
+    pub fn original_contract(&self) -> &ir::CarrierContract {
+        &self.original_contract
+    }
+    pub fn contract(&self) -> &ir::CarrierContract {
+        &self.contract
+    }
+    pub fn origin_schema(&self) -> &Arc<ir::SignatureOriginSchema> {
+        &self.origin
+    }
+    pub fn ref_contract(&self) -> &Arc<ir::RefContract> {
+        &self.fixed
+    }
+    pub fn region_schema(&self) -> &ir::CarrierRegionSchema {
+        &self.regions
+    }
+    pub fn source_region_env(&self) -> &Arc<ir::SourceRegionEnv> {
+        &self.source_regions
+    }
+    pub fn component_mappings(&self) -> &[ir::CarrierComponentMapping] {
+        &self.components
+    }
+    pub fn nominal_mappings(&self) -> &[ir::NominalCarrierMapping] {
+        &self.nominals
+    }
+    pub fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    pub fn arguments(&self) -> &[Ty] {
+        &self.arguments
+    }
+    pub fn parameter_actual(&self, parameter: ParamId) -> Result<Option<(usize, &Ty)>> {
+        for (index, candidate) in self.original_env.ordered_params().enumerate() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if candidate == parameter {
+                return Ok(self.arguments.get(index).map(|ty| (index, ty)));
+            }
+        }
+        Ok(None)
+    }
+    pub fn original_env(&self) -> &Arc<GenericEnv> {
+        &self.original_env
+    }
+    pub fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
+        facts.world.check_facts(facts, false)?;
+        facts.world.check_context(ProofContext::from_facts(facts))?;
+        if self.world != facts.world.id
+            || self.registry != facts.registry_snapshot()
+            || self.environment != facts.predicates.index
+            || self.phase != facts.phase()
+            || !self.budget.same_authority(facts.budget())
+        {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "carrier view has foreign context authority",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct DeclarationCarriers {
+    declaration: DeclId,
+    contract: ir::CarrierContract,
+    regions: ir::CarrierRegionSchema,
+    source_regions: Arc<ir::SourceRegionEnv>,
+}
+struct ExpandedCarrier {
+    location: ir::CarrierLocation,
+    component: Option<ir::CarrierLocation>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TypeUse {
     Root,
@@ -641,6 +767,7 @@ pub struct ValidatedTraitWorld {
     memo: Mutex<Vec<MemoEntry>>,
     requirements: Vec<(DeclId, Arc<[Predicate]>)>,
     origins: Vec<(DeclId, Arc<ir::SignatureOriginSchema>)>,
+    carriers: Vec<DeclarationCarriers>,
 }
 
 impl ValidatedTraitWorld {
@@ -772,6 +899,7 @@ impl ValidatedTraitWorld {
             memo: Mutex::new(Vec::new()),
             requirements: Vec::new(),
             origins: Vec::new(),
+            carriers: Vec::new(),
         };
         world.validate_headers()?;
         world.validate_supertrait_graph()?;
@@ -1096,18 +1224,18 @@ impl ValidatedTraitWorld {
             }
             Ty::Ref { kind, referent } => {
                 let depth = match usage {
-                    TypeUse::Root => 1,
-                    TypeUse::Referent {
-                        depth: 1,
-                        shared: true,
-                    } if *kind == ir::BorrowKind::Shared => 2,
-                    _ => {
+                    TypeUse::Root | TypeUse::Aggregate => 1,
+                    TypeUse::Referent { depth, .. } => depth.checked_add(1).ok_or_else(|| {
+                        FactsError::resource(&self.budget, "reference value depth overflow")
+                    })?,
+                    TypeUse::Actual => {
                         return Err(FactsError::unsupported(
                             &self.budget,
-                            "unsupported: nested mutable, deep, aggregate or type-actual reference",
+                            "unsupported: reference-containing aggregate executable actual",
                         ));
                     }
                 };
+                charged(&self.budget, self.budget.check_depth(usize::from(depth)))?;
                 child(
                     referent,
                     TypeUse::Referent {
@@ -1127,7 +1255,14 @@ impl ValidatedTraitWorld {
                 }
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
-                    child(t, TypeUse::Actual)?;
+                    child(
+                        t,
+                        if usage == TypeUse::Actual {
+                            TypeUse::Actual
+                        } else {
+                            TypeUse::Root
+                        },
+                    )?;
                 }
                 for field in t.def().fields.iter() {
                     child(&field.ty, TypeUse::Aggregate)?;
@@ -1144,7 +1279,14 @@ impl ValidatedTraitWorld {
                 }
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
-                    child(t, TypeUse::Actual)?;
+                    child(
+                        t,
+                        if usage == TypeUse::Actual {
+                            TypeUse::Actual
+                        } else {
+                            TypeUse::Root
+                        },
+                    )?;
                 }
                 for variant in t.def().variants.iter() {
                     charged(&self.budget, self.budget.charge_work(1))?;
@@ -1215,7 +1357,7 @@ impl ValidatedTraitWorld {
             }
             for ty in &signature.params {
                 charged(&self.budget, self.budget.charge_work(3))?;
-                if charged(&self.budget, ir::reference_layers(ty))? > 1 {
+                if charged(&self.budget, ir::root_reference_layers(ty))? > 1 {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "legacy erased declaration contains a nested reference",
@@ -1312,7 +1454,7 @@ impl ValidatedTraitWorld {
         let mut row = 0usize;
         for (param, ty) in signature.params.iter().enumerate() {
             charged(&self.budget, self.budget.charge_work(3))?;
-            let count = charged(&self.budget, ir::reference_layers(ty))?;
+            let count = charged(&self.budget, ir::root_reference_layers(ty))?;
             for depth in 0..count {
                 charged(&self.budget, self.budget.charge_work(1))?;
                 let expected = ir::InputReference {
@@ -1329,7 +1471,7 @@ impl ValidatedTraitWorld {
             }
         }
         charged(&self.budget, self.budget.charge_work(3))?;
-        let results = charged(&self.budget, ir::reference_layers(&signature.result))?;
+        let results = charged(&self.budget, ir::root_reference_layers(&signature.result))?;
         if row != contract.input_regions.len() || results != contract.results.len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -2021,17 +2163,1029 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
+    fn carrier_contract(
+        &self,
+        subject: SignatureSubject<'_>,
+        facts: &ValidatedFacts,
+    ) -> Result<Arc<CarrierContractView>> {
+        self.check_facts(facts, true)?;
+        self.check_context(ProofContext::from_facts(facts))?;
+        let (declaration, arguments, signature) = match subject {
+            SignatureSubject::Body => match &facts.subject {
+                FactsSubject::UniversalCallable(declaration) => {
+                    let raw = &self.callable_header(*declaration)?.schema;
+                    let mut args = Vec::new();
+                    for p in raw.env.ordered_params() {
+                        push(&self.budget, &mut args, Ty::Param(p))?;
+                    }
+                    (
+                        *declaration,
+                        Arc::<[Ty]>::from(args),
+                        clone_schema(raw, &self.budget)?.signature,
+                    )
+                }
+                FactsSubject::ClosedInstance(target) => (
+                    target.declaration,
+                    target.type_args.clone(),
+                    self.discharge_direct(target, facts)?.signature,
+                ),
+                FactsSubject::SchemaItem(_) => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "schema item cannot publish a body carrier view",
+                    ));
+                }
+            },
+            SignatureSubject::Call(Callee::Direct(target)) => (
+                target.declaration,
+                target.type_args.clone(),
+                self.discharge_direct(target, facts)?.signature,
+            ),
+            SignatureSubject::Call(Callee::TraitItem(call)) => {
+                let mut args = Vec::new();
+                push(&self.budget, &mut args, call.trait_ref.self_ty.clone())?;
+                for arg in call.trait_ref.args.iter().chain(call.method_args.iter()) {
+                    push(&self.budget, &mut args, arg.clone())?;
+                }
+                (
+                    call.item,
+                    Arc::<[Ty]>::from(args),
+                    self.instantiate_trait_signature(call, facts)?,
+                )
+            }
+        };
+        let raw = self.schema.declaration_schema(declaration)?;
+        if raw.env.total_arity() != arguments.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "carrier subject argument arity mismatch",
+            ));
+        }
+        let retained = self.declaration_carriers(declaration)?;
+        charged(&self.budget, self.budget.charge_work(self.origins.len()))?;
+        let origin = self
+            .origins
+            .iter()
+            .find(|(id, _)| *id == declaration)
+            .map(|(_, origin)| origin.clone())
+            .ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "carrier subject has no retained origin schema",
+                )
+            })?;
+        let mut nominals = Vec::new();
+        for (old, new) in raw
+            .signature
+            .params
+            .iter()
+            .zip(&signature.params)
+            .chain(std::iter::once((&raw.signature.result, &signature.result)))
+        {
+            self.collect_nominal_mappings(old, new, &mut nominals, 0)?;
+        }
+        let mut components = Vec::new();
+        let mut component_regions = usize::from(raw.signature.ref_contract.region_count);
+        for unused in retained.source_regions.normalized.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if unused.is_none() {
+                component_regions = component_regions.checked_add(1).ok_or_else(|| {
+                    FactsError::resource(&self.budget, "named component region overflow")
+                })?;
+            }
+        }
+        for (index, parameter) in raw.env.ordered_params().enumerate() {
+            for relative in charged(
+                &self.budget,
+                ir::carrier_locations(&arguments[index], &self.budget),
+            )?
+            .iter()
+            {
+                if matches!(relative.channel, ir::CarrierChannel::Fixed(_)) {
+                    component_regions = component_regions.checked_add(1).ok_or_else(|| {
+                        FactsError::resource(&self.budget, "hidden component region overflow")
+                    })?;
+                }
+                if component_regions > ir::MAX_REGION_PARAMS {
+                    return Err(FactsError::resource(
+                        &self.budget,
+                        "expanded carrier region limit exceeded",
+                    ));
+                }
+                push(
+                    &self.budget,
+                    &mut components,
+                    ir::CarrierComponentMapping {
+                        original_parameter: parameter,
+                        original: ir::CarrierLocation {
+                            path: relative.path.clone(),
+                            channel: ir::CarrierChannel::ParamTail {
+                                parameter,
+                                prefix: match relative.channel {
+                                    ir::CarrierChannel::Fixed(position) => position.depth,
+                                    ir::CarrierChannel::ParamTail { prefix, .. } => prefix,
+                                },
+                            },
+                        },
+                        substituted: relative.clone(),
+                    },
+                )?;
+            }
+        }
+        let mut inputs = Vec::new();
+        reserve_carriers(&self.budget, &mut inputs, retained.contract.inputs.len())?;
+        for input in retained.contract.inputs.iter() {
+            for expanded in self.expand_carrier(&input.location, &raw.env, &arguments, &nominals)? {
+                if inputs.len() >= ir::MAX_LOAN_SITES {
+                    return Err(FactsError::resource(
+                        &self.budget,
+                        "carrier input origin limit exceeded",
+                    ));
+                }
+                push(
+                    &self.budget,
+                    &mut inputs,
+                    ir::InputCarrier {
+                        param: input.param,
+                        location: expanded.location,
+                    },
+                )?;
+            }
+        }
+        let mut results = Vec::new();
+        for result in retained.contract.results.iter() {
+            for output in self.expand_carrier(&result.location, &raw.env, &arguments, &nominals)? {
+                let sources = self.expand_carrier_sources(
+                    &result.sources,
+                    output.component.as_ref(),
+                    &raw.env,
+                    &arguments,
+                    &nominals,
+                )?;
+                push(
+                    &self.budget,
+                    &mut results,
+                    ir::CarrierReturn {
+                        location: output.location,
+                        sources,
+                    },
+                )?;
+            }
+        }
+        let mut writes = Vec::new();
+        for write in retained.contract.writes.iter() {
+            for destination in
+                self.expand_carrier(&write.destination.location, &raw.env, &arguments, &nominals)?
+            {
+                let destination_ty =
+                    signature
+                        .params
+                        .get(write.destination.param)
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "expanded carrier write parameter is outside canonical signature",
+                            )
+                        })?;
+                if !self.carrier_writable(destination_ty, &destination.location)? {
+                    continue;
+                }
+                let sources = self.expand_carrier_sources(
+                    &write.sources,
+                    destination.component.as_ref(),
+                    &raw.env,
+                    &arguments,
+                    &nominals,
+                )?;
+                push(
+                    &self.budget,
+                    &mut writes,
+                    ir::CarrierWriteEnvelope {
+                        destination: ir::InputCarrier {
+                            param: write.destination.param,
+                            location: destination.location,
+                        },
+                        sources,
+                    },
+                )?;
+            }
+        }
+        let mut constraints = Vec::new();
+        for edge in retained.regions.constraints.iter() {
+            let remap = |term: &ir::CarrierRegionTerm| -> Result<ir::CarrierRegionTerm> {
+                Ok(match term {
+                    ir::CarrierRegionTerm::Fixed(old) => {
+                        ir::CarrierRegionTerm::Fixed(self.transport_fixed_region(
+                            *old,
+                            &raw.signature.ref_contract,
+                            &signature.ref_contract,
+                        )?)
+                    }
+                    other => other.clone(),
+                })
+            };
+            push(
+                &self.budget,
+                &mut constraints,
+                ir::CarrierRegionConstraint {
+                    longer: remap(&edge.longer)?,
+                    shorter: remap(&edge.shorter)?,
+                },
+            )?;
+        }
+        let mut normalized = Vec::new();
+        for original in retained.source_regions.normalized.iter() {
+            let mapped = original
+                .map(|id| {
+                    self.transport_fixed_region(
+                        id,
+                        &raw.signature.ref_contract,
+                        &signature.ref_contract,
+                    )
+                })
+                .transpose()?;
+            push(&self.budget, &mut normalized, mapped)?;
+        }
+        retain::<ir::SourceRegionEnv>(&self.budget, 1)?;
+        let source_regions = Arc::new(ir::SourceRegionEnv {
+            declaration,
+            region_count: retained.source_regions.region_count,
+            outlives: retained.source_regions.outlives.clone(),
+            normalized: normalized.into(),
+        });
+        retain::<CarrierContractView>(&self.budget, 1)?;
+        let view = Arc::new(CarrierContractView {
+            world: self.id,
+            registry: self.registry,
+            environment: facts.predicates.index,
+            phase: facts.phase(),
+            declaration,
+            arguments,
+            original_env: raw.env,
+            original_contract: retained.contract.clone(),
+            contract: ir::CarrierContract {
+                inputs: inputs.into(),
+                results: results.into(),
+                writes: writes.into(),
+            },
+            origin,
+            fixed: signature.ref_contract,
+            regions: ir::CarrierRegionSchema {
+                constraints: constraints.into(),
+            },
+            source_regions,
+            components: components.into(),
+            nominals: nominals.into(),
+            budget: self.budget.clone(),
+        });
+        view.validate_for(facts)?;
+        Ok(view)
+    }
+    fn transport_fixed_region(
+        &self,
+        old: ir::RegionParamId,
+        original: &ir::RefContract,
+        realized: &ir::RefContract,
+    ) -> Result<ir::RegionParamId> {
+        for row in original.input_regions.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if row.region == old {
+                for new in realized.input_regions.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if row.input == new.input {
+                        return Ok(new.region);
+                    }
+                }
+            }
+        }
+        for row in original.results.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if row.region == old {
+                for new in realized.results.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if row.position == new.position {
+                        return Ok(new.region);
+                    }
+                }
+            }
+        }
+        Err(FactsError::invalid(
+            &self.budget,
+            "transport lost an original fixed region",
+        ))
+    }
+    fn expand_carrier_sources(
+        &self,
+        sources: &[ir::InputCarrier],
+        component: Option<&ir::CarrierLocation>,
+        env: &GenericEnv,
+        args: &[Ty],
+        nominals: &[ir::NominalCarrierMapping],
+    ) -> Result<Arc<[ir::InputCarrier]>> {
+        let mut output = Vec::new();
+        for source in sources {
+            for expanded in self.expand_carrier(&source.location, env, args, nominals)? {
+                let matches = match (component, expanded.component.as_ref()) {
+                    (Some(a), Some(b)) => self.same_location(a, b)?,
+                    (None, None) => true,
+                    _ => false,
+                };
+                if matches {
+                    push(
+                        &self.budget,
+                        &mut output,
+                        ir::InputCarrier {
+                            param: source.param,
+                            location: expanded.location,
+                        },
+                    )?;
+                }
+            }
+        }
+        Ok(output.into())
+    }
+    fn expand_carrier(
+        &self,
+        location: &ir::CarrierLocation,
+        env: &GenericEnv,
+        args: &[Ty],
+        nominals: &[ir::NominalCarrierMapping],
+    ) -> Result<Vec<ExpandedCarrier>> {
+        let mut path = Vec::new();
+        for step in location.path.0.iter() {
+            let mut step = step.clone();
+            if let ir::CarrierStep::VariantField { variant, .. } = &mut step {
+                for mapping in nominals {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if mapping.original == variant.owner {
+                        variant.owner = mapping.instantiated;
+                        break;
+                    }
+                }
+            }
+            push(&self.budget, &mut path, step)?;
+        }
+        let mut output = Vec::new();
+        match location.channel {
+            ir::CarrierChannel::Fixed(position) => {
+                push(
+                    &self.budget,
+                    &mut output,
+                    ExpandedCarrier {
+                        location: ir::CarrierLocation {
+                            path: ir::CarrierPath(path.into()),
+                            channel: ir::CarrierChannel::Fixed(position),
+                        },
+                        component: None,
+                    },
+                )?;
+            }
+            ir::CarrierChannel::ParamTail { parameter, prefix } => {
+                let mut actual = None;
+                for (index, p) in env.ordered_params().enumerate() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if p == parameter {
+                        actual = args.get(index);
+                        break;
+                    }
+                }
+                let actual = actual.ok_or_else(|| {
+                    FactsError::invalid(
+                        &self.budget,
+                        "carrier family is outside exact original substitution",
+                    )
+                })?;
+                for relative in
+                    charged(&self.budget, ir::carrier_locations(actual, &self.budget))?.iter()
+                {
+                    let mut full = Vec::new();
+                    for step in &path {
+                        push(&self.budget, &mut full, step.clone())?;
+                    }
+                    let channel = if relative.path.0.is_empty() {
+                        match relative.channel {
+                            ir::CarrierChannel::Fixed(p) => {
+                                ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                                    depth: prefix.checked_add(p.depth).ok_or_else(|| {
+                                        FactsError::resource(
+                                            &self.budget,
+                                            "carrier fixed prefix overflow",
+                                        )
+                                    })?,
+                                })
+                            }
+                            ir::CarrierChannel::ParamTail {
+                                parameter,
+                                prefix: p,
+                            } => ir::CarrierChannel::ParamTail {
+                                parameter,
+                                prefix: prefix.checked_add(p).ok_or_else(|| {
+                                    FactsError::resource(
+                                        &self.budget,
+                                        "carrier symbolic prefix overflow",
+                                    )
+                                })?,
+                            },
+                        }
+                    } else {
+                        for _ in 0..prefix {
+                            push(&self.budget, &mut full, ir::CarrierStep::Referent)?;
+                        }
+                        for step in relative.path.0.iter() {
+                            push(&self.budget, &mut full, step.clone())?;
+                        }
+                        relative.channel.clone()
+                    };
+                    push(
+                        &self.budget,
+                        &mut output,
+                        ExpandedCarrier {
+                            location: ir::CarrierLocation {
+                                path: ir::CarrierPath(full.into()),
+                                channel,
+                            },
+                            component: Some(relative.clone()),
+                        },
+                    )?;
+                }
+            }
+        }
+        Ok(output)
+    }
+    fn collect_nominal_mappings(
+        &self,
+        original: &Ty,
+        instantiated: &Ty,
+        output: &mut Vec<ir::NominalCarrierMapping>,
+        depth: usize,
+    ) -> Result<()> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        match (original, instantiated) {
+            (Ty::Param(_), _) => {}
+            (
+                Ty::Ref {
+                    kind: a,
+                    referent: a_ty,
+                },
+                Ty::Ref {
+                    kind: b,
+                    referent: b_ty,
+                },
+            ) if a == b => self.collect_nominal_mappings(a_ty, b_ty, output, depth + 1)?,
+            (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
+                for (a, b) in a.iter().zip(b.iter()) {
+                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                }
+            }
+            (
+                Ty::Array {
+                    element: a,
+                    len: al,
+                },
+                Ty::Array {
+                    element: b,
+                    len: bl,
+                },
+            ) if al == bl => self.collect_nominal_mappings(a, b, output, depth + 1)?,
+            (Ty::Struct(a), Ty::Struct(b))
+                if a.def().source_decl == b.def().source_decl
+                    && a.def().fields.len() == b.def().fields.len() =>
+            {
+                charged(&self.budget, self.budget.charge_work(output.len()))?;
+                if output
+                    .iter()
+                    .any(|m| m.original == a.def().id && m.instantiated == b.def().id)
+                {
+                    return Ok(());
+                }
+                push(
+                    &self.budget,
+                    output,
+                    ir::NominalCarrierMapping {
+                        original: a.def().id,
+                        instantiated: b.def().id,
+                    },
+                )?;
+                for (a, b) in a.def().fields.iter().zip(b.def().fields.iter()) {
+                    self.collect_nominal_mappings(&a.ty, &b.ty, output, depth + 1)?;
+                }
+            }
+            (Ty::Enum(a), Ty::Enum(b))
+                if a.def().source_decl == b.def().source_decl
+                    && a.def().variants.len() == b.def().variants.len() =>
+            {
+                charged(&self.budget, self.budget.charge_work(output.len()))?;
+                if output
+                    .iter()
+                    .any(|m| m.original == a.def().id && m.instantiated == b.def().id)
+                {
+                    return Ok(());
+                }
+                push(
+                    &self.budget,
+                    output,
+                    ir::NominalCarrierMapping {
+                        original: a.def().id,
+                        instantiated: b.def().id,
+                    },
+                )?;
+                for (a, b) in a.def().variants.iter().zip(b.def().variants.iter()) {
+                    if a.fields.len() != b.fields.len() {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "nominal carrier variant correspondence changed",
+                        ));
+                    }
+                    for (a, b) in a.fields.iter().zip(b.fields.iter()) {
+                        self.collect_nominal_mappings(&a.ty, &b.ty, output, depth + 1)?;
+                    }
+                }
+            }
+            _ if self.eq_ty(original, instantiated, depth)? => {}
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "nominal carrier transport changed original canonical structure",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn declaration_carriers(&self, declaration: DeclId) -> Result<&DeclarationCarriers> {
+        for row in &self.carriers {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if row.declaration == declaration {
+                return Ok(row);
+            }
+        }
+        Err(FactsError::invalid(
+            &self.budget,
+            "declaration has no retained carrier schema",
+        ))
+    }
+    fn validate_source_regions(
+        &self,
+        declaration: DeclId,
+        signature: &Signature,
+    ) -> Result<Arc<ir::SourceRegionEnv>> {
+        let regions = self.schema.source_region_env(declaration)?;
+        let count = usize::from(regions.region_count);
+        if count > ir::MAX_REGION_PARAMS || regions.outlives.len() > 4096 {
+            return Err(FactsError::resource(
+                &self.budget,
+                "source lifetime environment resource limit exceeded",
+            ));
+        }
+        if regions.declaration != declaration
+            || regions.normalized.len() != count
+            || (self.catalog.declaration(declaration).is_some() && count != 0)
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "source lifetime environment has foreign or incomplete authority",
+            ));
+        }
+        charged(
+            &self.budget,
+            self.budget.charge_work(count + regions.outlives.len()),
+        )?;
+        let mut closure = [0u64; ir::MAX_REGION_PARAMS];
+        for (index, mapped) in regions.normalized.iter().enumerate() {
+            closure[index] = 1u64 << index;
+            if mapped.is_some_and(|id| id.0 >= signature.ref_contract.region_count) {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "source lifetime maps outside canonical signature",
+                ));
+            }
+        }
+        for (a, b) in regions.outlives.iter() {
+            if a.declaration != declaration
+                || b.declaration != declaration
+                || usize::from(a.index) >= count
+                || usize::from(b.index) >= count
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "source lifetime edge escapes original declaration",
+                ));
+            }
+            closure[usize::from(a.index)] |= 1u64 << b.index;
+        }
+        charged(
+            &self.budget,
+            self.budget.charge_work(
+                count
+                    .checked_mul(count)
+                    .and_then(|n| n.checked_mul(count))
+                    .ok_or_else(|| {
+                        FactsError::resource(&self.budget, "source lifetime closure overflow")
+                    })?,
+            ),
+        )?;
+        for k in 0..count {
+            for i in 0..count {
+                if closure[i] & (1u64 << k) != 0 {
+                    closure[i] |= closure[k];
+                }
+            }
+        }
+        for i in 0..count {
+            for j in 0..count {
+                if closure[i] & (1u64 << j) == 0 {
+                    continue;
+                }
+                if let (Some(a), Some(b)) = (regions.normalized[i], regions.normalized[j]) {
+                    charged(
+                        &self.budget,
+                        self.budget
+                            .charge_work(signature.ref_contract.outlives.len() + 1),
+                    )?;
+                    if a != b && !signature.ref_contract.outlives.contains(&(a, b)) {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "source lifetime relation disagrees with canonical normalized signature",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(regions)
+    }
+    fn same_location(&self, a: &ir::CarrierLocation, b: &ir::CarrierLocation) -> Result<bool> {
+        charged(
+            &self.budget,
+            self.budget.charge_work(
+                a.path
+                    .0
+                    .len()
+                    .saturating_add(b.path.0.len())
+                    .saturating_add(1),
+            ),
+        )?;
+        Ok(a == b)
+    }
+    fn carrier_writable(&self, mut ty: &Ty, location: &ir::CarrierLocation) -> Result<bool> {
+        let mut saw_deref = false;
+        let mut all_mutable = true;
+        for step in location.path.0.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            ty = match (step, ty) {
+                (ir::CarrierStep::Referent, Ty::Ref { kind, referent }) => {
+                    saw_deref = true;
+                    all_mutable &= *kind == ir::BorrowKind::Mut;
+                    referent
+                }
+                (ir::CarrierStep::Field(index), _) => ty.field_ty(*index).ok_or_else(|| {
+                    FactsError::invalid(
+                        &self.budget,
+                        "carrier effect field is outside original type",
+                    )
+                })?,
+                (ir::CarrierStep::ConstantIndex(index), Ty::Array { element, len })
+                    if index < len =>
+                {
+                    element
+                }
+                (ir::CarrierStep::VariantField { variant, field }, Ty::Enum(value))
+                    if variant.owner == value.def().id =>
+                {
+                    &value
+                        .def()
+                        .variants
+                        .get(variant.index)
+                        .and_then(|v| v.fields.get(*field))
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "carrier variant effect is outside original type",
+                            )
+                        })?
+                        .ty
+                }
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "carrier effect lens is not canonical",
+                    ));
+                }
+            };
+        }
+        let prefix = match location.channel {
+            ir::CarrierChannel::Fixed(p) => p.depth,
+            ir::CarrierChannel::ParamTail { prefix, .. } => prefix,
+        };
+        for _ in 0..prefix {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let Ty::Ref { kind, referent } = ty else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "carrier effect prefix is outside original type",
+                ));
+            };
+            saw_deref = true;
+            all_mutable &= *kind == ir::BorrowKind::Mut;
+            ty = referent;
+        }
+        Ok(saw_deref && all_mutable)
+    }
+    fn derive_carriers(
+        &self,
+        signature: &Signature,
+        source: &ir::SourceRegionEnv,
+    ) -> Result<(ir::CarrierContract, ir::CarrierRegionSchema)> {
+        let mut inputs = Vec::new();
+        reserve_carriers(&self.budget, &mut inputs, signature.params.len())?;
+        for (param, ty) in signature.params.iter().enumerate() {
+            for location in charged(&self.budget, ir::carrier_locations(ty, &self.budget))?.iter() {
+                if inputs.len() >= ir::MAX_LOAN_SITES {
+                    return Err(FactsError::resource(
+                        &self.budget,
+                        "declaration carrier origin limit exceeded",
+                    ));
+                }
+                push(
+                    &self.budget,
+                    &mut inputs,
+                    ir::InputCarrier {
+                        param,
+                        location: location.clone(),
+                    },
+                )?;
+            }
+        }
+        let mut results = Vec::new();
+        for location in charged(
+            &self.budget,
+            ir::carrier_locations(&signature.result, &self.budget),
+        )?
+        .iter()
+        {
+            let mut sources = Vec::new();
+            for input in &inputs {
+                if self.carrier_source_eligible(
+                    signature,
+                    location,
+                    &signature.result,
+                    input,
+                    None,
+                )? {
+                    push(&self.budget, &mut sources, input.clone())?;
+                }
+            }
+            push(
+                &self.budget,
+                &mut results,
+                ir::CarrierReturn {
+                    location: location.clone(),
+                    sources: sources.into(),
+                },
+            )?;
+        }
+        let mut writes = Vec::new();
+        for destination in &inputs {
+            if !self
+                .carrier_writable(&signature.params[destination.param], &destination.location)?
+            {
+                continue;
+            }
+            let mut sources = Vec::new();
+            for input in &inputs {
+                if self.carrier_source_eligible(
+                    signature,
+                    &destination.location,
+                    &signature.params[destination.param],
+                    input,
+                    Some(destination.param),
+                )? {
+                    push(&self.budget, &mut sources, input.clone())?;
+                }
+            }
+            push(
+                &self.budget,
+                &mut writes,
+                ir::CarrierWriteEnvelope {
+                    destination: destination.clone(),
+                    sources: sources.into(),
+                },
+            )?;
+        }
+        // ENTRY snapshots must include origins that can reach a returned carrier
+        // through any admitted write. This finite closure is header-only and is
+        // also the conservative recursion bootstrap.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for result in &mut results {
+                let mut sources = Vec::new();
+                for input in result.sources.iter() {
+                    push(&self.budget, &mut sources, input.clone())?;
+                }
+                for write in &writes {
+                    let mut reachable = false;
+                    for input in &sources {
+                        charged(&self.budget, self.budget.charge_work(1))?;
+                        if input.param == write.destination.param
+                            && self.same_location(&input.location, &write.destination.location)?
+                        {
+                            reachable = true;
+                            break;
+                        }
+                    }
+                    if reachable {
+                        for input in write.sources.iter() {
+                            let mut exists = false;
+                            for old in &sources {
+                                charged(&self.budget, self.budget.charge_work(1))?;
+                                if old.param == input.param
+                                    && self.same_location(&old.location, &input.location)?
+                                {
+                                    exists = true;
+                                    break;
+                                }
+                            }
+                            if !exists {
+                                push(&self.budget, &mut sources, input.clone())?;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                result.sources = sources.into();
+            }
+        }
+        let mut constraints = Vec::new();
+        for &(longer, shorter) in source.outlives.iter() {
+            push(
+                &self.budget,
+                &mut constraints,
+                ir::CarrierRegionConstraint {
+                    longer: ir::CarrierRegionTerm::Named(longer),
+                    shorter: ir::CarrierRegionTerm::Named(shorter),
+                },
+            )?;
+        }
+        for &(longer, shorter) in signature.ref_contract.outlives.iter() {
+            push(
+                &self.budget,
+                &mut constraints,
+                ir::CarrierRegionConstraint {
+                    longer: ir::CarrierRegionTerm::Fixed(longer),
+                    shorter: ir::CarrierRegionTerm::Fixed(shorter),
+                },
+            )?;
+        }
+        for input in &inputs {
+            if let ir::CarrierChannel::ParamTail { parameter, prefix } = input.location.channel
+                && input.location.path.0.is_empty()
+            {
+                for row in signature.ref_contract.input_regions.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if row.input.param == input.param && row.input.position.depth < prefix {
+                        push(
+                            &self.budget,
+                            &mut constraints,
+                            ir::CarrierRegionConstraint {
+                                longer: ir::CarrierRegionTerm::Family { parameter },
+                                shorter: ir::CarrierRegionTerm::Fixed(row.region),
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok((
+            ir::CarrierContract {
+                inputs: inputs.into(),
+                results: results.into(),
+                writes: writes.into(),
+            },
+            ir::CarrierRegionSchema {
+                constraints: constraints.into(),
+            },
+        ))
+    }
+    fn carrier_source_eligible(
+        &self,
+        signature: &Signature,
+        destination: &ir::CarrierLocation,
+        destination_ty: &Ty,
+        input: &ir::InputCarrier,
+        write: Option<usize>,
+    ) -> Result<bool> {
+        let a = charged(
+            &self.budget,
+            ir::carrier_at(destination_ty, destination, &self.budget),
+        )?;
+        let b = charged(
+            &self.budget,
+            ir::carrier_at(
+                &signature.params[input.param],
+                &input.location,
+                &self.budget,
+            ),
+        )?;
+        match (&destination.channel, &input.location.channel) {
+            (
+                ir::CarrierChannel::ParamTail { parameter: a, .. },
+                ir::CarrierChannel::ParamTail { parameter: b, .. },
+            ) => Ok(a == b),
+            (ir::CarrierChannel::Fixed(position), ir::CarrierChannel::Fixed(source_position)) => {
+                if let Some(destination_param) = write {
+                    if !self.eq_ty(a, b, 0)? {
+                        return Ok(false);
+                    }
+                    if !destination.path.0.is_empty() || !input.location.path.0.is_empty() {
+                        return Ok(false);
+                    }
+                    let mut destination_region = None;
+                    let mut source_region = None;
+                    for row in signature.ref_contract.input_regions.iter() {
+                        charged(&self.budget, self.budget.charge_work(1))?;
+                        if row.input.param == destination_param && row.input.position == *position {
+                            destination_region = Some(row.region);
+                        }
+                        if row.input.param == input.param && row.input.position == *source_position
+                        {
+                            source_region = Some(row.region);
+                        }
+                    }
+                    if let (Some(longer), Some(shorter)) = (source_region, destination_region) {
+                        charged(
+                            &self.budget,
+                            self.budget
+                                .charge_work(signature.ref_contract.outlives.len() + 1),
+                        )?;
+                        return Ok(longer == shorter
+                            || signature.ref_contract.outlives.contains(&(longer, shorter)));
+                    }
+                    return Ok(false);
+                }
+                if !destination.path.0.is_empty() || !input.location.path.0.is_empty() {
+                    return Ok(false);
+                }
+                for row in signature.ref_contract.results.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if row.position != *position {
+                        continue;
+                    }
+                    let expected = ir::InputReference {
+                        param: input.param,
+                        position: *source_position,
+                    };
+                    return Ok(match &row.returns {
+                        ir::ReturnContract::SharedInputPaths(paths)
+                        | ir::ReturnContract::MutInputPaths(paths) => {
+                            charged(&self.budget, self.budget.charge_work(paths.len()))?;
+                            paths.iter().any(|p| p.input == expected)
+                        }
+                        ir::ReturnContract::SharedInputEnvelopes(paths)
+                        | ir::ReturnContract::MutInputEnvelopes(paths) => {
+                            charged(&self.budget, self.budget.charge_work(paths.len()))?;
+                            paths.iter().any(|p| p.input == expected)
+                        }
+                        ir::ReturnContract::NoReference => false,
+                    });
+                }
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    }
     fn build_origin_schemas(&mut self) -> Result<()> {
-        for item in self.headers.items.iter() {
+        let mut declarations = Vec::new();
+        for declaration in self
+            .headers
+            .items
+            .iter()
+            .map(|h| h.declaration)
+            .chain(self.headers.callables.iter().map(|h| h.declaration))
+        {
+            charged(&self.budget, self.budget.charge_work(declarations.len()))?;
+            if !declarations.contains(&declaration) {
+                push(&self.budget, &mut declarations, declaration)?;
+            }
+        }
+        for declaration in declarations {
+            let raw = self.schema.declaration_schema(declaration)?;
             let schema = charged(
                 &self.budget,
-                ir::derive_signature_origin_schema(
-                    &item.schema.signature,
-                    &item.schema.env,
-                    &self.budget,
-                ),
+                ir::derive_signature_origin_schema(&raw.signature, &raw.env, &self.budget),
             )?;
-            push(&self.budget, &mut self.origins, (item.declaration, schema))?;
+            let source_regions = self.validate_source_regions(declaration, &raw.signature)?;
+            let (contract, regions) = self.derive_carriers(&raw.signature, &source_regions)?;
+            push(&self.budget, &mut self.origins, (declaration, schema))?;
+            push(
+                &self.budget,
+                &mut self.carriers,
+                DeclarationCarriers {
+                    declaration,
+                    contract,
+                    regions,
+                    source_regions,
+                },
+            )?;
         }
         Ok(())
     }
@@ -2504,6 +3658,7 @@ impl ValidatedTraitWorld {
         schema: &GenericSchema,
         args: &[Ty],
         facts: ProofContext<'_>,
+        declaration: Option<DeclId>,
     ) -> Result<InstantiatedSchema> {
         if args.len() != schema.env.total_arity() {
             return Err(FactsError::invalid(
@@ -2512,9 +3667,9 @@ impl ValidatedTraitWorld {
             ));
         }
         for arg in args {
-            self.validate_actual(arg, facts.env())?;
+            self.validate_executable_actual(arg, facts.env())?;
         }
-        let result = self
+        let mut result = self
             .schema
             .instantiate_schema(schema, args, facts.env(), &self.budget)?;
         if !self.eq_contract(
@@ -2526,9 +3681,255 @@ impl ValidatedTraitWorld {
                 "instantiation changed declaration-derived return authority",
             ));
         }
+        result.signature.ref_contract =
+            self.realize_ref_contract(schema, args, &result.signature, declaration)?;
         self.validate_signature_shape(&result.signature, facts.env(), None)?;
         self.validate_predicates(&result.predicates, facts.env(), None)?;
         Ok(result)
+    }
+    fn validate_executable_actual(&self, actual: &Ty, env: &GenericEnv) -> Result<()> {
+        charged(
+            &self.budget,
+            ir::validate_root_reference_actual(actual, &self.budget),
+        )?;
+        if !matches!(actual, Ty::Ref { .. }) {
+            return self.validate_actual(actual, env);
+        }
+        self.validate_ty(actual, env, None, true, 0)
+    }
+    fn realize_ref_contract(
+        &self,
+        schema: &GenericSchema,
+        args: &[Ty],
+        realized: &Signature,
+        declaration: Option<DeclId>,
+    ) -> Result<Arc<ir::RefContract>> {
+        let origin = charged(
+            &self.budget,
+            ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
+        )?;
+        let mut expanded = Vec::new();
+        for (index, parameter) in schema.env.ordered_params().enumerate() {
+            let actual = args
+                .get(index)
+                .ok_or_else(|| FactsError::invalid(&self.budget, "topology actual is missing"))?;
+            let layers = charged(&self.budget, ir::root_reference_layers(actual))?;
+            let scan_work = origin
+                .input_tails
+                .len()
+                .checked_add(origin.result_tails.len())
+                .ok_or_else(|| {
+                    FactsError::resource(&self.budget, "carrier tail lookup work overflow")
+                })?;
+            charged(&self.budget, self.budget.charge_work(scan_work))?;
+            let used = origin.input_tails.iter().any(|t| t.parameter == parameter)
+                || origin.result_tails.iter().any(|t| t.parameter == parameter);
+            if !used {
+                continue;
+            }
+            for relative in 0..layers {
+                if usize::from(origin.fixed.region_count) + expanded.len() >= ir::MAX_REGION_PARAMS
+                {
+                    return Err(FactsError::resource(
+                        &self.budget,
+                        "carrier topology region limit exceeded",
+                    ));
+                }
+                push(&self.budget, &mut expanded, (parameter, relative as u8))?;
+            }
+        }
+        if expanded.is_empty() {
+            return Ok(origin.fixed.clone());
+        }
+        let mut inputs = Vec::new();
+        let mut results = Vec::new();
+        let mut edges = Vec::new();
+        let mut next = usize::from(origin.fixed.region_count);
+        for row in origin.fixed.input_regions.iter() {
+            push(&self.budget, &mut inputs, row.clone())?;
+        }
+        charged(
+            &self.budget,
+            self.budget.charge_work(schema.signature.params.len()),
+        )?;
+        if inputs.is_empty()
+            && schema
+                .signature
+                .params
+                .iter()
+                .any(|ty| matches!(ty, Ty::Ref { .. }))
+        {
+            // Erasure is declaration-owned legacy authority, not permission
+            // carried by an arbitrary empty structural substitution result.
+            let declaration = declaration.ok_or_else(|| {
+                FactsError::invalid(&self.budget, "legacy topology requires callable authority")
+            })?;
+            let header = self.callable_header(declaration)?;
+            if self.info(declaration)?.region_contract_mode
+                != RegionContractMode::LegacyUnnamedFreeNoReturn
+                || !self.same_env(&schema.env, &header.schema.env)?
+                || !self.eq_signature(&schema.signature, &header.schema.signature)?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "legacy topology differs from its exact callable declaration",
+                ));
+            }
+            self.validate_schema_signature(declaration, &schema.signature, &schema.env, None)?;
+            // A nonempty positioned contract must cover every original fixed
+            // input, including references with no parameter-carrier tail.
+            for (param, ty) in schema.signature.params.iter().enumerate() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if !matches!(ty, Ty::Ref { .. }) {
+                    continue;
+                }
+                if next >= ir::MAX_REGION_PARAMS {
+                    return Err(FactsError::resource(
+                        &self.budget,
+                        "carrier topology region limit exceeded",
+                    ));
+                }
+                push(
+                    &self.budget,
+                    &mut inputs,
+                    ir::InputRegion {
+                        input: ir::InputReference {
+                            param,
+                            position: ir::ReferencePosition { depth: 0 },
+                        },
+                        region: ir::RegionParamId(next as u16),
+                    },
+                )?;
+                next += 1;
+            }
+        }
+        for row in origin.fixed.results.iter() {
+            push(&self.budget, &mut results, row.clone())?;
+        }
+        for edge in origin.fixed.outlives.iter() {
+            push(&self.budget, &mut edges, *edge)?;
+        }
+        for &(parameter, relative) in &expanded {
+            if next >= ir::MAX_REGION_PARAMS {
+                return Err(FactsError::resource(
+                    &self.budget,
+                    "carrier topology region limit exceeded",
+                ));
+            }
+            let region = ir::RegionParamId(next as u16);
+            next += 1;
+            for tail in origin.input_tails.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if tail.parameter != parameter {
+                    continue;
+                }
+                let depth = tail
+                    .prefix
+                    .checked_add(relative)
+                    .ok_or_else(|| FactsError::resource(&self.budget, "carrier prefix overflow"))?;
+                if usize::from(depth) >= self.budget.limits().depth {
+                    return Err(FactsError::resource(
+                        &self.budget,
+                        "carrier reference depth limit exceeded",
+                    ));
+                }
+                let input = ir::InputReference {
+                    param: tail.param,
+                    position: ir::ReferencePosition { depth },
+                };
+                // Earlier relative layers are parents too. One nearest-parent
+                // edge suffices because normalization closes the hierarchy.
+                for old in inputs.iter().rev() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if old.input.param == input.param && old.input.position.depth < depth {
+                        push(&self.budget, &mut edges, (region, old.region))?;
+                        break;
+                    }
+                }
+                push(&self.budget, &mut inputs, ir::InputRegion { input, region })?;
+            }
+            for tail in origin.result_tails.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if tail.parameter != parameter {
+                    continue;
+                }
+                let depth = tail.prefix.checked_add(relative).ok_or_else(|| {
+                    FactsError::resource(&self.budget, "carrier result prefix overflow")
+                })?;
+                let position = ir::ReferencePosition { depth };
+                let (kind, _) =
+                    charged(&self.budget, ir::reference_at(&realized.result, position))?;
+                let mut sources = Vec::new();
+                for input in tail.inputs.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if input.parameter != parameter {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "topology origin crosses rigid parameter identity",
+                        ));
+                    }
+                    let source = ir::InputReference {
+                        param: input.param,
+                        position: ir::ReferencePosition {
+                            depth: input.prefix.checked_add(relative).ok_or_else(|| {
+                                FactsError::resource(&self.budget, "carrier input prefix overflow")
+                            })?,
+                        },
+                    };
+                    let (source_kind, _) = charged(
+                        &self.budget,
+                        ir::reference_at(&realized.params[source.param], source.position),
+                    )?;
+                    if kind == ir::BorrowKind::Shared || source_kind == ir::BorrowKind::Mut {
+                        push(
+                            &self.budget,
+                            &mut sources,
+                            ir::InputEnvelope { input: source },
+                        )?;
+                    }
+                }
+                let returns = match kind {
+                    ir::BorrowKind::Shared => {
+                        ir::ReturnContract::SharedInputEnvelopes(sources.into())
+                    }
+                    ir::BorrowKind::Mut => ir::ReturnContract::MutInputEnvelopes(sources.into()),
+                };
+                push(
+                    &self.budget,
+                    &mut results,
+                    ir::ResultReference {
+                        position,
+                        region,
+                        returns,
+                    },
+                )?;
+            }
+        }
+        let sort_work = inputs
+            .len()
+            .checked_mul(inputs.len())
+            .and_then(|n| n.checked_add(results.len().checked_mul(results.len())?))
+            .ok_or_else(|| FactsError::resource(&self.budget, "carrier ordering work overflow"))?;
+        charged(&self.budget, self.budget.charge_work(sort_work))?;
+        inputs.sort_by_key(|r| r.input);
+        results.sort_by_key(|r| r.position);
+        if inputs.len() > 4096 || results.len() > 4096 {
+            return Err(FactsError::resource(
+                &self.budget,
+                "carrier positioned row limit exceeded",
+            ));
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let contract = ir::RefContract {
+            region_count: next as u16,
+            input_regions: inputs.into(),
+            results: results.into(),
+            outlives: edges.into(),
+        };
+        charged(
+            &self.budget,
+            ir::normalize_ref_contract(&contract, &self.budget),
+        )
     }
     fn ensure_provider(&self, declaration: DeclId) -> Result<()> {
         if let Some(record) = self.catalog.declaration(declaration) {
@@ -2617,7 +4018,7 @@ impl ValidatedTraitWorld {
                     "trait item has no original signature-origin schema",
                 )
             })?;
-        let actual_layers = charged(&self.budget, ir::reference_layers(actual))?;
+        let actual_layers = charged(&self.budget, ir::root_reference_layers(actual))?;
         let expands = actual_layers > 0
             && (!origin.input_tails.is_empty() || !origin.result_tails.is_empty());
         let fixed = &origin.fixed;
@@ -2644,52 +4045,8 @@ impl ValidatedTraitWorld {
                 "topology reference position limit exceeded",
             ));
         }
-        if expands {
-            for tail in origin.input_tails.iter() {
-                let ty = item
-                    .schema
-                    .signature
-                    .params
-                    .get(tail.param)
-                    .ok_or_else(|| {
-                        FactsError::invalid(
-                            &self.budget,
-                            "latent input is outside its original schema",
-                        )
-                    })?;
-                for depth in 0..tail.prefix {
-                    let (kind, _) = charged(
-                        &self.budget,
-                        ir::reference_at(ty, ir::ReferencePosition { depth }),
-                    )?;
-                    if kind != ir::BorrowKind::Shared {
-                        return Err(FactsError::unsupported(
-                            &self.budget,
-                            "unsupported: nested mutable trait Self expansion",
-                        ));
-                    }
-                }
-            }
-            for tail in origin.result_tails.iter() {
-                for depth in 0..tail.prefix {
-                    let (kind, _) = charged(
-                        &self.budget,
-                        ir::reference_at(
-                            &item.schema.signature.result,
-                            ir::ReferencePosition { depth },
-                        ),
-                    )?;
-                    if kind != ir::BorrowKind::Shared {
-                        return Err(FactsError::unsupported(
-                            &self.budget,
-                            "unsupported: nested mutable trait Self expansion",
-                        ));
-                    }
-                }
-            }
-        }
-        // Reject impossible expansion BEFORE the raw adapter allocates the new
-        // reference chain. This is method execution admission, not trait proof.
+        // Schema topology is common to Source and Recipe execution. Logical
+        // membership never reaches this allocation/admission path.
         for (prefix, parameter) in origin
             .input_tails
             .iter()
@@ -2703,26 +4060,16 @@ impl ValidatedTraitWorld {
                     "unsupported: executable method type parameters",
                 ));
             }
-            if usize::from(prefix) + actual_layers > 2 {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: trait Self expansion requires more than two reference layers",
-                ));
-            }
-            if prefix > 0 && actual_layers > 0 {
-                for depth in 0..actual_layers {
-                    let (kind, _) = charged(
-                        &self.budget,
-                        ir::reference_at(actual, ir::ReferencePosition { depth: depth as u8 }),
-                    )?;
-                    if kind != ir::BorrowKind::Shared {
-                        return Err(FactsError::unsupported(
-                            &self.budget,
-                            "unsupported: nested mutable trait Self expansion",
-                        ));
-                    }
-                }
-            }
+            charged(
+                &self.budget,
+                self.budget.check_depth(
+                    usize::from(prefix)
+                        .checked_add(actual_layers)
+                        .ok_or_else(|| {
+                            FactsError::resource(&self.budget, "schema reference depth overflow")
+                        })?,
+                ),
+            )?;
         }
         let mut instantiated = self.schema.instantiate_schema(
             &item.schema,
@@ -3214,7 +4561,7 @@ impl ValidatedTraitWorld {
                 },
                 predicates: implementation.predicates.clone(),
             };
-            let instantiated = self.instantiate_in(&schema, &args, facts)?;
+            let instantiated = self.instantiate_in(&schema, &args, facts, None)?;
             if !self.eq_ty(&instantiated.signature.result, &goal.self_ty, 0)? {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -3372,7 +4719,12 @@ impl ValidatedTraitWorld {
     ) -> Result<DirectCallProof> {
         self.ensure_provider(target.declaration)?;
         let schema = self.callable_schema(target.declaration)?;
-        let instantiated = self.instantiate_in(&schema, &target.type_args, context)?;
+        let instantiated = self.instantiate_in(
+            &schema,
+            &target.type_args,
+            context,
+            Some(target.declaration),
+        )?;
         let mut evidence = Vec::new();
         for predicate in instantiated.predicates.iter() {
             push(
@@ -3660,7 +5012,7 @@ impl TraitCx for ValidatedTraitWorld {
                     kind: ir::BorrowKind::Shared,
                     referent,
                 } => {
-                    self.validate_actual(referent, closed.env())?;
+                    self.validate_executable_actual(referent, closed.env())?;
                     push(&self.budget, &mut args, referent.as_ref().clone())?;
                     RecipeDescriptor::CloneSharedRef
                 }
@@ -4114,6 +5466,16 @@ pub(crate) mod test_support {
                 &self.budget,
                 "fixture has no original declaration schema",
             ))
+        }
+        fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
+            self.declaration_info(id)?;
+            retain::<ir::SourceRegionEnv>(&self.budget, 1)?;
+            Ok(Arc::new(ir::SourceRegionEnv {
+                declaration: id,
+                region_count: 0,
+                outlives: Arc::from([]),
+                normalized: Arc::from([]),
+            }))
         }
         fn instantiate_schema(
             &self,
@@ -4569,7 +5931,7 @@ mod tests {
     fn reference_signature(params: Vec<Ty>, result: Ty, budget: &PlanBudget) -> Signature {
         let mut input_regions = Vec::new();
         for (param, ty) in params.iter().enumerate() {
-            for depth in 0..ir::reference_layers(ty).unwrap() {
+            for depth in 0..ir::root_reference_layers(ty).unwrap() {
                 push(
                     budget,
                     &mut input_regions,
@@ -4585,7 +5947,7 @@ mod tests {
             }
         }
         let mut results = Vec::new();
-        for depth in 0..ir::reference_layers(&result).unwrap() {
+        for depth in 0..ir::root_reference_layers(&result).unwrap() {
             push(
                 budget,
                 &mut results,
@@ -4810,39 +6172,124 @@ mod tests {
         world
             .validate_ty_inner(&nested, facts.env(), 0, TypeUse::Root, &mut walk)
             .unwrap();
-        assert!(
-            world
-                .validate_ty_inner(
-                    &nested,
-                    facts.env(),
-                    0,
-                    TypeUse::Referent {
-                        depth: 1,
-                        shared: true
-                    },
-                    &mut walk
-                )
-                .is_err()
+        world
+            .validate_ty_inner(
+                &nested,
+                facts.env(),
+                0,
+                TypeUse::Referent {
+                    depth: 1,
+                    shared: true,
+                },
+                &mut walk,
+            )
+            .unwrap();
+        let deeper = reference(nested.clone());
+        facts.validate_ty(&deeper).unwrap();
+        let carriers = ir::carrier_locations(&deeper, &budget).unwrap();
+        assert_eq!(carriers.len(), 4);
+        for (depth, carrier) in carriers[..3].iter().enumerate() {
+            assert!(carrier.path.0.is_empty());
+            assert_eq!(
+                carrier.channel,
+                ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: depth as u8 })
+            );
+        }
+        assert!(carriers[3].path.0.is_empty());
+        assert_eq!(
+            carriers[3].channel,
+            ir::CarrierChannel::ParamTail {
+                parameter: facts.env().ordered_params().next().unwrap(),
+                prefix: 3,
+            }
         );
-        assert!(facts.validate_ty(&reference(nested.clone())).is_err());
         assert!(world.validate_actual(&nested, facts.env()).is_err());
         let mutable = Ty::Ref {
             kind: BorrowKind::Mut,
             referent: Arc::new(reference(Ty::Int(IntTy::I32))),
         };
-        assert!(facts.validate_ty(&mutable).is_err());
+        facts.validate_ty(&mutable).unwrap();
+        assert_eq!(ir::carrier_locations(&mutable, &budget).unwrap().len(), 2);
+        let empty_product = Ty::Array {
+            element: Arc::new(nested),
+            len: 0,
+        };
+        facts.validate_ty(&empty_product).unwrap();
         assert!(
-            facts
-                .validate_ty(&Ty::Array {
-                    element: Arc::new(nested),
-                    len: 0
-                })
+            ir::carrier_locations(&empty_product, &budget)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            world
+                .validate_executable_actual(&empty_product, facts.env())
                 .is_err()
         );
+        // Typed structural validation grants no verified family body capability.
     }
 
     #[test]
     fn generic_reference_world_transport_and_type_context() {
+        // Legacy erasure must survive scalar instances, but a reference actual
+        // must restore every original fixed input before realizing its tails.
+        let legacy_budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "fn g<T>(d:&mut T,x:T,y:T)->T{*d=x;y} fn h<T>(d:&mut T,x:T,z:&i32)->T{*d=x;loop{}} fn main(){}",
+        )
+        .unwrap();
+        let plan =
+            crate::compiler::frontend::PlanCtx::from_program(&program, &legacy_budget).unwrap();
+        let legacy_world = plan.trait_world().unwrap();
+        for callable in 0..2 {
+            let declaration = plan.callable_decl(callable).unwrap();
+            let facts = legacy_world.callable_facts(declaration).unwrap();
+            let schema = legacy_world.callable_schema(declaration).unwrap();
+            let scalar = legacy_world
+                .discharge_direct(
+                    &CallTarget {
+                        declaration,
+                        type_args: Arc::from([Ty::Int(IntTy::I32)]),
+                    },
+                    &facts,
+                )
+                .unwrap();
+            assert_eq!(scalar.signature().ref_contract.region_count, 0);
+            assert!(scalar.signature().ref_contract.input_regions.is_empty());
+            for layers in [1, 3] {
+                let mut actual = Ty::Int(IntTy::I32);
+                for _ in 0..layers {
+                    actual = Ty::Ref {
+                        kind: BorrowKind::Mut,
+                        referent: Arc::new(actual),
+                    };
+                }
+                let target = CallTarget {
+                    declaration,
+                    type_args: Arc::from([actual]),
+                };
+                let proof = legacy_world.discharge_direct(&target, &facts).unwrap();
+                let contract = &proof.signature().ref_contract;
+                assert_eq!(usize::from(contract.region_count), layers + 1 + callable);
+                assert_eq!(contract.input_regions[0].input.param, 0);
+                assert_eq!(contract.input_regions[0].input.position.depth, 0);
+                for rows in contract.input_regions.windows(2) {
+                    if rows[0].input.param == rows[1].input.param {
+                        assert!(
+                            contract
+                                .outlives_region(rows[1].region, rows[0].region)
+                                .unwrap()
+                        );
+                    }
+                }
+                assert_eq!(contract.input_regions.last().unwrap().input.param, 2);
+                assert_eq!(contract.results.len(), layers);
+                assert!(
+                    legacy_world
+                        .realize_ref_contract(&schema, &target.type_args, proof.signature(), None)
+                        .is_err()
+                );
+            }
+        }
         let budget = PlanBudget::default();
         let declaration =
             test_support::source_decl(SnapshotId::allocate().unwrap(), 0, &budget).unwrap();
@@ -4911,24 +6358,39 @@ mod tests {
                 .validate_signature(SignatureSubject::Body, &forged)
                 .is_err()
         );
+        let transported = world
+            .instance_facts(&CallTarget {
+                declaration,
+                type_args: Arc::from([reference(Ty::Int(IntTy::I32)), Ty::Int(IntTy::I32)]),
+            })
+            .unwrap();
+        let view = transported
+            .carrier_contract(SignatureSubject::Body)
+            .unwrap();
+        assert_eq!(view.ref_contract().input_regions.len(), 3);
+        assert_eq!(view.contract().inputs.len(), 3);
         assert!(
             world
                 .instance_facts(&CallTarget {
                     declaration,
-                    type_args: Arc::from([reference(Ty::Int(IntTy::I32)), Ty::Int(IntTy::I32)])
+                    type_args: Arc::from([
+                        Ty::Tuple(Arc::from([reference(Ty::Int(IntTy::I32))])),
+                        Ty::Int(IntTy::I32)
+                    ]),
                 })
                 .is_err()
         );
+        // Structural facts never create a verified executable template or body.
+        assert_eq!(transported.phase(), FactsPhase::Closed);
         let root = reference(parameter(0));
         let mut walk = TypeWalk::default();
         world
             .validate_ty_inner(&root, universal.env(), 0, TypeUse::Root, &mut walk)
             .unwrap();
-        assert!(
-            world
-                .validate_ty_inner(&root, universal.env(), 0, TypeUse::Aggregate, &mut walk)
-                .is_err()
-        );
+        world
+            .validate_ty_inner(&root, universal.env(), 0, TypeUse::Aggregate, &mut walk)
+            .unwrap();
+        assert!(world.validate_actual(&root, universal.env()).is_err());
         assert!(universal.must_copy(&root).unwrap());
     }
 
@@ -5105,6 +6567,9 @@ mod tests {
             declaration: DeclId,
         }
         impl SchemaCx for ErasedScope {
+            fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
+                self.raw.source_region_env(id)
+            }
             fn core_catalog(&self) -> &Arc<CoreCatalog> {
                 self.raw.core_catalog()
             }
@@ -5324,6 +6789,313 @@ mod tests {
         assert!(matches!(cyclic.build(),Err(e) if e.kind()==FactsErrorKind::Cycle));
     }
 
+    fn carrier_header(
+        budget: &PlanBudget,
+        parameters: usize,
+        make: impl FnOnce(&[Ty]) -> Signature,
+    ) -> CallableHeader {
+        let snapshot = SnapshotId::allocate().unwrap();
+        let declaration = test_support::source_decl(snapshot, 0, budget).unwrap();
+        let own = scope(declaration, parameters, budget);
+        let env = env(std::slice::from_ref(&own), budget);
+        let parameters: Vec<_> = env.ordered_params().map(Ty::Param).collect();
+        CallableHeader {
+            declaration,
+            schema: GenericSchema {
+                signature: make(&parameters),
+                env,
+                predicates: Arc::from([]),
+            },
+        }
+    }
+
+    #[test]
+    fn generic_carrier_world_same_parameter_transport_and_context_authority() {
+        let budget = PlanBudget::default();
+        let header = carrier_header(&budget, 2, |p| {
+            sig(vec![p[0].clone(), p[1].clone()], p[0].clone())
+        });
+        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let universal = world.callable_facts(header.declaration).unwrap();
+        let rigid = universal.carrier_contract(SignatureSubject::Body).unwrap();
+        assert_eq!(rigid.contract().inputs.len(), 2);
+        assert_eq!(rigid.contract().results.len(), 1);
+        assert_eq!(rigid.contract().results[0].sources.len(), 1);
+        assert_eq!(rigid.contract().results[0].sources[0].param, 0);
+        let target = CallTarget {
+            declaration: header.declaration,
+            type_args: Arc::from([
+                reference(Ty::Int(IntTy::I32)),
+                reference(Ty::Int(IntTy::I32)),
+            ]),
+        };
+        let facts = world.instance_facts(&target).unwrap();
+        let realized = facts.carrier_contract(SignatureSubject::Body).unwrap();
+        assert_eq!(realized.contract().inputs.len(), 2);
+        assert_eq!(realized.contract().results[0].sources.len(), 1);
+        assert_eq!(realized.contract().results[0].sources[0].param, 0);
+        assert_eq!(realized.ref_contract().results.len(), 1);
+        assert!(realized.validate_for(&universal).is_err());
+        let other = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        assert!(
+            realized
+                .validate_for(&other.instance_facts(&target).unwrap())
+                .is_err()
+        );
+        assert!(matches!(
+            realized.contract().inputs[0].location.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+        ));
+        // Shape-only facts cannot supply an executable checked-family template.
+        assert_eq!(facts.phase(), FactsPhase::Closed);
+    }
+
+    #[test]
+    fn generic_carrier_world_mutable_entry_effects_and_component_constraints() {
+        let budget = PlanBudget::default();
+        let header = carrier_header(&budget, 1, |p| {
+            reference_signature(
+                vec![
+                    Ty::Ref {
+                        kind: BorrowKind::Mut,
+                        referent: Arc::new(p[0].clone()),
+                    },
+                    p[0].clone(),
+                ],
+                Ty::Unit,
+                &budget,
+            )
+        });
+        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let universal = world.callable_facts(header.declaration).unwrap();
+        let rigid = universal.carrier_contract(SignatureSubject::Body).unwrap();
+        assert_eq!(rigid.contract().writes.len(), 1);
+        assert_eq!(rigid.contract().writes[0].destination.param, 0);
+        assert!(
+            rigid.contract().writes[0]
+                .sources
+                .iter()
+                .any(|s| s.param == 1)
+        );
+        assert!(rigid.region_schema().constraints.iter().any(|c| matches!(
+            c.longer,
+            ir::CarrierRegionTerm::Family { .. }
+        ) && matches!(
+            c.shorter,
+            ir::CarrierRegionTerm::Fixed(_)
+        )));
+        let target = CallTarget {
+            declaration: header.declaration,
+            type_args: Arc::from([Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Int(IntTy::I32)),
+            }]),
+        };
+        let facts = world.instance_facts(&target).unwrap();
+        let realized = facts.carrier_contract(SignatureSubject::Body).unwrap();
+        assert!(realized.contract().results.is_empty());
+        assert_eq!(realized.contract().writes.len(), 1);
+        assert_eq!(
+            realized.contract().writes[0].destination.location.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+        );
+        assert!(
+            realized.contract().writes[0]
+                .sources
+                .iter()
+                .any(|s| s.param == 1
+                    && s.location.channel
+                        == ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }))
+        );
+        assert_eq!(realized.component_mappings().len(), 1);
+        let parameter = header.schema.env.ordered_params().next().unwrap();
+        assert_eq!(realized.parameter_actual(parameter).unwrap().unwrap().0, 0);
+        let mutable = |ty| Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(ty),
+        };
+        let shared_barrier = reference(mutable(Ty::Int(IntTy::I32)));
+        let blocked_target = CallTarget {
+            declaration: header.declaration,
+            type_args: Arc::from([shared_barrier.clone()]),
+        };
+        let blocked = world
+            .instance_facts(&blocked_target)
+            .unwrap()
+            .carrier_contract(SignatureSubject::Body)
+            .unwrap();
+        assert_eq!(blocked.contract().writes.len(), 1);
+        assert_eq!(
+            blocked.contract().writes[0].destination.location.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+        );
+        assert!(
+            !blocked
+                .contract()
+                .writes
+                .iter()
+                .any(|write| write.destination.location.channel
+                    == ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 2 }))
+        );
+        let original_header = carrier_header(&budget, 0, |_| {
+            reference_signature(vec![mutable(shared_barrier.clone())], Ty::Unit, &budget)
+        });
+        let original_world =
+            test_support::world(std::slice::from_ref(&original_header), &budget).unwrap();
+        let original = original_world
+            .callable_facts(original_header.declaration)
+            .unwrap()
+            .carrier_contract(SignatureSubject::Body)
+            .unwrap();
+        assert_eq!(original.contract().writes.len(), 1);
+        assert_eq!(
+            original.contract().writes[0].destination.location.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+        );
+        let cell = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        assert!(
+            !world
+                .carrier_writable(&mutable(Ty::Int(IntTy::I32)), &cell)
+                .unwrap()
+        );
+        let field = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::Field(0),
+            ])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 }),
+        };
+        assert!(
+            !world
+                .carrier_writable(&mutable(Ty::Tuple(Arc::from([shared_barrier]))), &field)
+                .unwrap()
+        );
+        assert!(
+            world
+                .carrier_writable(
+                    &mutable(Ty::Tuple(Arc::from([mutable(mutable(Ty::Int(
+                        IntTy::I32
+                    )))]))),
+                    &field
+                )
+                .unwrap()
+        );
+        let index = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::ConstantIndex(0),
+            ])),
+            channel: field.channel,
+        };
+        assert!(
+            world
+                .carrier_writable(
+                    &mutable(Ty::Array {
+                        element: Arc::new(mutable(mutable(Ty::Int(IntTy::I32)))),
+                        len: 1,
+                    }),
+                    &index
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn generic_carrier_world_original_named_regions_and_resource_authority() {
+        struct Regions {
+            raw: Arc<dyn SchemaCx + Send + Sync>,
+            declaration: DeclId,
+            count: u16,
+            foreign: bool,
+        }
+        impl SchemaCx for Regions {
+            fn budget(&self) -> &PlanBudget {
+                self.raw.budget()
+            }
+            fn registry_snapshot(&self) -> SnapshotId {
+                self.raw.registry_snapshot()
+            }
+            fn core_catalog(&self) -> &Arc<CoreCatalog> {
+                self.raw.core_catalog()
+            }
+            fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl> {
+                self.raw.declaration_info(id)
+            }
+            fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema> {
+                self.raw.declaration_schema(id)
+            }
+            fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
+                if id != self.declaration {
+                    return self.raw.source_region_env(id);
+                }
+                let declaration = if self.foreign {
+                    self.raw.core_catalog().id(CatalogItem::CloneItem)
+                } else {
+                    id
+                };
+                Ok(Arc::new(ir::SourceRegionEnv {
+                    declaration,
+                    region_count: self.count,
+                    normalized: vec![None; usize::from(self.count)].into(),
+                    outlives: Arc::from([]),
+                }))
+            }
+            fn instantiate_schema(
+                &self,
+                s: &GenericSchema,
+                a: &[Ty],
+                e: &GenericEnv,
+                b: &PlanBudget,
+            ) -> Result<InstantiatedSchema> {
+                self.raw.instantiate_schema(s, a, e, b)
+            }
+            fn validate_nominal(&self, t: &Ty, e: &GenericEnv, b: &PlanBudget) -> Result<()> {
+                self.raw.validate_nominal(t, e, b)
+            }
+        }
+        let budget = PlanBudget::default();
+        let header = carrier_header(&budget, 1, |p| sig(vec![p[0].clone()], p[0].clone()));
+        let headers = HeaderSet {
+            traits: Arc::from([]),
+            items: Arc::from([]),
+            impls: Arc::from([]),
+            callables: Arc::from([header.clone()]),
+        };
+        let raw = test_support::adapter(&headers, &[], &budget).unwrap();
+        let world = ValidatedTraitWorld::build(
+            headers.clone(),
+            Arc::new(Regions {
+                raw: raw.clone(),
+                declaration: header.declaration,
+                count: 1,
+                foreign: false,
+            }),
+            &budget,
+        )
+        .unwrap();
+        let facts = world.callable_facts(header.declaration).unwrap();
+        let original = facts.source_region_env(header.declaration).unwrap();
+        assert_eq!(original.region_count, 1);
+        assert_eq!(original.normalized.as_ref(), &[None]);
+        assert!(
+            matches!(ValidatedTraitWorld::build(headers.clone(),Arc::new(Regions{raw:raw.clone(),declaration:header.declaration,count:1,foreign:true}),&budget),Err(e)if e.kind()==FactsErrorKind::InvalidMetadata)
+        );
+        assert!(
+            matches!(ValidatedTraitWorld::build(headers,Arc::new(Regions{raw,declaration:header.declaration,count:65,foreign:false}),&budget),Err(e)if e.is_resource())
+        );
+        budget.charge_work(budget.limits().work).unwrap_err();
+        // Use up only the remaining work, without a fresh ledger or permission.
+        let mut quantum = budget.limits().work / 2;
+        while quantum != 0 {
+            while budget.charge_work(quantum).is_ok() {}
+            quantum /= 2;
+        }
+        assert!(matches!(facts.carrier_contract(SignatureSubject::Body),Err(e)if e.is_resource()));
+    }
+
     #[test]
     fn canonical_required_self_topology_is_context_bound_and_not_logical_dispatch() {
         let c = case();
@@ -5375,8 +7147,13 @@ mod tests {
             },
             ..call
         };
-        assert!(
-            matches!(world.instantiate_trait_signature(&too_deep,&facts),Err(e) if e.kind()==FactsErrorKind::Unsupported)
-        );
+        let deeper = world
+            .instantiate_trait_signature(&too_deep, &facts)
+            .unwrap();
+        assert_eq!(deeper.ref_contract.input_regions.len(), 3);
+        assert_eq!(deeper.ref_contract.results.len(), 2);
+        assert_eq!(ir::root_reference_layers(&deeper.params[0]).unwrap(), 3);
+        // A declaration topology signature is not a checked recipe/body proof.
+        assert_eq!(facts.phase(), FactsPhase::Universal);
     }
 }

@@ -79,6 +79,7 @@ const UNIVERSAL_LOWER: u32 = 111;
 const UNIVERSAL_ANALYZE: u32 = 112;
 const MONO_PLAN: u32 = 113;
 const CONCRETE_PROOFS: u32 = 114;
+const UNIVERSAL_EFFECTS_READY: u32 = 115;
 
 enum Input {
     Text(String),
@@ -130,6 +131,7 @@ struct Snapshot {
     program: OnceLock<Arc<frontend::Program>>,
     types: OnceLock<frontend::PlanCtx>,
     declarations: OnceLock<Vec<DeclarationFacts>>,
+    effects: OnceLock<Arc<ownership::CarrierEffectTable>>,
     plan: OnceLock<instances::Plan>,
     native: OnceLock<Vec<NativeFacts>>,
     executable: OnceLock<Vec<u8>>,
@@ -391,9 +393,9 @@ impl Provider for CompilerProvider {
                         }
                     }
                 }
-                MONO_PLAN => {
+                UNIVERSAL_EFFECTS_READY => {
                     cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
-                    // No concrete work is exposed until every callable is universally valid.
+                    // Join all body typing and every required universal proof before concrete work.
                     let callable_count = this.types()?.callable_count();
                     let count = callable_count
                         .checked_mul(2)
@@ -409,6 +411,32 @@ impl Provider for CompilerProvider {
                     for handle in handles {
                         cx.read(handle).await?;
                     }
+                    let (mut templates, _templates_reservation) =
+                        this.scratch_vec(callable_count)?;
+                    for index in 0..callable_count {
+                        let declaration = this.types()?.callable_decl(index).map_err(Error::new)?;
+                        if this.universal_body(declaration)? {
+                            templates.push(
+                                this.declaration(index)?
+                                    .verified
+                                    .get()
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        Error::new("missing universal effect proof source")
+                                    })?,
+                            );
+                        }
+                    }
+                    publish(
+                        &this.0.effects,
+                        ownership::CarrierEffectTable::from_verified(&templates, &this.0.budget)
+                            .map_err(Error::new)?,
+                    )?;
+                }
+                MONO_PLAN => {
+                    cx.read(cx.request(root(UNIVERSAL_EFFECTS_READY)).get(0))
+                        .await?;
+                    let callable_count = this.types()?.callable_count();
                     let (mut sources, _sources_reservation) = this.scratch_vec(callable_count)?;
                     for slot in this
                         .0
@@ -480,7 +508,7 @@ impl Provider for CompilerProvider {
                             .instance_facts(&instance.target)
                             .map_err(Error::new)?;
                         let mut context = this.types()?.clone();
-                        let checked = if instance.target.type_args.is_empty() {
+                        let checked = if !this.universal_body(instance.target.declaration)? {
                             let source = declaration
                                 .checked
                                 .get()
@@ -546,7 +574,11 @@ impl Provider for CompilerProvider {
                             .ok_or_else(|| Error::new("missing exact closed instance facts"))?;
                         let closed =
                             cfg::close(lowered, facts, &this.0.budget).map_err(Error::new)?;
-                        match ownership::analyze_closed(closed) {
+                        let effects =
+                            this.0.effects.get().ok_or_else(|| {
+                                Error::new("missing universal effect publication")
+                            })?;
+                        match ownership::analyze_closed_with_effects(closed, effects) {
                             Ok(proof) => {
                                 publish(&slot.analysis, proof.analysis().clone())?;
                                 publish(&slot.concrete, proof)?;
@@ -743,6 +775,7 @@ fn compile_input_with_budget(
         budget,
         reservations: std::sync::Mutex::new(Vec::new()),
         declarations: OnceLock::new(),
+        effects: OnceLock::new(),
         plan: OnceLock::new(),
         native: OnceLock::new(),
         executable: OnceLock::new(),

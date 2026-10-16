@@ -543,12 +543,12 @@ pub struct MatchArm {
     pub pattern: Pattern,
     pub body: Expr,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnaryOp {
     Neg,
     Not,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -3755,6 +3755,7 @@ struct PlanState {
     schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
     functions: HashMap<ir::DeclId, tr::GenericSchema>,
     region_modes: HashMap<ir::DeclId, tr::RegionContractMode>,
+    source_regions: HashMap<ir::DeclId, Arc<ir::SourceRegionEnv>>,
     nominals: NominalInterner,
     contexts: HashMap<ir::DeclId, CallableContext>,
     reservations: Vec<ir::PlanReservation>,
@@ -3854,6 +3855,7 @@ impl PlanCtx {
         let mut state = PlanState {
             schemas: HashMap::new(),
             region_modes: HashMap::new(),
+            source_regions: HashMap::new(),
             functions: HashMap::new(),
             nominals: NominalInterner::default(),
             contexts: HashMap::new(),
@@ -4357,6 +4359,18 @@ impl PlanCtx {
                 params,
                 result,
             };
+            state.source_regions.insert(
+                id,
+                original_source_regions(
+                    id,
+                    &f.regions,
+                    &f.params,
+                    &f.result,
+                    &signature.ref_contract,
+                    context.receiver,
+                    budget,
+                )?,
+            );
             state.functions.insert(
                 id,
                 tr::GenericSchema {
@@ -4414,20 +4428,33 @@ impl PlanCtx {
                 }
                 let result =
                     state.source_ty(&registry, &h.result, &bindings, caller, budget, 0, true)?;
+                let ref_contract = canonical_ref_contract(
+                    &h.regions,
+                    &h.params,
+                    &h.result,
+                    (item.receiver, tr::RegionContractMode::Positioned),
+                    &params,
+                    &result,
+                    budget,
+                )?;
+                state.source_regions.insert(
+                    id,
+                    original_source_regions(
+                        id,
+                        &h.regions,
+                        &h.params,
+                        &h.result,
+                        &ref_contract,
+                        item.receiver,
+                        budget,
+                    )?,
+                );
                 state.functions.insert(
                     id,
                     tr::GenericSchema {
                         env: info.env.clone(),
                         signature: ir::Signature {
-                            ref_contract: canonical_ref_contract(
-                                &h.regions,
-                                &h.params,
-                                &h.result,
-                                (item.receiver, tr::RegionContractMode::Positioned),
-                                &params,
-                                &result,
-                                budget,
-                            )?,
+                            ref_contract,
                             params,
                             result,
                         },
@@ -4815,6 +4842,30 @@ impl PlanCtx {
         )?;
         Ok(schema.clone())
     }
+    pub fn source_region_env(&self, id: ir::DeclId) -> Result<Arc<ir::SourceRegionEnv>, String> {
+        self.budget.charge_work(1)?;
+        self.declaration(id)?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "source region registry poisoned")?;
+        if let Some(env) = state.source_regions.get(&id) {
+            return Ok(env.clone());
+        }
+        if state.functions.contains_key(&id) && self.catalog.declaration(id).is_none() {
+            return Err("source callable has no original lifetime environment".into());
+        }
+        // Catalog recipes and noncallable declaration headers declare no source
+        // lifetime names. Their fixed contracts remain separately authoritative.
+        self.budget
+            .retain_bytes(std::mem::size_of::<ir::SourceRegionEnv>() + 64)?;
+        Ok(Arc::new(ir::SourceRegionEnv {
+            declaration: id,
+            region_count: 0,
+            outlives: Arc::from([]),
+            normalized: Arc::from([]),
+        }))
+    }
     pub fn nominal_schema(
         &self,
         decl: ir::DeclId,
@@ -4915,13 +4966,37 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<ir::Signature, String> {
         self.check_budget(budget)?;
+        if let ir::FactsCtx::Validated(facts) = caller {
+            if !facts.budget().same_authority(budget) {
+                return Err("call signature changed planning budget authority".into());
+            }
+            // Executable call signatures include declaration-owned latent
+            // carrier transport. Structural substitution alone cannot mint
+            // the reference rows introduced by an admitted reference actual.
+            let proof = facts
+                .service()
+                .discharge_direct(target, facts)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            let signature = proof.signature();
+            budget.charge_work(signature.params.len() + 1)?;
+            budget.retain_bytes(
+                signature
+                    .params
+                    .len()
+                    .checked_mul(std::mem::size_of::<ir::Ty>())
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::Signature>()))
+                    .ok_or("generic planning byte limit exceeded")?,
+            )?;
+            return Ok(signature.clone());
+        }
         let info = self.declaration(target.declaration)?;
         let schema = self.raw_schema(target.declaration)?;
         if info.env.total_arity() != target.type_args.len() {
             return Err("wrong callable generic arity".into());
         }
         for arg in target.type_args.iter() {
-            validate_argument(arg, caller, budget, 0)?;
+            caller.validate_ty_with_budget(arg, budget)?;
+            ir::validate_root_reference_actual(arg, budget)?;
         }
         let mut cx = self.clone();
         let params = schema
@@ -5055,6 +5130,41 @@ impl ir::SubstitutionCx for PlanCtx {
     ) -> Result<ir::Ty, String> {
         PlanCtx::intern_nominal(self, decl, args, caller, budget)
     }
+    fn intern_substituted_nominal(
+        &mut self,
+        request: &ir::NominalSubstitutionRequest<'_>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        self.check_budget(budget)?;
+        budget.charge_work(1)?;
+        for arg in request.arguments() {
+            caller.validate_ty_with_budget(arg, budget)?;
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?;
+        let original = state
+            .nominals
+            .ordered
+            .get(request.original().index)
+            .ok_or("substitution request names unknown nominal")?;
+        let declaration = match original {
+            ir::Ty::Struct(ty) if ty.def().id == request.original() => ty.def().source_decl,
+            ir::Ty::Enum(ty) if ty.def().id == request.original() => ty.def().source_decl,
+            _ => return Err("substitution request names foreign nominal".into()),
+        };
+        state.intern_with_transport(
+            &self.registry,
+            declaration,
+            request.arguments(),
+            caller,
+            budget,
+            0,
+            Some(request),
+        )
+    }
     fn instantiate_signature(
         &mut self,
         target: &ir::CallTarget,
@@ -5164,6 +5274,14 @@ impl tr::SchemaCx for SchemaAdapter {
         self.registry.declaration(id).map_err(|e| self.error(e))?;
         self.raw_plan()
             .and_then(|plan| plan.raw_schema(id))
+            .map_err(|e| self.error(e))
+    }
+    fn source_region_env(
+        &self,
+        id: ir::DeclId,
+    ) -> Result<Arc<ir::SourceRegionEnv>, tr::FactsError> {
+        self.raw_plan()
+            .and_then(|plan| plan.source_region_env(id))
             .map_err(|e| self.error(e))
     }
     fn instantiate_schema(
@@ -5319,9 +5437,7 @@ impl tr::SchemaCx for SchemaAdapter {
                     }
                     child(element)?;
                 }
-                ir::Ty::Ref { .. } => {
-                    return Err("aggregate reference metadata is unsupported".into());
-                }
+                ir::Ty::Ref { referent, .. } => child(referent)?,
                 _ => {}
             }
             if let Some((id, _)) = nominal {
@@ -5330,7 +5446,7 @@ impl tr::SchemaCx for SchemaAdapter {
             }
             Ok(height)
         }
-        let layers = ir::reference_layers(ty).map_err(|e| self.error(e))?;
+        let layers = ir::root_reference_layers(ty).map_err(|e| self.error(e))?;
         let mut inner = ty;
         for _ in 0..layers {
             if let ir::Ty::Ref { referent, .. } = inner {
@@ -5692,7 +5808,7 @@ impl PlanCtx {
                             {
                                 return Err("canonical receiver formal mismatch".into());
                             }
-                            ir::reference_layers(&candidate)?;
+                            ir::root_reference_layers(&candidate)?;
                             return Ok(MethodSelection {
                                 target,
                                 signature,
@@ -6038,14 +6154,8 @@ fn validate_root_carrier(
     caller: ir::FactsCtx<'_>,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
-    let layers = ir::reference_layers(ty)?;
-    let mut inner = ty;
-    for _ in 0..layers {
-        if let ir::Ty::Ref { referent, .. } = inner {
-            inner = referent;
-        }
-    }
-    validate_argument(inner, caller, budget, layers)
+    caller.validate_ty_with_budget(ty, budget)?;
+    ir::carrier_locations(ty, budget).map(|_| ())
 }
 fn validate_argument(
     ty: &ir::Ty,
@@ -6180,6 +6290,22 @@ impl PlanState {
         depth: usize,
         allow_ref: bool,
     ) -> Result<ir::Ty, String> {
+        self.source_ty_with_transport(
+            registry, ty, bindings, caller, budget, depth, allow_ref, None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn source_ty_with_transport(
+        &mut self,
+        registry: &DeclRegistry,
+        ty: &Type,
+        bindings: &HashMap<String, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        allow_ref: bool,
+        transport: Option<&ir::NominalSubstitutionRequest<'_>>,
+    ) -> Result<ir::Ty, String> {
         budget.check_depth(depth)?;
         budget.charge_work(1)?;
         budget.charge_nodes(1)?;
@@ -6207,10 +6333,27 @@ impl PlanState {
                     .args
                     .iter()
                     .map(|arg| {
-                        self.source_ty(registry, arg, bindings, caller, budget, depth + 1, false)
+                        self.source_ty_with_transport(
+                            registry,
+                            arg,
+                            bindings,
+                            caller,
+                            budget,
+                            depth + 1,
+                            false,
+                            transport,
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                self.intern(registry, decl, &args, caller, budget, depth + 1)?
+                self.intern_with_transport(
+                    registry,
+                    decl,
+                    &args,
+                    caller,
+                    budget,
+                    depth + 1,
+                    transport,
+                )?
             }
             Type::SelfType => bindings
                 .get("Self")
@@ -6221,21 +6364,30 @@ impl PlanState {
                     .nominals
                     .get(name)
                     .ok_or_else(|| format!("unknown nominal type {name}"))?;
-                self.intern(registry, decl, &[], caller, budget, depth + 1)?
+                self.intern_with_transport(
+                    registry,
+                    decl,
+                    &[],
+                    caller,
+                    budget,
+                    depth + 1,
+                    transport,
+                )?
             }
             Type::Ref { kind, referent, .. } => {
                 if !allow_ref {
                     return Err("references in generic or aggregate types are unsupported".into());
                 }
                 let layers = source_reference_layers(ty)?;
-                let inner = self.source_ty(
+                let inner = self.source_ty_with_transport(
                     registry,
                     referent,
                     bindings,
                     caller,
                     budget,
                     depth + 1,
-                    layers == 2,
+                    layers > 1,
+                    transport,
                 )?;
                 ir::Ty::Ref {
                     kind: *kind,
@@ -6247,7 +6399,7 @@ impl PlanState {
                     return Err("array length exceeds supported limit".into());
                 }
                 ir::Ty::Array {
-                    element: Arc::new(self.source_ty(
+                    element: Arc::new(self.source_ty_with_transport(
                         registry,
                         element,
                         bindings,
@@ -6255,6 +6407,7 @@ impl PlanState {
                         budget,
                         depth + 1,
                         false,
+                        transport,
                     )?),
                     len: *len,
                 }
@@ -6267,7 +6420,16 @@ impl PlanState {
                     fields
                         .iter()
                         .map(|t| {
-                            self.source_ty(registry, t, bindings, caller, budget, depth + 1, false)
+                            self.source_ty_with_transport(
+                                registry,
+                                t,
+                                bindings,
+                                caller,
+                                budget,
+                                depth + 1,
+                                false,
+                                transport,
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()?
                         .into(),
@@ -6294,12 +6456,36 @@ impl PlanState {
         budget: &ir::PlanBudget,
         depth: usize,
     ) -> Result<ir::Ty, String> {
+        self.intern_with_transport(registry, decl, args, caller, budget, depth, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn intern_with_transport(
+        &mut self,
+        registry: &DeclRegistry,
+        decl: ir::DeclId,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        transport: Option<&ir::NominalSubstitutionRequest<'_>>,
+    ) -> Result<ir::Ty, String> {
         budget.check_depth(depth)?;
         budget.charge_work(1 + args.len())?;
         let info = registry.declaration(decl)?;
         let bindings = param_bindings(info, args)?;
         for arg in args {
-            validate_argument(arg, caller, budget, depth + 1)?;
+            if transport.is_some() {
+                // Only IR's unforgeable structural request can reach this path.
+                // The produced application is not an executable body proof.
+                let structural = match caller {
+                    ir::FactsCtx::Validated(facts) => ir::FactsCtx::Universal(facts.env()),
+                    facts => facts,
+                };
+                structural.validate_ty_with_budget(arg, budget)?;
+                ir::carrier_locations(arg, budget)?;
+            } else {
+                validate_argument(arg, caller, budget, depth + 1)?;
+            }
         }
         let key_bytes = args
             .len()
@@ -6341,7 +6527,7 @@ impl PlanState {
                         if !names.insert(&field.name) {
                             return Err(format!("duplicate field {}", field.name));
                         }
-                        let ty = state.source_ty(
+                        let ty = state.source_ty_with_transport(
                             registry,
                             &field.ty,
                             &bindings,
@@ -6349,6 +6535,7 @@ impl PlanState {
                             budget,
                             depth + 1,
                             false,
+                            transport,
                         )?;
                         result.push(ir::FieldDef {
                             name: field.name.clone(),
@@ -6442,7 +6629,11 @@ impl PlanState {
                     }))
                 }
             };
-            validate_argument(&ty, caller, budget, 0)?;
+            if transport.is_some() {
+                ir::carrier_locations(&ty, budget)?;
+            } else {
+                validate_argument(&ty, caller, budget, 0)?;
+            }
             self.nominals.active.pop();
             self.nominals.ordered.push(ty.clone());
             self.nominals
@@ -7148,6 +7339,9 @@ impl<'c, 's> Inference<'c, 's> {
             let Some(ty) = self.resolve(term, fallback, 0)? else {
                 return Ok(None);
             };
+            if matches!(ty, ir::Ty::Ref { .. }) {
+                return Err("unsupported generic inference: newly inferred structural reference actual; use explicit type arguments".into());
+            }
             validate_argument(&ty, self.checker.facts(), &plan.budget, 0)?;
             args.push(ty);
         }
@@ -7276,7 +7470,7 @@ impl Checker<'_> {
                 plan.budget.charge_work(place.fields.len() + 1)?;
                 self.infer_storage(place.fields.len() + 1)?;
                 let (_, referent, _) = self.checked_place(place)?;
-                Self::validate_borrow_referent(*kind, &referent)?;
+                self.validate_borrow_referent(*kind, &referent)?;
                 let inner = self.infer_type_term(&referent, None, depth + 1)?;
                 self.infer_node(InferKind::Ref(*kind, inner))?
             }
@@ -7605,12 +7799,16 @@ struct PendingReferenceDecl {
     position: usize,
     local: Option<ir::LocalId>,
 }
+type CheckedApplication = (String, Vec<ir::Ty>, Arc<[ir::TypeActualRegion]>);
+
 struct Checker<'a> {
     signatures: &'a Signatures,
     scopes: Vec<HashMap<String, ir::LocalId>>,
     pending_references: Vec<PendingReferenceDecl>,
     locals: Vec<ir::LocalDecl>,
     exprs: Vec<ir::TypedExpr>,
+    call_evidence: Vec<ir::CallEvidence>,
+    declaration: Option<ir::DeclId>,
     loops: Vec<LoopFrame>,
     next_loop: usize,
     reachable: bool,
@@ -7618,7 +7816,7 @@ struct Checker<'a> {
     module: String,
     count_queries: Vec<(ir::IntTy, ir::ExprId)>,
     field_indices: std::cell::RefCell<HashMap<ir::NominalAppId, HashMap<String, usize>>>,
-    applications: std::cell::RefCell<Vec<(String, Vec<ir::Ty>)>>,
+    applications: std::cell::RefCell<Vec<CheckedApplication>>,
     inference_evidence_cache: std::cell::RefCell<HashMap<(usize, usize, usize), InferTerm>>,
 }
 #[derive(Clone, Copy)]
@@ -7693,6 +7891,129 @@ fn source_region_mode(
     } else {
         tr::RegionContractMode::Positioned
     })
+}
+// Original names are retained by the source registry. Normalization can prune
+// unused declarations, but a pruned named lifetime remains a rigid source name.
+fn original_source_regions(
+    declaration: ir::DeclId,
+    regions: &RegionDecls,
+    params: &[(String, Type)],
+    result: &Type,
+    contract: &ir::RefContract,
+    receiver: ReceiverKind,
+    budget: &ir::PlanBudget,
+) -> Result<Arc<ir::SourceRegionEnv>, String> {
+    if regions.params.len() > ir::MAX_REGION_PARAMS {
+        return Err("declared lifetime resource limit exceeded".into());
+    }
+    budget.charge_work(regions.params.len() + regions.outlives.len() + params.len() + 1)?;
+    budget.retain_bytes(
+        regions
+            .params
+            .len()
+            .checked_mul(256)
+            .and_then(|n| {
+                regions
+                    .outlives
+                    .len()
+                    .checked_mul(64)
+                    .and_then(|m| n.checked_add(m))
+            })
+            .and_then(|n| n.checked_add(512))
+            .ok_or("source lifetime allocation overflow")?,
+    )?;
+    let mut names = HashMap::new();
+    for (index, name) in regions.params.iter().enumerate() {
+        budget.charge_work(name.len() + 1)?;
+        if names.insert(name.as_str(), index).is_some() {
+            return Err("duplicate source lifetime".into());
+        }
+    }
+    let lookup = |name: &str| -> Result<ir::SourceRegionId, String> {
+        budget.charge_work(name.len() + 1)?;
+        Ok(ir::SourceRegionId {
+            declaration,
+            index: *names.get(name).ok_or("undeclared source lifetime")? as u16,
+        })
+    };
+    let mut normalized = vec![None; regions.params.len()];
+    let mut bind = |name: Option<&str>, region: ir::RegionParamId| -> Result<(), String> {
+        if let Some(name) = name {
+            let source = lookup(name)?;
+            let slot = &mut normalized[source.index as usize];
+            if slot.is_some_and(|old| old != region) {
+                return Err("source lifetime normalization disagrees with canonical schema".into());
+            }
+            *slot = Some(region);
+        }
+        Ok(())
+    };
+    // A receiver is present even when its lifetime is elided. The source params
+    // exclude it; canonical input positions retain its actual parameter index.
+    let offset = usize::from(receiver != ReceiverKind::None);
+    if matches!(receiver, ReceiverKind::Borrowed { .. }) {
+        bind(
+            regions.receiver.as_deref(),
+            contract
+                .input_regions
+                .first()
+                .ok_or("borrowed receiver missing canonical region")?
+                .region,
+        )?;
+    }
+    for (index, (_, source)) in params.iter().enumerate() {
+        let mut ty = source;
+        let mut depth = 0u8;
+        while let Type::Ref {
+            region, referent, ..
+        } = ty
+        {
+            budget.charge_work(1)?;
+            // Canonical row lookup is bounded and explicitly charged.
+            let mut found = None;
+            for row in contract.input_regions.iter() {
+                budget.charge_work(1)?;
+                if row.input.param == index + offset && row.input.position.depth == depth {
+                    found = Some(row.region);
+                    break;
+                }
+            }
+            if let Some(canonical) = found {
+                bind(region.as_deref(), canonical)?;
+            } else if region.is_some() {
+                return Err("named source input missing canonical region".into());
+            }
+            depth = depth
+                .checked_add(1)
+                .ok_or("source lifetime nesting overflow")?;
+            ty = referent;
+        }
+    }
+    let mut ty = result;
+    let mut depth = 0usize;
+    while let Type::Ref {
+        region, referent, ..
+    } = ty
+    {
+        budget.charge_work(1)?;
+        let canonical = contract
+            .results
+            .get(depth)
+            .ok_or("source result missing canonical region")?;
+        bind(region.as_deref(), canonical.region)?;
+        depth += 1;
+        ty = referent;
+    }
+    let mut outlives = Vec::with_capacity(regions.outlives.len());
+    for (longer, shorter) in &regions.outlives {
+        outlives.push((lookup(longer)?, lookup(shorter)?));
+    }
+    Ok(Arc::new(ir::SourceRegionEnv {
+        declaration,
+        region_count: regions.params.len() as u16,
+        outlives: outlives.into(),
+        normalized: normalized.into(),
+    }))
 }
 fn canonical_ref_contract(
     regions: &RegionDecls,
@@ -7792,8 +8113,8 @@ fn canonical_ref_contract(
             region, referent, ..
         } = ty
         {
-            if depth >= 2 {
-                return Err("reference depth exceeds supported limit2".into());
+            if depth >= 128 {
+                return Err("reference depth exceeds supported limit128".into());
             }
             let region = fresh(region.as_deref())?;
             if let Some(outer) = previous {
@@ -7818,8 +8139,8 @@ fn canonical_ref_contract(
         region, referent, ..
     } = ty
     {
-        if results.len() >= 2 {
-            return Err("reference depth exceeds supported limit2".into());
+        if results.len() >= 128 {
+            return Err("reference depth exceeds supported limit128".into());
         }
         let region = if let Some(name) = region {
             lookup(name)?
@@ -7870,12 +8191,10 @@ fn canonical_ref_contract(
 fn source_reference_layers(ty: &Type) -> Result<usize, String> {
     let mut inner = ty;
     let mut layers = 0;
-    let mut mutable = false;
-    while let Type::Ref { kind, referent, .. } = inner {
+    while let Type::Ref { referent, .. } = inner {
         layers += 1;
-        mutable |= *kind == ir::BorrowKind::Mut;
-        if layers > 2 || (layers > 1 && mutable) {
-            return Err("only shared nested references of depth2 are supported".into());
+        if layers > 128 {
+            return Err("reference type nesting exceeds supported limit128".into());
         }
         inner = referent;
     }
@@ -7929,7 +8248,7 @@ fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, St
                 referent: std::sync::Arc::new(checked_ty_at(
                     referent,
                     env,
-                    source_reference_layers(ty)? == 2,
+                    source_reference_layers(ty)? > 1,
                 )?),
             })
         }
@@ -8011,6 +8330,8 @@ impl<'a> Checker<'a> {
             pending_references: Vec::new(),
             locals: Vec::new(),
             exprs: Vec::new(),
+            call_evidence: Vec::new(),
+            declaration: None,
             loops: Vec::new(),
             next_loop: 0,
             reachable: true,
@@ -8049,8 +8370,83 @@ impl<'a> Checker<'a> {
             .as_ref()
             .ok_or("generic application requires declaration registry")?;
         let app = plan.application(path, &self.signatures.params, self.facts(), &plan.budget)?;
-        self.applications.borrow_mut().push(app);
+        let (_, source_args) = path.application()?;
+        let regions = self.type_actual_regions(source_args, 0)?;
+        self.infer_storage(1)?;
+        self.applications.borrow_mut().push((app.0, app.1, regions));
         Ok(())
+    }
+    fn source_region(&self, name: &str) -> Result<ir::ActualRegion, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("source region requires registry")?;
+        let declaration = self
+            .declaration
+            .ok_or("source region requires original callable")?;
+        let source = plan.callable_body(&plan.program, declaration)?;
+        for (index, declared) in source.regions.params.iter().enumerate() {
+            plan.budget
+                .charge_work(1 + declared.len().min(name.len()))?;
+            if declared == name {
+                return Ok(ir::ActualRegion::Named(ir::SourceRegionId {
+                    declaration,
+                    index: index as u16,
+                }));
+            }
+        }
+        Err("undeclared lifetime in explicit type argument".into())
+    }
+    fn type_actual_regions(
+        &self,
+        args: &[Type],
+        offset: usize,
+    ) -> Result<Arc<[ir::TypeActualRegion]>, String> {
+        let mut rows = Vec::new();
+        for (argument, arg) in args.iter().enumerate() {
+            self.infer_work(0)?;
+            let mut ty = arg;
+            let mut depth = 0u8;
+            while let Type::Ref {
+                region, referent, ..
+            } = ty
+            {
+                self.infer_work(depth as usize)?;
+                self.charge_node(4 * std::mem::size_of::<ir::TypeActualRegion>() + 64)?;
+                rows.push(ir::TypeActualRegion {
+                    argument: argument
+                        .checked_add(offset)
+                        .ok_or("type argument index overflow")?,
+                    location: ir::CarrierLocation {
+                        path: ir::CarrierPath(Arc::from([])),
+                        channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth }),
+                    },
+                    source: region
+                        .as_deref()
+                        .map_or(Ok(ir::ActualRegion::Elided), |name| {
+                            self.source_region(name)
+                        })?,
+                });
+                depth = depth
+                    .checked_add(1)
+                    .ok_or("type argument reference nesting overflow")?;
+                ty = referent;
+            }
+        }
+        Ok(rows.into())
+    }
+    fn checked_type_actual(&self, source: &Type) -> Result<ir::Ty, String> {
+        let ty = checked_ty(source, self.signatures)?;
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("type actual requires registry")?;
+        ir::validate_root_reference_actual(&ty, &plan.budget)?;
+        // Validate source lifetime names now, before erasure and argument checking.
+        self.type_actual_regions(std::slice::from_ref(source), 0)?;
+        Ok(ty)
     }
     fn nominal(&self, name: &str, hint: Option<&ir::Ty>) -> Result<ir::Ty, String> {
         if name == "Self" {
@@ -8080,7 +8476,7 @@ impl<'a> Checker<'a> {
                 .applications
                 .borrow()
                 .last()
-                .is_some_and(|(owner, _)| owner == name)
+                .is_some_and(|(owner, _, _)| owner == name)
             {
                 self.applications.borrow_mut().pop().unwrap().1
             } else {
@@ -8279,34 +8675,44 @@ impl<'a> Checker<'a> {
         Err(format!("{context} differ: {a:?} and {b:?}"))
     }
     fn accessible(&self, ty: &ir::Ty) -> Result<(), String> {
-        let mut work = vec![ty];
-        while let Some(ty) = work.pop() {
+        fn visit(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<(), String> {
+            if depth > 128 {
+                return Err("type visibility nesting exceeds limit128".into());
+            }
+            if let Some(plan) = &checker.signatures.plan {
+                plan.budget.charge_work(1)?;
+            }
             match ty {
-                ir::Ty::Ref { referent, .. } => work.push(referent),
-                ir::Ty::Array { element, .. } => work.push(element),
-                ir::Ty::Tuple(fields) => work.extend(fields.iter()),
+                ir::Ty::Ref { referent, .. } => visit(checker, referent, depth + 1)?,
+                ir::Ty::Array { element, .. } => visit(checker, element, depth + 1)?,
+                ir::Ty::Tuple(fields) => {
+                    for field in fields.iter() {
+                        visit(checker, field, depth + 1)?;
+                    }
+                }
                 ir::Ty::Enum(ty)
-                    if !ty.def().public && !visible_from(&ty.def().module, &self.module) =>
+                    if !ty.def().public && !visible_from(&ty.def().module, &checker.module) =>
                 {
                     return Err(format!(
                         "private type {} is inaccessible from module {}",
                         ty.def().name,
-                        self.module
+                        checker.module
                     ));
                 }
                 ir::Ty::Struct(ty)
-                    if !ty.def().public && !visible_from(&ty.def().module, &self.module) =>
+                    if !ty.def().public && !visible_from(&ty.def().module, &checker.module) =>
                 {
                     return Err(format!(
                         "private type {} is inaccessible from module {}",
                         ty.def().name,
-                        self.module
+                        checker.module
                     ));
                 }
                 _ => {}
             }
+            Ok(())
         }
-        Ok(())
+        visit(self, ty, 0)
     }
     fn checked_place(&self, place: &Place) -> Result<(ir::Place, ir::Ty, bool), String> {
         if place.fields.len() > 128 {
@@ -8322,8 +8728,8 @@ impl<'a> Checker<'a> {
             match selector {
                 FieldSelector::Deref => {
                     derefs += 1;
-                    if derefs > 2 {
-                        return Err("reference dereference depth exceeds limit2".into());
+                    if derefs > 128 {
+                        return Err("reference dereference depth exceeds limit128".into());
                     }
                     let ir::Ty::Ref { kind, referent } = &ty else {
                         return Err("dereference requires a reference".into());
@@ -8338,7 +8744,7 @@ impl<'a> Checker<'a> {
                 }
                 _ => {
                     if let ir::Ty::Ref { kind, referent } = &ty {
-                        if derefs >= 2 {
+                        if derefs >= 128 {
                             return Err(
                                 "multiple dereferences in one field place are unsupported".into()
                             );
@@ -8362,22 +8768,14 @@ impl<'a> Checker<'a> {
         self.accessible(&ty)?;
         Ok((ir::Place { local, projection }, ty, writable))
     }
-    fn reject_aggregate_ref(ty: &ir::Ty) -> Result<(), String> {
-        let mut work = vec![ty];
-        while let Some(ty) = work.pop() {
-            match ty {
-                ir::Ty::Ref { .. } => {
-                    return Err(
-                        "reference aggregate elements and nested references are unsupported in B1"
-                            .into(),
-                    );
-                }
-                ir::Ty::Array { element, .. } => work.push(element),
-                ir::Ty::Tuple(fields) => work.extend(fields.iter()),
-                _ => {}
-            }
-        }
-        Ok(())
+    fn validate_value_carriers(&self, ty: &ir::Ty) -> Result<(), String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("carrier validation requires registry")?;
+        // Shape alone grants no lifetime, target, Copy or executable-body proof.
+        ir::carrier_locations(ty, &plan.budget).map(|_| ())
     }
     fn require_index(&self, flow: &Flow) -> Result<(), String> {
         self.require(flow,&ir::Ty::Int(ir::IntTy::Usize)).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
@@ -8431,7 +8829,7 @@ impl<'a> Checker<'a> {
                 self.infer_storage(type_args.len())?;
                 let args = type_args
                     .iter()
-                    .map(|t| checked_local_ty(t, self.signatures))
+                    .map(|t| self.checked_type_actual(t))
                     .collect::<Result<Vec<_>, _>>()?;
                 let owner = checked_local_ty(owner, self.signatures)?;
                 Some(
@@ -8463,7 +8861,7 @@ impl<'a> Checker<'a> {
                     self.infer_storage(type_args.len())?;
                     let args = type_args
                         .iter()
-                        .map(|t| checked_local_ty(t, self.signatures))
+                        .map(|t| self.checked_type_actual(t))
                         .collect::<Result<Vec<_>, _>>()?;
                     Some(
                         plan.select_method(
@@ -8860,7 +9258,7 @@ impl<'a> Checker<'a> {
                 .applications
                 .borrow()
                 .last()
-                .is_some_and(|(owner, _)| owner == name)
+                .is_some_and(|(owner, _, _)| owner == name)
         {
             return self.nominal(name, None);
         }
@@ -9215,10 +9613,21 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::Assign { name, value } => {
                     if let Some(pending) = self.pending_reference(name)? {
+                        // Only the already known dereference result supplies a scalar
+                        // type here. Later uses never contribute inference evidence.
+                        let scalar = if matches!(value, Expr::Deref { .. }) {
+                            self.scalar_hint(value)?.filter(|ty| {
+                                matches!(ty, ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit)
+                            })
+                        } else {
+                            None
+                        };
                         let value = self.expr(value)?;
                         let flow = self.flow(value);
-                        if !matches!(flow.ty, ir::Ty::Ref { .. }) {
-                            return Err("untyped deferred declarations require an independently known reference type; general backward inference is unsupported".into());
+                        if !matches!(flow.ty, ir::Ty::Ref { .. })
+                            && scalar.as_ref() != Some(&flow.ty)
+                        {
+                            return Err("untyped deferred declarations require an independently known reference or scalar dereference type; general backward inference is unsupported".into());
                         }
                         let local = ir::LocalId(self.locals.len());
                         self.charge_node(
@@ -9443,19 +9852,12 @@ impl<'a> Checker<'a> {
         }
         self.expr_without_cast(e, expectation)
     }
-    fn validate_borrow_referent(kind: ir::BorrowKind, referent: &ir::Ty) -> Result<(), String> {
-        if let ir::Ty::Ref {
-            kind: inner_kind,
-            referent: inner,
-        } = referent
-        {
-            if kind != ir::BorrowKind::Shared || *inner_kind != ir::BorrowKind::Shared {
-                return Err("mutable nested reference chains are unsupported".into());
-            }
-            Self::reject_aggregate_ref(inner)
-        } else {
-            Self::reject_aggregate_ref(referent)
-        }
+    fn validate_borrow_referent(
+        &self,
+        _kind: ir::BorrowKind,
+        referent: &ir::Ty,
+    ) -> Result<(), String> {
+        self.validate_value_carriers(referent)
     }
     fn borrow_expression(
         &mut self,
@@ -9463,7 +9865,7 @@ impl<'a> Checker<'a> {
         place: ir::Place,
     ) -> Result<ir::ExprId, String> {
         let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
-        Self::validate_borrow_referent(kind, &referent)?;
+        self.validate_borrow_referent(kind, &referent)?;
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
@@ -9531,8 +9933,86 @@ impl<'a> Checker<'a> {
         name: &str,
         signature: ir::Signature,
         source_args: &[Expr],
+        type_actual_regions: Arc<[ir::TypeActualRegion]>,
         receiver: Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>,
     ) -> Result<ir::ExprId, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("call evidence requires registry")?;
+        // Resolve under the original caller facts before recording ordinary
+        // actuals. Trait Self is not an ordinary source type argument, but a
+        // selected recipe may have genuine ordinary arguments of its own.
+        let (target, signature) = if let ir::Callee::TraitItem(call) = &target {
+            let facts = self
+                .facts()
+                .validated()
+                .ok_or("trait call evidence requires validated facts")?;
+            facts
+                .validate_signature(ir::SignatureSubject::Call(&target), &signature)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            let resolved = facts
+                .service()
+                .resolve_trait_call(call, facts)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            let signature = resolved.signature();
+            plan.budget.charge_work(
+                signature
+                    .params
+                    .len()
+                    .checked_add(resolved.callee().type_arguments().len())
+                    .and_then(|work| work.checked_add(1))
+                    .ok_or("resolved call evidence metadata work overflow")?,
+            )?;
+            self.charge_node(
+                signature
+                    .params
+                    .len()
+                    .checked_mul(std::mem::size_of::<ir::Ty>())
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::Signature>()))
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::Callee>()))
+                    .ok_or("resolved call evidence metadata allocation overflow")?,
+            )?;
+            facts
+                .validate_signature(ir::SignatureSubject::Call(resolved.callee()), signature)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            (resolved.callee().clone(), signature.clone())
+        } else {
+            (target, signature)
+        };
+        let actuals = match &target {
+            ir::Callee::Direct(target) => target.type_args.as_ref(),
+            ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+        };
+        plan.budget.charge_work(type_actual_regions.len())?;
+        self.charge_node(
+            type_actual_regions
+                .len()
+                .checked_mul(4 * std::mem::size_of::<ir::TypeActualRegion>() + 64)
+                .ok_or("call region evidence allocation overflow")?,
+        )?;
+        let mut region_rows = type_actual_regions.to_vec();
+        for (argument, ty) in actuals.iter().enumerate() {
+            for location in ir::carrier_locations(ty, &plan.budget)?.iter() {
+                if !matches!(location.channel, ir::CarrierChannel::Fixed(_)) {
+                    continue;
+                }
+                plan.budget.charge_work(region_rows.len())?;
+                if !region_rows
+                    .iter()
+                    .any(|row| row.argument == argument && row.location == *location)
+                {
+                    self.charge_node(4 * std::mem::size_of::<ir::TypeActualRegion>() + 64)?;
+                    region_rows.push(ir::TypeActualRegion {
+                        argument,
+                        location: location.clone(),
+                        source: ir::ActualRegion::Elided,
+                    });
+                }
+            }
+        }
+        let type_actual_regions = region_rows.into();
         let offset = usize::from(receiver.is_some());
         if signature.params.len() != source_args.len() + offset {
             return Err(format!("wrong arity for {name}"));
@@ -9546,6 +10026,24 @@ impl<'a> Checker<'a> {
         )?;
         let mut arguments = Vec::with_capacity(signature.params.len());
         let mut pending = Vec::with_capacity(signature.params.len());
+        self.charge_node(
+            signature
+                .params
+                .len()
+                .checked_mul(4 * std::mem::size_of::<ir::CallArgumentTrace>() + 64)
+                .ok_or("call trace allocation overflow")?,
+        )?;
+        // This signature is the original source-stage signature. Inference may
+        // not introduce new structural reference actuals, so a later argument
+        // cannot retroactively make an opaque parameter a firm Ref expectation.
+        let expectations = signature
+            .params
+            .iter()
+            .map(|ty| match ty {
+                ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
+                _ => ir::CallExpectation::NoFirmReference,
+            })
+            .collect::<Vec<_>>();
         let mut completes = true;
         if let Some((id, reason)) = receiver {
             self.require(&self.flow(id), &signature.params[0])?;
@@ -9587,6 +10085,21 @@ impl<'a> Checker<'a> {
                 reason,
             };
         }
+        let traces = arguments
+            .iter()
+            .enumerate()
+            .map(|(argument, value)| ir::CallArgumentTrace {
+                argument,
+                value: *value,
+                expectation: expectations[argument],
+            })
+            .collect::<Vec<_>>();
+        self.charge_node(4 * std::mem::size_of::<ir::CallEvidence>() + 64)?;
+        self.call_evidence.push(ir::CallEvidence {
+            call: id,
+            arguments: traces.into(),
+            type_actual_regions,
+        });
         self.charge_node(std::mem::size_of::<ir::TypedExpr>() + name.len())?;
         self.exprs.push(ir::TypedExpr {
             ty: signature.result.clone(),
@@ -9622,7 +10135,7 @@ impl<'a> Checker<'a> {
         self.infer_storage(type_args.len())?;
         let actuals = type_args
             .iter()
-            .map(|t| checked_local_ty(t, self.signatures))
+            .map(|t| self.checked_type_actual(t))
             .collect::<Result<Vec<_>, _>>()?;
         let selected = plan.select_method(
             &ty,
@@ -9632,6 +10145,10 @@ impl<'a> Checker<'a> {
             &self.module,
             &plan.budget,
         )?;
+        let region_offset = match &selected.target {
+            ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
+            ir::Callee::TraitItem(_) => 0,
+        };
         // Only primitive value temporaries have the approved lexical autoref extension.
         if selected.depth == 0
             && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
@@ -9658,6 +10175,7 @@ impl<'a> Checker<'a> {
                 name,
                 selected.signature,
                 args,
+                self.type_actual_regions(type_args, region_offset)?,
                 Some((borrowed, None)),
             )?;
             let result = self.exprs[call.0].ty.clone();
@@ -9748,6 +10266,7 @@ impl<'a> Checker<'a> {
             name,
             selected.signature,
             args,
+            self.type_actual_regions(type_args, region_offset)?,
             Some(adjusted),
         )
     }
@@ -9809,7 +10328,7 @@ impl<'a> Checker<'a> {
         self.infer_storage(type_args.len() + args.len() + 1)?;
         let actuals = type_args
             .iter()
-            .map(|t| checked_local_ty(t, self.signatures))
+            .map(|t| self.checked_type_actual(t))
             .collect::<Result<Vec<_>, _>>()?;
         let (target, signature, mode) = if let Expr::TraitCall { trait_path, .. } = expression {
             let tid = *plan
@@ -9872,7 +10391,18 @@ impl<'a> Checker<'a> {
         } else {
             None
         };
-        self.finish_checked_call(target, name, signature, args, adjusted)
+        let region_offset = match &target {
+            ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
+            ir::Callee::TraitItem(_) => 0,
+        };
+        self.finish_checked_call(
+            target,
+            name,
+            signature,
+            args,
+            self.type_actual_regions(type_args, region_offset)?,
+            adjusted,
+        )
     }
     fn cast_expression(&mut self, value: &Expr, target: &Type) -> Result<ir::ExprId, String> {
         let target = checked_local_ty(target, self.signatures)?;
@@ -9937,7 +10467,7 @@ impl<'a> Checker<'a> {
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
-                Self::validate_borrow_referent(*kind, &referent)?;
+                self.validate_borrow_referent(*kind, &referent)?;
                 (
                     ir::ExprKind::Borrow {
                         kind: *kind,
@@ -9954,14 +10484,20 @@ impl<'a> Checker<'a> {
                 let mut root = value.as_ref();
                 let mut depth = 1;
                 while let Expr::Deref { value } = root {
+                    if depth >= 128 {
+                        return Err("reference dereference depth exceeds limit128".into());
+                    }
+                    if let Some(plan) = &self.signatures.plan {
+                        plan.budget.charge_work(1)?;
+                    }
                     depth += 1;
                     root = value;
                 }
-                if depth > 2 || (!matches!(root, Expr::Var(_)) && !genuine_call(root)) {
-                    return Err(
-                        "dereference requires a bounded local or genuine reference call carrier"
-                            .into(),
-                    );
+                if !matches!(root, Expr::Var(_)) && !genuine_call(root) {
+                    // Static component carriers use the same checked projection
+                    // authority as field receivers, without an invented temporary.
+                    let source = static_source_place(e)?;
+                    self.checked_place(&source)?;
                 }
                 let value = self.expr(value)?;
                 let flow = self.flow(value);
@@ -10472,7 +11008,12 @@ impl<'a> Checker<'a> {
                 let mut flow = self.flow(base);
                 if let ir::Ty::Ref { referent, .. } = &flow.ty {
                     if !matches!(receiver, Expr::Var(_)) && !genuine_call(receiver) {
-                        return Err("complex reference field receivers are unsupported; use a local or genuine call result".into());
+                        // A projected carrier has the same authority as any other
+                        // static place. Validate its dereference without creating a
+                        // local or borrow, then read the already evaluated base once.
+                        let mut source = static_source_place(receiver)?;
+                        source.fields.push(FieldSelector::Deref);
+                        self.checked_place(&source)?;
                     }
                     let ty = referent.as_ref().clone();
                     self.accessible(&ty)?;
@@ -10680,17 +11221,18 @@ impl<'a> Checker<'a> {
                     .functions
                     .get(name)
                     .ok_or_else(|| format!("unresolved function {name}"))?;
-                let type_args = if self
+                let (type_args, actual_regions) = if self
                     .applications
                     .borrow()
                     .last()
-                    .is_some_and(|(owner, _)| owner == name)
+                    .is_some_and(|(owner, _, _)| owner == name)
                 {
-                    self.applications.borrow_mut().pop().unwrap().1
+                    let (_, args, regions) = self.applications.borrow_mut().pop().unwrap();
+                    (args, regions)
                 } else if plan.param_env(declaration)?.arity() > 0 {
-                    self.infer_call_args(declaration,args,expected,true)?.ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?
+                    (self.infer_call_args(declaration,args,expected,true)?.ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?, Arc::from([]))
                 } else {
-                    Vec::new()
+                    (Vec::new(), Arc::from([]))
                 };
                 let target = ir::CallTarget {
                     declaration,
@@ -10745,7 +11287,14 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
-                return self.finish_checked_call(target.into(), name, signature, args, None);
+                return self.finish_checked_call(
+                    target.into(),
+                    name,
+                    signature,
+                    args,
+                    actual_regions,
+                    None,
+                );
             }
             Expr::If {
                 condition,
@@ -10815,7 +11364,7 @@ impl<'a> Checker<'a> {
         };
         self.accessible(&flow.ty)?;
         if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
-            Self::reject_aggregate_ref(&flow.ty)?;
+            self.validate_value_carriers(&flow.ty)?;
         }
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
@@ -10945,6 +11494,7 @@ pub fn type_callable_with_plan(
     validate_depth(DepthNode::Block(&f.body))?;
     let module = context.module.join("::");
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
+    c.declaration = Some(declaration);
     let mut params = Vec::new();
     let offset = if context.receiver != ReceiverKind::None {
         let local = c.bind("self", signature.params[0].clone())?;
@@ -10973,9 +11523,12 @@ pub fn type_callable_with_plan(
         result: c.result,
         locals: c.locals,
         exprs: c.exprs,
+        call_evidence: c.call_evidence.into(),
+        body_substitution: None,
         body,
     };
     let facts = plan.callable_facts(declaration)?;
+    ir::validate_call_evidence(&checked, &facts, budget)?;
     let mut cx = plan.clone();
     ir::canonicalize_checked_calls(&checked, &facts, &mut cx, budget)
         .map_err(|e| e.into_legacy_diagnostic(budget))
@@ -11041,6 +11594,8 @@ pub fn type_function_with_env(
         result: c.result,
         locals: c.locals,
         exprs: c.exprs,
+        call_evidence: c.call_evidence.into(),
+        body_substitution: None,
         body,
     })
 }
@@ -11258,15 +11813,20 @@ mod typed_tests {
             "fn f(x:&&mut i32){}fn main(){}",
             "fn f(x:&mut &i32){}fn main(){}",
             "fn f(x:&&&i32){}fn main(){}",
-            "struct S{x:&&i32}fn main(){}",
             "fn f<T>(x:T){}fn main(){let x=1;let r=&x;f::<&i32>(r);}",
             "fn main(){let x=1;let r=&x;let rr=(&r,);}",
         ] {
-            assert!(
-                parse(source).and_then(|p| check(&p)).is_err(),
-                "accepted {source}"
-            );
+            parse(source)
+                .and_then(|p| check(&p))
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
         }
+        // Source-declared lifetime-bearing nominal fields remain outside the
+        // internally certified carrier-substitution domain.
+        let source = "struct S{x:&&i32}fn main(){}";
+        assert!(
+            parse(source).and_then(|p| check(&p)).is_err(),
+            "accepted {source}"
+        );
     }
 
     #[test]
@@ -11293,6 +11853,118 @@ mod typed_tests {
         );
     }
 
+    #[test]
+    fn generic_carrier_call_traces_preserve_firm_reborrows_and_opaque_moves() {
+        let p = parse("fn id<T>(x:T)->T{x}fn forward<T>(x:T)->T{id::<T>(x)}fn firm<'a>(x:&'a mut i32)->&'a mut i32{id::<&'a mut i32>(x)}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let forward =
+            type_callable_with_plan(&p, plan.function_decl(1).unwrap(), &plan, &budget).unwrap();
+        let firm_decl = plan.function_decl(2).unwrap();
+        let firm = type_callable_with_plan(&p, firm_decl, &plan, &budget).unwrap();
+        assert_eq!(forward.call_evidence.len(), 1);
+        assert_eq!(firm.call_evidence.len(), 1);
+        let opaque = &forward.call_evidence[0].arguments[0];
+        assert_eq!(opaque.expectation, ir::CallExpectation::NoFirmReference);
+        assert!(matches!(
+            forward.exprs[opaque.value.0].kind,
+            ir::ExprKind::Local(_)
+        ));
+        let explicit = &firm.call_evidence[0].arguments[0];
+        assert_eq!(
+            explicit.expectation,
+            ir::CallExpectation::FirmReference {
+                kind: ir::BorrowKind::Mut
+            }
+        );
+        assert!(matches!(
+            firm.exprs[explicit.value.0].kind,
+            ir::ExprKind::Borrow {
+                timing: ir::BorrowTiming::TwoPhase { .. },
+                ..
+            }
+        ));
+        assert_eq!(firm.call_evidence[0].type_actual_regions.len(), 1);
+        assert_eq!(
+            firm.call_evidence[0].type_actual_regions[0].source,
+            ir::ActualRegion::Named(ir::SourceRegionId {
+                declaration: firm_decl,
+                index: 0
+            })
+        );
+    }
+    #[test]
+    fn generic_carrier_original_region_env_retains_unused_names_and_required_items() {
+        let p = parse("trait Get{fn get<'a,'unused>(&'a self)->&'a Self;}fn keep<'a,'b:'a,'unused,T>(x:&'a T)->&'a T{x}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let env = plan.source_region_env(declaration).unwrap();
+        assert_eq!(env.declaration, declaration);
+        assert_eq!(env.region_count, 3);
+        assert_eq!(env.normalized.len(), 3);
+        assert!(env.normalized[0].is_some());
+        assert_eq!(env.normalized[1..], [None, None]);
+        assert_eq!(
+            env.outlives.as_ref(),
+            &[(
+                ir::SourceRegionId {
+                    declaration,
+                    index: 1
+                },
+                ir::SourceRegionId {
+                    declaration,
+                    index: 0
+                }
+            )]
+        );
+        let item = plan.registry.trait_items[0][0];
+        let item_env = plan.source_region_env(item).unwrap();
+        assert_eq!(item_env.region_count, 2);
+        assert!(item_env.normalized[0].is_some());
+        assert_eq!(item_env.normalized[1], None);
+        let foreign =
+            parse("fn id<T>(x:T)->T{x}fn bad(x:&i32)->&i32{id::<&'missing i32>(x)}fn main(){}")
+                .unwrap();
+        let foreign_plan = PlanCtx::from_program(&foreign, &ir::PlanBudget::default()).unwrap();
+        assert!(
+            type_callable_with_plan(
+                &foreign,
+                foreign_plan.function_decl(1).unwrap(),
+                &foreign_plan,
+                &foreign_plan.budget
+            )
+            .unwrap_err()
+            .contains("undeclared lifetime")
+        );
+    }
+    #[test]
+    fn generic_carrier_internal_nominal_transport_does_not_relax_source_actuals() {
+        let p = parse("struct Wrap<T>{value:T}enum E<T>{One{value:T}}fn wrap<T>(x:T)->E<T>{let w=Wrap{value:x};E::One{value:w.value}}fn main(){let x=1;let e=wrap::<&i32>(&x);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let body =
+            type_callable_with_plan(&p, plan.function_decl(0).unwrap(), &plan, &budget).unwrap();
+        assert!(
+            body.locals
+                .iter()
+                .any(|local| matches!(&local.ty, ir::Ty::Struct(ty) if ty.def().name == "Wrap"))
+        );
+        let caller =
+            type_callable_with_plan(&p, plan.function_decl(1).unwrap(), &plan, &budget).unwrap();
+        assert!(caller.exprs.iter().any(|expr| matches!(&expr.ty, ir::Ty::Enum(ty) if matches!(ty.def().variants[0].fields[0].ty, ir::Ty::Ref { .. }))));
+        for source in [
+            "struct Wrap<T>{value:T}fn main(){let x=1;let w=Wrap::<&i32>{value:&x};}",
+            "fn id<T>(x:T)->T{x}fn main(){let x=1;let r=id(&x);}",
+        ] {
+            assert!(
+                parse(source)
+                    .and_then(|program| check(&program))
+                    .unwrap_err()
+                    .contains("unsupported")
+            );
+        }
+    }
     #[test]
     fn generic_reference_declarations_keep_rigid_envelopes_and_canonical_regions() {
         check(&parse("fn id<T>(x:&T)->&T{x}fn wrap(x:&i32)->&i32{id(x)}fn main(){let x=7;let r=wrap(&x);let n=*r;}").unwrap()).unwrap();
@@ -11332,7 +12004,7 @@ mod typed_tests {
             "struct W<T>{x:T}fn main(){let x=1;let w=W::<&i32>{x:&x};}",
         ] {
             let result = parse(source).and_then(|p| check(&p));
-            if source == "fn bad<T>(x:&&T){}fn main(){}" {
+            if source != "struct W<T>{x:T}fn main(){let x=1;let w=W::<&i32>{x:&x};}" {
                 result.unwrap();
             } else {
                 assert!(result.is_err(), "accepted {source}");
@@ -13161,7 +13833,12 @@ mod typed_tests {
                 let env = signature_table(&p)?;
                 type_function_with_signatures(&p, p.functions.len() - 1, &env).map(|_| ())
             });
-            if source == "fn main(){let x=1;let r=&x;let nested=&r;}" {
+            if matches!(
+                source,
+                "fn main(){let x=1;let r=&x;let nested=&r;}"
+                    | "fn main(){let x=1;let r=&x;let a=[r;0];}"
+                    | "fn main(){let x=1;let r=&x;let t=(r,);}"
+            ) {
                 result.unwrap();
                 check(&parse(source).unwrap()).unwrap();
             } else {

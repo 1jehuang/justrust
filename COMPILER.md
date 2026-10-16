@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with bounded shared/mutable reference returns, noescape reference calls, local borrowing, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
+Status: executable Rust-subset implementation with bounded root-reference generic actuals, shared/mutable reference returns, noescape reference calls, local borrowing, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -63,18 +63,23 @@ including declared bounds, rather than a parameter-layout assumption.
 Demanded concrete instances substitute checked typed metadata,
 then lower and analyze again before sealed native emission. Exact instance
 recursion is deduplicated, while growing instantiations fail boundedly. Generic
-signatures and bodies admit standalone shared/mutable reference carriers with
-reference-free referents, including rigid parameters. Shared carriers additionally
-admit two reference layers, with position-qualified lifetime and origin mappings.
-Loading the inner reference transports its stored value provenance independently
-of the temporary outer handle. Nested mutable chains, deeper shared chains and
-reference-containing aggregates remain explicit boundaries. Recursively expanded type
-arguments remain reference-free. Positive local trait bounds use the canonical
+signatures and bodies admit bounded shared/mutable root reference chains ending
+in reference-free types or rigid parameters. Fully explicit root-reference type
+actuals, such as `id::<&i32>(r)`, use a common Source and Recipe carrier proof,
+not a Clone-only exception. Counted carrier layouts replace the earlier fixed
+two-layer domain, subject to unchanged depth, region and analysis-state limits.
+Internal tuple, array, struct and enum components transport distinct origins
+through certified substitution after an admitted root-reference actual. This is
+not permission for external aggregate/nominal reference actuals or explicit
+source reference fields. Newly inferred structural-reference actuals remain
+unsupported, while existing reference-free inference and rigid forwarding remain.
+Positive local trait bounds use the canonical
 obligation foundation below. Const generics and generic function values remain
 unsupported. See `GENERIC-REFERENCES.md` for transported reference contracts,
 borrowed receivers and genuine bounded two-phase loans. See
-`NESTED-REFERENCES.md` for the common two-layer shared-reference foundation,
-position-qualified contracts and preserved high-arity legacy admission.
+`NESTED-REFERENCES.md` for the preceding two-layer shared-reference foundation.
+`GENERIC-CARRIERS.md` defines the extended root-reference domain, current-cell
+semantics, entry-value effects, proof gates and preserved high-arity legacy path.
 See `GENERICS.md` for the universal/concrete trust boundary and shared
 planning limits, and `GENERIC-INFERENCE.md` for the private evidence grammar,
 fallible no-fallback hints and exactly-once ordinary elaboration. This foundation
@@ -126,8 +131,9 @@ with world-certified declaration-bound topology transport rather than a fresh
 contract derived from coincident concrete types. Every source body is checked,
 and generic source bodies plus every admitted recipe pass universal lowering and
 analysis. Demanded instances pass closed analysis before native publication.
-Logical Copy/Clone membership on two shared layers does not
-authorize a depth-three Clone receiver. A real source clone_from override runs
+Logical Copy/Clone membership alone does not authorize a receiver topology or
+reference-valued executable instance: counted layout and the exact common
+universal carrier proof remain required. A real source clone_from override runs
 normally, while its unavailable canonical default fails before instance admission.
 General default bodies, trait or trait-method generics, associated types, trait
 objects, destructor execution and full standard-library integration remain
@@ -184,7 +190,9 @@ authority frozen until their last use. Input kinds remain genuine capabilities,
 while all region-related inputs constrain output lifetimes independently of target
 eligibility. See `MIXED-REFERENCE-RETURNS.md`. Enum payload paths, dynamic borrowed
 indices, trait-based autoderef, bare reference indexing and general elision
-and reference-containing aggregates remain unsupported.
+and general source-declared reference-containing aggregates remain unsupported.
+Certified internal generic products are covered by the carrier domain below,
+not by a general reference-field or aggregate-type-actual permission.
 Builtin `r.field` and `r.0` insert one real Deref before field lookup in reads,
 assignments and borrows. Privacy and pointee capability are checked after peeling
 the reference, without moving its carrier or snapshotting its aggregate. Genuine
@@ -245,7 +253,14 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 - Check every source body and available registered recipe against authoritative
   signatures (operation 110). Generic source bodies and every recipe, including
   zero-arity recipes, lower universally (111) and pass the same move/dataflow
-  solver (112), including unused declarations, before instance planning (113).
+  solver (112), including unused declarations.
+- Join all body typing (110) and required generic-Source/all-Recipe universal
+  proofs (111/112) at `UNIVERSAL_EFFECTS_READY` (115), publishing one immutable
+  `CarrierEffectTable` from exact successful templates before instance planning
+  (113). Universal analysis uses conservative declaration envelopes, not this
+  table. Nongeneric Source bodies remain closed-only and supply no early body
+  summary. Operation 115 depends on neither closed analysis (109) nor the final
+  concrete barrier (114), avoiding a caller/body-summary dependency cycle.
 - Seal a bounded deduplicated instance frontier seeded by every nongeneric
   source function, with recipe instances admitted only on demand.
   Concrete bodies (102) reuse nongeneric facts or instantiate verified
@@ -257,6 +272,9 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 - Analyze each CFG once (operation 109), validating structure and running bounded
   definite-initialization, storage-lifetime, move-path, loan-origin and bounded
   signature-region dataflow to fixed points.
+  Closed analysis can use selected-body effect refinements from 115 only after
+  exact target, template, substitution and facts validation. Missing summaries
+  retain conservative declaration envelopes, not a fabricated family proof.
   Both check and emission require this successful immutable analysis fact.
 - Join all concrete analyses in one cached publication barrier (114) before
   requesting any native object. Unused invalid nongeneric bodies therefore
@@ -337,9 +355,97 @@ Shared aliases, mutable-handle moves, explicit reborrows and last-use permission
 checks operate on canonical storage places. An immutable binding holding a mutable
 reference may write its referent. Thin native addresses are emitted only after
 the exact CFG passes initialization and loan checks. Parameters and bounded
-whole-parameter results use the follow-on contracts above. Reference-containing
-aggregates, temporary lifetime extension and general Rust
+whole-parameter results use the follow-on contracts above. General source-declared
+reference-containing aggregates, temporary lifetime extension and general Rust
 regions remain unsupported. See `BORROWING.md` for B1 boundaries and B2/B3 work.
+
+### Generic carrier values, current cells and effects
+
+Source and Recipe use the same checked IR/CFG, ownership Plan, worklist and joins.
+`CarrierLocation` is a typed value lens, distinct from a canonical memory-place
+projection. Its `Fixed` channels identify reference positions, while an
+owner-qualified `ParamTail` denotes the latent component family of a rigid type
+parameter. Distinct input occurrences retain distinct entry origins even when
+their types or eventual concrete actuals coincide. Family origins are symbolic
+relations, not concrete loans, targets, layouts or Copy permission. Concrete
+reference origins and symbolic families occupy separate typed domains in the
+same solver. Every Copy exemption requires the exact canonical `must_copy` fact.
+
+World-owned `CarrierContractView` binds declaration schemas and topology to the
+exact world, registry snapshot, ordered actuals, environment, phase and shared
+planning ledger. It supplements fixed `RefContract` authority rather than
+rederiving return candidates from coincident specialized types. Header topology
+is not executable family proof. `VerifiedTemplateCfg` retains successful
+universal carrier/effect analysis, and the exhaustive checked-body substitution
+walk retains a private `BodySubstitutionProof` for nominal/component mappings,
+including body-local and dead metadata. Reference-valued instances require this
+exact common capability, fresh lowering with concrete Copy/Move decisions and
+closed analysis before the existing `ConcreteCfg` native seal. An older
+reference-free value proof alone cannot grant reference-family permission.
+
+Addressable carrier storage uses current cells keyed by canonical place and
+channel, not a physical reference-depth slot. A typed dereference follows handle
+targets, then loads the current inner cell, so writes through one alias are
+observed by later parent or sibling reloads. Existing issued loans still retain
+their original targets and parent authority. Reborrows through mutable chains
+retain all required intermediate unique-parent and lifetime dependencies, while
+an independent shared-reference value load does not permanently inherit a
+transient outer handle. Unknown aliases require a finite complete original typed
+candidate-cell cover or an explicit Unsupported result.
+
+Call returns and carrier writes name entry input-value snapshots. Analysis
+captures inputs, destination OLD contents and target lenses before consumption,
+computes effects from that same state and applies poststate simultaneously.
+OLD remains an allowed write alternative in conservative envelopes. Recursion,
+mutual recursion and abstract calls initially use canonical declaration
+envelopes. A private `CarrierEffectProof` records may effects and MustOverwrite
+across all normal exits, with joins intersecting definite-write facts. A call
+strong replacement requires a singleton Exact unique mutable target and sealed
+selected-body MustOverwrite, not merely an `&mut` formal. Direct stores establish
+their definite updates locally. The 115 table refines closed analysis only and
+never supplies missing universal family capability or skips all-body checks.
+
+Original caller named lifetimes remain rigid, including unused names pruned from
+normalized contracts. Each callee use has fresh occurrence bindings, even at
+recursive calls to the same declaration. Source-stage call evidence preserves
+firm explicit reference expectations and the original Move/reborrow decision.
+Family region constraints use witnessed pointwise component correspondence,
+with both directions required for mutable invariance, not type equality or an
+origin union. Call targets and native identities remain lifetime-erased.
+Instantiation does not rerun coercion from a final concrete type. Unused bodies
+and dead calls still validate new carrier metadata and capability requirements,
+without manufacturing reachable origins or loan permission.
+
+The first affine domain permits at most one returned owned affine component with
+no affine writes, or one written owned affine cell with no affine results.
+Components proven Copy by exact canonical facts are exempt from affine counting,
+but still undergo all lifetime, alias and effect checks. Owned-component counting
+stops at reference-value boundaries, rather than counting nested pointee views as
+extra transferred handles. Affine writes need one singleton Exact destination.
+Wider affine result/write correlation,
+multi-target affine writes, newly inferred structural-reference actuals, unknown
+cell aliases without a complete typed cover and recursive precision needing
+pre-barrier MustOverwrite remain Unsupported. Internal nominal value transport
+does not authorize a derived nested executable actual such as `Wrap<&U>`:
+instance facts do not yet accept certified call-lineage authority for that case.
+Explicit nominal lifetime/reference-field declarations and external
+reference-containing aggregate actuals remain outside this stage.
+
+All paths, families, cells, snapshots, effect relations, proof retention and
+concrete expansions charge the same `PlanBudget`, including symbolic work with
+no concrete loans. Limits remain 4096 combined concrete origins, 1,000,000
+memberships, 64 normalized regions per canonical contract when constraints are
+required, shared depth 128 and 128 MiB combined analysis state. The dynamic
+combined occurrence graph is separately metered against unchanged total-state
+limits, not a 64-region total across caller and callee bindings. Exactly qualified
+legacy erased subjects with no induced constraints keep zero normalized region
+rows while retaining their full typed carrier and alias analysis. New reference
+topology must create genuine fixed/family constraints or fail, not borrow that
+erased bypass or merge
+distinct origins to fit the cap. Resource exhaustion fails closed and is not
+reclassified as a semantic negative or Unsupported precision boundary. See
+`GENERIC-CARRIERS.md` for the detailed bounded contract. This is not full Rust
+generic-reference support or a compilation-performance claim.
 
 ## Aggregate implementation boundary
 
@@ -358,7 +464,9 @@ Assignments evaluate their full RHS before writing and require mutable roots
 except for a first whole-local initialization or a write through an authorized
 mutable reference. Borrowing an owned aggregate does not copy it; Copy fields can
 be read through references without moving the containing value. Aggregate
-comparisons, reference-containing aggregates, derives and destructors remain unsupported.
+comparisons, general source-declared reference-containing aggregates, derives
+and destructors remain unsupported. Certified internal generic products under
+admitted root-reference actuals use the carrier substitution proof above.
 Let patterns support nested tuples/structs, renamed or shorthand fields, wildcard
 and struct `..`, with whole-pattern annotations and independent mutable binders.
 Tuple-rest patterns, ref/ref mut, @, or/refutable patterns, parameter patterns,

@@ -7,10 +7,9 @@ use super::borrow::{
     self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target, TargetPrecision,
 };
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{
-    CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, ReferencePosition,
-    Ty,
-};
+#[cfg(test)]
+use super::ir::ReferencePosition;
+use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, Ty};
 use super::traits::{FactsError, FactsPhase, ValidatedFacts};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -82,6 +81,7 @@ impl Analysis {
 pub struct VerifiedTemplateCfg {
     template: cfg::TemplateCfg,
     analysis: Arc<Analysis>,
+    carrier_effects: Option<Arc<CarrierEffectProof>>,
     _reservation: Arc<super::ir::PlanReservation>,
 }
 impl VerifiedTemplateCfg {
@@ -102,6 +102,198 @@ impl VerifiedTemplateCfg {
     }
     pub fn budget(&self) -> &super::ir::PlanBudget {
         self.facts().budget()
+    }
+    pub(super) fn carrier_effects(&self) -> Option<&Arc<CarrierEffectProof>> {
+        self.carrier_effects.as_ref()
+    }
+}
+
+/// A successful SAME-Plan family/effect proof. It deliberately retains the
+/// original immutable inputs, not the wrapper which owns this proof.
+#[derive(Clone, Debug)]
+pub(super) struct CarrierEffectProof {
+    source: Arc<CheckedFunction>,
+    function: Arc<cfg::Function>,
+    facts: Arc<ValidatedFacts>,
+    analysis: Arc<Analysis>,
+    effects: Arc<borrow::CarrierEffects>,
+}
+
+/// Published only by the root's acyclic universal-effects join. Absence is
+/// conservative declaration authority, never a successful family proof.
+#[derive(Clone, Debug)]
+pub(super) struct CarrierEffectTable {
+    templates: Arc<[VerifiedTemplateCfg]>,
+    budget: super::ir::PlanBudget,
+}
+impl CarrierEffectTable {
+    pub(super) fn lookup(
+        &self,
+        target: &super::ir::Callee,
+        caller: &cfg::Function,
+        facts: &ValidatedFacts,
+        view: &super::traits::CarrierContractView,
+    ) -> Result<Option<Arc<borrow::CarrierEffects>>, super::traits::FactsError> {
+        let budget = facts.budget();
+        if !budget.same_authority(&self.budget) || facts.phase() != FactsPhase::Closed {
+            return Err(super::traits::FactsError::invalid(
+                budget,
+                "effect lookup changed closed planning authority",
+            ));
+        }
+        caller
+            .validate_provenance(facts, budget)
+            .map_err(|message| super::traits::FactsError::from_message(budget, &message))?;
+        view.validate_for(facts)?;
+        for template in self.templates.iter() {
+            budget
+                .charge_work(1)
+                .map_err(|message| super::traits::FactsError::resource(budget, &message))?;
+            if !Arc::ptr_eq(template.facts().world(), facts.world()) {
+                return Err(super::traits::FactsError::invalid(
+                    budget,
+                    "effect lookup mixed canonical worlds",
+                ));
+            }
+        }
+        let super::ir::Callee::Direct(target) = target else {
+            return Ok(None);
+        };
+        if target.declaration != view.declaration()
+            || !facts
+                .world()
+                .types_equal(&target.type_args, view.arguments())?
+        {
+            return Err(super::traits::FactsError::invalid(
+                budget,
+                "effect lookup selected a different canonical declaration",
+            ));
+        }
+        for template in self.templates.iter() {
+            budget
+                .charge_work(1)
+                .map_err(|message| super::traits::FactsError::resource(budget, &message))?;
+            if template.facts().declaration() != target.declaration {
+                continue;
+            }
+            if !Arc::ptr_eq(template.env(), view.original_env()) {
+                return Err(super::traits::FactsError::invalid(
+                    budget,
+                    "effect lookup changed original binder environment",
+                ));
+            }
+            let Some(proof) = template.carrier_effects() else {
+                return Ok(None);
+            };
+            if !Arc::ptr_eq(&proof.source, template.source())
+                || !Arc::ptr_eq(&proof.function, template.function())
+                || !Arc::ptr_eq(&proof.analysis, template.analysis())
+                || !Arc::ptr_eq(&proof.facts, template.facts())
+                || !proof.analysis.passed()
+                || !template.budget().same_authority(budget)
+            {
+                return Err(super::traits::FactsError::invalid(
+                    budget,
+                    "effect lookup lost exact universal body proof",
+                ));
+            }
+            return Ok(Some(proof.effects.clone()));
+        }
+        Ok(None)
+    }
+    pub(super) fn from_verified(
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        // Both the table and its retained slice have independent Arc control
+        // blocks, including the empty-table case. The caller's source slice
+        // remains live throughout this allocation.
+        budget.charge_nodes(2)?;
+        budget.charge_work(templates.len())?;
+        let bytes = templates
+            .len()
+            .checked_mul(std::mem::size_of::<VerifiedTemplateCfg>())
+            .and_then(|bytes| {
+                bytes.checked_add(std::mem::size_of::<Self>() + 4 * std::mem::size_of::<usize>())
+            })
+            .ok_or("carrier effect table size overflow")?;
+        budget.retain_bytes(bytes)?;
+        for (index, template) in templates.iter().enumerate() {
+            if !template.budget().same_authority(budget)
+                || template.facts().phase() != FactsPhase::Universal
+                || !template.analysis().passed()
+            {
+                return Err(
+                    "carrier effect table contains foreign or unsuccessful template".into(),
+                );
+            }
+            budget.charge_work(index)?;
+            for previous in &templates[..index] {
+                if !Arc::ptr_eq(previous.facts().world(), template.facts().world()) {
+                    return Err("carrier effect table mixes canonical worlds".into());
+                }
+                if previous.facts().declaration() == template.facts().declaration()
+                    && (!Arc::ptr_eq(previous.source(), template.source())
+                        || !Arc::ptr_eq(previous.function(), template.function())
+                        || !Arc::ptr_eq(previous.analysis(), template.analysis())
+                        || !Arc::ptr_eq(previous.facts(), template.facts())
+                        || !match (previous.carrier_effects(), template.carrier_effects()) {
+                            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                            (None, None) => true,
+                            _ => false,
+                        })
+                {
+                    return Err(
+                        "carrier effect table has conflicting provider proof identities".into(),
+                    );
+                }
+            }
+            if let Some(proof) = template.carrier_effects()
+                && (!Arc::ptr_eq(&proof.source, template.source())
+                    || !Arc::ptr_eq(&proof.function, template.function())
+                    || !Arc::ptr_eq(&proof.facts, template.facts())
+                    || !Arc::ptr_eq(&proof.analysis, template.analysis()))
+            {
+                return Err("carrier effect proof changed its exact verified inputs".into());
+            }
+        }
+        // Universal analysis assumes declaration envelopes, never another
+        // body's summary. Once every universal proof exists, independently
+        // check new ordinary reference-actual calls even in unused/dead source
+        // metadata. A reference-free-only callee proof is not sufficient.
+        for caller in templates {
+            for expression in &caller.source().exprs {
+                budget.charge_work(1)?;
+                let super::ir::ExprKind::Call { target, .. } = &expression.kind else {
+                    continue;
+                };
+                let actuals = match target {
+                    super::ir::Callee::Direct(target) => target.type_args.as_ref(),
+                    super::ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+                };
+                budget.charge_work(actuals.len())?;
+                if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
+                    continue;
+                }
+                let super::ir::Callee::Direct(target) = target else {
+                    return Err(
+                        "unsupported abstract method reference-actual body admission".into(),
+                    );
+                };
+                budget.charge_work(templates.len())?;
+                let callee = templates
+                    .iter()
+                    .find(|candidate| candidate.facts().declaration() == target.declaration)
+                    .ok_or("reference-actual call has no canonical universal body")?;
+                if callee.carrier_effects().is_none() {
+                    return Err("unsupported reference-actual call requires its callee's complete universal family proof".into());
+                }
+            }
+        }
+        Ok(Arc::new(Self {
+            templates: Arc::from(templates),
+            budget: budget.clone(),
+        }))
     }
 }
 
@@ -127,6 +319,90 @@ impl ConcreteCfg {
     }
 }
 
+/// Derive the compatibility boundary from the original checked source, including
+/// dead arena metadata. Demanded instance arguments cannot opt a body into the
+/// old reference-free-only fallback.
+fn type_requires_carrier_proof(
+    ty: &Ty,
+    budget: &super::ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    let classify = |message: String| FactsError::from_message(budget, &message);
+    let mut cursor = ty;
+    let mut depth = 0usize;
+    let mut mutable = false;
+    while let Ty::Ref { kind, referent } = cursor {
+        budget.check_depth(depth).map_err(classify)?;
+        budget.charge_work(1).map_err(classify)?;
+        depth = depth
+            .checked_add(1)
+            .ok_or_else(|| FactsError::resource(budget, "original carrier depth overflow"))?;
+        mutable |= *kind == super::ir::BorrowKind::Mut;
+        cursor = referent;
+    }
+    let locations = super::ir::carrier_locations(ty, budget).map_err(classify)?;
+    budget.charge_work(locations.len()).map_err(classify)?;
+    Ok(depth > 2
+        || (depth > 1 && mutable)
+        || locations.iter().any(|location| {
+            matches!(location.channel, super::ir::CarrierChannel::Fixed(_))
+                && !location.path.0.is_empty()
+        }))
+}
+
+fn source_requires_carrier_proof(
+    source: &CheckedFunction,
+    budget: &super::ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    let classify = |message: String| FactsError::from_message(budget, &message);
+    let mut required = false;
+    for expression in &source.exprs {
+        budget.charge_work(1).map_err(classify)?;
+        if let super::ir::ExprKind::Call {
+            target, signature, ..
+        } = &expression.kind
+        {
+            let actuals = match target {
+                super::ir::Callee::Direct(target) => target.type_args.as_ref(),
+                super::ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+            };
+            budget.charge_work(actuals.len()).map_err(classify)?;
+            required |= actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. }));
+            for ty in signature
+                .params
+                .iter()
+                .chain(std::iter::once(&signature.result))
+            {
+                required |= type_requires_carrier_proof(ty, budget)?;
+            }
+        }
+    }
+    for ty in std::iter::once(&source.result)
+        .chain(source.locals.iter().map(|local| &local.ty))
+        .chain(source.exprs.iter().map(|expression| &expression.ty))
+    {
+        required |= type_requires_carrier_proof(ty, budget)?;
+    }
+    Ok(required)
+}
+
+fn closed_requires_carrier_proof(closed: &cfg::ClosedCfg) -> Result<bool, FactsError> {
+    if let Some(proof) = closed.body_substitution() {
+        return source_requires_carrier_proof(proof.template().source(), closed.budget());
+    }
+    if let Some(evidence) = closed.call_evidence().first() {
+        return source_requires_carrier_proof(evidence.source(), closed.budget());
+    }
+    // No substitution or source call capsules: this is an original nongeneric
+    // body. Its complete typed local arena is unchanged by specialization.
+    let mut required = false;
+    for ty in std::iter::once(&closed.function().result)
+        .chain(closed.function().locals.iter().map(|local| &local.ty))
+    {
+        required |= type_requires_carrier_proof(ty, closed.budget())?;
+    }
+    Ok(required)
+}
+
 // Failed verification deliberately returns the full existing report, not a
 // lossy error summary or a second allocation on the failure path.
 #[allow(clippy::result_large_err)]
@@ -138,14 +414,53 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
             template.facts().budget(),
         ));
     }
-    let analysis = analyze_with_facts(
+    let mut candidate_effects = None;
+    let analysis = analyze_with_context(
         template.function(),
         Limits::default(),
         FactsCtx::Validated(template.facts()),
         Some(template.budget()),
+        (Some(template.function()), Some(template.facts())),
+        None,
+        &mut candidate_effects,
     );
     if !analysis.passed() {
         return Err(analysis);
+    }
+    match source_requires_carrier_proof(template.source(), template.budget()) {
+        Ok(true) if candidate_effects.is_none() => {
+            return Err(facts_error_analysis(
+                template.function(),
+                FactsError::unsupported(
+                    template.budget(),
+                    "unsupported original carrier body requires a complete universal family proof",
+                ),
+                template.budget(),
+            ));
+        }
+        Err(error) => {
+            return Err(facts_error_analysis(
+                template.function(),
+                error,
+                template.budget(),
+            ));
+        }
+        _ => {}
+    }
+    if candidate_effects.is_some() {
+        let proof_storage =
+            std::mem::size_of::<CarrierEffectProof>() + 2 * std::mem::size_of::<usize>();
+        if let Err(message) = template
+            .budget()
+            .charge_nodes(1)
+            .and_then(|()| template.budget().retain_bytes(proof_storage))
+        {
+            return Err(facts_error_analysis(
+                template.function(),
+                FactsError::resource(template.budget(), &message),
+                template.budget(),
+            ));
+        }
     }
     let (analysis, reservation) = bind_proof(
         analysis,
@@ -153,15 +468,52 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
         template.budget(),
         std::mem::size_of::<VerifiedTemplateCfg>(),
     )?;
+    // The candidate is produced by the SAME Plan, but only a complete,
+    // successful analysis above may turn it into executable family authority.
+    // Retain original immutable inputs, never this owning template wrapper.
+    let carrier_effects = candidate_effects.map(|effects| {
+        Arc::new(CarrierEffectProof {
+            source: template.source().clone(),
+            function: template.function().clone(),
+            facts: template.facts().clone(),
+            analysis: analysis.clone(),
+            effects,
+        })
+    });
     Ok(VerifiedTemplateCfg {
         template,
         analysis,
+        carrier_effects,
         _reservation: reservation,
     })
 }
 
 #[allow(clippy::result_large_err)]
+pub(super) fn analyze_closed_with_effects(
+    closed: cfg::ClosedCfg,
+    effects: &Arc<CarrierEffectTable>,
+) -> Result<ConcreteCfg, Analysis> {
+    if !closed.budget().same_authority(&effects.budget) {
+        return Err(invalid_facts_analysis(
+            closed.function(),
+            "carrier effects changed planning authority",
+            closed.budget(),
+        ));
+    }
+    // The table is not permission to omit the ordinary closed analysis. The
+    // SAME Plan consumes only exact, occurrence-bound entries during transfer.
+    analyze_closed_context(closed, Some(effects))
+}
+
+#[allow(clippy::result_large_err)]
 pub fn analyze_closed(closed: cfg::ClosedCfg) -> Result<ConcreteCfg, Analysis> {
+    analyze_closed_context(closed, None)
+}
+#[allow(clippy::result_large_err)]
+fn analyze_closed_context(
+    closed: cfg::ClosedCfg,
+    effects: Option<&Arc<CarrierEffectTable>>,
+) -> Result<ConcreteCfg, Analysis> {
     if closed.facts().phase() != FactsPhase::Closed {
         return Err(invalid_facts_analysis(
             closed.function(),
@@ -169,14 +521,38 @@ pub fn analyze_closed(closed: cfg::ClosedCfg) -> Result<ConcreteCfg, Analysis> {
             closed.facts().budget(),
         ));
     }
-    let analysis = analyze_with_facts(
+    let mut candidate_effects = None;
+    let analysis = analyze_with_context(
         closed.function(),
         Limits::default(),
         FactsCtx::Validated(closed.facts()),
         Some(closed.budget()),
+        (Some(closed.function()), Some(closed.facts())),
+        effects,
+        &mut candidate_effects,
     );
     if !analysis.passed() {
         return Err(analysis);
+    }
+    match closed_requires_carrier_proof(&closed) {
+        Ok(true) if candidate_effects.is_none() => {
+            return Err(facts_error_analysis(
+                closed.function(),
+                FactsError::unsupported(
+                    closed.budget(),
+                    "unsupported original carrier body requires a complete closed family proof",
+                ),
+                closed.budget(),
+            ));
+        }
+        Err(error) => {
+            return Err(facts_error_analysis(
+                closed.function(),
+                error,
+                closed.budget(),
+            ));
+        }
+        _ => {}
     }
     let (analysis, reservation) = bind_proof(
         analysis,
@@ -197,10 +573,25 @@ fn invalid_facts_analysis(
     budget: &super::ir::PlanBudget,
 ) -> Analysis {
     let error = super::traits::FactsError::invalid(budget, message);
+    facts_error_analysis(function, error, budget)
+}
+
+fn facts_error_analysis(
+    function: &cfg::Function,
+    error: FactsError,
+    budget: &super::ir::PlanBudget,
+) -> Analysis {
+    let category = error.kind();
     let kind = if error.is_resource() {
         ErrorKind::ResourceLimit
     } else {
-        ErrorKind::InvalidCfg(error.into_legacy_diagnostic(budget))
+        match error.into_diagnostic(budget) {
+            Ok(message) if category == super::traits::FactsErrorKind::Unsupported => {
+                ErrorKind::UnsupportedBorrowing(message)
+            }
+            Ok(message) => ErrorKind::InvalidCfg(message),
+            Err(_) => ErrorKind::ResourceLimit,
+        }
     };
     let complete = kind != ErrorKind::ResourceLimit;
     Analysis {
@@ -443,7 +834,7 @@ pub(super) fn preflight_recipe_counts(
             .ok_or(Exhausted)?;
         let ownership_bytes =
             ownership_state_bytes(counts.locals, counts.path_nodes, counts.blocks)?;
-        let borrow_bytes = if origins != 0 || counts.carrier_slots != 0 {
+        let mut borrow_bytes = if origins != 0 || counts.carrier_slots != 0 {
             borrow::plan_storage_bytes(
                 counts.locals,
                 counts.blocks,
@@ -461,6 +852,26 @@ pub(super) fn preflight_recipe_counts(
         } else {
             0
         };
+        // The same dynamic occurrence graph kernel pays for the retained body
+        // graph and the simultaneously live rigid/occurrence copies per call.
+        // Recipe events bound each call by the original carrier and binder rows.
+        let region_nodes = counts
+            .formal_origins
+            .checked_add(counts.binders)
+            .and_then(|n| n.checked_add(2))
+            .ok_or(Exhausted)?;
+        let region_copies = counts
+            .call_result_origins
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(1))
+            .ok_or(Exhausted)?;
+        borrow_bytes = borrow_bytes
+            .checked_add(
+                borrow::region_storage_bytes(region_nodes)?
+                    .checked_mul(region_copies)
+                    .ok_or(Exhausted)?,
+            )
+            .ok_or(Exhausted)?;
         let path_bytes =
             paths_storage_bytes(counts.locals, counts.path_nodes, counts.variant_offsets)?;
         let state_bytes = ownership_bytes.checked_add(borrow_bytes).ok_or(Exhausted)?;
@@ -537,6 +948,8 @@ pub(super) struct Budget {
     plan: Option<super::ir::PlanBudget>,
     reservations: Vec<super::ir::PlanReservation>,
     peak_scratch: usize,
+    reserved_bytes: usize,
+    state_limit: usize,
 }
 impl Budget {
     #[cfg(test)]
@@ -546,6 +959,8 @@ impl Budget {
             plan: None,
             reservations: Vec::new(),
             peak_scratch: 0,
+            reserved_bytes: 0,
+            state_limit: 128 * 1024 * 1024,
         }
     }
     fn for_plan(remaining: usize, plan: Option<&super::ir::PlanBudget>) -> Self {
@@ -554,6 +969,8 @@ impl Budget {
             plan: plan.cloned(),
             reservations: Vec::new(),
             peak_scratch: 0,
+            reserved_bytes: 0,
+            state_limit: 128 * 1024 * 1024,
         }
     }
     pub(super) fn spend(&mut self, amount: usize) -> Result<(), Exhausted> {
@@ -564,29 +981,71 @@ impl Budget {
         self.remaining = remaining;
         Ok(())
     }
+    pub(super) fn plan_budget(&self) -> Option<&super::ir::PlanBudget> {
+        self.plan.as_ref()
+    }
+    pub(super) fn reserved_bytes(&self) -> usize {
+        self.reserved_bytes
+    }
     pub(super) fn reserve_bytes(&mut self, amount: usize) -> Result<(), Exhausted> {
-        if let Some(plan) = &self.plan {
-            // Each retained token also pays for its Vec growth before push.
-            let amount = amount
-                .checked_add(2 * std::mem::size_of::<super::ir::PlanReservation>())
-                .ok_or(Exhausted)?;
-            self.reservations
-                .push(plan.reserve_bytes(amount).map_err(|_| Exhausted)?);
+        let growth =
+            if self.plan.is_some() && self.reservations.len() == self.reservations.capacity() {
+                Some(
+                    self.reservations
+                        .capacity()
+                        .checked_mul(2)
+                        .ok_or(Exhausted)?
+                        .max(4),
+                )
+            } else {
+                None
+            };
+        let overhead = match growth {
+            Some(capacity) => capacity
+                .checked_add(self.reservations.capacity())
+                .and_then(|words| {
+                    words.checked_mul(std::mem::size_of::<super::ir::PlanReservation>())
+                })
+                .ok_or(Exhausted)?,
+            None => 0,
+        };
+        let amount = amount.checked_add(overhead).ok_or(Exhausted)?;
+        let next = self.reserved_bytes.checked_add(amount).ok_or(Exhausted)?;
+        if next > self.state_limit {
+            return Err(Exhausted);
         }
+        if growth.is_some() {
+            self.spend(self.reservations.len().checked_add(1).ok_or(Exhausted)?)?;
+            self.nodes(1)?;
+        }
+        if let Some(plan) = &self.plan {
+            let reservation = plan.reserve_bytes(amount).map_err(|_| Exhausted)?;
+            if let Some(capacity) = growth {
+                self.reservations
+                    .try_reserve_exact(
+                        capacity
+                            .checked_sub(self.reservations.len())
+                            .ok_or(Exhausted)?,
+                    )
+                    .map_err(|_| Exhausted)?;
+            }
+            self.reservations.push(reservation);
+        }
+        self.reserved_bytes = next;
         Ok(())
     }
-    fn nodes(&mut self, count: usize) -> Result<(), Exhausted> {
+    pub(super) fn nodes(&mut self, count: usize) -> Result<(), Exhausted> {
         if let Some(plan) = &self.plan {
             plan.charge_nodes(count).map_err(|_| Exhausted)?;
         }
         Ok(())
     }
     fn scratch(&mut self, amount: usize) -> Result<Option<super::ir::PlanReservation>, Exhausted> {
+        // Retain scratch accounting conservatively for this analysis. This also
+        // covers overlapping reservations without a second untracked allocator.
+        self.reserve_bytes(amount)?;
         self.peak_scratch = self.peak_scratch.max(amount);
-        self.plan
-            .as_ref()
-            .map(|plan| plan.reserve_bytes(amount).map_err(|_| Exhausted))
-            .transpose()
+        Ok(None)
     }
 }
 
@@ -608,12 +1067,18 @@ fn preflight_with_plan(
         loan_sites: usize,
         max_bytes: usize,
         contract: &super::ir::RefContract,
+        facts: FactsCtx<'_>,
         budget: &mut Budget,
     ) -> Result<Option<super::ir::PlanReservation>, Exhausted> {
         let mut candidate_count = 0usize;
         let mut envelope_count = 0usize;
         let mut steps = 0usize;
-        if contract.results.len() > 2 || contract.input_regions.len() > 4096 {
+        let result_limit = if matches!(facts, FactsCtx::Validated(_)) {
+            4096
+        } else {
+            2
+        };
+        if contract.results.len() > result_limit || contract.input_regions.len() > 4096 {
             return Err(Exhausted);
         }
         budget.spend(contract.results.len() + contract.input_regions.len() + 1)?;
@@ -849,6 +1314,7 @@ fn preflight_with_plan(
         f.loan_sites.len(),
         limits.state_bytes,
         &f.ref_contract,
+        facts,
         &mut budget,
     )?;
     let mut param_types = Vec::with_capacity(f.params.len());
@@ -1006,6 +1472,7 @@ fn preflight_with_plan(
                     f.loan_sites.len(),
                     limits.state_bytes,
                     &signature.ref_contract,
+                    facts,
                     &mut budget,
                 )?;
                 let call_valid = if let FactsCtx::Validated(authority) = facts {
@@ -1143,7 +1610,7 @@ struct PathNode {
 }
 struct Paths {
     roots: Vec<usize>,
-    external: Vec<[Option<usize>; 2]>,
+    external: Vec<Vec<(super::ir::CarrierLocation, usize)>>,
     nodes: Vec<PathNode>,
 }
 impl Paths {
@@ -1215,16 +1682,24 @@ impl Paths {
         for local in &f.locals {
             count(&local.ty, facts, budget, limit, 0, &mut counts)?;
         }
+        let ledger = match facts {
+            FactsCtx::Validated(facts) => facts.budget().clone(),
+            _ => budget
+                .plan
+                .clone()
+                .unwrap_or_else(|| super::ir::PlanBudget::new(Default::default())),
+        };
         for local in &f.params {
-            for depth in
-                0..super::ir::reference_layers(&f.locals[local.0].ty).map_err(|_| Exhausted)?
+            for location in super::ir::carrier_locations(&f.locals[local.0].ty, &ledger)
+                .map_err(|_| Exhausted)?
+                .iter()
             {
-                let (_, referent) = super::ir::reference_at(
-                    &f.locals[local.0].ty,
-                    ReferencePosition { depth: depth as u8 },
-                )
-                .map_err(|_| Exhausted)?;
-                count(referent, facts, budget, limit, 0, &mut counts)?;
+                if let Ty::Ref { referent, .. } =
+                    super::ir::carrier_at(&f.locals[local.0].ty, location, &ledger)
+                        .map_err(|_| Exhausted)?
+                {
+                    count(referent, facts, budget, limit, 0, &mut counts)?;
+                }
             }
         }
         let (node_count, variant_count) = counts;
@@ -1292,7 +1767,7 @@ impl Paths {
         }
         let mut result = Self {
             roots: Vec::new(),
-            external: vec![[None; 2]; f.locals.len()],
+            external: vec![vec![]; f.locals.len()],
             nodes: Vec::new(),
         };
         for local in &f.locals {
@@ -1300,16 +1775,18 @@ impl Paths {
             result.roots.push(root);
         }
         for local in &f.params {
-            for depth in
-                0..super::ir::reference_layers(&f.locals[local.0].ty).map_err(|_| Exhausted)?
+            for location in super::ir::carrier_locations(&f.locals[local.0].ty, &ledger)
+                .map_err(|_| Exhausted)?
+                .iter()
             {
-                let (_, referent) = super::ir::reference_at(
-                    &f.locals[local.0].ty,
-                    ReferencePosition { depth: depth as u8 },
-                )
-                .map_err(|_| Exhausted)?;
-                let root = add(&mut result, referent, None, limit, facts, budget)?;
-                result.external[local.0][depth] = Some(root);
+                if let Ty::Ref { referent, .. } =
+                    super::ir::carrier_at(&f.locals[local.0].ty, location, &ledger)
+                        .map_err(|_| Exhausted)?
+                {
+                    let root = add(&mut result, referent, None, limit, facts, budget)?;
+                    budget.reserve_bytes(4 * size_of::<(super::ir::CarrierLocation, usize)>())?;
+                    result.external[local.0].push((location.clone(), root));
+                }
             }
         }
         Ok(result)
@@ -1321,7 +1798,11 @@ impl Paths {
         match root {
             CanonicalRoot::Owned(local) => self.roots[local.0],
             CanonicalRoot::ParameterReferent(local, position) => {
-                self.external[local.0][usize::from(position.depth)].expect("formal referent path")
+                self.external[local.0]
+                    .iter()
+                    .find(|(location, _)| location == position)
+                    .expect("formal referent path")
+                    .1
             }
         }
     }
@@ -1536,37 +2017,46 @@ impl Transfer<'_> {
         Ok(())
     }
     fn carrier_read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
-        let depth = borrow::dereference_count(place);
-        if depth != 0 {
-            self.read_raw(state, &root_place(place.local))?;
-            // Every intermediate reference value is an actual checked read.
-            // Its loan authorizes this load only, not the inner value's lifetime.
-            for count in 1..depth {
-                self.budget.spend(count + 1)?;
-                let carrier = Place {
-                    local: place.local,
-                    projection: vec![Projection::Deref; count],
-                };
-                for target in self.targets(&carrier)? {
-                    self.check_access(&target, Access::Read)?;
-                    self.read_canonical(state, &target.place)?;
-                }
+        for (index, projection) in place.projection.iter().enumerate() {
+            if *projection != Projection::Deref {
+                continue;
+            }
+            self.budget.spend(index + 1)?;
+            let carrier = Place {
+                local: place.local,
+                projection: place.projection[..index].to_vec(),
+            };
+            for target in self.targets(&carrier)? {
+                self.check_access(&target, Access::Read)?;
+                self.read_canonical(state, &target.place)?;
             }
         }
         Ok(())
     }
     fn mut_authority(&mut self, place: &Place) {
-        if !matches!(
-            self.f.locals[place.local.0].ty,
-            Ty::Ref {
-                kind: super::ir::BorrowKind::Mut,
-                ..
+        for (index, projection) in place.projection.iter().enumerate() {
+            if *projection != Projection::Deref {
+                continue;
             }
-        ) {
-            self.problem(
-                Problem::Invalid("mutation requires mutable reference authority".into()),
-                place.clone(),
-            );
+            if !matches!(
+                super::ir::projected_ty(
+                    &self.f.locals[place.local.0].ty,
+                    &place.projection[..index]
+                ),
+                Ok(Ty::Ref {
+                    kind: super::ir::BorrowKind::Mut,
+                    ..
+                })
+            ) {
+                self.problem(
+                    Problem::Invalid(
+                        "mutation requires mutable authority through every reference carrier"
+                            .into(),
+                    ),
+                    place.clone(),
+                );
+                return;
+            }
         }
     }
     fn read_mode(
@@ -1592,7 +2082,7 @@ impl Transfer<'_> {
         if self.loans.is_none() {
             return self.write_raw(state, place);
         }
-        let deref = place.projection.first() == Some(&Projection::Deref);
+        let deref = place.projection.contains(&Projection::Deref);
         self.carrier_read(state, place)?;
         if deref {
             self.mut_authority(place);
@@ -2133,6 +2623,16 @@ impl Transfer<'_> {
                         }
                     }
                 }
+                if let Some(loans) = self.loans {
+                    // Effect destinations were resolved from the shared ENTRY
+                    // snapshot. A singleton address or RefMut type alone is not
+                    // access permission: live children and parent authority are
+                    // checked by the same transfer gate as source assignments.
+                    for target in loans.call_write_targets(self.block, self.budget)? {
+                        self.check_access(&target, Access::Write)?;
+                        self.read_canonical(state, &target.place)?;
+                    }
+                }
                 for arg in args {
                     self.operand(state, arg)?;
                 }
@@ -2212,6 +2712,18 @@ fn analyze_with_facts(
     facts: FactsCtx<'_>,
     plan: Option<&super::ir::PlanBudget>,
 ) -> Analysis {
+    analyze_with_context(f, limits, facts, plan, (None, None), None, &mut None)
+}
+fn analyze_with_context(
+    f: &cfg::Function,
+    limits: Limits,
+    facts: FactsCtx<'_>,
+    plan: Option<&super::ir::PlanBudget>,
+    exact: (Option<&Arc<cfg::Function>>, Option<&Arc<ValidatedFacts>>),
+    effect_table: Option<&Arc<CarrierEffectTable>>,
+    effect_output: &mut Option<Arc<borrow::CarrierEffects>>,
+) -> Analysis {
+    let (exact_function, exact_facts) = exact;
     if let FactsCtx::Validated(authority) = facts {
         if authority.phase() == FactsPhase::Schema {
             return invalid_facts_analysis(
@@ -2240,9 +2752,18 @@ fn analyze_with_facts(
     let result = (|| -> Result<(), Exhausted> {
         let scratch = preflight_with_plan(f, limits, plan, facts)?;
         let mut budget = Budget::for_plan(limits.work, plan);
+        budget.state_limit = limits.state_bytes;
         let verification_scratch = budget.scratch(scratch)?;
         if let Err(error) = f.validate_with_facts(facts) {
-            if error.contains("limit") || error.contains("exhaust") {
+            let resource = plan.map_or_else(
+                || {
+                    ["limit", "exhaust", "resource", "overflow", "poison"]
+                        .iter()
+                        .any(|term| error.contains(term))
+                },
+                |plan| super::traits::FactsError::from_message(plan, &error).is_resource(),
+            );
+            if resource {
                 return Err(Exhausted);
             }
             report.diagnostics.push(Diagnostic {
@@ -2266,19 +2787,23 @@ fn analyze_with_facts(
         }
         budget.reserve_bytes(bytes)?;
         let mut seed = State::new(f.locals.len(), paths.nodes.len());
-        let loans = if !f.loan_sites.is_empty()
-            || f.locals
-                .iter()
-                .any(|local| matches!(local.ty, Ty::Ref { .. }))
-        {
-            Some(borrow::Plan::build(
-                f,
+        let loans = if let (Some(function), Some(authority)) = (exact_function, exact_facts) {
+            Some(borrow::Plan::build_validated(
+                function,
+                authority,
+                effect_table,
                 &mut budget,
                 limits.state_bytes - bytes,
             )?)
         } else {
-            None
+            Some(borrow::Plan::build_with_facts(
+                f,
+                facts,
+                &mut budget,
+                limits.state_bytes - bytes,
+            )?)
         };
+        *effect_output = loans.as_ref().and_then(|loans| loans.effects().cloned());
         if let Some(loans) = &loans {
             if bytes.checked_add(loans.bytes).ok_or(Exhausted)? > limits.state_bytes {
                 return Err(Exhausted);
@@ -2313,7 +2838,8 @@ fn analyze_with_facts(
                 .range(root, paths.nodes[root].end, true, &mut budget)?;
             seed.ever_written
                 .range(root, paths.nodes[root].end, true, &mut budget)?;
-            for &root in paths.external[local.0].iter().flatten() {
+            for (_, root) in &paths.external[local.0] {
+                let root = *root;
                 seed.must_init
                     .range(root, paths.nodes[root].end, true, &mut budget)?;
                 seed.may_init
@@ -2512,6 +3038,8 @@ mod tests {
             footprint.borrow_bytes,
             borrow::plan_storage_bytes(8, 3, 16, 4, 5).unwrap()
                 + borrow::target_payload_bytes(6, 4, 5, 16).unwrap()
+                + borrow::region_storage_bytes(counts.formal_origins + counts.binders + 2).unwrap()
+                    * (2 * counts.call_result_origins + 1)
         );
         assert_eq!(
             footprint.state_bytes,
@@ -2762,8 +3290,8 @@ mod tests {
             })
             .find(|declaration| plan.callable_body(&program, *declaration).unwrap().name == name)
             .unwrap();
-        let checked =
-            frontend::type_callable_with_plan(&program, declaration, &plan, budget).unwrap();
+        let checked = frontend::type_callable_with_plan(&program, declaration, &plan, budget)
+            .unwrap_or_else(|error| panic!("{name} in {source}: {error}"));
         let facts = plan.callable_facts(declaration).unwrap();
         // Facts must retain their immutable world and structural adapter after
         // both the source program and the frontend planning handle are dropped.
@@ -2788,6 +3316,97 @@ mod tests {
         let budget = super::super::ir::PlanBudget::default();
         let (checked, facts) = trait_callable_fixture(source, name, &budget);
         cfg::lower_template(checked, facts, &budget).unwrap()
+    }
+
+    fn carrier_reference_template(source: &str) -> cfg::TemplateCfg {
+        reference_template(&format!("{source} fn main(){{}}"), "f")
+    }
+
+    #[test]
+    fn generic_carriers_universal_families_owned_writes_and_deep_results() {
+        for source in [
+            "fn f<T>(x:T)->T{x}",
+            "fn f<T>(d:&mut T,x:T){*d=x;}",
+            "fn f<T>(d:&mut T,x:T,y:T)->T{*d=x;y}",
+            "fn f<'a,'b,'c>(p:&'a &'b &'c i32)->&'a &'b &'c i32{p}",
+            "fn f<'a,'b>(d:&mut &'a mut &'b mut i32,x:&'a mut &'b mut i32){*d=x;}",
+        ] {
+            let proof = verify_template(carrier_reference_template(source))
+                .unwrap_or_else(|analysis| panic!("{source}: {:?}", analysis.diagnostics));
+            assert!(proof.analysis().passed());
+            assert!(proof.carrier_effects().is_some(), "{source}");
+        }
+    }
+
+    #[test]
+    fn generic_carriers_rigid_extent_dead_calls_and_mutable_parent_lifetimes() {
+        for source in [
+            "fn id<T>(x:T)->T{x} fn f<'a>(){let x=1;id::<&'a i32>(&x);}",
+            "fn f<'a,'b>(p:&'a mut &'b mut i32)->&'b mut i32{*p}",
+        ] {
+            let program =
+                super::super::frontend::parse(&format!("{source} fn main(){{}}")).unwrap();
+            let error = super::super::frontend::check(&program)
+                .expect_err("invalid carrier source must fail semantic checking");
+            assert!(
+                !error.contains("limit") && !error.contains("exhaust"),
+                "{source}: {error}"
+            );
+        }
+        let source = "fn g<T>(d:&mut T,x:T,y:T)->T{*d=x;y} fn f<'a>(d:&mut &'a mut i32,x:&'a mut i32,y:&'a mut i32){return;g::<&'a mut i32>(d,x,y);}";
+        let analysis = verify_template(carrier_reference_template(source)).unwrap_err();
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.kind, ErrorKind::UnsupportedBorrowing(_))),
+            "{:?}",
+            analysis.diagnostics
+        );
+    }
+
+    #[test]
+    fn generic_carriers_exact_capsules_and_combined_resource_denial() {
+        let template = carrier_reference_template(
+            "fn id<T>(x:T)->T{x} fn f<'a>(x:&'a i32)->&'a i32{id::<&'a i32>(x)}",
+        );
+        let mut forged = template.function().as_ref().clone();
+        forged.lowering_proof = None;
+        let analysis = analyze_with_facts(
+            &forged,
+            Limits::default(),
+            FactsCtx::Validated(template.facts()),
+            Some(template.budget()),
+        );
+        assert!(!analysis.passed());
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.kind, ErrorKind::InvalidCfg(_)))
+        );
+        let ledger = super::super::ir::PlanBudget::default();
+        let mut budget = Budget::for_plan(usize::MAX, Some(&ledger));
+        budget.state_limit = 63;
+        assert!(budget.reserve_bytes(64).is_err());
+        let mut budget = Budget::for_plan(usize::MAX, Some(&ledger));
+        budget.state_limit = 4096;
+        budget.reserve_bytes(3000).unwrap();
+        assert!(budget.scratch(1097).is_err());
+        let mut budget = Budget::for_plan(usize::MAX, Some(&ledger));
+        for _ in 0..17 {
+            budget.reserve_bytes(0).unwrap();
+        }
+        assert!(
+            budget.reserved_bytes()
+                >= budget.reservations.capacity()
+                    * std::mem::size_of::<super::super::ir::PlanReservation>()
+        );
+        let exhausted = super::super::ir::PlanBudget::new(super::super::ir::PlanLimits {
+            bytes: 0,
+            ..super::super::ir::PlanLimits::default()
+        });
+        assert!(CarrierEffectTable::from_verified(&[], &exhausted).is_err());
     }
 
     #[test]
@@ -2827,7 +3446,7 @@ mod tests {
             assert!(targets.iter().all(|t| t.place.root
                 == CanonicalRoot::ParameterReferent(
                     f.params[0],
-                    ReferencePosition { depth: depth as u8 }
+                    borrow::fixed_location(ReferencePosition { depth: depth as u8 })
                 )));
         }
         let source = "fn inner<'a,'b,T>(p:&'a &'b T)->&'b T{*p} fn f<'a,'b,T>(p:&'a &'b T)->&'b T{inner(p)} fn main(){}";
@@ -2994,7 +3613,7 @@ mod tests {
                     && t.place.root
                         == CanonicalRoot::ParameterReferent(
                             f.params[0],
-                            ReferencePosition { depth: 0 }
+                            borrow::fixed_location(ReferencePosition { depth: 0 })
                         )
                     && t.place.projection.is_empty())
         );
@@ -3437,6 +4056,8 @@ mod tests {
         let (env, parameters) = symbolic_pair();
         let ty = Ty::Tuple(Vec::from(parameters).into());
         let source = Arc::new(CheckedFunction {
+            call_evidence: Arc::from([]),
+            body_substitution: None,
             ref_contract: Default::default(),
             name: "both_binders".into(),
             params: vec![LocalId(0)],
@@ -3610,6 +4231,8 @@ mod tests {
         use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
         let (env, parameter) = symbolic_parameter();
         let source = Arc::new(CheckedFunction {
+            call_evidence: Arc::from([]),
+            body_substitution: None,
             ref_contract: Default::default(),
             name: "identity".into(),
             params: vec![LocalId(0)],
@@ -4523,7 +5146,10 @@ mod tests {
         assert_eq!(targets.len(), 2);
         for (param, field) in [(f.params[0], 0), (f.params[1], 1)] {
             assert!(targets.iter().any(|target| target.place.root
-                == CanonicalRoot::ParameterReferent(param, ReferencePosition { depth: 0 })
+                == CanonicalRoot::ParameterReferent(
+                    param,
+                    borrow::fixed_location(ReferencePosition { depth: 0 })
+                )
                 && target.place.projection == [Projection::Field(field)]));
         }
         assert!(targets[0].authority != targets[1].authority);
@@ -4892,7 +5518,10 @@ mod tests {
         assert_eq!(after.len(), 1);
         assert_eq!(
             after[0].place.root,
-            CanonicalRoot::ParameterReferent(f.params[0], ReferencePosition { depth: 0 })
+            CanonicalRoot::ParameterReferent(
+                f.params[0],
+                borrow::fixed_location(ReferencePosition { depth: 0 })
+            )
         );
         let mut budget = Budget::new(32 * 1024 * 1024);
         assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
@@ -5213,6 +5842,9 @@ mod tests {
     }
     fn fixture() -> cfg::Function {
         cfg::Function {
+            body_substitution: None,
+            call_evidence: Arc::from([]),
+            lowering_proof: None,
             ref_contract: Default::default(),
             name: "caps".into(),
             params: vec![],

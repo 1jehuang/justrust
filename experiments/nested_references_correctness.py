@@ -1037,6 +1037,24 @@ FROZEN_CORPUS_JSON = r'''[
 '''
 FIXTURES = json.loads(FROZEN_CORPUS_JSON)
 
+# Effective native-only promotions, backed by immutable worker1/8 BUILD/CHECK/run
+# parity evidence. Frozen stock dictionaries and historical groups remain unchanged.
+NATIVE_PROMOTIONS = {
+    "nested_mutable_reference_chain": "0cd40686bbbe209e74df6e40de6bac1084f49ecf6f7cca7efa352b5875cba99d",
+    "ordinary_reference_generic_actual": "80ae5b278b3d3fb1165e17e54bc23ffbc9238019e0b347464035f08a6fc95070",
+    "shared_reference_depth_greater_than_two": "677de66b1201fd9d44cc3a8b133897b4076c0a5c36ded40a57a877877c1d82b0",
+}
+
+def effective_native_case(case):
+    expected_hash = NATIVE_PROMOTIONS.get(case.name)
+    if expected_hash is None:
+        return case
+    if (case.kind != "boundary"
+            or hashlib.sha256(case.source.encode()).hexdigest() != expected_hash):
+        raise ValueError(f"native promotion changed its frozen source/classification: {case.name}")
+    return Case(case.name, "valid", case.source, case.stdout)
+
+
 def corpus():
     if hashlib.sha256(FROZEN_CORPUS_JSON.encode()).hexdigest() != ACCEPTANCE_CORPUS_SHA256:
         raise ValueError("frozen nested reference dictionary bytes changed")
@@ -1140,7 +1158,12 @@ def stock_case(case, index, directory, rustc, compile_timeout, run_timeout):
 
 def native_case(case, index, directory, binary, rustc, compile_timeout, run_timeout):
     """Use supplied native binary and shared bounded worker1/8 BUILD/CHECK/runtime."""
+    original_kind = case.kind
+    case = effective_native_case(case)
     row = run_case(case, index, directory, binary, rustc, compile_timeout, run_timeout)
+    if case.name in NATIVE_PROMOTIONS:
+        row["original_kind"] = original_kind
+        row["native_promotion_source_sha256"] = NATIVE_PROMOTIONS[case.name]
     if case.kind in ("invalid", "boundary"):
         for worker in row["workers"]:
             for mode in ("compile", "check"):
@@ -1192,6 +1215,10 @@ def main():
                 "case_count": len(cases),
                 "case_counts": {kind: sum(c.kind == kind for c in cases)
                                 for kind in ("valid", "invalid", "boundary")},
+                "native_promotions": {} if args.stock_only else NATIVE_PROMOTIONS,
+                "effective_native_case_counts": {} if args.stock_only else {
+                    kind: sum(effective_native_case(c).kind == kind for c in cases)
+                    for kind in ("valid", "invalid", "boundary", "resource_error")},
                 "stock_only": args.stock_only,
                 "workers": [] if args.stock_only else [1, 8],
                 "modes": [] if args.stock_only else ["build", "check"], "edition": 2024,

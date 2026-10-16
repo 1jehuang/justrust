@@ -436,6 +436,7 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                     Key::new(113, vec![]),
+                    Key::new(115, vec![]),
                     source.clone(),
                 ];
                 for index in 0..2 {

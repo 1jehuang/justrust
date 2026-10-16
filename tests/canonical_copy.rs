@@ -579,6 +579,15 @@ fn frozen_canonical_copy_invalid12() {
 #[test]
 fn frozen_canonical_copy_legal_excluded4() {
     for fixture in group("legal-excluded", 4) {
-        rejects(fixture.name, fixture.full_source, false);
+        // Keep the historical group and every other unsupported boundary unchanged.
+        if matches!(
+            fixture.name,
+            "ordinary_reference_generic_actual_clone_wrapper"
+                | "forced_clone_on_double_shared_reference_requires_depth3_receiver"
+        ) {
+            runs(fixture.full_source, fixture.expected_stdout);
+        } else {
+            rejects(fixture.name, fixture.full_source, false);
+        }
     }
 }

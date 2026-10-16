@@ -22,7 +22,7 @@ pub enum LoanTiming {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoanSite {
     pub kind: ir::BorrowKind,
     pub place: Place,
@@ -30,7 +30,7 @@ pub struct LoanSite {
     pub timing: LoanTiming,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Located<T> {
     pub value: T,
     pub origin: Option<ExprId>,
@@ -38,6 +38,9 @@ pub struct Located<T> {
 
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub lowering_proof: Option<std::sync::Arc<GeneratedCfgShape>>,
+    pub body_substitution: Option<std::sync::Arc<ir::BodySubstitutionProof>>,
+    pub call_evidence: std::sync::Arc<[std::sync::Arc<ir::ValidatedCallEvidence>]>,
     pub ref_contract: std::sync::Arc<ir::RefContract>,
     pub loan_sites: Vec<LoanSite>,
     pub name: String,
@@ -51,13 +54,302 @@ pub struct Function {
     pub return_local: LocalId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BasicBlock {
     pub statements: Vec<Located<Statement>>,
     pub terminator: Located<Terminator>,
 }
 
+/// Payload correspondence with the one canonical lowering. Identity guards retain
+/// their original allocations, never the produced Function. Body proofs retain
+/// only the original verified template, so these guards have no output backedge.
 #[derive(Clone, Debug)]
+pub struct GeneratedCfgShape {
+    name: String,
+    params: std::sync::Arc<[LocalId]>,
+    locals: std::sync::Arc<[ir::LocalDecl]>,
+    blocks: std::sync::Arc<[BasicBlock]>,
+    loans: std::sync::Arc<[LoanSite]>,
+    result: Ty,
+    contract: std::sync::Arc<ir::RefContract>,
+    entry: BlockId,
+    return_local: LocalId,
+    world: std::sync::Arc<super::traits::ValidatedTraitWorld>,
+    declaration: ir::DeclId,
+    phase: super::traits::FactsPhase,
+    target: Option<ir::CallTarget>,
+    capsules: std::sync::Arc<[std::sync::Arc<ir::ValidatedCallEvidence>]>,
+    body_proof: Option<std::sync::Arc<ir::BodySubstitutionProof>>,
+    budget: ir::PlanBudget,
+}
+impl GeneratedCfgShape {
+    fn capture(
+        f: &Function,
+        facts: &super::traits::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, String> {
+        f.preflight_plan(ir::FactsCtx::from_validated(facts), budget)?;
+        budget.retain_bytes(f.snapshot_storage(budget)?)?;
+        budget.retain_bytes(std::mem::size_of::<Self>() + 8 * std::mem::size_of::<usize>())?;
+        budget.retain_bytes(
+            f.call_evidence
+                .len()
+                .checked_mul(2 * std::mem::size_of::<std::sync::Arc<ir::ValidatedCallEvidence>>())
+                .ok_or("lowering capsule storage overflow")?,
+        )?;
+        budget.charge_work(f.call_evidence.len())?;
+        Ok(Self {
+            name: f.name.clone(),
+            params: f.params.clone().into(),
+            locals: f.locals.clone().into(),
+            blocks: f.blocks.clone().into(),
+            loans: f.loan_sites.clone().into(),
+            result: f.result.clone(),
+            contract: f.ref_contract.clone(),
+            entry: f.entry,
+            return_local: f.return_local,
+            body_proof: f.body_substitution.clone(),
+            budget: budget.clone(),
+            world: facts.world().clone(),
+            declaration: facts.declaration(),
+            phase: facts.phase(),
+            target: facts.target().cloned(),
+            capsules: f.call_evidence.clone(),
+        })
+    }
+    pub(super) fn validate(
+        &self,
+        f: &Function,
+        facts: &super::traits::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        f.preflight_plan(ir::FactsCtx::from_validated(facts), budget)?;
+        f.snapshot_storage(budget)?;
+        if !self.budget.same_authority(budget)
+            || !std::sync::Arc::ptr_eq(&self.world, facts.world())
+            || self.declaration != facts.declaration()
+            || self.phase != facts.phase()
+            || !facts.budget().same_authority(budget)
+        {
+            return Err("lowering proof facts authority changed".into());
+        }
+        match (&self.target, facts.target()) {
+            (Some(a), Some(b))
+                if a.declaration == b.declaration
+                    && facts
+                        .world()
+                        .types_equal(&a.type_args, &b.type_args)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))? => {}
+            (None, None) => {}
+            _ => return Err("lowering proof target changed".into()),
+        }
+        budget.charge_work(f.call_evidence.len().saturating_add(self.capsules.len()))?;
+        match (&self.body_proof, &f.body_substitution) {
+            (Some(original), Some(current)) if std::sync::Arc::ptr_eq(original, current) => {}
+            (None, None) => {}
+            _ => return Err("lowering proof exact body correspondence changed".into()),
+        }
+        if f.call_evidence.len() != self.capsules.len()
+            || f.call_evidence
+                .iter()
+                .zip(self.capsules.iter())
+                .any(|(capsule, original)| !std::sync::Arc::ptr_eq(capsule, original))
+        {
+            return Err("lowering proof original evidence changed".into());
+        }
+        budget.charge_work(
+            self.name
+                .len()
+                .saturating_add(self.params.len())
+                .saturating_add(self.locals.len())
+                .saturating_add(self.blocks.len())
+                .saturating_add(self.loans.len()),
+        )?;
+        if f.name != self.name
+            || f.params.as_slice() != self.params.as_ref()
+            || f.locals.len() != self.locals.len()
+            || f.blocks.len() != self.blocks.len()
+            || f.loan_sites.len() != self.loans.len()
+            || f.entry != self.entry
+            || f.return_local != self.return_local
+            || !std::sync::Arc::ptr_eq(&f.ref_contract, &self.contract)
+            || !ir::identical_type(&f.result, &self.result, budget)?
+        {
+            return Err("generated CFG subject changed".into());
+        }
+        for (a, b) in f.locals.iter().zip(self.locals.iter()) {
+            if !ir::identical_type(&a.ty, &b.ty, budget)? {
+                return Err("generated CFG local type changed".into());
+            }
+        }
+        for (a, b) in f.blocks.iter().zip(self.blocks.iter()) {
+            budget.charge_work(a.statements.len().saturating_add(b.statements.len()))?;
+            if a.statements.len() != b.statements.len() {
+                return Err("generated CFG statement count changed".into());
+            }
+            for (a, b) in a.statements.iter().zip(&b.statements) {
+                if !same_statement_types(&a.value, &b.value, budget)? {
+                    return Err("generated CFG statement metadata changed".into());
+                }
+            }
+            if !same_terminator_types(&a.terminator.value, &b.terminator.value, budget)? {
+                return Err("generated CFG call metadata changed".into());
+            }
+        }
+        if f.locals.as_slice() != self.locals.as_ref()
+            || f.blocks.as_slice() != self.blocks.as_ref()
+            || f.loan_sites.as_slice() != self.loans.as_ref()
+        {
+            return Err("generated CFG operation, flow, origin or loan timing changed".into());
+        }
+        Ok(())
+    }
+}
+fn same_operand_types(a: &Operand, b: &Operand, budget: &ir::PlanBudget) -> Result<bool, String> {
+    budget.charge_work(1)?;
+    if let (
+        Operand::Constant(Constant::Enum { ty: a, .. }),
+        Operand::Constant(Constant::Enum { ty: b, .. }),
+    ) = (a, b)
+    {
+        return ir::identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget);
+    }
+    Ok(true)
+}
+fn same_operand_list(
+    a: &[Operand],
+    b: &[Operand],
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    budget.charge_work(a.len().saturating_add(b.len()))?;
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    for (a, b) in a.iter().zip(b) {
+        if !same_operand_types(a, b, budget)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<bool, String> {
+    budget.charge_work(1)?;
+    if std::mem::discriminant(a) != std::mem::discriminant(b) {
+        return Ok(false);
+    }
+    match (a, b) {
+        (Rvalue::Repeat { ty: a, value: aa }, Rvalue::Repeat { ty: b, value: bb }) => {
+            Ok(ir::identical_type(a, b, budget)? && same_operand_types(aa, bb, budget)?)
+        }
+        (Rvalue::Aggregate { ty: a, fields: aa }, Rvalue::Aggregate { ty: b, fields: bb }) => {
+            Ok(ir::identical_type(a, b, budget)? && same_operand_list(aa, bb, budget)?)
+        }
+        (
+            Rvalue::EnumVariant {
+                ty: a, fields: aa, ..
+            },
+            Rvalue::EnumVariant {
+                ty: b, fields: bb, ..
+            },
+        ) => Ok(
+            ir::identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)?
+                && same_operand_list(aa, bb, budget)?,
+        ),
+        (Rvalue::Use(a), Rvalue::Use(b))
+        | (Rvalue::IntCast { value: a, .. }, Rvalue::IntCast { value: b, .. })
+        | (Rvalue::Unary { value: a, .. }, Rvalue::Unary { value: b, .. })
+        | (Rvalue::IndexCopy { index: a, .. }, Rvalue::IndexCopy { index: b, .. }) => {
+            same_operand_types(a, b, budget)
+        }
+        (
+            Rvalue::Binary {
+                left: a, right: aa, ..
+            },
+            Rvalue::Binary {
+                left: b, right: bb, ..
+            },
+        ) => Ok(same_operand_types(a, b, budget)? && same_operand_types(aa, bb, budget)?),
+        _ => Ok(true),
+    }
+}
+fn same_statement_types(
+    a: &Statement,
+    b: &Statement,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    budget.charge_work(1)?;
+    if std::mem::discriminant(a) != std::mem::discriminant(b) {
+        return Ok(false);
+    }
+    match (a, b) {
+        (Statement::Assign { value: a, .. }, Statement::Assign { value: b, .. }) => {
+            same_rvalue_types(a, b, budget)
+        }
+        (
+            Statement::IndexAssign {
+                index: a,
+                value: aa,
+                ..
+            },
+            Statement::IndexAssign {
+                index: b,
+                value: bb,
+                ..
+            },
+        )
+        | (
+            Statement::IndexAssignOp {
+                index: a,
+                value: aa,
+                ..
+            },
+            Statement::IndexAssignOp {
+                index: b,
+                value: bb,
+                ..
+            },
+        ) => Ok(same_operand_types(a, b, budget)? && same_operand_types(aa, bb, budget)?),
+        (Statement::IndexInspect { index: a, .. }, Statement::IndexInspect { index: b, .. }) => {
+            same_operand_types(a, b, budget)
+        }
+        _ => Ok(true),
+    }
+}
+fn same_terminator_types(
+    a: &Terminator,
+    b: &Terminator,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    budget.charge_work(1)?;
+    if std::mem::discriminant(a) != std::mem::discriminant(b) {
+        return Ok(false);
+    }
+    match (a, b) {
+        (
+            Terminator::Call {
+                target: a,
+                signature: sa,
+                args: aa,
+                ..
+            },
+            Terminator::Call {
+                target: b,
+                signature: sb,
+                args: bb,
+                ..
+            },
+        ) => {
+            Ok(ir::identical_call_types(a, sa, b, sb, budget)?
+                && same_operand_list(aa, bb, budget)?)
+        }
+        (Terminator::Switch { condition: a, .. }, Terminator::Switch { condition: b, .. }) => {
+            same_operand_types(a, b, budget)
+        }
+        _ => Ok(true),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement {
     IndexAssignOp {
         array: Place,
@@ -85,7 +377,7 @@ pub enum Statement {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constant {
     Enum { ty: ir::EnumTy, variant: usize },
     Int(IntValue),
@@ -93,14 +385,14 @@ pub enum Constant {
     Unit,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operand {
     Constant(Constant),
     Copy(Place),
     Move(Place),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
     IntCast {
         value: Operand,
@@ -139,7 +431,7 @@ pub enum Rvalue {
     Println(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Terminator {
     SwitchVariant {
         place: Place,
@@ -256,6 +548,9 @@ pub struct TemplateCfg {
     budget: ir::PlanBudget,
 }
 impl TemplateCfg {
+    pub fn call_evidence(&self) -> &[std::sync::Arc<ir::ValidatedCallEvidence>] {
+        &self.function.call_evidence
+    }
     pub fn facts(&self) -> &std::sync::Arc<super::traits::ValidatedFacts> {
         &self.facts
     }
@@ -279,6 +574,12 @@ pub struct ClosedCfg {
     budget: ir::PlanBudget,
 }
 impl ClosedCfg {
+    pub fn body_substitution(&self) -> Option<&std::sync::Arc<ir::BodySubstitutionProof>> {
+        self.function.body_substitution.as_ref()
+    }
+    pub fn call_evidence(&self) -> &[std::sync::Arc<ir::ValidatedCallEvidence>] {
+        &self.function.call_evidence
+    }
     pub fn facts(&self) -> &std::sync::Arc<super::traits::ValidatedFacts> {
         &self.facts
     }
@@ -305,6 +606,7 @@ pub fn close(
     budget: &ir::PlanBudget,
 ) -> Result<ClosedCfg, String> {
     require_facts(&facts, super::traits::FactsPhase::Closed, budget)?;
+    function.validate_provenance(&facts, budget)?;
     function.preflight_plan(ir::FactsCtx::from_validated(&facts), budget)?;
     function.validate_with_facts(ir::FactsCtx::from_validated(&facts))?;
     Ok(ClosedCfg {
@@ -321,7 +623,14 @@ pub fn lower_template(
     require_facts(&authority, super::traits::FactsPhase::Universal, budget)?;
     budget.charge_nodes(source.exprs.len().saturating_add(source.locals.len()))?;
     let facts = ir::FactsCtx::from_validated(&authority);
-    let function = std::sync::Arc::new(lower_internal(&source, facts, Some(budget))?);
+    let mut lowered = lower_internal(&source, facts, Some(budget))?;
+    lowered.call_evidence = ir::bind_call_evidence(source.clone(), authority.clone(), budget)?;
+    if !lowered.call_evidence.is_empty() {
+        lowered.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
+            &lowered, &authority, budget,
+        )?));
+    }
+    let function = std::sync::Arc::new(lowered);
     function.preflight_plan(facts, budget)?;
     function.validate_with_facts(facts)?;
     Ok(TemplateCfg {
@@ -330,6 +639,17 @@ pub fn lower_template(
         function,
         budget: budget.clone(),
     })
+}
+
+fn concrete_carrier_count(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<usize, String> {
+    if let Some(authority) = facts.validated() {
+        Ok(ir::carrier_locations(ty, authority.budget())?
+            .iter()
+            .filter(|location| matches!(location.channel, ir::CarrierChannel::Fixed(_)))
+            .count())
+    } else {
+        ir::reference_layers(ty)
+    }
 }
 
 fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
@@ -406,6 +726,243 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
 }
 
 impl Function {
+    /// Same exact payload sizing walk for snapshot construction and comparison.
+    /// Only construction retains bytes. Type allocations are shared immutable
+    /// Arcs and are validated separately by the authoritative preflight.
+    fn snapshot_storage(&self, budget: &ir::PlanBudget) -> Result<usize, String> {
+        fn add(
+            bytes: &mut usize,
+            n: usize,
+            width: usize,
+            budget: &ir::PlanBudget,
+        ) -> Result<(), String> {
+            budget.charge_work(n)?;
+            *bytes = bytes
+                .checked_add(n.checked_mul(width).ok_or("CFG snapshot size overflow")?)
+                .ok_or("CFG snapshot size overflow")?;
+            Ok(())
+        }
+        fn path(bytes: &mut usize, p: &Place, budget: &ir::PlanBudget) -> Result<(), String> {
+            budget.check_depth(p.projection.len())?;
+            add(
+                bytes,
+                p.projection.len(),
+                std::mem::size_of::<Projection>(),
+                budget,
+            )
+        }
+        fn operand(bytes: &mut usize, o: &Operand, budget: &ir::PlanBudget) -> Result<(), String> {
+            budget.charge_work(1)?;
+            if let Operand::Copy(p) | Operand::Move(p) = o {
+                path(bytes, p, budget)?;
+            }
+            Ok(())
+        }
+        let mut bytes = 0;
+        add(&mut bytes, self.name.len(), 1, budget)?;
+        add(
+            &mut bytes,
+            self.params.len(),
+            2 * std::mem::size_of::<LocalId>(),
+            budget,
+        )?;
+        add(
+            &mut bytes,
+            self.locals.len(),
+            2 * std::mem::size_of::<ir::LocalDecl>(),
+            budget,
+        )?;
+        add(
+            &mut bytes,
+            self.blocks.len(),
+            2 * std::mem::size_of::<BasicBlock>(),
+            budget,
+        )?;
+        add(
+            &mut bytes,
+            self.loan_sites.len(),
+            2 * std::mem::size_of::<LoanSite>(),
+            budget,
+        )?;
+        for local in &self.locals {
+            add(&mut bytes, local.name.len(), 1, budget)?;
+        }
+        for loan in &self.loan_sites {
+            path(&mut bytes, &loan.place, budget)?;
+        }
+        for block in &self.blocks {
+            add(
+                &mut bytes,
+                block.statements.len(),
+                std::mem::size_of::<Located<Statement>>(),
+                budget,
+            )?;
+            for statement in &block.statements {
+                match &statement.value {
+                    Statement::Assign { destination, value } => {
+                        path(&mut bytes, destination, budget)?;
+                        match value {
+                            Rvalue::Aggregate { fields, .. }
+                            | Rvalue::EnumVariant { fields, .. } => add(
+                                &mut bytes,
+                                fields.len(),
+                                std::mem::size_of::<Operand>(),
+                                budget,
+                            )?,
+                            Rvalue::Println(text) => add(&mut bytes, text.len(), 1, budget)?,
+                            Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
+                                path(&mut bytes, array, budget)?
+                            }
+                            _ => {}
+                        }
+                    }
+                    Statement::IndexAssignOp { array, .. }
+                    | Statement::IndexAssign { array, .. }
+                    | Statement::IndexInspect { array, .. }
+                    | Statement::Inspect(array) => path(&mut bytes, array, budget)?,
+                    Statement::StorageLive(_) | Statement::StorageDead(_) => {}
+                }
+                statement
+                    .value
+                    .visit_operands(&mut |value| operand(&mut bytes, value, budget))?;
+            }
+            match &block.terminator.value {
+                Terminator::Call {
+                    name,
+                    signature,
+                    args,
+                    destination,
+                    ..
+                } => {
+                    add(&mut bytes, name.len(), 1, budget)?;
+                    add(
+                        &mut bytes,
+                        signature.params.len(),
+                        std::mem::size_of::<Ty>(),
+                        budget,
+                    )?;
+                    add(
+                        &mut bytes,
+                        args.len(),
+                        std::mem::size_of::<Operand>(),
+                        budget,
+                    )?;
+                    path(&mut bytes, destination, budget)?;
+                }
+                Terminator::SwitchVariant { place, .. } => path(&mut bytes, place, budget)?,
+                _ => {}
+            }
+            block
+                .terminator
+                .value
+                .visit_operands(&mut |value| operand(&mut bytes, value, budget))?;
+        }
+        Ok(bytes)
+    }
+    pub fn validate_provenance(
+        &self,
+        facts: &super::traits::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        if !facts.budget().same_authority(budget) {
+            return Err("CFG provenance changed planning authority".into());
+        }
+        if let Some(target) = facts.target() {
+            budget.charge_work(target.type_args.len())?;
+        }
+        if facts.target().is_some_and(|target| {
+            target
+                .type_args
+                .iter()
+                .any(|ty| matches!(ty, Ty::Ref { .. }))
+        }) && self.body_substitution.is_none()
+        {
+            return Err(
+                "reference-valued instance requires its exact verified-template body proof".into(),
+            );
+        }
+        if let Some(shape) = &self.lowering_proof {
+            shape.validate(self, facts, budget)?;
+        } else if self.body_substitution.is_some() || !self.call_evidence.is_empty() {
+            return Err("CFG provenance requires its exact canonical lowering snapshot".into());
+        }
+        if let Some(proof) = &self.body_substitution {
+            proof.validate_cfg(self, facts, budget)?;
+        }
+        for block in &self.blocks {
+            budget.charge_work(self.call_evidence.len().saturating_add(1))?;
+            let Terminator::Call { target, args, .. } = &block.terminator.value else {
+                continue;
+            };
+            let capsule = self
+                .call_evidence
+                .iter()
+                .find(|evidence| Some(evidence.call()) == block.terminator.origin);
+            let ordinary_actuals: &[Ty] = match target {
+                ir::Callee::Direct(target) => &target.type_args,
+                ir::Callee::TraitItem(call) => &call.method_args,
+            };
+            budget.charge_work(ordinary_actuals.len())?;
+            let requires = ordinary_actuals
+                .iter()
+                .any(|ty| matches!(ty, Ty::Ref { .. }));
+            let Some(capsule) = capsule else {
+                if requires {
+                    return Err("reference actual CFG call lacks original checked evidence".into());
+                }
+                continue;
+            };
+            if !std::sync::Arc::ptr_eq(capsule.facts().world(), facts.world())
+                || !capsule.facts().budget().same_authority(budget)
+            {
+                return Err("CFG call evidence has foreign world or ledger".into());
+            }
+            if let Some(proof) = &self.body_substitution {
+                if !std::sync::Arc::ptr_eq(capsule.source(), proof.template().source())
+                    || capsule.facts().declaration() != proof.template().facts().declaration()
+                    || capsule.facts().phase() != super::traits::FactsPhase::Universal
+                {
+                    return Err(
+                        "CFG call evidence is not the exact verified template source".into(),
+                    );
+                }
+            } else if capsule.facts().declaration() != facts.declaration()
+                || capsule.facts().phase() != facts.phase()
+            {
+                return Err("CFG call evidence subject or phase mismatch".into());
+            }
+            let ir::ExprKind::Call {
+                args: source_args, ..
+            } = &capsule
+                .source()
+                .exprs
+                .get(capsule.call().0)
+                .ok_or("CFG call source outside checked arena")?
+                .kind
+            else {
+                return Err("CFG evidence source is not a call".into());
+            };
+            if args.len() != source_args.len() {
+                return Err("CFG call argument provenance arity mismatch".into());
+            }
+            for (argument, source_arg) in args.iter().zip(source_args) {
+                budget.charge_work(1)?;
+                let expected = capsule
+                    .source()
+                    .locals
+                    .len()
+                    .checked_add(source_arg.0)
+                    .ok_or("CFG source argument index overflow")?;
+                if !matches!(argument, Operand::Copy(place) | Operand::Move(place) if place.local.0 == expected && place.projection.is_empty())
+                {
+                    return Err(
+                        "CFG call no longer uses its exact checked argument snapshot".into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
     fn validate_loan_timing(&self, facts: ir::FactsCtx<'_>) -> Result<(), String> {
         let mut work = 0usize;
         let mut spend = |amount: usize| -> Result<(), String> {
@@ -887,7 +1444,10 @@ impl Function {
     ) -> Result<&Ty, String> {
         self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts)?;
         let array_ty = self.place_ty(array)?;
-        validate_type(array_ty, 0)?;
+        if facts.validated().is_none() {
+            validate_type(array_ty, 0)?;
+        }
+        facts.validate_ty(array_ty)?;
         let Ty::Array { element, .. } = array_ty else {
             return Err("dynamic indexing requires array place".into());
         };
@@ -984,7 +1544,9 @@ impl Function {
                     kind: site.kind,
                     referent: std::sync::Arc::new(referent.clone()),
                 };
-                ir::reference_layers(&ty)?;
+                if facts.validated().is_none() {
+                    ir::reference_layers(&ty)?;
+                }
                 facts.validate_ty(&ty)?;
                 Ok(ty)
             }
@@ -996,7 +1558,10 @@ impl Function {
                 Ok(element.clone())
             }
             Rvalue::Repeat { ty, value } => {
-                validate_type(ty, 0)?;
+                if facts.validated().is_none() {
+                    validate_type(ty, 0)?;
+                }
+                facts.validate_ty(ty)?;
                 let Ty::Array { element, len } = ty else {
                     return Err("CFG repeat requires array type".into());
                 };
@@ -1013,7 +1578,10 @@ impl Function {
                 variant,
                 fields,
             } => {
-                validate_type(&Ty::Enum(ty.clone()), 0)?;
+                if facts.validated().is_none() {
+                    validate_type(&Ty::Enum(ty.clone()), 0)?;
+                }
+                facts.validate_ty(&Ty::Enum(ty.clone()))?;
                 let def = ty
                     .def()
                     .variants
@@ -1059,7 +1627,10 @@ impl Function {
                 )
             }
             Rvalue::Aggregate { ty, fields } => {
-                validate_type(ty, 0)?;
+                if facts.validated().is_none() {
+                    validate_type(ty, 0)?;
+                }
+                facts.validate_ty(ty)?;
                 if let Ty::Array { element, len } = ty {
                     if fields.len() != *len {
                         return Err("CFG array aggregate length mismatch".into());
@@ -1113,10 +1684,14 @@ impl Function {
             }
         };
         block(self.entry)?;
-        for local in &self.locals {
-            validate_type(&local.ty, 0)?;
+        if let Some(authority) = facts.validated() {
+            self.validate_provenance(authority, authority.budget())?;
+        } else {
+            for local in &self.locals {
+                validate_type(&local.ty, 0)?;
+            }
+            validate_type(&self.result, 0)?;
         }
-        validate_type(&self.result, 0)?;
         if self.params.len() >= ir::MAX_PATTERN_PROJECTION_WORK {
             return Err("reference contract parameter resource limit exceeded".into());
         }
@@ -1145,7 +1720,10 @@ impl Function {
         let mut origins = self.loan_sites.len();
         for param in &self.params {
             origins = origins
-                .checked_add(ir::reference_layers(self.place_ty(&place(*param))?)?)
+                .checked_add(concrete_carrier_count(
+                    self.place_ty(&place(*param))?,
+                    facts,
+                )?)
                 .ok_or("reference origin overflow")?;
             if origins > ir::MAX_LOAN_SITES {
                 return Err("CFG combined reference origin limit exceeded".into());
@@ -1154,7 +1732,7 @@ impl Function {
         for block in &self.blocks {
             if let Terminator::Call { signature, .. } = &block.terminator.value {
                 origins = origins
-                    .checked_add(ir::reference_layers(&signature.result)?)
+                    .checked_add(concrete_carrier_count(&signature.result, facts)?)
                     .ok_or("reference origin overflow")?;
                 if origins > ir::MAX_LOAN_SITES {
                     return Err("CFG combined reference origin limit exceeded".into());
@@ -1298,9 +1876,15 @@ impl Function {
                         return Err("CFG call arity mismatch".into());
                     }
                     for ty in &signature.params {
-                        validate_type(ty, 0)?;
+                        if facts.validated().is_none() {
+                            validate_type(ty, 0)?;
+                        }
+                        facts.validate_ty(ty)?;
                     }
-                    validate_type(&signature.result, 0)?;
+                    if facts.validated().is_none() {
+                        validate_type(&signature.result, 0)?;
+                    }
+                    facts.validate_ty(&signature.result)?;
                     if facts.validated().is_none() {
                         signature
                             .ref_contract
@@ -2216,7 +2800,7 @@ impl Lowerer<'_> {
             } => {
                 self.origins = self
                     .origins
-                    .checked_add(ir::reference_layers(&signature.result)?)
+                    .checked_add(concrete_carrier_count(&signature.result, self.facts)?)
                     .ok_or("reference origin overflow")?;
                 if self.origins > ir::MAX_LOAN_SITES {
                     return Err("CFG combined reference origin limit exceeded".into());
@@ -2347,7 +2931,27 @@ pub fn lower_with_facts(
     budget: &ir::PlanBudget,
 ) -> Result<Function, String> {
     require_facts(facts, super::traits::FactsPhase::Closed, budget)?;
-    lower_internal(source, ir::FactsCtx::from_validated(facts), Some(budget))
+    let mut function = lower_internal(source, ir::FactsCtx::from_validated(facts), Some(budget))?;
+    if source.body_substitution.is_some() || !source.call_evidence.is_empty() {
+        source.preflight_plan(ir::FactsCtx::from_validated(facts), budget)?;
+        budget.retain_bytes(
+            std::mem::size_of::<ir::CheckedFunction>()
+                + std::mem::size_of::<super::traits::ValidatedFacts>()
+                + 4 * std::mem::size_of::<usize>(),
+        )?;
+        function.call_evidence = ir::bind_call_evidence(
+            std::sync::Arc::new(source.clone()),
+            std::sync::Arc::new(facts.clone()),
+            budget,
+        )?;
+    }
+    if source.body_substitution.is_some() || !source.call_evidence.is_empty() {
+        function.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
+            &function, facts, budget,
+        )?));
+    }
+    function.validate_provenance(facts, budget)?;
+    Ok(function)
 }
 fn lower_internal(
     source: &ir::CheckedFunction,
@@ -2386,7 +2990,7 @@ fn lower_internal(
             .ok_or("invalid reference parameter local")?
             .ty;
         formal_origins = formal_origins
-            .checked_add(ir::reference_layers(ty)?)
+            .checked_add(concrete_carrier_count(ty, facts)?)
             .ok_or("reference origin overflow")?;
         if formal_origins > ir::MAX_LOAN_SITES {
             return Err("CFG combined reference origin limit exceeded".into());
@@ -2396,7 +3000,7 @@ fn lower_internal(
     for expression in &source.exprs {
         if matches!(expression.kind, ir::ExprKind::Call { .. }) {
             formal_origins = formal_origins
-                .checked_add(ir::reference_layers(&expression.ty)?)
+                .checked_add(concrete_carrier_count(&expression.ty, facts)?)
                 .ok_or("reference origin overflow")?;
             if formal_origins > ir::MAX_LOAN_SITES {
                 return Err("CFG combined reference origin limit exceeded".into());
@@ -2462,6 +3066,9 @@ fn lower_internal(
         used_loans: std::collections::HashSet::new(),
         source,
         result: Function {
+            lowering_proof: None,
+            body_substitution: source.body_substitution.clone(),
+            call_evidence: std::sync::Arc::from([]),
             ref_contract: source.ref_contract.clone(),
             loan_sites,
             name: source.name.clone(),
@@ -2537,6 +3144,99 @@ fn lower_internal(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_carrier_generated_body_and_lowering_proofs_reject_metadata_replay() {
+        use crate::compiler::{frontend, ownership};
+        let budget = ir::PlanBudget::default();
+        let program = frontend::parse(
+            "fn id<T>(x:T,y:T)->T{x} fn forward<T>(x:T,y:T)->T{id::<T>(x,y)} fn main(){}",
+        )
+        .unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let source =
+            frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
+        let universal = plan.callable_facts(declaration).unwrap();
+        let template = ownership::verify_template(
+            lower_template(std::sync::Arc::new(source), universal, &budget).unwrap(),
+        )
+        .unwrap();
+        let target = ir::CallTarget {
+            declaration,
+            type_args: std::sync::Arc::from([Ty::Int(IntTy::I32)]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let instance = ir::instantiate_checked(
+            &template,
+            &target.type_args,
+            &facts,
+            &mut plan.clone(),
+            &budget,
+        )
+        .unwrap();
+        instance
+            .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+            .unwrap();
+        let mut replay = instance.clone();
+        let call = replay
+            .exprs
+            .iter_mut()
+            .find(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
+            .unwrap();
+        let ir::ExprKind::Call {
+            target: ir::Callee::Direct(target),
+            args,
+            ..
+        } = &mut call.kind
+        else {
+            panic!("direct call fixture");
+        };
+        target.declaration = declaration;
+        args.swap(0, 1);
+        assert!(
+            replay
+                .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                .is_err()
+        );
+        assert!(lower_with_facts(&replay, &facts, &budget).is_err());
+        let function = lower_with_facts(&instance, &facts, &budget).unwrap();
+        function.validate_provenance(&facts, &budget).unwrap();
+        let shape = function.lowering_proof.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&shape.world, facts.world()));
+        assert!(std::sync::Arc::ptr_eq(
+            shape.body_proof.as_ref().unwrap(),
+            function.body_substitution.as_ref().unwrap()
+        ));
+        assert!(
+            shape
+                .capsules
+                .iter()
+                .zip(function.call_evidence.iter())
+                .all(|(original, current)| std::sync::Arc::ptr_eq(original, current))
+        );
+        let mut replay = function.clone();
+        let call = replay
+            .blocks
+            .iter_mut()
+            .find(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+            .unwrap();
+        let Terminator::Call {
+            target: ir::Callee::Direct(target),
+            args,
+            ..
+        } = &mut call.terminator.value
+        else {
+            panic!("direct lowered fixture");
+        };
+        target.declaration = declaration;
+        args.swap(0, 1);
+        assert!(replay.validate_provenance(&facts, &budget).is_err());
+        assert!(close(std::sync::Arc::new(replay), facts.clone(), &budget).is_err());
+        let mut detached = function;
+        detached.lowering_proof = None;
+        assert!(detached.validate_provenance(&facts, &budget).is_err());
+    }
+
     #[test]
     fn nested_shared_carriers_lower_typed_dereferences_and_bound_formal_origins() {
         let scalar = Ty::Int(IntTy::I32);
@@ -2673,6 +3373,8 @@ mod tests {
         let types = env.ordered_params().map(Ty::Param).collect::<Vec<_>>();
         let result = Ty::Tuple(types.clone().into());
         let source = ir::CheckedFunction {
+            call_evidence: std::sync::Arc::from([]),
+            body_substitution: None,
             ref_contract: Default::default(),
             name: "associated".into(),
             params: vec![LocalId(0), LocalId(1)],
@@ -2719,7 +3421,7 @@ mod tests {
             instance.result,
             Ty::Tuple(vec![Ty::Int(IntTy::I32), Ty::Bool].into())
         );
-        let function = lower_with_budget(&instance, &budget).unwrap();
+        let function = lower_with_facts(&instance, &closed_facts, &budget).unwrap();
         assert!(
             super::super::ownership::analyze_closed(
                 close(std::sync::Arc::new(function), closed_facts.clone(), &budget).unwrap()
@@ -2763,6 +3465,8 @@ mod tests {
         });
         let env = std::sync::Arc::new(ir::GenericEnv::new(&[scope], &budget).unwrap());
         let source = ir::CheckedFunction {
+            call_evidence: std::sync::Arc::from([]),
+            body_substitution: None,
             ref_contract: Default::default(),
             name: "id".into(),
             params: vec![LocalId(0)],
@@ -2807,7 +3511,7 @@ mod tests {
             &budget,
         )
         .unwrap();
-        let concrete = lower_with_budget(&instance, &budget).unwrap();
+        let concrete = lower_with_facts(&instance, &closed_facts, &budget).unwrap();
         assert!(concrete.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value,Statement::Assign { value:Rvalue::Use(Operand::Copy(place)),.. } if place.local==LocalId(0))));
         assert!(
             super::super::ownership::analyze_closed(
@@ -2859,6 +3563,9 @@ mod tests {
         })]));
         let aggregate = Ty::Tuple(std::sync::Arc::from([Ty::Enum(closed_enum)]));
         let malformed = Function {
+            lowering_proof: None,
+            body_substitution: None,
+            call_evidence: std::sync::Arc::from([]),
             ref_contract: Default::default(),
             loan_sites: vec![],
             name: "forged".into(),
@@ -3680,6 +4387,8 @@ mod tests {
         statements: Vec<ir::Stmt>,
     ) -> ir::CheckedFunction {
         ir::CheckedFunction {
+            call_evidence: std::sync::Arc::from([]),
+            body_substitution: None,
             ref_contract: Default::default(),
             name: "nominal_fixture".into(),
             params: vec![LocalId(0)],

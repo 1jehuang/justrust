@@ -3,7 +3,8 @@
 use super::{frontend, ir, traits};
 use std::sync::Arc;
 
-const SEMANTICS: &[u8] = b"jr-native-canonical-copy-v1/linux-x86_64/checked/schema-topology";
+const SEMANTICS: &[u8] =
+    b"jr-native-generic-carriers-v1/linux-x86_64/checked/carrier-regions-storage-effects";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -260,7 +261,13 @@ impl Encoder<'_> {
                 Ok(())
             }
             ir::Ty::Param(_) => Err("generic instance key contains unresolved parameter".into()),
-            ir::Ty::Ref { .. } => Err("unsupported: reference-containing generic argument".into()),
+            ir::Ty::Ref { kind, referent } => {
+                self.append(match kind {
+                    ir::BorrowKind::Shared => b"rs",
+                    ir::BorrowKind::Mut => b"rm",
+                })?;
+                self.ty(referent, depth + 1)
+            }
         }
     }
 }
@@ -343,10 +350,9 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Never => {}
-            ir::Ty::Param(_) | ir::Ty::Ref { .. } => {
-                return Err(
-                    "generic instance has non-closed or reference-containing argument".into(),
-                );
+            ir::Ty::Ref { referent, .. } => walk(referent, depth + 1, budget)?,
+            ir::Ty::Param(_) => {
+                return Err("generic instance has non-closed argument".into());
             }
         }
         Ok(())
@@ -442,6 +448,9 @@ pub(super) fn build(
             budget: &ir::PlanBudget,
         ) -> Result<(), String> {
             charge_target_lookup(&target, budget)?;
+            // A cached target or canonical nominal app is not admission authority.
+            // Validate the exact instance even for recursive/cache-hit demands.
+            context.instance_facts(&target)?;
             // Exact recursive instances are already finite, regardless of call depth.
             if self.seen.contains_key(&target) {
                 return Ok(());
@@ -453,7 +462,6 @@ pub(super) fn build(
                 .ok_or("generic call does not resolve to a function declaration")?;
             // Entry predicates are proved even if the body has no calls.
             // Caller-side discharge remains separate in substitute_callee.
-            context.instance_facts(&target)?;
             budget.charge_application()?;
             budget.charge_nodes(1)?;
             let reservation = budget.reserve_bytes(
@@ -763,6 +771,64 @@ mod tests {
         );
         assert_eq!(shared, renamed);
         assert_ne!(shared, mutable);
+    }
+
+    #[test]
+    fn generic_carrier_keys_preserve_reference_kind_topology_and_resource_bounds() {
+        fn context(source: &str) -> (frontend::PlanCtx, ir::PlanBudget, ir::DeclId) {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = (0..context.callable_count())
+                .map(|index| context.callable_decl(index).unwrap())
+                .find(|declaration| {
+                    matches!(
+                        context.callable_provider(*declaration).unwrap(),
+                        frontend::CallableProvider::Source { .. }
+                    ) && context.semantic_path(*declaration).unwrap().item == "identity"
+                })
+                .unwrap();
+            (context, budget, declaration)
+        }
+        let (first, budget, declaration) = context("fn identity<T>(x:T)->T{x}fn main(){}");
+        let (reordered, other_budget, other_declaration) =
+            context("fn unrelated(){}fn main(){}fn identity<U>(x:U)->U{x}");
+        let reference = |kind, referent| ir::Ty::Ref {
+            kind,
+            referent: Arc::new(referent),
+        };
+        let scalar = ir::Ty::Int(ir::IntTy::I32);
+        let shared = reference(ir::BorrowKind::Shared, scalar.clone());
+        let mutable = reference(ir::BorrowKind::Mut, scalar.clone());
+        let nested = reference(ir::BorrowKind::Shared, shared.clone());
+        let target = |declaration, ty| ir::CallTarget {
+            declaration,
+            type_args: Arc::from([ty]),
+        };
+        let shared_key = identity(&target(declaration, shared.clone()), &first, &budget).unwrap();
+        let renamed_key = identity(
+            &target(other_declaration, shared.clone()),
+            &reordered,
+            &other_budget,
+        )
+        .unwrap();
+        assert_eq!(shared_key.canonical, renamed_key.canonical);
+        assert_eq!(shared_key.symbol, renamed_key.symbol);
+        for different in [scalar.clone(), mutable, nested] {
+            let key = identity(&target(declaration, different), &first, &budget).unwrap();
+            assert_ne!(shared_key.canonical, key.canonical);
+            assert_ne!(shared_key.symbol, key.symbol);
+        }
+        let mut excessive = scalar;
+        for _ in 0..=ir::PlanLimits::default().depth {
+            excessive = reference(ir::BorrowKind::Shared, excessive);
+        }
+        assert!(identity(&target(declaration, excessive), &first, &budget).is_err());
+        let exhausted = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..ir::PlanLimits::default()
+        });
+        assert!(identity(&target(declaration, shared), &first, &exhausted).is_err());
     }
 
     #[test]

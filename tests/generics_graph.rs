@@ -66,14 +66,136 @@ fn unused_generic_moves_are_checked_universally_before_native_publication() {
 
 #[test]
 fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses() {
-    for source in [
+    for (case, source) in [
         "fn bad<T>(x:T)->T{x+1}fn main(){}",
         "struct Wrap<T>{value:T}fn bad<T>(x:Wrap<T>)->Wrap<u64>{x}fn main(){}",
         "fn bad<T>(x:T)->u8{x as u8}fn main(){}",
         "fn bad<T>(x:T)->T{x}fn main(){let x=7u8;let y=bad::<&u8>(&x);}",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         for workers in [1, 8] {
             for check in [true, false] {
+                // The unchanged fourth source now uses the admitted explicit root
+                // reference actual. Its identity body still needs universal proof.
+                if case == 3 {
+                    use justrust_engine::Key;
+                    let compiled = compiler::compile(source.to_owned(), workers, check).unwrap();
+                    assert_eq!(compiled.functions, 2);
+                    assert_eq!(compiled.control_flow.len(), 2);
+                    assert_eq!(compiled.analyses.len(), 2);
+                    assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
+                    assert_eq!(compiled.executable.is_none(), check);
+                    if let Some(executable) = &compiled.executable {
+                        assert!(executable.len() >= 64, "truncated native executable");
+                        assert_eq!(&executable[..6], b"\x7fELF\x02\x01");
+                    }
+                    let report = &compiled.report;
+                    assert!(report.capture_complete);
+                    assert_eq!(report.events_dropped, 0);
+                    assert_eq!(report.failures, 0);
+                    let mut expected = vec![
+                        Key::new(100, vec![]),
+                        Key::new(106, vec![]),
+                        Key::new(101, vec![]),
+                        Key::new(104, vec![]),
+                        Key::new(113, vec![]),
+                        Key::new(115, vec![]),
+                        Key::new(111, vec![0]),
+                        Key::new(112, vec![0]),
+                    ];
+                    for index in 0..2 {
+                        for kind in [110, 102, 108, 109] {
+                            expected.push(Key::new(kind, vec![index]));
+                        }
+                        if !check {
+                            expected.push(Key::new(103, vec![index]));
+                        }
+                    }
+                    if !check {
+                        expected.push(Key::new(105, vec![]));
+                        expected.push(Key::new(114, vec![]));
+                    }
+                    let program = compiler::frontend::parse(source).unwrap();
+                    let plan = compiler::frontend::PlanCtx::from_program(
+                        &program,
+                        &compiler::ir::PlanBudget::default(),
+                    )
+                    .unwrap();
+                    for index in 0..plan.callable_count() {
+                        let declaration = plan.callable_decl(index).unwrap();
+                        match plan.callable_provider(declaration).unwrap() {
+                            compiler::frontend::CallableProvider::Source { .. } => {
+                                assert!(index < compiled.functions);
+                            }
+                            compiler::frontend::CallableProvider::Recipe { .. } => {
+                                assert!(index >= compiled.functions);
+                                for kind in [110, 111, 112] {
+                                    expected.push(Key::new(kind, vec![index as u64]));
+                                }
+                            }
+                            compiler::frontend::CallableProvider::UnavailableProvided {
+                                ..
+                            } => {
+                                panic!("unavailable provider entered body enumeration")
+                            }
+                        }
+                    }
+                    assert_eq!(report.node_evaluations.len(), expected.len());
+                    for key in expected {
+                        let entries: Vec<_> = report
+                            .node_evaluations
+                            .iter()
+                            .filter(|(seen, _)| *seen == key)
+                            .collect();
+                        assert_eq!(entries.len(), 1, "missing or duplicated {key:?}");
+                        assert_eq!(entries[0].1, 1, "shared operation repeated {key:?}");
+                    }
+                    let discovered = |key: &Key| {
+                        let spelling = format!("{key:?}");
+                        report
+                            .events
+                            .iter()
+                            .find(|event| event.kind == "discovered" && event.detail == spelling)
+                            .expect("required graph node was not discovered")
+                    };
+                    let published = |node| {
+                        report
+                            .events
+                            .iter()
+                            .find(|event| event.kind == "publish" && event.node == Some(node))
+                            .expect("required graph node did not publish")
+                            .at_ns
+                    };
+                    let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
+                    assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
+                    for (key, _) in &report.node_evaluations {
+                        let event = discovered(key);
+                        if matches!(key.kind, 110 | 112) {
+                            assert!(published(event.node.unwrap()) <= effects);
+                        }
+                        if matches!(key.kind, 102 | 108 | 109 | 103) {
+                            assert!(event.at_ns >= effects);
+                        }
+                    }
+                    if check {
+                        assert!(
+                            !report
+                                .node_evaluations
+                                .iter()
+                                .any(|(key, _)| key.kind == 103)
+                        );
+                    } else {
+                        let sealed = published(discovered(&Key::new(114, vec![])).node.unwrap());
+                        for (key, _) in &report.node_evaluations {
+                            if key.kind == 103 {
+                                assert!(discovered(key).at_ns >= sealed);
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let failure = compiler::compile_observed(source.to_owned(), workers, check)
                     .err()
                     .unwrap();

@@ -3482,6 +3482,9 @@ mod tests {
                 terminator: located(cfg::Terminator::Return),
             };
             let function = cfg::Function {
+                body_substitution: None,
+                call_evidence: std::sync::Arc::from([]),
+                lowering_proof: None,
                 ref_contract: Default::default(),
                 loan_sites: vec![],
                 name: "main".into(),
@@ -3956,11 +3959,8 @@ mod tests {
         too_many
             .params
             .push(("extra".into(), Type::Int(ir::IntTy::I32)));
-        assert!(
-            emit(&program(vec![], vec![too_many]))
-                .unwrap_err()
-                .contains("4096")
-        );
+        let error = emit(&program(vec![], vec![too_many])).unwrap_err();
+        assert!(error.contains("4096"), "{error}");
         assert!(
             emit(&program(
                 vec![Stmt::Expr(call("pick", vec![Expr::i32(0); MAX_ARGS + 1]))],
@@ -4360,6 +4360,8 @@ mod tests {
         );
         assert!(value_size(&too_large).is_err());
         let checked = ir::CheckedFunction {
+            body_substitution: None,
+            call_evidence: std::sync::Arc::from([]),
             ref_contract: Default::default(),
             name: "oversized".into(),
             params: vec![],
@@ -4417,6 +4419,9 @@ mod tests {
         let pair =
             ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::I32), ir::Ty::Int(ir::IntTy::I32)].into());
         let mut function = cfg::Function {
+            body_substitution: None,
+            call_evidence: std::sync::Arc::from([]),
+            lowering_proof: None,
             ref_contract: Default::default(),
             loan_sites: vec![],
             name: "main".into(),
