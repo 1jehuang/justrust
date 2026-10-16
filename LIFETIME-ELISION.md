@@ -1,7 +1,9 @@
 # Free-function lifetime elision
 
-Status: corrected against stock rustc's E0106 oracle before implementation release.
-Implementation and acceptance gates are pending. This extends projected reference
+Status: implemented after correcting the initial proposal against stock rustc's
+E0106 oracle. All 915 hosted tests, strict all-target lint, formatting and both
+independent actual-code reviews pass. The frozen 20-case CLI/stock corpus and four
+new graph tests pass. Tracked eighteen-corpus native verification is pending. This extends projected reference
 returns without changing public IR/CFG/provenance APIs. Full Rust remains open.
 
 ## Normalization before body checking
@@ -58,11 +60,13 @@ output errors, local escape and dependent storage lifetime failures. Check combi
 regressions. Retained graph tests must prove canonical IDs/paths, exact shared CFG
 and ANALYZE facts, no OBJECT on CHECK and unused invalid-body publication failure.
 
-Two historical exact sources are expected to become supported: shared
-`elided_result` and mutable `elided_mutable_result`. Promote only their existing
-classification/assertion after actual new native acceptance, without changing any
-source byte, stdout or expected value. All other historical sources and oracle
-classifications remain unchanged. No implicit-autoderef promotion is included.
+Four historical exact sources become supported: shared `elided_result`, mutable
+`elided_mutable_result`, B1 `reference_parameter_result` and B2
+`reference_return_escape`. The latter two were exposed by the full regression
+gate after the initial two-case inventory. Promote only these existing
+classification/assertions after native acceptance, without changing any source
+byte, stdout or expected value. All other historical sources and classifications
+remain unchanged. No implicit-autoderef promotion is included.
 
 Final gates remain full hosted check/test/strict all-target lint, formatting,
 independent actual-code review, tracked eighteen-corpus native acceptance and raw

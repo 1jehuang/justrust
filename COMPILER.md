@@ -56,8 +56,11 @@ all candidate referent selection proofs without inventing initialization. Every
 body must pass analysis before executable publication. Standalone checked-function
 emission rejects reference calls without whole-program signature/noescape evidence.
 Shared or mutable reference results may point to same-kind parameter referents
-or typed static tuple/struct/constant-array subpaths under explicit named lifetime
-contracts. Complete declaration-derived InputPath candidates, rigid body outlives
+or typed static tuple/struct/constant-array subpaths under normalized lifetime
+contracts. Omitted input lifetimes receive fresh rigid declaration IDs. An omitted
+output lifetime requires exactly one input reference lifetime position, even when
+multiple input positions explicitly share the same name. Explicit output bounds
+remain rigid, and unrelated anonymous inputs do not gain inferred outlives edges. Complete declaration-derived InputPath candidates, rigid body outlives
 obligations and separate transitive lifetime dependencies gate returned pointers.
 Each suffix stays correlated with its original argument and source authority.
 Private-field getters do not grant callers direct private access. Mutable results
@@ -67,7 +70,8 @@ inputs to match the result kind. Enum payload paths, dynamic borrowed indices,
 implicit field autoderef, mixed-kind returning inputs, general elision and
 reference-containing aggregates remain unsupported.
 See `BORROWING.md`, `REFERENCE-CALLS.md`, `REFERENCE-RETURNS.md`,
-`MUTABLE-REFERENCE-RETURNS.md` and `PROJECTED-REFERENCE-RETURNS.md`.
+`MUTABLE-REFERENCE-RETURNS.md`, `PROJECTED-REFERENCE-RETURNS.md` and
+`LIFETIME-ELISION.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.

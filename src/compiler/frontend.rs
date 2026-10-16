@@ -2865,27 +2865,49 @@ fn canonical_ref_contract(
     }
     let Type::Ref {
         kind: result_kind,
-        region: Some(output),
+        region: output,
         ..
     } = &function.result
     else {
-        return Err(
-            "reference returns require an explicit named lifetime; lifetime elision is unsupported"
-                .into(),
-        );
+        return Err("reference result requires a source reference type".into());
     };
+    let mut region_count = ids.len();
+    let mut input_positions = 0usize;
+    let mut input_region = None;
     let mut param_regions = Vec::with_capacity(params.len());
     for (_, ty) in &function.params {
-        param_regions.push(match ty {
-            Type::Ref { kind, region:Some(name), .. } if kind == result_kind =>Some(id(name)?),
-            Type::Ref { .. }=>return Err("reference-return functions require explicitly named same-kind reference inputs; mixed kinds and elision are unsupported".into()),
-            _=>None,
-        });
+        let region = match ty {
+            Type::Ref { kind, region, .. } if kind == result_kind => {
+                let region = if let Some(name) = region {
+                    id(name)?
+                } else {
+                    if region_count >= ir::MAX_REGION_PARAMS {
+                        return Err("combined explicit and anonymous lifetime regions exceed supported limit64".into());
+                    }
+                    let region = ir::RegionParamId(region_count as u16);
+                    region_count += 1;
+                    region
+                };
+                input_positions += 1;
+                input_region = Some(region);
+                Some(region)
+            }
+            Type::Ref { .. } => return Err("reference-return functions require same-kind reference inputs; mixed kinds are unsupported".into()),
+            _ => None,
+        };
+        param_regions.push(region);
     }
+    let result_region = if let Some(output) = output {
+        id(output)?
+    } else if input_positions == 1 {
+        input_region.ok_or("missing input lifetime for elided reference output")?
+    } else {
+        return Err("missing lifetime specifier: elided reference output requires exactly one input reference lifetime position".into());
+    };
     let mut contract = ir::RefContract {
-        region_count: ids.len() as u16,
+        region_count: region_count as u16,
         param_regions: param_regions.into(),
-        result_region: Some(id(output)?),
+        result_region: Some(result_region),
         outlives: edges.into(),
         returns: ir::ReturnContract::NoReference,
     };
@@ -4642,6 +4664,97 @@ mod typed_tests {
     use super::*;
 
     #[test]
+    fn e1_elision_matches_explicit_contracts_and_keeps_anonymous_inputs_rigid() {
+        let p=parse("fn elided(x:&i32,n:i32)->&i32{x}fn explicit<'a>(x:&'a i32,n:i32)->&'a i32{x}fn mut_elided(x:&mut i32)->&mut i32{x}fn mut_explicit<'a>(x:&'a mut i32)->&'a mut i32{x}fn unused_names<'a,'b>(x:&i32)->&i32{x}fn rigid<'a>(x:&i32,y:&i32)->&'a i32{x}fn repeated<'a>(x:&'a i32,y:&'a bool)->&'a i32{x}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        assert_eq!(
+            env.functions["elided"].ref_contract,
+            env.functions["explicit"].ref_contract
+        );
+        assert_eq!(
+            env.functions["mut_elided"].ref_contract,
+            env.functions["mut_explicit"].ref_contract
+        );
+        let unused = &env.functions["unused_names"].ref_contract;
+        assert_eq!(unused.region_count, 3);
+        assert_eq!(unused.param_regions.as_ref(), &[Some(ir::RegionParamId(2))]);
+        assert_eq!(unused.result_region, Some(ir::RegionParamId(2)));
+        let rigid = &env.functions["rigid"].ref_contract;
+        assert_eq!(
+            rigid.param_regions.as_ref(),
+            &[Some(ir::RegionParamId(1)), Some(ir::RegionParamId(2))]
+        );
+        assert_eq!(rigid.result_region, Some(ir::RegionParamId(0)));
+        assert!(rigid.outlives.is_empty());
+        assert_eq!(
+            rigid.returns,
+            ir::ReturnContract::SharedInputPaths(vec![].into())
+        );
+        type_function_with_signatures(&p, 5, &env).unwrap();
+        assert!(check_function_with_signatures(&p, 5, &env).is_err());
+        for index in [0, 1, 2, 3, 4, 6] {
+            check_function_with_signatures(&p, index, &env).unwrap();
+        }
+    }
+
+    #[test]
+    fn e1_output_elision_counts_reference_positions_not_distinct_region_ids() {
+        for source in [
+            "fn missing()->&i32{loop{}}fn main(){}",
+            "fn ambiguous(x:&i32,y:&i32)->&i32{x}fn main(){}",
+            "fn repeated<'a>(x:&'a i32,y:&'a i32)->&i32{x}fn main(){}",
+            "fn repeated<'a>(x:&'a mut i32,y:&'a mut i32)->&mut i32{x}fn main(){}",
+            "fn different<'a>(x:&'a i32,y:&'a bool)->&i32{x}fn main(){}",
+        ] {
+            let p = parse(source).unwrap();
+            assert!(
+                signature_table(&p)
+                    .unwrap_err()
+                    .contains("missing lifetime specifier"),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn e1_combined_region_cap_does_not_limit_erased_no_reference_parameters() {
+        let names = |count: usize| {
+            (0..count)
+                .map(|i| format!("'r{i}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let p = parse(&format!(
+            "fn at_limit<{}>(x:&i32)->&i32{{x}}fn main(){{}}",
+            names(63)
+        ))
+        .unwrap();
+        let env = signature_table(&p).unwrap();
+        assert_eq!(env.functions["at_limit"].ref_contract.region_count, 64);
+        assert_eq!(
+            env.functions["at_limit"].ref_contract.result_region,
+            Some(ir::RegionParamId(63))
+        );
+        let p = parse(&format!(
+            "fn over_limit<{}>(x:&i32)->&i32{{x}}fn main(){{}}",
+            names(64)
+        ))
+        .unwrap();
+        assert!(signature_table(&p).unwrap_err().contains("limit64"));
+        let params = (0..4096)
+            .map(|i| format!("p{i}:&i32"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let p = parse(&format!("fn erased({params}){{}}fn main(){{}}")).unwrap();
+        let env = signature_table(&p).unwrap();
+        let contract = &env.functions["erased"].ref_contract;
+        assert_eq!(contract.region_count, 0);
+        assert_eq!(contract.param_regions.len(), 4096);
+        assert!(contract.param_regions.iter().all(Option::is_none));
+        assert_eq!(contract.returns, ir::ReturnContract::NoReference);
+    }
+
+    #[test]
     fn projected_contract_paths_keep_source_privacy_and_argument_layouts() {
         let p=parse("mod m{pub struct S{nested:([i32;1],)}pub fn get<'a>(p:&'a S)->&'a i32{&(*p).nested.0[0]}pub fn get_mut<'a>(p:&'a mut S)->&'a mut i32{&mut (*p).nested.0[0]}pub fn make()->S{S{nested:([7],)}}}fn choose<'a>(flag:bool,a:&'a(i32,bool),b:&'a(bool,i32))->&'a i32{if flag{&(*a).0}else{&(*b).1}}fn main(){let mut s=m::make();let r=m::get(&s);let n=*r;let q=m::get_mut(&mut s);*q=9;}").unwrap();
         let env = signature_table(&p).unwrap();
@@ -4856,7 +4969,6 @@ mod typed_tests {
             "fn f<'a:'b>(x:&'a i32)->&'a i32{x}fn main(){}",
             "fn f<'a>(x:&'a mut i32)->&'a i32{&*x}fn main(){}",
             "fn f<'a>(x:&'a i32)->&'a mut i32{loop{}}fn main(){}",
-            "fn f(x:&i32)->&i32{x}fn main(){}",
             "fn f<'a>(x:&'a i32){}fn main(){}",
             "fn f<'fn>(x:&'fn i32)->&'fn i32{x}fn main(){}",
         ] {

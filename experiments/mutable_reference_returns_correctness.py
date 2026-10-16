@@ -20,7 +20,9 @@ from module_correctness import Case, accepted, process, rejected, run_case
 
 ACCEPTANCE_CORPUS_SHA256 = "5049cb8e2f69028b9df552a92db2e3d8640b4ea6d40e68e372d516ab7cdc1b11"
 
-# Authoritative frozen bear oracle. full_source has no added wrapper.
+# Original immutable acceptance artifact hash retained above.
+# E1 native-pass promotion: elided_mutable_result is now positive; source/stdout/value unchanged.
+# Authoritative bear source bytes. full_source has no added wrapper.
 FIXTURES = json.loads(r'''
 [
   {
@@ -248,7 +250,7 @@ FIXTURES = json.loads(r'''
     "expected_stdout": "mutable returns oracle ok\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "elided_mutable_result",
     "source": "fn id(r:&mut i32)->&mut i32{r} fn run()->i32{let mut x=3;let q=id(&mut x);*q=7;x}",
     "expected": 7,

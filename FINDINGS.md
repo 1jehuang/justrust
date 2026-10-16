@@ -8558,3 +8558,34 @@ All seventeen raw corpus receipts plus the example observation are retained in
 exact expected stdout, complete capture, 26 nodes, 35 edges, zero failures and
 zero dropped events. Observed 15.262 ms total and 3.637 ms engine time are
 contended/uncontrolled, not speedup evidence. Full Rust remains open.
+
+### Free-function lifetime elision: stock oracle corrects the frozen proposal
+
+Normalized omitted reference input lifetimes into fresh rigid IDs after explicit
+names in original parameter order. Omitted output lifetime selection counts input
+reference lifetime POSITIONS, not distinct region IDs. The initial design and
+review advice were wrong on repeated explicit names: stock rustc rejects two
+`&'a` input positions with omitted output as E0106. The oracle caught this before
+release, and the corrected 20-case corpus retains those exact sources as invalid.
+Explicit outputs still use only declared bounds, anonymous inputs remain rigid,
+and erased NoReference contracts retain their 4096-origin compatibility path.
+Only frontend production normalization changed; graph/provenance/native ABI did not.
+
+The frozen corpus (ten supported, eight invalid, two legal-unsupported) passed
+stock20/20 and actual native CLI workers1/8 checks/builds/runs. Artifact SHA256:
+`8245335da3b4dbc4872b01a13e3ab9565d867593d5914b49b68179045195ce26`.
+Four new graph tests retain canonical IDs/paths and shared analysis facts, no
+OBJECT on CHECK and failed unused-callee/rigid-bound/storage publication. Full
+regression exposed two additional historical B1/B2 elision boundaries beyond the
+initial shared/mutable inventory. All four CLI sources plus the historical unused
+identity graph source are promoted unchanged, with every source/stdout/value byte
+preserved. No implicit field autoderef or mixed-kind returning inputs are enabled.
+
+Exact final hosted check `20261016-021354596-2923347`, all-target test
+`20261016-021355232-2923432` (915 passed) and strict all-target clippy
+`20261016-021356523-2923572` pass. Formatting, diff checks and both independent
+actual-code reviews pass. Exact three redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-lifetime-elision.jsonl`. The elided recursive
+private-field/high64 example also passes the external stock oracle. Tracked
+eighteen-corpus native verification follows after commit. Full Rust remains open;
+these correctness gates do not establish a speedup.

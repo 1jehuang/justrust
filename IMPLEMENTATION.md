@@ -58,6 +58,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Free-function lifetime elision is implemented under `LIFETIME-ELISION.md`.
+Stock E0106 probes corrected the initial distinct-ID proposal before release:
+output elision counts input reference lifetime positions, not distinct IDs. Fresh
+anonymous inputs remain rigid, explicit outputs cannot infer missing bounds, and
+NoReference call contracts retain their erased B2 behavior. All 915 hosted tests,
+strict all-target lint, formatting and both independent actual-code reviews pass.
+The corrected 20-case stock/CLI corpus and four new graph tests pass. Four
+historical CLI sources and one graph source are promoted without source edits.
+Tracked eighteen-corpus native verification follows. Full Rust remains open.
+
 Projected input reference returns are implemented under
 `PROJECTED-REFERENCE-RETURNS.md`: complete declaration-derived typed static paths,
 source-specific candidate/argument correlation, private-field privacy separation

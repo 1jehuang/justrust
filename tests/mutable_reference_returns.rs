@@ -460,13 +460,12 @@ fn main() { if run() == 7 { println!("mutable returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_elided_mutable_result() {
-    // Stock accepts and runs this fixture, outside the bounded B3b slice.
-    rejects(
-        "elided_mutable_result",
+fn accepts_elided_mutable_result() {
+    runs(
         r#"fn id(r:&mut i32)->&mut i32{r} fn run()->i32{let mut x=3;let q=id(&mut x);*q=7;x}
 fn main() { if run() == 7 { println!("mutable returns oracle ok"); } }
 "#,
+        "mutable returns oracle ok\n",
     );
 }
 

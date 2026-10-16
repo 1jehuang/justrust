@@ -448,13 +448,12 @@ fn main() { if run() == 7 { println!("reference returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_elided_result() {
-    // Stock accepts and runs this fixture, outside the bounded B3a slice.
-    rejects(
-        "elided_result",
+fn accepts_elided_result() {
+    runs(
         r#"fn id(x:&i32)->&i32{x} fn run()->i32{let x=7;*id(&x)}
 fn main() { if run() == 7 { println!("reference returns oracle ok"); } }
 "#,
+        "reference returns oracle ok\n",
     );
 }
 

@@ -6,6 +6,18 @@ subset is a bootstrap milestone, not the intended final language or architecture
 Normal Rust tools may build our implementation and act as external test oracles.
 They must not compile user programs on our native implementation path.
 
+## Lifetime elision normalization slice
+
+`LIFETIME-ELISION.md` extends the bounded free-function reference-result contracts
+without changing canonical provenance, graph operations or native pointer ABI.
+Omitted inputs receive fresh rigid regions in original parameter order. Omitted
+outputs require exactly one input reference lifetime position, not one distinct
+ID: repeated explicit names in multiple input positions remain ambiguous. An
+external stock E0106 oracle corrected the initial design before release. Explicit
+outputs never infer missing anonymous-input bounds, and erased NoReference call
+contracts remain unchanged. Method elision, `'_`, implicit field autoderef,
+mixed-kind result contracts and general Rust lifetimes remain open.
+
 ## Contract and completion criteria
 
 - Define supported editions, targets and stable language versions explicitly.

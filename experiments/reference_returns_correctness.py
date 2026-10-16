@@ -20,7 +20,9 @@ from module_correctness import Case, accepted, process, rejected, run_case
 
 ACCEPTANCE_CORPUS_SHA256 = "87a4940bb3b2800a6d285102ede7658ef1ed019149f7e73d17fffdbf6fad9b9a"
 
-# Authoritative frozen bear oracle. full_source has no added wrapper.
+# Original immutable acceptance artifact hash retained above.
+# E1 native-pass promotion: elided_result is now positive; source/stdout/value unchanged.
+# Authoritative bear source bytes. full_source has no added wrapper.
 FIXTURES = json.loads(r'''
 [
   {
@@ -243,7 +245,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "reference returns oracle ok\n",
     "full_source": "fn id(x:&i32)->&i32{x} fn run()->i32{let x=7;*id(&x)}\nfn main() { if run() == 7 { println!(\"reference returns oracle ok\"); } }\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "elided_result",
     "source": "fn id(x:&i32)->&i32{x} fn run()->i32{let x=7;*id(&x)}"
   },

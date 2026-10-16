@@ -436,13 +436,12 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_return_escape() {
-    // Stock accepts and runs this fixture, outside this bounded B2 slice.
-    rejects(
-        "reference_return_escape",
+fn accepts_reference_return_escape() {
+    runs(
         r#"fn pass(r:&i32)->&i32{r} fn run()->i32{let x=7;*pass(&x)}
 fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
 "#,
+        "borrow params oracle ok\n",
     );
 }
 

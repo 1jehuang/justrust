@@ -88,14 +88,24 @@ fn unused_bad_reference_callee_blocks_publication() {
 }
 
 #[test]
-fn reference_return_boundary_is_checked_even_when_unused() {
+fn unused_elided_reference_return_is_analyzed_and_accepted() {
     let source = "fn escape(p:&i32)->&i32{p}fn main(){}";
     for workers in [1, 8] {
         for check in [true, false] {
-            let failure = compiler::compile_observed(source.to_owned(), workers, check)
-                .err()
-                .unwrap();
-            assert!(failure.report.unwrap().capture_complete);
+            let compiled = compiler::compile(source.to_owned(), workers, check).unwrap();
+            assert!(compiled.report.capture_complete);
+            assert_eq!(compiled.executable.is_none(), check);
+            assert_eq!(compiled.analyses.len(), 2);
+            assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
+            let contract = &compiled.control_flow[0].ref_contract;
+            assert_eq!(contract.region_count, 1);
+            assert_eq!(contract.result_region, Some(compiler::ir::RegionParamId(0)));
+            let compiler::ir::ReturnContract::SharedInputPaths(paths) = &contract.returns else {
+                panic!("expected normalized shared return contract");
+            };
+            assert_eq!(paths.len(), 1);
+            assert_eq!(paths[0].param, 0);
+            assert!(paths[0].projection.is_empty());
         }
     }
 }
