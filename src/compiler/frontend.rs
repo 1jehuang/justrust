@@ -417,6 +417,8 @@ pub enum BinaryOp {
     BitAnd,
     BitOr,
     BitXor,
+    Shl,
+    Shr,
 }
 
 #[derive(Clone, Debug)]
@@ -606,6 +608,8 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         | ('!', '=')
                         | ('<', '=')
                         | ('>', '=')
+                        | ('<', '<')
+                        | ('>', '>')
                         | ('&', '&')
                         | ('|', '|')
                         | ('=', '>')
@@ -643,6 +647,8 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | "<="
                     | ">"
                     | ">="
+                    | "<<"
+                    | ">>"
                     | "&"
                     | "|"
                     | "^"
@@ -1444,7 +1450,7 @@ impl Parser {
             return Err(self.error("parenthesized cast target types are unsupported"));
         }
         let target = self.ty()?;
-        if self.is("<") {
+        if self.is("<") || self.is("<<") {
             return Err(self.error("parenthesize the cast before a less-than comparison; otherwise '<' starts generic arguments"));
         }
         if self.is(".") || self.is("[") || self.is("(") {
@@ -1779,6 +1785,8 @@ impl Parser {
                 "|" => (4, BinaryOp::BitOr),
                 "^" => (5, BinaryOp::BitXor),
                 "&" => (6, BinaryOp::BitAnd),
+                "<<" => (7, BinaryOp::Shl),
+                ">>" => (7, BinaryOp::Shr),
                 "+" => (8, BinaryOp::Add),
                 "-" => (8, BinaryOp::Sub),
                 "*" => (9, BinaryOp::Mul),
@@ -1789,13 +1797,19 @@ impl Parser {
             if self.token().string || precedence < min {
                 break;
             }
-            if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
-                && self
-                    .tokens
-                    .get(self.at + 1)
-                    .is_some_and(|token| !token.string && token.text == "=")
+            if matches!(
+                op,
+                BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            ) && self
+                .tokens
+                .get(self.at + 1)
+                .is_some_and(|token| !token.string && token.text == "=")
             {
-                return Err(self.error("compound bitwise assignments are unsupported"));
+                return Err(self.error("compound bitwise/shift assignments are unsupported"));
             }
             if precedence == 3 {
                 if compared {
@@ -2916,6 +2930,318 @@ struct PatternLocal {
     projection: Vec<ir::Projection>,
 }
 type ResolvedVariantPattern<'p> = (ir::EnumTy, usize, Vec<(usize, &'p Pattern)>);
+
+const COUNT_EVAL_WORK: usize = 1_000_000;
+#[derive(Clone, Copy, Debug)]
+enum CountValue {
+    Known(ir::IntValue),
+    Dynamic,
+    Unsupported,
+}
+#[derive(Clone, Copy)]
+enum CountMemo {
+    Unseen,
+    Visiting,
+    Done(CountValue),
+}
+struct CountEvaluator<'a> {
+    exprs: &'a [ir::TypedExpr],
+    memo: Vec<CountMemo>,
+    heights: Vec<usize>,
+    work: usize,
+}
+impl<'a> CountEvaluator<'a> {
+    fn new(exprs: &'a [ir::TypedExpr]) -> Result<Self, String> {
+        let bytes = exprs
+            .len()
+            .checked_mul(std::mem::size_of::<CountMemo>() + std::mem::size_of::<usize>())
+            .ok_or("shift count memo allocation overflow")?;
+        if exprs.len() > COUNT_EVAL_WORK || bytes > 64 * 1024 * 1024 {
+            return Err("shift count memo resource limit exceeded".into());
+        }
+        Ok(Self {
+            exprs,
+            memo: vec![CountMemo::Unseen; exprs.len()],
+            heights: vec![0; exprs.len()],
+            work: 0,
+        })
+    }
+    fn charge(&mut self) -> Result<(), String> {
+        self.work += 1;
+        if self.work > COUNT_EVAL_WORK {
+            return Err("shift count evaluation work limit exceeded".into());
+        }
+        Ok(())
+    }
+    fn value(&self, id: ir::ExprId) -> Result<CountValue, String> {
+        match self.memo.get(id.0) {
+            Some(CountMemo::Done(value)) => Ok(*value),
+            _ => Err("invalid shift count evaluation dependency".into()),
+        }
+    }
+    fn evaluate(&mut self, root: ir::ExprId) -> Result<CountValue, String> {
+        let mut pending = vec![(root, false, 0usize)];
+        while let Some((id, ready, depth)) = pending.pop() {
+            self.charge()?;
+            if depth > 128 {
+                return Err("shift count evaluation depth limit exceeded".into());
+            }
+            let expr = self
+                .exprs
+                .get(id.0)
+                .ok_or("invalid shift count expression ID")?;
+            if !ready {
+                match self.memo[id.0] {
+                    CountMemo::Done(_) => {
+                        if depth + self.heights[id.0] > 128 {
+                            return Err("shift count evaluation depth limit exceeded".into());
+                        }
+                        continue;
+                    }
+                    CountMemo::Visiting => return Err("cycle in shift count expression".into()),
+                    CountMemo::Unseen => {}
+                }
+                // A typed integer that cannot return has no constant value.
+                if expr.completion == ir::Completion::Never {
+                    self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
+                    continue;
+                }
+                let children = match &expr.kind {
+                    ir::ExprKind::Int(value) => {
+                        value.validate()?;
+                        if expr.ty != ir::Ty::Int(value.ty) {
+                            return Err("shift count constant type mismatch".into());
+                        }
+                        self.memo[id.0] = CountMemo::Done(CountValue::Known(*value));
+                        continue;
+                    }
+                    ir::ExprKind::Local(_)
+                    | ir::ExprKind::Call { .. }
+                    | ir::ExprKind::Index { .. }
+                    | ir::ExprKind::DynamicIndex { .. }
+                    | ir::ExprKind::Deref { .. }
+                    | ir::ExprKind::Field { .. } => {
+                        self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
+                        continue;
+                    }
+                    ir::ExprKind::Unary { value, .. } | ir::ExprKind::IntCast { value, .. } => {
+                        [Some(*value), None]
+                    }
+                    ir::ExprKind::Binary { left, right, .. } => [Some(*left), Some(*right)],
+                    ir::ExprKind::Block(block) if block.statements.is_empty() => [block.tail, None],
+                    ir::ExprKind::Block(_) => {
+                        self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
+                        continue;
+                    }
+                    _ => {
+                        self.memo[id.0] = CountMemo::Done(CountValue::Unsupported);
+                        continue;
+                    }
+                };
+                self.memo[id.0] = CountMemo::Visiting;
+                pending.push((id, true, depth));
+                for child in children.into_iter().flatten().rev() {
+                    pending.push((child, false, depth + 1));
+                }
+                continue;
+            }
+            let result = match &expr.kind {
+                ir::ExprKind::Block(block) => block
+                    .tail
+                    .map(|id| self.value(id))
+                    .transpose()?
+                    .unwrap_or(CountValue::Unsupported),
+                ir::ExprKind::IntCast { value, to } => match self.value(*value)? {
+                    CountValue::Known(value) => CountValue::Known(ir::IntValue {
+                        ty: *to,
+                        bits: count_integer(value) as u64 & to.mask(),
+                    }),
+                    other => other,
+                },
+                ir::ExprKind::Unary { op, value } => match self.value(*value)? {
+                    CountValue::Known(value) => {
+                        let bits = match op {
+                            UnaryOp::Not => !value.bits & value.ty.mask(),
+                            UnaryOp::Neg => {
+                                if !value.ty.is_signed() {
+                                    return Err("unsigned negation in shift count".into());
+                                }
+                                count_checked_signed(-count_integer(value), value.ty)?
+                            }
+                        };
+                        CountValue::Known(ir::IntValue { ty: value.ty, bits })
+                    }
+                    other => other,
+                },
+                ir::ExprKind::Binary { op, left, right } => {
+                    let lhs = self.value(*left)?;
+                    let rhs = self.value(*right)?;
+                    if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
+                        && let CountValue::Known(value) = rhs
+                    {
+                        let ir::Ty::Int(ty) = self.exprs[left.0].ty else {
+                            return Err("noninteger nested shift".into());
+                        };
+                        count_shift_amount(value, ty)?;
+                    }
+                    match (lhs, rhs) {
+                        (CountValue::Known(lhs), CountValue::Known(rhs)) => {
+                            count_binary(*op, lhs, rhs)?
+                        }
+                        (CountValue::Unsupported, _) | (_, CountValue::Unsupported) => {
+                            CountValue::Unsupported
+                        }
+                        _ => CountValue::Dynamic,
+                    }
+                }
+                _ => return Err("invalid shift count evaluation state".into()),
+            };
+            if let CountValue::Known(value) = result
+                && expr.ty != ir::Ty::Int(value.ty)
+            {
+                return Err("shift count result type mismatch".into());
+            }
+            let height = match &expr.kind {
+                ir::ExprKind::Block(block) => {
+                    block.tail.map(|id| self.heights[id.0] + 1).unwrap_or(0)
+                }
+                ir::ExprKind::IntCast { value, .. } | ir::ExprKind::Unary { value, .. } => {
+                    self.heights[value.0] + 1
+                }
+                ir::ExprKind::Binary { left, right, .. } => {
+                    self.heights[left.0].max(self.heights[right.0]) + 1
+                }
+                _ => 0,
+            };
+            if depth + height > 128 {
+                return Err("shift count evaluation depth limit exceeded".into());
+            }
+            self.heights[id.0] = height;
+            self.memo[id.0] = CountMemo::Done(result);
+        }
+        self.value(root)
+    }
+}
+fn count_integer(value: ir::IntValue) -> i128 {
+    let bits = value.ty.bits();
+    if value.ty.is_signed() && value.bits & (1u64 << (bits - 1)) != 0 {
+        value.bits as i128 - (1i128 << bits)
+    } else {
+        value.bits as i128
+    }
+}
+fn count_checked_signed(value: i128, ty: ir::IntTy) -> Result<u64, String> {
+    let limit = 1i128 << (ty.bits() - 1);
+    if value < -limit || value >= limit {
+        return Err("arithmetic overflow in static shift count".into());
+    }
+    Ok(value as u64 & ty.mask())
+}
+fn count_shift_amount(value: ir::IntValue, lhs: ir::IntTy) -> Result<u32, String> {
+    value.validate()?;
+    let amount = count_integer(value);
+    if amount < 0 || amount >= lhs.bits() as i128 {
+        return Err(format!(
+            "shift count {amount} overflows {}-bit integer",
+            lhs.bits()
+        ));
+    }
+    Ok(amount as u32)
+}
+fn count_binary(op: BinaryOp, lhs: ir::IntValue, rhs: ir::IntValue) -> Result<CountValue, String> {
+    lhs.validate()?;
+    rhs.validate()?;
+    let ty = lhs.ty;
+    let bits = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+        let amount = count_shift_amount(rhs, ty)?;
+        match op {
+            BinaryOp::Shl => (lhs.bits << amount) & ty.mask(),
+            _ if ty.is_signed() => (count_integer(lhs) >> amount) as u64 & ty.mask(),
+            _ => lhs.bits >> amount,
+        }
+    } else {
+        if lhs.ty != rhs.ty {
+            return Err("static shift count integer type mismatch".into());
+        }
+        match op {
+            BinaryOp::BitAnd => lhs.bits & rhs.bits,
+            BinaryOp::BitOr => lhs.bits | rhs.bits,
+            BinaryOp::BitXor => lhs.bits ^ rhs.bits,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                if ty.is_signed() {
+                    let a = count_integer(lhs);
+                    let b = count_integer(rhs);
+                    if matches!(op, BinaryOp::Div | BinaryOp::Rem)
+                        && (b == 0 || (a == -(1i128 << (ty.bits() - 1)) && b == -1))
+                    {
+                        return Err("invalid division in static shift count".into());
+                    }
+                    let value = match op {
+                        BinaryOp::Add => a.checked_add(b),
+                        BinaryOp::Sub => a.checked_sub(b),
+                        BinaryOp::Mul => a.checked_mul(b),
+                        BinaryOp::Div => a.checked_div(b),
+                        _ => a.checked_rem(b),
+                    }
+                    .ok_or("arithmetic overflow in static shift count")?;
+                    count_checked_signed(value, ty)?
+                } else {
+                    let a = lhs.bits as u128;
+                    let b = rhs.bits as u128;
+                    let value = match op {
+                        BinaryOp::Add => a.checked_add(b),
+                        BinaryOp::Sub => a.checked_sub(b),
+                        BinaryOp::Mul => a.checked_mul(b),
+                        BinaryOp::Div => a.checked_div(b),
+                        _ => a.checked_rem(b),
+                    }
+                    .filter(|v| *v <= ty.mask() as u128)
+                    .ok_or("invalid arithmetic in static shift count")?;
+                    value as u64
+                }
+            }
+            _ => return Ok(CountValue::Unsupported),
+        }
+    };
+    Ok(CountValue::Known(ir::IntValue { ty, bits }))
+}
+fn validate_shift_counts(exprs: &[ir::TypedExpr]) -> Result<(), String> {
+    if !exprs.iter().any(|e| {
+        matches!(
+            e.kind,
+            ir::ExprKind::Binary {
+                op: BinaryOp::Shl | BinaryOp::Shr,
+                ..
+            }
+        )
+    }) {
+        return Ok(());
+    }
+    let mut evaluator = CountEvaluator::new(exprs)?;
+    for expr in exprs {
+        evaluator.charge()?;
+        if let ir::ExprKind::Binary {
+            op: BinaryOp::Shl | BinaryOp::Shr,
+            left,
+            right,
+        } = expr.kind
+        {
+            let ir::Ty::Int(lhs) = exprs.get(left.0).ok_or("invalid shift lhs")?.ty else {
+                return Err("noninteger shift lhs".into());
+            };
+            match evaluator.evaluate(right)? {
+                CountValue::Known(value) => {
+                    count_shift_amount(value, lhs)?;
+                }
+                CountValue::Dynamic => {}
+                CountValue::Unsupported => {
+                    return Err("unsupported static-shaped shift count expression".into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
 struct Checker<'a> {
     signatures: &'a Signatures,
     scopes: Vec<HashMap<String, ir::LocalId>>,
@@ -3448,6 +3774,11 @@ impl<'a> Checker<'a> {
                     | BinaryOp::Or,
                 ..
             } => Some(ir::Ty::Bool),
+            Expr::Binary {
+                op: BinaryOp::Shl | BinaryOp::Shr,
+                left,
+                ..
+            } => self.scalar_hint(left),
             Expr::Binary { left, right, .. } => {
                 self.scalar_hint(left).or_else(|| self.scalar_hint(right))
             }
@@ -4679,6 +5010,7 @@ impl<'a> Checker<'a> {
             }
             Expr::Binary { op, left, right } => {
                 let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
+                let shifting = matches!(op, BinaryOp::Shl | BinaryOp::Shr);
                 let hint = if logical {
                     Some(ir::Ty::Bool)
                 } else {
@@ -4686,17 +5018,27 @@ impl<'a> Checker<'a> {
                         .filter(|t| matches!(t, ir::Ty::Int(_)))
                         .cloned()
                         .or_else(|| self.scalar_hint(left))
-                        .or_else(|| self.scalar_hint(right))
+                        .or_else(|| {
+                            if shifting {
+                                None
+                            } else {
+                                self.scalar_hint(right)
+                            }
+                        })
                 };
                 let left = self.expr_expected(left, hint.as_ref())?;
                 let left_flow = self.flow(left);
-                let right_hint = hint.or_else(|| {
-                    if matches!(left_flow.ty, ir::Ty::Int(_) | ir::Ty::Bool) {
-                        Some(left_flow.ty.clone())
-                    } else {
-                        None
-                    }
-                });
+                let right_hint = if shifting {
+                    None
+                } else {
+                    hint.or_else(|| {
+                        if matches!(left_flow.ty, ir::Ty::Int(_) | ir::Ty::Bool) {
+                            Some(left_flow.ty.clone())
+                        } else {
+                            None
+                        }
+                    })
+                };
                 let right = self.expr_expected_when(
                     right,
                     self.reachable && left_flow.completes,
@@ -4721,6 +5063,15 @@ impl<'a> Checker<'a> {
                 };
                 let (operand, result) = match op {
                     BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
+                    BinaryOp::Shl | BinaryOp::Shr => {
+                        if l.ty == ir::Ty::Never || r.ty == ir::Ty::Never {
+                            return Err("shift operator on semantic Never is unsupported".into());
+                        }
+                        if !matches!(l.ty, ir::Ty::Int(_)) || !matches!(r.ty, ir::Ty::Int(_)) {
+                            return Err("shift operands must both be integers".into());
+                        }
+                        (l.ty.clone(), l.ty.clone())
+                    }
                     BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
                         let operand = self.join(&l.ty, &r.ty, "bitwise operands")?;
                         if !matches!(operand, ir::Ty::Int(_) | ir::Ty::Bool) {
@@ -4739,7 +5090,9 @@ impl<'a> Checker<'a> {
                     _ => (numeric.clone(), numeric),
                 };
                 self.require(&l, &operand)?;
-                self.require(&r, &operand)?;
+                if !shifting {
+                    self.require(&r, &operand)?;
+                }
                 // Trait-based scalar operators do not gain a never coercion
                 // merely because evaluating an operand cannot complete.
                 if !logical && (l.ty == ir::Ty::Never || r.ty == ir::Ty::Never) {
@@ -4954,6 +5307,7 @@ pub fn type_function_with_env(
         .map_err(|e| format!("in function {}: {e}", f.name))?;
     c.require(&flow, &c.result)
         .map_err(|e| format!("in function {}: {e}", f.name))?;
+    validate_shift_counts(&c.exprs).map_err(|e| format!("in function {}: {e}", f.name))?;
     Ok(ir::CheckedFunction {
         name: f.name.clone(),
         ref_contract: signature.ref_contract.clone(),
@@ -4975,6 +5329,168 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn shifts_keep_independent_integer_operands_and_parser_precedence() {
+        let names = [
+            "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+        ];
+        for lhs in names {
+            for rhs in names {
+                let source = format!("fn f(x:{lhs},n:{rhs})->{lhs}{{(x<<n)>>n}}fn main(){{}}");
+                let p = parse(&source).unwrap();
+                check(&p).unwrap();
+                let f =
+                    type_function_with_signatures(&p, 0, &signature_table(&p).unwrap()).unwrap();
+                for expr in &f.exprs {
+                    if let ir::ExprKind::Binary {
+                        op: BinaryOp::Shl | BinaryOp::Shr,
+                        left,
+                        right,
+                    } = expr.kind
+                    {
+                        assert_eq!(expr.ty, f.exprs[left.0].ty);
+                        assert_eq!(f.exprs[right.0].ty, f.locals[f.params[1].0].ty);
+                    }
+                }
+            }
+        }
+        let p = parse("fn f()->u8{1<<1u64}fn g(x:u8)->u8{x<<1}fn main(){let x=1<<1u64;let y=(1i16 as u8)<<1;let z=4i32 as u8>>1;let p=1 | 2 & 3 << 4+1*2;}").unwrap();
+        check(&p).unwrap();
+        let env = signature_table(&p).unwrap();
+        let g = type_function_with_signatures(&p, 1, &env).unwrap();
+        let ir::ExprKind::Binary { right, .. } = g.exprs[g.body.tail.unwrap().0].kind else {
+            panic!("shift")
+        };
+        assert_eq!(g.exprs[right.0].ty, ir::Ty::Int(ir::IntTy::I32));
+        let main = type_function_with_signatures(&p, 2, &env).unwrap();
+        assert_eq!(main.locals[0].ty, ir::Ty::Int(ir::IntTy::I32));
+        for source in [
+            "fn main(){let x=true<<1;}",
+            "fn main(){let x=1>>false;}",
+            "fn main(){let x=1i32 as u8<<1;}",
+            "fn main(){let x=1 \"<<\" 1;}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err());
+        }
+        for op in ["<<=", ">>="] {
+            assert!(
+                parse(&format!("fn main(){{let mut x=1;x{op}1;}} "))
+                    .unwrap_err()
+                    .contains("unsupported")
+            );
+        }
+    }
+
+    #[test]
+    fn shifts_static_count_grammar_and_runtime_leaves_are_distinct() {
+        for count in [
+            "8u8",
+            "-1i16",
+            "(3u16+5u16)",
+            "(1u64<<3u8)",
+            "(!0u8)",
+            "((-1i8) as u64)",
+            "{8u32}",
+            "(255u8+1u8)",
+            "(1u8/0u8)",
+            "((-128i8)/(-1i8))",
+        ] {
+            let source = format!("fn main(){{let x=1u8<<({count});}}");
+            assert!(
+                parse(&source).and_then(|p| check(&p)).is_err(),
+                "accepted {count}"
+            );
+        }
+        check(&parse("fn count()->u64{64}fn f(x:u8,n:u64)->u8{x<<n}fn main(){let n=8u64;let x=1u8<<n;let y=1u64>>count();let z=1u8<<((3u16^1u16) as u64);let a=1u64<<((18446744073709551615u64*0u64) as u8);}").unwrap()).unwrap();
+        assert!(
+            parse("fn main(){let x=1u8<<(if true{1}else{2});}")
+                .and_then(|p| check(&p))
+                .unwrap_err()
+                .contains("unsupported")
+        );
+        check(&parse("fn main(){let mut bits=3u8;let snapshot=bits<<{bits=9u8;1u32};}").unwrap())
+            .unwrap();
+        let p =
+            parse("fn dead()->u8{1u8<<({return 7u8;1u32})}fn once(n:u8)->u8{1u8<<n}fn main(){}")
+                .unwrap();
+        check(&p).unwrap();
+        let f = type_function_with_signatures(&p, 0, &signature_table(&p).unwrap()).unwrap();
+        assert_eq!(
+            f.exprs[f.body.tail.unwrap().0].completion,
+            ir::Completion::Never
+        );
+    }
+
+    #[test]
+    fn shift_count_memo_bounds_cycles_and_never_values() {
+        let literal = ir::TypedExpr {
+            kind: ir::ExprKind::Int(ir::IntValue::i32(0)),
+            ty: ir::Ty::Int(ir::IntTy::I32),
+            completion: ir::Completion::Returns,
+        };
+        let mut arena = vec![literal.clone()];
+        for index in 0..100 {
+            arena.push(ir::TypedExpr {
+                kind: ir::ExprKind::Binary {
+                    op: BinaryOp::BitOr,
+                    left: ir::ExprId(index),
+                    right: ir::ExprId(index),
+                },
+                ..literal.clone()
+            });
+        }
+        let mut eval = CountEvaluator::new(&arena).unwrap();
+        assert!(matches!(
+            eval.evaluate(ir::ExprId(100)).unwrap(),
+            CountValue::Known(_)
+        ));
+        assert!(eval.work < 1000);
+        eval.work = COUNT_EVAL_WORK;
+        assert!(eval.evaluate(ir::ExprId(0)).unwrap_err().contains("work"));
+        let mut deep = vec![literal.clone()];
+        for index in 0..130 {
+            deep.push(ir::TypedExpr {
+                kind: ir::ExprKind::IntCast {
+                    value: ir::ExprId(index),
+                    to: ir::IntTy::I32,
+                },
+                ..literal.clone()
+            });
+        }
+        let mut eval = CountEvaluator::new(&deep).unwrap();
+        eval.evaluate(ir::ExprId(100)).unwrap();
+        assert!(
+            eval.evaluate(ir::ExprId(130))
+                .unwrap_err()
+                .contains("depth")
+        );
+        let cyclic = [ir::TypedExpr {
+            kind: ir::ExprKind::IntCast {
+                value: ir::ExprId(0),
+                to: ir::IntTy::I32,
+            },
+            ..literal.clone()
+        }];
+        assert!(
+            CountEvaluator::new(&cyclic)
+                .unwrap()
+                .evaluate(ir::ExprId(0))
+                .unwrap_err()
+                .contains("cycle")
+        );
+        let never = [ir::TypedExpr {
+            completion: ir::Completion::Never,
+            ..literal
+        }];
+        assert!(matches!(
+            CountEvaluator::new(&never)
+                .unwrap()
+                .evaluate(ir::ExprId(0))
+                .unwrap(),
+            CountValue::Dynamic
+        ));
+    }
 
     #[test]
     fn bitwise_exact_integer_and_boolean_types_preserve_operand_hints() {

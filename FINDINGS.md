@@ -8846,3 +8846,30 @@ The actual96worker example executed with exact expected stdout,1,129source
 bytes,12,326ELF bytes,42CFG blocks,101locals,117move paths,18graph nodes and
 23edges. Total25,384,224ns and engine4,415,349ns are contended/uncontrolled
 observations, not a speedup comparison. No experimental installation occurred.
+
+## 2026-10-16: independently typed checked shifts
+
+Native Shl/Shr preserve the LHS integer type while accepting independently typed
+integer RHS counts. Full normalized count comparison precedes CL masking and
+rejects signed negatives, width-sized counts and huge unsigned values. SHL loses
+high value bits without arithmetic overflow checks; SAR/SHR follow signedness.
+Existing eager snapshots, visitors, reference origins and private ABI remain.
+
+The frozen32 stock/native cases and four graph tests pass, including nine exact
+runtime101 traps. Two static invalid fixtures explicitly preserve stock metadata0
+versus codegen arithmetic_overflow, while native CHECK diagnoses earlier and
+BUILD rejects. The typed private count evaluator is bounded by shared perfunction
+1M work,128depth and prechecked64MiB memo/heights allocation, with cycle detection.
+No general consteval or optimized local-propagation claim is made.
+
+Actual review exposed effectful RHS blocks incorrectly classified Unsupported.
+The original snapshot fixture was retained, nonempty blocks became Dynamic
+opaque barriers without evaluating statements or tails, and backend62 plus final
+full gates passed. All1145 hosted tests and strict all-target Clippy pass, with
+check/test/lint IDs20261016-035156006-3713726,
+20261016-035158008-3714039 and20261016-035200936-3714315 retained in
+`data/runs/prototype-bootstrap/2026-10-shifts.jsonl`. Both actual-code reviewers
+clear the final correction. The real example prints
+`checked shifts compiled correctly` with stock/native parity. Independent
+tracked24corpus evidence follows the implementation commit. Full Rust and
+performance acceptance remain open, and no experimental installation occurred.

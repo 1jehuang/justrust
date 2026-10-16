@@ -15,7 +15,11 @@ not Rust platform layout or FFI support. `INTEGER-CASTS.md` adds all 100
 integer-to-integer conversions with source-signed extension and destination
 truncation/normalization, nontrapping casts and private soft source expectations.
 Eager integer/Boolean `&`, `|`, `^` preserve exact types and left-to-right evaluation.
-Noninteger casts, shifts, compound assignments, 128-bit integers, floats and
+Checked heterogeneous integer shifts preserve LHS type and full-count checks;
+known invalid counts are diagnosed during native CHECK/BUILD, including two
+cases stock metadata accepts before its codegen rejects arithmetic_overflow.
+Bounded static diagnostics do not claim general consteval/lint equivalence.
+Noninteger casts, compound assignments, 128-bit integers, floats and
 broader inference remain separate work. The full Rust compatibility goal remains
 open.
 

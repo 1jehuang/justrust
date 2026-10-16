@@ -33,8 +33,12 @@ operators and block tails, not arithmetic or branch unification. Concrete source
 types retain their identity. See `INTEGER-TYPES.md` and `INTEGER-CASTS.md`.
 Eager `&`, `|` and `^` accept identical integer types or Boolean operands and
 evaluate both operands once, left to right. Logical `&&`/`||` remain short-circuit.
-Shifts, compound assignments, 128-bit integers, floats and noninteger casts
-remain unsupported. Parenthesized cast target types are an explicit boundary.
+Checked `<<` and `>>` accept independently typed integer counts and return the
+LHS integer type. Negative or width-exceeding counts trap101, left shifts truncate
+lost value bits, and signed right shifts preserve sign. A bounded typed static
+count diagnostic rejects known invalid counts, sometimes earlier than stock
+metadata-only checking. This is not general consteval or release wrapping.
+Compound assignments, 128-bit integers, floats and noninteger casts remain unsupported. Parenthesized cast target types are an explicit boundary.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and

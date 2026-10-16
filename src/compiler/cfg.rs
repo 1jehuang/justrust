@@ -389,6 +389,21 @@ impl Function {
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     return Err("CFG short-circuit operator must be control flow".into());
                 }
+                if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+                    let (Ty::Int(left_integer), Ty::Int(_)) = (&left_ty, &right_ty) else {
+                        return Err("CFG shift requires integer operands".into());
+                    };
+                    if let Operand::Constant(Constant::Int(count)) = right {
+                        let negative = count.ty.is_signed()
+                            && count.bits & (1_u64 << (count.ty.bits() - 1)) != 0;
+                        if negative || count.bits >= u64::from(left_integer.bits()) {
+                            return Err(
+                                "CFG constant shift count is negative or exceeds LHS width".into(),
+                            );
+                        }
+                    }
+                    return Ok(left_ty);
+                }
                 let comparison = matches!(
                     op,
                     BinaryOp::Eq
@@ -2190,6 +2205,214 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn shifts_validate_all_pairs_full_counts_dead_blocks_and_eager_order() {
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ];
+        let function = nominal_lowered(&with_root(Ty::Unit, vec![], vec![]));
+        for op in [BinaryOp::Shl, BinaryOp::Shr] {
+            for left in types {
+                for right in types {
+                    let lhs = Operand::Constant(Constant::Int(IntValue {
+                        ty: left,
+                        bits: left.mask(),
+                    }));
+                    let count =
+                        |bits| Operand::Constant(Constant::Int(IntValue { ty: right, bits }));
+                    for bits in [0, u64::from(left.bits() - 1)] {
+                        assert_eq!(
+                            function
+                                .rvalue_ty(&Rvalue::Binary {
+                                    op,
+                                    left: lhs.clone(),
+                                    right: count(bits)
+                                })
+                                .unwrap(),
+                            Ty::Int(left)
+                        );
+                    }
+                    for bits in [u64::from(left.bits()), right.mask()] {
+                        assert!(
+                            function
+                                .rvalue_ty(&Rvalue::Binary {
+                                    op,
+                                    left: lhs.clone(),
+                                    right: count(bits)
+                                })
+                                .unwrap_err()
+                                .contains("shift count")
+                        );
+                    }
+                    if right.bits() == 64 {
+                        assert!(
+                            function
+                                .rvalue_ty(&Rvalue::Binary {
+                                    op,
+                                    left: lhs.clone(),
+                                    right: count(1_u64 << 32)
+                                })
+                                .is_err()
+                        );
+                    }
+                }
+            }
+            for endpoint in [
+                Operand::Constant(Constant::Bool(false)),
+                Operand::Constant(Constant::Unit),
+            ] {
+                let integer = Operand::Constant(Constant::Int(IntValue::i32(0)));
+                assert!(
+                    function
+                        .rvalue_ty(&Rvalue::Binary {
+                            op,
+                            left: endpoint.clone(),
+                            right: integer.clone()
+                        })
+                        .is_err()
+                );
+                assert!(
+                    function
+                        .rvalue_ty(&Rvalue::Binary {
+                            op,
+                            left: integer,
+                            right: endpoint
+                        })
+                        .is_err()
+                );
+            }
+            for count in [
+                IntValue {
+                    ty: IntTy::U64,
+                    bits: 64,
+                },
+                IntValue {
+                    ty: IntTy::U64,
+                    bits: u64::MAX,
+                },
+                IntValue {
+                    ty: IntTy::U8,
+                    bits: 256,
+                },
+            ] {
+                let mut dead = function.clone();
+                dead.blocks.push(BasicBlock {
+                    statements: vec![Located {
+                        value: Statement::Assign {
+                            destination: place(LocalId(0)),
+                            value: Rvalue::Binary {
+                                op,
+                                left: Operand::Constant(Constant::Int(IntValue::i32(1))),
+                                right: Operand::Constant(Constant::Int(count)),
+                            },
+                        },
+                        origin: None,
+                    }],
+                    terminator: Located {
+                        value: Terminator::Unreachable,
+                        origin: None,
+                    },
+                });
+                let error = dead.validate().unwrap_err();
+                assert!(error.contains(if count.bits > count.ty.mask() {
+                    "noncanonical"
+                } else {
+                    "shift count"
+                }));
+            }
+            let source = with_root(
+                Ty::Unit,
+                vec![
+                    expr(
+                        Ty::Int(IntTy::I8),
+                        ir::ExprKind::Call {
+                            name: "left".into(),
+                            args: vec![],
+                            signature: ir::Signature {
+                                ref_contract: Default::default(),
+                                params: vec![],
+                                result: Ty::Int(IntTy::I8),
+                            },
+                        },
+                    ),
+                    expr(
+                        Ty::Int(IntTy::U64),
+                        ir::ExprKind::Call {
+                            name: "right".into(),
+                            args: vec![],
+                            signature: ir::Signature {
+                                ref_contract: Default::default(),
+                                params: vec![],
+                                result: Ty::Int(IntTy::U64),
+                            },
+                        },
+                    ),
+                    expr(
+                        Ty::Int(IntTy::I8),
+                        ir::ExprKind::Binary {
+                            op,
+                            left: ExprId(0),
+                            right: ExprId(1),
+                        },
+                    ),
+                ],
+                vec![ir::Stmt::Expr(ExprId(2))],
+            );
+            let lowered = nominal_lowered(&source);
+            let calls: Vec<_> = lowered
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.terminator.value {
+                    Terminator::Call { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(calls, ["left", "right"]);
+            assert_eq!(
+                lowered
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .filter(|statement| matches!(
+                        statement.value,
+                        Statement::Assign {
+                            value: Rvalue::Binary {
+                                op: BinaryOp::Shl | BinaryOp::Shr,
+                                ..
+                            },
+                            ..
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert_storage_paths(&lowered);
+            assert!(super::super::ownership::analyze(&lowered).passed());
+        }
+        // Other operators retain exact identity despite shift heterogeneity.
+        assert!(
+            function
+                .rvalue_ty(&Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: Operand::Constant(Constant::Int(IntValue::i32(1))),
+                    right: Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::U32,
+                        bits: 1
+                    }))
+                })
+                .is_err()
+        );
     }
 
     #[test]

@@ -1438,6 +1438,28 @@ impl CheckedFunction {
                 ExprKind::Binary { op, left, right } => {
                     expr(*left)?;
                     expr(*right)?;
+                    if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+                        let left = &self.exprs[left.0];
+                        let right = &self.exprs[right.0];
+                        if !matches!(left.ty, Ty::Int(_))
+                            || !matches!(right.ty, Ty::Int(_))
+                            || value.ty != left.ty
+                        {
+                            return Err(
+                                "shift requires integer operands and exact LHS result type".into(),
+                            );
+                        }
+                        let completion = if left.completion == Completion::Returns
+                            && right.completion == Completion::Returns
+                        {
+                            Completion::Returns
+                        } else {
+                            Completion::Never
+                        };
+                        if value.completion != completion {
+                            return Err("shift completion mismatch".into());
+                        }
+                    }
                     if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
                         let left = &self.exprs[left.0];
                         let right = &self.exprs[right.0];
@@ -1563,6 +1585,81 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shifts_validate_independent_integer_types_and_eager_completion() {
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ];
+        for op in [BinaryOp::Shl, BinaryOp::Shr] {
+            for left in types {
+                for right in types {
+                    let mut function = fixture();
+                    function.exprs[0] = TypedExpr {
+                        ty: Ty::Int(left),
+                        completion: Completion::Returns,
+                        kind: ExprKind::Int(IntValue { ty: left, bits: 1 }),
+                    };
+                    function.exprs.push(TypedExpr {
+                        ty: Ty::Int(right),
+                        completion: Completion::Returns,
+                        kind: ExprKind::Int(IntValue { ty: right, bits: 0 }),
+                    });
+                    function.exprs.push(TypedExpr {
+                        ty: Ty::Int(left),
+                        completion: Completion::Returns,
+                        kind: ExprKind::Binary {
+                            op,
+                            left: ExprId(0),
+                            right: ExprId(1),
+                        },
+                    });
+                    function.validate().unwrap();
+                    function.exprs[2].ty = Ty::Bool;
+                    assert!(function.validate().is_err());
+                    function.exprs[2].ty = Ty::Int(left);
+                    for endpoint in [0, 1] {
+                        function.exprs[endpoint].completion = Completion::Never;
+                        assert!(function.validate().unwrap_err().contains("completion"));
+                        function.exprs[2].completion = Completion::Never;
+                        function.validate().unwrap();
+                        function.exprs[endpoint].completion = Completion::Returns;
+                        function.exprs[2].completion = Completion::Returns;
+                    }
+                    for endpoint in [0, 1] {
+                        let saved = function.exprs[endpoint].clone();
+                        for ty in [
+                            Ty::Bool,
+                            Ty::Unit,
+                            Ty::Never,
+                            Ty::Tuple(Arc::from([Ty::Bool])),
+                            Ty::Ref {
+                                kind: BorrowKind::Shared,
+                                referent: Arc::new(Ty::Bool),
+                            },
+                        ] {
+                            function.exprs[endpoint] = TypedExpr {
+                                ty,
+                                completion: Completion::Returns,
+                                kind: ExprKind::Bool(false),
+                            };
+                            assert!(function.validate().is_err());
+                        }
+                        function.exprs[endpoint] = saved;
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn bitwise_validates_exact_types_dead_operands_and_eager_completion() {
         for op in [BinaryOp::BitAnd, BinaryOp::BitOr, BinaryOp::BitXor] {

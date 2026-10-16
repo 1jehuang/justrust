@@ -480,6 +480,23 @@ impl<'a> Emitter<'a> {
     }
     fn binary_integer(&mut self, op: BinaryOp, ty: ir::IntTy) -> Result<(), String> {
         match op {
+            BinaryOp::Shl | BinaryOp::Shr => {
+                // RCX is the independently typed, normalized FULL count.
+                // Unsigned comparison also rejects sign-extended negatives.
+                self.bytes(&[0x48, 0x83, 0xf9, ty.bits() as u8]);
+                self.trap_if(0x83); // jae, before hardware masks CL
+                self.bytes(&[
+                    0x48,
+                    0xd3,
+                    match op {
+                        BinaryOp::Shl => 0xe0,
+                        _ if ty.is_signed() => 0xf8,
+                        _ => 0xe8,
+                    },
+                ]);
+                // Lost left-shift value bits are truncation, not overflow.
+                self.normalize_integer(ty);
+            }
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
                 self.bytes(&[
                     0x48,
@@ -1311,6 +1328,106 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn shifts_all_hundred_type_pairs_sign_right_and_left_truncation() {
+        use ir::IntTy;
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ];
+        for lhs in types {
+            let name = lhs.name();
+            let high = 1_i128 << (lhs.bits() - 1);
+            let (all, top, right, doubled) = if lhs.is_signed() {
+                (-1, -high, -1, -2)
+            } else {
+                (high * 2 - 1, high, 1, high * 2 - 2)
+            };
+            let mut functions = String::new();
+            let mut calls = String::new();
+            for rhs in types {
+                let count = rhs.name();
+                functions.push_str(&format!(
+                    "fn pair_{count}(value:{name}, count:{count})->bool {{
+                        if (value << count) != {top}{name} {{ return false; }}
+                        if (value >> count) != {right}{name} {{ return false; }}
+                        true
+                    }}"
+                ));
+                calls.push_str(&format!(
+                    "if !pair_{count}({all}{name},{}{count}) {{ 1/0; }}",
+                    lhs.bits() - 1
+                ));
+            }
+            let source = format!(
+                "{functions} fn main() {{ {calls}
+                    let all={all}{name}; let zero=0u64; let one=1i8;
+                    if (all << zero) != all {{ 1/0; }}
+                    if (all >> zero) != all {{ 1/0; }}
+                    if (all << one) != {doubled}{name} {{ 1/0; }}
+                }}"
+            );
+            let program = frontend::parse(&source).unwrap();
+            let output = run(&program);
+            assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn shifts_full_count_guards_eager_snapshots_and_typed_divergence() {
+        let program = frontend::parse(
+            r#"
+            fn left(trace:&mut i32)->u8 { *trace=*trace*10+1; 129u8 }
+            fn count(trace:&mut i32)->u64 { *trace=*trace*10+2; 1u64 }
+            fn divergent_left()->u8 { ({ return 3u8; 1u8 }) << 1u32 }
+            fn divergent_right()->u8 { 1u8 << { return 4u8; 1u64 } }
+            fn main() {
+                let mut trace=0;
+                let result=left(&mut trace) << count(&mut trace);
+                if result != 2u8 { 1/0; }
+                if trace != 12 { 1/0; }
+                let mut bits=1u8;
+                let snapshot=bits << { bits=9u8; 1u32 };
+                if snapshot != 2u8 { 1/0; }
+                if bits != 9u8 { 1/0; }
+                if divergent_left() != 3u8 { 1/0; }
+                if divergent_right() != 4u8 { 1/0; }
+                println!("checked-shifts");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"checked-shifts\n");
+        for (lhs, rhs, count) in [
+            ("u8", "i8", "-1i8"),
+            ("i64", "i64", "-1i64"),
+            ("u8", "u64", "8u64"),
+            ("u64", "u8", "64u8"),
+            ("i32", "u64", "4294967296u64"),
+            ("u64", "u64", "18446744073709551615u64"),
+        ] {
+            for op in ["<<", ">>"] {
+                let source = format!(
+                    "fn shift(value:{lhs},count:{rhs})->{lhs} {{ value {op} count }}
+                     fn main() {{ let result=shift(1{lhs},{count}); }}"
+                );
+                let program = frontend::parse(&source).unwrap();
+                let output = run(&program);
+                assert_eq!(output.status.code(), Some(101), "{source}: {output:?}");
+            }
+        }
     }
 
     #[test]

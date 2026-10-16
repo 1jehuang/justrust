@@ -296,4 +296,15 @@ And/Or separation are validated. All1100 hosted tests and strict all-target lint
 pass, including exact20 stock/native cases and four graph tests. Independent
 23corpus native follow-through passes all836cases, with24raw receipts and
 actual96worker example execution retained. Shifts and compound assignments
-remain separate work, and full Rust remains open.
+were separate work at that checkpoint, and full Rust remains open.
+
+### Checked heterogeneous shifts checkpoint
+
+`SHIFTS.md` is implemented: independently typed integer counts, full-width guard
+before hardware masking, truncating left shifts and signed/unsigned right shifts.
+The private bounded typed count diagnostic preserves runtime effects, distinguishes
+semantic Never from typed noncompletion and shares memo/work/depth limits.
+All1145 hosted tests, exact32 stock/native cases, four graph tests and strict
+all-target lint pass. Earlier CHECK diagnostics than stock metadata are explicit
+for two static invalid fixtures. Independent24corpus evidence is pending.
+Compound assignments, general consteval and full Rust remain open.

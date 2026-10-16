@@ -53,7 +53,9 @@ text guessing, runtime execution or general Rust consteval. Supported pure forms
 canonical IntValue literals, empty-statement Block tails, integer Unary Neg/Not,
 IntCast, integer arithmetic/bitwise and nested shifts. Preserve exact declared
 width, source-signed cast extension, checked arithmetic and count semantics.
-Parentheses are already transparent, effectful blocks are not. Known negative or
+Parentheses are already transparent. Effectful blocks are DYNAMIC opaque
+barriers: retain their normal runtime effects and count guard, never fold or
+execute them in the evaluator. Known negative or
 too-large RHS values reject. Known arithmetic overflow, zero division or MIN/-1
 inside the evaluated count must diagnose or explicitly report unsupported,
 never silently wrap or become a dynamic value. Genuine Local/Call/index/deref
@@ -93,3 +95,16 @@ four graph tests, real example, docs/profiles and tracked24corpus native receipt
 Reviewers remain strictly read-only. Every owner publishes production+fixture
 COMPILE-READY before bounded focused tests. No implementation GO is implied by
 this document alone.
+
+## Implemented validation checkpoint
+
+The exact32 stock/native CLI cases and four graph tests pass. All1145 hosted
+tests, strict all-target Clippy and formatting pass on the frozen implementation.
+Final check/test/lint IDs are20261016-035156006-3713726,
+20261016-035158008-3714039 and20261016-035200936-3714315, retained as exact
+redacted summaries in data/runs/prototype-bootstrap/2026-10-shifts.jsonl.
+Both actual-code reviews are clear after correcting effectful blocks to Dynamic
+opaque barriers without changing the original snapshot regression. The real
+high-bit/reference/once-evaluation example executes with stock/native stdout
+parity. Independent tracked24corpus native follow-through is pending this
+implementation commit. No speedup or full Rust claim is made.

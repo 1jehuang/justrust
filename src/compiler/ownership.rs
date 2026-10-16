@@ -1586,6 +1586,116 @@ mod tests {
     }
 
     #[test]
+    fn heterogeneous_shifts_read_both_operands_and_retain_operand_loans() {
+        use super::super::frontend::BinaryOp;
+        for op in [BinaryOp::Shl, BinaryOp::Shr] {
+            for (lhs, rhs) in [(IntTy::I8, IntTy::U64), (IntTy::U64, IntTy::I8)] {
+                let mut f = fixture();
+                f.locals.extend([
+                    local(Ty::Int(lhs)),
+                    local(Ty::Int(rhs)),
+                    local(Ty::Int(lhs)),
+                ]);
+                f.params.push(LocalId(1));
+                f.blocks[0].statements.extend([
+                    located(Statement::StorageLive(LocalId(2))),
+                    located(Statement::StorageLive(LocalId(3))),
+                    located(Statement::Assign {
+                        destination: place(3),
+                        value: Rvalue::Binary {
+                            op,
+                            left: Operand::Copy(place(1)),
+                            right: Operand::Copy(place(2)),
+                        },
+                    }),
+                ]);
+                let result = analyze(&f);
+                assert!(result.complete);
+                assert_eq!(result.stats.operands_read, 4);
+                assert!(
+                    result
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+                );
+                f.params.push(LocalId(2));
+                f.blocks[0]
+                    .statements
+                    .retain(|s| !matches!(s.value, Statement::StorageLive(LocalId(2))));
+                assert!(analyze(&f).passed());
+            }
+        }
+        for operator in ["<<", ">>"] {
+            for (expression, owner) in [
+                (format!("*r {operator} 1u64"), "x"),
+                (format!("1u8 {operator} *r"), "x"),
+            ] {
+                let valid = borrowed_source(&format!(
+                    "fn f(input:u8)->u8{{let mut x=input;let r=&x;let y={expression};{owner}=2;y}}"
+                ));
+                assert!(analyze(&valid).passed());
+                let invalid = borrowed_source(&format!(
+                    "fn f(input:u8)->u8{{let mut x=input;let r=&x;{owner}=2;{expression}}}"
+                ));
+                assert!(
+                    analyze(&invalid)
+                        .diagnostics
+                        .iter()
+                        .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_)))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shift_bad_constant_counts_in_dead_cfg_fail_closed() {
+        use super::super::frontend::BinaryOp;
+        for op in [BinaryOp::Shl, BinaryOp::Shr] {
+            for count in [
+                IntValue {
+                    ty: IntTy::I8,
+                    bits: 255,
+                },
+                IntValue {
+                    ty: IntTy::U64,
+                    bits: u64::MAX,
+                },
+                IntValue {
+                    ty: IntTy::U64,
+                    bits: 8,
+                },
+            ] {
+                let mut f = fixture();
+                f.locals.push(local(Ty::Int(IntTy::U8)));
+                f.blocks.push(BasicBlock {
+                    statements: vec![located(Statement::Assign {
+                        destination: place(1),
+                        value: Rvalue::Binary {
+                            op,
+                            left: Operand::Constant(Constant::Int(IntValue {
+                                ty: IntTy::U8,
+                                bits: 1,
+                            })),
+                            right: Operand::Constant(Constant::Int(count)),
+                        },
+                    })],
+                    terminator: located(Terminator::Return),
+                });
+                let result = analyze(&f);
+                assert!(!result.passed());
+                assert!(
+                    result
+                        .diagnostics
+                        .iter()
+                        .any(|d| matches!(d.kind, ErrorKind::InvalidCfg(_))),
+                    "{:?}",
+                    result.diagnostics
+                );
+            }
+        }
+    }
+
+    #[test]
     fn eager_bitwise_reads_both_operands_once_in_left_to_right_order() {
         use super::super::frontend::BinaryOp;
         for op in [BinaryOp::BitAnd, BinaryOp::BitOr, BinaryOp::BitXor] {
