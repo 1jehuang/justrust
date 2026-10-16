@@ -9,6 +9,12 @@ use super::ir::{
 };
 use std::sync::{Arc, Mutex};
 
+mod catalog;
+pub use catalog::{
+    CallableProvider, CatalogDecl, CatalogItem, CoreCatalog, CoreCatalogBuilder, DeclOrigin,
+    RecipeDescriptor, RecipeShapeInventory,
+};
+
 pub const MAX_PREDICATES: usize = 256;
 const DIAGNOSTIC_LIMIT: usize = 64 * 1024;
 
@@ -185,7 +191,8 @@ fn retain<T>(b: &PlanBudget, count: usize) -> Result<()> {
     charged(b, b.retain_bytes(bytes))
 }
 fn push<T>(b: &PlanBudget, values: &mut Vec<T>, value: T) -> Result<()> {
-    retain::<T>(b, 1)?;
+    // Retain a conservative old-plus-new relocation peak before Vec growth.
+    retain::<T>(b, 2)?;
     if values.len() == values.capacity() {
         charged(b, b.charge_work(values.len()))?;
     }
@@ -202,6 +209,11 @@ pub struct GenericSchema {
     pub signature: Signature,
     pub predicates: Arc<[Predicate]>,
 }
+fn clone_schema(schema: &GenericSchema, budget: &PlanBudget) -> Result<GenericSchema> {
+    charged(budget, budget.charge_work(schema.signature.params.len()))?;
+    retain::<Ty>(budget, schema.signature.params.len())?;
+    Ok(schema.clone())
+}
 #[derive(Clone, Debug, Default)]
 pub struct HeaderSet {
     pub traits: Arc<[TraitHeader]>,
@@ -215,6 +227,7 @@ pub struct TraitHeader {
     pub self_param: ParamId,
     pub env: Arc<GenericEnv>,
     pub items: Arc<[DeclId]>,
+    pub supertraits: Arc<[TraitRef]>,
 }
 #[derive(Clone, Debug)]
 pub struct TraitItemHeader {
@@ -222,6 +235,7 @@ pub struct TraitItemHeader {
     pub trait_decl: DeclId,
     pub receiver: ReceiverMode,
     pub schema: GenericSchema,
+    pub default: Option<DeclId>,
 }
 #[derive(Clone, Debug)]
 pub struct ImplHeader {
@@ -261,6 +275,7 @@ pub struct InstantiatedSchema {
 pub trait SchemaCx {
     fn budget(&self) -> &PlanBudget;
     fn registry_snapshot(&self) -> SnapshotId;
+    fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
     fn instantiate_schema(
@@ -389,7 +404,15 @@ impl ValidatedFacts {
             ));
         }
         self.validate_ty(ty)?;
-        intrinsic_copy(ty, self.budget(), 0)
+        let predicate = Predicate::Implements(TraitRef {
+            declaration: self.world.catalog.id(CatalogItem::Copy),
+            self_ty: ty.clone(),
+            args: Arc::from([]),
+        });
+        Ok(matches!(
+            self.world.prove_goal(&predicate, self)?,
+            ProofOutcome::Proved(_)
+        ))
     }
     pub fn projected_ty<'a>(&self, root: &'a Ty, path: &[Projection]) -> Result<&'a Ty> {
         self.validate_ty(root)?;
@@ -397,27 +420,12 @@ impl ValidatedFacts {
         charged(self.budget(), ir::projected_ty(root, path))
     }
 }
-fn intrinsic_copy(ty: &Ty, b: &PlanBudget, depth: usize) -> Result<bool> {
-    charged(b, b.check_depth(depth))?;
-    charged(b, b.charge_work(1))?;
-    match ty {
-        Ty::Param(_) | Ty::Struct(_) | Ty::Enum(_) => Ok(false),
-        Ty::Ref { kind, .. } => Ok(*kind == ir::BorrowKind::Shared),
-        Ty::Tuple(parts) => {
-            for t in parts.iter() {
-                if !intrinsic_copy(t, b, depth + 1)? {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        }
-        Ty::Array { element, .. } => intrinsic_copy(element, b, depth + 1),
-        Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => Ok(true),
-    }
-}
 #[derive(Clone, Debug)]
 enum ProofOrigin {
     Assumption,
+    Builtin {
+        item: CatalogItem,
+    },
     Implementation {
         declaration: DeclId,
         arguments: Arc<[Ty]>,
@@ -458,6 +466,7 @@ pub struct ResolvedTraitCall {
     signature: Signature,
     _evidence: ProofEvidence,
     _refinement: Option<Arc<ReturnRefinementProof>>,
+    _topology: Option<Arc<SignatureTopologyProof>>,
 }
 impl ResolvedTraitCall {
     pub fn callee(&self) -> &Callee {
@@ -509,6 +518,29 @@ struct ReturnRefinementProof {
     implementation: DeclId,
     required: Arc<ir::RefContract>,
     provided: Arc<ir::RefContract>,
+    topology: Option<Arc<SignatureTopologyProof>>,
+}
+
+#[derive(Clone, Debug)]
+struct CarrierRegionBinding {
+    carrier: ir::ParameterCarrier,
+    region: ir::RegionParamId,
+    inputs: Arc<[ir::InputReference]>,
+    results: Arc<[ir::ReferencePosition]>,
+}
+#[derive(Clone, Debug)]
+struct SignatureTopologyProof {
+    world: WorldId,
+    registry: SnapshotId,
+    environment: usize,
+    phase: FactsPhase,
+    declaration: DeclId,
+    arguments: Arc<[Ty]>,
+    schema: Arc<ir::SignatureOriginSchema>,
+    fixed_regions: Arc<[ir::RegionParamId]>,
+    carriers: Arc<[CarrierRegionBinding]>,
+    realized: Arc<ir::RefContract>,
+    budget: PlanBudget,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -601,17 +633,19 @@ pub struct ValidatedTraitWorld {
     id: WorldId,
     registry: SnapshotId,
     schema: Arc<dyn SchemaCx + Send + Sync>,
+    catalog: Arc<CoreCatalog>,
     budget: PlanBudget,
     headers: HeaderSet,
     environments: Vec<Arc<PredicateEnv>>,
     empty: Arc<PredicateEnv>,
     memo: Mutex<Vec<MemoEntry>>,
     requirements: Vec<(DeclId, Arc<[Predicate]>)>,
+    origins: Vec<(DeclId, Arc<ir::SignatureOriginSchema>)>,
 }
 
 impl ValidatedTraitWorld {
     pub fn build(
-        headers: HeaderSet,
+        mut headers: HeaderSet,
         schema: Arc<dyn SchemaCx + Send + Sync>,
         budget: &PlanBudget,
     ) -> Result<Arc<Self>> {
@@ -622,6 +656,82 @@ impl ValidatedTraitWorld {
             ));
         }
         let registry = schema.registry_snapshot();
+        let catalog = schema.core_catalog().clone();
+        if catalog.snapshot() != registry || !catalog.budget().same_authority(budget) {
+            return Err(FactsError::invalid(
+                budget,
+                "canonical catalog registry or ledger mismatch",
+            ));
+        }
+        // Canonical rows come ONLY from the retained catalog. Supplied rows of
+        // the same identity are checked against it, never replaced or remapped.
+        let mut traits = Vec::new();
+        let mut items = Vec::new();
+        let mut callables = Vec::new();
+        for h in headers.traits.iter() {
+            push(budget, &mut traits, h.clone())?;
+        }
+        for h in catalog.headers().traits.iter() {
+            charged(budget, budget.charge_work(traits.len()))?;
+            if !traits.iter().any(|v| v.declaration == h.declaration) {
+                push(budget, &mut traits, h.clone())?;
+            }
+        }
+        for h in headers.items.iter() {
+            push(
+                budget,
+                &mut items,
+                TraitItemHeader {
+                    schema: clone_schema(&h.schema, budget)?,
+                    declaration: h.declaration,
+                    trait_decl: h.trait_decl,
+                    receiver: h.receiver,
+                    default: h.default,
+                },
+            )?;
+        }
+        for h in catalog.headers().items.iter() {
+            charged(budget, budget.charge_work(items.len()))?;
+            if !items.iter().any(|v| v.declaration == h.declaration) {
+                push(
+                    budget,
+                    &mut items,
+                    TraitItemHeader {
+                        schema: clone_schema(&h.schema, budget)?,
+                        declaration: h.declaration,
+                        trait_decl: h.trait_decl,
+                        receiver: h.receiver,
+                        default: h.default,
+                    },
+                )?;
+            }
+        }
+        for h in headers.callables.iter() {
+            push(
+                budget,
+                &mut callables,
+                CallableHeader {
+                    declaration: h.declaration,
+                    schema: clone_schema(&h.schema, budget)?,
+                },
+            )?;
+        }
+        for h in catalog.headers().callables.iter() {
+            charged(budget, budget.charge_work(callables.len()))?;
+            if !callables.iter().any(|v| v.declaration == h.declaration) {
+                push(
+                    budget,
+                    &mut callables,
+                    CallableHeader {
+                        declaration: h.declaration,
+                        schema: clone_schema(&h.schema, budget)?,
+                    },
+                )?;
+            }
+        }
+        headers.traits = traits.into();
+        headers.items = items.into();
+        headers.callables = callables.into();
         // Check identities before invoking any potentially expensive raw callback.
         for id in headers
             .traits
@@ -654,15 +764,42 @@ impl ValidatedTraitWorld {
             id,
             registry,
             schema,
+            catalog,
             budget: budget.clone(),
             headers,
             environments: Vec::new(),
             empty,
             memo: Mutex::new(Vec::new()),
             requirements: Vec::new(),
+            origins: Vec::new(),
         };
         world.validate_headers()?;
+        world.validate_supertrait_graph()?;
+        world.build_declared_environments()?;
+        world.build_origin_schemas()?;
+        for h in world.headers.impls.iter() {
+            world.validate_impl(h)?;
+        }
+        for h in world.headers.impls.iter() {
+            let env = world.predicate_env(h.declaration)?;
+            let context = ProofContext {
+                predicates: &env,
+                phase: FactsPhase::Universal,
+            };
+            world.require_impl_wf(h, &h.trait_ref.self_ty, context, &mut Vec::new())?;
+        }
         world.build_environments()?;
+        if world
+            .headers
+            .impls
+            .iter()
+            .any(|h| h.trait_ref.declaration == world.catalog.id(CatalogItem::Drop))
+        {
+            return Err(FactsError::unsupported(
+                budget,
+                "unsupported: canonical Drop destructor execution",
+            ));
+        }
         Ok(Arc::new(world))
     }
     pub fn registry_snapshot(&self) -> SnapshotId {
@@ -686,6 +823,28 @@ impl ValidatedTraitWorld {
             ));
         }
         let info = self.schema.declaration_info(id)?;
+        if let Some(canonical) = self.catalog.declaration(id) {
+            let c = &canonical.info;
+            if info.kind != c.kind
+                || info.owner != c.owner
+                || info.receiver != c.receiver
+                || info.public != c.public
+                || info.region_contract_mode != c.region_contract_mode
+                || !self.same_env(&info.env, &c.env)?
+                || info.own_env.binder() != c.own_env.binder()
+                || info.own_env.arity() != c.own_env.arity()
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "catalog declaration metadata spoofed by registry",
+                ));
+            }
+        } else if id.index < self.catalog.source_start() || id.index >= self.catalog.source_end() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "source declaration overlaps or escapes frozen catalog layout",
+            ));
+        }
         if info.declaration != id || info.own_env.binder().declaration != id {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -803,10 +962,7 @@ impl ValidatedTraitWorld {
             ));
         }
         self.validate_ty(&goal.self_ty, env, maybe_unsized, true, 0)?;
-        charged(
-            &self.budget,
-            ir::reject_references(&goal.self_ty, &self.budget),
-        )
+        Ok(())
     }
     fn validate_predicates(
         &self,
@@ -1126,6 +1282,29 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
+        if let Some(trusted) = self
+            .catalog
+            .declaration(declaration)
+            .and_then(|d| d.schema.as_ref())
+        {
+            if !self.same_env(&trusted.env, &canonical.env)?
+                || !self.eq_signature(&trusted.signature, &canonical.signature)?
+                || trusted.predicates.len() != canonical.predicates.len()
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "raw adapter disagrees with immutable catalog schema",
+                ));
+            }
+            for (a, b) in trusted.predicates.iter().zip(canonical.predicates.iter()) {
+                if !self.eq_predicate(a, b)? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "raw adapter changed catalog obligations",
+                    ));
+                }
+            }
+        }
         Ok(())
     }
     fn validate_position_coverage(&self, signature: &Signature) -> Result<()> {
@@ -1369,6 +1548,47 @@ impl ValidatedTraitWorld {
         }
         push(&self.budget, output, predicate.clone())
     }
+    fn validate_supertrait_graph(&self) -> Result<()> {
+        fn visit(
+            world: &ValidatedTraitWorld,
+            declaration: DeclId,
+            active: &mut Vec<DeclId>,
+            complete: &mut Vec<DeclId>,
+        ) -> Result<()> {
+            charged(&world.budget, world.budget.check_depth(active.len()))?;
+            charged(
+                &world.budget,
+                world.budget.charge_work(
+                    active
+                        .len()
+                        .saturating_add(complete.len())
+                        .saturating_add(1),
+                ),
+            )?;
+            if active.contains(&declaration) {
+                return Err(FactsError::cycle(
+                    &world.budget,
+                    "cyclic supertrait declaration metadata",
+                ));
+            }
+            if complete.contains(&declaration) {
+                return Ok(());
+            }
+            push(&world.budget, active, declaration)?;
+            for bound in world.trait_header(declaration)?.supertraits.iter() {
+                charged(&world.budget, world.budget.charge_work(1))?;
+                visit(world, bound.declaration, active, complete)?;
+            }
+            active.pop();
+            push(&world.budget, complete, declaration)
+        }
+        let mut active = Vec::new();
+        let mut complete = Vec::new();
+        for header in self.headers.traits.iter() {
+            visit(self, header.declaration, &mut active, &mut complete)?;
+        }
+        Ok(())
+    }
     fn validate_headers(&self) -> Result<()> {
         let mut seen = Vec::new();
         for id in self
@@ -1403,6 +1623,41 @@ impl ValidatedTraitWorld {
                 ));
             }
             let mut items = Vec::new();
+            if h.supertraits.len() > MAX_PREDICATES {
+                return Err(FactsError::resource(
+                    &self.budget,
+                    "supertrait header limit exceeded",
+                ));
+            }
+            for goal in h.supertraits.iter() {
+                self.validate_ref_in(goal, &h.env, Some(h.self_param))?;
+            }
+            if let Some(canonical) = self
+                .catalog
+                .headers()
+                .traits
+                .iter()
+                .find(|c| c.declaration == h.declaration)
+            {
+                if canonical.items != h.items || canonical.supertraits.len() != h.supertraits.len()
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "canonical trait header was replaced",
+                    ));
+                }
+                for (a, b) in canonical.supertraits.iter().zip(h.supertraits.iter()) {
+                    if !self.eq_predicate(
+                        &Predicate::Implements(a.clone()),
+                        &Predicate::Implements(b.clone()),
+                    )? {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "canonical supertraits were replaced",
+                        ));
+                    }
+                }
+            }
             for id in h.items.iter() {
                 charged(&self.budget, self.budget.charge_work(items.len()))?;
                 if items.contains(id) || self.item_header(*id)?.trait_decl != h.declaration {
@@ -1434,6 +1689,28 @@ impl ValidatedTraitWorld {
                 ));
             }
             self.validate_declaration_schema(item.declaration, &item.schema)?;
+            if let Some(canonical) = self
+                .catalog
+                .headers()
+                .items
+                .iter()
+                .find(|c| c.declaration == item.declaration)
+                && item.default != canonical.default
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "canonical required/provided item classification changed",
+                ));
+            }
+            if let Some(default) = item.default
+                && (self.catalog.declaration(item.declaration).is_none()
+                    || self.catalog.declaration(default).is_none())
+            {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: source trait default body",
+                ));
+            }
             self.validate_schema_signature(
                 item.declaration,
                 &item.schema.signature,
@@ -1492,9 +1769,6 @@ impl ValidatedTraitWorld {
             }
             self.validate_predicates(&callable.schema.predicates, &callable.schema.env, None)?;
         }
-        for implementation in self.headers.impls.iter() {
-            self.validate_impl(implementation)?;
-        }
         for (index, a) in self.headers.impls.iter().enumerate() {
             for b in self.headers.impls[..index].iter() {
                 charged(&self.budget, self.budget.charge_work(1))?;
@@ -1531,9 +1805,24 @@ impl ValidatedTraitWorld {
             ));
         }
         if !matches!(h.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_)) {
-            return Err(FactsError::unsupported(
+            return Err(
+                if self.catalog.declaration(h.trait_ref.declaration).is_some() {
+                    FactsError::invalid(
+                        &self.budget,
+                        "canonical foreign trait implementation requires local nominal Self",
+                    )
+                } else {
+                    FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: nonnominal trait implementation head",
+                    )
+                },
+            );
+        }
+        if h.trait_ref.declaration == self.catalog.id(CatalogItem::Sized) {
+            return Err(FactsError::invalid(
                 &self.budget,
-                "unsupported: nonnominal trait implementation head",
+                "explicit canonical Sized implementations are invalid",
             ));
         }
         self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
@@ -1547,11 +1836,14 @@ impl ValidatedTraitWorld {
             }
         }
         let trait_header = self.trait_header(h.trait_ref.declaration)?;
-        if h.items.len() != trait_header.items.len() {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "trait impl has missing or extra required items",
-            ));
+        for id in trait_header.items.iter() {
+            let item = self.item_header(*id)?;
+            if item.default.is_none() && !h.items.iter().any(|(mapped, _)| mapped == id) {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "trait impl has missing required items",
+                ));
+            }
         }
         for callable in self.headers.callables.iter() {
             if self.info(callable.declaration)?.owner == Some(h.declaration) {
@@ -1603,21 +1895,12 @@ impl ValidatedTraitWorld {
                     "unsupported: generic trait method implementation",
                 ));
             }
-            let expected = self.schema.instantiate_schema(
-                &item.schema,
-                std::slice::from_ref(&h.trait_ref.self_ty),
-                &h.schema_env,
-                &self.budget,
-            )?;
-            if !self.eq_contract(
-                &expected.signature.ref_contract,
-                &item.schema.signature.ref_contract,
-            )? {
-                return Err(FactsError::invalid(
-                    &self.budget,
-                    "schema substitution changed declaration return authority",
-                ));
-            }
+            let env = self.predicate_env(h.declaration)?;
+            let context = ProofContext {
+                predicates: &env,
+                phase: FactsPhase::Universal,
+            };
+            let (expected, _) = self.instantiate_item(item, &h.trait_ref.self_ty, context)?;
             self.validate_signature_shape(&expected.signature, &h.schema_env, None)?;
             self.validate_predicates(&expected.predicates, &h.schema_env, None)?;
             if !self.eq_types(
@@ -1639,7 +1922,7 @@ impl ValidatedTraitWorld {
             }
             for predicate in target.schema.predicates.iter() {
                 let mut allowed = false;
-                for candidate in h.predicates.iter().chain(expected.predicates.iter()) {
+                for candidate in env.predicates.iter().chain(expected.predicates.iter()) {
                     if self.eq_predicate(predicate, candidate)? {
                         allowed = true;
                         break;
@@ -1655,6 +1938,185 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
+    fn supers_for(&self, goal: &TraitRef) -> Result<Vec<Predicate>> {
+        let header = self.trait_header(goal.declaration)?;
+        let mut supers = Vec::new();
+        for declared in header.supertraits.iter() {
+            if !matches!(&declared.self_ty, Ty::Param(p) if *p == header.self_param) {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: supertrait Self type transformation",
+                ));
+            }
+            push(
+                &self.budget,
+                &mut supers,
+                Predicate::Implements(TraitRef {
+                    declaration: declared.declaration,
+                    self_ty: goal.self_ty.clone(),
+                    args: declared.args.clone(),
+                }),
+            )?;
+        }
+        Ok(supers)
+    }
+    fn close_predicates(&self, predicates: &mut Vec<Predicate>) -> Result<()> {
+        let mut index = 0;
+        while index < predicates.len() {
+            let Predicate::Implements(goal) = &predicates[index];
+            let supers = self.supers_for(goal)?;
+            for p in supers {
+                self.append_predicate(predicates, &p)?;
+            }
+            index += 1;
+        }
+        Ok(())
+    }
+    fn implicit_sized(&self, env: &GenericEnv, predicates: &mut Vec<Predicate>) -> Result<()> {
+        for p in env.ordered_params() {
+            if self.info(p.owner.declaration)?.kind == DeclKind::Trait {
+                continue;
+            }
+            self.append_predicate(
+                predicates,
+                &Predicate::Implements(TraitRef {
+                    declaration: self.catalog.id(CatalogItem::Sized),
+                    self_ty: Ty::Param(p),
+                    args: Arc::from([]),
+                }),
+            )?;
+        }
+        Ok(())
+    }
+    fn build_declared_environments(&mut self) -> Result<()> {
+        for h in self.headers.impls.iter() {
+            let info = self.info(h.declaration)?;
+            if info.kind != DeclKind::TraitImpl || !self.same_env(&info.env, &h.schema_env)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "impl bounds have foreign declaration authority",
+                ));
+            }
+            self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
+            self.validate_predicates(&h.predicates, &h.schema_env, None)?;
+            let mut predicates = Vec::new();
+            for p in h.predicates.iter() {
+                self.append_predicate(&mut predicates, p)?;
+            }
+            self.implicit_sized(&h.schema_env, &mut predicates)?;
+            self.close_predicates(&mut predicates)?;
+            retain::<PredicateEnv>(&self.budget, 1)?;
+            let index = self.environments.len();
+            push(
+                &self.budget,
+                &mut self.environments,
+                Arc::new(PredicateEnv {
+                    world: self.id,
+                    index,
+                    declaration: Some(h.declaration),
+                    env: h.schema_env.clone(),
+                    predicates: predicates.into(),
+                }),
+            )?;
+        }
+        Ok(())
+    }
+    fn build_origin_schemas(&mut self) -> Result<()> {
+        for item in self.headers.items.iter() {
+            let schema = charged(
+                &self.budget,
+                ir::derive_signature_origin_schema(
+                    &item.schema.signature,
+                    &item.schema.env,
+                    &self.budget,
+                ),
+            )?;
+            push(&self.budget, &mut self.origins, (item.declaration, schema))?;
+        }
+        Ok(())
+    }
+    fn require_impl_wf(
+        &self,
+        h: &ImplHeader,
+        actual: &Ty,
+        context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<()> {
+        let goal = TraitRef {
+            declaration: h.trait_ref.declaration,
+            self_ty: actual.clone(),
+            args: Arc::from([]),
+        };
+        for p in self.supers_for(&goal)? {
+            self.require_in(&p, context, active)?;
+        }
+        if goal.declaration != self.catalog.id(CatalogItem::Copy) {
+            return Ok(());
+        }
+        let source_decl = match actual {
+            Ty::Struct(t) => t.def().source_decl,
+            Ty::Enum(t) => t.def().source_decl,
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "source Copy implementation requires local nominal Self",
+                ));
+            }
+        };
+        for other in self.headers.impls.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if other.trait_ref.declaration == self.catalog.id(CatalogItem::Drop) {
+                let other_decl = match &other.trait_ref.self_ty {
+                    Ty::Struct(t) => Some(t.def().source_decl),
+                    Ty::Enum(t) => Some(t.def().source_decl),
+                    _ => None,
+                };
+                if other_decl == Some(source_decl) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "canonical Copy and Drop cannot be implemented for the same type",
+                    ));
+                }
+            }
+        }
+        self.require_in(
+            &Predicate::Implements(TraitRef {
+                declaration: self.catalog.id(CatalogItem::Sized),
+                self_ty: actual.clone(),
+                args: Arc::from([]),
+            }),
+            context,
+            active,
+        )?;
+        let mut field = |ty: &Ty| -> Result<()> {
+            self.require_in(
+                &Predicate::Implements(TraitRef {
+                    declaration: self.catalog.id(CatalogItem::Copy),
+                    self_ty: ty.clone(),
+                    args: Arc::from([]),
+                }),
+                context,
+                active,
+            )?;
+            Ok(())
+        };
+        match actual {
+            Ty::Struct(t) => {
+                for f in t.def().fields.iter() {
+                    field(&f.ty)?;
+                }
+            }
+            Ty::Enum(t) => {
+                for v in t.def().variants.iter() {
+                    for f in v.fields.iter() {
+                        field(&f.ty)?;
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
     fn build_environments(&mut self) -> Result<()> {
         // Header schemas are now globally validated. These environments remain
         // inaccessible until the immutable world is successfully returned.
@@ -1663,6 +2125,16 @@ impl ValidatedTraitWorld {
             for p in item.schema.predicates.iter() {
                 self.append_predicate(&mut predicates, p)?;
             }
+            self.implicit_sized(&item.schema.env, &mut predicates)?;
+            self.append_predicate(
+                &mut predicates,
+                &Predicate::Implements(TraitRef {
+                    declaration: item.trait_decl,
+                    self_ty: Ty::Param(self.trait_header(item.trait_decl)?.self_param),
+                    args: Arc::from([]),
+                }),
+            )?;
+            self.close_predicates(&mut predicates)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {
                 world: self.id,
@@ -1678,6 +2150,7 @@ impl ValidatedTraitWorld {
             for p in callable.schema.predicates.iter() {
                 self.append_predicate(&mut requirements, p)?;
             }
+            self.implicit_sized(&callable.schema.env, &mut requirements)?;
             let owner = self.info(callable.declaration)?.owner;
             let mut implementation = None;
             for h in self.headers.impls.iter() {
@@ -1692,6 +2165,7 @@ impl ValidatedTraitWorld {
                     self.append_predicate(&mut requirements, p)?;
                 }
             }
+            self.close_predicates(&mut requirements)?;
             retain::<Predicate>(&self.budget, requirements.len())?;
             let declared: Arc<[Predicate]> = requirements.clone().into();
             push(
@@ -1705,6 +2179,7 @@ impl ValidatedTraitWorld {
                     &Predicate::Implements(h.trait_ref.clone()),
                 )?;
             }
+            self.close_predicates(&mut requirements)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {
                 world: self.id,
@@ -1979,6 +2454,7 @@ impl ValidatedTraitWorld {
         }))
     }
     pub fn callable_facts(self: &Arc<Self>, decl: DeclId) -> Result<Arc<ValidatedFacts>> {
+        self.ensure_provider(decl)?;
         self.callable_header(decl)?;
         let predicates = self.predicate_env(decl)?;
         retain::<ValidatedFacts>(&self.budget, 1)?;
@@ -2053,6 +2529,511 @@ impl ValidatedTraitWorld {
         self.validate_signature_shape(&result.signature, facts.env(), None)?;
         self.validate_predicates(&result.predicates, facts.env(), None)?;
         Ok(result)
+    }
+    fn ensure_provider(&self, declaration: DeclId) -> Result<()> {
+        if let Some(record) = self.catalog.declaration(declaration) {
+            match record.callable_provider {
+                Some(CallableProvider::Recipe { .. }) => {}
+                Some(CallableProvider::UnavailableProvided { .. }) => {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: canonical provided body is unavailable",
+                    ));
+                }
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "signature-only catalog item is not an executable target",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    fn check_context(&self, context: ProofContext<'_>) -> Result<()> {
+        if context.predicates.world != self.id {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "topology context belongs to another world",
+            ));
+        }
+        let expected = if context.predicates.index == usize::MAX {
+            &self.empty
+        } else {
+            self.environments
+                .get(context.predicates.index)
+                .ok_or_else(|| {
+                    FactsError::invalid(
+                        &self.budget,
+                        "topology predicate environment index is foreign",
+                    )
+                })?
+        };
+        if !std::ptr::eq(expected.as_ref(), context.predicates) {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "topology context is not the world's retained predicate authority",
+            ));
+        }
+        if context.predicates.index == usize::MAX
+            && (context.env().is_generic() || !context.predicates.predicates.is_empty())
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "nonempty topology context used the empty sentinel",
+            ));
+        }
+        Ok(())
+    }
+    fn instantiate_item(
+        &self,
+        item: &TraitItemHeader,
+        actual: &Ty,
+        context: ProofContext<'_>,
+    ) -> Result<(InstantiatedSchema, Option<Arc<SignatureTopologyProof>>)> {
+        self.check_context(context)?;
+        let owner = self.trait_header(item.trait_decl)?;
+        let info = self.info(item.declaration)?;
+        if info.kind != DeclKind::TraitItem
+            || info.owner != Some(owner.declaration)
+            || item.schema.env.ordered_params().next() != Some(owner.self_param)
+            || owner.self_param.index != 0
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "schema substitution lost authoritative Trait Self membership",
+            ));
+        }
+        self.validate_ty(actual, context.env(), None, true, 0)?;
+        charged(&self.budget, self.budget.charge_work(self.origins.len()))?;
+        let origin = self
+            .origins
+            .iter()
+            .find(|(d, _)| *d == item.declaration)
+            .map(|(_, s)| s.clone())
+            .ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "trait item has no original signature-origin schema",
+                )
+            })?;
+        let actual_layers = charged(&self.budget, ir::reference_layers(actual))?;
+        let expands = actual_layers > 0
+            && (!origin.input_tails.is_empty() || !origin.result_tails.is_empty());
+        let fixed = &origin.fixed;
+        let total = usize::from(fixed.region_count)
+            .checked_add(if expands { actual_layers } else { 0 })
+            .ok_or_else(|| FactsError::resource(&self.budget, "topology region overflow"))?;
+        if total > 64 {
+            return Err(FactsError::resource(
+                &self.budget,
+                "topology positioned region limit exceeded",
+            ));
+        }
+        let introduced = origin
+            .input_tails
+            .len()
+            .checked_add(origin.result_tails.len())
+            .and_then(|n| n.checked_mul(actual_layers))
+            .and_then(|n| n.checked_add(fixed.input_regions.len()))
+            .and_then(|n| n.checked_add(fixed.results.len()))
+            .ok_or_else(|| FactsError::resource(&self.budget, "topology position overflow"))?;
+        if introduced > 4096 {
+            return Err(FactsError::resource(
+                &self.budget,
+                "topology reference position limit exceeded",
+            ));
+        }
+        if expands {
+            for tail in origin.input_tails.iter() {
+                let ty = item
+                    .schema
+                    .signature
+                    .params
+                    .get(tail.param)
+                    .ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "latent input is outside its original schema",
+                        )
+                    })?;
+                for depth in 0..tail.prefix {
+                    let (kind, _) = charged(
+                        &self.budget,
+                        ir::reference_at(ty, ir::ReferencePosition { depth }),
+                    )?;
+                    if kind != ir::BorrowKind::Shared {
+                        return Err(FactsError::unsupported(
+                            &self.budget,
+                            "unsupported: nested mutable trait Self expansion",
+                        ));
+                    }
+                }
+            }
+            for tail in origin.result_tails.iter() {
+                for depth in 0..tail.prefix {
+                    let (kind, _) = charged(
+                        &self.budget,
+                        ir::reference_at(
+                            &item.schema.signature.result,
+                            ir::ReferencePosition { depth },
+                        ),
+                    )?;
+                    if kind != ir::BorrowKind::Shared {
+                        return Err(FactsError::unsupported(
+                            &self.budget,
+                            "unsupported: nested mutable trait Self expansion",
+                        ));
+                    }
+                }
+            }
+        }
+        // Reject impossible expansion BEFORE the raw adapter allocates the new
+        // reference chain. This is method execution admission, not trait proof.
+        for (prefix, parameter) in origin
+            .input_tails
+            .iter()
+            .map(|t| (t.prefix, t.parameter))
+            .chain(origin.result_tails.iter().map(|t| (t.prefix, t.parameter)))
+        {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if parameter != owner.self_param {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: executable method type parameters",
+                ));
+            }
+            if usize::from(prefix) + actual_layers > 2 {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: trait Self expansion requires more than two reference layers",
+                ));
+            }
+            if prefix > 0 && actual_layers > 0 {
+                for depth in 0..actual_layers {
+                    let (kind, _) = charged(
+                        &self.budget,
+                        ir::reference_at(actual, ir::ReferencePosition { depth: depth as u8 }),
+                    )?;
+                    if kind != ir::BorrowKind::Shared {
+                        return Err(FactsError::unsupported(
+                            &self.budget,
+                            "unsupported: nested mutable trait Self expansion",
+                        ));
+                    }
+                }
+            }
+        }
+        let mut instantiated = self.schema.instantiate_schema(
+            &item.schema,
+            std::slice::from_ref(actual),
+            context.env(),
+            &self.budget,
+        )?;
+        if !self.eq_contract(
+            &item.schema.signature.ref_contract,
+            &instantiated.signature.ref_contract,
+        )? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "raw schema adapter changed return authority before topology validation",
+            ));
+        }
+        if !expands {
+            self.validate_signature_shape(&instantiated.signature, context.env(), None)?;
+            return Ok((instantiated, None));
+        }
+        let mut inputs = Vec::new();
+        let mut results = Vec::new();
+        let mut edges = Vec::new();
+        let mut carriers = Vec::new();
+        for row in fixed.input_regions.iter() {
+            push(&self.budget, &mut inputs, row.clone())?;
+        }
+        for row in fixed.results.iter() {
+            push(&self.budget, &mut results, row.clone())?;
+        }
+        for edge in fixed.outlives.iter() {
+            push(&self.budget, &mut edges, *edge)?;
+        }
+        for relative in 0..actual_layers {
+            let position = ir::ReferencePosition {
+                depth: relative as u8,
+            };
+            let region = ir::RegionParamId(fixed.region_count + relative as u16);
+            let mut ci = Vec::new();
+            let mut cr = Vec::new();
+            for tail in origin.input_tails.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if tail.parameter != owner.self_param {
+                    continue;
+                }
+                let input = ir::InputReference {
+                    param: tail.param,
+                    position: ir::ReferencePosition {
+                        depth: tail.prefix + relative as u8,
+                    },
+                };
+                push(&self.budget, &mut inputs, ir::InputRegion { input, region })?;
+                push(&self.budget, &mut ci, input)?;
+            }
+            for tail in origin.result_tails.iter() {
+                if tail.parameter != owner.self_param {
+                    continue;
+                }
+                let output = ir::ReferencePosition {
+                    depth: tail.prefix + relative as u8,
+                };
+                let (kind, _) = charged(
+                    &self.budget,
+                    ir::reference_at(&instantiated.signature.result, output),
+                )?;
+                let mut envelopes = Vec::new();
+                for input in tail.inputs.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if input.parameter != tail.parameter {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "latent result widened to a different parameter",
+                        ));
+                    }
+                    let anchor = ir::InputReference {
+                        param: input.param,
+                        position: ir::ReferencePosition {
+                            depth: input.prefix + relative as u8,
+                        },
+                    };
+                    let ty = instantiated
+                        .signature
+                        .params
+                        .get(anchor.param)
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "latent input index is outside signature",
+                            )
+                        })?;
+                    let (input_kind, _) =
+                        charged(&self.budget, ir::reference_at(ty, anchor.position))?;
+                    if kind == ir::BorrowKind::Shared || input_kind == ir::BorrowKind::Mut {
+                        push(
+                            &self.budget,
+                            &mut envelopes,
+                            ir::InputEnvelope { input: anchor },
+                        )?;
+                    }
+                }
+                let returns = if kind == ir::BorrowKind::Shared {
+                    ir::ReturnContract::SharedInputEnvelopes(envelopes.into())
+                } else {
+                    ir::ReturnContract::MutInputEnvelopes(envelopes.into())
+                };
+                push(
+                    &self.budget,
+                    &mut results,
+                    ir::ResultReference {
+                        position: output,
+                        region,
+                        returns,
+                    },
+                )?;
+                push(&self.budget, &mut cr, output)?;
+            }
+            push(
+                &self.budget,
+                &mut carriers,
+                CarrierRegionBinding {
+                    carrier: ir::ParameterCarrier {
+                        parameter: owner.self_param,
+                        relative: position,
+                    },
+                    region,
+                    inputs: ci.into(),
+                    results: cr.into(),
+                },
+            )?;
+        }
+        charged(
+            &self.budget,
+            self.budget.charge_work(
+                inputs
+                    .len()
+                    .saturating_mul(inputs.len())
+                    .saturating_add(results.len().saturating_mul(results.len())),
+            ),
+        )?;
+        inputs.sort_unstable_by_key(|r| (r.input.param, r.input.position.depth));
+        results.sort_unstable_by_key(|r| r.position.depth);
+        for rows in inputs.windows(2) {
+            if rows[0].input.param == rows[1].input.param {
+                push(&self.budget, &mut edges, (rows[1].region, rows[0].region))?;
+            }
+        }
+        for rows in results.windows(2) {
+            push(&self.budget, &mut edges, (rows[1].region, rows[0].region))?;
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let raw = ir::RefContract {
+            region_count: total as u16,
+            input_regions: inputs.into(),
+            results: results.into(),
+            outlives: edges.into(),
+        };
+        let realized = charged(&self.budget, ir::normalize_ref_contract(&raw, &self.budget))?;
+        let mut renumber = Vec::new();
+        charged(
+            &self.budget,
+            self.budget.charge_work(
+                total
+                    .saturating_mul(raw.input_regions.len().saturating_add(raw.results.len()))
+                    .saturating_mul(2),
+            ),
+        )?;
+        for old in 0..total {
+            let region = ir::RegionParamId(old as u16);
+            let mapped = raw
+                .input_regions
+                .iter()
+                .find(|r| r.region == region)
+                .and_then(|r| {
+                    realized
+                        .input_regions
+                        .iter()
+                        .find(|n| n.input == r.input)
+                        .map(|r| r.region)
+                })
+                .or_else(|| {
+                    raw.results
+                        .iter()
+                        .find(|r| r.region == region)
+                        .and_then(|r| {
+                            realized
+                                .results
+                                .iter()
+                                .find(|n| n.position == r.position)
+                                .map(|r| r.region)
+                        })
+                })
+                .ok_or_else(|| {
+                    FactsError::invalid(&self.budget, "topology region correspondence was lost")
+                })?;
+            push(&self.budget, &mut renumber, mapped)?;
+        }
+        for carrier in &mut carriers {
+            carrier.region = renumber[usize::from(carrier.region.0)];
+        }
+        let mut fixed_regions = Vec::new();
+        for region in renumber.iter().take(usize::from(fixed.region_count)) {
+            push(&self.budget, &mut fixed_regions, *region)?;
+        }
+        instantiated.signature.ref_contract = realized.clone();
+        self.validate_signature_shape(&instantiated.signature, context.env(), None)?;
+        self.validate_position_coverage(&instantiated.signature)?;
+        retain::<Ty>(&self.budget, 1)?;
+        retain::<SignatureTopologyProof>(&self.budget, 1)?;
+        let proof = Arc::new(SignatureTopologyProof {
+            world: self.id,
+            registry: self.registry,
+            environment: context.predicates.index,
+            phase: context.phase,
+            declaration: item.declaration,
+            arguments: Arc::from([actual.clone()]),
+            schema: origin,
+            fixed_regions: fixed_regions.into(),
+            carriers: carriers.into(),
+            realized,
+            budget: self.budget.clone(),
+        });
+        self.validate_topology(&proof, context)?;
+        Ok((instantiated, Some(proof)))
+    }
+    fn validate_topology(
+        &self,
+        proof: &SignatureTopologyProof,
+        context: ProofContext<'_>,
+    ) -> Result<()> {
+        self.check_context(context)?;
+        charged(&self.budget, self.budget.charge_work(self.origins.len()))?;
+        if proof.world != self.id
+            || proof.registry != self.registry
+            || proof.environment != context.predicates.index
+            || proof.phase != context.phase
+            || !proof.budget.same_authority(&self.budget)
+            || proof.arguments.len() != 1
+            || proof.fixed_regions.len() != usize::from(proof.schema.fixed.region_count)
+            || !self
+                .origins
+                .iter()
+                .any(|(d, s)| *d == proof.declaration && Arc::ptr_eq(s, &proof.schema))
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "signature topology certificate lost exact context authority",
+            ));
+        }
+        let owner = self.trait_header(self.item_header(proof.declaration)?.trait_decl)?;
+        for binding in proof.carriers.iter() {
+            let scans = binding
+                .inputs
+                .len()
+                .checked_mul(proof.realized.input_regions.len())
+                .and_then(|n| {
+                    binding
+                        .results
+                        .len()
+                        .checked_mul(proof.realized.results.len())
+                        .and_then(|m| n.checked_add(m))
+                })
+                .ok_or_else(|| {
+                    FactsError::resource(&self.budget, "topology verification work overflow")
+                })?;
+            charged(&self.budget, self.budget.charge_work(scans))?;
+            charged(
+                &self.budget,
+                self.budget.charge_work(
+                    binding
+                        .inputs
+                        .len()
+                        .saturating_add(binding.results.len())
+                        .saturating_add(1),
+                ),
+            )?;
+            if binding.carrier.parameter != owner.self_param
+                || binding.region.0 >= proof.realized.region_count
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "topology carrier binding is foreign",
+                ));
+            }
+            for input in binding.inputs.iter() {
+                if !proof
+                    .realized
+                    .input_regions
+                    .iter()
+                    .any(|r| r.input == *input && r.region == binding.region)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "topology input binding mismatch",
+                    ));
+                }
+            }
+            for result in binding.results.iter() {
+                if !proof
+                    .realized
+                    .results
+                    .iter()
+                    .any(|r| r.position == *result && r.region == binding.region)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "topology result binding mismatch",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
     fn require_in(
         &self,
@@ -2186,6 +3167,9 @@ impl ValidatedTraitWorld {
             }
         }
         let Predicate::Implements(goal) = predicate;
+        if let Some(outcome) = self.prove_builtin(predicate, facts, active)? {
+            return Ok(outcome);
+        }
         let mut selected = None;
         for implementation in self.headers.impls.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -2250,6 +3234,7 @@ impl ValidatedTraitWorld {
             if !satisfied {
                 continue;
             }
+            self.require_impl_wf(implementation, &goal.self_ty, facts, active)?;
             if selected.is_some() {
                 return Err(FactsError::ambiguous(
                     &self.budget,
@@ -2271,7 +3256,85 @@ impl ValidatedTraitWorld {
             Ok(ProofOutcome::NotProven)
         }
     }
-    fn trait_signature_in(&self, call: &TraitCall, context: ProofContext<'_>) -> Result<Signature> {
+    fn prove_builtin(
+        &self,
+        predicate: &Predicate,
+        context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<Option<ProofOutcome>> {
+        let Predicate::Implements(goal) = predicate;
+        let item = if goal.declaration == self.catalog.id(CatalogItem::Sized) {
+            CatalogItem::Sized
+        } else if goal.declaration == self.catalog.id(CatalogItem::Clone) {
+            CatalogItem::Clone
+        } else if goal.declaration == self.catalog.id(CatalogItem::Copy) {
+            CatalogItem::Copy
+        } else {
+            return Ok(None);
+        };
+        let mut children: Vec<&Ty> = Vec::new();
+        let known = match &goal.self_ty {
+            Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
+            Ty::Struct(t) if item == CatalogItem::Sized => {
+                for f in t.def().fields.iter() {
+                    push(&self.budget, &mut children, &f.ty)?;
+                }
+                true
+            }
+            Ty::Enum(t) if item == CatalogItem::Sized => {
+                for v in t.def().variants.iter() {
+                    for f in v.fields.iter() {
+                        push(&self.budget, &mut children, &f.ty)?;
+                    }
+                }
+                true
+            }
+            Ty::Struct(_) | Ty::Enum(_) => return Ok(None),
+            Ty::Tuple(parts) => {
+                for t in parts.iter() {
+                    push(&self.budget, &mut children, t)?;
+                }
+                true
+            }
+            Ty::Array { element, .. } => {
+                push(&self.budget, &mut children, element.as_ref())?;
+                true
+            }
+            Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
+            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => true,
+        };
+        if !known {
+            return Ok(Some(ProofOutcome::NotProven));
+        }
+        for ty in children {
+            let child = Predicate::Implements(TraitRef {
+                declaration: goal.declaration,
+                self_ty: ty.clone(),
+                args: Arc::from([]),
+            });
+            if matches!(
+                self.prove_in(&child, context, active)?,
+                ProofOutcome::NotProven
+            ) {
+                return Ok(Some(ProofOutcome::NotProven));
+            }
+        }
+        for supertrait in self.supers_for(goal)? {
+            if matches!(
+                self.prove_in(&supertrait, context, active)?,
+                ProofOutcome::NotProven
+            ) {
+                return Ok(Some(ProofOutcome::NotProven));
+            }
+        }
+        self.evidence(predicate, context, ProofOrigin::Builtin { item })
+            .map(Some)
+    }
+    fn trait_signature_with_topology(
+        &self,
+        call: &TraitCall,
+        context: ProofContext<'_>,
+    ) -> Result<(Signature, Option<Arc<SignatureTopologyProof>>)> {
         self.validate_ref_in(&call.trait_ref, context.env(), None)?;
         let item = self.item_header(call.item)?;
         if item.trait_decl != call.trait_ref.declaration {
@@ -2291,21 +3354,23 @@ impl ValidatedTraitWorld {
             context,
             &mut Vec::new(),
         )?;
-        let instantiated = self.instantiate_in(
-            &item.schema,
-            std::slice::from_ref(&call.trait_ref.self_ty),
-            context,
-        )?;
+        let (instantiated, topology) =
+            self.instantiate_item(item, &call.trait_ref.self_ty, context)?;
         for predicate in instantiated.predicates.iter() {
             self.require_in(predicate, context, &mut Vec::new())?;
         }
-        Ok(instantiated.signature)
+        Ok((instantiated.signature, topology))
+    }
+    fn trait_signature_in(&self, call: &TraitCall, context: ProofContext<'_>) -> Result<Signature> {
+        self.trait_signature_with_topology(call, context)
+            .map(|(s, _)| s)
     }
     fn discharge_in(
         &self,
         target: &CallTarget,
         context: ProofContext<'_>,
     ) -> Result<DirectCallProof> {
+        self.ensure_provider(target.declaration)?;
         let schema = self.callable_schema(target.declaration)?;
         let instantiated = self.instantiate_in(&schema, &target.type_args, context)?;
         let mut evidence = Vec::new();
@@ -2324,7 +3389,7 @@ impl ValidatedTraitWorld {
     }
     fn goal_is_closed(&self, goal: &TraitRef, env: &GenericEnv) -> Result<bool> {
         let mut walk = TypeWalk::default();
-        self.validate_ty_inner(&goal.self_ty, env, 0, TypeUse::Actual, &mut walk)?;
+        self.validate_ty_inner(&goal.self_ty, env, 0, TypeUse::Root, &mut walk)?;
         for ty in goal.args.iter() {
             self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut walk)?;
         }
@@ -2361,6 +3426,18 @@ impl ValidatedTraitWorld {
             };
         }
         match (pattern, actual) {
+            (
+                Ty::Ref {
+                    kind: a,
+                    referent: at,
+                },
+                Ty::Ref {
+                    kind: b,
+                    referent: bt,
+                },
+            ) => {
+                return Ok(a == b && self.match_head(at, bt, env, slots, depth + 1)?);
+            }
             (Ty::Tuple(_), Ty::Tuple(_)) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a.def().source_decl == b.def().source_decl => {}
             (Ty::Enum(a), Ty::Enum(b)) if a.def().source_decl == b.def().source_decl => {}
@@ -2474,7 +3551,7 @@ impl TraitCx for ValidatedTraitWorld {
     ) -> Result<ResolvedTraitCall> {
         self.check_facts(facts, true)?;
         let caller = ProofContext::from_facts(facts);
-        let signature = self.trait_signature_in(call, caller)?;
+        let (signature, caller_topology) = self.trait_signature_with_topology(call, caller)?;
         let predicate = Predicate::Implements(call.trait_ref.clone());
         if facts.phase() == FactsPhase::Universal
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
@@ -2485,6 +3562,7 @@ impl TraitCx for ValidatedTraitWorld {
                 signature,
                 _evidence: evidence,
                 _refinement: None,
+                _topology: caller_topology,
             });
         }
         // The same obligation engine runs with the world's private empty
@@ -2493,18 +3571,8 @@ impl TraitCx for ValidatedTraitWorld {
             predicates: &self.empty,
             phase: FactsPhase::Closed,
         };
-        let signature = self.trait_signature_in(call, closed)?;
+        let (signature, topology) = self.trait_signature_with_topology(call, closed)?;
         let evidence = self.require_in(&predicate, closed, &mut Vec::new())?;
-        let ProofOrigin::Implementation {
-            declaration,
-            arguments,
-        } = &evidence.0.origin
-        else {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "closed dispatch cannot use caller assumption evidence",
-            ));
-        };
         if evidence.0.world != self.id
             || evidence.0.environment != self.empty.index
             || evidence.0.phase != FactsPhase::Closed
@@ -2516,21 +3584,104 @@ impl TraitCx for ValidatedTraitWorld {
             ));
         }
         let mut target = None;
-        for h in self.headers.impls.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if h.declaration == *declaration {
-                for (item, body) in h.items.iter() {
-                    charged(&self.budget, self.budget.charge_work(1))?;
-                    if *item == call.item {
+        if let ProofOrigin::Implementation {
+            declaration,
+            arguments,
+        } = &evidence.0.origin
+        {
+            for h in self.headers.impls.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if h.declaration == *declaration {
+                    for (item, body) in h.items.iter() {
+                        charged(&self.budget, self.budget.charge_work(1))?;
+                        if *item == call.item {
+                            target = Some(CallTarget {
+                                declaration: *body,
+                                type_args: arguments.clone(),
+                            });
+                            break;
+                        }
+                    }
+                    if target.is_none()
+                        && let Some(default) = self.item_header(call.item)?.default
+                    {
+                        self.ensure_provider(default)?;
                         target = Some(CallTarget {
-                            declaration: *body,
-                            type_args: arguments.clone(),
+                            declaration: default,
+                            type_args: Arc::from([call.trait_ref.self_ty.clone()]),
                         });
-                        break;
+                    }
+                    break;
+                }
+            }
+        } else if let ProofOrigin::Builtin {
+            item: CatalogItem::Clone,
+        } = &evidence.0.origin
+        {
+            if call.item != self.catalog.id(CatalogItem::CloneItem) {
+                if let Some(default) = self.item_header(call.item)?.default {
+                    self.ensure_provider(default)?;
+                }
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: builtin trait item has no executable provider",
+                ));
+            }
+            let mut args = Vec::new();
+            let descriptor = match &call.trait_ref.self_ty {
+                Ty::Int(i) => RecipeDescriptor::CloneInt(*i),
+                Ty::Bool => RecipeDescriptor::CloneBool,
+                Ty::Unit => RecipeDescriptor::CloneUnit,
+                Ty::Never => {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: CloneNever executable body",
+                    ));
+                }
+                Ty::Tuple(parts) => {
+                    for p in parts.iter() {
+                        push(&self.budget, &mut args, p.clone())?;
+                    }
+                    RecipeDescriptor::CloneTuple {
+                        arity: parts.len().try_into().map_err(|_| {
+                            FactsError::resource(&self.budget, "tuple Clone arity overflow")
+                        })?,
                     }
                 }
-                break;
-            }
+                Ty::Array { element, len } => {
+                    push(&self.budget, &mut args, element.as_ref().clone())?;
+                    RecipeDescriptor::CloneArray {
+                        len: (*len).try_into().map_err(|_| {
+                            FactsError::resource(&self.budget, "array Clone length overflow")
+                        })?,
+                    }
+                }
+                Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent,
+                } => {
+                    self.validate_actual(referent, closed.env())?;
+                    push(&self.budget, &mut args, referent.as_ref().clone())?;
+                    RecipeDescriptor::CloneSharedRef
+                }
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "builtin Clone evidence has invalid Self shape",
+                    ));
+                }
+            };
+            let record = self.catalog.recipe(descriptor)?;
+            self.ensure_provider(record.declaration)?;
+            target = Some(CallTarget {
+                declaration: record.declaration,
+                type_args: args.into(),
+            });
+        } else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closed dispatch cannot use assumption or noncallable builtin evidence",
+            ));
         }
         let target = target.ok_or_else(|| {
             FactsError::invalid(
@@ -2557,7 +3708,11 @@ impl TraitCx for ValidatedTraitWorld {
             implementation: target.declaration,
             required: item.schema.signature.ref_contract.clone(),
             provided: implementation.schema.signature.ref_contract.clone(),
+            topology,
         });
+        if let Some(topology) = &refinement.topology {
+            self.validate_topology(topology, closed)?;
+        }
         // Retain exact rigid source identities, never derive a widened list
         // from the specialized signature or retain an ArcWorld backreference.
         if refinement.world != self.id
@@ -2579,6 +3734,7 @@ impl TraitCx for ValidatedTraitWorld {
             signature: direct.signature,
             _evidence: evidence,
             _refinement: Some(refinement),
+            _topology: None,
         })
     }
 }
@@ -2603,6 +3759,9 @@ impl std::fmt::Debug for ValidatedTraitWorld {
 /// goes through the production world builder and its real facts factories.
 #[cfg(test)]
 pub(crate) mod test_support {
+    pub fn source_decl(snapshot: SnapshotId, ordinal: u32, budget: &PlanBudget) -> Result<DeclId> {
+        super::catalog::fixture_source_decl(snapshot, ordinal, budget)
+    }
     use super::*;
     use ir::{BinderId, FactsCtx, NominalAppId, NominalAppInfo, SubstitutionCx};
 
@@ -2612,6 +3771,7 @@ pub(crate) mod test_support {
         declarations: Vec<SchemaDecl>,
         schemas: Vec<(DeclId, GenericSchema)>,
         nominals: Vec<Ty>,
+        catalog: Option<Arc<CoreCatalog>>,
     }
     impl FixtureSchema {
         fn register(
@@ -2773,6 +3933,7 @@ pub(crate) mod test_support {
             declarations: Vec::new(),
             schemas: Vec::new(),
             nominals: Vec::new(),
+            catalog: None,
         };
         for h in headers.traits.iter() {
             schema.register(
@@ -2882,6 +4043,26 @@ pub(crate) mod test_support {
             push(budget, &mut schema.schemas, (h.0, h.1.clone()))?;
         }
         retain::<FixtureSchema>(budget, 1)?;
+        let builder = CoreCatalogBuilder::new(registry, budget)?;
+        let mut end = builder.source_start();
+        for decl in schema
+            .declarations
+            .iter()
+            .map(|d| d.declaration)
+            .chain(schema.nominals.iter().filter_map(nominal_decl))
+        {
+            charged(budget, budget.charge_work(1))?;
+            if decl.index < builder.source_start() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "fixture source declaration collides with canonical catalog prefix",
+                ));
+            }
+            end = end.max(decl.index.checked_add(1).ok_or_else(|| {
+                FactsError::resource(budget, "fixture source declaration index overflow")
+            })?);
+        }
+        schema.catalog = Some(builder.finish(end, RecipeShapeInventory::new(), budget)?);
         Ok(Arc::new(schema))
     }
     impl SchemaCx for FixtureSchema {
@@ -2891,7 +4072,15 @@ pub(crate) mod test_support {
         fn registry_snapshot(&self) -> SnapshotId {
             self.registry
         }
+        fn core_catalog(&self) -> &Arc<CoreCatalog> {
+            self.catalog
+                .as_ref()
+                .expect("fixture catalog must be frozen before adapter publication")
+        }
         fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl> {
+            if let Some(row) = self.core_catalog().declaration(id) {
+                return Ok(row.info.clone());
+            }
             for info in &self.declarations {
                 charged(&self.budget, self.budget.charge_work(1))?;
                 if info.declaration == id {
@@ -2904,6 +4093,12 @@ pub(crate) mod test_support {
             ))
         }
         fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema> {
+            if let Some(row) = self.core_catalog().declaration(id) {
+                let schema = row.schema.as_ref().ok_or_else(|| {
+                    FactsError::invalid(&self.budget, "catalog declaration has no signature schema")
+                })?;
+                return clone_schema(schema, &self.budget);
+            }
             for (declaration, schema) in &self.schemas {
                 charged(&self.budget, self.budget.charge_work(1))?;
                 if *declaration == id {
@@ -2935,43 +4130,37 @@ pub(crate) mod test_support {
             }
             let mut cx = FixtureSubstitution { schema: self };
             let caller = FactsCtx::Universal(caller);
+            let mut item_schema = false;
+            for scope in schema.env.scopes() {
+                if self.declaration_info(scope.binder().declaration)?.kind == DeclKind::TraitItem {
+                    item_schema = true;
+                }
+            }
+            let substitute = |ty: &Ty, cx: &mut FixtureSubstitution<'_>| {
+                if item_schema {
+                    ir::substitute_schema_ty(ty, &schema.env, args, caller, cx, self, budget)
+                } else {
+                    ir::substitute_ty(ty, &schema.env, args, caller, cx, budget)
+                }
+            };
             let mut params = Vec::new();
             for p in &schema.signature.params {
                 push(
                     budget,
                     &mut params,
-                    charged(
-                        budget,
-                        ir::substitute_ty(p, &schema.env, args, caller, &mut cx, budget),
-                    )?,
+                    charged(budget, substitute(p, &mut cx))?,
                 )?;
             }
-            let result = charged(
-                budget,
-                ir::substitute_ty(
-                    &schema.signature.result,
-                    &schema.env,
-                    args,
-                    caller,
-                    &mut cx,
-                    budget,
-                ),
-            )?;
+            let result = charged(budget, substitute(&schema.signature.result, &mut cx))?;
             let mut predicates = Vec::new();
             for Predicate::Implements(goal) in schema.predicates.iter() {
-                let self_ty = charged(
-                    budget,
-                    ir::substitute_ty(&goal.self_ty, &schema.env, args, caller, &mut cx, budget),
-                )?;
+                let self_ty = charged(budget, substitute(&goal.self_ty, &mut cx))?;
                 let mut trait_args = Vec::new();
                 for a in goal.args.iter() {
                     push(
                         budget,
                         &mut trait_args,
-                        charged(
-                            budget,
-                            ir::substitute_ty(a, &schema.env, args, caller, &mut cx, budget),
-                        )?,
+                        charged(budget, substitute(a, &mut cx))?,
                     )?;
                 }
                 push(
@@ -3104,6 +4293,7 @@ pub(crate) mod test_support {
             declarations: Vec::new(),
             schemas: Vec::new(),
             nominals: Vec::new(),
+            catalog: None,
         };
         for ty in types
             .iter()
@@ -3112,7 +4302,7 @@ pub(crate) mod test_support {
         {
             raw.gather(ty, 0)?;
         }
-        let mut index = 0u32;
+        let mut index = source_decl(registry, 0, budget)?.index;
         for nominal in &raw.nominals {
             let decl = nominal_decl(nominal)
                 .ok_or_else(|| FactsError::invalid(budget, "fixture nominal kind mismatch"))?;
@@ -3151,7 +4341,8 @@ pub(crate) mod test_support {
             callables: Arc::from([callable]),
             ..empty_headers
         };
-        let world = ValidatedTraitWorld::build(headers, Arc::new(raw), budget)?;
+        let raw = adapter(&headers, types, budget)?;
+        let world = ValidatedTraitWorld::build(headers, raw, budget)?;
         let facts = world.instance_facts(&CallTarget {
             declaration,
             type_args: Arc::from([]),
@@ -3213,10 +4404,7 @@ mod tests {
     fn case() -> Case {
         let budget = PlanBudget::default();
         let registry = SnapshotId::allocate().unwrap();
-        let id = |index| DeclId {
-            snapshot: registry,
-            index,
-        };
+        let id = |index| test_support::source_decl(registry, index, &budget).unwrap();
         let i32_ty = Ty::Int(IntTy::I32);
         let marker_self = scope(id(0), 1, &budget);
         let marker_env = env(std::slice::from_ref(&marker_self), &budget);
@@ -3252,6 +4440,7 @@ mod tests {
                     },
                     env: marker_env,
                     items: Arc::from([]),
+                    supertraits: Arc::from([]),
                 },
                 TraitHeader {
                     declaration: id(2),
@@ -3261,12 +4450,14 @@ mod tests {
                     },
                     env: value_env,
                     items: Arc::from([id(3)]),
+                    supertraits: Arc::from([]),
                 },
             ]),
             items: Arc::from([TraitItemHeader {
                 declaration: id(3),
                 trait_decl: id(2),
                 receiver: ReceiverMode::Value,
+                default: None,
                 schema: GenericSchema {
                     env: item_env,
                     signature: sig(
@@ -3331,7 +4522,7 @@ mod tests {
             ]),
         };
         Case {
-            budget,
+            budget: budget.clone(),
             headers,
             types: vec![pattern, boxed.clone(), leaf.clone()],
             caller: id(10),
@@ -3443,10 +4634,8 @@ mod tests {
     }
 
     fn nested_header(budget: &PlanBudget) -> CallableHeader {
-        let declaration = DeclId {
-            snapshot: SnapshotId::allocate().unwrap(),
-            index: 0,
-        };
+        let declaration =
+            test_support::source_decl(SnapshotId::allocate().unwrap(), 0, budget).unwrap();
         let binder = scope(declaration, 1, budget);
         let environment = env(std::slice::from_ref(&binder), budget);
         let parameter = Ty::Param(ParamId {
@@ -3576,10 +4765,8 @@ mod tests {
         assert!(
             matches!(ValidatedTraitWorld::build(forged, world.schema.clone(), &budget), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
         );
-        let declaration = DeclId {
-            snapshot: SnapshotId::allocate().unwrap(),
-            index: 0,
-        };
+        let declaration =
+            test_support::source_decl(SnapshotId::allocate().unwrap(), 0, &budget).unwrap();
         let empty = env(&[], &budget);
         let raw = CallableHeader {
             declaration,
@@ -3657,10 +4844,8 @@ mod tests {
     #[test]
     fn generic_reference_world_transport_and_type_context() {
         let budget = PlanBudget::default();
-        let declaration = DeclId {
-            snapshot: SnapshotId::allocate().unwrap(),
-            index: 0,
-        };
+        let declaration =
+            test_support::source_decl(SnapshotId::allocate().unwrap(), 0, &budget).unwrap();
         let scope = scope(declaration, 2, &budget);
         let environment = env(std::slice::from_ref(&scope), &budget);
         let parameter = |index| {
@@ -3910,7 +5095,8 @@ mod tests {
         let mut c = case();
         let mut implementations = c.headers.impls.to_vec();
         let mut overlap = implementations[1].clone();
-        overlap.declaration.index = 11;
+        overlap.declaration =
+            test_support::source_decl(overlap.declaration.snapshot, 11, &c.budget).unwrap();
         implementations.push(overlap);
         c.headers.impls = implementations.into();
         assert!(matches!(c.build(),Err(e)if e.kind()==FactsErrorKind::Ambiguous));
@@ -3919,6 +5105,9 @@ mod tests {
             declaration: DeclId,
         }
         impl SchemaCx for ErasedScope {
+            fn core_catalog(&self) -> &Arc<CoreCatalog> {
+                self.raw.core_catalog()
+            }
             fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema> {
                 self.raw.declaration_schema(id)
             }
@@ -4019,6 +5208,175 @@ mod tests {
             test_support::world(&c.headers.callables, &tiny)
                 .unwrap_err()
                 .is_resource()
+        );
+    }
+
+    #[test]
+    fn canonical_copy_logical_permission_and_supertrait_closure() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        assert!(facts.must_copy(&Ty::Int(IntTy::I32)).unwrap());
+        assert!(!facts.must_copy(&c.caller_parameter).unwrap());
+        assert!(!facts.must_copy(&c.leaf).unwrap());
+        let shared = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Int(IntTy::I32)),
+        };
+        let nested = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(shared.clone()),
+        };
+        assert!(facts.must_copy(&nested).unwrap());
+        let mutable = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Int(IntTy::I32)),
+        };
+        assert!(!facts.must_copy(&mutable).unwrap());
+        let mut callable = c
+            .headers
+            .callables
+            .iter()
+            .find(|h| h.declaration == c.caller)
+            .unwrap()
+            .clone();
+        callable.schema.predicates = Arc::from([Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Copy),
+            self_ty: c.caller_parameter.clone(),
+            args: Arc::from([]),
+        })]);
+        let bounded = test_support::world(&[callable], &c.budget).unwrap();
+        let bounded_facts = bounded.callable_facts(c.caller).unwrap();
+        assert!(bounded_facts.must_copy(&c.caller_parameter).unwrap());
+        for item in [CatalogItem::Clone, CatalogItem::Sized] {
+            let predicate = Predicate::Implements(TraitRef {
+                declaration: bounded.catalog.id(item),
+                self_ty: c.caller_parameter.clone(),
+                args: Arc::from([]),
+            });
+            assert!(matches!(
+                bounded.prove_goal(&predicate, &bounded_facts).unwrap(),
+                ProofOutcome::Proved(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn canonical_catalog_identity_and_provided_dispatch_boundaries() {
+        let c = case();
+        let world = c.build().unwrap();
+        let catalog = &world.catalog;
+        assert!(catalog.origin(c.caller).is_err());
+        assert!(matches!(
+            catalog.origin(catalog.id(CatalogItem::Copy)).unwrap(),
+            DeclOrigin::CoreCatalog {
+                version: catalog::CATALOG_VERSION,
+                item: CatalogItem::Copy
+            }
+        ));
+        let clone = world
+            .item_header(catalog.id(CatalogItem::CloneItem))
+            .unwrap();
+        assert!(clone.default.is_none());
+        let provided = world
+            .item_header(catalog.id(CatalogItem::CloneFromItem))
+            .unwrap();
+        let default = provided.default.unwrap();
+        assert_eq!(
+            catalog.declaration(default).unwrap().callable_provider,
+            Some(CallableProvider::UnavailableProvided {
+                declaration: default
+            })
+        );
+        assert!(
+            matches!(world.callable_facts(default),Err(e) if e.kind()==FactsErrorKind::Unsupported)
+        );
+        let drop_item = world
+            .item_header(catalog.id(CatalogItem::DropItem))
+            .unwrap();
+        assert!(drop_item.default.is_none());
+        assert!(
+            catalog
+                .declaration(drop_item.declaration)
+                .unwrap()
+                .callable_provider
+                .is_none()
+        );
+        assert!(
+            matches!(catalog.recipe(RecipeDescriptor::CloneNever),Err(e) if e.kind()==FactsErrorKind::Unsupported)
+        );
+        assert!(test_support::source_decl(c.caller.snapshot, u32::MAX, &c.budget).is_err());
+        let mut cyclic = case();
+        let mut traits = cyclic.headers.traits.to_vec();
+        let left = traits[0].declaration;
+        let right = traits[1].declaration;
+        traits[0].supertraits = Arc::from([TraitRef {
+            declaration: right,
+            self_ty: Ty::Param(traits[0].self_param),
+            args: Arc::from([]),
+        }]);
+        traits[1].supertraits = Arc::from([TraitRef {
+            declaration: left,
+            self_ty: Ty::Param(traits[1].self_param),
+            args: Arc::from([]),
+        }]);
+        cyclic.headers.traits = traits.into();
+        assert!(matches!(cyclic.build(),Err(e) if e.kind()==FactsErrorKind::Cycle));
+    }
+
+    #[test]
+    fn canonical_required_self_topology_is_context_bound_and_not_logical_dispatch() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let shared = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(c.caller_parameter.clone()),
+        };
+        let call = TraitCall {
+            trait_ref: TraitRef {
+                declaration: world.catalog.id(CatalogItem::Clone),
+                self_ty: shared,
+                args: Arc::from([]),
+            },
+            item: world.catalog.id(CatalogItem::CloneItem),
+            method_args: Arc::from([]),
+        };
+        let resolved = world.resolve_trait_call(&call, &facts).unwrap();
+        assert!(matches!(resolved.callee(), Callee::TraitItem(_)));
+        let proof = resolved._topology.as_ref().unwrap();
+        assert_eq!(proof.environment, facts.predicates.index);
+        assert_eq!(proof.phase, FactsPhase::Universal);
+        assert_eq!(proof.realized.input_regions.len(), 2);
+        let result = &proof.realized.results[0];
+        let ir::ReturnContract::SharedInputEnvelopes(envelopes) = &result.returns else {
+            panic!("latent carrier must retain an input envelope")
+        };
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].input.position.depth, 1);
+        let wrong = ProofContext {
+            predicates: &world.empty,
+            phase: FactsPhase::Closed,
+        };
+        assert!(world.validate_topology(proof, wrong).is_err());
+        let concrete = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(IntTy::I32)),
+            }),
+        };
+        assert!(facts.must_copy(&concrete).unwrap());
+        let too_deep = TraitCall {
+            trait_ref: TraitRef {
+                declaration: world.catalog.id(CatalogItem::Clone),
+                self_ty: concrete,
+                args: Arc::from([]),
+            },
+            ..call
+        };
+        assert!(
+            matches!(world.instantiate_trait_signature(&too_deep,&facts),Err(e) if e.kind()==FactsErrorKind::Unsupported)
         );
     }
 }

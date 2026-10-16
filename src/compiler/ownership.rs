@@ -11,7 +11,7 @@ use super::ir::{
     CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, ReferencePosition,
     Ty,
 };
-use super::traits::{FactsPhase, ValidatedFacts};
+use super::traits::{FactsError, FactsPhase, ValidatedFacts};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -276,6 +276,260 @@ impl Default for Limits {
         }
     }
 }
+/// Data from the same structural recipe events that emit checked IR. Counts are
+/// conservative upper bounds, not callable facts, evidence, or Copy permission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct RecipePlanCounts {
+    pub binders: usize,
+    pub expressions: usize,
+    pub locals: usize,
+    pub blocks: usize,
+    pub points: usize,
+    pub carrier_slots: usize,
+    pub loan_sites: usize,
+    pub formal_origins: usize,
+    pub call_result_origins: usize,
+    pub path_nodes: usize,
+    pub variant_offsets: usize,
+    pub operations: usize,
+    pub origin_memberships: usize,
+    pub parent_memberships: usize,
+    pub lifetime_dependency_memberships: usize,
+    pub target_memberships: usize,
+    /// Allocation attempts include candidates later deduplicated by the solver.
+    pub target_allocations: usize,
+    pub target_projection_steps: usize,
+    pub target_authority_entries: usize,
+    /// Formal targets use two overhead words, derived targets use three.
+    pub target_overhead_words: usize,
+    pub ir_retained_bytes: usize,
+    pub cfg_retained_bytes: usize,
+    /// Additional construction scratch/relocation coexisting with retained IR.
+    pub construction_peak_bytes: usize,
+    pub verification_scratch_bytes: usize,
+    pub work_upper_bound: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RecipeFootprint {
+    pub origins: usize,
+    pub memberships: usize,
+    pub ownership_bytes: usize,
+    pub borrow_bytes: usize,
+    pub path_bytes: usize,
+    pub state_bytes: usize,
+    pub peak_bytes: usize,
+    pub work: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RecipeLimit {
+    Overflow,
+    Bound {
+        resource: &'static str,
+        required: usize,
+        limit: usize,
+    },
+}
+impl RecipeLimit {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::Overflow => "recipe footprint count arithmetic overflow",
+            Self::Bound { resource, .. } => resource,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RecipeAdmission {
+    Available(RecipeFootprint),
+    IntrinsicLimit(RecipeLimit),
+}
+
+fn ownership_state_bytes(locals: usize, paths: usize, blocks: usize) -> Result<usize, Exhausted> {
+    let per_state = locals
+        .div_ceil(64)
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(paths.div_ceil(64).checked_mul(3)?))
+        .and_then(|n| n.checked_add(paths))
+        .ok_or(Exhausted)?
+        .checked_mul(8)
+        .and_then(|n| n.checked_add(std::mem::size_of::<State>()))
+        .ok_or(Exhausted)?;
+    per_state
+        .checked_mul(blocks.checked_add(3).ok_or(Exhausted)?)
+        .and_then(|n| n.checked_add(paths.div_ceil(64).checked_mul(8)?))
+        .and_then(|n| n.checked_add(std::mem::size_of::<Bits>()))
+        .ok_or(Exhausted)
+}
+
+fn paths_storage_bytes(locals: usize, nodes: usize, variants: usize) -> Result<usize, Exhausted> {
+    nodes
+        .checked_mul(4 * std::mem::size_of::<PathNode>() + 4 * std::mem::size_of::<usize>())
+        .and_then(|n| n.checked_add(variants.checked_mul(4 * std::mem::size_of::<usize>())?))
+        .and_then(|n| {
+            n.checked_add(locals.checked_mul(
+                4 * std::mem::size_of::<usize>() + std::mem::size_of::<[Option<usize>; 2]>(),
+            )?)
+        })
+        .ok_or(Exhausted)
+}
+
+/// Absolute descriptor admission is independent of the ledger's remaining
+/// capacity. Charging this calculation can still exhaust that SAME ledger, which
+/// is an error for the whole plan, never a silently unavailable descriptor.
+pub(super) fn preflight_recipe_counts(
+    counts: &RecipePlanCounts,
+    budget: &super::ir::PlanBudget,
+) -> Result<RecipeAdmission, FactsError> {
+    budget.charge_work(128).map_err(|_| {
+        FactsError::resource(budget, "recipe footprint preflight resource limit exceeded")
+    })?;
+    let limits = Limits::default();
+    let plan = super::ir::PlanLimits::default();
+    let bound = |resource, required, limit| {
+        RecipeAdmission::IntrinsicLimit(RecipeLimit::Bound {
+            resource,
+            required,
+            limit,
+        })
+    };
+    for (name, required, limit) in [
+        ("recipe binder limit exceeded", counts.binders, plan.params),
+        (
+            "recipe expression limit exceeded",
+            counts.expressions,
+            plan.nodes,
+        ),
+        ("recipe local limit exceeded", counts.locals, limits.locals),
+        ("recipe block limit exceeded", counts.blocks, limits.blocks),
+        (
+            "recipe move-path limit exceeded",
+            counts.path_nodes,
+            limits.paths,
+        ),
+        (
+            "recipe operation limit exceeded",
+            counts.operations,
+            limits.operations,
+        ),
+        (
+            "recipe work limit exceeded",
+            counts.work_upper_bound,
+            plan.work.min(limits.work),
+        ),
+    ] {
+        if required > limit {
+            return Ok(bound(name, required, limit));
+        }
+    }
+    if counts.points < counts.blocks {
+        return Err(FactsError::invalid(
+            budget,
+            "recipe count model omits terminator points",
+        ));
+    }
+    let calculated = (|| -> Result<RecipeFootprint, Exhausted> {
+        let origins = counts
+            .loan_sites
+            .checked_add(counts.formal_origins)
+            .and_then(|n| n.checked_add(counts.call_result_origins))
+            .ok_or(Exhausted)?;
+        let memberships = counts
+            .origin_memberships
+            .checked_add(counts.parent_memberships)
+            .and_then(|n| n.checked_add(counts.lifetime_dependency_memberships))
+            .and_then(|n| n.checked_add(counts.target_memberships))
+            .ok_or(Exhausted)?;
+        let ownership_bytes =
+            ownership_state_bytes(counts.locals, counts.path_nodes, counts.blocks)?;
+        let borrow_bytes = if origins != 0 || counts.carrier_slots != 0 {
+            borrow::plan_storage_bytes(
+                counts.locals,
+                counts.blocks,
+                counts.points,
+                counts.carrier_slots,
+                origins,
+            )?
+            .checked_add(borrow::target_payload_bytes(
+                counts.target_allocations,
+                counts.target_projection_steps,
+                counts.target_authority_entries,
+                counts.target_overhead_words,
+            )?)
+            .ok_or(Exhausted)?
+        } else {
+            0
+        };
+        let path_bytes =
+            paths_storage_bytes(counts.locals, counts.path_nodes, counts.variant_offsets)?;
+        let state_bytes = ownership_bytes.checked_add(borrow_bytes).ok_or(Exhausted)?;
+        let retained = counts
+            .ir_retained_bytes
+            .checked_add(counts.cfg_retained_bytes)
+            .ok_or(Exhausted)?;
+        let analysis_peak = path_bytes.checked_add(state_bytes).ok_or(Exhausted)?;
+        let peak_bytes = retained
+            .checked_add(
+                analysis_peak
+                    .max(counts.verification_scratch_bytes)
+                    .max(counts.construction_peak_bytes),
+            )
+            .ok_or(Exhausted)?;
+        let work = counts.work_upper_bound.max(borrow::plan_initial_work(
+            counts.blocks,
+            counts.points,
+            counts.carrier_slots,
+            origins,
+        )?);
+        Ok(RecipeFootprint {
+            origins,
+            memberships,
+            ownership_bytes,
+            borrow_bytes,
+            path_bytes,
+            state_bytes,
+            peak_bytes,
+            work,
+        })
+    })();
+    let Ok(footprint) = calculated else {
+        return Ok(RecipeAdmission::IntrinsicLimit(RecipeLimit::Overflow));
+    };
+    for (name, required, limit) in [
+        (
+            "recipe combined-origin limit exceeded",
+            footprint.origins,
+            borrow::MAX_LOANS,
+        ),
+        (
+            "recipe membership limit exceeded",
+            footprint.memberships,
+            borrow::MAX_MEMBERSHIPS,
+        ),
+        (
+            "recipe ownership/borrow state limit exceeded",
+            footprint.state_bytes,
+            limits.state_bytes,
+        ),
+        (
+            "recipe retained peak byte limit exceeded",
+            footprint.peak_bytes,
+            plan.bytes,
+        ),
+        (
+            "recipe work limit exceeded",
+            footprint.work,
+            plan.work.min(limits.work),
+        ),
+    ] {
+        if required > limit {
+            return Ok(bound(name, required, limit));
+        }
+    }
+    Ok(RecipeAdmission::Available(footprint))
+}
+
 #[derive(Debug)]
 pub(super) struct Exhausted;
 pub(super) struct Budget {
@@ -977,17 +1231,7 @@ impl Paths {
         budget.nodes(node_count)?;
         // Small Vec allocations start at four slots, so a one-field product
         // needs more than a two-times logical-edge allowance.
-        let bytes = node_count
-            .checked_mul(4 * std::mem::size_of::<PathNode>() + 4 * std::mem::size_of::<usize>())
-            .and_then(|n| {
-                n.checked_add(variant_count.checked_mul(4 * std::mem::size_of::<usize>())?)
-            })
-            .and_then(|n| {
-                n.checked_add(f.locals.len().checked_mul(
-                    4 * std::mem::size_of::<usize>() + std::mem::size_of::<[Option<usize>; 2]>(),
-                )?)
-            })
-            .ok_or(Exhausted)?;
+        let bytes = paths_storage_bytes(f.locals.len(), node_count, variant_count)?;
         budget.reserve_bytes(bytes)?;
         fn add(
             paths: &mut Paths,
@@ -2016,24 +2260,7 @@ fn analyze_with_facts(
         // Account for dense retained entry states and transient states as well
         // as Vec headers. No allocation proportional to blocks*paths precedes
         // this checked bound.
-        let per_state = f
-            .locals
-            .len()
-            .div_ceil(64)
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(paths.nodes.len().div_ceil(64).checked_mul(3)?))
-            .and_then(|n| n.checked_add(paths.nodes.len()))
-            .ok_or(Exhausted)?
-            .checked_mul(8)
-            .and_then(|n| n.checked_add(std::mem::size_of::<State>()))
-            .ok_or(Exhausted)?;
-        let bytes = per_state
-            .checked_mul(f.blocks.len().checked_add(3).ok_or(Exhausted)?)
-            // One call's deduplicated mutable-effect bitmap can coexist with
-            // the solver and canonical target scratch, never with another call.
-            .and_then(|n| n.checked_add(paths.nodes.len().div_ceil(64).checked_mul(8)?))
-            .and_then(|n| n.checked_add(std::mem::size_of::<Bits>()))
-            .ok_or(Exhausted)?;
+        let bytes = ownership_state_bytes(f.locals.len(), paths.nodes.len(), f.blocks.len())?;
         if bytes > limits.state_bytes {
             return Err(Exhausted);
         }
@@ -2235,8 +2462,209 @@ mod tests {
         DeclId, EnumDef, EnumTy, FieldDef, IntTy, IntValue, LocalDecl, NominalAppId, SnapshotId,
         StructDef, StructTy, VariantDef, VariantId, VariantShape,
     };
+    use super::super::traits::test_support::source_decl;
     use super::*;
     use cfg::{BasicBlock, Constant, Located};
+
+    #[test]
+    fn recipe_preflight_shared_kernels_include_retained_and_attempted_targets() {
+        let counts = RecipePlanCounts {
+            binders: 1,
+            expressions: 12,
+            locals: 8,
+            blocks: 3,
+            points: 16,
+            carrier_slots: 4,
+            loan_sites: 2,
+            formal_origins: 2,
+            call_result_origins: 1,
+            path_nodes: 11,
+            variant_offsets: 2,
+            operations: 20,
+            origin_memberships: 7,
+            parent_memberships: 3,
+            lifetime_dependency_memberships: 2,
+            target_memberships: 5,
+            target_allocations: 6,
+            target_projection_steps: 4,
+            target_authority_entries: 5,
+            target_overhead_words: 16,
+            ir_retained_bytes: 1000,
+            cfg_retained_bytes: 2000,
+            construction_peak_bytes: 4000,
+            verification_scratch_bytes: 5000,
+            work_upper_bound: 1000,
+        };
+        let budget = super::super::ir::PlanBudget::default();
+        let RecipeAdmission::Available(footprint) =
+            preflight_recipe_counts(&counts, &budget).unwrap()
+        else {
+            panic!("bounded count fixture must be available")
+        };
+        assert_eq!(footprint.origins, 5);
+        assert_eq!(footprint.memberships, 17);
+        assert_eq!(
+            footprint.ownership_bytes,
+            ownership_state_bytes(8, 11, 3).unwrap()
+        );
+        assert_eq!(footprint.path_bytes, paths_storage_bytes(8, 11, 2).unwrap());
+        assert_eq!(
+            footprint.borrow_bytes,
+            borrow::plan_storage_bytes(8, 3, 16, 4, 5).unwrap()
+                + borrow::target_payload_bytes(6, 4, 5, 16).unwrap()
+        );
+        assert_eq!(
+            footprint.state_bytes,
+            footprint.ownership_bytes + footprint.borrow_bytes
+        );
+        assert_eq!(
+            footprint.peak_bytes,
+            3000 + (footprint.path_bytes + footprint.state_bytes).max(5000)
+        );
+        let mut additional_attempt = counts;
+        additional_attempt.target_allocations += 1;
+        let RecipeAdmission::Available(larger) =
+            preflight_recipe_counts(&additional_attempt, &budget).unwrap()
+        else {
+            panic!("one additional target attempt remains bounded")
+        };
+        assert_eq!(
+            larger.borrow_bytes - footprint.borrow_bytes,
+            borrow::target_payload_bytes(1, 0, 0, 0).unwrap()
+        );
+        additional_attempt.construction_peak_bytes = larger.peak_bytes + 1000;
+        let RecipeAdmission::Available(construction) =
+            preflight_recipe_counts(&additional_attempt, &budget).unwrap()
+        else {
+            panic!("retained metadata plus construction scratch remains bounded")
+        };
+        assert_eq!(construction.peak_bytes, 4000 + larger.peak_bytes);
+    }
+
+    #[test]
+    fn recipe_preflight_absolute_limits_count_all_origins_memberships_and_peaks() {
+        let base = RecipePlanCounts {
+            locals: 1,
+            blocks: 1,
+            points: 1,
+            path_nodes: 1,
+            ..Default::default()
+        };
+        let budget = super::super::ir::PlanBudget::default();
+        let mut array = base;
+        array.loan_sites = 4096;
+        array.formal_origins = 1;
+        assert!(matches!(
+            preflight_recipe_counts(&array, &budget).unwrap(),
+            RecipeAdmission::IntrinsicLimit(RecipeLimit::Bound {
+                required: 4097,
+                limit: 4096,
+                ..
+            })
+        ));
+        let mut tuple = base;
+        tuple.binders = 33;
+        assert!(matches!(
+            preflight_recipe_counts(&tuple, &budget).unwrap(),
+            RecipeAdmission::IntrinsicLimit(RecipeLimit::Bound {
+                required: 33,
+                limit: 32,
+                ..
+            })
+        ));
+        let mut memberships = base;
+        memberships.origin_memberships = 250_000;
+        memberships.parent_memberships = 250_000;
+        memberships.lifetime_dependency_memberships = 250_000;
+        memberships.target_memberships = 250_001;
+        assert!(matches!(
+            preflight_recipe_counts(&memberships, &budget).unwrap(),
+            RecipeAdmission::IntrinsicLimit(RecipeLimit::Bound {
+                required: 1_000_001,
+                limit: 1_000_000,
+                ..
+            })
+        ));
+        let mut peak = base;
+        peak.ir_retained_bytes = super::super::ir::PlanLimits::default().bytes;
+        assert!(matches!(
+            preflight_recipe_counts(&peak, &budget).unwrap(),
+            RecipeAdmission::IntrinsicLimit(_)
+        ));
+        let mut overflow = base;
+        overflow.target_allocations = usize::MAX;
+        overflow.loan_sites = 1;
+        assert_eq!(
+            preflight_recipe_counts(&overflow, &budget).unwrap(),
+            RecipeAdmission::IntrinsicLimit(RecipeLimit::Overflow)
+        );
+        let mut dense = base;
+        dense.locals = 65_536;
+        dense.blocks = 16_384;
+        dense.points = 16_384;
+        dense.path_nodes = 131_072;
+        assert!(matches!(
+            preflight_recipe_counts(&dense, &budget).unwrap(),
+            RecipeAdmission::IntrinsicLimit(_)
+        ));
+    }
+
+    #[test]
+    fn recipe_preflight_ledger_exhaustion_is_error_not_descriptor_unavailability() {
+        use super::super::ir::{PlanBudget, PlanLimits};
+        let counts = RecipePlanCounts {
+            locals: 1,
+            blocks: 1,
+            points: 1,
+            path_nodes: 1,
+            ..Default::default()
+        };
+        let small = PlanBudget::new(PlanLimits {
+            bytes: 1,
+            ..Default::default()
+        });
+        assert!(matches!(
+            preflight_recipe_counts(&counts, &small).unwrap(),
+            RecipeAdmission::Available(_)
+        ));
+        // Admission did not reserve the unbuilt recipe's footprint.
+        let reservation = small.reserve_bytes(1).unwrap();
+        assert!(matches!(
+            preflight_recipe_counts(&counts, &small).unwrap(),
+            RecipeAdmission::Available(_)
+        ));
+        drop(reservation);
+        let exhausted = PlanBudget::new(PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            preflight_recipe_counts(&counts, &exhausted)
+                .unwrap_err()
+                .is_resource()
+        );
+        let mut intrinsically_large = counts;
+        intrinsically_large.binders = 33;
+        assert!(
+            preflight_recipe_counts(&intrinsically_large, &exhausted)
+                .unwrap_err()
+                .is_resource()
+        );
+        assert!(matches!(
+            preflight_recipe_counts(&intrinsically_large, &PlanBudget::default()).unwrap(),
+            RecipeAdmission::IntrinsicLimit(_)
+        ));
+        let malformed = RecipePlanCounts {
+            blocks: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            preflight_recipe_counts(&malformed, &PlanBudget::default())
+                .unwrap_err()
+                .kind(),
+            super::super::traits::FactsErrorKind::InvalidMetadata
+        );
+    }
 
     fn borrowed_source(source: &str) -> cfg::Function {
         let program = super::super::frontend::parse(&format!("{source} fn main(){{}}")).unwrap();
@@ -2293,10 +2721,8 @@ mod tests {
         budget: &super::super::ir::PlanBudget,
     ) -> Result<cfg::ClosedCfg, String> {
         use super::super::ir::{BinderId, CallTarget, ParamEnv, Signature};
-        let declaration = DeclId {
-            snapshot: SnapshotId::allocate()?,
-            index: 0,
-        };
+        let declaration =
+            source_decl(SnapshotId::allocate()?, 0, budget).map_err(|error| error.to_string())?;
         let scope = Arc::new(ParamEnv::new(BinderId { declaration }, 0)?);
         let env = Arc::new(GenericEnv::new(&[scope], budget)?);
         let signature = Signature {
@@ -2328,6 +2754,12 @@ mod tests {
         let plan = frontend::PlanCtx::from_program(&program, budget).unwrap();
         let declaration = (0..plan.callable_count())
             .map(|index| plan.callable_decl(index).unwrap())
+            .filter(|declaration| {
+                matches!(
+                    plan.callable_provider(*declaration).unwrap(),
+                    frontend::CallableProvider::Source { .. }
+                )
+            })
             .find(|declaration| plan.callable_body(&program, *declaration).unwrap().name == name)
             .unwrap();
         let checked =
@@ -2897,14 +3329,12 @@ mod tests {
 
     fn symbolic_parameter() -> (Arc<GenericEnv>, Ty) {
         use super::super::ir::{BinderId, ParamEnv, ParamId, PlanBudget};
+        let budget = PlanBudget::default();
         let binder = BinderId {
-            declaration: DeclId {
-                snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
-            },
+            declaration: source_decl(SnapshotId::allocate().unwrap(), 0, &budget).unwrap(),
         };
         let scope = Arc::new(ParamEnv::new(binder, 1).unwrap());
-        let env = Arc::new(GenericEnv::new(&[scope], &PlanBudget::default()).unwrap());
+        let env = Arc::new(GenericEnv::new(&[scope], &budget).unwrap());
         (
             env,
             Ty::Param(ParamId {
@@ -2916,12 +3346,13 @@ mod tests {
 
     fn symbolic_pair() -> (Arc<GenericEnv>, [Ty; 2]) {
         use super::super::ir::{BinderId, ParamEnv, ParamId, PlanBudget};
+        let budget = PlanBudget::default();
         let snapshot = SnapshotId::allocate().unwrap();
         let binders = [0, 1].map(|index| BinderId {
-            declaration: DeclId { snapshot, index },
+            declaration: source_decl(snapshot, index, &budget).unwrap(),
         });
         let scopes = binders.map(|binder| Arc::new(ParamEnv::new(binder, 1).unwrap()));
-        let env = GenericEnv::new(&scopes, &PlanBudget::default()).unwrap();
+        let env = GenericEnv::new(&scopes, &budget).unwrap();
         let parameters = binders.map(|owner| Ty::Param(ParamId { owner, index: 0 }));
         (Arc::new(env), parameters)
     }
@@ -4749,10 +5180,12 @@ mod tests {
     }
     fn synthetic_call_target() -> super::super::ir::Callee {
         super::super::ir::Callee::Direct(super::super::ir::CallTarget {
-            declaration: DeclId {
-                snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
-            },
+            declaration: source_decl(
+                SnapshotId::allocate().unwrap(),
+                0,
+                &super::super::ir::PlanBudget::default(),
+            )
+            .unwrap(),
             type_args: Arc::from([]),
         })
     }
@@ -4760,7 +5193,8 @@ mod tests {
         let snapshot = SnapshotId::allocate().unwrap();
         Ty::Struct(StructTy::new(StructDef {
             id: NominalAppId { snapshot, index: 0 },
-            source_decl: DeclId { snapshot, index: 0 },
+            source_decl: source_decl(snapshot, 0, &super::super::ir::PlanBudget::default())
+                .unwrap(),
             type_args: Arc::from([]),
             name: "Paths".into(),
             module: String::new(),
@@ -4804,7 +5238,8 @@ mod tests {
         let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
             id: NominalAppId { snapshot, index: 0 },
-            source_decl: DeclId { snapshot, index: 0 },
+            source_decl: source_decl(snapshot, 0, &super::super::ir::PlanBudget::default())
+                .unwrap(),
             type_args: Arc::from([]),
             name: "Tag".into(),
             module: String::new(),
@@ -4845,7 +5280,8 @@ mod tests {
         let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
             id: NominalAppId { snapshot, index: 0 },
-            source_decl: DeclId { snapshot, index: 0 },
+            source_decl: source_decl(snapshot, 0, &super::super::ir::PlanBudget::default())
+                .unwrap(),
             type_args: Arc::from([]),
             name: "Payload".into(),
             module: String::new(),

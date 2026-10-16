@@ -486,6 +486,13 @@ fn cfg_native_emission_preserves_order_snapshots_recursion_and_control_edges() {
             let budget = ir::PlanBudget::default();
             let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
             let functions = (0..plan.callable_count())
+                .filter(|index| {
+                    matches!(
+                        plan.callable_provider(plan.callable_decl(*index).unwrap())
+                            .unwrap(),
+                        frontend::CallableProvider::Source { .. }
+                    )
+                })
                 .map(|index| {
                     let declaration = plan.callable_decl(index).unwrap();
                     let checked =

@@ -451,6 +451,32 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     expected.push(Key::new(105, vec![]));
                     expected.push(Key::new(114, vec![]));
                 }
+                // Include every available recipe's real universal proof, without
+                // changing source-file accounting or eager concrete roots.
+                let loaded = compiler::source::load(&scratch.path("src/input.rs")).unwrap();
+                let program = compiler::frontend::parse(&loaded.text).unwrap();
+                let plan = compiler::frontend::PlanCtx::from_program(
+                    &program,
+                    &compiler::ir::PlanBudget::default(),
+                )
+                .unwrap();
+                for index in 0..plan.callable_count() {
+                    let declaration = plan.callable_decl(index).unwrap();
+                    match plan.callable_provider(declaration).unwrap() {
+                        compiler::frontend::CallableProvider::Source { .. } => {
+                            assert!(index < result.functions);
+                        }
+                        compiler::frontend::CallableProvider::Recipe { .. } => {
+                            assert!(index >= result.functions);
+                            for kind in [110, 111, 112] {
+                                expected.push(Key::new(kind, vec![index as u64]));
+                            }
+                        }
+                        compiler::frontend::CallableProvider::UnavailableProvided { .. } => {
+                            panic!("unavailable provider entered body enumeration")
+                        }
+                    }
+                }
                 assert_eq!(result.report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = result

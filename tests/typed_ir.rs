@@ -360,6 +360,13 @@ fn checked_ir_native_lowering_and_cli_preserve_shadow_calls_and_return_execution
             let budget = ir::PlanBudget::default();
             let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
             for index in 0..plan.callable_count() {
+                if !matches!(
+                    plan.callable_provider(plan.callable_decl(index).unwrap())
+                        .unwrap(),
+                    frontend::CallableProvider::Source { .. }
+                ) {
+                    continue;
+                }
                 let declaration = plan.callable_decl(index).unwrap();
                 let checked =
                     frontend::type_callable_with_plan(&program, declaration, &plan, &budget)

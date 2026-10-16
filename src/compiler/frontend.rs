@@ -19,6 +19,9 @@ use super::ir;
 use super::traits as tr;
 use std::collections::HashMap;
 
+mod recipes;
+pub use tr::CallableProvider;
+
 #[derive(Clone, Debug)]
 pub struct Program {
     pub functions: Vec<Function>,
@@ -92,6 +95,7 @@ pub struct TypeBound {
 }
 #[derive(Clone, Debug)]
 pub struct TraitDecl {
+    pub supertraits: Vec<String>,
     pub name: String,
     pub public: bool,
     pub items: Vec<TraitItemDecl>,
@@ -1212,8 +1216,20 @@ impl Parser {
                 (name, ItemKind::Import(path))
             } else if self.eat("trait") {
                 let name = self.ident()?;
-                if self.is("<") || self.is(":") {
-                    return Err(self.error("trait generics and supertraits are unsupported"));
+                if self.is("<") {
+                    return Err(self.error("trait generics are unsupported"));
+                }
+                let mut supertraits = Vec::new();
+                if self.eat(":") {
+                    loop {
+                        if supertraits.len() >= 256 {
+                            return Err(self.error("supertrait limit exceeded"));
+                        }
+                        supertraits.push(self.path()?);
+                        if !self.eat("+") {
+                            break;
+                        }
+                    }
                 }
                 self.expect("{")?;
                 let mut items = Vec::new();
@@ -1240,6 +1256,7 @@ impl Parser {
                 }
                 self.expect("}")?;
                 parsed.program.traits.push(TraitDecl {
+                    supertraits,
                     name: qualify(module, &name),
                     public,
                     items,
@@ -2550,9 +2567,16 @@ struct Resolver<'a> {
 }
 impl Resolver<'_> {
     fn trait_path(&mut self, path: &mut String, module: &str) -> Result<(), String> {
-        let item = self
-            .path(path, module, true, false)?
-            .ok_or_else(|| format!("unresolved trait {path}"))?;
+        let item = match self.path(path, module, true, false)? {
+            Some(item) => item,
+            None => {
+                if let Some(canonical) = canonical_trait_spelling(path) {
+                    *path = canonical.into();
+                    return Ok(());
+                }
+                return Err(format!("unresolved trait {path}"));
+            }
+        };
         if item.kind != ResolvedKind::Trait {
             return Err(format!("{} is not a trait", item.path));
         }
@@ -2578,6 +2602,34 @@ impl Resolver<'_> {
         visible_only: bool,
     ) -> Result<Option<ResolvedItem>, String> {
         let Some(bindings) = self.items.get(path) else {
+            if module {
+                if let Some(canonical) = canonical_trait_spelling(path)
+                    && path.contains("::")
+                {
+                    return Ok(Some(ResolvedItem {
+                        path: canonical.into(),
+                        module: true,
+                        kind: ResolvedKind::Trait,
+                    }));
+                }
+                if matches!(
+                    path,
+                    "core"
+                        | "std"
+                        | "core::marker"
+                        | "std::marker"
+                        | "core::clone"
+                        | "std::clone"
+                        | "core::ops"
+                        | "std::ops"
+                ) {
+                    return Ok(Some(ResolvedItem {
+                        path: path.into(),
+                        module: true,
+                        kind: ResolvedKind::Module,
+                    }));
+                }
+            }
             return Ok(None);
         };
         let owner = parent(path);
@@ -3331,6 +3383,9 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         }
     }
     for declaration in &mut program.traits {
+        for path in &mut declaration.supertraits {
+            resolver.trait_path(path, parent(&declaration.name))?;
+        }
         resolver.type_params.clear();
         resolver.self_nominal = Some("Self".into());
         for item in &mut declaration.items {
@@ -3425,9 +3480,15 @@ enum DepthNode<'a> {
     Block(&'a Block),
 }
 fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
+    walk_depth(root, None)
+}
+fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<(), String> {
     let mut stack = vec![(root, 0usize)];
     let mut pattern_nodes = 0usize;
     while let Some((node, depth)) = stack.pop() {
+        if let Some(budget) = budget {
+            preflight_clone_node(&node, budget)?;
+        }
         if depth > 128 {
             return Err("AST nesting exceeds limit 128".into());
         }
@@ -3700,6 +3761,8 @@ struct PlanState {
 }
 #[derive(Clone, Debug)]
 pub struct PlanCtx {
+    program: Arc<Program>,
+    catalog: Arc<tr::CoreCatalog>,
     world: Option<Arc<tr::ValidatedTraitWorld>>,
     validated: Arc<HashMap<ir::DeclId, ir::GenericSignature>>,
     registry: Arc<DeclRegistry>,
@@ -3754,7 +3817,17 @@ fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Resul
 }
 impl PlanCtx {
     pub fn from_program(program: &Program, budget: &ir::PlanBudget) -> Result<Self, String> {
+        preflight_program_clone(program, budget)?;
+        Self::from_shared_program(Arc::new(program.clone()), budget)
+    }
+    pub fn from_shared_program(
+        shared: Arc<Program>,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, String> {
+        let program = shared.as_ref();
         let snapshot = ir::SnapshotId::allocate()?;
+        let catalog_builder = tr::CoreCatalogBuilder::new(snapshot, budget)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let mut import_bytes = 128usize;
         for (module, path) in &program.trait_imports {
             budget.charge_work(1)?;
@@ -3786,6 +3859,48 @@ impl PlanCtx {
             contexts: HashMap::new(),
             reservations: Vec::new(),
         };
+        for entry in catalog_builder.base_declarations() {
+            let info = &entry.info;
+            budget.charge_work(1)?;
+            budget.retain_bytes(1024 + entry.name.len() * 4)?;
+            if entry.declaration.index as usize != registry.declarations.len() {
+                return Err("catalog prefix identity mismatch".into());
+            }
+            registry.declarations.push(catalog_decl_info(entry));
+            if let Some(schema) = &entry.schema {
+                state.functions.insert(entry.declaration, schema.clone());
+            }
+            state
+                .region_modes
+                .insert(entry.declaration, info.region_contract_mode);
+            if info.kind == ir::DeclKind::Trait {
+                let canonical = match entry.origin {
+                    tr::DeclOrigin::CoreCatalog {
+                        item: tr::CatalogItem::Sized,
+                        ..
+                    } => "core::marker::Sized",
+                    tr::DeclOrigin::CoreCatalog {
+                        item: tr::CatalogItem::Clone,
+                        ..
+                    } => "core::clone::Clone",
+                    tr::DeclOrigin::CoreCatalog {
+                        item: tr::CatalogItem::Copy,
+                        ..
+                    } => "core::marker::Copy",
+                    tr::DeclOrigin::CoreCatalog {
+                        item: tr::CatalogItem::Drop,
+                        ..
+                    } => "core::ops::Drop",
+                    _ => return Err("catalog trait origin mismatch".into()),
+                };
+                registry.traits.insert(canonical.into(), entry.declaration);
+                if let Some(rest) = canonical.strip_prefix("core::") {
+                    registry
+                        .traits
+                        .insert(format!("std::{rest}"), entry.declaration);
+                }
+            }
+        }
         let declarations = program
             .functions
             .len()
@@ -3979,6 +4094,23 @@ impl PlanCtx {
                 ids.push(id);
             }
             registry.associated_ids.push(ids);
+        }
+        for entry in catalog_builder.base_declarations() {
+            if entry.info.kind != ir::DeclKind::Trait {
+                continue;
+            }
+            registry.trait_ids.push(entry.declaration);
+            registry.trait_items.push(
+                catalog_builder
+                    .base_declarations()
+                    .iter()
+                    .filter(|item| {
+                        item.info.owner == Some(entry.declaration)
+                            && item.info.kind == ir::DeclKind::TraitItem
+                    })
+                    .map(|item| item.declaration)
+                    .collect(),
+            );
         }
         for (index, declaration) in program.traits.iter().enumerate() {
             let id = registry.trait_ids[index];
@@ -4232,6 +4364,7 @@ impl PlanCtx {
                     signature,
                     predicates: {
                         let mut rows = Vec::new();
+                        append_implicit_sized(&registry, &info.env, &mut rows, budget)?;
                         if let CallableSource::Associated { implementation, .. } =
                             registry.callable_sources[index]
                         {
@@ -4311,7 +4444,40 @@ impl PlanCtx {
         }) {
             return Err("main must exist, take no arguments and return ()".into());
         }
+        let source_end = u32::try_from(registry.declarations.len())
+            .map_err(|_| "source declaration count overflow")?;
+        let inventory = recipes::inventory(program, budget)?;
+        let catalog = catalog_builder
+            .finish(source_end, inventory, budget)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let registry_mut =
+            Arc::get_mut(&mut registry).ok_or("registry shared before catalog seal")?;
+        for entry in catalog.declarations() {
+            if entry.declaration.index < source_end {
+                continue;
+            }
+            budget.charge_work(1)?;
+            budget.retain_bytes(1024 + entry.name.len() * 4)?;
+            if entry.declaration.index as usize != registry_mut.declarations.len() {
+                return Err("recipe suffix identity mismatch".into());
+            }
+            registry_mut.declarations.push(catalog_decl_info(entry));
+            if let Some(schema) = &entry.schema {
+                state.functions.insert(entry.declaration, schema.clone());
+            }
+            state
+                .region_modes
+                .insert(entry.declaration, entry.info.region_contract_mode);
+            if matches!(
+                entry.callable_provider,
+                Some(CallableProvider::Recipe { .. })
+            ) {
+                registry_mut.function_ids.push(entry.declaration);
+            }
+        }
         let mut plan = Self {
+            program: shared.clone(),
+            catalog,
             world: None,
             validated: Arc::new(HashMap::new()),
             registry,
@@ -4332,10 +4498,10 @@ impl PlanCtx {
                 .ok_or("trait headers allocation overflow")?,
         )?;
         let mut headers = tr::HeaderSet::default();
-        let mut traits = Vec::new();
-        let mut items = Vec::new();
-        let mut impls = Vec::new();
-        let mut callables = Vec::new();
+        let mut traits = self.catalog.headers().traits.to_vec();
+        let mut items = self.catalog.headers().items.to_vec();
+        let mut impls = self.catalog.headers().impls.to_vec();
+        let mut callables = self.catalog.headers().callables.to_vec();
         for (ti, t) in program.traits.iter().enumerate() {
             let id = self.registry.trait_ids[ti];
             let info = self.declaration(id)?;
@@ -4347,6 +4513,25 @@ impl PlanCtx {
                 },
                 env: info.env.clone(),
                 items: self.registry.trait_items[ti].clone().into(),
+                supertraits: t
+                    .supertraits
+                    .iter()
+                    .map(|path| {
+                        Ok(ir::TraitRef {
+                            declaration: *self
+                                .registry
+                                .traits
+                                .get(path)
+                                .ok_or("unknown supertrait")?,
+                            self_ty: ir::Ty::Param(ir::ParamId {
+                                owner: info.param_env.binder(),
+                                index: 0,
+                            }),
+                            args: Arc::from([]),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+                    .into(),
             });
             for (ii, item) in t.items.iter().enumerate() {
                 let declaration = self.registry.trait_items[ti][ii];
@@ -4355,6 +4540,7 @@ impl PlanCtx {
                     trait_decl: id,
                     receiver: receiver_mode(item.receiver),
                     schema: self.raw_schema(declaration)?,
+                    default: None,
                 });
             }
         }
@@ -4373,6 +4559,7 @@ impl PlanCtx {
             };
             let self_ty = self.source_ty(&block.self_ty, &bindings, caller, budget)?;
             let mut predicates = Vec::new();
+            append_implicit_sized(&self.registry, &info.env, &mut predicates, budget)?;
             append_source_bounds(
                 &self.registry,
                 &bindings,
@@ -4405,6 +4592,9 @@ impl PlanCtx {
         }
         for id in &self.registry.function_ids {
             budget.charge_work(1)?;
+            if self.catalog.declaration(*id).is_some() {
+                continue;
+            }
             callables.push(tr::CallableHeader {
                 declaration: *id,
                 schema: self.raw_schema(*id)?,
@@ -4415,6 +4605,8 @@ impl PlanCtx {
         headers.impls = impls.into();
         headers.callables = callables.into();
         let adapter = Arc::new(SchemaAdapter {
+            program: self.program.clone(),
+            catalog: self.catalog.clone(),
             registry: self.registry.clone(),
             state: self.state.clone(),
             budget: budget.clone(),
@@ -4465,6 +4657,62 @@ impl PlanCtx {
         }
         Ok(())
     }
+    pub fn declaration_origin(&self, id: ir::DeclId) -> Result<tr::DeclOrigin, String> {
+        self.declaration(id)?;
+        Ok(self
+            .catalog
+            .declaration(id)
+            .map_or(tr::DeclOrigin::Source, |d| d.origin))
+    }
+    pub fn callable_provider(&self, id: ir::DeclId) -> Result<CallableProvider, String> {
+        self.declaration(id)?;
+        if let Some(d) = self.catalog.declaration(id) {
+            return d
+                .callable_provider
+                .ok_or_else(|| "declaration has no executable provider".into());
+        }
+        Ok(CallableProvider::Source {
+            source_index: self.callable_index(id)?,
+        })
+    }
+    pub fn checked_body(
+        &self,
+        target: &ir::CallTarget,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::CheckedFunction, String> {
+        self.check_budget(budget)?;
+        if facts.phase() != tr::FactsPhase::Universal
+            || facts.declaration() != target.declaration
+            || !budget.same_authority(facts.budget())
+            || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
+        {
+            return Err("checked body requires exact universal declaration facts".into());
+        }
+        let env = self.callable_env(target.declaration)?;
+        budget.retain_bytes(env.total_arity() * std::mem::size_of::<ir::Ty>() + 128)?;
+        budget.charge_work(env.total_arity())?;
+        let ordered = env.ordered_params().map(ir::Ty::Param).collect::<Vec<_>>();
+        for (a, b) in ordered.iter().zip(target.type_args.iter()) {
+            if !metered_type_equal(a, b, budget, 0)? {
+                return Err("checked body requires rigid arguments".into());
+            }
+        }
+        if ordered.len() != target.type_args.len() {
+            return Err("checked body rigid arity mismatch".into());
+        }
+        match self.callable_provider(target.declaration)? {
+            CallableProvider::Source { .. } => {
+                type_callable_with_plan(&self.program, target.declaration, self, budget)
+            }
+            CallableProvider::Recipe { descriptor } => {
+                recipes::checked_body(self, target, facts, descriptor, budget)
+            }
+            CallableProvider::UnavailableProvided { .. } => {
+                Err("unsupported: unavailable provided body".into())
+            }
+        }
+    }
     pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
         self.registry.declaration(id)
     }
@@ -4490,7 +4738,12 @@ impl PlanCtx {
         decl: ir::DeclId,
     ) -> Result<&'p Function, String> {
         let index = self.callable_index(decl)?;
-        match self.registry.callable_sources[index] {
+        match *self
+            .registry
+            .callable_sources
+            .get(index)
+            .ok_or("recipe has no source AST body")?
+        {
             CallableSource::Free(i) => program.functions.get(i),
             CallableSource::Associated {
                 implementation,
@@ -4529,11 +4782,18 @@ impl PlanCtx {
         Ok(self.declaration(id)?.param_env.clone())
     }
     pub fn function_schema(&self, id: ir::DeclId) -> Result<ir::GenericSignature, String> {
-        self.budget.charge_work(1)?;
-        self.validated
+        let schema = self
+            .validated
             .get(&id)
-            .cloned()
-            .ok_or_else(|| "missing validated callable schema".into())
+            .ok_or("missing validated callable schema")?;
+        self.budget.charge_work(schema.signature.params.len() + 1)?;
+        self.budget.retain_bytes(
+            std::mem::size_of_val(schema.signature.params.as_slice())
+                .checked_mul(4)
+                .and_then(|n| n.checked_add(128))
+                .ok_or("validated signature allocation overflow")?,
+        )?;
+        Ok(schema.clone())
     }
     fn raw_schema(&self, id: ir::DeclId) -> Result<tr::GenericSchema, String> {
         let state = self
@@ -4721,7 +4981,7 @@ impl PlanCtx {
             facts: None,
         };
         for info in &self.registry.declarations {
-            if info.kind == ir::DeclKind::Function {
+            if info.kind == ir::DeclKind::Function && self.catalog.declaration(info.id).is_none() {
                 env.functions.insert(
                     info.name.clone(),
                     state
@@ -4844,6 +5104,8 @@ fn append_source_bounds(
 }
 #[derive(Debug)]
 struct SchemaAdapter {
+    program: Arc<Program>,
+    catalog: Arc<tr::CoreCatalog>,
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
     budget: ir::PlanBudget,
@@ -4852,6 +5114,8 @@ impl SchemaAdapter {
     fn raw_plan(&self) -> Result<PlanCtx, String> {
         self.budget.retain_bytes(128)?;
         Ok(PlanCtx {
+            program: self.program.clone(),
+            catalog: self.catalog.clone(),
             registry: self.registry.clone(),
             state: self.state.clone(),
             budget: self.budget.clone(),
@@ -4864,6 +5128,9 @@ impl SchemaAdapter {
     }
 }
 impl tr::SchemaCx for SchemaAdapter {
+    fn core_catalog(&self) -> &Arc<tr::CoreCatalog> {
+        &self.catalog
+    }
     fn budget(&self) -> &ir::PlanBudget {
         &self.budget
     }
@@ -4917,9 +5184,22 @@ impl tr::SchemaCx for SchemaAdapter {
             .map_err(|e| self.error(e))?;
         let mut cx = self.raw_plan().map_err(|e| self.error(e))?;
         let facts = ir::FactsCtx::Universal(caller);
+        let mut schema_only_item = false;
+        for scope in schema.env.scopes() {
+            budget.charge_work(1).map_err(|e| self.error(e))?;
+            let declaration = self
+                .registry
+                .declaration(scope.binder().declaration)
+                .map_err(|e| self.error(e))?;
+            schema_only_item |= declaration.kind == ir::DeclKind::TraitItem;
+        }
         let mut sub = |ty: &ir::Ty| {
-            ir::substitute_ty(ty, &schema.env, args, facts, &mut cx, budget)
-                .map_err(|e| self.error(e))
+            if schema_only_item {
+                ir::substitute_schema_ty(ty, &schema.env, args, facts, &mut cx, self, budget)
+            } else {
+                ir::substitute_ty(ty, &schema.env, args, facts, &mut cx, budget)
+            }
+            .map_err(|e| self.error(e))
         };
         let params = schema
             .signature
@@ -5329,12 +5609,121 @@ impl PlanCtx {
         &self,
         owner: &ir::Ty,
         name: &str,
-        method_args: &[ir::Ty],
+        args: &[ir::Ty],
         caller: ir::FactsCtx<'_>,
         module: &str,
         dot: bool,
         budget: &ir::PlanBudget,
     ) -> Result<(ir::Callee, ir::Signature, ReceiverKind), String> {
+        for traits_only in [false, true] {
+            if let Some(found) = self.lookup_associated(
+                owner,
+                name,
+                args,
+                caller,
+                module,
+                dot,
+                None,
+                traits_only,
+                budget,
+            )? {
+                return Ok(found);
+            }
+        }
+        Err(format!("no applicable associated item {name}"))
+    }
+    fn select_method(
+        &self,
+        receiver: &ir::Ty,
+        name: &str,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        module: &str,
+        budget: &ir::PlanBudget,
+    ) -> Result<MethodSelection, String> {
+        let mut root = receiver;
+        for depth in 0..=2 {
+            budget.charge_work(1)?;
+            for adjustment in [
+                ReceiverAdjustment::Identity,
+                ReceiverAdjustment::SharedAutoref,
+                ReceiverAdjustment::MutAutoref,
+            ] {
+                budget.retain_bytes(128)?;
+                let candidate = match adjustment {
+                    ReceiverAdjustment::Identity => root.clone(),
+                    ReceiverAdjustment::SharedAutoref => ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: Arc::new(root.clone()),
+                    },
+                    ReceiverAdjustment::MutAutoref => ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: Arc::new(root.clone()),
+                    },
+                };
+                for traits_only in [false, true] {
+                    let borrowed = match &candidate {
+                        ir::Ty::Ref { kind, referent } => {
+                            Some((ReceiverKind::Borrowed { kind: *kind }, referent.as_ref()))
+                        }
+                        _ => None,
+                    };
+                    for (mode, owner) in
+                        std::iter::once((ReceiverKind::Value { mutable: false }, &candidate))
+                            .chain(borrowed)
+                    {
+                        if let Some((target, signature, mode)) = self.lookup_associated(
+                            owner,
+                            name,
+                            args,
+                            caller,
+                            module,
+                            true,
+                            Some(mode),
+                            traits_only,
+                            budget,
+                        )? {
+                            if !signature
+                                .params
+                                .first()
+                                .map(|formal| metered_type_equal(formal, &candidate, budget, 0))
+                                .transpose()?
+                                .unwrap_or(false)
+                            {
+                                return Err("canonical receiver formal mismatch".into());
+                            }
+                            ir::reference_layers(&candidate)?;
+                            return Ok(MethodSelection {
+                                target,
+                                signature,
+                                mode,
+                                depth,
+                                adjustment,
+                            });
+                        }
+                    }
+                }
+            }
+            match root {
+                ir::Ty::Ref { referent, .. } => root = referent,
+                _ => break,
+            }
+        }
+        Err(format!("no applicable method {name}"))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn lookup_associated(
+        &self,
+        owner: &ir::Ty,
+        name: &str,
+        method_args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        module: &str,
+        dot: bool,
+        filter: Option<ReceiverKind>,
+        traits_only: bool,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
         self.check_budget(budget)?;
         let nominal = nominal_parts(owner).map(|(id, _)| id);
         let mut selected = None;
@@ -5345,7 +5734,10 @@ impl PlanCtx {
                 continue;
             };
             budget.charge_work(1 + info.path.item.len().min(name.len()))?;
-            if associated.trait_decl.is_some()
+            if traits_only
+                || filter
+                    .is_some_and(|mode| receiver_mode(mode) != receiver_mode(associated.receiver))
+                || associated.trait_decl.is_some()
                 || Some(associated.nominal) != nominal
                 || info.path.item != name
             {
@@ -5413,7 +5805,10 @@ impl PlanCtx {
             selected = Some((ir::Callee::Direct(target), signature, associated.receiver));
         }
         if let Some(selected) = selected {
-            return Ok(selected);
+            return Ok(Some(selected));
+        }
+        if !traits_only {
+            return Ok(None);
         }
         let ir::FactsCtx::Validated(facts) = caller else {
             return Err("trait selection requires validated facts".into());
@@ -5423,7 +5818,8 @@ impl PlanCtx {
             budget.charge_work(1)?;
             let info = self.declaration(*trait_id)?;
             let path_module = info.path.module.join("::");
-            let mut visible = path_module == module;
+            let mut visible =
+                path_module == module || self.catalog.declaration(*trait_id).is_some();
             for (import_module, path) in &self.registry.trait_imports {
                 budget.charge_work(1 + path.len() + import_module.len())?;
                 if import_module == module && self.registry.traits.get(path) == Some(trait_id) {
@@ -5441,16 +5837,23 @@ impl PlanCtx {
             if !visible {
                 continue;
             }
-            if let Some(call) =
-                self.select_trait(owner, *trait_id, name, method_args, caller, dot, budget)?
-            {
+            if let Some(call) = self.select_trait_filtered(
+                owner,
+                *trait_id,
+                name,
+                method_args,
+                caller,
+                dot,
+                filter,
+                budget,
+            )? {
                 if selected.is_some() {
                     return Err("ambiguous in-scope trait item".into());
                 }
                 selected = Some(call);
             }
         }
-        selected.ok_or_else(|| format!("no applicable associated item {name}"))
+        Ok(selected)
     }
 }
 impl PlanCtx {
@@ -5458,11 +5861,25 @@ impl PlanCtx {
     fn select_trait(
         &self,
         owner: &ir::Ty,
+        id: ir::DeclId,
+        name: &str,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        dot: bool,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
+        self.select_trait_filtered(owner, id, name, args, caller, dot, None, budget)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn select_trait_filtered(
+        &self,
+        owner: &ir::Ty,
         trait_id: ir::DeclId,
         name: &str,
         method_args: &[ir::Ty],
         caller: ir::FactsCtx<'_>,
         dot: bool,
+        filter: Option<ReceiverKind>,
         budget: &ir::PlanBudget,
     ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
         self.check_budget(budget)?;
@@ -5490,6 +5907,10 @@ impl PlanCtx {
         let Some(item) = item else {
             return Ok(None);
         };
+        let item_receiver = self.declaration(item)?.receiver;
+        if filter.is_some_and(|mode| receiver_mode(mode) != receiver_mode(item_receiver)) {
+            return Ok(None);
+        }
         let call = ir::TraitCall {
             trait_ref: ir::TraitRef {
                 declaration: trait_id,
@@ -5543,6 +5964,39 @@ fn generic_bindings(
         }
     }
     Ok(bindings)
+}
+fn append_implicit_sized(
+    registry: &DeclRegistry,
+    env: &ir::GenericEnv,
+    rows: &mut Vec<ir::Predicate>,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    let sized = *registry
+        .traits
+        .get("core::marker::Sized")
+        .ok_or("missing canonical Sized identity")?;
+    for scope in env.scopes() {
+        let declaration = registry.declaration(scope.binder().declaration)?;
+        if declaration.kind == ir::DeclKind::Trait {
+            continue;
+        }
+        for index in 0..scope.arity() {
+            budget.charge_work(1)?;
+            if rows.len() >= 256 {
+                return Err("predicate limit exceeded".into());
+            }
+            budget.retain_bytes(256)?;
+            rows.push(ir::Predicate::Implements(ir::TraitRef {
+                declaration: sized,
+                self_ty: ir::Ty::Param(ir::ParamId {
+                    owner: scope.binder(),
+                    index: index as u16,
+                }),
+                args: Arc::from([]),
+            }));
+        }
+    }
+    Ok(())
 }
 fn symbolic_args(env: &ir::ParamEnv, budget: &ir::PlanBudget) -> Result<Vec<ir::Ty>, String> {
     budget.charge_work(env.arity())?;
@@ -8001,10 +8455,6 @@ impl<'a> Checker<'a> {
                 ..
             } => {
                 if let Some(owner) = self.scalar_hint(receiver)? {
-                    let owner = match owner {
-                        ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
-                        ty => ty,
-                    };
                     let plan = self
                         .signatures
                         .plan
@@ -8016,16 +8466,15 @@ impl<'a> Checker<'a> {
                         .map(|t| checked_local_ty(t, self.signatures))
                         .collect::<Result<Vec<_>, _>>()?;
                     Some(
-                        plan.select_associated(
+                        plan.select_method(
                             &owner,
                             name,
                             &args,
                             self.facts(),
                             &self.module,
-                            true,
                             &plan.budget,
                         )?
-                        .1
+                        .signature
                         .result,
                     )
                 } else {
@@ -8047,6 +8496,8 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
+            Expr::Bool(_) => Some(ir::Ty::Bool),
+            Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self
                 .lookup(name)
                 .ok()
@@ -9153,7 +9604,163 @@ impl<'a> Checker<'a> {
         });
         Ok(id)
     }
+    fn method_expression(
+        &mut self,
+        receiver: &Expr,
+        name: &str,
+        type_args: &[Type],
+        args: &[Expr],
+    ) -> Result<ir::ExprId, String> {
+        let plan = self
+            .signatures
+            .plan
+            .clone()
+            .ok_or("method call requires registry")?;
+        let ty = self
+            .scalar_hint(receiver)?
+            .ok_or("unsupported unresolved receiver type")?;
+        self.infer_storage(type_args.len())?;
+        let actuals = type_args
+            .iter()
+            .map(|t| checked_local_ty(t, self.signatures))
+            .collect::<Result<Vec<_>, _>>()?;
+        let selected = plan.select_method(
+            &ty,
+            name,
+            &actuals,
+            self.facts(),
+            &self.module,
+            &plan.budget,
+        )?;
+        // Only primitive value temporaries have the approved lexical autoref extension.
+        if selected.depth == 0
+            && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
+            && matches!(ty, ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit)
+            && static_source_place(receiver).is_err()
+        {
+            let value = self.expr(receiver)?;
+            self.charge_node(std::mem::size_of::<ir::LocalDecl>() + 64)?;
+            let local = ir::LocalId(self.locals.len());
+            self.locals.push(ir::LocalDecl {
+                name: "$primitive_receiver".into(),
+                ty,
+                mutable: false,
+            });
+            let borrowed = self.borrow_expression(
+                ir::BorrowKind::Shared,
+                ir::Place {
+                    local,
+                    projection: Vec::new(),
+                },
+            )?;
+            let call = self.finish_checked_call(
+                selected.target,
+                name,
+                selected.signature,
+                args,
+                Some((borrowed, None)),
+            )?;
+            let result = self.exprs[call.0].ty.clone();
+            let completion = self.exprs[call.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 128)?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty: result,
+                completion,
+                kind: ir::ExprKind::Block(ir::Block {
+                    statements: vec![ir::Stmt::Let { local, value }],
+                    tail: Some(call),
+                }),
+            });
+            return Ok(id);
+        }
+        let adjusted = match selected.mode {
+            ReceiverKind::None => return Err("method has no receiver".into()),
+            ReceiverKind::Value { .. } => {
+                let mut id = self.expr(receiver)?;
+                for _ in 0..selected.depth {
+                    let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
+                        return Err("invalid receiver dereference".into());
+                    };
+                    let ty = referent.as_ref().clone();
+                    let completion = self.exprs[id.0].completion;
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    let next = ir::ExprId(self.exprs.len());
+                    self.exprs.push(ir::TypedExpr {
+                        kind: ir::ExprKind::Deref { value: id },
+                        ty,
+                        completion,
+                    });
+                    id = next;
+                }
+                (id, None)
+            }
+            ReceiverKind::Borrowed { kind } => {
+                if matches!(selected.adjustment, ReceiverAdjustment::Identity)
+                    && (kind == ir::BorrowKind::Shared
+                        || (selected.depth == 0 && genuine_call(receiver)))
+                {
+                    let mut id = self.expr(receiver)?;
+                    for _ in 0..selected.depth {
+                        let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
+                            return Err("invalid receiver dereference".into());
+                        };
+                        let ty = referent.as_ref().clone();
+                        let completion = self.exprs[id.0].completion;
+                        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                        let next = ir::ExprId(self.exprs.len());
+                        self.exprs.push(ir::TypedExpr {
+                            kind: ir::ExprKind::Deref { value: id },
+                            ty,
+                            completion,
+                        });
+                        id = next;
+                    }
+                    (id, None)
+                } else {
+                    if genuine_call(receiver) {
+                        return Err(
+                            "unsupported: autoref of a reference-return call temporary".into()
+                        );
+                    }
+                    let source = static_source_place(receiver)?;
+                    let (mut place, _, _) = self.checked_place(&source)?;
+                    let derefs = selected.depth
+                        + usize::from(matches!(selected.adjustment, ReceiverAdjustment::Identity));
+                    self.charge_node(derefs * std::mem::size_of::<ir::Projection>() + 64)?;
+                    place
+                        .projection
+                        .extend(std::iter::repeat_n(ir::Projection::Deref, derefs));
+                    let id = self.borrow_expression(kind, place)?;
+                    (
+                        id,
+                        if kind == ir::BorrowKind::Mut {
+                            Some(ir::ImplicitBorrowKind::MutableReceiver)
+                        } else {
+                            None
+                        },
+                    )
+                }
+            }
+        };
+        self.finish_checked_call(
+            selected.target,
+            name,
+            selected.signature,
+            args,
+            Some(adjusted),
+        )
+    }
     fn associated_expression(&mut self, expression: &Expr) -> Result<ir::ExprId, String> {
+        if let Expr::MethodCall {
+            receiver,
+            name,
+            type_args,
+            args,
+        } = expression
+        {
+            return self.method_expression(receiver, name, type_args, args);
+        }
         let plan = self
             .signatures
             .plan
@@ -10233,6 +10840,16 @@ pub fn check_signatures(program: &Program) -> Result<(), String> {
 }
 pub fn check_function(program: &Program, index: usize) -> Result<(), String> {
     let signatures = signature_table(program)?;
+    let plan = signatures
+        .plan
+        .as_ref()
+        .ok_or("source function check requires planning context")?;
+    if !matches!(
+        plan.callable_provider(plan.callable_decl(index)?)?,
+        CallableProvider::Source { .. }
+    ) {
+        return Err("invalid source function index".into());
+    }
     check_function_with_signatures(program, index, &signatures)
 }
 /// `signatures` must be the validated table for this same immutable program.
@@ -10245,7 +10862,11 @@ pub fn check_function_with_signatures(
 ) -> Result<(), String> {
     let typed = type_function_with_signatures(program, index, signatures)?;
     if let Some(plan) = &signatures.plan
-        && plan.callable_env(plan.callable_decl(index)?)?.is_generic()
+        && (plan.callable_env(plan.callable_decl(index)?)?.is_generic()
+            || matches!(
+                plan.callable_provider(plan.callable_decl(index)?)?,
+                CallableProvider::Recipe { .. }
+            ))
     {
         let plan = signatures
             .plan
@@ -10304,6 +10925,19 @@ pub fn type_callable_with_plan(
 ) -> Result<ir::CheckedFunction, String> {
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
+    if matches!(
+        plan.callable_provider(declaration)?,
+        CallableProvider::Recipe { .. }
+    ) {
+        let env = plan.callable_env(declaration)?;
+        budget.retain_bytes(env.total_arity() * std::mem::size_of::<ir::Ty>() + 128)?;
+        let target = ir::CallTarget {
+            declaration,
+            type_args: env.ordered_params().map(ir::Ty::Param).collect(),
+        };
+        let facts = plan.callable_facts(declaration)?;
+        return plan.checked_body(&target, &facts, budget);
+    }
     let f = plan.callable_body(program, declaration)?;
     let signatures = plan.environment(Some(declaration))?;
     let signature = plan.function_schema(declaration)?.signature;
@@ -10426,6 +11060,63 @@ pub fn check(program: &Program) -> Result<(), String> {
 mod typed_tests {
     use super::*;
 
+    #[test]
+    fn canonical_copy_identity_and_source_supertraits_authorize_only_real_bounds() {
+        let source = "trait Copy{fn fake(&self)->i32;}trait Clone{fn fake_clone(&self)->i32;}struct S{v:i32}impl core::clone::Clone for S{fn clone(&self)->Self{S{v:self.v}}}impl core::marker::Copy for S{}fn twice<T:std::marker::Copy>(x:T)->(T,T){(x,x)}fn main(){let s=S{v:3};let p=twice::<S>(s);let n=p.0.v+p.1.v;}";
+        let p = parse(source).unwrap();
+        check(&p).unwrap();
+        let p = parse("trait Base{fn base(&self)->i32;}trait Child:Base{fn child(&self)->i32;}struct S{v:i32}impl Base for S{fn base(&self)->i32{self.v}}impl Child for S{fn child(&self)->i32{self.v}}fn via<T:Child>(x:&T)->i32{x.base()+x.child()}fn main(){}").unwrap();
+        check(&p).unwrap();
+        let fake = parse("trait Copy{fn tag(&self)->i32;}struct S{v:i32}impl Copy for S{fn tag(&self)->i32{self.v}}fn main(){let s=S{v:1};let a=s;let b=s;let n=a.v+b.v;}").unwrap();
+        assert!(check(&fake).is_err());
+    }
+
+    #[test]
+    fn canonical_clone_receiver_order_and_primitive_temporaries_use_real_borrows() {
+        let p = parse("struct S{v:i32}impl Clone for S{fn clone(&self)->Self{S{v:self.v+1}}}impl S{fn set(&mut self,n:i32){self.v=n;}}fn carrier(x:&mut S)->&mut S{x}struct Opaque{v:i32}fn main(){let s=S{v:12};let r=&s;let value=r.clone();let owner=Opaque{v:13};let shared=&owner;let handle=shared.clone();let n=10i32.clone();let yes=true.clone();let unit=().clone();let used=n+value.v+handle.v;let mut temporary=S{v:1};carrier(&mut temporary).set(2);}").unwrap();
+        let signatures = signature_table(&p).unwrap();
+        let checked = type_function_with_signatures(&p, 1, &signatures).unwrap();
+        assert!(checked.exprs.iter().any(|e| matches!(&e.kind, ir::ExprKind::Block(block) if block.statements.iter().any(|s| matches!(s,ir::Stmt::Let{local,..} if checked.locals[local.0].name=="$primitive_receiver")))));
+        assert!(checked.exprs.iter().any(|e|matches!(&e.ty,ir::Ty::Ref{referent,..} if matches!(referent.as_ref(),ir::Ty::Struct(t) if t.def().name=="Opaque"))));
+        check(&p).unwrap();
+    }
+
+    #[test]
+    fn registered_recipe_bodies_share_counting_and_universal_verification() {
+        let p = Arc::new(parse("fn main(){let tuple=(1i32,true);let array:[i32;0]=[];}").unwrap());
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_shared_program(p.clone(), &budget).unwrap();
+        let mut recipes_seen = 0;
+        for index in 0..plan.callable_count() {
+            let declaration = plan.callable_decl(index).unwrap();
+            if let CallableProvider::Recipe { descriptor } =
+                plan.callable_provider(declaration).unwrap()
+            {
+                recipes_seen += 1;
+                assert!(
+                    matches!(plan.declaration_origin(declaration).unwrap(),tr::DeclOrigin::CoreCatalog{item:tr::CatalogItem::Recipe(d),..} if d==descriptor)
+                );
+                let env = plan.callable_env(declaration).unwrap();
+                let target = ir::CallTarget {
+                    declaration,
+                    type_args: env.ordered_params().map(ir::Ty::Param).collect(),
+                };
+                let facts = plan.callable_facts(declaration).unwrap();
+                let checked = plan.checked_body(&target, &facts, &budget).unwrap();
+                let template =
+                    super::super::cfg::lower_template(Arc::new(checked), facts, &budget).unwrap();
+                super::super::ownership::verify_template(template).unwrap();
+            }
+        }
+        assert!(recipes_seen >= 14);
+        let counts =
+            recipes::counts(tr::RecipeDescriptor::CloneTuple { arity: 33 }, &budget).unwrap();
+        assert!(matches!(
+            super::super::ownership::preflight_recipe_counts(&counts, &budget).unwrap(),
+            super::super::ownership::RecipeAdmission::IntrinsicLimit(_)
+        ));
+    }
+
     fn input_region(param: usize, region: u16) -> ir::InputRegion {
         ir::InputRegion {
             input: ir::InputReference {
@@ -10502,6 +11193,8 @@ mod typed_tests {
         let budget = ir::PlanBudget::default();
         let plan = PlanCtx::from_program(&p, &budget).unwrap();
         let adapter = SchemaAdapter {
+            program: plan.program.clone(),
+            catalog: plan.catalog.clone(),
             registry: plan.registry.clone(),
             state: plan.state.clone(),
             budget: budget.clone(),
@@ -10710,10 +11403,19 @@ mod typed_tests {
         let p=parse("struct S{x:i32}trait Value{fn value(self)->i32;}impl Value for S{fn value(mut self)->i32{self.x=self.x+1;self.x}}fn read<T:Value>(x:T)->i32{<T as Value>::value(x)}fn main(){let n=read::<S>(S{x:6});}").unwrap();
         let budget = ir::PlanBudget::default();
         let plan = PlanCtx::from_program(&p, &budget).unwrap();
-        assert_eq!(plan.callable_count(), 3);
+        assert_eq!(
+            (0..plan.callable_count())
+                .filter(|&i| matches!(
+                    plan.callable_provider(plan.callable_decl(i).unwrap())
+                        .unwrap(),
+                    CallableProvider::Source { .. }
+                ))
+                .count(),
+            3
+        );
         let generic = plan.callable_decl(0).unwrap();
         let facts = plan.callable_facts(generic).unwrap();
-        assert_eq!(facts.predicates().predicates().len(), 1);
+        assert_eq!(facts.predicates().predicates().len(), 2);
         let typed = type_callable_with_plan(&p, generic, &plan, &budget).unwrap();
         assert!(typed.exprs.iter().any(|e|matches!(&e.kind,ir::ExprKind::Call{target:ir::Callee::TraitItem(call),..} if matches!(call.trait_ref.self_ty,ir::Ty::Param(_)))));
         let trait_decl = plan.registry.trait_ids[0];
@@ -10789,11 +11491,26 @@ mod typed_tests {
         let budget = ir::PlanBudget::default();
         let plan = PlanCtx::from_program(&p, &budget).unwrap();
         assert_eq!(p.functions.len(), 1);
-        assert_eq!(plan.callable_count(), 4);
+        assert_eq!(
+            (0..plan.callable_count())
+                .filter(|&i| matches!(
+                    plan.callable_provider(plan.callable_decl(i).unwrap())
+                        .unwrap(),
+                    CallableProvider::Source { .. }
+                ))
+                .count(),
+            4
+        );
         for index in 0..plan.callable_count() {
             let decl = plan.callable_decl(index).unwrap();
             assert_eq!(plan.callable_index(decl).unwrap(), index);
             let f = type_callable_with_plan(&p, decl, &plan, &budget).unwrap();
+            if !matches!(
+                plan.callable_provider(decl).unwrap(),
+                CallableProvider::Source { .. }
+            ) {
+                continue;
+            }
             let context = plan.callable_context(decl).unwrap();
             if context.receiver != ReceiverKind::None {
                 assert_eq!(
@@ -13764,4 +14481,322 @@ mod tests {
         bad("fn main(){println!(\"\\q\");}");
         assert!(parse("\nfn main(){@}").unwrap_err().starts_with("2:11:"));
     }
+}
+
+fn canonical_trait_spelling(path: &str) -> Option<&'static str> {
+    match path {
+        "Copy" | "core::marker::Copy" | "std::marker::Copy" => Some("core::marker::Copy"),
+        "Clone" | "core::clone::Clone" | "std::clone::Clone" => Some("core::clone::Clone"),
+        "Sized" | "core::marker::Sized" | "std::marker::Sized" => Some("core::marker::Sized"),
+        "Drop" | "core::ops::Drop" | "std::ops::Drop" => Some("core::ops::Drop"),
+        _ => None,
+    }
+}
+fn catalog_decl_info(entry: &tr::CatalogDecl) -> DeclInfo {
+    let info = &entry.info;
+    let receiver = match info.receiver {
+        ir::ReceiverMode::None => ReceiverKind::None,
+        ir::ReceiverMode::Value => ReceiverKind::Value { mutable: false },
+        ir::ReceiverMode::Borrowed { kind } => ReceiverKind::Borrowed { kind },
+    };
+    DeclInfo {
+        receiver,
+        owner: info.owner,
+        id: entry.declaration,
+        kind: info.kind,
+        name: entry.name.into(),
+        path: DeclSemanticPath {
+            module: info.module.clone(),
+            item: entry.name.rsplit("::").next().unwrap_or(entry.name).into(),
+            kind: info.kind,
+            associated: None,
+        },
+        source_index: usize::MAX,
+        param_env: info.own_env.clone(),
+        type_params: (0..info.own_env.arity())
+            .map(|i| format!("__catalog{i}"))
+            .collect::<Vec<_>>()
+            .into(),
+        env: info.env.clone(),
+        public: info.public,
+    }
+}
+fn clone_text(text: &str, budget: &ir::PlanBudget) -> Result<(), String> {
+    budget.charge_work(
+        text.len()
+            .checked_add(1)
+            .ok_or("source text work overflow")?,
+    )?;
+    budget.retain_bytes(
+        text.len()
+            .checked_add(32)
+            .ok_or("source text bytes overflow")?,
+    )
+}
+fn clone_vector<T>(values: &[T], budget: &ir::PlanBudget) -> Result<(), String> {
+    budget.charge_work(
+        values
+            .len()
+            .checked_add(1)
+            .ok_or("source collection work overflow")?,
+    )?;
+    budget.retain_bytes(
+        std::mem::size_of_val(values)
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(128))
+            .ok_or("source collection bytes overflow")?,
+    )
+}
+fn clone_names(names: &[String], budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_vector(names, budget)?;
+    for name in names {
+        clone_text(name, budget)?;
+    }
+    Ok(())
+}
+fn clone_regions(regions: &RegionDecls, budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_names(&regions.params, budget)?;
+    if let Some(receiver) = &regions.receiver {
+        clone_text(receiver, budget)?;
+    }
+    clone_vector(&regions.outlives, budget)?;
+    for (a, b) in &regions.outlives {
+        clone_text(a, budget)?;
+        clone_text(b, budget)?;
+    }
+    Ok(())
+}
+fn clone_bounds(bounds: &[TypeBound], budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_vector(bounds, budget)?;
+    for bound in bounds {
+        clone_text(&bound.parameter, budget)?;
+        clone_names(&bound.traits, budget)?;
+    }
+    Ok(())
+}
+fn clone_parameters(params: &[(String, Type)], budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_vector(params, budget)?;
+    for (name, ty) in params {
+        clone_text(name, budget)?;
+        walk_depth(DepthNode::Type(ty), Some(budget))?;
+    }
+    Ok(())
+}
+fn clone_fields(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_vector(fields, budget)?;
+    for field in fields {
+        clone_text(&field.name, budget)?;
+        walk_depth(DepthNode::Type(&field.ty), Some(budget))?;
+    }
+    Ok(())
+}
+fn clone_selector(selector: &FieldSelector, budget: &ir::PlanBudget) -> Result<(), String> {
+    if let FieldSelector::Named(name) = selector {
+        clone_text(name, budget)?;
+    }
+    Ok(())
+}
+fn clone_place(place: &Place, budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_text(&place.local, budget)?;
+    clone_vector(&place.fields, budget)?;
+    for field in &place.fields {
+        clone_selector(field, budget)?;
+    }
+    Ok(())
+}
+fn clone_path(path: &GenericPath, budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_vector(&path.segments, budget)?;
+    for segment in &path.segments {
+        clone_text(&segment.name, budget)?;
+        clone_vector(&segment.args, budget)?;
+    }
+    Ok(())
+}
+fn preflight_clone_node(node: &DepthNode<'_>, budget: &ir::PlanBudget) -> Result<(), String> {
+    budget.charge_work(1)?;
+    budget.retain_bytes(1024)?;
+    match node {
+        DepthNode::Type(ty) => match ty {
+            Type::Named(name) | Type::Param(name) => clone_text(name, budget)?,
+            Type::Ref {
+                region: Some(name), ..
+            } => clone_text(name, budget)?,
+            Type::Tuple(fields) => clone_vector(fields, budget)?,
+            Type::Apply(path) => clone_path(path, budget)?,
+            _ => {}
+        },
+        DepthNode::Pattern(pattern) => match pattern {
+            Pattern::Apply { path, .. } => clone_path(path, budget)?,
+            Pattern::Path(name) | Pattern::Binding { name, .. } => clone_text(name, budget)?,
+            Pattern::Struct { name, fields, .. } => {
+                clone_text(name, budget)?;
+                clone_vector(fields, budget)?;
+                for (name, _) in fields {
+                    clone_text(name, budget)?;
+                }
+            }
+            Pattern::Variant { name, fields, .. } => {
+                clone_text(name, budget)?;
+                clone_vector(fields, budget)?;
+                for (field, _) in fields {
+                    clone_selector(field, budget)?;
+                }
+            }
+            Pattern::Tuple(fields) => clone_vector(fields, budget)?,
+            _ => {}
+        },
+        DepthNode::Expr(expr) => match expr {
+            Expr::Var(name) | Expr::Println(name) => clone_text(name, budget)?,
+            Expr::Call { name, args } => {
+                clone_text(name, budget)?;
+                clone_vector(args, budget)?;
+            }
+            Expr::MethodCall {
+                name,
+                type_args,
+                args,
+                ..
+            }
+            | Expr::AssociatedCall {
+                name,
+                type_args,
+                args,
+                ..
+            } => {
+                clone_text(name, budget)?;
+                clone_vector(type_args, budget)?;
+                clone_vector(args, budget)?;
+            }
+            Expr::TraitCall {
+                trait_path,
+                name,
+                args,
+                ..
+            } => {
+                clone_text(trait_path, budget)?;
+                clone_text(name, budget)?;
+                clone_vector(args, budget)?;
+            }
+            Expr::Apply { path, .. } => clone_path(path, budget)?,
+            Expr::Borrow { place, .. } => clone_place(place, budget)?,
+            Expr::Array(fields) | Expr::Tuple(fields) => clone_vector(fields, budget)?,
+            Expr::EnumVariant { name, fields, .. } => {
+                clone_text(name, budget)?;
+                clone_vector(fields, budget)?;
+                for (field, _) in fields {
+                    clone_selector(field, budget)?;
+                }
+            }
+            Expr::Struct { name, fields } => {
+                clone_text(name, budget)?;
+                clone_vector(fields, budget)?;
+                for (field, _) in fields {
+                    clone_text(field, budget)?;
+                }
+            }
+            Expr::Field { field, .. } => clone_selector(field, budget)?,
+            Expr::Match { arms, .. } => clone_vector(arms, budget)?,
+            _ => {}
+        },
+        DepthNode::Block(block) => {
+            clone_vector(&block.statements, budget)?;
+            for statement in &block.statements {
+                budget.charge_work(1)?;
+                match statement {
+                    Stmt::Declare { name, .. }
+                    | Stmt::Let { name, .. }
+                    | Stmt::Assign { name, .. } => clone_text(name, budget)?,
+                    Stmt::AssignPlace { place, .. } | Stmt::AssignOp { place, .. } => {
+                        clone_place(place, budget)?
+                    }
+                    Stmt::AssignIndex { array, .. } | Stmt::AssignIndexOp { array, .. } => {
+                        clone_place(array, budget)?
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn preflight_program_clone(program: &Program, budget: &ir::PlanBudget) -> Result<(), String> {
+    budget.retain_bytes(std::mem::size_of::<Program>())?;
+    clone_vector(&program.functions, budget)?;
+    for f in &program.functions {
+        preflight_function_clone(f, budget)?;
+    }
+    clone_vector(&program.impls, budget)?;
+    for implementation in &program.impls {
+        clone_text(&implementation.module, budget)?;
+        if let Some(path) = &implementation.trait_path {
+            clone_text(path, budget)?;
+        }
+        clone_names(&implementation.type_params, budget)?;
+        clone_bounds(&implementation.bounds, budget)?;
+        walk_depth(DepthNode::Type(&implementation.self_ty), Some(budget))?;
+        clone_vector(&implementation.items, budget)?;
+        for item in &implementation.items {
+            preflight_function_clone(&item.function, budget)?;
+        }
+    }
+    clone_vector(&program.structs, budget)?;
+    for declaration in &program.structs {
+        clone_text(&declaration.name, budget)?;
+        clone_names(&declaration.type_params, budget)?;
+        clone_fields(&declaration.fields, budget)?;
+    }
+    clone_vector(&program.enums, budget)?;
+    for declaration in &program.enums {
+        clone_text(&declaration.name, budget)?;
+        clone_names(&declaration.type_params, budget)?;
+        clone_vector(&declaration.variants, budget)?;
+        for variant in &declaration.variants {
+            clone_text(&variant.name, budget)?;
+            clone_fields(&variant.fields, budget)?;
+        }
+    }
+    clone_vector(&program.traits, budget)?;
+    for declaration in &program.traits {
+        clone_text(&declaration.name, budget)?;
+        clone_names(&declaration.supertraits, budget)?;
+        clone_vector(&declaration.items, budget)?;
+        for item in &declaration.items {
+            let head = &item.signature;
+            clone_text(&head.name, budget)?;
+            clone_names(&head.type_params, budget)?;
+            clone_bounds(&head.bounds, budget)?;
+            clone_regions(&head.regions, budget)?;
+            clone_parameters(&head.params, budget)?;
+            walk_depth(DepthNode::Type(&head.result), Some(budget))?;
+        }
+    }
+    clone_vector(&program.trait_imports, budget)?;
+    for (module, path) in &program.trait_imports {
+        clone_text(module, budget)?;
+        clone_text(path, budget)?;
+    }
+    Ok(())
+}
+fn preflight_function_clone(function: &Function, budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_text(&function.name, budget)?;
+    clone_names(&function.type_params, budget)?;
+    clone_bounds(&function.bounds, budget)?;
+    clone_regions(&function.regions, budget)?;
+    clone_parameters(&function.params, budget)?;
+    walk_depth(DepthNode::Type(&function.result), Some(budget))?;
+    walk_depth(DepthNode::Block(&function.body), Some(budget))
+}
+
+#[derive(Clone, Copy)]
+enum ReceiverAdjustment {
+    Identity,
+    SharedAutoref,
+    MutAutoref,
+}
+struct MethodSelection {
+    target: ir::Callee,
+    signature: ir::Signature,
+    mode: ReceiverKind,
+    depth: usize,
+    adjustment: ReceiverAdjustment,
 }

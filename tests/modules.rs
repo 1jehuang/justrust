@@ -538,6 +538,31 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                     expected.push(Key::new(105, vec![]));
                     expected.push(Key::new(114, vec![]));
                 }
+                // Available catalog recipes add real universal proof nodes, but
+                // never eager concrete roots. Keep every historical source key.
+                let program = compiler::frontend::parse(source).unwrap();
+                let plan = compiler::frontend::PlanCtx::from_program(
+                    &program,
+                    &compiler::ir::PlanBudget::default(),
+                )
+                .unwrap();
+                for index in 0..plan.callable_count() {
+                    let declaration = plan.callable_decl(index).unwrap();
+                    match plan.callable_provider(declaration).unwrap() {
+                        compiler::frontend::CallableProvider::Source { .. } => {
+                            assert!(index < result.functions);
+                        }
+                        compiler::frontend::CallableProvider::Recipe { .. } => {
+                            assert!(index >= result.functions);
+                            for kind in [110, 111, 112] {
+                                expected.push(Key::new(kind, vec![index as u64]));
+                            }
+                        }
+                        compiler::frontend::CallableProvider::UnavailableProvided { .. } => {
+                            panic!("unavailable provider entered body enumeration")
+                        }
+                    }
+                }
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report

@@ -482,101 +482,6 @@ pub fn substitute_ty(
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<Ty, String> {
-    fn walk(
-        ty: &Ty,
-        env: &GenericEnv,
-        args: &[Ty],
-        caller: FactsCtx<'_>,
-        cx: &mut impl SubstitutionCx,
-        budget: &PlanBudget,
-        depth: usize,
-    ) -> Result<Ty, String> {
-        budget.check_depth(depth)?;
-        budget.charge_work(1)?;
-        budget.charge_nodes(1)?;
-        Ok(match ty {
-            Ty::Param(param) => {
-                budget.charge_work(env.scopes().len())?;
-                if let Some(index) = env.argument_index(*param) {
-                    // Simultaneous substitution: caller arguments are rigid and
-                    // are never visited again under the callee environment.
-                    args.get(index)
-                        .ok_or("type parameter substitution index out of bounds")?
-                        .clone()
-                } else {
-                    if env
-                        .scopes()
-                        .iter()
-                        .any(|scope| scope.binder() == param.owner)
-                    {
-                        return Err("type parameter substitution index out of bounds".into());
-                    }
-                    caller.validate_ty_with_budget(ty, budget)?;
-                    Ty::Param(*param)
-                }
-            }
-            Ty::Tuple(fields) => {
-                budget.retain_bytes(
-                    fields
-                        .len()
-                        .checked_mul(std::mem::size_of::<Ty>())
-                        .ok_or("substitution size overflow")?,
-                )?;
-                Ty::Tuple(
-                    fields
-                        .iter()
-                        .map(|ty| walk(ty, env, args, caller, cx, budget, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                )
-            }
-            Ty::Array { element, len } => {
-                budget
-                    .retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
-                Ty::Array {
-                    element: Arc::new(walk(element, env, args, caller, cx, budget, depth + 1)?),
-                    len: *len,
-                }
-            }
-            Ty::Ref { kind, referent } => {
-                budget
-                    .retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
-                Ty::Ref {
-                    kind: *kind,
-                    referent: Arc::new(walk(referent, env, args, caller, cx, budget, depth + 1)?),
-                }
-            }
-            Ty::Struct(value) => {
-                let app = cx.nominal_application(value.def().id)?;
-                if app.type_args.len() > 32 {
-                    return Err("nominal argument limit exceeded".into());
-                }
-                let _scratch =
-                    budget.reserve_bytes(app.type_args.len() * std::mem::size_of::<Ty>())?;
-                let arguments = app
-                    .type_args
-                    .iter()
-                    .map(|ty| walk(ty, env, args, caller, cx, budget, depth + 1))
-                    .collect::<Result<Vec<_>, _>>()?;
-                cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
-            }
-            Ty::Enum(value) => {
-                let app = cx.nominal_application(value.def().id)?;
-                if app.type_args.len() > 32 {
-                    return Err("nominal argument limit exceeded".into());
-                }
-                let _scratch =
-                    budget.reserve_bytes(app.type_args.len() * std::mem::size_of::<Ty>())?;
-                let arguments = app
-                    .type_args
-                    .iter()
-                    .map(|ty| walk(ty, env, args, caller, cx, budget, depth + 1))
-                    .collect::<Result<Vec<_>, _>>()?;
-                cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
-            }
-            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
-        })
-    }
     if args.len() != env.total_arity() {
         return Err("generic argument arity mismatch".into());
     }
@@ -584,7 +489,185 @@ pub fn substitute_ty(
         caller.validate_ty_with_budget(argument, budget)?;
         reject_references(argument, budget)?;
     }
-    walk(ty, env, args, caller, cx, budget, 0)
+    substitute_ty_walk(ty, env, args, caller, cx, budget, 0)
+}
+
+/// Unsealed structural substitution for nonexecuting trait-item schemas only.
+/// The world must certify topology before publishing the resulting signature.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn substitute_schema_ty(
+    ty: &Ty,
+    env: &GenericEnv,
+    args: &[Ty],
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    registry: &dyn super::traits::SchemaCx,
+    budget: &PlanBudget,
+) -> Result<Ty, String> {
+    if !registry.budget().same_authority(budget) || args.len() != env.total_arity() {
+        return Err("schema substitution authority or arity mismatch".into());
+    }
+    budget.charge_work(env.scopes().len().saturating_mul(env.scopes().len() + 1))?;
+    let mut item_owner = None;
+    for scope in env.scopes() {
+        let declaration = registry
+            .declaration_info(scope.binder().declaration)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        if declaration.kind == DeclKind::TraitItem {
+            if item_owner.is_some() {
+                return Err("ambiguous trait-item schema environment".into());
+            }
+            let raw = registry
+                .declaration_schema(declaration.declaration)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            if raw.env.scopes().len() != env.scopes().len()
+                || !raw
+                    .env
+                    .scopes()
+                    .iter()
+                    .zip(env.scopes())
+                    .all(|(left, right)| {
+                        left.binder() == right.binder() && left.arity() == right.arity()
+                    })
+            {
+                return Err("trait-item schema environment mismatch".into());
+            }
+            item_owner = declaration.owner;
+        }
+    }
+    let trait_owner = item_owner.ok_or("schema substitution requires a trait-item environment")?;
+    for (parameter, argument) in env.ordered_params().zip(args) {
+        caller.validate_ty_with_budget(argument, budget)?;
+        let declaration = registry
+            .declaration_info(parameter.owner.declaration)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        let is_self = declaration.kind == DeclKind::Trait
+            && declaration.declaration == trait_owner
+            && declaration.own_env.binder() == parameter.owner
+            && declaration.own_env.contains(parameter)
+            && parameter.index == 0;
+        if is_self {
+            reference_layers(argument)?;
+            let mut inner = argument;
+            while let Ty::Ref { referent, .. } = inner {
+                budget.charge_work(1)?;
+                inner = referent;
+            }
+            reject_references(inner, budget)?;
+        } else {
+            reject_references(argument, budget)?;
+        }
+    }
+    substitute_ty_walk(ty, env, args, caller, cx, budget, 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn substitute_ty_walk(
+    ty: &Ty,
+    env: &GenericEnv,
+    args: &[Ty],
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    depth: usize,
+) -> Result<Ty, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    budget.charge_nodes(1)?;
+    Ok(match ty {
+        Ty::Param(param) => {
+            budget.charge_work(env.scopes().len())?;
+            if let Some(index) = env.argument_index(*param) {
+                // Simultaneous substitution: caller arguments are rigid and
+                // are never visited again under the callee environment.
+                args.get(index)
+                    .ok_or("type parameter substitution index out of bounds")?
+                    .clone()
+            } else {
+                if env
+                    .scopes()
+                    .iter()
+                    .any(|scope| scope.binder() == param.owner)
+                {
+                    return Err("type parameter substitution index out of bounds".into());
+                }
+                caller.validate_ty_with_budget(ty, budget)?;
+                Ty::Param(*param)
+            }
+        }
+        Ty::Tuple(fields) => {
+            budget.retain_bytes(
+                fields
+                    .len()
+                    .checked_mul(std::mem::size_of::<Ty>())
+                    .ok_or("substitution size overflow")?,
+            )?;
+            Ty::Tuple(
+                fields
+                    .iter()
+                    .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into(),
+            )
+        }
+        Ty::Array { element, len } => {
+            budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
+            Ty::Array {
+                element: Arc::new(substitute_ty_walk(
+                    element,
+                    env,
+                    args,
+                    caller,
+                    cx,
+                    budget,
+                    depth + 1,
+                )?),
+                len: *len,
+            }
+        }
+        Ty::Ref { kind, referent } => {
+            budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
+            Ty::Ref {
+                kind: *kind,
+                referent: Arc::new(substitute_ty_walk(
+                    referent,
+                    env,
+                    args,
+                    caller,
+                    cx,
+                    budget,
+                    depth + 1,
+                )?),
+            }
+        }
+        Ty::Struct(value) => {
+            let app = cx.nominal_application(value.def().id)?;
+            if app.type_args.len() > 32 {
+                return Err("nominal argument limit exceeded".into());
+            }
+            let _scratch = budget.reserve_bytes(app.type_args.len() * std::mem::size_of::<Ty>())?;
+            let arguments = app
+                .type_args
+                .iter()
+                .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
+                .collect::<Result<Vec<_>, _>>()?;
+            cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
+        }
+        Ty::Enum(value) => {
+            let app = cx.nominal_application(value.def().id)?;
+            if app.type_args.len() > 32 {
+                return Err("nominal argument limit exceeded".into());
+            }
+            let _scratch = budget.reserve_bytes(app.type_args.len() * std::mem::size_of::<Ty>())?;
+            let arguments = app
+                .type_args
+                .iter()
+                .map(|ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1))
+                .collect::<Result<Vec<_>, _>>()?;
+            cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
+        }
+        Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
+    })
 }
 
 /// Instantiate only a universally checked exact source, then lower the returned
@@ -1636,6 +1719,122 @@ pub struct ReferencePosition {
 pub struct InputReference {
     pub param: usize,
     pub position: ReferencePosition,
+}
+
+/// A latent reference-value channel belonging to one rigid type parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ParameterCarrier {
+    pub parameter: ParamId,
+    pub relative: ReferencePosition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InputCarrierTail {
+    pub param: usize,
+    pub prefix: u8,
+    pub parameter: ParamId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ResultCarrierTail {
+    pub prefix: u8,
+    pub parameter: ParamId,
+    pub inputs: Arc<[InputCarrierTail]>,
+}
+
+/// Data-only declaration schema. This does not authorize topology realization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureOriginSchema {
+    pub fixed: Arc<RefContract>,
+    pub input_tails: Arc<[InputCarrierTail]>,
+    pub result_tails: Arc<[ResultCarrierTail]>,
+}
+
+pub fn derive_signature_origin_schema(
+    signature: &Signature,
+    env: &GenericEnv,
+    budget: &PlanBudget,
+) -> Result<Arc<SignatureOriginSchema>, String> {
+    fn tail(
+        ty: &Ty,
+        env: &GenericEnv,
+        budget: &PlanBudget,
+    ) -> Result<Option<(u8, ParamId)>, String> {
+        let layers = reference_layers(ty)?;
+        let mut inner = ty;
+        for _ in 0..layers {
+            budget.charge_work(1)?;
+            let Ty::Ref { referent, .. } = inner else {
+                return Err("signature-origin reference prefix mismatch".into());
+            };
+            inner = referent;
+        }
+        budget.charge_work(1 + env.scopes().len())?;
+        if let Ty::Param(parameter) = inner {
+            if !env.contains(*parameter) {
+                return Err("signature-origin parameter is outside declaration environment".into());
+            }
+            Ok(Some((layers as u8, *parameter)))
+        } else {
+            Ok(None)
+        }
+    }
+    if signature.params.len() > MAX_LOAN_SITES {
+        return Err("signature-origin parameter limit exceeded".into());
+    }
+    let capacity = signature.params.len();
+    // Vec-to-Arc conversion and the result's filtered copy may coexist.
+    let storage = capacity
+        .checked_mul(3 * std::mem::size_of::<InputCarrierTail>())
+        .and_then(|bytes| {
+            bytes.checked_add(
+                std::mem::size_of::<SignatureOriginSchema>()
+                    + 2 * std::mem::size_of::<ResultCarrierTail>()
+                    + 12 * std::mem::size_of::<usize>(),
+            )
+        })
+        .ok_or("signature-origin storage overflow")?;
+    budget.retain_bytes(storage)?;
+    budget.charge_work(capacity)?;
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(capacity)
+        .map_err(|_| "signature-origin allocation failed")?;
+    for (param, ty) in signature.params.iter().enumerate() {
+        if let Some((prefix, parameter)) = tail(ty, env, budget)? {
+            inputs.push(InputCarrierTail {
+                param,
+                prefix,
+                parameter,
+            });
+        }
+    }
+    let results: Arc<[ResultCarrierTail]> =
+        if let Some((prefix, parameter)) = tail(&signature.result, env, budget)? {
+            budget.charge_work(inputs.len())?;
+            let mut matching = Vec::new();
+            matching
+                .try_reserve_exact(inputs.len())
+                .map_err(|_| "signature-origin allocation failed")?;
+            matching.extend(
+                inputs
+                    .iter()
+                    .copied()
+                    .filter(|input| input.parameter == parameter),
+            );
+            Arc::from([ResultCarrierTail {
+                prefix,
+                parameter,
+                inputs: matching.into(),
+            }])
+        } else {
+            Arc::from([])
+        };
+    Ok(Arc::new(SignatureOriginSchema {
+        fixed: signature.ref_contract.clone(),
+        input_tails: inputs.into(),
+        result_tails: results,
+    }))
 }
 
 /// Number of root reference-value layers, not memory projections.
@@ -4033,6 +4232,81 @@ mod tests {
     }
 
     #[test]
+    fn canonical_origin_tails_preserve_binders_prefixes_and_bounded_storage() {
+        let budget = PlanBudget::default();
+        let scope = Arc::new(
+            ParamEnv::new(
+                BinderId {
+                    declaration: test_decl(),
+                },
+                2,
+            )
+            .unwrap(),
+        );
+        let env = GenericEnv::new(std::slice::from_ref(&scope), &budget).unwrap();
+        let parameter = |index| ParamId {
+            owner: scope.binder(),
+            index,
+        };
+        let reference = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let fixed = Arc::new(RefContract::default());
+        let signature = Signature {
+            ref_contract: fixed.clone(),
+            params: vec![
+                reference(Ty::Param(parameter(0))),
+                Ty::Param(parameter(1)),
+                Ty::Param(parameter(0)),
+            ],
+            result: Ty::Param(parameter(0)),
+        };
+        let schema = derive_signature_origin_schema(&signature, &env, &budget).unwrap();
+        assert!(Arc::ptr_eq(&schema.fixed, &fixed));
+        assert_eq!(schema.input_tails.len(), 3);
+        assert_eq!(schema.input_tails[0].prefix, 1);
+        assert_eq!(schema.result_tails[0].prefix, 0);
+        assert_eq!(
+            schema.result_tails[0].inputs.as_ref(),
+            [schema.input_tails[0], schema.input_tails[2]]
+        );
+        assert_ne!(
+            schema.input_tails[0].parameter,
+            schema.input_tails[1].parameter
+        );
+        let mut nested = signature.clone();
+        nested.result = reference(reference(Ty::Param(parameter(1))));
+        let result = derive_signature_origin_schema(&nested, &env, &budget).unwrap();
+        assert_eq!(result.result_tails[0].prefix, 2);
+        assert_eq!(
+            result.result_tails[0].inputs.as_ref(),
+            [schema.input_tails[1]]
+        );
+        nested.result = Ty::Tuple(Arc::from([Ty::Param(parameter(0))]));
+        assert!(
+            derive_signature_origin_schema(&nested, &env, &budget)
+                .unwrap()
+                .result_tails
+                .is_empty()
+        );
+        nested.result = Ty::Param(ParamId {
+            owner: BinderId {
+                declaration: test_decl(),
+            },
+            index: 0,
+        });
+        assert!(derive_signature_origin_schema(&nested, &env, &budget).is_err());
+        nested.params = vec![Ty::Unit; MAX_LOAN_SITES + 1];
+        assert!(derive_signature_origin_schema(&nested, &env, &budget).is_err());
+        let tiny = PlanBudget::new(PlanLimits {
+            bytes: 0,
+            ..PlanLimits::default()
+        });
+        assert!(derive_signature_origin_schema(&signature, &env, &tiny).is_err());
+    }
+
+    #[test]
     fn associated_generic_environments_preserve_scope_authority_and_total_limits() {
         let budget = PlanBudget::default();
         let scope = |arity| {
@@ -4255,10 +4529,12 @@ mod tests {
         assert!(budget.check_depth(129).is_err());
     }
     fn test_decl() -> super::DeclId {
-        super::DeclId {
-            snapshot: super::SnapshotId::allocate().unwrap(),
-            index: 0,
-        }
+        super::super::traits::test_support::source_decl(
+            super::SnapshotId::allocate().unwrap(),
+            0,
+            &PlanBudget::default(),
+        )
+        .unwrap()
     }
     fn test_target() -> super::Callee {
         super::Callee::Direct(super::CallTarget {

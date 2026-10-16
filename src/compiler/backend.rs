@@ -3432,7 +3432,12 @@ mod tests {
         let snapshot = ir::SnapshotId::allocate().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
             id: ir::NominalAppId { snapshot, index: 0 },
-            source_decl: ir::DeclId { snapshot, index: 0 },
+            source_decl: super::super::traits::test_support::source_decl(
+                snapshot,
+                0,
+                &ir::PlanBudget::default(),
+            )
+            .unwrap(),
             type_args: [].into(),
             name: "Singleton".into(),
             module: String::new(),

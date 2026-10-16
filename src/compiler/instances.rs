@@ -1,9 +1,9 @@
 //! Snapshot-local instance planning with canonical, collision-free native symbols.
 //! Local declaration/application IDs are lookup handles, never persistent keys.
-use super::{frontend, ir};
+use super::{frontend, ir, traits};
 use std::sync::Arc;
 
-const SEMANTICS: &[u8] = b"jr-native-generic-references-v1/linux-x86_64/checked/two-phase";
+const SEMANTICS: &[u8] = b"jr-native-canonical-copy-v1/linux-x86_64/checked/schema-topology";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -52,6 +52,14 @@ impl Encoder<'_> {
     }
 
     fn declaration(&mut self, declaration: ir::DeclId) -> Result<(), String> {
+        match self.context.declaration_origin(declaration)? {
+            traits::DeclOrigin::Source => self.append(b"S")?,
+            traits::DeclOrigin::CoreCatalog { version, item } => {
+                self.append(b"C")?;
+                self.append(&version.to_le_bytes())?;
+                return self.catalog_item(item);
+            }
+        }
         let path = self.context.semantic_path(declaration)?;
         self.append(&[match path.kind {
             ir::DeclKind::Function => 0,
@@ -84,11 +92,10 @@ impl Encoder<'_> {
                 (Some(trait_decl), Some(trait_item)) => {
                     self.append(b"T")?;
                     self.declaration(trait_decl)?;
-                    let item = self.context.semantic_path(trait_item)?;
-                    if item.kind != ir::DeclKind::TraitItem {
+                    if self.context.declaration(trait_item)?.kind != ir::DeclKind::TraitItem {
                         return Err("trait instance key has non-item owner".into());
                     }
-                    self.text(&item.item)?;
+                    self.declaration(trait_item)?;
                 }
                 _ => return Err("trait instance key has incomplete semantic owner".into()),
             }
@@ -105,6 +112,46 @@ impl Encoder<'_> {
             }])
         } else {
             self.append(b"F")
+        }
+    }
+
+    fn catalog_item(&mut self, item: traits::CatalogItem) -> Result<(), String> {
+        // Explicit wire tags are independent from Rust enum layout and local IDs.
+        let tag = match item {
+            traits::CatalogItem::Sized => 0,
+            traits::CatalogItem::Clone => 1,
+            traits::CatalogItem::CloneItem => 2,
+            traits::CatalogItem::CloneFromItem => 3,
+            traits::CatalogItem::CloneFromDefault => 4,
+            traits::CatalogItem::Copy => 5,
+            traits::CatalogItem::Drop => 6,
+            traits::CatalogItem::DropItem => 7,
+            traits::CatalogItem::Recipe(descriptor) => {
+                self.append(&[8])?;
+                return self.recipe(descriptor);
+            }
+        };
+        self.append(&[tag])
+    }
+
+    fn recipe(&mut self, descriptor: traits::RecipeDescriptor) -> Result<(), String> {
+        match descriptor {
+            traits::RecipeDescriptor::CloneInt(integer) => {
+                self.append(&[0])?;
+                self.text(integer.name())
+            }
+            traits::RecipeDescriptor::CloneBool => self.append(&[1]),
+            traits::RecipeDescriptor::CloneUnit => self.append(&[2]),
+            traits::RecipeDescriptor::CloneNever => self.append(&[3]),
+            traits::RecipeDescriptor::CloneTuple { arity } => {
+                self.append(&[4])?;
+                self.count(usize::from(arity))
+            }
+            traits::RecipeDescriptor::CloneArray { len } => {
+                self.append(&[5])?;
+                self.count(usize::from(len))
+            }
+            traits::RecipeDescriptor::CloneSharedRef => self.append(&[6]),
         }
     }
 
@@ -158,9 +205,14 @@ impl Encoder<'_> {
                 }
                 Ok(())
             }
-            ir::Ty::Never | ir::Ty::Ref { .. } => {
-                Err("unsupported associated instance self pattern".into())
+            ir::Ty::Ref { kind, referent } => {
+                self.append(&[match kind {
+                    ir::BorrowKind::Shared => b'r',
+                    ir::BorrowKind::Mut => b'm',
+                }])?;
+                self.pattern(referent, env, depth + 1)
             }
+            ir::Ty::Never => Err("unsupported associated instance self pattern".into()),
         }
     }
 
@@ -473,7 +525,17 @@ pub(super) fn build(
     // are local slots only. Canonical identity never contains this ordering.
     for index in 0..context.callable_count() {
         let declaration = context.callable_decl(index)?;
-        if !context.callable_env(declaration)?.is_generic() {
+        let source = match context.callable_provider(declaration)? {
+            frontend::CallableProvider::Source { .. } => true,
+            frontend::CallableProvider::Recipe { .. } => false,
+            frontend::CallableProvider::UnavailableProvided { .. } => {
+                return Err(
+                    "unsupported: unavailable provided body in executable instance inventory"
+                        .into(),
+                );
+            }
+        };
+        if source && !context.callable_env(declaration)?.is_generic() {
             queue.add(
                 ir::CallTarget {
                     declaration,
@@ -574,6 +636,12 @@ mod tests {
             (0..context.callable_count())
                 .map(|index| context.callable_decl(index).unwrap())
                 .filter(|declaration| {
+                    if !matches!(
+                        context.callable_provider(*declaration).unwrap(),
+                        frontend::CallableProvider::Source { .. }
+                    ) {
+                        return false;
+                    }
                     let path = context.semantic_path(*declaration).unwrap();
                     path.associated.is_some() && path.item == name
                 })
@@ -620,6 +688,12 @@ mod tests {
             let mut result = Vec::new();
             for index in 0..context.callable_count() {
                 let declaration = context.callable_decl(index).unwrap();
+                if !matches!(
+                    context.callable_provider(declaration).unwrap(),
+                    frontend::CallableProvider::Source { .. }
+                ) {
+                    continue;
+                }
                 let path = context.semantic_path(declaration).unwrap();
                 if path.item == "item" && path.associated.is_some() {
                     result.push(
@@ -659,6 +733,12 @@ mod tests {
             let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
             let declaration = (0..context.callable_count())
                 .map(|index| context.callable_decl(index).unwrap())
+                .filter(|declaration| {
+                    matches!(
+                        context.callable_provider(*declaration).unwrap(),
+                        frontend::CallableProvider::Source { .. }
+                    )
+                })
                 .find(|declaration| context.semantic_path(*declaration).unwrap().item == "value")
                 .unwrap();
             identity(

@@ -10,8 +10,8 @@ use super::ownership::{Budget, Exhausted};
 use std::collections::VecDeque;
 use std::mem::size_of;
 
-const MAX_LOANS: usize = 4096;
-const MAX_MEMBERSHIPS: usize = 1_000_000;
+pub(super) const MAX_LOANS: usize = 4096;
+pub(super) const MAX_MEMBERSHIPS: usize = 1_000_000;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Phase {
@@ -463,6 +463,96 @@ fn overlap(a: &CanonicalPlace, b: &CanonicalPlace, budget: &mut Budget) -> Resul
     Ok(true)
 }
 
+/// The same checked accounting is used before recipe registration and before
+/// the real solver allocates. These are sizes, never evidence or permissions.
+pub(super) fn plan_metadata_bytes(locals: usize, blocks: usize) -> Result<usize, Exhausted> {
+    add(mul(locals, 96)?, mul(add(blocks, 1)?, 96)?)
+}
+
+pub(super) fn plan_storage_bytes(
+    locals: usize,
+    blocks: usize,
+    points: usize,
+    slots: usize,
+    origins: usize,
+) -> Result<usize, Exhausted> {
+    let metadata = plan_metadata_bytes(locals, blocks)?;
+    let origin_size = mul(slots, add(size_of::<Set>(), mul(origins.div_ceil(64), 8)?)?)?;
+    let live_size = add(size_of::<Set>(), mul(slots.div_ceil(64), 8)?)?;
+    let mut bytes = add(
+        metadata,
+        add(
+            mul(add(add(points, mul(blocks, 2)?)?, 2)?, origin_size)?,
+            mul(add(mul(points, 3)?, add(mul(blocks, 3)?, 4)?)?, live_size)?,
+        )?,
+    )?;
+    bytes = add(
+        bytes,
+        add(
+            mul(blocks, 256)?,
+            add(
+                mul(points, 128)?,
+                mul(locals, size_of::<[Option<usize>; 2]>())?,
+            )?,
+        )?,
+    )?;
+    bytes = add(
+        bytes,
+        mul(origins, add(256, mul(origins.div_ceil(64), 16)?)?)?,
+    )?;
+    let activation_size = add(size_of::<Set>(), mul(origins.div_ceil(64), 8)?)?;
+    bytes = add(
+        bytes,
+        add(
+            mul(add(points, add(mul(blocks, 4)?, 8)?)?, activation_size)?,
+            add(
+                mul(blocks, 4 * (size_of::<Vec<LoanId>>() + size_of::<usize>()))?,
+                mul(origins, 4 * (size_of::<LoanId>() + size_of::<usize>()))?,
+            )?,
+        )?,
+    )?;
+    bytes = add(bytes, mul(origins, 64)?)?;
+    add(
+        bytes,
+        2 * (size_of::<Target>() + 128 * size_of::<Projection>()),
+    )
+}
+
+pub(super) fn plan_initial_work(
+    blocks: usize,
+    points: usize,
+    slots: usize,
+    origins: usize,
+) -> Result<usize, Exhausted> {
+    add(
+        mul(add(points, blocks)?, mul(slots, origins.div_ceil(64))?)?,
+        mul(add(mul(points, 3)?, mul(blocks, 2)?)?, slots.div_ceil(64))?,
+    )
+}
+
+/// Counts allocation attempts, including deduplicated candidates. The factor of
+/// four retains the existing Vec-growth and simultaneous resolved/issued peak.
+pub(super) fn target_payload_bytes(
+    allocations: usize,
+    projection_steps: usize,
+    authority_entries: usize,
+    overhead_words: usize,
+) -> Result<usize, Exhausted> {
+    mul(
+        4,
+        add(
+            mul(allocations, size_of::<Target>())?,
+            add(
+                mul(
+                    add(projection_steps, mul(allocations, 128)?)?,
+                    size_of::<Projection>(),
+                )?,
+                mul(add(authority_entries, overhead_words)?, size_of::<usize>())?,
+            )?,
+        )?,
+    )
+}
+
 fn append_target(
     next: &mut Vec<Target>,
     target: &Target,
@@ -490,14 +580,7 @@ fn append_target(
         return Err(Exhausted);
     }
     budget.spend(path_len + target.authority.len() + 1)?;
-    let size = add(
-        size_of::<Target>(),
-        add(
-            mul(path_len + 128, size_of::<Projection>())?,
-            mul(target.authority.len() + 3, size_of::<usize>())?,
-        )?,
-    )?;
-    let added_bytes = mul(4, size)?;
+    let added_bytes = target_payload_bytes(1, path_len, target.authority.len(), 3)?;
     *bytes = add(*bytes, added_bytes)?;
     *memberships = add(*memberships, target.authority.len() + 2)?;
     if *bytes > max_bytes || *memberships > MAX_MEMBERSHIPS {
@@ -528,7 +611,7 @@ impl Plan {
         budget: &mut Budget,
         max_bytes: usize,
     ) -> Result<Self, Exhausted> {
-        let metadata_bytes = add(mul(f.locals.len(), 96)?, mul(f.blocks.len() + 1, 96)?)?;
+        let metadata_bytes = plan_metadata_bytes(f.locals.len(), f.blocks.len())?;
         if metadata_bytes > max_bytes {
             return Err(Exhausted);
         }
@@ -593,56 +676,13 @@ impl Plan {
             )?);
         }
         let p = *offsets.last().unwrap();
-        let origin_size = mul(r, add(size_of::<Set>(), mul(loans.div_ceil(64), 8)?)?)?;
-        let live_size = add(size_of::<Set>(), mul(r.div_ceil(64), 8)?)?;
-        // Peak includes solver entry states, point snapshots, scratch and sets
-        // used by the backward solver. Check before the dense products allocate.
-        let mut bytes = add(
-            metadata_bytes,
-            add(
-                mul(add(add(p, mul(b, 2)?)?, 2)?, origin_size)?,
-                mul(add(mul(p, 3)?, add(mul(b, 3)?, 4)?)?, live_size)?,
-            )?,
-        )?;
-        bytes = add(
-            bytes,
-            add(
-                mul(b, 256)?,
-                add(
-                    mul(p, 128)?,
-                    mul(f.locals.len(), size_of::<[Option<usize>; 2]>())?,
-                )?,
-            )?,
-        )?;
-        bytes = add(bytes, mul(loans, add(256, mul(loans.div_ceil(64), 16)?)?)?)?;
-        // Dense retained snapshots, entry states and masking/worklist scratch.
-        // Check the full point-by-loan product before allocating any of it.
-        let activation_size = add(size_of::<Set>(), mul(loans.div_ceil(64), 8)?)?;
-        bytes = add(
-            bytes,
-            add(
-                mul(add(p, add(mul(b, 4)?, 8)?)?, activation_size)?,
-                add(
-                    mul(b, 4 * (size_of::<Vec<LoanId>>() + size_of::<usize>()))?,
-                    mul(loans, 4 * (size_of::<LoanId>() + size_of::<usize>()))?,
-                )?,
-            )?,
-        )?;
-        // Reserve bounded access scratch alongside persistent targets. Two copies
-        // cover the caller's resolved targets while active-loan checks run.
-        bytes = add(bytes, mul(loans, 64)?)?;
-        bytes = add(
-            bytes,
-            2 * (size_of::<Target>() + 128 * size_of::<Projection>()),
-        )?;
+        // The same full dense/scratch accounting governs recipe admission.
+        let mut bytes = plan_storage_bytes(f.locals.len(), b, p, r, loans)?;
         if bytes > max_bytes {
             return Err(Exhausted);
         }
         budget.reserve_bytes(bytes - metadata_bytes)?;
-        budget.spend(add(
-            mul(add(p, b)?, mul(r, loans.div_ceil(64))?)?,
-            mul(add(mul(p, 3)?, mul(b, 2)?)?, r.div_ceil(64))?,
-        )?)?;
+        budget.spend(plan_initial_work(b, p, r, loans)?)?;
         let mut reachable = vec![false; b];
         let mut queue = VecDeque::from([f.entry.0]);
         reachable[f.entry.0] = true;
@@ -900,10 +940,7 @@ impl Plan {
         for (index, slot) in parameter_origins.iter().enumerate() {
             let row = f.loan_sites.len() + index;
             let old_bytes = bytes;
-            bytes = add(
-                bytes,
-                4 * (size_of::<Target>() + 128 * size_of::<Projection>() + 2 * size_of::<usize>()),
-            )?;
+            bytes = add(bytes, target_payload_bytes(1, 0, 0, 2)?)?;
             memberships = add(memberships, 2)?;
             if bytes > max_bytes || memberships > MAX_MEMBERSHIPS {
                 return Err(Exhausted);
@@ -952,25 +989,12 @@ impl Plan {
                             if path_len > 128 {
                                 return Err(Exhausted);
                             }
-                            let size = add(
-                                size_of::<Target>(),
-                                add(
-                                    mul(path_len, size_of::<Projection>())?,
-                                    mul(target.authority.len() + 1, size_of::<usize>())?,
-                                )?,
-                            )?;
-                            // Include Vec growth and peak resolved/issued clones,
-                            // allowing the longest legal projection at access time.
+                            // Include the same growth and resolved/issued peak
+                            // used by descriptor admission.
                             let old_bytes = bytes;
                             bytes = add(
                                 bytes,
-                                mul(
-                                    4,
-                                    add(
-                                        size,
-                                        128 * size_of::<Projection>() + 2 * size_of::<usize>(),
-                                    )?,
-                                )?,
+                                target_payload_bytes(1, path_len, target.authority.len(), 3)?,
                             )?;
                             memberships = add(memberships, target.authority.len() + 2)?;
                             if bytes > max_bytes || memberships > MAX_MEMBERSHIPS {
@@ -1009,15 +1033,7 @@ impl Plan {
                     let old_bytes = bytes;
                     bytes = add(
                         bytes,
-                        mul(
-                            4,
-                            add(
-                                size_of::<Target>()
-                                    + 128 * size_of::<Projection>()
-                                    + 2 * size_of::<usize>(),
-                                mul(site.place.projection.len(), size_of::<Projection>())?,
-                            )?,
-                        )?,
+                        target_payload_bytes(1, site.place.projection.len(), 0, 2)?,
                     )?;
                     memberships = add(memberships, 1)?;
                     if bytes > max_bytes || memberships > MAX_MEMBERSHIPS {

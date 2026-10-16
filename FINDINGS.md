@@ -9443,3 +9443,74 @@ Observed18,503,797ns total and5,032,414ns engine time are contended functional
 evidence, not a pinned before/after speed claim. The next canonical Copy/Clone
 client still requires explicit authority for reference-valued Self topology;
 this completed common nested-reference foundation does not claim that solved.
+
+## 2026-10-16: canonical Copy/Clone and declaration-bound carrier topology
+
+Implemented the frozen `CANONICAL-COPY.md` contract3970ddcd2. A trusted immutable
+catalog supplies canonical identities, logical rules and available callable
+providers. Local spellings do not grant permission. Copy uses the existing single
+world/env/phase/ledger obligation engine, with true supertrait closure and nominal
+field obligations. Explicit Move still consumes and initialization inspection is
+not a Copy query. Required Drop metadata is validated, Copy+Drop is invalid before
+otherwise-valid destructor-only execution reports Unsupported.
+
+The common signature-origin side table retains owner-qualified latent parameter
+tails. World-private topology certificates bind original declarations, ordered
+actuals, exact predicate-environment index and phase, hidden-region maps and
+realized positions. Known open `Self=&T` can retain an abstract TraitItem with a
+fixed inner-carrier contract. Opaque Self is not invented into a carrier, ordinary
+executable reference type actuals remain excluded, and coincident T/U actuals
+cannot create origin channels. Shared-reference Clone returns input position1,
+not a fabricated lifetime dependency on its temporary outer receiver.
+
+Available recipes are genuine checked bodies. Product Clone calls each child's
+Clone even when Copy holds. Every source body and available recipe, including
+zero-arity recipes, passes universal checking/lowering/analysis. Only demanded
+recipe instances enter the concrete frontier, and every concrete proof joins the
+existing publication barrier before any native object. Ordered receiver selection
+matches formal receiver types, applies the selected adjustment once, and preserves
+implicit mutable TwoPhase reborrows. Genuine returned mutable call carriers retain
+their once-evaluated value without a fake local/autoref.
+
+Recipe counting and emission share structural events and the actual solver sizing
+kernels. Intrinsic absolute limits retain logical-only shapes without poisoning
+unrelated source. Shared-ledger exhaustion remains a whole-plan error. Existing
+32-binder,4096-origin,1M-membership and128MiB state limits remain unchanged, with
+projection/authority/dependency payload, relocation and scratch accounting.
+
+Final verification on the ready source:
+- `cargo fmt --check` and `git diff --check` PASS.
+- Hosted all-target check20261016-102618402-2718796 PASS, no warnings.
+- Hosted full `justrust test --no-fail-fast`20261016-103427514-2803525:
+  **1453 passed,0failed,0ignored**,70 binaries. Observed1.620s wall is contended
+  functional evidence, not a speed comparison.
+- Hosted strict `clippy --all-targets -- -D warnings`
+  20261016-103542565-2818624 PASS. Exact three redacted profiles are retained in
+  `data/runs/prototype-bootstrap/2026-10-canonical-copy.jsonl`.
+- Frozen32 native worker1/8 BUILD/CHECK/runtime campaign PASS:
+  16accepted-parity,12semantic-invalid,4explicit-unsupported. Frozen observed
+  corpus SHA2563c3759705d094af4f4c53a53e8bcb3bc400da7e1d31a84e878f5e2708502b1d7
+  is unchanged. Tuple203/array405 manual-child Clone observations are retained.
+- Real formatted `examples/compiler/canonical_copy.rs` executes at96 workers,
+  exit0 and exact `canonical copy oracle ok\n`; complete61-node/136-edge graph,
+  zero failures/dropped events. Actual candidate binary SHA256
+  7f9c747f42323d92afc6809a38207bc407b4e66b93d560b83b215e520895213d.
+- Independent actual-source architecture and resource reviewers both STATIC CLEAR.
+  Their review is not represented as independent runtime execution.
+
+Two historical boundaries were promoted only after unchanged sources passed
+independent stock execution plus native workers1/8 BUILD/CHECK/runtime:
+`copy_bound_trait_dependency` sourceSHA42b36f8a8cb9d3f433258c71ae9205b49a8d1486f1bb0e864a30f3916e186ed4,
+`borrowed_receiver_and_Copy_bound` sourceSHA8e5659d9a873dff362565e49cd1755f0544f51b8c76c19f06ffe8b0ef58b2cc5.
+Only classification and Rust test expectations changed, not source/stdout bytes.
+Historical exact graph assertions now include actual registered recipe universal
+nodes, while source-function telemetry and physical source-only fixtures retain
+their intended scope. No assertions or source validity checks were removed.
+
+The original stock32 oracle and first zero-byte bin-rmeta STOP receipts remain
+preserved. The sole harness correction accepts an actual regular metadata-only
+artifact even when empty, not metadata-plus-link or repaired source. These stock
+receipts are distinct from the native acceptance above. No install, full-Rust
+compatibility or speedup claim is made. Destructor execution, general executable
+reference-valued parameters, deeper/mixed nested carriers, general default bodies,
+macros, core/alloc/std and existing-project acceptance remain open.

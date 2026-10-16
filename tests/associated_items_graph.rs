@@ -28,7 +28,13 @@ fn main(){if run()==7{println!("associated items oracle ok");}}
                     .report
                     .node_evaluations
                     .iter()
-                    .filter(|(key, _)| key.kind == 112)
+                    .filter(|(key, _)| {
+                        key.kind == 112
+                            && key
+                                .params
+                                .first()
+                                .is_some_and(|index| *index < compiled.functions as u64)
+                    })
                     .count(),
                 2
             );

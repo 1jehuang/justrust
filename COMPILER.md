@@ -58,7 +58,9 @@ while opaque operands cannot force numeric fallback. Partial type holes,
 future-use inference and unresolved nested omitted applications remain explicit
 boundaries. Every generic body, including unused declarations,
 receives universal type and move analysis with parameters treated as opaque
-non-Copy values. Demanded concrete instances substitute checked typed metadata,
+values. Copy permission requires an authoritative canonical Copy obligation,
+including declared bounds, rather than a parameter-layout assumption.
+Demanded concrete instances substitute checked typed metadata,
 then lower and analyze again before sealed native emission. Exact instance
 recursion is deduplicated, while growing instantiations fail boundedly. Generic
 signatures and bodies admit standalone shared/mutable reference carriers with
@@ -86,8 +88,10 @@ simultaneous substitution and one authoritative callable enumeration preserve
 universal validation of every unused associated body. Receiver selection matches
 impl parameters against rigid actual types, while a separate bounded overlap
 check rejects conflicting same-name items. Receiver and arguments are checked
-once in source order. Borrowed receivers support one bounded explicit adjustment
-and shared/mutable autoref of admitted places, not general trait autoderef.
+once in source order. Borrowed receivers use bounded ordered builtin-dereference
+and shared/mutable autoref candidates, matching the actual receiver formal before
+selecting an implementation. Selected adjustments execute once, with genuine
+mutable reborrows retaining the two-phase protocol, not general trait autoderef.
 Omitted method type arguments remain unsupported. See `ASSOCIATED-ITEMS.md` and
 `GENERIC-REFERENCES.md`.
 The associated checkpoint passes1318 hosted tests and988 independently verified
@@ -107,13 +111,27 @@ instances and reused nongeneric bodies, including dead metadata. Exact closed
 facts and successful ownership analysis remain prerequisites for native emission.
 The obligation engine uses one shared ledger, bounded memoization and
 operation-local cycle detection. Required declaration `Self` is not silently
-assumed Sized in executable code. Traits named `Copy` grant no Copy permission.
+assumed Sized in executable code. Local traits merely named `Copy` grant no Copy
+permission. Trusted canonical core/std identities now provide Sized, Clone, Copy
+and Drop declarations, with real supertrait closure and default Sized bounds on
+ordinary source parameters. Explicit nominal Copy implementations require Clone,
+all owned fields to be Copy, and no canonical Drop implementation. Primitive,
+product and shared-reference Copy evidence uses the same obligation engine.
 Borrowed required receivers and projected reference returns use canonical input
 envelopes and private implementation refinements, never invented opaque fields.
-Default bodies, trait or trait-method generics, supertraits, associated types,
-trait objects and standard-library trait integration
-remain explicit boundaries. See `TRAITS.md` for authority, resource limits and
-the fixed resource-exhaustion diagnostic transport exception.
+Canonical Clone recipes are genuine universally checked typed bodies. Tuple and
+array recipes call each child's Clone implementation, including observable manual
+Clone on Copy types. Shared-reference Clone loads the original inner carrier,
+with world-certified declaration-bound topology transport rather than a fresh
+contract derived from coincident concrete types. Every source body and admitted
+recipe passes universal gates, and demanded instances pass closed analysis before
+native publication. Logical Copy/Clone membership on two shared layers does not
+authorize a depth-three Clone receiver. A real source clone_from override runs
+normally, while its unavailable canonical default fails before instance admission.
+General default bodies, trait or trait-method generics, associated types, trait
+objects, destructor execution and full standard-library integration remain
+explicit boundaries. See `CANONICAL-COPY.md` for the catalog, topology, provider
+and resource contract, and `TRAITS.md` for the underlying obligation foundation.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and
@@ -223,11 +241,13 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 - Resolve paths, imports and visibility once, publishing canonical item identities.
 - Validate declarations, reject recursive by-value types and publish one immutable
   nominal type environment with callable signatures (operation 101).
-- Check every declaration body against authoritative signatures (operation 110).
-  Generic declarations lower universally (111) and pass the same move/dataflow
+- Check every source body and available registered recipe against authoritative
+  signatures (operation 110). Generic source bodies and every recipe, including
+  zero-arity recipes, lower universally (111) and pass the same move/dataflow
   solver (112), including unused declarations, before instance planning (113).
 - Seal a bounded deduplicated instance frontier seeded by every nongeneric
-  function. Concrete bodies (102) reuse nongeneric facts or instantiate verified
+  source function, with recipe instances admitted only on demand.
+  Concrete bodies (102) reuse nongeneric facts or instantiate verified
   typed templates, never source text. Calls and nominal applications use resolved
   declaration identities and ordered type arguments, not display names.
 - Lower each concrete checked instance once into an explicit control-flow graph
@@ -300,8 +320,9 @@ Joins and backedges use a worklist fixed point. Diagnostics are produced from
 converged reachable states, with block, statement, expression-origin and place
 provenance. Structural validation includes unreachable blocks. Resource exhaustion
 fails closed rather than publishing a successful analysis of partial work.
-Source-level named structs and enums are non-Copy, including scalar-only
-representations. Enum discriminant inspection does not grant Copy permission.
+Source-level named structs and enums are non-Copy unless an explicit canonical
+Copy implementation satisfies its field and supertrait obligations. Scalar-only
+representation and enum discriminant inspection do not grant Copy permission.
 Wildcard-only and singleton matches do not require a place read. Unreachable
 match arms still participate in ownership checks and post-match joins through
 constant-true CFG switches whose imaginary successor is analysis-reachable but

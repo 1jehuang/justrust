@@ -83,7 +83,7 @@ const CONCRETE_PROOFS: u32 = 114;
 enum Input {
     Text(String),
     File(PathBuf),
-    Program(frontend::Program),
+    Program(Arc<frontend::Program>),
 }
 struct DeclarationFacts {
     checked: OnceLock<Arc<ir::CheckedFunction>>,
@@ -127,7 +127,7 @@ struct Snapshot {
     reservations: std::sync::Mutex<Vec<ir::PlanReservation>>,
     source: OnceLock<source::LoadedSource>,
     parsed: OnceLock<frontend::ParsedProgram>,
-    program: OnceLock<frontend::Program>,
+    program: OnceLock<Arc<frontend::Program>>,
     types: OnceLock<frontend::PlanCtx>,
     declarations: OnceLock<Vec<DeclarationFacts>>,
     plan: OnceLock<instances::Plan>,
@@ -149,11 +149,53 @@ impl CompilerProvider {
             .map_err(|_| Error::new("generic frontier allocation limit exceeded"))?;
         Ok((values, reservation))
     }
-    fn program(&self) -> Result<&frontend::Program, Error> {
+    fn program(&self) -> Result<&Arc<frontend::Program>, Error> {
         self.0
             .program
             .get()
             .ok_or_else(|| Error::new("missing resolved program"))
+    }
+    fn universal_body(&self, declaration: ir::DeclId) -> Result<bool, Error> {
+        let context = self.types()?;
+        match context.callable_provider(declaration).map_err(Error::new)? {
+            frontend::CallableProvider::Source { .. } => Ok(context
+                .callable_env(declaration)
+                .map_err(Error::new)?
+                .is_generic()),
+            frontend::CallableProvider::Recipe { .. } => Ok(true),
+            frontend::CallableProvider::UnavailableProvided { .. } => Err(Error::new(
+                "unsupported: unavailable provided body in executable declaration inventory",
+            )),
+        }
+    }
+    fn symbolic_target(
+        &self,
+        declaration: ir::DeclId,
+        facts: &traits::ValidatedFacts,
+    ) -> Result<(ir::CallTarget, ir::PlanReservation), Error> {
+        let count = facts.env().total_arity();
+        let budget = &self.0.budget;
+        budget.charge_nodes(count).map_err(Error::new)?;
+        budget.charge_work(count).map_err(Error::new)?;
+        // Vec-to-Arc conversion retains both buffers at its allocation peak.
+        let bytes = count
+            .checked_mul(2 * std::mem::size_of::<ir::Ty>())
+            .and_then(|n| n.checked_add(2 * std::mem::size_of::<usize>()))
+            .ok_or_else(|| Error::new("symbolic callable target byte limit exceeded"))?;
+        let reservation = budget.reserve_bytes(bytes).map_err(Error::new)?;
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve_exact(count)
+            .map_err(|_| Error::new("symbolic callable target allocation limit exceeded"))?;
+        arguments.extend(facts.env().ordered_params().map(ir::Ty::Param));
+        budget.charge_work(count).map_err(Error::new)?;
+        Ok((
+            ir::CallTarget {
+                declaration,
+                type_args: arguments.into(),
+            },
+            reservation,
+        ))
     }
     fn types(&self) -> Result<&frontend::PlanCtx, Error> {
         self.0
@@ -237,20 +279,34 @@ impl Provider for CompilerProvider {
                     cx.read(cx.request(root(PARSE)).get(0)).await?;
                     let program = match &this.0.input {
                         Input::Program(program) => program.clone(),
-                        _ => frontend::resolve(
+                        _ => {
                             this.0
-                                .parsed
-                                .get()
-                                .ok_or_else(|| Error::new("missing parsed snapshot"))?,
-                        )
-                        .map_err(Error::new)?,
+                                .budget
+                                .retain_bytes(
+                                    std::mem::size_of::<frontend::Program>()
+                                        + 2 * std::mem::size_of::<usize>(),
+                                )
+                                .map_err(Error::new)?;
+                            Arc::new(
+                                frontend::resolve(
+                                    this.0
+                                        .parsed
+                                        .get()
+                                        .ok_or_else(|| Error::new("missing parsed snapshot"))?,
+                                )
+                                .map_err(Error::new)?,
+                            )
+                        }
                     };
                     publish(&this.0.program, program)?;
                 }
                 SIGNATURES => {
                     cx.read(cx.request(root(RESOLVE)).get(0)).await?;
-                    let context = frontend::PlanCtx::from_program(this.program()?, &this.0.budget)
-                        .map_err(Error::new)?;
+                    let context = frontend::PlanCtx::from_shared_program(
+                        this.program()?.clone(),
+                        &this.0.budget,
+                    )
+                    .map_err(Error::new)?;
                     let count = context.callable_count();
                     this.reserve(
                         count
@@ -275,13 +331,16 @@ impl Provider for CompilerProvider {
                     let slot = this.declaration(index)?;
                     if key.kind == TEMPLATE_BODY {
                         let declaration = this.types()?.callable_decl(index).map_err(Error::new)?;
-                        let checked = frontend::type_callable_with_plan(
-                            this.program()?,
-                            declaration,
-                            this.types()?,
-                            &this.0.budget,
-                        )
-                        .map_err(Error::new)?;
+                        let facts = this
+                            .types()?
+                            .callable_facts(declaration)
+                            .map_err(Error::new)?;
+                        let (target, _target_reservation) =
+                            this.symbolic_target(declaration, &facts)?;
+                        let checked = this
+                            .types()?
+                            .checked_body(&target, &facts, &this.0.budget)
+                            .map_err(Error::new)?;
                         publish(&slot.checked, Arc::new(checked))?;
                     } else if key.kind == UNIVERSAL_LOWER {
                         cx.read(cx.request(function(TEMPLATE_BODY, index)).get(0))
@@ -291,9 +350,9 @@ impl Provider for CompilerProvider {
                             .types()?
                             .callable_facts(declaration)
                             .map_err(Error::new)?;
-                        if !facts.env().is_generic() {
+                        if !this.universal_body(declaration)? {
                             return Err(Error::new(
-                                "universal lowering requires generic declaration",
+                                "universal lowering requires a generic source or registered recipe",
                             ));
                         }
                         let source = slot
@@ -343,12 +402,7 @@ impl Provider for CompilerProvider {
                     for index in 0..callable_count {
                         handles.push(cx.request(function(TEMPLATE_BODY, index)).get(0));
                         let declaration = this.types()?.callable_decl(index).map_err(Error::new)?;
-                        if this
-                            .types()?
-                            .callable_env(declaration)
-                            .map_err(Error::new)?
-                            .is_generic()
-                        {
+                        if this.universal_body(declaration)? {
                             handles.push(cx.request(function(UNIVERSAL_ANALYZE, index)).get(0));
                         }
                     }
@@ -671,13 +725,22 @@ fn retained_analyses(snapshot: &Snapshot) -> Vec<(usize, Arc<ownership::Analysis
 }
 
 fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compilation, Failure> {
+    compile_input_with_budget(input, workers, check_only, ir::PlanBudget::default())
+}
+
+fn compile_input_with_budget(
+    input: Input,
+    workers: usize,
+    check_only: bool,
+    budget: ir::PlanBudget,
+) -> Result<Compilation, Failure> {
     let snapshot = Arc::new(Snapshot {
         input,
         source: OnceLock::new(),
         parsed: OnceLock::new(),
         program: OnceLock::new(),
         types: OnceLock::new(),
-        budget: ir::PlanBudget::default(),
+        budget,
         reservations: std::sync::Mutex::new(Vec::new()),
         declarations: OnceLock::new(),
         plan: OnceLock::new(),
@@ -714,10 +777,37 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
             analyses: retained_analyses(&snapshot),
         });
     }
-    let functions = snapshot
-        .types
-        .get()
-        .map_or(0, frontend::PlanCtx::callable_count);
+    // Public source telemetry remains source-only. Registered recipe bodies are
+    // additional universal proof subjects, not newly discovered source functions.
+    let functions = (|| -> Result<usize, String> {
+        let Some(context) = snapshot.types.get() else {
+            return Ok(0);
+        };
+        snapshot.budget.charge_work(context.callable_count())?;
+        let mut count = 0usize;
+        for index in 0..context.callable_count() {
+            let declaration = context.callable_decl(index)?;
+            match context.callable_provider(declaration)? {
+                frontend::CallableProvider::Source { .. } => {
+                    count = count
+                        .checked_add(1)
+                        .ok_or("source callable count overflow")?;
+                }
+                frontend::CallableProvider::Recipe { .. } => {}
+                frontend::CallableProvider::UnavailableProvided { .. } => {
+                    return Err(
+                        "unsupported: unavailable provided body in source accounting".into(),
+                    );
+                }
+            }
+        }
+        Ok(count)
+    })()
+    .map_err(|message| Failure {
+        error: Error::new(message),
+        report: Some(Box::new(report.clone())),
+        analyses: retained_analyses(&snapshot),
+    })?;
     let executable = snapshot.executable.get().cloned();
     let (source_bytes, source_files) = match &snapshot.input {
         Input::Text(text) => (text.len(), 1),
@@ -789,7 +879,20 @@ pub(super) fn compile_program_observed(
     workers: usize,
     check_only: bool,
 ) -> Result<Compilation, Failure> {
-    compile_input(Input::Program(program), workers, check_only)
+    let budget = ir::PlanBudget::default();
+    budget
+        .retain_bytes(std::mem::size_of::<frontend::Program>() + 2 * std::mem::size_of::<usize>())
+        .map_err(|message| Failure {
+            error: Error::new(message),
+            report: None,
+            analyses: Vec::new(),
+        })?;
+    compile_input_with_budget(
+        Input::Program(Arc::new(program)),
+        workers,
+        check_only,
+        budget,
+    )
 }
 
 #[cfg(test)]

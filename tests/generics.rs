@@ -424,11 +424,11 @@ fn main(){run();}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_copy_bound_trait_dependency() {
-    rejects(
-        "legalunsupported: copy_bound_trait_dependency",
+fn runs_copy_bound_trait_dependency() {
+    runs(
         r#"fn dup<T:Copy>(x:T)->(T,T){(x,x)}fn run()->i32{let p=dup::<i32>(7);p.0}
 fn main(){if run()==7{println!("generic oracle ok");}}"#,
+        "generic oracle ok\n",
     );
 }
 

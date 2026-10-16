@@ -490,11 +490,11 @@ fn main(){if run()==7{println!("traits oracle ok");}}
 }
 
 #[test]
-fn rejects_legal_unsupported_borrowed_receiver_and_copy_bound() {
-    rejects(
-        "legalunsupported: borrowed_receiver_and_Copy_bound",
+fn runs_borrowed_receiver_and_copy_bound() {
+    runs(
         r###"struct S{x:i32}trait Read{fn read(&self)->i32;}impl Read for S{fn read(&self)->i32{self.x}}fn dup<T:Copy>(x:T)->(T,T){(x,x)}fn run()->i32{let s=S{x:3};let p=dup::<i32>(2);s.read()+p.0+p.1}
 fn main(){if run()==7{println!("traits oracle ok");}}
 "###,
+        "traits oracle ok\n",
     );
 }

@@ -221,7 +221,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "generic oracle ok\n",
     "full_source": "fn dup<T:Copy>(x:T)->(T,T){(x,x)}fn run()->i32{let p=dup::<i32>(7);p.0}\nfn main(){if run()==7{println!(\"generic oracle ok\");}}",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "copy_bound_trait_dependency",
     "source": "fn dup<T:Copy>(x:T)->(T,T){(x,x)}fn run()->i32{let p=dup::<i32>(7);p.0}"
   },

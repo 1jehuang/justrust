@@ -31,7 +31,13 @@ fn required_signatures_have_no_native_slots_and_conditional_calls_close_before_o
                     .report
                     .node_evaluations
                     .iter()
-                    .filter(|(key, _)| key.kind == 112)
+                    .filter(|(key, _)| {
+                        key.kind == 112
+                            && key
+                                .params
+                                .first()
+                                .is_some_and(|index| *index < compiled.functions as u64)
+                    })
                     .count(),
                 2
             );

@@ -3021,16 +3021,77 @@ mod tests {
     fn test_decl() -> ir::DeclId {
         static SNAPSHOT: std::sync::OnceLock<ir::SnapshotId> = std::sync::OnceLock::new();
         static INDEX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        ir::DeclId {
-            snapshot: *SNAPSHOT.get_or_init(|| ir::SnapshotId::allocate().unwrap()),
-            index: INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        }
+        super::super::traits::test_support::source_decl(
+            *SNAPSHOT.get_or_init(|| ir::SnapshotId::allocate().unwrap()),
+            INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            &ir::PlanBudget::default(),
+        )
+        .unwrap()
     }
     fn test_target() -> ir::Callee {
         ir::Callee::Direct(ir::CallTarget {
             declaration: test_decl(),
             type_args: std::sync::Arc::from([]),
         })
+    }
+
+    #[test]
+    fn canonical_copy_lowering_uses_exact_bounds_and_explicit_moves_still_consume() {
+        use super::super::frontend;
+        for (text, copy) in [
+            (
+                "fn dup<T:core::marker::Copy>(x:T)->(T,T){(x,x)} fn main(){}",
+                true,
+            ),
+            (
+                "trait Copy{} fn dup<T:Copy>(x:T)->(T,T){(x,x)} fn main(){}",
+                false,
+            ),
+        ] {
+            let program = frontend::parse(text).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.callable_decl(0).unwrap();
+            let source =
+                frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
+            let facts = plan.callable_facts(declaration).unwrap();
+            let template = lower_template(std::sync::Arc::new(source), facts, &budget).unwrap();
+            let parameter = template.function.params[0];
+            let copies = template
+                .function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter(|statement| {
+                    matches!(&statement.value, Statement::Assign {
+                    value: Rvalue::Use(Operand::Copy(place)), ..
+                } if place.local == parameter && place.projection.is_empty())
+                })
+                .count();
+            assert_eq!(copies, if copy { 2 } else { 0 });
+            assert_eq!(
+                super::super::ownership::verify_template(template.clone()).is_ok(),
+                copy
+            );
+            if copy {
+                let mut consuming = template;
+                for block in &mut std::sync::Arc::make_mut(&mut consuming.function).blocks {
+                    for statement in &mut block.statements {
+                        if let Statement::Assign {
+                            value: Rvalue::Use(operand),
+                            ..
+                        } = &mut statement.value
+                            && let Operand::Copy(place) = operand
+                            && place.local == parameter
+                            && place.projection.is_empty()
+                        {
+                            *operand = Operand::Move(place.clone());
+                        }
+                    }
+                }
+                assert!(super::super::ownership::verify_template(consuming).is_err());
+            }
+        }
     }
     use super::*;
     use std::collections::HashSet;
