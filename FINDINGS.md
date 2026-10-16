@@ -8382,3 +8382,15 @@ classification passed the unchanged 30-case corpus: 18 supported successful
 programs, eight invalid programs and four legal-unsupported boundaries.
 Reference returns, region contracts, aggregate references and full Rust remain
 open. No speedup or cold-build claim follows from these correctness gates.
+
+Tracked run `compiler-reference-calls-20261016-0805` built revision
+`a4ec0292010791c4f0a0738fed5976e1b58c96f7` and passed all 602 cases across
+fourteen corpora: 361 successful parity cases, 178 invalid rejections, nine
+declared runtime-101 traps and 54 explicit legal-unsupported boundaries.
+Independent parsing checked every summary and all 128 generated cases, including
+zero native/reference compile and runtime exits for each generated case. Raw
+receipts are retained as `experiments/results/20261016-m8a-reference-calls-*`.
+The 96-worker reference-call example executed successfully with complete capture,
+18 nodes, 23 edges and zero failures or dropped events. Its observed 11.364 ms
+total and 3.108 ms engine times are contended/uncontrolled observations, not a
+speedup or cold-build claim. Full Rust and escaping reference lifetimes remain open.

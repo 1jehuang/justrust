@@ -64,7 +64,10 @@ independent resource/soundness review pass. The unchanged 30-case stock corpus
 separates 18 successful, eight invalid and four legal-unsupported programs.
 Formal referent roots outlive carrier slots, and mutable calls invalidate all
 candidate referent proofs without inventing initialization. Tracked fourteen-
-corpus native differential verification remains the next delivery gate.
+corpus native verification passed all 602 cases: 361 successful parity cases,
+178 invalid rejections, nine declared runtime-101 traps and 54 explicit legal-
+unsupported boundaries. Raw receipts and the executed 96-worker example are
+retained under `experiments/results/20261016-m8a-reference-calls-*`.
 Reference returns and signature regions remain open under the read-only
 `REFERENCE-RETURNS.md` design checkpoint, not an implemented capability.
 

@@ -3,7 +3,9 @@
 Status: implemented with 748 hosted tests, strict all-target lint, formatting
 and independent source/resource review passing. The frozen 30-case stock corpus
 contains 18 successful programs, eight invalid programs and four explicit
-unsupported boundaries. Tracked native differential receipts are the next gate.
+unsupported boundaries. Tracked fourteen-corpus native verification passed all
+602 cases, with raw receipts retained under
+`experiments/results/20261016-m8a-reference-calls-*`.
 B1 is recorded in `BORROWING.md`. Full Rust and escaping lifetimes remain open.
 
 ## Scope
