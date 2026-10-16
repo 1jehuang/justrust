@@ -64,8 +64,11 @@ handle, candidate-specific authority and transitive lifetime dependencies. Norma
 returns prove universal provenance before consuming a mutable carrier. All 844
 hosted tests, strict all-target lint, formatting and both independent actual-code
 reviews pass. The exact 30-case stock corpus and four graph tests pass, including
-parent freeze/resume and failed unused-callee publication. Tracked sixteen-corpus
-native verification remains the delivery gate. Projected/mixed-kind results,
+parent freeze/resume and failed unused-callee publication. Tracked M8a run
+`compiler-mutable-reference-returns-20261016-0843` at `49a1ae343` passed all 662
+cases across sixteen corpora: 394 accepted, 196 invalid rejected, nine declared
+runtime-101 traps and 63 legal-unsupported boundaries. All raw receipts and the
+96-worker example are retained. Projected/mixed-kind results,
 general lifetime inference and full Rust remain open.
 
 Noescape reference parameters and expected-site reborrows are implemented under

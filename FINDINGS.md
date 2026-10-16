@@ -8491,3 +8491,20 @@ redacted profiles are retained in
 `data/runs/prototype-bootstrap/2026-10-mutable-reference-returns.jsonl`. Tracked
 sixteen-corpus native verification follows after commit. These are correctness
 gates, not speedup or cold-build claims.
+
+### B3b tracked native verification retained
+
+Tracked M8a run `compiler-mutable-reference-returns-20261016-0843` at exact
+revision `49a1ae343776c140aaf991ec9dafdc6766177101` passed all 662 cases across
+sixteen corpora: 394 accepted, 196 invalid rejected, nine declared runtime-101
+traps and 63 legal-unsupported boundaries. Independently parsed all fourteen
+summary receipts and all 128 generated scalar/loop records, requiring exact
+parity and zero compile/runtime exits for every generated case. The new mutable
+return corpus contributes exactly 16 accepted, ten invalid and four boundaries.
+
+All sixteen raw corpus receipts plus the native example observation are retained
+in `experiments/results/20261016-m8a-mutable-reference-returns-*.jsonl`. The
+96-worker example compiled and executed with exact expected stdout, complete
+event capture, 18 nodes, 23 edges, zero failures and zero dropped events. Observed
+14.815 ms total and 3.283 ms engine time are contended/uncontrolled measurements,
+not speedup claims. Full Rust and projected reference returns remain open.
