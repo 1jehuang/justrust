@@ -3,6 +3,7 @@ pub mod backend;
 pub mod cfg;
 pub mod frontend;
 pub mod ir;
+pub mod ownership;
 pub mod source;
 
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ const BUILD: u32 = 105;
 const RESOLVE: u32 = 106;
 const SOURCE: u32 = 107;
 const LOWER: u32 = 108;
+const ANALYZE: u32 = 109;
 
 enum Input {
     Text(String),
@@ -33,6 +35,7 @@ struct Snapshot {
     signatures: OnceLock<frontend::Signatures>,
     checked: OnceLock<Vec<OnceLock<ir::CheckedFunction>>>,
     lowered: OnceLock<Vec<OnceLock<Arc<cfg::Function>>>>,
+    analyses: OnceLock<Vec<OnceLock<Arc<ownership::Analysis>>>>,
     objects: OnceLock<Vec<OnceLock<backend::Object>>>,
     executable: OnceLock<Vec<u8>>,
 }
@@ -94,6 +97,14 @@ impl Provider for CompilerProvider {
                         .map(|_| OnceLock::new())
                         .collect();
                     this.0
+                        .analyses
+                        .set(
+                            (0..parsed.program.functions.len())
+                                .map(|_| OnceLock::new())
+                                .collect(),
+                        )
+                        .map_err(|_| Error::new("duplicate analysis arena"))?;
+                    this.0
                         .lowered
                         .set(lowered)
                         .map_err(|_| Error::new("duplicate CFG arena"))?;
@@ -132,7 +143,7 @@ impl Provider for CompilerProvider {
                         .set(signatures)
                         .map_err(|_| Error::new("duplicate signatures"))?;
                 }
-                BODY | LOWER | OBJECT => {
+                BODY | LOWER | ANALYZE | OBJECT => {
                     let [index] = key.params.as_slice() else {
                         return Err(Error::new("missing function index"));
                     };
@@ -168,7 +179,7 @@ impl Provider for CompilerProvider {
                             .and_then(OnceLock::get)
                             .ok_or_else(|| Error::new("missing checked function"))?;
                         let lowered = cfg::lower(item).map_err(Error::new)?;
-                        lowered.validate().map_err(Error::new)?;
+
                         this.0
                             .lowered
                             .get()
@@ -176,8 +187,35 @@ impl Provider for CompilerProvider {
                             .ok_or_else(|| Error::new("missing CFG slot"))?
                             .set(Arc::new(lowered))
                             .map_err(|_| Error::new("duplicate CFG fact"))?;
-                    } else {
+                    } else if key.kind == ANALYZE {
                         cx.read(cx.request(function(LOWER, index)).get(0)).await?;
+                        let item = this
+                            .0
+                            .lowered
+                            .get()
+                            .and_then(|v| v.get(index))
+                            .and_then(OnceLock::get)
+                            .ok_or_else(|| Error::new("missing CFG fact"))?;
+                        let analysis = Arc::new(ownership::analyze(item));
+                        let passed = analysis.passed();
+                        let diagnostics = (!passed).then(|| {
+                            format!(
+                                "{}: initialization/move analysis (complete={}): {:?}",
+                                item.name, analysis.complete, analysis.diagnostics
+                            )
+                        });
+                        this.0
+                            .analyses
+                            .get()
+                            .and_then(|v| v.get(index))
+                            .ok_or_else(|| Error::new("missing analysis slot"))?
+                            .set(analysis)
+                            .map_err(|_| Error::new("duplicate analysis fact"))?;
+                        if let Some(diagnostics) = diagnostics {
+                            return Err(Error::new(diagnostics));
+                        }
+                    } else {
+                        cx.read(cx.request(function(ANALYZE, index)).get(0)).await?;
                         let item = this
                             .0
                             .lowered
@@ -199,7 +237,7 @@ impl Provider for CompilerProvider {
                     cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
                     let program = this.program()?;
                     // Expose the entire independent function frontier before awaiting.
-                    let kind = if key.kind == BUILD { OBJECT } else { LOWER };
+                    let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
                     let inputs: Vec<_> = (0..program.functions.len())
                         .map(|i| cx.request(function(kind, i)).get(0))
                         .collect();
@@ -247,6 +285,8 @@ pub struct Compilation {
     pub cfg_locals: usize,
     /// Shared CFG facts retained for post-build graph/provenance inspection.
     pub control_flow: Vec<Arc<cfg::Function>>,
+    /// Per-function immutable initialization/move analysis facts.
+    pub analyses: Vec<Arc<ownership::Analysis>>,
     /// Bytes read from all source files, before external-module expansion.
     pub source_bytes: usize,
     pub source_files: usize,
@@ -259,6 +299,8 @@ pub struct Compilation {
 pub struct Failure {
     pub error: Error,
     pub report: Option<Box<Report>>,
+    /// Completed analysis facts paired with their original function indices.
+    pub analyses: Vec<(usize, Arc<ownership::Analysis>)>,
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -290,6 +332,17 @@ pub fn compile_file_observed(
     compile_input(Input::File(path), workers, check_only)
 }
 
+fn retained_analyses(snapshot: &Snapshot) -> Vec<(usize, Arc<ownership::Analysis>)> {
+    snapshot
+        .analyses
+        .get()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, slot)| slot.get().map(|analysis| (index, analysis.clone())))
+        .collect()
+}
+
 fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compilation, Failure> {
     let snapshot = Arc::new(Snapshot {
         input,
@@ -299,6 +352,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         signatures: OnceLock::new(),
         checked: OnceLock::new(),
         lowered: OnceLock::new(),
+        analyses: OnceLock::new(),
         objects: OnceLock::new(),
         executable: OnceLock::new(),
     });
@@ -308,6 +362,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
     let report = engine.run(workers).map_err(|error| Failure {
         error,
         report: None,
+        analyses: Vec::new(),
     })?;
     let outcome = (|| -> Result<(), Error> {
         check.completion()?;
@@ -328,6 +383,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         return Err(Failure {
             error,
             report: Some(Box::new(report)),
+            analyses: retained_analyses(&snapshot),
         });
     }
     let functions = snapshot.program.get().map_or(0, |p| p.functions.len());
@@ -338,6 +394,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
             let loaded = snapshot.source.get().ok_or_else(|| Failure {
                 error: Error::new("missing loaded source accounting"),
                 report: Some(Box::new(report.clone())),
+                analyses: retained_analyses(&snapshot),
             })?;
             (loaded.source_bytes, loaded.files)
         }
@@ -373,6 +430,14 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         cfg_blocks,
         cfg_edges,
         cfg_locals,
+        analyses: snapshot
+            .analyses
+            .get()
+            .into_iter()
+            .flatten()
+            .filter_map(OnceLock::get)
+            .cloned()
+            .collect(),
         control_flow,
         source_bytes,
         source_files,

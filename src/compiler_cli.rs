@@ -79,6 +79,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => {
             if let Some(file) = &mut trace_file {
                 writeln!(file, "compilation failed: {error}")?;
+                writeln!(file, "initialization/move analyses: {:#?}", error.analyses)?;
                 if let Some(report) = &error.report {
                     writeln!(file, "{report:#?}")?;
                 }
@@ -110,9 +111,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(file) = &mut trace_file {
         writeln!(file, "{report:#?}")?;
         writeln!(file, "control-flow graphs: {:#?}", compiled.control_flow)?;
+        writeln!(
+            file,
+            "initialization/move analyses: {:#?}",
+            compiled.analyses
+        )?;
     }
+    let analysis_worklist_pops: usize = compiled
+        .analyses
+        .iter()
+        .map(|a| a.stats.worklist_pops)
+        .sum();
+    let analysis_move_paths: usize = compiled.analyses.iter().map(|a| a.stats.move_paths).sum();
+    let analysis_moves: usize = compiled.analyses.iter().map(|a| a.stats.moves).sum();
     println!(
-        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
+        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"analysis_worklist_pops\":{analysis_worklist_pops},\"analysis_move_paths\":{analysis_move_paths},\"analysis_moves\":{analysis_moves},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
         if check { "check" } else { "build" },
         compiled.functions,
         compiled.cfg_blocks,

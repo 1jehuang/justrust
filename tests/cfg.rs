@@ -521,6 +521,26 @@ fn cfg_native_emission_preserves_order_snapshots_recursion_and_control_edges() {
                     assert_eq!(result.cfg_edges, cfg_edges);
                     assert_eq!(result.cfg_locals, cfg_locals);
                     assert_eq!(result.control_flow.len(), functions.len());
+                    assert_eq!(result.analyses.len(), result.functions);
+                    assert!(result.analyses.iter().all(|analysis| analysis.passed()));
+                    let analyses = result
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == 109)
+                        .collect::<Vec<_>>();
+                    assert_eq!(analyses.len(), result.functions);
+                    for index in 0..result.functions {
+                        let key = justrust_engine::Key::new(109, vec![index as u64]);
+                        assert_eq!(
+                            analyses
+                                .iter()
+                                .filter(|(seen, count)| *seen == key && *count == 1)
+                                .count(),
+                            1,
+                            "analysis must run exactly once for {key:?}"
+                        );
+                    }
                     assert_eq!(
                         result
                             .control_flow
@@ -599,13 +619,38 @@ fn cfg_cli_graph_trace_is_explicit_and_normal_output_remains_json() {
                             "CLI stdout must remain one JSON object: {stdout}"
                         );
                         assert_eq!(stdout.lines().count(), 1);
-                        for field in ["\"cfg_blocks\":", "\"cfg_edges\":", "\"cfg_locals\":"] {
+                        for field in [
+                            "\"cfg_blocks\":",
+                            "\"cfg_edges\":",
+                            "\"cfg_locals\":",
+                            "\"analysis_worklist_pops\":",
+                            "\"analysis_move_paths\":",
+                            "\"analysis_moves\":",
+                        ] {
                             assert!(
                                 stdout.contains(field),
                                 "missing CFG telemetry {field}: {stdout}"
                             );
                         }
-                        for full_graph in ["control-flow graphs:", "BlockId(", "origin:"] {
+                        for field in ["analysis_worklist_pops", "analysis_move_paths"] {
+                            let prefix = format!("\"{field}\":");
+                            let value = stdout
+                                .split_once(&prefix)
+                                .unwrap()
+                                .1
+                                .split([',', '}'])
+                                .next()
+                                .unwrap()
+                                .parse::<usize>()
+                                .unwrap();
+                            assert!(value > 0, "missing analysis work for {field}: {stdout}");
+                        }
+                        for full_graph in [
+                            "control-flow graphs:",
+                            "initialization/move analyses:",
+                            "BlockId(",
+                            "origin:",
+                        ] {
                             assert!(
                                 !stdout.contains(full_graph),
                                 "implicit graph dump on stdout"
@@ -616,6 +661,7 @@ fn cfg_cli_graph_trace_is_explicit_and_normal_output_remains_json() {
                             let text = fs::read_to_string(&trace).unwrap();
                             for required in [
                                 "control-flow graphs:",
+                                "initialization/move analyses:",
                                 "helper",
                                 "main",
                                 "BlockId(",

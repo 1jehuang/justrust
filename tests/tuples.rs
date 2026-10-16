@@ -446,6 +446,8 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
             for check in [true, false] {
                 let result = compiler::compile(source.to_owned(), workers, check).unwrap();
                 assert_eq!(result.functions, 3);
+                assert_eq!(result.analyses.len(), result.functions);
+                assert!(result.analyses.iter().all(|analysis| analysis.passed()));
                 assert_eq!(result.executable.is_none(), check);
                 let report = result.report;
                 assert!(report.capture_complete);
@@ -460,6 +462,7 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                 for index in 0..3 {
                     expected.push(Key::new(102, vec![index]));
                     expected.push(Key::new(108, vec![index]));
+                    expected.push(Key::new(109, vec![index]));
                     if !check {
                         expected.push(Key::new(103, vec![index]));
                     }

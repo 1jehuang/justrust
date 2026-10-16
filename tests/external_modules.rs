@@ -415,6 +415,8 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     files.iter().map(|(_, text)| text.len()).sum::<usize>()
                 );
                 assert_eq!(result.source_files, files.len());
+                assert_eq!(result.analyses.len(), result.functions);
+                assert!(result.analyses.iter().all(|analysis| analysis.passed()));
                 assert_eq!(result.executable.is_none(), check);
                 assert!(result.report.capture_complete);
                 assert_eq!(result.report.events_dropped, 0);
@@ -438,6 +440,7 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                 for index in 0..2 {
                     expected.push(Key::new(102, vec![index]));
                     expected.push(Key::new(108, vec![index]));
+                    expected.push(Key::new(109, vec![index]));
                     if !check {
                         expected.push(Key::new(103, vec![index]));
                     }

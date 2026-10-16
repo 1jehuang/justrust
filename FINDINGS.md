@@ -1,5 +1,36 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Cached initialization and move-path analysis gates native emission
+
+Per-function operation 109 now consumes the immutable CFG from operation 108.
+Check and object generation both require its successful analysis fact, so neither
+root repeats the fixed point or bypasses a rejection. Completed analyses remain
+available after success and failure, with original function indices on partial
+failures. CLI JSON reports move paths, worklist pops and static move operations,
+and explicit traces retain analysis reports and diagnostic provenance.
+
+The dataflow model tracks must/may live storage, must/may initialized move paths,
+aggregate shallow initialization and immutable assignment history. Whole moves,
+partial moves, ancestor requirements, source-order operand consumption and new
+storage lifetimes have separate transfer rules. Diagnostics are emitted only
+from converged reachable states; structural checks include unreachable blocks.
+This remains an internal foundation, not a borrow checker or new source syntax.
+All currently admitted source types are still Copy.
+
+Independent acceptance adds 25 tests, including a 32-program concrete-path oracle,
+and six private resource/bitset regressions. Review found and bounded repeated
+large-type comparisons before structural validation. Block/local/path/state,
+operation/work and diagnostic limits fail closed. Exhaustion in the final
+replay pass is tested separately from solver exhaustion. Bit operations are
+checked across every interval through 131 bits, including empty ranges and word
+boundaries. No speedup is claimed from adding this correctness gate.
+
+Hosted check `20261015-223750587-1164403`, all 209 tests
+`20261015-223820066-1171340` and strict all-target Clippy
+`20261015-223824005-1172230` passed. Profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-analysis.jsonl`. Real source-to-ELF
+regression validation on the dedicated M8a follows this implementation commit.
+
 ## 2026-10-15: Cached explicit control-flow facts replace structured native lowering
 
 Revision `38da4ff44300d78a584219fa85ed58c9b57e72d1` introduces per-function

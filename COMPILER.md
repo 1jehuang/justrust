@@ -67,7 +67,10 @@ implemented boundary. Semantic coverage must be expanded explicitly.
   publishing an immutable typed-function fact (operation 102).
 - Lower each checked function once into an explicit control-flow graph
   (operation 108), with ordered value snapshots, branches, loop edges and calls.
-  Verify its structural invariants before publishing it to either root.
+  Publishing the CFG does not imply it passed initialization analysis.
+- Analyze each CFG once (operation 109), validating structure and running bounded
+  definite-initialization, storage-lifetime and move-path dataflow to a fixed point.
+  Both check and emission require this successful immutable analysis fact.
 - Emit each function from that exact cached CFG fact without repeating lowering
   or waiting for other bodies.
 - Link emitted functions and resolve relocations into one executable.
@@ -77,8 +80,9 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 Recursive calls depend on declarations, not completion of the callee body.
 All independent function prerequisites are demanded before awaiting results.
 Within one graph, concurrent check and build requests share parsing, resolution,
-declarations, body checks and per-function CFG lowering. Check demands the same
-validated CFG facts as native codegen, without demanding objects or linking.
+declarations, body checks, per-function CFG lowering and initialization analysis.
+Check demands the same successful analysis facts as native codegen, without
+demanding objects or linking.
 Output facts contain typed-arena handles because
 the prototype runtime currently stores u64 slots. Arenas remain owned by the
 compilation snapshot and are not persistent cache keys.
@@ -99,9 +103,8 @@ Explicit unreachable tails retain their actual type and are still checked. Pure
 never operands to nonlogical binary operators currently receive an explicit
 unsupported diagnostic. This deliberately includes some legal stock comparisons
 pending integer/operator inference, rather than accepting invalid programs.
-`break`/`continue` targets are resolved loop IDs. Native abrupt edges restore the
-exact temporary-stack depth for the target, preserving enclosing expression
-values and discarding abandoned operands/arguments. A direct break/continue in
+`break`/`continue` targets are resolved loop IDs. CFG edges preserve enclosing
+expression snapshots and end exited storage lifetimes. A direct break/continue in
 its own while condition is rejected, while a nested loop has its own target.
 
 
@@ -113,6 +116,23 @@ operations. These are explicit implementation limitations, not architectural
 claims that all
 Rust parsing or linking must be serialized. Per-function checking/codegen is a
 starting granularity, not proof of optimal units. No cross-build cache exists.
+
+## Initialization and move-analysis boundary
+
+Analysis tracks per-local storage state and per-place initialization, including
+aggregate shallow-initialization markers. Whole moves invalidate an entire value,
+while a field move leaves its initialized ancestors intact. This permits mutable
+field reinitialization after a partial move without permitting field writes into
+an entirely uninitialized or whole-moved aggregate. Immutable initialization
+history survives moves and resets only at a new storage lifetime.
+
+Joins and backedges use a worklist fixed point. Diagnostics are produced from
+converged reachable states, with block, statement, expression-origin and place
+provenance. Structural validation includes unreachable blocks. Resource exhaustion
+fails closed rather than publishing a successful analysis of partial work.
+Current source values remain Copy. Explicit CFG Move operations exercise the
+analysis foundation, not new source-level non-Copy support. This is not loan,
+reference, lifetime, destructor or borrow checking.
 
 ## Aggregate implementation boundary
 
@@ -160,6 +180,9 @@ Use the resulting binary on the machine holding that build artifact:
 `cfg_blocks`, `cfg_edges` and `cfg_locals` count explicit control-flow work,
 separately from scheduling dependency `nodes` and `edges`. Counts include retained
 blocks and generated temporary locals, not just source declarations.
+`analysis_worklist_pops`, `analysis_move_paths` and `analysis_moves` describe
+initialization-analysis work. These are not elapsed-time or speedup claims.
+Successful traces retain the immutable analysis reports as well as the CFGs.
 The compiler prints a JSON accounting summary, not the program's output.
 Execute the emitted ELF separately. `--trace NEW_TRACE` writes the full Debug
 report, including failure events on rejected compilations. Trace creation occurs

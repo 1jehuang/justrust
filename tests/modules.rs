@@ -511,6 +511,8 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
             for check_only in [true, false] {
                 let result = compiler::compile(source.to_owned(), workers, check_only).unwrap();
                 assert_eq!(result.functions, 3);
+                assert_eq!(result.analyses.len(), result.functions);
+                assert!(result.analyses.iter().all(|analysis| analysis.passed()));
                 assert_eq!(result.executable.is_none(), check_only);
                 let report = result.report;
                 assert!(report.capture_complete);
@@ -525,6 +527,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                 for index in 0..3 {
                     expected.push(Key::new(102, vec![index]));
                     expected.push(Key::new(108, vec![index]));
+                    expected.push(Key::new(109, vec![index]));
                     if !check_only {
                         expected.push(Key::new(103, vec![index]));
                     }
