@@ -27,8 +27,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Noescape reference parameters and genuine expected-site carrier reborrows.
 - [x] Shared/mutable static input-path returns with explicit or elided regions.
 - [x] Builtin reference field projections and capability-sensitive mixed inputs.
-- [x] Explicit reference-free generic templates with universal move checking,
+- [x] Reference-free generic templates with universal move checking,
       application-qualified nominal identity and sealed concrete native instances.
+- [x] Bounded first-order omitted call/constructor arguments with deferred integer
+      evidence, rigid caller parameters and fallible no-fallback peer hints.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -64,11 +66,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active work and evidence limits
 
-The full requested outcome is not reached. The generic foundation passes 1,235
-hosted tests, strict all-target lint, its 28 exact source cases and four
-instance/trust graph tests. The tracked 26-corpus independent campaign verifies
-928 native cases on revision 714a034d90d308e635fd17bbfb6cef653288a96d, including
-the distinct bounded-instantiation resource outcome. There is no successful
+The full requested outcome is not reached. Bounded generic inference passes 1,270
+hosted tests, strict all-target lint, its unchanged 28 exact source cases and four
+instance/trust graph tests. One historical generic-enum source is promoted only
+after unchanged stock/native runtime parity. The prior tracked 26-corpus campaign
+verifies 928 native cases on revision 714a034d90d308e635fd17bbfb6cef653288a96d,
+including the distinct bounded-instantiation resource outcome. The expanded
+independent inference campaign is still pending. There is no successful
 core/alloc/std build, broad existing-project acceptance or representative full-Rust
 performance comparison. INTEGER-TYPES.md now records delivered signed/unsigned
 primitives through64 bits, typed literals/patterns and existing checked operations.
@@ -77,12 +81,28 @@ four graph tests, with soft source inference grounded in primary semantics.
 The tracked22corpus native campaign verifies all816cases.
 Additional operators remain separate follow-through work.
 Full Rust completion remains the goal, not this bounded milestone.
-Integer128, floats, generic inference/traits/methods, Drop,
+Integer128, floats, broader inference/traits/methods, Drop,
 reference-containing values, libraries and project integration remain open.
 
 ## Delivered milestones, newest first
 
 Numbers below are evidence at each checkpoint, not cumulative full-Rust coverage.
+
+### Bounded first-order generic inference
+
+Frontend-only inference now resolves fully omitted call/constructor arguments
+from hard expected types and bounded known evidence, with schema-only slots and
+rigid caller types even during same-binder recursion. Partial product evidence
+retains opaque/numeric leaves privately, defers fallback until all constraints
+and never lets unknown evidence force a default. Fallible no-fallback peer hints
+are not committed solutions. The ordinary checker still elaborates each child
+exactly once in source order before unchanged universal/concrete trust gates.
+All 1,270 hosted tests, strict all-target lint and formatting pass. The exact28
+frozen source corpus and four graph gates pass, and the real eight-worker native
+example executes successfully. Actual reviews closed schema scratch ordering
+and constructor lookup-work gaps. No generic references, partial type holes,
+global future-use inference, unresolved nested omission or full Rust claim is
+introduced. See GENERIC-INFERENCE.md and its retained validation profiles.
 Earlier boundary statements describe that historical slice; the newest contracts
 and the remaining implementation checklist determine current support.
 

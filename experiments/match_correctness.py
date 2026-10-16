@@ -377,7 +377,7 @@ FIXTURES = json.loads(r'''
     "expected_stdout": "match oracle ok\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "generic_enum",
     "source": "enum E<T>{A(T)} fn run()->i32{match E::A(3){E::A(n)=>n}}",
     "expected": 3,

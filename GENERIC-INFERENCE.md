@@ -196,3 +196,19 @@ observed correction. Stock runtime at the unconstrained local site alone is not
 proof of its inferred fallback type, which also needs a checked-type regression.
 The cast contrast `id(256) as u8` executes as0, consistent with primary call
 expectation guidance using only hard expected types, not CastableToType.
+
+## Delivered acceptance checkpoint
+
+The frontend-only implementation passes all 1,270 hosted tests, including the
+unchanged exact28 corpus, four graph groups and three focused frontend groups.
+Both independent actual-source reviewers cleared the corrected implementation.
+The existing deep-parser and 120-cast resource gates remain unchanged. Final
+check/test/strict all-target lint runs are 20261016-052541976-266990,
+20261016-052542583-267149 and 20261016-052543995-266808, retained in
+`data/runs/prototype-bootstrap/2026-10-generic-inference.jsonl`.
+
+The actual eight-worker native example executes with exact expected stdout. One
+historical generic-enum match fixture is promoted after unchanged-source stock
+and native workers1/8 runtime parity, not rewritten to fit the implementation.
+The expanded independent whole-corpus campaign remains a separate pending gate.
+No full Rust completion or compile-speed improvement is claimed.

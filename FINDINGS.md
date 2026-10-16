@@ -9023,3 +9023,35 @@ The refreshed running-instance address succeeded without bypassing metering or
 isolation. Timings are contended/uncontrolled functional evidence, not a
 speedup claim or full Rust completion. Generic inference, traits, references in
 generic values, Drop, full libraries and existing-project acceptance remain open.
+
+### Bounded generic inference native checkpoint
+
+The frontend-only implementation under GENERIC-INFERENCE.md now passes the
+unchanged exact28 stock-classified cases (16 positive, eight invalid and four
+legal excluded forms), four instance/trust graph groups and 1,270 hosted tests.
+Hard expected results and known operands constrain only current-callee schema
+slots, with rigid caller evidence, deferred integer leaves, opaque taint and
+fallible no-fallback hints. Normal source children are checked once after
+canonical instantiation. No shared IR or native ABI changed.
+
+Final hosted runs are check 20261016-052541976-266990, test
+20261016-052542583-267149 (1,270 passed) and strict all-target lint
+20261016-052543995-266808. Formatting and diff checks pass on the frozen source.
+The actual eight-worker example emits a native ELF and prints exactly
+`generic inference compiled correctly`. Its complete capture has 49 nodes and
+101 edges, 60 CFG blocks, 65 CFG edges, 137 locals and zero failures/drops.
+
+One historical match generic-enum fixture is promoted without changing source
+bytes or expected stdout, only after independent stock/native workers1/8 BUILD,
+CHECK and actual runtime parity. Source SHA256 is
+`f6ca9e44074dbcc61adbc1267fb259547397371c521d9bf30eb3a6dccedb928e`.
+The new corpus source/hash parity is checked independently against artifact
+`fdd1a268685f4eba121b10d7e354b93ef7375fb7b0fa06639702e0a49c6df845`.
+
+Actual reviews closed scratch reservation ordering and unmetered quadratic
+constructor name-lookup work. The two initial frozen non-Copy positives exposed
+missing nongeneric-constructor evidence, fixed by reading its authoritative
+rigid result without checking fields twice or changing the frozen sources.
+All owners and reviewers cleared the corrected patch. The independent expanded
+whole-corpus campaign is pending. No experimental stable installation, compiler
+delegation, measured speedup or full Rust completion is claimed.

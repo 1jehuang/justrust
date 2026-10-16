@@ -3287,6 +3287,37 @@ impl PlanCtx {
         )?;
         Ok(schema.clone())
     }
+    pub fn nominal_schema(
+        &self,
+        decl: ir::DeclId,
+        budget: &ir::PlanBudget,
+    ) -> Result<(Arc<ir::ParamEnv>, ir::Ty), String> {
+        self.check_budget(budget)?;
+        let info = self.declaration(decl)?;
+        if info.kind == ir::DeclKind::Function {
+            return Err("function is not a nominal schema".into());
+        }
+        let _scratch = budget.reserve_bytes(
+            info.param_env
+                .arity()
+                .checked_mul(std::mem::size_of::<ir::Ty>())
+                .and_then(|n| n.checked_add(128))
+                .ok_or("inference scratch size overflow")?,
+        )?;
+        let args = symbolic_args(&info.param_env, budget)?;
+        budget.charge_work(1 + args.len())?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?;
+        let ty = state
+            .nominals
+            .applications
+            .get(&(decl, args))
+            .cloned()
+            .ok_or("missing canonical nominal schema")?;
+        Ok((info.param_env.clone(), ty))
+    }
     pub fn signature(&self, id: ir::DeclId) -> Result<ir::GenericSignature, String> {
         self.function_schema(id)
     }
@@ -4295,6 +4326,673 @@ fn validate_shift_counts(
     }
     Ok(())
 }
+// Frontend-private inference evidence. No node is a checked expression or public type hole.
+type InferTerm = Arc<InferKind>;
+#[derive(Clone, Debug)]
+enum InferKind {
+    Slot(usize),
+    Rigid(ir::Ty),
+    Integer,
+    Unknown(bool),
+    Tuple(Arc<[InferTerm]>),
+    Array(InferTerm, usize),
+    Nominal(ir::DeclId, Arc<[InferTerm]>),
+}
+enum InferField<'a> {
+    Named(&'a str),
+    Tuple(usize),
+}
+struct Inference<'c, 's> {
+    checker: &'c Checker<'s>,
+    env: Option<Arc<ir::ParamEnv>>,
+    slots: Vec<Option<InferTerm>>,
+}
+impl<'c, 's> Inference<'c, 's> {
+    fn new(checker: &'c Checker<'s>, env: Arc<ir::ParamEnv>) -> Result<Self, String> {
+        checker.infer_storage(env.arity())?;
+        let slots = vec![None; env.arity()];
+        Ok(Self {
+            checker,
+            env: Some(env),
+            slots,
+        })
+    }
+    fn schema(&self, ty: &ir::Ty, depth: usize) -> Result<InferTerm, String> {
+        self.checker.infer_type_term(
+            ty,
+            Some(
+                self.env
+                    .as_ref()
+                    .ok_or("schema conversion requires authoritative binder")?
+                    .binder(),
+            ),
+            depth,
+        )
+    }
+    fn taint(&self, term: &InferTerm, depth: usize) -> Result<InferTerm, String> {
+        self.checker.infer_work(depth)?;
+        let kind = match term.as_ref() {
+            InferKind::Integer => InferKind::Unknown(true),
+            InferKind::Unknown(numeric) => InferKind::Unknown(*numeric),
+            InferKind::Tuple(fields) => {
+                self.checker.infer_storage(fields.len())?;
+                InferKind::Tuple(
+                    fields
+                        .iter()
+                        .map(|f| self.taint(f, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            InferKind::Array(element, len) => {
+                InferKind::Array(self.taint(element, depth + 1)?, *len)
+            }
+            InferKind::Nominal(decl, args) => {
+                self.checker.infer_storage(args.len())?;
+                InferKind::Nominal(
+                    *decl,
+                    args.iter()
+                        .map(|a| self.taint(a, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            _ => return Ok(term.clone()),
+        };
+        self.checker.infer_node(kind)
+    }
+    fn merge(&self, a: &InferTerm, b: &InferTerm, depth: usize) -> Result<InferTerm, String> {
+        self.checker.infer_work(depth)?;
+        if Arc::ptr_eq(a, b) {
+            return Ok(a.clone());
+        }
+        match (a.as_ref(), b.as_ref()) {
+            (InferKind::Unknown(n), other) | (other, InferKind::Unknown(n)) => {
+                if *n
+                    && !matches!(
+                        other,
+                        InferKind::Integer
+                            | InferKind::Unknown(_)
+                            | InferKind::Rigid(ir::Ty::Int(_))
+                    )
+                {
+                    return Err(
+                        "generic integer-domain constraint conflicts with noninteger type".into(),
+                    );
+                }
+                if let InferKind::Unknown(m) = other {
+                    return self.checker.infer_node(InferKind::Unknown(*n || *m));
+                }
+                self.taint(
+                    if matches!(a.as_ref(), InferKind::Unknown(_)) {
+                        b
+                    } else {
+                        a
+                    },
+                    depth + 1,
+                )
+            }
+            (InferKind::Integer, InferKind::Integer) => Ok(a.clone()),
+            (InferKind::Integer, InferKind::Rigid(ir::Ty::Int(_))) => Ok(b.clone()),
+            (InferKind::Rigid(ir::Ty::Int(_)), InferKind::Integer) => Ok(a.clone()),
+            (InferKind::Rigid(x), InferKind::Rigid(y)) if x == y => Ok(a.clone()),
+            (InferKind::Tuple(x), InferKind::Tuple(y)) if x.len() == y.len() => {
+                self.checker.infer_storage(x.len())?;
+                self.checker.infer_node(InferKind::Tuple(
+                    x.iter()
+                        .zip(y.iter())
+                        .map(|(x, y)| self.merge(x, y, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                ))
+            }
+            (InferKind::Array(x, n), InferKind::Array(y, m)) if n == m => self
+                .checker
+                .infer_node(InferKind::Array(self.merge(x, y, depth + 1)?, *n)),
+            (InferKind::Nominal(d, x), InferKind::Nominal(e, y))
+                if d == e && x.len() == y.len() =>
+            {
+                self.checker.infer_storage(x.len())?;
+                self.checker.infer_node(InferKind::Nominal(
+                    *d,
+                    x.iter()
+                        .zip(y.iter())
+                        .map(|(x, y)| self.merge(x, y, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                ))
+            }
+            _ => Err("conflicting generic inference constraints".into()),
+        }
+    }
+    fn occurs(&self, slot: usize, term: &InferTerm, depth: usize) -> Result<(), String> {
+        self.checker.infer_work(depth)?;
+        match term.as_ref() {
+            InferKind::Slot(index) if *index == slot => {
+                return Err("cyclic generic inference constraint".into());
+            }
+            InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
+                for f in fields.iter() {
+                    self.occurs(slot, f, depth + 1)?;
+                }
+            }
+            InferKind::Array(element, _) => self.occurs(slot, element, depth + 1)?,
+            _ => {}
+        }
+        Ok(())
+    }
+    fn constrain(
+        &mut self,
+        schema: &InferTerm,
+        evidence: &InferTerm,
+        depth: usize,
+    ) -> Result<(), String> {
+        self.checker.infer_work(depth)?;
+        if matches!(evidence.as_ref(), InferKind::Rigid(ir::Ty::Never))
+            || matches!(schema.as_ref(), InferKind::Rigid(ir::Ty::Never))
+        {
+            return Ok(());
+        }
+        match schema.as_ref() {
+            InferKind::Slot(slot) => {
+                self.occurs(*slot, evidence, depth + 1)?;
+                let value = if let Some(old) = &self.slots[*slot] {
+                    self.merge(old, evidence, depth + 1)?
+                } else {
+                    evidence.clone()
+                };
+                self.slots[*slot] = Some(value);
+                Ok(())
+            }
+            InferKind::Tuple(fields) => match evidence.as_ref() {
+                InferKind::Tuple(actual) if fields.len() == actual.len() => {
+                    for (f, a) in fields.iter().zip(actual.iter()) {
+                        self.constrain(f, a, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                InferKind::Unknown(_) => {
+                    for f in fields.iter() {
+                        self.constrain(f, evidence, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                _ => Err("generic tuple inference shape mismatch".into()),
+            },
+            InferKind::Array(element, len) => match evidence.as_ref() {
+                InferKind::Array(actual, n) if len == n => {
+                    self.constrain(element, actual, depth + 1)
+                }
+                InferKind::Unknown(_) => self.constrain(element, evidence, depth + 1),
+                _ => Err("generic array inference shape mismatch".into()),
+            },
+            InferKind::Nominal(decl, args) => match evidence.as_ref() {
+                InferKind::Nominal(actual, values)
+                    if decl == actual && args.len() == values.len() =>
+                {
+                    for (f, a) in args.iter().zip(values.iter()) {
+                        self.constrain(f, a, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                InferKind::Unknown(_) => {
+                    for f in args.iter() {
+                        self.constrain(f, evidence, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                _ => Err("generic nominal inference identity mismatch".into()),
+            },
+            InferKind::Rigid(_) => {
+                if matches!(evidence.as_ref(), InferKind::Unknown(_)) {
+                    Ok(())
+                } else {
+                    self.merge(schema, evidence, depth + 1).map(|_| ())
+                }
+            }
+            _ => Err("invalid generic schema inference marker".into()),
+        }
+    }
+    fn resolve(
+        &self,
+        term: &InferTerm,
+        fallback: bool,
+        depth: usize,
+    ) -> Result<Option<ir::Ty>, String> {
+        self.checker.infer_work(depth)?;
+        Ok(match term.as_ref() {
+            InferKind::Rigid(ty) => Some(ty.clone()),
+            InferKind::Integer if fallback => Some(ir::Ty::Int(ir::IntTy::I32)),
+            InferKind::Integer | InferKind::Unknown(_) => None,
+            InferKind::Slot(_) => {
+                return Err("unresolved schema slot escaped inference binding".into());
+            }
+            InferKind::Tuple(fields) => {
+                self.checker.infer_storage(fields.len())?;
+                let mut result = Vec::with_capacity(fields.len());
+                for f in fields.iter() {
+                    let Some(ty) = self.resolve(f, fallback, depth + 1)? else {
+                        return Ok(None);
+                    };
+                    result.push(ty);
+                }
+                Some(ir::Ty::Tuple(result.into()))
+            }
+            InferKind::Array(element, len) => {
+                self.resolve(element, fallback, depth + 1)?
+                    .map(|element| ir::Ty::Array {
+                        element: Arc::new(element),
+                        len: *len,
+                    })
+            }
+            InferKind::Nominal(decl, args) => {
+                self.checker.infer_storage(args.len())?;
+                let mut values = Vec::with_capacity(args.len());
+                for a in args.iter() {
+                    let Some(ty) = self.resolve(a, fallback, depth + 1)? else {
+                        return Ok(None);
+                    };
+                    values.push(ty);
+                }
+                let plan = self
+                    .checker
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("inference requires planning context")?;
+                Some(plan.intern_nominal(*decl, &values, self.checker.facts(), &plan.budget)?)
+            }
+        })
+    }
+    fn finish(&self, fallback: bool) -> Result<Option<Vec<ir::Ty>>, String> {
+        self.checker.infer_storage(self.slots.len())?;
+        let mut args = Vec::with_capacity(self.slots.len());
+        let plan = self
+            .checker
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        for slot in &self.slots {
+            let Some(term) = slot else {
+                return Ok(None);
+            };
+            let Some(ty) = self.resolve(term, fallback, 0)? else {
+                return Ok(None);
+            };
+            validate_argument(&ty, self.checker.facts(), &plan.budget, 0)?;
+            args.push(ty);
+        }
+        Ok(Some(args))
+    }
+}
+impl Checker<'_> {
+    fn infer_work(&self, depth: usize) -> Result<(), String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        plan.budget.check_depth(depth)?;
+        plan.budget.charge_work(1)
+    }
+    fn infer_storage(&self, count: usize) -> Result<(), String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        plan.budget.retain_bytes(
+            count
+                .checked_mul(
+                    4 * (std::mem::size_of::<InferTerm>() + std::mem::size_of::<ir::Ty>() + 64),
+                )
+                .and_then(|n| n.checked_add(128))
+                .ok_or("inference allocation resource overflow")?,
+        )
+    }
+    fn infer_node(&self, kind: InferKind) -> Result<InferTerm, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        plan.budget.charge_nodes(1)?;
+        plan.budget.charge_work(1)?;
+        plan.budget
+            .retain_bytes(std::mem::size_of::<InferKind>() + 128)?;
+        Ok(Arc::new(kind))
+    }
+    fn infer_type_term(
+        &self,
+        ty: &ir::Ty,
+        schema: Option<ir::BinderId>,
+        depth: usize,
+    ) -> Result<InferTerm, String> {
+        self.infer_work(depth)?;
+        let kind = match ty {
+            ir::Ty::Param(param) if schema == Some(param.owner) => {
+                InferKind::Slot(param.index as usize)
+            }
+            ir::Ty::Tuple(fields) => {
+                self.infer_storage(fields.len())?;
+                InferKind::Tuple(
+                    fields
+                        .iter()
+                        .map(|t| self.infer_type_term(t, schema, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            ir::Ty::Array { element, len } => {
+                InferKind::Array(self.infer_type_term(element, schema, depth + 1)?, *len)
+            }
+            ir::Ty::Struct(ty) => {
+                self.infer_storage(ty.def().type_args.len())?;
+                InferKind::Nominal(
+                    ty.def().source_decl,
+                    ty.def()
+                        .type_args
+                        .iter()
+                        .map(|t| self.infer_type_term(t, schema, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            ir::Ty::Enum(ty) => {
+                self.infer_storage(ty.def().type_args.len())?;
+                InferKind::Nominal(
+                    ty.def().source_decl,
+                    ty.def()
+                        .type_args
+                        .iter()
+                        .map(|t| self.infer_type_term(t, schema, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            _ => InferKind::Rigid(ty.clone()),
+        };
+        self.infer_node(kind)
+    }
+    fn inference_evidence(&self, expr: &Expr, depth: usize) -> Result<InferTerm, String> {
+        self.infer_work(depth)?;
+        // Local IDs grow monotonically, including shadowing. Scope depth distinguishes pops.
+        let key = (
+            expr as *const Expr as usize,
+            self.locals.len(),
+            self.scopes.len(),
+        );
+        if let Some(term) = self.inference_evidence_cache.borrow().get(&key) {
+            return Ok(term.clone());
+        }
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        let term = match expr {
+            Expr::Integer(literal) => self.infer_node(match literal.suffix {
+                Some(t) => InferKind::Rigid(ir::Ty::Int(t)),
+                None => InferKind::Integer,
+            })?,
+            Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
+            Expr::Var(name) => match self.lookup(name) {
+                Ok(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
+                Err(_) => self.infer_node(InferKind::Unknown(false))?,
+            },
+            Expr::Tuple(fields) => {
+                self.infer_storage(fields.len())?;
+                self.infer_node(InferKind::Tuple(
+                    fields
+                        .iter()
+                        .map(|f| self.inference_evidence(f, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                ))?
+            }
+            Expr::Array(fields) => {
+                let mut elements = None;
+                let dummy = Inference {
+                    checker: self,
+                    env: None,
+                    slots: Vec::new(),
+                };
+                for f in fields {
+                    let term = self.inference_evidence(f, depth + 1)?;
+                    elements = Some(if let Some(old) = elements {
+                        dummy.merge(&old, &term, depth + 1)?
+                    } else {
+                        term
+                    });
+                }
+                self.infer_node(InferKind::Array(
+                    elements.unwrap_or(self.infer_node(InferKind::Unknown(false))?),
+                    fields.len(),
+                ))?
+            }
+            Expr::Repeat { value, len } => self.infer_node(InferKind::Array(
+                self.inference_evidence(value, depth + 1)?,
+                *len,
+            ))?,
+            Expr::Unary { value, .. } if matches!(value.as_ref(), Expr::Integer(_)) => {
+                self.inference_evidence(value, depth + 1)?
+            }
+            Expr::Block(block) if block.statements.is_empty() && block.tail.is_none() => {
+                self.infer_node(InferKind::Rigid(ir::Ty::Unit))?
+            }
+            Expr::Cast { target, .. } => {
+                self.infer_type_term(&checked_local_ty(target, self.signatures)?, None, depth + 1)?
+            }
+            Expr::Call { name, .. } => {
+                let declaration = *plan
+                    .registry
+                    .functions
+                    .get(name)
+                    .ok_or("unresolved function declaration in inference")?;
+                let schema = plan.function_schema(declaration)?;
+                if schema.param_env.arity() == 0 {
+                    self.infer_type_term(&schema.signature.result, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Struct { name, .. } | Expr::EnumVariant { name, .. } => {
+                let owner = if matches!(expr, Expr::EnumVariant { .. }) {
+                    name.rsplit_once("::").ok_or("invalid enum constructor")?.0
+                } else {
+                    name.as_str()
+                };
+                let decl = *plan
+                    .registry
+                    .nominals
+                    .get(owner)
+                    .ok_or("unresolved nominal declaration in inference")?;
+                let (env, ty) = plan.nominal_schema(decl, &plan.budget)?;
+                if env.arity() == 0 {
+                    self.infer_type_term(&ty, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Apply { path, value } => {
+                let (_, args) =
+                    plan.application(path, &self.signatures.params, self.facts(), &plan.budget)?;
+                let ty = match value.as_ref() {
+                    Expr::Call { name, .. } => {
+                        let declaration = *plan
+                            .registry
+                            .functions
+                            .get(name)
+                            .ok_or("unresolved function declaration in inference")?;
+                        plan.instantiate_signature(
+                            &ir::CallTarget {
+                                declaration,
+                                type_args: args.into(),
+                            },
+                            self.facts(),
+                            &plan.budget,
+                        )?
+                        .result
+                    }
+                    Expr::Struct { name, .. } => {
+                        let decl = *plan
+                            .registry
+                            .nominals
+                            .get(name)
+                            .ok_or("unresolved nominal declaration in inference")?;
+                        plan.intern_nominal(decl, &args, self.facts(), &plan.budget)?
+                    }
+                    Expr::EnumVariant { name, .. } => {
+                        let (owner, _) =
+                            name.rsplit_once("::").ok_or("invalid enum constructor")?;
+                        let decl = *plan
+                            .registry
+                            .nominals
+                            .get(owner)
+                            .ok_or("unresolved enum declaration in inference")?;
+                        plan.intern_nominal(decl, &args, self.facts(), &plan.budget)?
+                    }
+                    _ => return Err("unsupported explicit generic evidence form".into()),
+                };
+                self.infer_type_term(&ty, None, depth + 1)?
+            }
+            Expr::Field { base, field } => {
+                let base = self.inference_evidence(base, depth + 1)?;
+                let dummy = Inference {
+                    checker: self,
+                    env: None,
+                    slots: Vec::new(),
+                };
+                if let Some(ty) = dummy.resolve(&base, false, depth + 1)? {
+                    let receiver = if let ir::Ty::Ref { referent, .. } = &ty {
+                        referent.as_ref()
+                    } else {
+                        &ty
+                    };
+                    let (_, ty) = self.field_type(receiver, field)?;
+                    self.infer_type_term(&ty, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Index { base, index } => {
+                match self.inference_evidence(base, depth + 1)?.as_ref() {
+                    InferKind::Array(element, len) if index < len => element.clone(),
+                    InferKind::Array(_, _) => return Err("array index out of bounds".into()),
+                    _ => self.infer_node(InferKind::Unknown(false))?,
+                }
+            }
+            _ => self.infer_node(InferKind::Unknown(false))?,
+        };
+        self.infer_storage(1)?;
+        self.inference_evidence_cache
+            .borrow_mut()
+            .insert(key, term.clone());
+        Ok(term)
+    }
+    fn infer_call_args(
+        &self,
+        declaration: ir::DeclId,
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+        fallback: bool,
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        let schema = plan.function_schema(declaration)?;
+        if schema.signature.params.len() != args.len() {
+            return Err("generic function argument count mismatch".into());
+        }
+        let mut solver = Inference::new(self, schema.param_env)?;
+        if let Some(expected) = expected {
+            let formal = solver.schema(&schema.signature.result, 0)?;
+            let evidence = self.infer_type_term(expected, None, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        for (formal, expr) in schema.signature.params.iter().zip(args) {
+            let formal = solver.schema(formal, 0)?;
+            let evidence = self.inference_evidence(expr, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        solver.finish(fallback)
+    }
+    fn infer_constructor(
+        &self,
+        name: &str,
+        variant: Option<&str>,
+        fields: &[(InferField<'_>, &Expr)],
+        expected: Option<&ir::Ty>,
+        fallback: bool,
+    ) -> Result<Option<ir::Ty>, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        let declaration = *plan
+            .registry
+            .nominals
+            .get(name)
+            .ok_or("unknown nominal declaration")?;
+        let (env, schema) = plan.nominal_schema(declaration, &plan.budget)?;
+        let mut solver = Inference::new(self, env)?;
+        if let Some(expected) = expected {
+            let formal = solver.schema(&schema, 0)?;
+            let evidence = self.infer_type_term(expected, None, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        let definitions = match (&schema, variant) {
+            (ir::Ty::Struct(ty), None) => &ty.def().fields,
+            (ir::Ty::Enum(ty), Some(name)) => {
+                let mut found = None;
+                for variant in ty.def().variants.iter() {
+                    plan.budget
+                        .charge_work(1 + variant.name.len().min(name.len()))?;
+                    if variant.name == name {
+                        found = Some(variant);
+                        break;
+                    }
+                }
+                &found.ok_or("unknown enum variant")?.fields
+            }
+            _ => return Err("constructor declaration kind mismatch".into()),
+        };
+        for (selector, expr) in fields {
+            let field = match selector {
+                InferField::Tuple(index) => definitions.get(*index),
+                InferField::Named(name) => {
+                    let mut found = None;
+                    for field in definitions.iter() {
+                        plan.budget
+                            .charge_work(1 + field.name.len().min(name.len()))?;
+                        if field.name == *name {
+                            found = Some(field);
+                            break;
+                        }
+                    }
+                    found
+                }
+            }
+            .ok_or("unknown constructor field")?;
+            let formal = solver.schema(&field.ty, 0)?;
+            let evidence = self.inference_evidence(expr, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        let Some(args) = solver.finish(fallback)? else {
+            return Ok(None);
+        };
+        Ok(Some(plan.intern_nominal(
+            declaration,
+            &args,
+            self.facts(),
+            &plan.budget,
+        )?))
+    }
+}
 struct Checker<'a> {
     signatures: &'a Signatures,
     scopes: Vec<HashMap<String, ir::LocalId>>,
@@ -4308,6 +5006,7 @@ struct Checker<'a> {
     count_queries: Vec<(ir::IntTy, ir::ExprId)>,
     field_indices: std::cell::RefCell<HashMap<ir::NominalAppId, HashMap<String, usize>>>,
     applications: std::cell::RefCell<Vec<(String, Vec<ir::Ty>)>>,
+    inference_evidence_cache: std::cell::RefCell<HashMap<(usize, usize, usize), InferTerm>>,
 }
 #[derive(Clone, Copy)]
 enum Expectation<'a> {
@@ -4601,6 +5300,7 @@ impl<'a> Checker<'a> {
             count_queries: Vec::new(),
             field_indices: std::cell::RefCell::new(HashMap::new()),
             applications: std::cell::RefCell::new(Vec::new()),
+            inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
         }
     }
     fn charge_node(&self, bytes: usize) -> Result<(), String> {
@@ -4906,47 +5606,66 @@ impl<'a> Checker<'a> {
     fn require_index(&self, flow: &Flow) -> Result<(), String> {
         self.require(flow,&ir::Ty::Int(ir::IntTy::Usize)).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
     }
-    fn scalar_hint(&self, e: &Expr) -> Option<ir::Ty> {
-        match e {
-            Expr::Apply { path, value } => {
-                let Expr::Call { name, .. } = value.as_ref() else {
-                    return None;
-                };
-                let plan = self.signatures.plan.as_ref()?;
-                let (_, type_args) = plan
-                    .application(path, &self.signatures.params, self.facts(), &plan.budget)
-                    .ok()?;
-                let declaration = *plan.registry.functions.get(name)?;
-                plan.instantiate_signature(
-                    &ir::CallTarget {
-                        declaration,
-                        type_args: type_args.into(),
-                    },
-                    self.facts(),
-                    &plan.budget,
-                )
-                .ok()
-                .map(|s| s.result)
-            }
-            Expr::Cast { target, .. } => checked_local_ty(target, self.signatures).ok(),
-            Expr::Deref { value } => self.scalar_hint(value).and_then(|ty| {
-                if let ir::Ty::Ref { referent, .. } = ty {
-                    Some(referent.as_ref().clone())
-                } else {
-                    None
+    fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
+        Ok(match e {
+            Expr::Apply { .. } => {
+                let evidence = self.inference_evidence(e, 0)?;
+                Inference {
+                    checker: self,
+                    env: None,
+                    slots: Vec::new(),
                 }
-            }),
+                .resolve(&evidence, false, 0)?
+            }
+            Expr::Cast { target, .. } => Some(checked_local_ty(target, self.signatures)?),
+            Expr::Deref { value } => match self.scalar_hint(value)? {
+                Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
+                _ => None,
+            },
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Var(name) => self
                 .lookup(name)
                 .ok()
                 .map(|id| self.locals[id.0].ty.clone()),
-            Expr::Call { name, .. } => self
-                .signatures
-                .functions
-                .get(name)
-                .map(|s| s.result.clone()),
-            Expr::Unary { value, .. } => self.scalar_hint(value),
+            Expr::Call { name, args } => {
+                let plan = self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("call hint requires declaration registry")?;
+                let declaration = *plan
+                    .registry
+                    .functions
+                    .get(name)
+                    .ok_or("unresolved function in hint")?;
+                if plan.param_env(declaration)?.arity() == 0 {
+                    Some(
+                        self.signatures
+                            .functions
+                            .get(name)
+                            .ok_or("missing function signature")?
+                            .result
+                            .clone(),
+                    )
+                } else if let Some(type_args) =
+                    self.infer_call_args(declaration, args, None, false)?
+                {
+                    Some(
+                        plan.instantiate_signature(
+                            &ir::CallTarget {
+                                declaration,
+                                type_args: type_args.into(),
+                            },
+                            self.facts(),
+                            &plan.budget,
+                        )?
+                        .result,
+                    )
+                } else {
+                    None
+                }
+            }
+            Expr::Unary { value, .. } => self.scalar_hint(value)?,
             Expr::Binary {
                 op:
                     BinaryOp::Eq
@@ -4963,31 +5682,37 @@ impl<'a> Checker<'a> {
                 op: BinaryOp::Shl | BinaryOp::Shr,
                 left,
                 ..
-            } => self.scalar_hint(left),
-            Expr::Binary { left, right, .. } => {
-                self.scalar_hint(left).or_else(|| self.scalar_hint(right))
-            }
-            Expr::Field { base, field } => self.scalar_hint(base).and_then(|t| {
-                let receiver = if let ir::Ty::Ref { referent, .. } = &t {
-                    referent.as_ref()
-                } else {
-                    &t
-                };
-                self.field_type(receiver, field).ok().map(|(_, t)| t)
-            }),
-            Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
-                self.scalar_hint(base).and_then(|t| {
-                    if let ir::Ty::Array { element, .. } = t {
-                        Some(element.as_ref().clone())
+            } => self.scalar_hint(left)?,
+            Expr::Binary { left, right, .. } => match self.scalar_hint(left)? {
+                Some(ty) => Some(ty),
+                None => self.scalar_hint(right)?,
+            },
+            Expr::Field { base, field } => {
+                if let Some(ty) = self.scalar_hint(base)? {
+                    let receiver = if let ir::Ty::Ref { referent, .. } = &ty {
+                        referent.as_ref()
                     } else {
-                        None
-                    }
-                })
+                        &ty
+                    };
+                    Some(self.field_type(receiver, field)?.1)
+                } else {
+                    None
+                }
             }
-            Expr::Block(b) => b.tail.as_ref().and_then(|e| self.scalar_hint(e)),
+            Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
+                match self.scalar_hint(base)? {
+                    Some(ir::Ty::Array { element, .. }) => Some(element.as_ref().clone()),
+                    _ => None,
+                }
+            }
+            Expr::Block(block) if block.statements.is_empty() => match &block.tail {
+                Some(tail) => self.scalar_hint(tail)?,
+                None => Some(ir::Ty::Unit),
+            },
             _ => None,
-        }
+        })
     }
+
     fn deref_source(&self, mut id: ir::ExprId) -> bool {
         loop {
             match &self.exprs[id.0].kind {
@@ -5234,6 +5959,34 @@ impl<'a> Checker<'a> {
         let result = self.expr_expected(e, expected);
         self.reachable = previous;
         result
+    }
+    fn constructor_type(
+        &self,
+        name: &str,
+        variant: Option<&str>,
+        fields: &[(InferField<'_>, &Expr)],
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::Ty, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("constructor requires planning context")?;
+        let decl = *plan
+            .registry
+            .nominals
+            .get(name)
+            .ok_or("unknown nominal declaration")?;
+        if plan.param_env(decl)?.arity() == 0
+            || self
+                .applications
+                .borrow()
+                .last()
+                .is_some_and(|(owner, _)| owner == name)
+        {
+            return self.nominal(name, None);
+        }
+        self.infer_constructor(name,variant,fields,expected,true)?.ok_or_else(||"unsupported generic inference: insufficient evidence; explicit type arguments required".into())
     }
     fn enum_variant(&self, name: &str) -> Result<(ir::EnumTy, usize), String> {
         let (owner, variant) = name
@@ -5904,7 +6657,45 @@ impl<'a> Checker<'a> {
                 shape,
                 fields,
             } => {
-                let (ty, variant) = self.enum_variant(name)?;
+                let (owner, variant_name) = name
+                    .rsplit_once("::")
+                    .ok_or("invalid enum constructor path")?;
+                self.infer_storage(fields.len())?;
+                if fields.iter().any(|(selector, _)| {
+                    matches!(
+                        selector,
+                        FieldSelector::Deref | FieldSelector::ConstantIndex(_)
+                    )
+                }) {
+                    return Err("unsupported constructor inference selector".into());
+                }
+                let evidence_fields = fields
+                    .iter()
+                    .map(|(selector, value)| {
+                        (
+                            match selector {
+                                FieldSelector::Named(name) => InferField::Named(name),
+                                FieldSelector::Tuple(index) => InferField::Tuple(*index),
+                                FieldSelector::Deref | FieldSelector::ConstantIndex(_) => {
+                                    unreachable!("constructor fields are named or tuple selectors")
+                                }
+                            },
+                            value,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let ir::Ty::Enum(ty) =
+                    self.constructor_type(owner, Some(variant_name), &evidence_fields, expected)?
+                else {
+                    return Err("expected enum constructor".into());
+                };
+                let variant = ty
+                    .def()
+                    .variants
+                    .iter()
+                    .position(|v| v.name == variant_name)
+                    .ok_or("unknown enum variant")?;
+                self.accessible(&ir::Ty::Enum(ty.clone()))?;
                 let definition = &ty.def().variants[variant];
                 if *shape != definition.shape
                     && !(definition.shape == ir::VariantShape::Unit
@@ -6184,7 +6975,14 @@ impl<'a> Checker<'a> {
             }
             Expr::Apply { .. } => return Err("generic application dispatcher invariant".into()),
             Expr::Struct { name, fields } => {
-                let ir::Ty::Struct(ty) = self.nominal(name, None)? else {
+                self.infer_storage(fields.len())?;
+                let evidence_fields = fields
+                    .iter()
+                    .map(|(name, value)| (InferField::Named(name), value))
+                    .collect::<Vec<_>>();
+                let ir::Ty::Struct(ty) =
+                    self.constructor_type(name, None, &evidence_fields, expected)?
+                else {
                     return Err("expected struct constructor".into());
                 };
                 if !ty.def().public && !visible_from(&ty.def().module, &self.module) {
@@ -6288,10 +7086,12 @@ impl<'a> Checker<'a> {
                     });
                     return Ok(id);
                 }
-                let hint = expected
+                let mut hint = expected
                     .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Bool))
-                    .cloned()
-                    .or_else(|| self.scalar_hint(value));
+                    .cloned();
+                if hint.is_none() {
+                    hint = self.scalar_hint(value)?;
+                }
                 let value = if matches!(expectation, Expectation::CastableToInt(_)) {
                     self.expr_with_expectation(value, expectation)?
                 } else {
@@ -6332,17 +7132,14 @@ impl<'a> Checker<'a> {
                 let hint = if logical {
                     Some(ir::Ty::Bool)
                 } else {
-                    expected
-                        .filter(|t| matches!(t, ir::Ty::Int(_)))
-                        .cloned()
-                        .or_else(|| self.scalar_hint(left))
-                        .or_else(|| {
-                            if shifting {
-                                None
-                            } else {
-                                self.scalar_hint(right)
-                            }
-                        })
+                    let mut hint = expected.filter(|t| matches!(t, ir::Ty::Int(_))).cloned();
+                    if hint.is_none() {
+                        hint = self.scalar_hint(left)?;
+                    }
+                    if hint.is_none() && !shifting {
+                        hint = self.scalar_hint(right)?;
+                    }
+                    hint
                 };
                 let left = self.expr_expected(left, hint.as_ref())?;
                 let left_flow = self.flow(left);
@@ -6447,6 +7244,8 @@ impl<'a> Checker<'a> {
                     .is_some_and(|(owner, _)| owner == name)
                 {
                     self.applications.borrow_mut().pop().unwrap().1
+                } else if plan.param_env(declaration)?.arity() > 0 {
+                    self.infer_call_args(declaration,args,expected,true)?.ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?
                 } else {
                     Vec::new()
                 };
@@ -6744,13 +7543,104 @@ mod typed_tests {
     }
 
     #[test]
+    fn omitted_generic_inference_uses_all_evidence_before_integer_fallback() {
+        let p = parse("struct W<T>{v:T}enum E<T>{A(T),B}fn id<T>(x:T)->T{x}fn same<T>(x:T,y:T)->T{y}fn main(){let a=id(1);let b:u8=id(2);let c=same(3,4u8);let d=id(1)+2u8;let e=1+id(2u8);let p=id((1,2));let z:[u8;0]=id([]);let w=W{v:7u16};let en=E::A(8u8);let explicit=id::<i32>(id(1));let cast=id(256) as u8;}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let function = type_function_with_plan(&p, 2, &plan, &budget).unwrap();
+        let local = |name: &str| {
+            function
+                .locals
+                .iter()
+                .find(|l| l.name == name)
+                .unwrap()
+                .ty
+                .clone()
+        };
+        assert_eq!(local("a"), ir::Ty::Int(ir::IntTy::I32));
+        for name in ["b", "c", "d", "e", "cast"] {
+            assert_eq!(local(name), ir::Ty::Int(ir::IntTy::U8));
+        }
+        assert_eq!(
+            local("p"),
+            ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::I32); 2].into())
+        );
+        assert_eq!(
+            local("z"),
+            ir::Ty::Array {
+                element: Arc::new(ir::Ty::Int(ir::IntTy::U8)),
+                len: 0
+            }
+        );
+        assert!(
+            matches!(local("w"), ir::Ty::Struct(t) if t.def().type_args.as_ref() == [ir::Ty::Int(ir::IntTy::U16)])
+        );
+        assert!(
+            matches!(local("en"), ir::Ty::Enum(t) if t.def().type_args.as_ref() == [ir::Ty::Int(ir::IntTy::U8)])
+        );
+        check(&p).unwrap();
+    }
+
+    #[test]
+    fn omitted_generic_inference_keeps_opaque_sites_and_universal_binders_rigid() {
+        for source in [
+            "fn id<T>(x:T)->T{x}fn main(){let x:u8=id({let a=1;2});}",
+            "fn id<T>(x:T)->T{x}fn same<T>(x:T,y:T)->T{y}fn main(){let x=same(id(1),2u8);}",
+            "fn f<T>(x:T,n:i32)->T{if n==0{x}else{f(x,n-1)}}fn main(){let x=f(1u8,1);}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+        for source in [
+            "fn id<T>(x:T)->T{x}fn main(){let x=id({let a=1;2});}",
+            "fn id<T>(x:T)->T{x}fn main(){let x=id(id(1));}",
+        ] {
+            let error = parse(source).and_then(|p| check(&p)).unwrap_err();
+            assert!(error.contains("unsupported generic inference"), "{error}");
+        }
+        for source in [
+            "fn same<T>(x:T,y:T)->T{y}fn main(){let x=same(1u8,2u16);}",
+            "fn bad<T>(x:T)->(T,T){(x,x)}fn main(){}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err());
+        }
+    }
+
+    #[test]
+    fn omitted_generic_hints_do_not_commit_numeric_defaults_or_expression_effects() {
+        let p = parse("fn id<T>(x:T)->T{x}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let signatures = plan
+            .environment(Some(plan.function_decl(1).unwrap()))
+            .unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, String::new());
+        let call = |suffix| Expr::Call {
+            name: "id".into(),
+            args: vec![Expr::Integer(IntegerLiteral {
+                magnitude: 1,
+                suffix,
+            })],
+        };
+        let untyped = call(None);
+        let typed = call(Some(ir::IntTy::U8));
+        assert_eq!(checker.scalar_hint(&untyped).unwrap(), None);
+        assert_eq!(
+            checker.scalar_hint(&typed).unwrap(),
+            Some(ir::Ty::Int(ir::IntTy::U8))
+        );
+        assert!(checker.locals.is_empty());
+        assert!(checker.exprs.is_empty());
+        assert!(checker.reachable);
+        assert_eq!(checker.scalar_hint(&untyped).unwrap(), None);
+    }
+
+    #[test]
     fn generic_all_body_semantics_do_not_specialize_away_invalid_templates() {
         for source in [
             "fn bad<T>(x:T)->(T,T){(x,x)}fn main(){}",
             "fn bad<T>(x:T)->(T,T){(x,x)}fn main(){let n=bad::<i32>(7);}",
             "fn bad<T>(x:T)->T{x+1}fn main(){}",
             "fn bad<T>(x:T)->T{7i32}fn main(){}",
-            "fn id<T>(x:T)->T{x}fn main(){let n=id::<i32>(id(1));}",
             "fn id<T>(x:T)->T{x}fn main(){let n=id::<i32,u8>(1);}",
             "struct W<T>{v:T}fn main(){let x=1;let w=W::<&i32>{v:&x};}",
             "fn bad<T>(x:T){return;let r=&x;}fn main(){}",

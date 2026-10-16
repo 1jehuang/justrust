@@ -651,13 +651,13 @@ fn main() { if run() == 3 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_generic_enum() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "generic_enum",
+fn accepts_inferred_generic_enum() {
+    // Source bytes unchanged, now independently stock/native runtime verified.
+    runs(
         r#"enum E<T>{A(T)} fn run()->i32{match E::A(3){E::A(n)=>n}}
 fn main() { if run() == 3 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 

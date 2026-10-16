@@ -49,18 +49,25 @@ Overloaded trait assignments, compound expressions outside statement contexts,
 cast target types are an explicit boundary.
 
 Explicit type-parameter functions, braced structs and payload enums use rigid
-declaration-qualified parameters and canonical nominal applications. Calls and
-constructors require explicit ordered type arguments, for example `id::<u64>(x)`
-and `Wrap::<u8>{value:x}`. Every generic body, including unused declarations,
+declaration-qualified parameters and canonical nominal applications. Fully
+explicit ordered arguments remain supported, for example `id::<u64>(x)` and
+`Wrap::<u8>{value:x}`. Calls and constructors can also omit all arguments when
+bounded first-order evidence from known operands or a hard expected result
+resolves them. Deferred integer leaves default only after all constraints,
+while opaque operands cannot force numeric fallback. Partial type holes,
+future-use inference and unresolved nested omitted applications remain explicit
+boundaries. Every generic body, including unused declarations,
 receives universal type and move analysis with parameters treated as opaque
 non-Copy values. Demanded concrete instances substitute checked typed metadata,
 then lower and analyze again before sealed native emission. Exact instance
 recursion is deduplicated, while growing instantiations fail boundedly. Generic
 bodies and their recursively expanded type arguments cannot contain references
-in this milestone. Inference, traits, bounds, methods, const generics and generic
+in this milestone. Traits, bounds, methods, const generics and generic
 function values remain unsupported. Ordinary nongeneric reference support is
 unchanged. See `GENERICS.md` for the universal/concrete trust boundary and shared
-planning limits. This foundation is not full Rust generic compatibility.
+planning limits, and `GENERIC-INFERENCE.md` for the private evidence grammar,
+fallible no-fallback hints and exactly-once ordinary elaboration. This foundation
+is not full Rust generic compatibility.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and
@@ -146,7 +153,7 @@ Canonical paths detect active inclusion cycles, not enforce a filesystem sandbox
 Not supported: crates/manifests, grouped or
 glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
 standard-library APIs beyond the documented print form, general macros, traits,
-generic inference/bounds beyond the explicit slice above, empty enums, explicit discriminants, empty/unit/tuple structs,
+generic inference/bounds beyond the bounded slice above, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
 general reference results and escaping references beyond bounded static input paths,
 general lifetimes, strings as values, closures, async,
