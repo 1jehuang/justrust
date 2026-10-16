@@ -33,6 +33,14 @@ Final hosted gates, nightly-2026-10-08 on the 96-core host:
 Profiles are retained in `data/runs/prototype-bootstrap/2026-10-match.jsonl`.
 The new source corpus has 59 independently stock-classified fixtures: 26 accepted
 parity cases, 20 invalid programs and 13 explicit legal-unsupported boundaries.
+Tracked M8a run `compiler-match-20261016-0621` on source `c24c0cfb6` passed
+all **411 fixtures** across eight corpora: 263 accepted parity cases, 115 invalid
+rejections and 33 explicit legal-unsupported boundaries. Full source-bearing
+receipts are in `experiments/results/20261016-m8a-match-*.jsonl`. The 96-worker
+example compiled and executed with three functions, one struct and one enum;
+36 CFG blocks, 41 CFG edges, 75 move paths and nine moves were retained. Graph
+capture was complete with zero failures or dropped events. The raw timings are
+contended/uncontrolled, not cold measurements or a speed claim.
 These gates are not proof of full Rust support or a performance improvement.
 
 ## 2026-10-15: Irrefutable let patterns consume only selected places

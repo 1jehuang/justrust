@@ -58,7 +58,9 @@ records nonconsuming variant inspection, selected binding moves, finite coverage
 and static ownership checks for unreachable arms. Payload variants, sum-aware
 move paths, guards, or/range/nested refutable patterns and broader enum features
 remain open. The 59-case independent corpus separates 26 accepted cases,
-20 invalid programs and 13 legal-unsupported boundaries.
+20 invalid programs and 13 legal-unsupported boundaries. The full M8a regression
+run passed 411 fixtures: 263 accepted parity cases, 115 invalid rejections and
+33 legal-unsupported boundaries, with raw receipts retained.
 
 Named nonempty structs now extend the cached initialization foundation with
 nominal identity, field privacy, whole/partial moves and native aggregate calls.
