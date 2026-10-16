@@ -9319,3 +9319,38 @@ complete capture. Its source SHA256 is
 00c380d3f24f3ea425bb9dad384645a992f76f383507374cfaea044a81306498.
 Independent cumulative exact-revision native evidence remains a separate gate.
 No experimental install, default promotion, full-Rust claim or speedup is made.
+
+## 2026-10-16: independently verified1052-case generic-borrowing checkpoint
+
+Tracked metered campaign compiler-generic-references-20261016-1508 runs exact
+pushed implementation a1c86fe56262874bfa5d2a1d52d30541b8458b17. Independent parsing
+of30 raw corpus receipts verifies1052 cases:632 accepted parity,35 declared
+runtime101,300 invalid rejected,84 legal unsupported and1 distinct resource
+rejection. All1008 ordinary workers1/8 runtime comparisons,70 trap-worker runs
+and128 generated compile/runtime exit comparisons pass. Successful native graphs
+have complete capture with zero failures/dropped events. Source and stream
+hashes, summaries, exit statuses and bounded capture are independently checked.
+The four unchanged historical promotions account for four additional accepted
+cases without reducing the new32 corpus or changing any old source.
+
+All corpus receipts identify one actual binary SHA256
+2d0c1329d27aeb2b356644495326df6fd8856f7ecde7c5b017fbb8bf48a927d1.
+The new32 receipt's source/stdout/hash values match the frozen verified artifact
+exactly. Every invalid native worker rejection is a semantic error, not a parser
+failure, panic, timeout, truncation or legal-unsupported substitute. The earlier
+strict stock BUILD/CHECK classification and N18 code-less diagnostic metadata
+correction remain recorded separately, without rewritten source bytes.
+
+The31 raw corpus/example receipts are retained under
+`experiments/results/20261016-m8a-generic-references-*`. The actual96-worker
+example exits0 with exact expected stdout, source SHA256
+00c380d3f24f3ea425bb9dad384645a992f76f383507374cfaea044a81306498,
+and a complete59-node/140-edge graph with zero failures/drops. The authenticated
+metered lifecycle reports exit0 and lifecycle_ok, with no billing or isolation
+bypass. Observed25,467,109ns total/6,478,087ns engine time is contended functional
+evidence, not a pinned before/after speedup measurement.
+
+This completes the bounded generic-reference milestone, not full Rust.
+Canonical Copy/Clone, destructors, broader reference shapes, associated types,
+generic trait items, macros, core/std and existing-project acceptance remain open.
+Autonomous work toward the complete independent compiler continues.
