@@ -345,6 +345,7 @@ struct Lowerer<'a> {
     source: &'a ir::CheckedFunction,
     result: Function,
     expressions: Vec<LocalId>,
+    parameters: std::collections::HashSet<LocalId>,
     blocks: Vec<PendingBlock>,
     current: BlockId,
     scopes: Vec<Vec<LocalId>>,
@@ -424,6 +425,37 @@ impl Lowerer<'_> {
         }
     }
 
+    /// Evaluate only the non-place root of a pattern initializer. A field chain
+    /// remains an address even when rooted in a call/temporary: ignoring that
+    /// field must not accidentally load or move it merely to obtain its place.
+    fn pattern_source(&mut self, id: ExprId) -> Result<Place, String> {
+        let mut root = id;
+        let mut fields = Vec::new();
+        let mut source = loop {
+            let expression = self
+                .source
+                .exprs
+                .get(root.0)
+                .ok_or("invalid pattern initializer expression")?;
+            match &expression.kind {
+                ir::ExprKind::Local(local) => break place(*local),
+                ir::ExprKind::Field { base, index } => {
+                    if fields.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                        return Err("pattern initializer projection depth exceeds limit 128".into());
+                    }
+                    fields.push(*index);
+                    root = *base;
+                }
+                _ => break self.materialize_expression(root)?,
+            }
+        };
+        source.fields.extend(fields.into_iter().rev());
+        // Static metadata validation is not a value read. Moved and partially
+        // initialized places are deliberately addressable in pattern context.
+        self.result.place_ty(&source)?;
+        Ok(source)
+    }
+
     fn body(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
         self.scopes.push(Vec::new());
         for statement in &body.statements {
@@ -432,6 +464,37 @@ impl Lowerer<'_> {
                     let operand = self.expression(*value)?;
                     self.live(*local, Some(*value));
                     self.assign(place(*local), Rvalue::Use(operand), Some(*value));
+                }
+                ir::Stmt::LetPattern {
+                    value,
+                    ty,
+                    bindings,
+                } => {
+                    self.source.validate_pattern_bindings_with_params(
+                        ty,
+                        bindings,
+                        &self.parameters,
+                    )?;
+                    let source = self.pattern_source(*value)?;
+                    let completes =
+                        self.source.exprs[value.0].completion == ir::Completion::Returns;
+                    for binding in bindings {
+                        if binding.local == source.local {
+                            return Err("pattern binding aliases initializer storage".into());
+                        }
+                        // The entire initializer runs in the old scope before
+                        // any new binding starts its storage lifetime.
+                        self.live(binding.local, Some(*value));
+                        if completes {
+                            let mut selected = source.clone();
+                            selected.fields.extend_from_slice(&binding.fields);
+                            let operand = self.consume(selected)?;
+                            self.assign(place(binding.local), Rvalue::Use(operand), Some(*value));
+                        }
+                    }
+                    // Wildcard/rest have no bindings, loads, moves or storage
+                    // markers. A non-place initializer has still run once.
+                    // Divergent initializers never produce projection loads.
                 }
                 ir::Stmt::Assign { local, value } => {
                     let operand = self.expression(*value)?;
@@ -823,6 +886,7 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
             return_local,
         },
         expressions,
+        parameters: source.params.iter().copied().collect(),
         blocks: Vec::new(),
         current: BlockId(0),
         scopes: vec![source.params.clone()],
@@ -1212,6 +1276,113 @@ mod tests {
         let source = "struct S{x:i32} fn take(s:S,n:i32){} fn main(){let s=S{x:1};take(s,s.x);}";
         let function = nominal_lowered(&checked(source, 1));
         assert!(!super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn wildcard_patterns_do_not_read_previously_moved_struct_places() {
+        let source =
+            "struct S{x:i32} fn f(p:S){let moved=p;let _=p;let _=(p);let S{x:_}=p;} fn main(){}";
+        let function = nominal_lowered(&checked(source, 0));
+        assert!(super::super::ownership::analyze(&function).passed());
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 1);
+        assert!(matches!(reads[0], Operand::Move(p) if p.fields.is_empty()));
+    }
+
+    #[test]
+    fn partial_move_pattern_reads_only_selected_sibling_in_source_order() {
+        let source =
+            "struct S{x:i32} fn f(p:(S,S)){let first=p.0;let(_,second)=p;let(_,_) =p;} fn main(){}";
+        let function = nominal_lowered(&checked(source, 0));
+        assert!(super::super::ownership::analyze(&function).passed());
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 2);
+        assert!(matches!(reads[0], Operand::Move(p) if p.fields == [0]));
+        assert!(matches!(reads[1], Operand::Move(p) if p.fields == [1]));
+
+        let source = "struct S{x:i32} struct P{first:S,second:S} fn f(p:P){let P{second:b,first:a}=p;} fn main(){}";
+        let function = nominal_lowered(&checked(source, 0));
+        assert!(super::super::ownership::analyze(&function).passed());
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 2);
+        assert!(matches!(reads[0], Operand::Move(p) if p.fields == [1]));
+        assert!(matches!(reads[1], Operand::Move(p) if p.fields == [0]));
+    }
+
+    #[test]
+    fn wildcard_on_temporary_field_calls_once_without_consuming_that_field() {
+        let source = "struct S{x:i32} struct O{child:S} fn make()->O{O{child:S{x:1}}} fn main(){let _=make().child;}";
+        let function = nominal_lowered(&checked(source, 1));
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_eq!(function.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call {name, ..} if name == "make")).count(), 1);
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(|statement| {
+                    matches!(
+                        &statement.value,
+                        Statement::Assign {
+                            value: Rvalue::Use(Operand::Copy(_) | Operand::Move(_)),
+                            ..
+                        }
+                    )
+                })
+        );
+    }
+
+    #[test]
+    fn wildcard_rvalue_tuple_still_consumes_its_input_expressions() {
+        let source = "struct S{x:i32} fn f(a:S,b:S){let(_,_)=(a,b);} fn main(){}";
+        let function = nominal_lowered(&checked(source, 0));
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_eq!(root_reads(&function).len(), 1);
+        for local in [LocalId(0), LocalId(1)] {
+            assert_eq!(function.blocks.iter().flat_map(|block| &block.statements).filter(|statement| {
+                matches!(&statement.value, Statement::Assign {value: Rvalue::Use(Operand::Move(p)), ..} if p.local == local && p.fields.is_empty())
+            }).count(), 1);
+        }
+    }
+
+    #[test]
+    fn unit_pattern_is_not_a_read_but_unit_binding_is() {
+        let function = nominal_lowered(&checked("fn f(u:()){let ()=u;let real=u;} fn main(){}", 0));
+        assert!(super::super::ownership::analyze(&function).passed());
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 1);
+        assert!(matches!(reads[0], Operand::Copy(p) if p.fields.is_empty()));
+    }
+
+    #[test]
+    fn divergent_pattern_initializer_has_effects_but_no_impossible_binding_reads() {
+        let source = "fn f(){let(a,b):(i32,bool)={return;};} fn main(){}";
+        let function = nominal_lowered(&checked(source, 0));
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert!(!function.blocks.iter().flat_map(|block| &block.statements).any(|statement| {
+            matches!(&statement.value, Statement::Assign {destination, ..} if matches!(function.locals[destination.local.0].name.as_str(), "a" | "b"))
+        }));
+    }
+
+    #[test]
+    fn cyclic_pattern_initializer_projection_fails_at_the_depth_bound() {
+        let mut source = with_root(
+            Ty::I32,
+            vec![expr(
+                Ty::I32,
+                ir::ExprKind::Field {
+                    base: ExprId(0),
+                    index: 0,
+                },
+            )],
+            vec![],
+        );
+        source.body.statements.push(ir::Stmt::LetPattern {
+            value: ExprId(0),
+            ty: Ty::I32,
+            bindings: vec![],
+        });
+        assert!(lower(&source).unwrap_err().contains("depth"));
     }
 
     fn live_operand(value: &Operand, live: &[bool]) {

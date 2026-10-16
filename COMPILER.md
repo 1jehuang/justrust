@@ -24,7 +24,8 @@ published until every required check and code generation operation succeeds.
 Initial supported syntax: free functions with `i32`, `bool`, unit, nested tuples
 and nonempty braced named structs as parameters/results, aggregate literals and
 numeric/named field projections,
-local bindings and shadowing, `mut`, whole-value and local-rooted field assignment,
+local bindings and shadowing, irrefutable tuple/struct let patterns, wildcard,
+per-binding `mut`, struct-pattern `..`, whole-value and local-rooted field assignment,
 integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
 `while`, unlabelled `loop` expressions, `break` with supported value types,
 `continue`, `return`, calls including recursion, and `println!("literal")`.
@@ -152,8 +153,16 @@ moves only the selected place. Scalar field reads leave the containing struct
 available, partial moves preserve siblings, and mutable field reinitialization
 restores the selected subtree. Joins and loops must retain definite initialization.
 Assignments evaluate their full RHS before writing and require mutable roots
-except for a first whole-local initialization. General destructuring, aggregate
-comparisons, references, derives and destructors remain unsupported.
+except for a first whole-local initialization. Aggregate comparisons, references,
+derives and destructors remain unsupported.
+Let patterns support nested tuples/structs, renamed or shorthand fields, wildcard
+and struct `..`, with whole-pattern annotations and independent mutable binders.
+Tuple-rest patterns, ref/ref mut, @, or/refutable patterns, parameter patterns,
+let-else and destructuring assignment remain outside this slice. See `PATTERNS.md`.
+Ignored place fields do not become reads or moves. RHS effects still execute once,
+and all new binders enter scope only after the initializer and pattern checks.
+Unannotated tuple patterns requiring later backward inference from a pure-Never
+initializer receive an explicit unsupported diagnostic.
 
 The private ABI passes one 8-byte word per argument, containing a scalar or a
 pointer to a caller-owned aggregate snapshot. Callees copy aggregate arguments

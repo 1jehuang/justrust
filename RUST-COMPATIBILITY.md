@@ -82,10 +82,18 @@ reinitialization and control-flow joins. Field privacy includes the accessibilit
 of inferred and intermediate projected types, not only field names.
 
 The private aggregate ABI is not a platform representation contract. Empty/unit/
-tuple structs, struct update/shorthand, destructuring, derives, references, loans,
+tuple structs, struct update/shorthand, derives, references, loans,
 lifetimes, destructors, enums and general Rust data/abstraction features remain
 open. Compact shared declaration DAGs and diagnostics have explicit resource
 bounds. This slice does not complete ownership or full Rust compatibility.
+
+## Current follow-on: irrefutable let patterns
+
+`PATTERNS.md` defines tuple/struct let destructuring, wildcard and per-binding
+mutability. Lowering consumes only selected projected places and preserves RHS
+effects once. This remains distinct from match/exhaustiveness, refutable patterns,
+borrowing, destructors and full inference. Historical legal destructuring boundary
+fixtures are promoted to accepted cases only with native execution evidence.
 
 ## Completed source slice: inline modules and item resolution
 

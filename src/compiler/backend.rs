@@ -1614,4 +1614,92 @@ mod tests {
                 .contains("initialization/move analysis")
         );
     }
+
+    #[test]
+    fn let_patterns_selectively_move_fields_without_consuming_ignored_siblings() {
+        let p = frontend::parse(
+            r#"
+            struct Leaf { value: i32 }
+            struct Pair { left: Leaf, right: Leaf }
+            fn main() {
+                let pair = Pair { left: Leaf { value: 1 }, right: Leaf { value: 2 } };
+                let Pair { left: first, .. } = pair;
+                let remaining = pair.right;
+                let tuple = (Leaf { value: 3 }, (Leaf { value: 4 }, 5));
+                let (_, (selected, number)) = tuple;
+                let ignored = tuple.0;
+                if first.value != 1 { 1 / 0; }
+                if remaining.value != 2 { 1 / 0; }
+                if ignored.value != 3 { 1 / 0; }
+                if selected.value != 4 { 1 / 0; }
+                if number != 5 { 1 / 0; }
+                let (mut scalar,) = (6,);
+                scalar = scalar + 1;
+                if scalar != 7 { 1 / 0; }
+                println!("selected");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"selected\n");
+    }
+
+    #[test]
+    fn let_pattern_wildcards_skip_moved_places_but_evaluate_nonplaces_once() {
+        let p = frontend::parse(
+            r#"
+            struct Leaf { value: i32 }
+            struct Pair { left: Leaf, right: Leaf }
+            fn produce() -> (Leaf, i32) {
+                println!("produce");
+                (Leaf { value: 8 }, 9)
+            }
+            fn main() {
+                let item = Leaf { value: 1 };
+                let moved = item;
+                let _ = item;
+                let pair = Pair { left: Leaf { value: 2 }, right: Leaf { value: 3 } };
+                let moved_pair = pair;
+                let Pair { .. } = pair;
+                let tuple = (Leaf { value: 4 }, Leaf { value: 5 });
+                let moved_tuple = tuple;
+                let (_, _) = tuple;
+                let (made, number) = produce();
+                if moved.value != 1 { 1 / 0; }
+                if moved_pair.right.value != 3 { 1 / 0; }
+                if moved_tuple.0.value != 4 { 1 / 0; }
+                if made.value != 8 { 1 / 0; }
+                if number != 9 { 1 / 0; }
+                let _ = { println!("wildcard"); produce() };
+                println!("done");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"produce\nwildcard\nproduce\ndone\n");
+    }
+
+    #[test]
+    fn let_pattern_consumed_selected_leaf_is_rejected_by_checked_convenience() {
+        for source in [
+            "struct Leaf{value:i32} fn main(){let t=(Leaf{value:1},Leaf{value:2});let (selected,_)=t;let again=t.0;}",
+            "struct Leaf{value:i32} struct Pair{left:Leaf,right:Leaf} fn main(){let p=Pair{left:Leaf{value:1},right:Leaf{value:2}};let Pair{left:selected,..}=p;let again=p.left;}",
+        ] {
+            let p = frontend::parse(source).unwrap();
+            let env = frontend::signature_table(&p).unwrap();
+            let index = p.functions.iter().position(|f| f.name == "main").unwrap();
+            let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
+            let error = emit_checked_function(&checked).unwrap_err();
+            assert!(error.contains("initialization/move analysis"), "{error}");
+            assert!(
+                emit(&p)
+                    .unwrap_err()
+                    .contains("initialization/move analysis")
+            );
+        }
+    }
 }

@@ -20,6 +20,7 @@ from module_correctness import Case, accepted, process, rejected, run_case
 
 def corpus():
     valid = [
+        ("tuple_destructuring", "fn main(){let (n,b)=(3,true);if n==3 && b {println!(\"ok\");}}"),
         ("nested_literal", "fn main(){let t=(4,(true,9));if t.0+t.1.1==13 && t.1.0 {println!(\"ok\");}}"),
         ("annotated_nested_unit", "fn main(){let t:(i32,(bool,()),i32)=(3,(true,()),8);t.1.1;if t.0+t.2==11 && t.1.0 {println!(\"ok\");}}"),
         ("single_tuple_and_parentheses", "fn main(){let t:(i32,)=(7,);let x=(t.0);if x==7 {println!(\"ok\");}}"),
@@ -64,7 +65,6 @@ def corpus():
     for name, source in [
         ("tuple_equality", "fn main(){let t=(1,true);if t==(1,true){println!(\"ok\");}}"),
         ("tuple_ordering", "fn main(){if (1,2)<(2,1){println!(\"ok\");}}"),
-        ("tuple_destructuring", "fn main(){let (n,b)=(3,true);if n==3 && b {println!(\"ok\");}}"),
         ("tuple_reference", "fn main(){let t=(1,true);let p=&t;if p.0==1 && p.1 {println!(\"ok\");}}"),
     ]:
         yield Case(name, "boundary", source, "ok\n")

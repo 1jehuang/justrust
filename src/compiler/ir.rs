@@ -155,8 +155,21 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             Self::I32 | Self::Bool | Self::Unit | Self::Never => true,
-            Self::Tuple(fields) => fields.iter().all(Self::is_copy),
             Self::Struct(_) => false,
+            Self::Tuple(_) => {
+                let mut pending = vec![self];
+                let mut seen = std::collections::HashSet::new();
+                while let Some(ty) = pending.pop() {
+                    match ty {
+                        Self::Struct(_) => return false,
+                        Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
+                            pending.extend(fields.iter());
+                        }
+                        _ => {}
+                    }
+                }
+                true
+            }
         }
     }
 }
@@ -231,11 +244,68 @@ pub struct Place {
     pub fields: Vec<usize>,
 }
 
+pub const MAX_PATTERN_BINDINGS: usize = 65_536;
+pub const MAX_PATTERN_PROJECTION_DEPTH: usize = 128;
+pub const MAX_PATTERN_PROJECTION_WORK: usize = 1_000_000;
+
+/// One binding from an irrefutable pattern. The projection is relative to the
+/// initializer place, not an eagerly consumed whole-value snapshot. Ignored
+/// wildcard/rest fields have no entry. Entries retain source pattern order.
+#[derive(Clone, Debug)]
+pub struct PatternBinding {
+    pub local: LocalId,
+    pub fields: Vec<usize>,
+}
+
+fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String> {
+    let mut pending = vec![(a, b, 0)];
+    while let Some((a, b, depth)) = pending.pop() {
+        *work = work
+            .checked_add(1)
+            .ok_or("pattern projection work limit exceeded")?;
+        if *work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("pattern projection work limit exceeded".into());
+        }
+        if depth > MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern type comparison depth exceeds limit 128".into());
+        }
+        match (a, b) {
+            (Ty::I32, Ty::I32)
+            | (Ty::Bool, Ty::Bool)
+            | (Ty::Unit, Ty::Unit)
+            | (Ty::Never, Ty::Never) => {}
+            (Ty::Struct(a), Ty::Struct(b)) if a == b => {}
+            (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
+                if Arc::ptr_eq(a, b) {
+                    continue;
+                }
+                let queued = pending
+                    .len()
+                    .checked_add(a.len())
+                    .ok_or("pattern projection work limit exceeded")?;
+                if queued > MAX_PATTERN_PROJECTION_WORK - *work {
+                    return Err("pattern projection work limit exceeded".into());
+                }
+                pending.extend(a.iter().zip(b.iter()).map(|(a, b)| (a, b, depth + 1)));
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
 #[derive(Clone, Debug)]
 pub enum Stmt {
     Let {
         local: LocalId,
         value: ExprId,
+    },
+    LetPattern {
+        value: ExprId,
+        /// Fully resolved effective pattern type, including an annotation or
+        /// concrete pattern hint when the initializer itself has type Never.
+        ty: Ty,
+        bindings: Vec<PatternBinding>,
     },
     Assign {
         local: LocalId,
@@ -313,11 +383,75 @@ pub enum ExprKind {
 }
 
 impl CheckedFunction {
+    /// Bound and check the flattened plan without revisiting source patterns,
+    /// visibility, names or inference. No overlapping bindings are admitted by
+    /// this slice, which deliberately excludes `@` patterns.
+    #[cfg(test)]
+    fn validate_pattern_bindings(
+        &self,
+        ty: &Ty,
+        bindings: &[PatternBinding],
+    ) -> Result<(), String> {
+        if bindings.is_empty() {
+            return Ok(());
+        }
+        let parameters = self.params.iter().copied().collect();
+        self.validate_pattern_bindings_with_params(ty, bindings, &parameters)
+    }
+
+    pub(super) fn validate_pattern_bindings_with_params(
+        &self,
+        ty: &Ty,
+        bindings: &[PatternBinding],
+        parameters: &std::collections::HashSet<LocalId>,
+    ) -> Result<(), String> {
+        if bindings.len() > MAX_PATTERN_BINDINGS {
+            return Err("pattern binding limit exceeded".into());
+        }
+        let mut work = bindings.len();
+        let mut locals = std::collections::HashSet::new();
+        let mut paths = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            if binding.fields.len() > MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("pattern projection depth exceeds limit 128".into());
+            }
+            work = work
+                .checked_add(binding.fields.len())
+                .ok_or("pattern projection work limit exceeded")?;
+            if work > MAX_PATTERN_PROJECTION_WORK {
+                return Err("pattern projection work limit exceeded".into());
+            }
+            let local = self
+                .locals
+                .get(binding.local.0)
+                .ok_or("invalid pattern binding local")?;
+            if !locals.insert(binding.local) || parameters.contains(&binding.local) {
+                return Err("pattern binding locals must be distinct fresh locals".into());
+            }
+            let mut projected = ty;
+            for &index in &binding.fields {
+                projected = projected
+                    .field_ty(index)
+                    .ok_or("invalid pattern binding projection")?;
+            }
+            if !pattern_types_equal(&local.ty, projected, &mut work)? {
+                return Err("pattern binding local type mismatch".into());
+            }
+            paths.push(binding.fields.as_slice());
+        }
+        paths.sort_unstable();
+        if paths.windows(2).any(|pair| pair[1].starts_with(pair[0])) {
+            return Err("overlapping pattern binding projections".into());
+        }
+        Ok(())
+    }
+
     /// Optional structural debugging check. This is not source type checking,
     /// borrow checking, or a codegen prerequisite. Normal compilation consumes
     /// the immutable result produced by the checker without revalidating it.
     ///
-    /// Checks reference bounds, distinct parameters, and call arity. Deliberately
+    /// Checks reference bounds, distinct parameters, call arity and flattened
+    /// pattern plan consistency. Deliberately
     /// does not establish lexical scope, reachability, expression flow, or loop
     /// target validity or projection typing. Those are established once by
     /// semantic analysis.
@@ -407,6 +541,14 @@ impl CheckedFunction {
                         local(*id)?;
                         expr(*value)?;
                     }
+                    Stmt::LetPattern {
+                        value,
+                        ty,
+                        bindings,
+                    } => {
+                        expr(*value)?;
+                        self.validate_pattern_bindings_with_params(ty, bindings, &parameters)?;
+                    }
                     Stmt::AssignPlace { place, value } => {
                         local(place.local)?;
                         expr(*value)?;
@@ -429,6 +571,161 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flattened_pattern_plan_validates_types_and_disjoint_fresh_bindings() {
+        let mut function = fixture();
+        let ty = Ty::Tuple(vec![Ty::I32, Ty::Bool].into());
+        function.locals[0].ty = ty.clone();
+        function.exprs[0].ty = ty.clone();
+        function.locals.push(LocalDecl {
+            name: "first".into(),
+            ty: Ty::I32,
+            mutable: false,
+        });
+        let bindings = vec![
+            PatternBinding {
+                local: LocalId(2),
+                fields: vec![0],
+            },
+            PatternBinding {
+                local: LocalId(1),
+                fields: vec![1],
+            },
+        ];
+        function.body.statements = vec![Stmt::LetPattern {
+            value: ExprId(0),
+            ty: ty.clone(),
+            bindings: bindings.clone(),
+        }];
+        function.validate().unwrap();
+        function.validate_pattern_bindings(&ty, &[]).unwrap();
+        let mut invalid = bindings.clone();
+        invalid[1].local = LocalId(2);
+        assert!(
+            function
+                .validate_pattern_bindings(&ty, &invalid)
+                .unwrap_err()
+                .contains("distinct")
+        );
+        invalid[1].local = LocalId(0);
+        assert!(
+            function
+                .validate_pattern_bindings(&ty, &invalid)
+                .unwrap_err()
+                .contains("fresh")
+        );
+        invalid[1].local = LocalId(1);
+        invalid[1].fields = vec![2];
+        assert!(
+            function
+                .validate_pattern_bindings(&ty, &invalid)
+                .unwrap_err()
+                .contains("projection")
+        );
+        invalid[1].fields = vec![0];
+        assert!(
+            function
+                .validate_pattern_bindings(&ty, &invalid)
+                .unwrap_err()
+                .contains("type mismatch")
+        );
+        function.locals.push(LocalDecl {
+            name: "overlap".into(),
+            ty: Ty::I32,
+            mutable: false,
+        });
+        invalid[1].local = LocalId(3);
+        assert!(
+            function
+                .validate_pattern_bindings(&ty, &invalid)
+                .unwrap_err()
+                .contains("overlapping")
+        );
+        function.locals[3].ty = ty.clone();
+        invalid[1].fields.clear();
+        assert!(
+            function
+                .validate_pattern_bindings(&ty, &invalid)
+                .unwrap_err()
+                .contains("overlapping")
+        );
+    }
+
+    #[test]
+    fn flattened_pattern_plan_enforces_binding_depth_and_work_bounds() {
+        let mut function = fixture();
+        let binding = PatternBinding {
+            local: LocalId(1),
+            fields: vec![],
+        };
+        let oversized = vec![binding.clone(); MAX_PATTERN_BINDINGS + 1];
+        assert!(
+            function
+                .validate_pattern_bindings(&Ty::Bool, &oversized)
+                .unwrap_err()
+                .contains("binding limit")
+        );
+        let deep = PatternBinding {
+            local: LocalId(1),
+            fields: vec![0; MAX_PATTERN_PROJECTION_DEPTH + 1],
+        };
+        assert!(
+            function
+                .validate_pattern_bindings(&Ty::Bool, &[deep])
+                .unwrap_err()
+                .contains("depth")
+        );
+
+        let mut root = Ty::I32;
+        for _ in 0..MAX_PATTERN_PROJECTION_DEPTH {
+            root = Ty::Tuple(vec![root].into());
+        }
+        let count = MAX_PATTERN_PROJECTION_WORK / (MAX_PATTERN_PROJECTION_DEPTH + 1) + 1;
+        function.locals.truncate(1);
+        let mut bindings = Vec::with_capacity(count);
+        for index in 0..count {
+            function.locals.push(LocalDecl {
+                name: format!("b{index}"),
+                ty: Ty::I32,
+                mutable: false,
+            });
+            bindings.push(PatternBinding {
+                local: LocalId(index + 1),
+                fields: vec![0; MAX_PATTERN_PROJECTION_DEPTH],
+            });
+        }
+        assert!(
+            function
+                .validate_pattern_bindings(&root, &bindings)
+                .unwrap_err()
+                .contains("work limit")
+        );
+    }
+
+    #[test]
+    fn pattern_type_equality_fails_closed_on_independently_allocated_shared_dags() {
+        let mut a = Ty::I32;
+        let mut b = Ty::I32;
+        for _ in 0..32 {
+            a = Ty::Tuple(vec![a.clone(), a].into());
+            b = Ty::Tuple(vec![b.clone(), b].into());
+        }
+        assert!(a.is_copy());
+        assert!(b.is_copy());
+        let mut function = fixture();
+        function.locals[1].ty = a;
+        let bindings = [PatternBinding {
+            local: LocalId(1),
+            fields: vec![],
+        }];
+        assert!(
+            function
+                .validate_pattern_bindings(&b, &bindings)
+                .unwrap_err()
+                .contains("work limit")
+        );
+    }
 
     fn nominal(id: DefId, name: &str, fields: Vec<Ty>) -> StructTy {
         StructTy::new(StructDef {

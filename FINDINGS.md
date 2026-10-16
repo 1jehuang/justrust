@@ -1,5 +1,42 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Irrefutable let patterns consume only selected places
+
+Implemented nested tuple/struct let patterns, wildcard, per-binding mutability,
+renames/shorthand, whole-pattern annotations and struct `..`. `PATTERNS.md`
+records the exact API and ownership contract. The frontend validates the complete
+pattern before installing new binders, while the initializer resolves in its old
+scope. Explicit fields enforce visibility and type accessibility even for `_`.
+
+Checked IR carries a bounded flat projection plan. Lowering addresses local and
+temporary-rooted field chains without eagerly consuming the parent, materializes
+non-place roots once, then consumes only selected binding paths. Wildcard/rest
+add no read or move, including after prior whole/partial moves. Rvalue initializer
+effects still happen. Divergent initializers never create impossible field loads.
+Existing analysis 109 and the native backend need no new semantic instruction.
+
+Review caught invalid trailing commas after struct rest and retained both cases
+as negative fixtures. Resource review replaced per-binding parameter scans with
+a cached set, bounded iterative pattern type equality, and shared-tuple Copy
+classification that visits distinct handles rather than expanding a DAG. Checked
+plan bounds are 65,536 bindings, depth 128 and one million comparison/projection
+work units. These are explicit implementation limits, not language limits.
+
+Final hosted gates (nightly-2026-10-08, 96-core host):
+- check `20261015-230233651-1393741`, passed.
+- test `20261015-230234847-1393876`, **356 passed**, no failures.
+- strict all-target clippy `20261015-230236326-1393951`, no warnings.
+- `cargo fmt --check` and `git diff --check`, passed.
+Exact profiles are in `data/runs/prototype-bootstrap/2026-10-patterns.jsonl`.
+The historical tuple-destructuring rejection is now a positive check/build and
+execution-parity fixture with its original source preserved. Independent source
+fixtures cover wildcard versus underscore bindings, ignored moved fields,
+initializer effects/order, shadowing, privacy and selected-path move failures.
+
+Tuple rest, ref/ref mut, @, refutable/match patterns, destructuring assignment,
+parameter patterns, let-else, general backward inference, borrowing and destruction
+remain open. No full-Rust or performance claim follows from this milestone.
+
 ## 2026-10-15: Nominal structs and source-level partial moves
 
 The clean-room compiler now accepts nonempty braced named structs, nominal type

@@ -17,6 +17,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Explicit cached CFG facts shared by check and native emission, with provenance.
 - [x] Cached storage/initialization/move-path dataflow shared by check and emission.
 - [x] Nonempty nominal structs, field privacy and source-level whole/partial moves.
+- [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -53,12 +54,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 Named nonempty structs now extend the cached initialization foundation with
 nominal identity, field privacy, whole/partial moves and native aggregate calls.
-The following slices remain open: destructuring and patterns, references, loans,
-lifetimes, destructors, enums, broader types and all remaining categories above.
+The following slices remain open: general patterns and destructuring assignment,
+references, loans, lifetimes, destructors, enums, broader types and categories above.
 This milestone passed 278 hosted tests and all 295 M8a source fixtures, including
 19 accepted nominal execution cases, 20 invalid nominal programs and two explicit
-legal-unsupported nominal boundaries. Next is irrefutable let destructuring with
-projected moves and wildcard semantics, not general match or borrowing.
+legal-unsupported nominal boundaries.
+
+Nested irrefutable let patterns now pass 356 hosted tests, including independent
+source acceptance and rejected-move graph retention. Pattern matching/exhaustiveness,
+remaining types/control flow and references/loans/destruction remain following
+slices. `PATTERNS.md` records the exact implemented contract and explicit gaps.
 
 The internal initialization/move-analysis foundation passed 209 hosted tests and
 all 254 existing M8a source fixtures. Both check and emission require the same

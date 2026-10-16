@@ -95,10 +95,29 @@ pub struct Place {
     pub fields: Vec<FieldSelector>,
 }
 #[derive(Clone, Debug)]
+pub enum Pattern {
+    Wildcard,
+    Binding {
+        name: String,
+        mutable: bool,
+    },
+    Tuple(Vec<Pattern>),
+    Struct {
+        name: String,
+        fields: Vec<(String, Pattern)>,
+        rest: bool,
+    },
+}
+#[derive(Clone, Debug)]
 pub enum Stmt {
     Let {
         name: String,
         mutable: bool,
+        ty: Type,
+        value: Expr,
+    },
+    LetPattern {
+        pattern: Pattern,
         ty: Type,
         value: Expr,
     },
@@ -367,6 +386,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         | ('>', '=')
                         | ('&', '&')
                         | ('|', '|')
+                        | ('.', '.')
                 )
             {
                 text.push(next);
@@ -382,6 +402,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | ";"
                     | ","
                     | "."
+                    | ".."
                     | "->"
                     | "+"
                     | "-"
@@ -687,6 +708,88 @@ impl Parser {
         self.nesting -= 1;
         result
     }
+    fn pattern(&mut self) -> Result<Pattern, String> {
+        if self.nesting >= 128 {
+            return Err(self.error("pattern nesting exceeds limit 128"));
+        }
+        self.nesting += 1;
+        let result = self.pattern_inner();
+        self.nesting -= 1;
+        result
+    }
+    fn pattern_inner(&mut self) -> Result<Pattern, String> {
+        if self.eat("_") {
+            return Ok(Pattern::Wildcard);
+        }
+        if self.eat("(") {
+            if self.eat(")") {
+                return Ok(Pattern::Tuple(Vec::new()));
+            }
+            let first = self.pattern()?;
+            if !self.eat(",") {
+                self.expect(")")?;
+                return Ok(first);
+            }
+            let mut fields = vec![first];
+            while !self.is(")") {
+                if self.is("..") {
+                    return Err(self.error("tuple rest patterns are unsupported"));
+                }
+                fields.push(self.pattern()?);
+                if !self.eat(",") {
+                    break;
+                }
+            }
+            self.expect(")")?;
+            return Ok(Pattern::Tuple(fields));
+        }
+        if self.eat("mut") {
+            return Ok(Pattern::Binding {
+                name: self.ident()?,
+                mutable: true,
+            });
+        }
+        let name = self.path()?;
+        if !self.eat("{") {
+            if name.contains("::") || matches!(name.as_str(), "self" | "super" | "crate") {
+                return Err(self.error("qualified patterns require named struct braces"));
+            }
+            return Ok(Pattern::Binding {
+                name,
+                mutable: false,
+            });
+        }
+        let mut fields = Vec::new();
+        let mut rest = false;
+        while !self.is("}") {
+            if self.eat("..") {
+                rest = true;
+                if !self.is("}") {
+                    return Err(self.error("struct rest pattern must be last"));
+                }
+                break;
+            }
+            let mutable = self.eat("mut");
+            let field = self.ident()?;
+            let pattern = if self.eat(":") {
+                if mutable {
+                    return Err(self.error("mut must apply to a binding, not a field selector"));
+                }
+                self.pattern()?
+            } else {
+                Pattern::Binding {
+                    name: field.clone(),
+                    mutable,
+                }
+            };
+            fields.push((field, pattern));
+            if !self.eat(",") {
+                break;
+            }
+        }
+        self.expect("}")?;
+        Ok(Pattern::Struct { name, fields, rest })
+    }
     fn block_inner(&mut self) -> Result<Block, String> {
         self.expect("{")?;
         let mut statements = Vec::new();
@@ -702,11 +805,7 @@ impl Parser {
                 return Err(self.error("block-local items are unsupported"));
             }
             if self.eat("let") {
-                let mutable = self.eat("mut");
-                if self.is("(") {
-                    return Err(self.error("destructuring patterns are unsupported"));
-                }
-                let name = self.ident()?;
+                let pattern = self.pattern()?;
                 // Local inference is performed by each independent function checker.
                 let annotation = if self.eat(":") {
                     Some(self.ty()?)
@@ -717,12 +816,16 @@ impl Parser {
                 let value = self.expr(0)?;
                 self.expect(";")?;
                 let ty = annotation.unwrap_or(Type::Infer);
-                statements.push(Stmt::Let {
-                    name,
-                    mutable,
-                    ty,
-                    value,
-                });
+                if let Pattern::Binding { name, mutable } = pattern {
+                    statements.push(Stmt::Let {
+                        name,
+                        mutable,
+                        ty,
+                        value,
+                    });
+                } else {
+                    statements.push(Stmt::LetPattern { pattern, ty, value });
+                }
             } else if self.eat("return") {
                 let value = if self.is(";") || self.is("}") {
                     None
@@ -1240,6 +1343,39 @@ impl Resolver<'_> {
         }
         Ok(())
     }
+    fn pattern(
+        &mut self,
+        pattern: &mut Pattern,
+        module: &str,
+        names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), String> {
+        match pattern {
+            Pattern::Wildcard => {}
+            Pattern::Binding { name, .. } => {
+                if !names.insert(name.clone()) {
+                    return Err(format!("duplicate pattern binding {name}"));
+                }
+            }
+            Pattern::Tuple(fields) => {
+                for pattern in fields {
+                    self.pattern(pattern, module, names)?;
+                }
+            }
+            Pattern::Struct { name, fields, .. } => {
+                let item = self
+                    .path(name, module, true, false)?
+                    .ok_or_else(|| format!("unresolved struct pattern {name}"))?;
+                if !item.structure {
+                    return Err(format!("{} is not a struct pattern", item.path));
+                }
+                *name = item.path;
+                for (_, pattern) in fields {
+                    self.pattern(pattern, module, names)?;
+                }
+            }
+        }
+        Ok(())
+    }
     fn block(
         &mut self,
         block: &mut Block,
@@ -1255,6 +1391,13 @@ impl Resolver<'_> {
                     self.ty(ty, module)?;
                     self.expr(value, module, locals)?;
                     locals.last_mut().unwrap().insert(name.clone());
+                }
+                Stmt::LetPattern { pattern, ty, value } => {
+                    self.ty(ty, module)?;
+                    self.expr(value, module, locals)?;
+                    let mut names = std::collections::HashSet::new();
+                    self.pattern(pattern, module, &mut names)?;
+                    locals.last_mut().unwrap().extend(names);
                 }
                 Stmt::Assign { value, .. }
                 | Stmt::AssignPlace { value, .. }
@@ -1386,11 +1529,13 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
 }
 enum DepthNode<'a> {
     Type(&'a Type),
+    Pattern(&'a Pattern),
     Expr(&'a Expr),
     Block(&'a Block),
 }
 fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
     let mut stack = vec![(root, 0usize)];
+    let mut pattern_nodes = 0usize;
     while let Some((node, depth)) = stack.pop() {
         if depth > 128 {
             return Err("AST nesting exceeds limit 128".into());
@@ -1403,6 +1548,25 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 }
             }
             DepthNode::Type(_) => {}
+            DepthNode::Pattern(pattern) => {
+                pattern_nodes += 1;
+                if pattern_nodes > ir::MAX_PATTERN_PROJECTION_WORK {
+                    return Err("pattern node count exceeds limit".into());
+                }
+                match pattern {
+                    Pattern::Tuple(fields) => {
+                        for pattern in fields {
+                            push(DepthNode::Pattern(pattern));
+                        }
+                    }
+                    Pattern::Struct { fields, .. } => {
+                        for (_, pattern) in fields {
+                            push(DepthNode::Pattern(pattern));
+                        }
+                    }
+                    _ => {}
+                }
+            }
             DepthNode::Expr(expr) => match expr {
                 Expr::Tuple(fields) => {
                     for field in fields {
@@ -1444,6 +1608,11 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                         Stmt::Let { value, ty, .. } => {
                             push(DepthNode::Expr(value));
                             push(DepthNode::Type(ty));
+                        }
+                        Stmt::LetPattern { pattern, ty, value } => {
+                            push(DepthNode::Pattern(pattern));
+                            push(DepthNode::Type(ty));
+                            push(DepthNode::Expr(value));
                         }
                         Stmt::Assign { value, .. }
                         | Stmt::AssignPlace { value, .. }
@@ -1678,6 +1847,12 @@ struct LoopFrame {
     checking_condition: bool,
     break_ty: Option<ir::Ty>,
     can_exit: bool,
+}
+struct PatternLocal {
+    name: String,
+    ty: ir::Ty,
+    mutable: bool,
+    fields: Vec<usize>,
 }
 struct Checker<'a> {
     signatures: &'a Signatures,
@@ -1914,6 +2089,113 @@ impl<'a> Checker<'a> {
         self.accessible(&projected)?;
         Ok((index, projected))
     }
+    /// Recover only concrete pattern shape, without a general inference engine.
+    fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
+        match pattern {
+            Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
+            Pattern::Tuple(patterns) => match ty {
+                ir::Ty::Unit if patterns.is_empty() => Ok(ir::Ty::Unit),
+                ir::Ty::Never if patterns.is_empty() => Ok(ir::Ty::Unit),
+                ir::Ty::Never => patterns.iter().map(|pattern| {
+                    if matches!(pattern, Pattern::Binding { .. } | Pattern::Wildcard) {
+                        Err("unannotated never tuple pattern inference is unsupported; add a whole-pattern type annotation".into())
+                    } else { self.pattern_ty(pattern, &ir::Ty::Never) }
+                }).collect::<Result<Vec<_>, String>>().map(|fields| ir::Ty::Tuple(fields.into())),
+                ir::Ty::Tuple(fields) if fields.len() == patterns.len() => patterns.iter().zip(fields.iter()).map(|(pattern, ty)| self.pattern_ty(pattern, ty)).collect::<Result<Vec<_>, _>>().map(|fields| ir::Ty::Tuple(fields.into())),
+                _ => Err(format!("tuple pattern with {} fields does not match {ty:?}", patterns.len())),
+            },
+            Pattern::Struct { name, .. } => {
+                let expected = self.signatures.structs.get(name).cloned().map(ir::Ty::Struct).ok_or_else(|| format!("unknown struct pattern {name}"))?;
+                self.accessible(&expected)?;
+                if !coerces(ty, &expected) { return Err(format!("struct pattern {name} does not match {ty:?}")); }
+                Ok(expected)
+            }
+        }
+    }
+    fn pattern_locals(
+        &self,
+        pattern: &Pattern,
+        ty: &ir::Ty,
+        path: &mut Vec<usize>,
+        names: &mut std::collections::HashSet<String>,
+        pending: &mut Vec<PatternLocal>,
+        work: &mut usize,
+    ) -> Result<(), String> {
+        if path.len() > ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern projection depth exceeds limit".into());
+        }
+        match pattern {
+            Pattern::Wildcard => {}
+            Pattern::Binding { name, mutable } => {
+                if name == "_" {
+                    return Err("underscore is a wildcard, not a binding name".into());
+                }
+                if !names.insert(name.clone()) {
+                    return Err(format!("duplicate pattern binding {name}"));
+                }
+                self.accessible(ty)?;
+                if pending.len() >= ir::MAX_PATTERN_BINDINGS {
+                    return Err("pattern binding count exceeds limit".into());
+                }
+                *work = work
+                    .checked_add(1 + path.len())
+                    .ok_or("pattern projection work overflow")?;
+                if *work > ir::MAX_PATTERN_PROJECTION_WORK {
+                    return Err("pattern projection work exceeds limit".into());
+                }
+                pending.push(PatternLocal {
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    mutable: *mutable,
+                    fields: path.clone(),
+                });
+            }
+            Pattern::Tuple(patterns) => {
+                if patterns.is_empty() && *ty == ir::Ty::Unit {
+                    return Ok(());
+                }
+                let ir::Ty::Tuple(fields) = ty else {
+                    return Err(format!("tuple pattern does not match {ty:?}"));
+                };
+                if fields.len() != patterns.len() {
+                    return Err("tuple pattern arity mismatch".into());
+                }
+                for (index, (pattern, ty)) in patterns.iter().zip(fields.iter()).enumerate() {
+                    path.push(index);
+                    self.pattern_locals(pattern, ty, path, names, pending, work)?;
+                    path.pop();
+                }
+            }
+            Pattern::Struct { name, fields, rest } => {
+                let expected = self.pattern_ty(pattern, ty)?;
+                if &expected != ty {
+                    return Err(
+                        "nested never struct pattern requires a concrete annotated shape".into(),
+                    );
+                }
+                let ir::Ty::Struct(structure) = ty else {
+                    return Err(format!("expected struct pattern {name}"));
+                };
+                let mut selected = std::collections::HashSet::new();
+                for (field, pattern) in fields {
+                    let (index, field_ty) =
+                        self.field_type(ty, &FieldSelector::Named(field.clone()))?;
+                    if !selected.insert(index) {
+                        return Err(format!("duplicate struct pattern field {field}"));
+                    }
+                    path.push(index);
+                    self.pattern_locals(pattern, &field_ty, path, names, pending, work)?;
+                    path.pop();
+                }
+                if !rest && selected.len() != structure.def().fields.len() {
+                    return Err(format!(
+                        "missing fields in struct pattern {name}; use .. to omit fields"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
     fn expr_when(&mut self, e: &Expr, reachable: bool) -> Result<ir::ExprId, String> {
         let previous = self.reachable;
         self.reachable = reachable;
@@ -1954,6 +2236,48 @@ impl<'a> Checker<'a> {
                     };
                     let local = self.local(name, t, *mutable)?;
                     (ir::Stmt::Let { local, value }, f.completes)
+                }
+                Stmt::LetPattern { pattern, ty, value } => {
+                    // Resolve/check every initializer against the complete old scope.
+                    let value = self.expr(value)?;
+                    let flow = self.flow(value);
+                    let seed = if *ty == Type::Infer {
+                        flow.ty.clone()
+                    } else {
+                        let ty = checked_ty(ty, self.signatures)?;
+                        self.accessible(&ty)?;
+                        self.require(&flow, &ty)?;
+                        ty
+                    };
+                    let ty = self.pattern_ty(pattern, &seed)?;
+                    self.require(&flow, &ty)?;
+                    self.accessible(&ty)?;
+                    let mut pending = Vec::new();
+                    self.pattern_locals(
+                        pattern,
+                        &ty,
+                        &mut Vec::new(),
+                        &mut std::collections::HashSet::new(),
+                        &mut pending,
+                        &mut 0usize,
+                    )?;
+                    // No partially installed binder set can affect another binder.
+                    let mut bindings = Vec::with_capacity(pending.len());
+                    for binding in pending {
+                        let local = self.local(&binding.name, binding.ty, binding.mutable)?;
+                        bindings.push(ir::PatternBinding {
+                            local,
+                            fields: binding.fields,
+                        });
+                    }
+                    (
+                        ir::Stmt::LetPattern {
+                            value,
+                            ty,
+                            bindings,
+                        },
+                        flow.completes,
+                    )
                 }
                 Stmt::Assign { name, value } => {
                     let local = self.lookup(name)?;
@@ -2532,7 +2856,7 @@ mod typed_tests {
             "fn main(){let x=(1,).00;}",
             "fn main(){let x=(1,).0usize;}",
             "fn main(){let x=(1,).-1;}",
-            "fn main(){let (x,y)=(1,2);}",
+            "fn main(){let (x,..)=(1,2);}",
         ] {
             assert!(parse(source).is_err(), "{source}");
         }
@@ -2850,6 +3174,173 @@ mod typed_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tuple_patterns_preserve_old_scope_and_simultaneous_fresh_bindings() {
+        let program = parse("fn f()->i32{7} fn main(){let x=1;let ((mut x,),y):((i32,),bool)=((x,),true);x=2;let _=x;let _y=y;let (f,z)=(f(),f());}").unwrap();
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 1, &env).unwrap();
+        checked.validate().unwrap();
+        let ir::Stmt::LetPattern {
+            value, bindings, ..
+        } = &checked.body.statements[1]
+        else {
+            panic!("expected tuple pattern")
+        };
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.fields.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![0, 0], vec![1]]
+        );
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.local)
+                .collect::<Vec<_>>(),
+            vec![ir::LocalId(1), ir::LocalId(2)]
+        );
+        assert!(checked.locals[1].mutable);
+        assert_eq!(checked.locals[2].ty, ir::Ty::Bool);
+        assert!(
+            checked.exprs[..value.0]
+                .iter()
+                .any(|expr| matches!(expr.kind, ir::ExprKind::Local(ir::LocalId(0))))
+        );
+        let ir::Stmt::LetPattern { bindings, .. } = &checked.body.statements[3] else {
+            panic!("expected wildcard")
+        };
+        assert!(bindings.is_empty());
+        assert_eq!(
+            checked
+                .locals
+                .iter()
+                .filter(|local| local.name == "x")
+                .count(),
+            2
+        );
+        assert!(
+            parse("fn f()->i32{1} fn main(){let (f,z)=(f(),2);f();}")
+                .unwrap_err()
+                .contains("not callable")
+        );
+        check(
+            &parse(
+                "fn main(){let(x,y)=(1,2);let (z,)=(x,);let ()=();let (mut grouped)=z;grouped=y;}",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn struct_patterns_publish_source_order_paths_and_nominal_types() {
+        let program = parse("struct Inner{x:i32} struct S{a:Inner,b:bool} use S as Alias; fn main(){let s=S{a:Inner{x:1},b:true};let Alias{b:mut flag,a:Inner{x:n}}:S=s;flag=false;let Alias{..}=S{a:Inner{x:n},b:flag};}").unwrap();
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        checked.validate().unwrap();
+        let ir::Stmt::LetPattern { ty, bindings, .. } = &checked.body.statements[1] else {
+            panic!("expected struct pattern")
+        };
+        assert_eq!(*ty, ir::Ty::Struct(env.structs["S"].clone()));
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.fields.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![1], vec![0, 0]]
+        );
+        assert_eq!(checked.locals[bindings[0].local.0].name, "flag");
+        assert!(checked.locals[bindings[0].local.0].mutable);
+        assert_eq!(checked.locals[bindings[1].local.0].ty, ir::Ty::I32);
+    }
+
+    #[test]
+    fn pattern_shape_duplicate_annotation_and_privacy_errors_reject_even_when_dead() {
+        for source in [
+            "fn main(){let(x,x)=(1,2);}",
+            "fn main(){let(x,y)=(1,);}",
+            "fn main(){let ()=(1,);}",
+            "fn main(){let(x,y):(i32,bool)=(1,2);}",
+            "fn main(){let(x,y)=(1,true);x=false;}",
+            "struct S{x:i32,y:bool} fn main(){let S{x}=S{x:1,y:true};}",
+            "struct S{x:i32} fn main(){let S{x:_,x:_}=S{x:1};}",
+            "struct S{x:i32} fn main(){let S{missing:_,..}=S{x:1};}",
+            "struct S{x:i32} struct T{x:i32} fn main(){let S{x}=T{x:1};}",
+            "mod m{pub struct S{private:i32} pub fn make()->S{S{private:1}}} fn main(){let m::S{private:_,..}=m::make();}",
+            "mod m{struct H{x:i32} pub struct S{pub hidden:H} pub fn make()->S{S{hidden:H{x:1}}}} fn main(){let m::S{hidden:_,..}=m::make();}",
+            "fn main(){return;let(x,x)=(1,2);}",
+        ] {
+            assert!(
+                parse(source).and_then(|program| check(&program)).is_err(),
+                "accepted {source}"
+            );
+        }
+        check(&parse("mod m{struct H{x:i32} pub struct S{pub hidden:H} pub fn make()->S{S{hidden:H{x:1}}}} fn main(){let m::S{..}=m::make();}").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn never_patterns_use_explicit_shape_and_preserve_dead_value_types() {
+        for source in [
+            "fn main(){let(x,y):(i32,bool)=loop{};}",
+            "struct S{x:i32} fn main(){let S{x}=loop{};}",
+            "fn main(){let _=loop{};}",
+            "fn main(){let ()=loop{};}",
+            "struct S{x:i32} fn main(){let(S{x},())=loop{};}",
+            "struct S{x:i32} fn main(){let (S{x},)=({return;},);}",
+        ] {
+            let program = parse(source).unwrap();
+            let env = type_env(&program).unwrap();
+            type_function_with_env(&program, 0, &env)
+                .unwrap()
+                .validate()
+                .unwrap();
+        }
+        let error = check(&parse("fn main(){let(x,y)=loop{};}").unwrap()).unwrap_err();
+        assert!(error.contains("inference is unsupported"));
+        assert!(
+            check(&parse("fn main(){let(x,y):(i32,bool)={return;(false,0)};}").unwrap()).is_err()
+        );
+    }
+
+    #[test]
+    fn unsupported_patterns_and_pattern_nesting_are_explicit() {
+        for source in [
+            "fn main(){let(x,..)=(1,2);}",
+            "fn main(){let ref x=1;}",
+            "fn main(){let x @ _=1;}",
+            "fn main(){let 1=1;}",
+            "fn main(){let(mut _)=1;}",
+            "fn main(){let(x,y)=(1,2) else {};}",
+            "struct S{x:i32} fn main(){let S{..,x}=S{x:1};}",
+            "struct S{x:i32} fn main(){let S{..,}=S{x:1};}",
+            "struct S{x:i32} fn main(){let S{x,..,}=S{x:1};}",
+            "struct S{x:i32} fn main(){let S{. .}=S{x:1};}",
+            "fn f((x,y):(i32,i32)){} fn main(){}",
+        ] {
+            assert!(parse(source).is_err(), "accepted {source}");
+        }
+        let source = format!(
+            "fn main(){{let {}x{}=1;}}",
+            "(".repeat(140),
+            ")".repeat(140)
+        );
+        assert!(parse(&source).unwrap_err().contains("nesting"));
+        let mut program = parse("fn main(){let _=1;}").unwrap();
+        let mut pattern = Pattern::Wildcard;
+        for _ in 0..140 {
+            pattern = Pattern::Tuple(vec![pattern]);
+        }
+        let Stmt::LetPattern {
+            pattern: target, ..
+        } = &mut program.functions[0].body.statements[0]
+        else {
+            unreachable!()
+        };
+        *target = pattern;
+        assert!(check(&program).unwrap_err().contains("nesting"));
+    }
 
     #[test]
     fn structs_share_nominal_handles_within_one_environment_only() {
