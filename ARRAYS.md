@@ -52,5 +52,7 @@ unsupported boundaries. The exact historical array fixture is now accepted and
 executed without changing its source. `tests/array_graph.rs` checks once-only
 body/CFG/analysis facts and retained failure reports. Native backend tests cover
 4096 repeats with bounded generated code, large by-value copies, zero backing
-and nested empty-array strides. Tracked remote corpus evidence is retained in
-`FINDINGS.md` when complete. This is not full Rust or a speed claim.
+and nested empty-array strides. Tracked run `compiler-arrays-20261016-0703`
+passed505 cases across eleven corpora plus the native96-worker example, with
+raw receipts and qualified observations retained in `FINDINGS.md`. This is not
+full Rust or a speed claim.

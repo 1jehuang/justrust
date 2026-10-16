@@ -32,8 +32,14 @@ Final frozen hosted gates passed:
 Three exported profiles are retained in
 `data/runs/prototype-bootstrap/2026-10-arrays.jsonl`. Formatting and diff checks
 passed, independent read-only review reported no remaining blocker. Tracked
-M8a eleven-corpus execution is the next validation gate. No full-Rust, cold-build
-or comparative speed claim follows from these tests.
+M8a run `compiler-arrays-20261016-0703` at source revision `854415ba972f`
+passed all 505 cases across eleven corpora: 310 accepted parity cases, 150 invalid
+rejections and 45 explicit legal-unsupported boundaries. All raw JSONL receipts
+are retained as `experiments/results/20261016-m8a-arrays-*.jsonl`. The native
+96-worker example executed successfully and retained complete18-node capture,
+23edges, zero failures and zero dropped events. Its observed total10,169,938ns
+and engine2,858,755ns are contended/uncontrolled example observations, not cold
+or comparative performance measurements. No full-Rust or speed claim follows.
 
 ## 2026-10-16: Payload enums preserve explicit selection and initialization facts
 

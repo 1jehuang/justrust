@@ -62,7 +62,9 @@ expanded-path, work and frame limits. Repeats evaluate once even at length zero,
 indexed wildcards inspect initialized array storage, and non-Copy indexed moves
 reject. The independent 30-case corpus separates 12 supported, 13 invalid and
 five legal-unsupported programs. Dynamic `usize` indices, slices and array
-patterns remain later work. Full Rust completion remains open.
+patterns remain later work. The tracked M8a run passed505 cases across eleven
+corpora (310accepted,150invalid,45legalunsupported), with a successful96-worker
+native example and all raw receipts retained. Full Rust completion remains open.
 
 Payload enums now pass 533 hosted tests plus strict all-target lint.
 `PAYLOAD-ENUMS.md` defines tuple/braced/unit construction, selected payload
