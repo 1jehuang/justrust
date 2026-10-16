@@ -1621,7 +1621,7 @@ mod tests {
         ));
         assert!(matches!(
             callee.ref_contract.returns,
-            ir::ReturnContract::MutWholeParams(_)
+            ir::ReturnContract::MutInputPaths(_)
         ));
         assert!(callee.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { destination, value: Rvalue::Use(Operand::Move(_)) } if destination.local == callee.return_local)));
         let mut malformed = callee.clone();
@@ -1641,7 +1641,11 @@ mod tests {
         assert!(malformed.validate().unwrap_err().contains("Copy type"));
         let mut forged = callee.clone();
         let mut contract = forged.ref_contract.as_ref().clone();
-        contract.returns = ir::ReturnContract::SharedWholeParams(std::sync::Arc::from([0]));
+        contract.returns =
+            ir::ReturnContract::SharedInputPaths(std::sync::Arc::from([ir::InputPath {
+                param: 0,
+                projection: std::sync::Arc::from([]),
+            }]));
         forged.ref_contract = std::sync::Arc::new(contract);
         assert!(forged.validate().unwrap_err().contains("kind mismatch"));
         let source =
@@ -1681,7 +1685,7 @@ mod tests {
         ));
         assert!(matches!(
             lowered.ref_contract.returns,
-            ir::ReturnContract::SharedWholeParams(_)
+            ir::ReturnContract::SharedInputPaths(_)
         ));
         let source =
             super::super::frontend::type_function_with_signatures(&program, 1, &signatures)

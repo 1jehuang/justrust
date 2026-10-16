@@ -411,12 +411,22 @@ pub const MAX_REGION_PARAMS: usize = 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RegionParamId(pub u16);
 
+pub const MAX_INPUT_PATHS: usize = 4096;
+pub const MAX_INPUT_PATH_STEPS: usize = 131_072;
+pub const MAX_INPUT_PATH_OCCURRENCES: usize = 131_072;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InputPath {
+    pub param: usize,
+    pub projection: Arc<[Projection]>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ReturnContract {
     #[default]
     NoReference,
-    SharedWholeParams(Arc<[usize]>),
-    MutWholeParams(Arc<[usize]>),
+    SharedInputPaths(Arc<[InputPath]>),
+    MutInputPaths(Arc<[InputPath]>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -549,8 +559,12 @@ impl RefContract {
         Ok(rows[usize::from(longer.0)] & (1u64 << shorter.0) != 0)
     }
 
-    pub fn eligible_params(&self, params: &[Ty], result: &Ty) -> Result<Vec<usize>, String> {
-        self.eligible_params_counted(params, result)
+    pub fn eligible_input_paths(
+        &self,
+        params: &[Ty],
+        result: &Ty,
+    ) -> Result<Vec<InputPath>, String> {
+        self.eligible_input_paths_counted(params, result)
             .map(|(params, _)| params)
     }
 
@@ -559,11 +573,11 @@ impl RefContract {
         self.param_regions.len() * 2 + self.outlives.len() * 2 + count * count + count + 1
     }
 
-    fn eligible_params_counted(
+    fn eligible_input_paths_counted(
         &self,
         params: &[Ty],
         result: &Ty,
-    ) -> Result<(Vec<usize>, usize), String> {
+    ) -> Result<(Vec<InputPath>, usize), String> {
         let shape_work = Self::validate_shapes(params, result)?;
         let rows = self.closure()?;
         if self.param_regions.len() != params.len() {
@@ -581,18 +595,90 @@ impl RefContract {
             .ok_or("missing reference result region")?;
         let mut eligible = Vec::new();
         let mut work = 0;
+        let mut occurrences = 0usize;
+        let mut stored_steps = 0usize;
+        let mut path = Vec::new();
+        let mut frames: Vec<(&Ty, usize)> = Vec::new();
+        let children = |ty: &Ty| -> usize {
+            if let Ty::Array { len, .. } = ty {
+                *len
+            } else {
+                ty.field_count().unwrap_or(0)
+            }
+        };
+        fn child(ty: &Ty, index: usize) -> Result<(Projection, &Ty), String> {
+            if let Ty::Array { element, len } = ty {
+                if *len > MAX_ARRAY_LEN || index >= *len {
+                    return Err("invalid input path array index".into());
+                }
+                Ok((Projection::ConstantIndex(index), element))
+            } else {
+                Ok((
+                    Projection::Field(index),
+                    ty.field_ty(index).ok_or("invalid input path field")?,
+                ))
+            }
+        }
         for (index, (ty, param_region)) in params.iter().zip(self.param_regions.iter()).enumerate()
         {
             match ty {
                 Ty::Ref { kind, referent } if kind == result_kind => {
                     let input = param_region.ok_or("missing reference parameter region")?;
-                    if rows[usize::from(input.0)] & (1u64 << region.0) != 0
-                        && pattern_types_equal(referent, output, &mut work)?
-                    {
-                        if eligible.len() >= MAX_LOAN_SITES {
-                            return Err("reference return candidate limit exceeded".into());
+                    if rows[usize::from(input.0)] & (1u64 << region.0) != 0 {
+                        occurrences += 1;
+                        if occurrences > MAX_INPUT_PATH_OCCURRENCES {
+                            return Err("input path occurrence resource limit exceeded".into());
                         }
-                        eligible.push(index);
+                        let mut current = referent.as_ref();
+                        'walk: loop {
+                            if pattern_types_equal(current, output, &mut work)? {
+                                if eligible.len() >= MAX_INPUT_PATHS {
+                                    return Err("reference return candidate limit exceeded".into());
+                                }
+                                stored_steps = stored_steps
+                                    .checked_add(path.len())
+                                    .ok_or("input path step resource limit exceeded")?;
+                                if stored_steps > MAX_INPUT_PATH_STEPS {
+                                    return Err("input path step resource limit exceeded".into());
+                                }
+                                eligible.push(InputPath {
+                                    param: index,
+                                    projection: path.clone().into(),
+                                });
+                            }
+                            let count = children(current);
+                            if count != 0 {
+                                if path.len() >= MAX_PATTERN_PROJECTION_DEPTH {
+                                    return Err("input path depth resource limit exceeded".into());
+                                }
+                                occurrences = occurrences
+                                    .checked_add(count)
+                                    .ok_or("input path occurrence resource limit exceeded")?;
+                                if occurrences > MAX_INPUT_PATH_OCCURRENCES {
+                                    return Err(
+                                        "input path occurrence resource limit exceeded".into()
+                                    );
+                                }
+                                let (step, next) = child(current, 0)?;
+                                frames.push((current, 1));
+                                path.push(step);
+                                current = next;
+                                continue;
+                            }
+                            while let Some((parent, next_index)) = frames.last_mut() {
+                                let parent = *parent;
+                                if *next_index < children(parent) {
+                                    let (step, next) = child(parent, *next_index)?;
+                                    *next_index += 1;
+                                    *path.last_mut().ok_or("invalid input path traversal")? = step;
+                                    current = next;
+                                    continue 'walk;
+                                }
+                                frames.pop();
+                                path.pop();
+                            }
+                            break;
+                        }
                     }
                 }
                 Ty::Ref { .. } => {
@@ -609,7 +695,7 @@ impl RefContract {
         }
         Ok((
             eligible,
-            shape_work + self.metadata_work() + params.len() + work,
+            shape_work + self.metadata_work() + params.len() + work + occurrences + stored_steps,
         ))
     }
 
@@ -620,9 +706,44 @@ impl RefContract {
     /// Work for this exact structural validation, for the caller's shared
     /// preflight budget. Charge before repeating validation/publication.
     pub fn validation_work(&self, params: &[Ty], result: &Ty) -> Result<usize, String> {
+        let mut supplied_work = 0usize;
+        if let ReturnContract::SharedInputPaths(candidates)
+        | ReturnContract::MutInputPaths(candidates) = &self.returns
+        {
+            if candidates.len() > MAX_INPUT_PATHS {
+                return Err("reference return candidate limit exceeded".into());
+            }
+            let mut steps = 0usize;
+            for candidate in candidates.iter() {
+                if candidate.projection.len() > MAX_PATTERN_PROJECTION_DEPTH {
+                    return Err("input path depth resource limit exceeded".into());
+                }
+                steps = steps
+                    .checked_add(candidate.projection.len())
+                    .ok_or("input path step resource limit exceeded")?;
+                if steps > MAX_INPUT_PATH_STEPS {
+                    return Err("input path step resource limit exceeded".into());
+                }
+            }
+            for candidate in candidates.iter() {
+                let Ty::Ref { referent, .. } = params
+                    .get(candidate.param)
+                    .ok_or("invalid input path parameter index")?
+                else {
+                    return Err("input path parameter requires reference type".into());
+                };
+                if candidate.projection.iter().any(|step| {
+                    !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                }) {
+                    return Err("forbidden input path projection".into());
+                }
+                projected_ty(referent, &candidate.projection)?;
+            }
+            supplied_work = candidates.len() * 2 + steps * 2;
+        }
         let mut work = Self::validate_shapes(params, result)?;
         self.closure()?;
-        work += self.metadata_work();
+        work += self.metadata_work() + supplied_work;
         match &self.returns {
             ReturnContract::NoReference => {
                 if matches!(result, Ty::Ref { .. })
@@ -635,9 +756,9 @@ impl RefContract {
                     return Err("invalid noescape reference contract".into());
                 }
             }
-            ReturnContract::SharedWholeParams(candidates)
-            | ReturnContract::MutWholeParams(candidates) => {
-                let expected_kind = if matches!(self.returns, ReturnContract::MutWholeParams(_)) {
+            ReturnContract::SharedInputPaths(candidates)
+            | ReturnContract::MutInputPaths(candidates) => {
+                let expected_kind = if matches!(self.returns, ReturnContract::MutInputPaths(_)) {
                     BorrowKind::Mut
                 } else {
                     BorrowKind::Shared
@@ -645,11 +766,14 @@ impl RefContract {
                 if !matches!(result, Ty::Ref { kind, .. } if *kind == expected_kind) {
                     return Err("reference return contract/result kind mismatch".into());
                 }
-                if candidates.len() > MAX_LOAN_SITES {
-                    return Err("reference return candidate limit exceeded".into());
-                }
-                let (eligible, candidate_work) = self.eligible_params_counted(params, result)?;
-                work += candidate_work + candidates.len();
+                let (eligible, candidate_work) =
+                    self.eligible_input_paths_counted(params, result)?;
+                work += candidate_work
+                    + candidates.len()
+                    + candidates
+                        .iter()
+                        .map(|candidate| candidate.projection.len())
+                        .sum::<usize>();
                 if candidates.as_ref() != eligible.as_slice() {
                     return Err("reference return candidates must equal complete declaration-derived parameters".into());
                 }
@@ -1321,6 +1445,270 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn projected_input_path_resources_bound_occurrences_and_buffers() {
+        let reference = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let contract = RefContract {
+            region_count: 1,
+            param_regions: Arc::from([Some(RegionParamId(0))]),
+            result_region: Some(RegionParamId(0)),
+            outlives: Arc::from([]),
+            returns: ReturnContract::SharedInputPaths(Arc::from([])),
+        };
+        let output = reference(Ty::I32);
+        let array = Ty::Array {
+            element: Arc::new(Ty::I32),
+            len: MAX_INPUT_PATHS,
+        };
+        let candidates = contract
+            .eligible_input_paths(&[reference(array.clone())], &output)
+            .unwrap();
+        assert_eq!(candidates.len(), MAX_INPUT_PATHS);
+        assert_eq!(
+            candidates.last().unwrap().projection.as_ref(),
+            &[Projection::ConstantIndex(MAX_INPUT_PATHS - 1)]
+        );
+        let too_many = Ty::Tuple(Arc::from([array.clone(), Ty::I32]));
+        assert!(
+            contract
+                .eligible_input_paths(&[reference(too_many)], &output)
+                .unwrap_err()
+                .contains("candidate limit")
+        );
+        let mut many_steps = array;
+        for _ in 0..64 {
+            many_steps = Ty::Tuple(Arc::from([many_steps]));
+        }
+        assert!(
+            contract
+                .eligible_input_paths(&[reference(many_steps)], &output)
+                .unwrap_err()
+                .contains("step resource")
+        );
+        let mut dag = Ty::Bool;
+        for _ in 0..16 {
+            dag = Ty::Tuple(Arc::from([dag.clone(), dag]));
+        }
+        assert!(
+            contract
+                .eligible_input_paths(&[reference(dag.clone())], &output)
+                .unwrap()
+                .is_empty()
+        );
+        dag = Ty::Tuple(Arc::from([dag.clone(), dag]));
+        assert!(
+            contract
+                .eligible_input_paths(&[reference(dag)], &output)
+                .unwrap_err()
+                .contains("occurrence resource")
+        );
+        let oversized = InputPath {
+            param: 0,
+            projection: vec![Projection::Field(0); 128].into(),
+        };
+        let malformed = RefContract {
+            returns: ReturnContract::SharedInputPaths(
+                vec![oversized; MAX_INPUT_PATH_STEPS / 128 + 1].into(),
+            ),
+            ..contract.clone()
+        };
+        assert!(
+            malformed
+                .validate(std::slice::from_ref(&output), &output)
+                .unwrap_err()
+                .contains("step resource")
+        );
+        let malformed = RefContract {
+            returns: ReturnContract::SharedInputPaths(
+                vec![
+                    InputPath {
+                        param: usize::MAX,
+                        projection: Arc::from([])
+                    };
+                    MAX_INPUT_PATHS + 1
+                ]
+                .into(),
+            ),
+            ..contract
+        };
+        assert!(
+            malformed
+                .validate(std::slice::from_ref(&output), &output)
+                .unwrap_err()
+                .contains("candidate limit")
+        );
+    }
+
+    #[test]
+    fn projected_input_paths_preserve_occurrences_privacy_and_exact_metadata() {
+        let snapshot = SnapshotId::allocate().unwrap();
+        let pair = Ty::Tuple(Arc::from([Ty::I32, Ty::I32]));
+        let enumeration = EnumTy::new(EnumDef {
+            id: DefId { snapshot, index: 7 },
+            name: "E".into(),
+            module: String::new(),
+            public: false,
+            variants: Arc::from([VariantDef {
+                name: "V".into(),
+                shape: VariantShape::Tuple,
+                fields: Arc::from([FieldDef {
+                    name: "0".into(),
+                    ty: Ty::I32,
+                    public: false,
+                }]),
+            }]),
+        });
+        let root = Ty::Struct(nominal(
+            DefId { snapshot, index: 0 },
+            "Private",
+            vec![
+                pair.clone(),
+                Ty::Array {
+                    element: Arc::new(pair),
+                    len: 2,
+                },
+                Ty::Array {
+                    element: Arc::new(Ty::I32),
+                    len: 0,
+                },
+                Ty::Enum(enumeration.clone()),
+            ],
+        ));
+        let reference = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let params = vec![Ty::Bool, reference(root.clone()), reference(Ty::I32)];
+        let result = reference(Ty::I32);
+        let mut contract = RefContract {
+            region_count: 1,
+            param_regions: Arc::from([None, Some(RegionParamId(0)), Some(RegionParamId(0))]),
+            result_region: Some(RegionParamId(0)),
+            outlives: Arc::from([]),
+            returns: ReturnContract::SharedInputPaths(Arc::from([])),
+        };
+        let candidate = |param, projection: Vec<Projection>| InputPath {
+            param,
+            projection: projection.into(),
+        };
+        let expected = vec![
+            candidate(1, vec![Projection::Field(0), Projection::Field(0)]),
+            candidate(1, vec![Projection::Field(0), Projection::Field(1)]),
+            candidate(
+                1,
+                vec![
+                    Projection::Field(1),
+                    Projection::ConstantIndex(0),
+                    Projection::Field(0),
+                ],
+            ),
+            candidate(
+                1,
+                vec![
+                    Projection::Field(1),
+                    Projection::ConstantIndex(0),
+                    Projection::Field(1),
+                ],
+            ),
+            candidate(
+                1,
+                vec![
+                    Projection::Field(1),
+                    Projection::ConstantIndex(1),
+                    Projection::Field(0),
+                ],
+            ),
+            candidate(
+                1,
+                vec![
+                    Projection::Field(1),
+                    Projection::ConstantIndex(1),
+                    Projection::Field(1),
+                ],
+            ),
+            candidate(2, vec![]),
+        ];
+        assert_eq!(
+            contract.eligible_input_paths(&params, &result).unwrap(),
+            expected
+        );
+        contract.returns = ReturnContract::SharedInputPaths(expected.clone().into());
+        contract.validate(&params, &result).unwrap();
+        for mut malformed in [
+            expected[..6].to_vec(),
+            {
+                let mut paths = expected.clone();
+                paths.swap(0, 1);
+                paths
+            },
+            {
+                let mut paths = expected.clone();
+                paths.push(paths[0].clone());
+                paths
+            },
+        ] {
+            contract.returns =
+                ReturnContract::SharedInputPaths(std::mem::take(&mut malformed).into());
+            assert!(contract.validate(&params, &result).is_err());
+        }
+        for path in [
+            vec![Projection::Deref],
+            vec![Projection::Downcast(VariantId {
+                owner: enumeration.def().id,
+                index: 0,
+            })],
+            vec![Projection::Field(99)],
+            vec![Projection::ConstantIndex(0)],
+        ] {
+            contract.returns = ReturnContract::SharedInputPaths(Arc::from([candidate(1, path)]));
+            assert!(contract.validate(&params, &result).is_err());
+        }
+        let Ty::Struct(root_type) = &root else {
+            unreachable!()
+        };
+        let other = Ty::Struct(nominal(
+            DefId { snapshot, index: 1 },
+            "Private",
+            root_type
+                .def()
+                .fields
+                .iter()
+                .map(|field| field.ty.clone())
+                .collect(),
+        ));
+        assert!(
+            contract
+                .eligible_input_paths(&params, &reference(other))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            contract
+                .eligible_input_paths(&params, &reference(root))
+                .unwrap(),
+            vec![candidate(1, vec![])]
+        );
+        assert_eq!(
+            contract
+                .eligible_input_paths(&params, &reference(Ty::Enum(enumeration)))
+                .unwrap(),
+            vec![candidate(1, vec![Projection::Field(3)])]
+        );
+    }
+
+    fn empty_input_paths(params: &[usize]) -> Arc<[InputPath]> {
+        params
+            .iter()
+            .map(|param| InputPath {
+                param: *param,
+                projection: Arc::from([]),
+            })
+            .collect::<Vec<_>>()
+            .into()
+    }
+    #[test]
     fn mutable_reference_contracts_require_exact_kinds_and_complete_candidates() {
         let mutable = |ty| Ty::Ref {
             kind: BorrowKind::Mut,
@@ -1343,12 +1731,12 @@ mod tests {
             ]),
             result_region: Some(RegionParamId(1)),
             outlives: Arc::from([(RegionParamId(0), RegionParamId(1))]),
-            returns: ReturnContract::MutWholeParams(Arc::from([2, 3])),
+            returns: ReturnContract::MutInputPaths(empty_input_paths(&[2, 3])),
         };
         contract.validate(&params, &result).unwrap();
         assert_eq!(
-            contract.eligible_params(&params, &result).unwrap(),
-            vec![2, 3]
+            contract.eligible_input_paths(&params, &result).unwrap(),
+            empty_input_paths(&[2, 3]).to_vec()
         );
         assert!(contract.validation_work(&params, &result).unwrap() > params.len());
         for candidates in [
@@ -1359,13 +1747,13 @@ mod tests {
             vec![usize::MAX],
         ] {
             let malformed = RefContract {
-                returns: ReturnContract::MutWholeParams(candidates.into()),
+                returns: ReturnContract::MutInputPaths(empty_input_paths(&candidates)),
                 ..contract.clone()
             };
             assert!(malformed.validate(&params, &result).is_err());
         }
         let forged = RefContract {
-            returns: ReturnContract::SharedWholeParams(Arc::from([2, 3])),
+            returns: ReturnContract::SharedInputPaths(empty_input_paths(&[2, 3])),
             ..contract.clone()
         };
         assert!(
@@ -1401,7 +1789,7 @@ mod tests {
             param_regions: Arc::from([]),
             result_region: Some(RegionParamId(0)),
             outlives: Arc::from([]),
-            returns: ReturnContract::MutWholeParams(Arc::from([])),
+            returns: ReturnContract::MutInputPaths(empty_input_paths(&[])),
         };
         divergent.validate(&[], &result).unwrap();
     }
@@ -1428,7 +1816,7 @@ mod tests {
                 (RegionParamId(0), RegionParamId(1)),
                 (RegionParamId(1), RegionParamId(2)),
             ]),
-            returns: ReturnContract::SharedWholeParams(Arc::from([2, 3])),
+            returns: ReturnContract::SharedInputPaths(empty_input_paths(&[2, 3])),
         };
         contract.validate(&params, &result).unwrap();
         assert!(
@@ -1442,16 +1830,16 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
-            contract.eligible_params(&params, &result).unwrap(),
-            vec![2, 3]
+            contract.eligible_input_paths(&params, &result).unwrap(),
+            empty_input_paths(&[2, 3]).to_vec()
         );
         assert!(contract.validation_work(&params, &result).unwrap() >= params.len());
         let mut invalid = contract.clone();
-        invalid.returns = ReturnContract::SharedWholeParams(Arc::from([2]));
+        invalid.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[2]));
         assert!(invalid.validate(&params, &result).is_err());
-        invalid.returns = ReturnContract::SharedWholeParams(Arc::from([3, 2]));
+        invalid.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[3, 2]));
         assert!(invalid.validate(&params, &result).is_err());
-        invalid.returns = ReturnContract::SharedWholeParams(Arc::from([2, 2, 3]));
+        invalid.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[2, 2, 3]));
         assert!(invalid.validate(&params, &result).is_err());
         for region in [3, u16::MAX] {
             let mut invalid = contract.clone();
@@ -1474,7 +1862,7 @@ mod tests {
         assert!(invalid.validate(&params, &result).is_err());
         let mut no_edges = contract.clone();
         no_edges.outlives = Arc::from([]);
-        no_edges.returns = ReturnContract::SharedWholeParams(Arc::from([]));
+        no_edges.returns = ReturnContract::SharedInputPaths(empty_input_paths(&[]));
         no_edges.validate(&params, &result).unwrap();
         assert!(
             !no_edges

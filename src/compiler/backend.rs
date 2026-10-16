@@ -787,6 +787,8 @@ impl<'a> Emitter<'a> {
 /// and successful read-phase return-provenance/region verification as part of
 /// that analysis. Mutable returns additionally consume the unique handle with
 /// Move. The pointer load below is physical transport, not semantic Copy.
+/// Projected returns require exact external-root plus typed suffix membership
+/// and candidate-to-actual-origin correlation, never layout offsets in summaries.
 /// Local analysis alone cannot establish the whole-program call contract.
 /// Every local and lowering temporary has stable invocation-owned frame storage.
 pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
@@ -1249,6 +1251,106 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn projected_reference_returns_native_tuple_array_aggregate_and_recursion() {
+        let p = frontend::parse(
+            r#"
+            struct Record { before: usize, pair: (usize, [usize; 9]), after: usize }
+            fn element<'a>(value: &'a Record) -> &'a usize { &(*value).pair.1[8] }
+            fn array<'a>(value: &'a mut Record) -> &'a mut [usize; 9] { &mut (*value).pair.1 }
+            fn recurse<'a>(value: &'a Record, depth: i32) -> &'a usize {
+                if depth == 0 { &(*value).pair.1[8] } else { recurse(value, depth - 1) }
+            }
+            fn large() -> [usize; 9] { [9223372036854775808usize; 9] }
+            fn main() {
+                let mut record = Record {
+                    before: 17usize, pair: (23usize, [0usize; 9]), after: 29usize
+                };
+                let returned = array(&mut record);
+                *returned = large();
+                (*returned)[8] = 18446744073709551615usize;
+                let copied = *returned;
+                if copied[0] != 9223372036854775808usize { 1 / 0; }
+                if *element(&record) != 18446744073709551615usize { 1 / 0; }
+                if *recurse(&record, 3) != 18446744073709551615usize { 1 / 0; }
+                if record.before != 17usize { 1 / 0; }
+                if record.pair.0 != 23usize { 1 / 0; }
+                if record.after != 29usize { 1 / 0; }
+                println!("projected-return");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"projected-return\n");
+    }
+
+    #[test]
+    fn projected_reference_returns_native_candidate_actual_layout_correlation() {
+        let p = frontend::parse(
+            r#"
+            struct Left { value: usize, guard: bool }
+            struct Right { guard: bool, padding: [bool; 2], value: usize }
+            fn choose<'a>(tag: i32, a: &'a mut Left, b: &'a mut Right, first: bool) -> &'a mut usize {
+                if first { &mut (*a).value } else { &mut (*b).value }
+            }
+            fn main() {
+                let mut a = Left { value: 1usize, guard: true };
+                let mut b = Right { guard: true, padding: [false; 2], value: 2usize };
+                let left = choose(0, &mut a, &mut b, true);
+                *left = 9223372036854775808usize;
+                let right = choose(1, &mut a, &mut b, false);
+                *right = 18446744073709551615usize;
+                if a.value != 9223372036854775808usize { 1 / 0; }
+                if b.value != 18446744073709551615usize { 1 / 0; }
+                if !a.guard { 1 / 0; }
+                if !b.guard { 1 / 0; }
+                if b.padding[0] { 1 / 0; }
+                println!("correlated-layouts");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"correlated-layouts\n");
+    }
+
+    #[test]
+    fn projected_reference_returns_native_private_getter_does_not_grant_source_privacy() {
+        let p = frontend::parse(
+            r#"
+            mod hidden {
+                pub struct Data { padding: [usize; 9], value: usize }
+                pub fn make() -> Data {
+                    Data { padding: [17usize; 9], value: 9223372036854775808usize }
+                }
+                pub fn get<'a>(data: &'a Data) -> &'a usize { &(*data).value }
+                pub fn get_mut<'a>(data: &'a mut Data) -> &'a mut usize { &mut (*data).value }
+                pub fn guard(data: &Data) -> usize { (*data).padding[8] }
+            }
+            fn main() {
+                let mut data = hidden::make();
+                if *hidden::get(&data) != 9223372036854775808usize { 1 / 0; }
+                let returned = hidden::get_mut(&mut data);
+                *returned = 18446744073709551615usize;
+                if *hidden::get(&data) != 18446744073709551615usize { 1 / 0; }
+                if hidden::guard(&data) != 17usize { 1 / 0; }
+                println!("private-getter");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"private-getter\n");
+        let private_access = frontend::parse(
+            "mod hidden { pub struct Data { value: usize } pub fn make() -> Data { Data { value: 1usize } } } fn main() { let data = hidden::make(); let forbidden = data.value; }",
+        );
+        assert!(private_access.and_then(|p| emit(&p)).is_err());
     }
 
     #[test]

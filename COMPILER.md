@@ -55,16 +55,19 @@ referents have separate invocation-lived canonical roots. Mutable calls invalida
 all candidate referent selection proofs without inventing initialization. Every
 body must pass analysis before executable publication. Standalone checked-function
 emission rejects reference calls without whole-program signature/noescape evidence.
-Shared or mutable reference results may point to whole same-kind reference
-parameter referents under explicit named lifetime contracts. Declaration-derived
-candidates, rigid body outlives obligations and separate transitive lifetime
-dependencies gate returned pointers. Mutable results are consumed unique handles,
-not copied capabilities, and keep overlapping parent authority frozen until their
-last use. Returning functions currently require all reference inputs to match the
-result kind. Projected results, mixed-kind returning inputs, general elision and
+Shared or mutable reference results may point to same-kind parameter referents
+or typed static tuple/struct/constant-array subpaths under explicit named lifetime
+contracts. Complete declaration-derived InputPath candidates, rigid body outlives
+obligations and separate transitive lifetime dependencies gate returned pointers.
+Each suffix stays correlated with its original argument and source authority.
+Private-field getters do not grant callers direct private access. Mutable results
+are consumed unique handles, not copied capabilities, and keep overlapping parent
+authority frozen until their last use. Returning functions require all reference
+inputs to match the result kind. Enum payload paths, dynamic borrowed indices,
+implicit field autoderef, mixed-kind returning inputs, general elision and
 reference-containing aggregates remain unsupported.
-See `BORROWING.md`, `REFERENCE-CALLS.md`, `REFERENCE-RETURNS.md` and
-`MUTABLE-REFERENCE-RETURNS.md`.
+See `BORROWING.md`, `REFERENCE-CALLS.md`, `REFERENCE-RETURNS.md`,
+`MUTABLE-REFERENCE-RETURNS.md` and `PROJECTED-REFERENCE-RETURNS.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.

@@ -2889,10 +2889,10 @@ fn canonical_ref_contract(
         outlives: edges.into(),
         returns: ir::ReturnContract::NoReference,
     };
-    let candidates = contract.eligible_params(params, result)?.into();
+    let candidates = contract.eligible_input_paths(params, result)?.into();
     contract.returns = match result_kind {
-        ir::BorrowKind::Shared => ir::ReturnContract::SharedWholeParams(candidates),
-        ir::BorrowKind::Mut => ir::ReturnContract::MutWholeParams(candidates),
+        ir::BorrowKind::Shared => ir::ReturnContract::SharedInputPaths(candidates),
+        ir::BorrowKind::Mut => ir::ReturnContract::MutInputPaths(candidates),
     };
     contract.validate(params, result)?;
     Ok(std::sync::Arc::new(contract))
@@ -4642,12 +4642,73 @@ mod typed_tests {
     use super::*;
 
     #[test]
+    fn projected_contract_paths_keep_source_privacy_and_argument_layouts() {
+        let p=parse("mod m{pub struct S{nested:([i32;1],)}pub fn get<'a>(p:&'a S)->&'a i32{&(*p).nested.0[0]}pub fn get_mut<'a>(p:&'a mut S)->&'a mut i32{&mut (*p).nested.0[0]}pub fn make()->S{S{nested:([7],)}}}fn choose<'a>(flag:bool,a:&'a(i32,bool),b:&'a(bool,i32))->&'a i32{if flag{&(*a).0}else{&(*b).1}}fn main(){let mut s=m::make();let r=m::get(&s);let n=*r;let q=m::get_mut(&mut s);*q=9;}").unwrap();
+        let env = signature_table(&p).unwrap();
+        let nested = ir::InputPath {
+            param: 0,
+            projection: vec![
+                ir::Projection::Field(0),
+                ir::Projection::Field(0),
+                ir::Projection::ConstantIndex(0),
+            ]
+            .into(),
+        };
+        assert_eq!(
+            env.functions["m::get"].ref_contract.returns,
+            ir::ReturnContract::SharedInputPaths(vec![nested.clone()].into())
+        );
+        assert_eq!(
+            env.functions["m::get_mut"].ref_contract.returns,
+            ir::ReturnContract::MutInputPaths(vec![nested].into())
+        );
+        assert_eq!(
+            env.functions["choose"].ref_contract.returns,
+            ir::ReturnContract::SharedInputPaths(
+                vec![
+                    ir::InputPath {
+                        param: 1,
+                        projection: vec![ir::Projection::Field(0)].into()
+                    },
+                    ir::InputPath {
+                        param: 2,
+                        projection: vec![ir::Projection::Field(1)].into()
+                    },
+                ]
+                .into()
+            )
+        );
+        for index in 0..p.functions.len() {
+            type_function_with_signatures(&p, index, &env).unwrap();
+        }
+        let invalid=parse("mod m{pub struct S{x:i32}pub fn make()->S{S{x:7}}}fn main(){let s=m::make();let r=&s.x;}").unwrap();
+        let env = signature_table(&invalid).unwrap();
+        assert!(
+            type_function_with_signatures(&invalid, 1, &env)
+                .unwrap_err()
+                .contains("private")
+        );
+    }
+
+    #[test]
     fn b3b_mutable_contracts_keep_complete_original_indices_and_return_reborrows() {
         let p=parse("fn pick<'a>(flag:bool,s:&'a mut bool,x:&'a mut i32,y:&'a mut i32)->&'a mut i32{if flag{x}else{y}}fn moved<'a>(r:&'a mut i32)->&'a mut i32{let moved=r;moved}fn main(){}").unwrap();
         let env = signature_table(&p).unwrap();
         assert_eq!(
             env.functions["pick"].ref_contract.returns,
-            ir::ReturnContract::MutWholeParams(vec![2, 3].into())
+            ir::ReturnContract::MutInputPaths(
+                vec![
+                    ir::InputPath {
+                        param: 2,
+                        projection: vec![].into()
+                    },
+                    ir::InputPath {
+                        param: 3,
+                        projection: vec![].into()
+                    }
+                ]
+                .into()
+            )
         );
         let pick = type_function_with_signatures(&p, 0, &env).unwrap();
         assert_eq!(
@@ -4728,7 +4789,19 @@ mod typed_tests {
         );
         assert_eq!(
             first.ref_contract.returns,
-            ir::ReturnContract::SharedWholeParams(vec![2, 3].into())
+            ir::ReturnContract::SharedInputPaths(
+                vec![
+                    ir::InputPath {
+                        param: 2,
+                        projection: vec![].into()
+                    },
+                    ir::InputPath {
+                        param: 3,
+                        projection: vec![].into()
+                    }
+                ]
+                .into()
+            )
         );
         let checked = type_function_with_signatures(&p, 0, &env).unwrap();
         assert!(std::sync::Arc::ptr_eq(
@@ -4744,11 +4817,17 @@ mod typed_tests {
         let env = signature_table(&p).unwrap();
         assert_eq!(
             env.functions["short"].ref_contract.returns,
-            ir::ReturnContract::SharedWholeParams(vec![0].into())
+            ir::ReturnContract::SharedInputPaths(
+                vec![ir::InputPath {
+                    param: 0,
+                    projection: vec![].into()
+                }]
+                .into()
+            )
         );
         assert_eq!(
             env.functions["missing"].ref_contract.returns,
-            ir::ReturnContract::SharedWholeParams(vec![].into())
+            ir::ReturnContract::SharedInputPaths(vec![].into())
         );
         let checked = type_function_with_signatures(&p, 3, &env).unwrap();
         assert_eq!(

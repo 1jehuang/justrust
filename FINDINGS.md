@@ -8508,3 +8508,36 @@ in `experiments/results/20261016-m8a-mutable-reference-returns-*.jsonl`. The
 event capture, 18 nodes, 23 edges, zero failures and zero dropped events. Observed
 14.815 ms total and 3.283 ms engine time are contended/uncontrolled measurements,
 not speedup claims. Full Rust and projected reference returns remain open.
+
+### Projected input reference returns: declaration paths, not body summaries
+
+Implemented canonical `InputPath { param, projection }` contracts with complete
+SharedInputPaths/MutInputPaths lists derived from declaration types and rigid
+outlives closure. Static tuple/struct Field and ConstantIndex paths include private
+fields internally without granting source visibility. Enums remain opaque. The
+occurrence DFS retains one path plus depth-bounded frames, caps nonmatching shared
+DAG occurrences independently, and bounds supplied/generated path buffers before
+allocation. Each call candidate is substituted ONLY through its original actual
+argument origins, never a suffix cross-product over flattened parents. Returns
+prove exact external root plus suffix membership separately from all transitive
+universal lifetime dependencies. Mutable returns still prove before unique Move,
+and all mutable actuals retain conservative proof invalidation without init repair.
+
+The exact frozen 30-case corpus (17 supported, nine invalid, four boundaries)
+passed independent stock classification and all CLI workers1/8 checks/builds/runs.
+Artifact SHA256 is `bd1c90a96f02023841f1ee68c4d8b0d863fea94a5f2e14b8118a3dc2ce1bb207`.
+Four new graph tests retain exact canonical paths/CFG/ANALYZE facts, no OBJECT on
+check, parent freeze and failed unused-callee/universal-dependency publication.
+Historical implicit-autoderef source bytes and boundary classifications are
+unchanged. Both independent actual-code soundness/resource reviews are clear.
+
+Exact final hosted check `20261016-015817786-2799255`, all-target test
+`20261016-015818728-2799446` (888 passed) and strict all-target clippy
+`20261016-015820616-2799227` pass after all source owners froze. Formatting and
+diff checks pass. Final preflight explicitly counts each formal occurrence, even
+malformed duplicate IDs, before sizing generated scratch. Exact three redacted
+profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-projected-reference-returns.jsonl`. The
+private-field recursive projected-return example passes the external stock
+oracle. Tracked seventeen-corpus native verification follows after commit. These
+are correctness gates, not speedup or full-Rust-completion claims.

@@ -103,8 +103,13 @@ separate target authority and lifetime dependencies and rigid universal body
 proofs. `MUTABLE-REFERENCE-RETURNS.md` adds whole mutable-parameter results as
 consumed unique handles, with kind-correct returned origins and parent-loan
 freeze/resume. Returning functions require all reference inputs to match the
-result kind. Projected results, mixed-kind returning inputs, aggregate reference
-fields, temporary lifetime extension and general Rust regions remain later work.
+result kind. `PROJECTED-REFERENCE-RETURNS.md` extends results to complete typed
+static Field/ConstantIndex input paths, including internal private-field paths
+without changing source privacy. Candidate suffixes remain correlated with their
+original argument authority, while lifetime dependencies are checked separately.
+Enum payload paths, dynamic borrowed indices, implicit field autoderef, mixed-kind
+returning inputs, aggregate reference fields, temporary lifetime extension and
+general Rust regions remain later work.
 Loans born within an SCC and carried over a backedge receive an explicit
 unsupported diagnostic. Current acceptance does not establish full Rust
 borrow-checker compatibility.

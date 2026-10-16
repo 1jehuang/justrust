@@ -110,14 +110,66 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         arity: usize,
         loan_sites: usize,
         max_bytes: usize,
+        contract: &super::ir::RefContract,
+        budget: &mut Budget,
     ) -> Result<(), Exhausted> {
+        let candidates = match &contract.returns {
+            super::ir::ReturnContract::NoReference => &[][..],
+            super::ir::ReturnContract::SharedInputPaths(paths)
+            | super::ir::ReturnContract::MutInputPaths(paths) => paths.as_ref(),
+        };
+        if candidates.len() > 4096 {
+            return Err(Exhausted);
+        }
+        budget.spend(candidates.len() + 1)?;
+        let mut steps = 0usize;
+        for candidate in candidates {
+            if candidate.projection.len() > 128 {
+                return Err(Exhausted);
+            }
+            steps = steps
+                .checked_add(candidate.projection.len())
+                .ok_or(Exhausted)?;
+            if steps > 131072 {
+                return Err(Exhausted);
+            }
+        }
+        budget.spend(steps)?;
+        let provided_bytes = candidates
+            .len()
+            .checked_mul(std::mem::size_of::<super::ir::InputPath>())
+            .and_then(|n| n.checked_add(steps.checked_mul(std::mem::size_of::<Projection>())?))
+            .ok_or(Exhausted)?;
+        let generated_bytes = if matches!(contract.returns, super::ir::ReturnContract::NoReference)
+        {
+            0
+        } else {
+            // Expanded preceding type visits bound occurrence count. Reserve
+            // candidate Arc/Vec growth and full path copies, independently of
+            // the supplied list (which may be forged small or empty).
+            type_work
+                .min(4096)
+                .checked_mul(std::mem::size_of::<super::ir::InputPath>())
+                .and_then(|n| {
+                    n.checked_add(
+                        type_work
+                            .checked_mul(128)?
+                            .min(131072)
+                            .checked_mul(std::mem::size_of::<Projection>())?,
+                    )
+                })
+                .and_then(|n| n.checked_mul(4))
+                .ok_or(Exhausted)?
+        };
         // A structural type visit can retain a comparison pair, depth, Vec
-        // growth and hash-table slot. Helpers never expand array elements and
-        // deduplicate DAGs, so the preceding expanded type walk bounds visits.
+        // growth and hash-table slot. The expanded type walk also bounds
+        // occurrence enumeration, independently of helper DAG equality caches.
         let bytes = type_work
             .checked_mul(128)
             .and_then(|n| n.checked_add(arity.checked_mul(std::mem::size_of::<Ty>())?))
             .and_then(|n| n.checked_add(loan_sites.checked_mul(std::mem::size_of::<usize>())?))
+            .and_then(|n| n.checked_add(provided_bytes))
+            .and_then(|n| n.checked_add(generated_bytes))
             .and_then(|n| n.checked_add(4096))
             .ok_or(Exhausted)?;
         if bytes > max_bytes {
@@ -238,12 +290,22 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     for local in &f.locals {
         preflight_ty(&local.ty, 0, &mut budget)?;
     }
+    // The contract helper sees formal occurrences, not distinct local slots.
+    // Malformed duplicate formal indices are diagnosed later, but must not
+    // undercount generated candidates or scratch before that validation.
+    for param in &f.params {
+        if let Some(local) = f.locals.get(param.0) {
+            preflight_ty(&local.ty, 0, &mut budget)?;
+        }
+    }
     preflight_ty(&f.result, 0, &mut budget)?;
     contract_scratch(
         before_types - budget.0,
         f.params.len(),
         f.loan_sites.len(),
         limits.state_bytes,
+        &f.ref_contract,
+        &mut budget,
     )?;
     let mut param_types = Vec::with_capacity(f.params.len());
     for param in &f.params {
@@ -351,6 +413,8 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                     signature.params.len(),
                     f.loan_sites.len(),
                     limits.state_bytes,
+                    &signature.ref_contract,
+                    &mut budget,
                 )?;
                 if !charge_contract(
                     signature
@@ -1516,6 +1580,150 @@ mod tests {
     }
 
     #[test]
+    fn projected_returns_preserve_nested_places_and_unique_parent_freeze() {
+        for source in [
+            "fn f<'a>(p:&'a (bool,[i32;2]))->&'a i32{&(*p).1[1]}",
+            "struct S{a:bool,b:(i32,[i32;2])} fn f<'a>(p:&'a mut S)->&'a mut i32{&mut (*p).b.1[1]}",
+            "fn f()->i32{let mut p=(1,2);let r=&mut p;let q=get(r);*q=3;(*r).1} fn get<'a>(p:&'a mut (i32,i32))->&'a mut i32{&mut (*p).0}",
+            "fn f<'a>(p:&'a (i32,bool))->&'a i32{id(get(p))} fn get<'a>(p:&'a (i32,bool))->&'a i32{&(*p).0} fn id<'a>(p:&'a i32)->&'a i32{p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        let source = "fn f()->i32{let mut p=(1,2);let r=&mut p;let q=get(r);let n=(*r).1;*q+n} fn get<'a>(p:&'a mut (i32,i32))->&'a mut i32{&mut (*p).0}";
+        assert!(!analyze(&borrowed_source(source)).passed());
+    }
+
+    #[test]
+    fn projected_call_candidates_remain_correlated_with_original_arguments() {
+        let f = borrowed_source(
+            "fn f(p:&(i32,bool),q:&(bool,i32),b:bool)->i32{*pick(b,p,q)} fn pick<'a>(b:bool,p:&'a (i32,bool),q:&'a (bool,i32))->&'a i32{if b{&(*p).0}else{&(*q).1}}",
+        );
+        assert!(analyze(&f).passed());
+        let (block, destination) = f
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(index, block)| match &block.terminator.value {
+                Terminator::Call { destination, .. } => Some((BlockId(index), destination.clone())),
+                _ => None,
+            })
+            .unwrap();
+        let mut budget = Budget(32 * 1024 * 1024);
+        let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+        let targets = plan
+            .resolve(
+                &Place {
+                    local: destination.local,
+                    projection: vec![Projection::Deref],
+                },
+                block,
+                None,
+                Phase::Write,
+                &mut budget,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(targets.len(), 2);
+        for (param, field) in [(f.params[0], 0), (f.params[1], 1)] {
+            assert!(targets.iter().any(|target| target.place.root
+                == CanonicalRoot::ParameterReferent(param)
+                && target.place.projection == [Projection::Field(field)]));
+        }
+        assert!(targets[0].authority != targets[1].authority);
+        let f = borrowed_source(
+            "fn f()->i32{let x=(1,2);*pick(&x,&x)} fn pick<'a>(p:&'a (i32,i32),q:&'a (i32,i32))->&'a i32{&(*p).0}",
+        );
+        let (block, destination) = f
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(index, block)| match &block.terminator.value {
+                Terminator::Call { destination, .. } => Some((BlockId(index), destination.clone())),
+                _ => None,
+            })
+            .unwrap();
+        let mut budget = Budget(32 * 1024 * 1024);
+        let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+        let targets = plan
+            .resolve(
+                &Place {
+                    local: destination.local,
+                    projection: vec![Projection::Deref],
+                },
+                block,
+                None,
+                Phase::Write,
+                &mut budget,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(targets.len(), 4);
+        assert!(targets.iter().any(|a| {
+            targets
+                .iter()
+                .any(|b| a.place == b.place && a.authority != b.authority)
+        }));
+        assert!(analyze(&f).passed());
+    }
+
+    #[test]
+    fn projected_metadata_limits_precede_structural_helper_allocation() {
+        use super::super::ir::{InputPath, ReturnContract};
+        for (count, depth) in [(4097, 0), (1025, 128), (1, 129)] {
+            let mut f = borrowed_source("fn f<'a>(p:&'a i32)->&'a i32{p}");
+            let path = InputPath {
+                param: 0,
+                projection: vec![Projection::Field(0); depth].into(),
+            };
+            std::sync::Arc::make_mut(&mut f.ref_contract).returns =
+                ReturnContract::SharedInputPaths(vec![path; count].into());
+            let result = analyze(&f);
+            assert!(
+                !result.complete,
+                "{count}/{depth}: {:?}",
+                result.diagnostics
+            );
+            assert_eq!(result.diagnostics[0].kind, ErrorKind::ResourceLimit);
+        }
+        let mut f = borrowed_source("fn f<'a>(p:&'a i32)->&'a i32{p}");
+        std::sync::Arc::make_mut(&mut f.ref_contract).returns = ReturnContract::SharedInputPaths(
+            vec![InputPath {
+                param: 0,
+                projection: vec![Projection::Deref].into(),
+            }]
+            .into(),
+        );
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(matches!(
+            result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
+    }
+
+    #[test]
+    fn projected_candidate_products_and_generated_scratch_fail_closed() {
+        let f = borrowed_source(
+            "fn f(p:&[i32;32])->i32{*get(p)} fn get<'a>(p:&'a [i32;32])->&'a i32{&(*p)[0]}",
+        );
+        assert!(analyze(&f).passed());
+        let mut budget = Budget(32 * 1024 * 1024);
+        let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+        let mut budget = Budget(32 * 1024 * 1024);
+        assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
+        let result = analyze_with_limits(
+            &f,
+            Limits {
+                state_bytes: 1024,
+                ..Limits::default()
+            },
+        );
+        assert!(!result.complete);
+        assert!(!result.passed());
+    }
+
+    #[test]
     fn mutable_returns_transfer_unique_authority_and_resume_after_last_use() {
         for source in [
             "fn f<'a>(p:&'a mut i32)->&'a mut i32{p}",
@@ -1868,7 +2076,7 @@ mod tests {
         let mut f = borrowed_source("fn f<'a,'b>(p:&'a i32)->&'a i32{p}");
         let contract = std::sync::Arc::make_mut(&mut f.ref_contract);
         contract.result_region = Some(super::super::ir::RegionParamId(1));
-        contract.returns = super::super::ir::ReturnContract::SharedWholeParams(vec![].into());
+        contract.returns = super::super::ir::ReturnContract::SharedInputPaths(vec![].into());
         f.blocks = vec![BasicBlock {
             statements: vec![],
             terminator: located(Terminator::Goto(BlockId(0))),

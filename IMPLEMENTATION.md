@@ -58,6 +58,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Projected input reference returns are implemented under
+`PROJECTED-REFERENCE-RETURNS.md`: complete declaration-derived typed static paths,
+source-specific candidate/argument correlation, private-field privacy separation
+and bounded occurrence enumeration. All 888 hosted tests, the frozen 30-case stock
+corpus and four workers1/8 graph acceptance tests pass. Both independent actual-code
+soundness/resource reviews, strict all-target lint and formatting pass. Tracked
+seventeen-corpus native verification remains required before delivery. Full Rust
+is open.
+
 Mutable whole-parameter reference returns are implemented under
 `MUTABLE-REFERENCE-RETURNS.md`, with exact kind contracts, one unique returned
 handle, candidate-specific authority and transitive lifetime dependencies. Normal

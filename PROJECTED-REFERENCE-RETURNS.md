@@ -1,8 +1,10 @@
 # Projected input reference returns: design checkpoint
 
-Status: protocol frozen after all owner feasibility and independent read-only
-soundness/resource reviews. Implementation is authorized under the ownership
-scopes below, with correctness and native acceptance gates still pending.
+Status: implemented with the frozen 30-case stock corpus and four retained
+workers1/8 graph tests passing. All 888 hosted tests pass, and both independent
+actual-code soundness/resource reviews are clear. Final strict all-target lint
+and formatting also pass. Tracked seventeen-corpus native verification remains
+the delivery gate.
 Mutable whole-parameter returns passed 844 hosted tests and all 662 tracked native
 cases at implementation `49a1ae343`, with raw evidence pushed in `68c2b7258`.
 Full Rust remains open.
@@ -33,7 +35,10 @@ competing representations. NoReference and its B2 mixed-kind policy stay intact.
 Shared-returning functions retain all-shared reference inputs, and mutable-returning
 functions retain all-mutable reference inputs. Reference aggregates, nested
 references, local/static/rvalue returns, lifetime elision and enum payload return
-projections remain outside this slice.
+projections remain outside this slice. Source projected borrows retain explicit
+one-Deref place syntax, such as `&(*p).field`; implicit field autoderef is not
+introduced. Historical `&p.field` and `&mut p.field` boundary sources remain
+byte-identical and are not promoted by this protocol.
 
 For every same-kind input whose declared region outlives the output, enumerate
 all static referent occurrences. Emit a candidate at every node whose type exactly

@@ -16,7 +16,7 @@ fn shared_returns_share_exact_body_cfg_and_analysis() {
                 assert_eq!(function.ref_contract.region_count, 1);
                 assert!(matches!(
                     &function.ref_contract.returns,
-                    compiler::ir::ReturnContract::SharedWholeParams(indices) if indices.as_ref() == [0]
+                    compiler::ir::ReturnContract::SharedInputPaths(paths) if paths.len() == 1 && paths[0].param == 0 && paths[0].projection.is_empty()
                 ));
             }
             for index in 0..3 {

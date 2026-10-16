@@ -693,8 +693,8 @@ impl Plan {
             )?;
             let closure = contract.closure().expect("validated reference contract");
             let result = contract.result_region.expect("reference result region");
-            let (ReturnContract::SharedWholeParams(candidates)
-            | ReturnContract::MutWholeParams(candidates)) = &contract.returns
+            let (ReturnContract::SharedInputPaths(candidates)
+            | ReturnContract::MutInputPaths(candidates)) = &contract.returns
             else {
                 unreachable!()
             };
@@ -706,7 +706,8 @@ impl Plan {
                     unreachable!()
                 };
                 let actual = &point.origins[refs[place.local.0].expect("reference actual")];
-                if candidates.binary_search(&index).is_ok() {
+                budget.spend(candidates.len())?;
+                if candidates.iter().any(|candidate| candidate.param == index) {
                     parents[row].union(actual, budget)?;
                 }
                 if closure[region.0 as usize] & (1u64 << result.0) != 0 {
@@ -857,22 +858,47 @@ impl Plan {
                 ready[loan] = true;
                 changed = true;
             }
-            for row in call_rows.iter().flatten().copied() {
+            budget.spend(call_rows.len())?;
+            for (block, row) in call_rows.iter().enumerate() {
+                let Some(row) = *row else { continue };
                 if ready[row] || lifetime_deps[row].members().any(|parent| !ready[parent]) {
                     continue;
                 }
                 budget.spend(lifetime_deps[row].0.len() + parents[row].0.len() + 1)?;
+                let Terminator::Call {
+                    args, signature, ..
+                } = &f.blocks[block].terminator.value
+                else {
+                    unreachable!()
+                };
+                let (ReturnContract::SharedInputPaths(candidates)
+                | ReturnContract::MutInputPaths(candidates)) = &signature.ref_contract.returns
+                else {
+                    unreachable!()
+                };
+                let Some(point) = &points[offsets[block + 1] - 1] else {
+                    continue;
+                };
                 let mut next = vec![];
-                for parent in parents[row].members() {
-                    for target in &targets[parent] {
-                        append_target(
-                            &mut next,
-                            target,
-                            &[],
-                            parent,
-                            (&mut bytes, &mut memberships, max_bytes),
-                            budget,
-                        )?;
+                for candidate in candidates.iter() {
+                    budget.spend(candidate.projection.len() + 1)?;
+                    let (Operand::Copy(actual) | Operand::Move(actual)) = &args[candidate.param]
+                    else {
+                        unreachable!()
+                    };
+                    let actual = &point.origins[refs[actual.local.0].expect("reference actual")];
+                    budget.spend(actual.0.len())?;
+                    for parent in actual.members() {
+                        for target in &targets[parent] {
+                            append_target(
+                                &mut next,
+                                target,
+                                &candidate.projection,
+                                parent,
+                                (&mut bytes, &mut memberships, max_bytes),
+                                budget,
+                            )?;
+                        }
                     }
                 }
                 targets[row] = next;
@@ -1112,7 +1138,7 @@ impl Plan {
         block: BlockId,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
-        let (ReturnContract::SharedWholeParams(allowed) | ReturnContract::MutWholeParams(allowed)) =
+        let (ReturnContract::SharedInputPaths(allowed) | ReturnContract::MutInputPaths(allowed)) =
             &f.ref_contract.returns
         else {
             return Ok(None);
@@ -1149,18 +1175,19 @@ impl Plan {
                 )));
             }
             for target in &self.targets[origin] {
-                budget.spend(f.params.len() + allowed.len() + target.place.projection.len() + 1)?;
+                budget.spend(f.params.len() + target.place.projection.len() + 1)?;
+                for candidate in allowed.iter() {
+                    budget.spend(candidate.projection.len() + 1)?;
+                }
                 let CanonicalRoot::ParameterReferent(local) = target.place.root else {
                     return Ok(Some(Problem::Invalid(
                         "cannot return a reference to owned frame storage".into(),
                     )));
                 };
-                if !target.place.projection.is_empty() {
-                    return Ok(Some(Problem::Unsupported(
-                        "projected reference returns are unsupported".into(),
-                    )));
-                }
-                if !allowed.iter().any(|index| f.params[*index] == local) {
+                if !allowed.iter().any(|candidate| {
+                    f.params[candidate.param] == local
+                        && candidate.projection.as_ref() == target.place.projection.as_slice()
+                }) {
                     return Ok(Some(Problem::Invalid(
                         "returned input does not satisfy declared output lifetime".into(),
                     )));
