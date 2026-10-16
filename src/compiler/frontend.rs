@@ -74,6 +74,7 @@ pub struct Function {
 pub enum ReceiverKind {
     None,
     Value { mutable: bool },
+    Borrowed { kind: ir::BorrowKind },
 }
 #[derive(Clone, Debug)]
 pub struct ImplDecl {
@@ -133,6 +134,7 @@ pub struct AssociatedSemanticOwner {
 }
 #[derive(Clone, Debug, Default)]
 pub struct RegionDecls {
+    pub receiver: Option<String>,
     pub params: Vec<String>,
     pub outlives: Vec<(String, String)>,
 }
@@ -279,6 +281,10 @@ pub enum Stmt {
     },
     Assign {
         name: String,
+        value: Expr,
+    },
+    AssignDeref {
+        carrier: Expr,
         value: Expr,
     },
     AssignIndex {
@@ -1208,7 +1214,7 @@ impl Parser {
                     if !item_names.insert(signature.name.clone()) {
                         return Err(self.error("duplicate required trait item"));
                     }
-                    if !signature.type_params.is_empty() || !signature.regions.params.is_empty() {
+                    if !signature.type_params.is_empty() {
                         return Err(self.error("generic trait methods are unsupported"));
                     }
                     if self.is("{") {
@@ -1516,6 +1522,61 @@ impl Parser {
             receiver,
         ))
     }
+    fn callable_generics(&mut self, regions: &mut RegionDecls) -> Result<Vec<String>, String> {
+        self.pending_bounds.clear();
+        let mut params = Vec::new();
+        if !self.eat("<") {
+            return Ok(params);
+        }
+        let mut seen_type = false;
+        loop {
+            if self.token().text.starts_with('\'') {
+                if seen_type {
+                    return Err(self.error("lifetime parameters must precede type parameters"));
+                }
+                if regions.params.len() >= 64 {
+                    return Err(self.error("declared lifetime limit64"));
+                }
+                let name = self.lifetime()?;
+                regions.params.push(name.clone());
+                self.region_bounds(&name, regions)?;
+            } else {
+                seen_type = true;
+                if params.len() >= 32 {
+                    return Err(self.error("generic parameter resource limit32"));
+                }
+                let name = self.ident()?;
+                if params.contains(&name) {
+                    return Err(self.error("duplicate type parameter"));
+                }
+                params.push(name.clone());
+                if self.eat(":") {
+                    let mut traits = Vec::new();
+                    loop {
+                        if traits.len() >= 256 {
+                            return Err(self.error("predicate limit exceeded"));
+                        }
+                        traits.push(self.path()?);
+                        if !self.eat("+") {
+                            break;
+                        }
+                    }
+                    self.pending_bounds.push(TypeBound {
+                        parameter: name,
+                        traits,
+                    });
+                }
+                if self.is("=") {
+                    return Err(self.error("generic defaults are unsupported"));
+                }
+            }
+            if !self.eat(",") || self.is(">") {
+                break;
+            }
+        }
+        self.expect(">")?;
+        Ok(params)
+    }
     fn function_head(
         &mut self,
         inherited: &[String],
@@ -1524,16 +1585,7 @@ impl Parser {
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
-        let mut type_params = Vec::new();
-        self.pending_bounds.clear();
-        if self.is("<")
-            && !self
-                .tokens
-                .get(self.at + 1)
-                .is_some_and(|t| t.text.starts_with('\''))
-        {
-            type_params = self.type_parameters()?;
-        }
+        let type_params = self.callable_generics(&mut regions)?;
         let bounds = std::mem::take(&mut self.pending_bounds);
         self.type_params = inherited.to_vec();
         for name in &type_params {
@@ -1542,30 +1594,26 @@ impl Parser {
             }
             self.type_params.push(name.clone());
         }
-        if self.eat("<") {
-            if self.is(">") {
-                return Err(self.error("empty generic parameter lists are unsupported"));
-            }
-            loop {
-                if regions.params.len() >= 64 {
-                    return Err(self.error("declared lifetimes exceed supported limit 64"));
-                }
-                if !self.token().text.starts_with('\'') {
-                    return Err(self.error("type and const generic parameters are unsupported"));
-                }
-                let region = self.lifetime()?;
-                regions.params.push(region.clone());
-                self.region_bounds(&region, &mut regions)?;
-                if !self.eat(",") || self.is(">") {
-                    break;
-                }
-            }
-            self.expect(">")?;
-        }
         self.expect("(")?;
         let mut params = Vec::new();
         let mut receiver = ReceiverKind::None;
-        if associated && (self.is("self") || self.is("mut")) {
+        if associated && self.eat("&") {
+            regions.receiver = if self.token().text.starts_with('\'') {
+                Some(self.lifetime()?)
+            } else {
+                None
+            };
+            let kind = if self.eat("mut") {
+                ir::BorrowKind::Mut
+            } else {
+                ir::BorrowKind::Shared
+            };
+            self.expect("self")?;
+            receiver = ReceiverKind::Borrowed { kind };
+            if !self.is(")") {
+                self.expect(",")?;
+            }
+        } else if associated && (self.is("self") || self.is("mut")) {
             let mutable = self.eat("mut");
             self.expect("self")?;
             if self.is(":") {
@@ -1807,7 +1855,7 @@ impl Parser {
                     let Pattern::Binding { name, mutable } = pattern else {
                         return Err(self.error("deferred pattern declarations are unsupported"));
                     };
-                    let ty = annotation.ok_or_else(||self.error("untyped deferred declarations are unsupported; add a concrete type annotation"))?;
+                    let ty = annotation.unwrap_or(Type::Infer);
                     statements.push(Stmt::Declare { name, ty, mutable });
                     continue;
                 }
@@ -1852,6 +1900,18 @@ impl Parser {
                         statements.push(Stmt::AssignIndex {
                             array,
                             index: *index,
+                            value,
+                        });
+                        continue;
+                    }
+                    if let Expr::Deref { value: carrier } = &expr
+                        && genuine_call(carrier)
+                    {
+                        let Expr::Deref { value: carrier } = expr else {
+                            unreachable!()
+                        };
+                        statements.push(Stmt::AssignDeref {
+                            carrier: *carrier,
                             value,
                         });
                         continue;
@@ -2949,6 +3009,10 @@ impl Resolver<'_> {
                     self.pattern(pattern, module, &mut names)?;
                     locals.last_mut().unwrap().extend(names);
                 }
+                Stmt::AssignDeref { carrier, value } => {
+                    self.expr(value, module, locals)?;
+                    self.expr(carrier, module, locals)?;
+                }
                 Stmt::AssignIndex { index, value, .. }
                 | Stmt::AssignIndexOp { index, value, .. } => {
                     self.expr(value, module, locals)?;
@@ -3521,6 +3585,10 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                             push(DepthNode::Pattern(pattern));
                             push(DepthNode::Type(ty));
                             push(DepthNode::Expr(value));
+                        }
+                        Stmt::AssignDeref { carrier, value } => {
+                            push(DepthNode::Expr(value));
+                            push(DepthNode::Expr(carrier));
                         }
                         Stmt::AssignIndex { index, value, .. }
                         | Stmt::AssignIndexOp { index, value, .. } => {
@@ -4102,27 +4170,35 @@ impl PlanCtx {
                 .iter()
                 .map(|(_, ty)| state.source_ty(&registry, ty, &bindings, caller, budget, 0, true))
                 .collect::<Result<Vec<_>, _>>()?;
-            if matches!(context.receiver, ReceiverKind::Value { .. }) {
+            if context.receiver != ReceiverKind::None {
                 params.insert(
                     0,
-                    context
-                        .self_ty
-                        .clone()
-                        .ok_or("receiver without Self type")?,
+                    receiver_ty(
+                        context.receiver,
+                        context
+                            .self_ty
+                            .clone()
+                            .ok_or("receiver without Self type")?,
+                    ),
                 );
             }
             let result =
                 state.source_ty(&registry, &f.result, &bindings, caller, budget, 0, true)?;
             if info.env.is_generic() {
-                if !f.regions.params.is_empty() {
-                    return Err("references in generic declarations are unsupported".into());
-                }
                 for ty in params.iter().chain(std::iter::once(&result)) {
-                    validate_argument(ty, caller, budget, 0)?;
+                    validate_root_carrier(ty, caller, budget)?;
                 }
             }
             let signature = ir::Signature {
-                ref_contract: canonical_ref_contract(f, &params, &result)?,
+                ref_contract: canonical_ref_contract(
+                    &f.regions,
+                    &f.params,
+                    &f.result,
+                    context.receiver,
+                    &params,
+                    &result,
+                    budget,
+                )?,
                 params,
                 result,
             };
@@ -4174,23 +4250,28 @@ impl PlanCtx {
                     .params
                     .iter()
                     .map(|(_, ty)| {
-                        state.source_ty(&registry, ty, &bindings, caller, budget, 0, false)
+                        state.source_ty(&registry, ty, &bindings, caller, budget, 0, true)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                if matches!(item.receiver, ReceiverKind::Value { .. }) {
-                    params.insert(0, ir::Ty::Param(self_param));
+                if item.receiver != ReceiverKind::None {
+                    params.insert(0, receiver_ty(item.receiver, ir::Ty::Param(self_param)));
                 }
                 let result =
-                    state.source_ty(&registry, &h.result, &bindings, caller, budget, 0, false)?;
+                    state.source_ty(&registry, &h.result, &bindings, caller, budget, 0, true)?;
                 state.functions.insert(
                     id,
                     tr::GenericSchema {
                         env: info.env.clone(),
                         signature: ir::Signature {
-                            ref_contract: Arc::new(ir::RefContract {
-                                param_regions: vec![None; params.len()].into(),
-                                ..ir::RefContract::default()
-                            }),
+                            ref_contract: canonical_ref_contract(
+                                &h.regions,
+                                &h.params,
+                                &h.result,
+                                item.receiver,
+                                &params,
+                                &result,
+                                budget,
+                            )?,
                             params,
                             result,
                         },
@@ -4704,6 +4785,7 @@ fn receiver_mode(receiver: ReceiverKind) -> ir::ReceiverMode {
     match receiver {
         ReceiverKind::None => ir::ReceiverMode::None,
         ReceiverKind::Value { .. } => ir::ReceiverMode::Value,
+        ReceiverKind::Borrowed { kind } => ir::ReceiverMode::Borrowed { kind },
     }
 }
 fn append_source_bounds(
@@ -4919,7 +5001,12 @@ impl tr::SchemaCx for SchemaAdapter {
                     }
                     child(element)?;
                 }
-                ir::Ty::Ref { referent, .. } => child(referent)?,
+                ir::Ty::Ref { referent, .. } => {
+                    if depth != 0 {
+                        return Err("nested/aggregate reference metadata is unsupported".into());
+                    }
+                    child(referent)?;
+                }
                 _ => {}
             }
             if let Some((id, _)) = nominal {
@@ -5441,6 +5528,25 @@ fn param_bindings(info: &DeclInfo, args: &[ir::Ty]) -> Result<HashMap<String, ir
         .collect())
 }
 
+fn receiver_ty(receiver: ReceiverKind, self_ty: ir::Ty) -> ir::Ty {
+    match receiver {
+        ReceiverKind::Borrowed { kind } => ir::Ty::Ref {
+            kind,
+            referent: Arc::new(self_ty),
+        },
+        _ => self_ty,
+    }
+}
+fn validate_root_carrier(
+    ty: &ir::Ty,
+    caller: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    match ty {
+        ir::Ty::Ref { referent, .. } => validate_argument(referent, caller, budget, 0),
+        _ => validate_argument(ty, caller, budget, 0),
+    }
+}
 fn validate_argument(
     ty: &ir::Ty,
     caller: ir::FactsCtx<'_>,
@@ -5618,7 +5724,7 @@ impl PlanState {
                 self.intern(registry, decl, &[], caller, budget, depth + 1)?
             }
             Type::Ref { kind, referent, .. } => {
-                if !allow_ref || matches!(caller, ir::FactsCtx::Universal(_)) {
+                if !allow_ref {
                     return Err("references in generic or aggregate types are unsupported".into());
                 }
                 ir::Ty::Ref {
@@ -6233,6 +6339,7 @@ enum InferKind {
     Unknown(bool),
     Tuple(Arc<[InferTerm]>),
     Array(InferTerm, usize),
+    Ref(ir::BorrowKind, InferTerm),
     Nominal(ir::DeclId, Arc<[InferTerm]>),
 }
 enum InferField<'a> {
@@ -6280,6 +6387,9 @@ impl<'c, 's> Inference<'c, 's> {
                         .collect::<Result<Vec<_>, _>>()?
                         .into(),
                 )
+            }
+            InferKind::Ref(kind, referent) => {
+                InferKind::Ref(*kind, self.taint(referent, depth + 1)?)
             }
             InferKind::Array(element, len) => {
                 InferKind::Array(self.taint(element, depth + 1)?, *len)
@@ -6343,6 +6453,9 @@ impl<'c, 's> Inference<'c, 's> {
                         .into(),
                 ))
             }
+            (InferKind::Ref(k, x), InferKind::Ref(l, y)) if k == l => self
+                .checker
+                .infer_node(InferKind::Ref(*k, self.merge(x, y, depth + 1)?)),
             (InferKind::Array(x, n), InferKind::Array(y, m)) if n == m => self
                 .checker
                 .infer_node(InferKind::Array(self.merge(x, y, depth + 1)?, *n)),
@@ -6373,7 +6486,9 @@ impl<'c, 's> Inference<'c, 's> {
                     self.occurs(slot, f, depth + 1)?;
                 }
             }
-            InferKind::Array(element, _) => self.occurs(slot, element, depth + 1)?,
+            InferKind::Array(element, _) | InferKind::Ref(_, element) => {
+                self.occurs(slot, element, depth + 1)?
+            }
             _ => {}
         }
         Ok(())
@@ -6415,6 +6530,13 @@ impl<'c, 's> Inference<'c, 's> {
                     Ok(())
                 }
                 _ => Err("generic tuple inference shape mismatch".into()),
+            },
+            InferKind::Ref(kind, referent) => match evidence.as_ref() {
+                InferKind::Ref(actual_kind, actual) if kind == actual_kind => {
+                    self.constrain(referent, actual, depth + 1)
+                }
+                InferKind::Unknown(_) => self.constrain(referent, evidence, depth + 1),
+                _ => Err("generic reference inference kind or shape mismatch".into()),
             },
             InferKind::Array(element, len) => match evidence.as_ref() {
                 InferKind::Array(actual, n) if len == n => {
@@ -6474,6 +6596,13 @@ impl<'c, 's> Inference<'c, 's> {
                     result.push(ty);
                 }
                 Some(ir::Ty::Tuple(result.into()))
+            }
+            InferKind::Ref(kind, referent) => {
+                self.resolve(referent, fallback, depth + 1)?
+                    .map(|referent| ir::Ty::Ref {
+                        kind: *kind,
+                        referent: Arc::new(referent),
+                    })
             }
             InferKind::Array(element, len) => {
                 self.resolve(element, fallback, depth + 1)?
@@ -6580,6 +6709,9 @@ impl Checker<'_> {
                         .collect::<Result<Vec<_>, _>>()?
                         .into(),
                 )
+            }
+            ir::Ty::Ref { kind, referent } => {
+                InferKind::Ref(*kind, self.infer_type_term(referent, schema, depth + 1)?)
             }
             ir::Ty::Array { element, len } => {
                 InferKind::Array(self.infer_type_term(element, schema, depth + 1)?, *len)
@@ -6905,9 +7037,61 @@ impl Checker<'_> {
         )?))
     }
 }
+fn genuine_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { .. }
+        | Expr::AssociatedCall { .. }
+        | Expr::TraitCall { .. }
+        | Expr::MethodCall { .. } => true,
+        Expr::Apply { value, .. } => genuine_call(value),
+        _ => false,
+    }
+}
+fn static_source_place(mut expr: &Expr) -> Result<Place, String> {
+    let mut fields = Vec::new();
+    loop {
+        if fields.len() >= 128 {
+            return Err("receiver place nesting limit128".into());
+        }
+        match expr {
+            Expr::Var(local) => {
+                fields.reverse();
+                return Ok(Place {
+                    local: local.clone(),
+                    fields,
+                });
+            }
+            Expr::Field { base, field } => {
+                fields.push(field.clone());
+                expr = base;
+            }
+            Expr::Index { base, index } => {
+                fields.push(FieldSelector::ConstantIndex(*index));
+                expr = base;
+            }
+            Expr::Deref { value } => {
+                fields.push(FieldSelector::Deref);
+                expr = value;
+            }
+            _ => {
+                return Err(
+                    "owned rvalue or dynamic borrowed receiver places are unsupported".into(),
+                );
+            }
+        }
+    }
+}
+struct PendingReferenceDecl {
+    name: String,
+    mutable: bool,
+    scope: usize,
+    position: usize,
+    local: Option<ir::LocalId>,
+}
 struct Checker<'a> {
     signatures: &'a Signatures,
     scopes: Vec<HashMap<String, ir::LocalId>>,
+    pending_references: Vec<PendingReferenceDecl>,
     locals: Vec<ir::LocalDecl>,
     exprs: Vec<ir::TypedExpr>,
     loops: Vec<LoopFrame>,
@@ -6969,130 +7153,166 @@ impl Flow {
     }
 }
 fn canonical_ref_contract(
-    function: &Function,
+    regions: &RegionDecls,
+    source_params: &[(String, Type)],
+    source_result: &Type,
+    receiver: ReceiverKind,
     params: &[ir::Ty],
     result: &ir::Ty,
-) -> Result<std::sync::Arc<ir::RefContract>, String> {
-    let mut ids = HashMap::new();
-    if function.regions.params.len() > 64 || function.regions.outlives.len() > 4096 {
-        return Err("declared lifetime resources exceed supported limits".into());
+    budget: &ir::PlanBudget,
+) -> Result<Arc<ir::RefContract>, String> {
+    if regions.params.len() > 64 || regions.outlives.len() > 4096 {
+        return Err("declared lifetime resource limit exceeded".into());
     }
-    for (index, name) in function.regions.params.iter().enumerate() {
+    budget.charge_work(regions.params.len() + regions.outlives.len() + source_params.len() + 1)?;
+    let _scratch = budget.reserve_bytes(
+        regions
+            .params
+            .len()
+            .checked_mul(256)
+            .and_then(|n| {
+                source_params
+                    .len()
+                    .checked_mul(64)
+                    .and_then(|m| n.checked_add(m))
+            })
+            .and_then(|n| {
+                regions
+                    .outlives
+                    .len()
+                    .checked_mul(32)
+                    .and_then(|e| n.checked_add(e))
+            })
+            .and_then(|n| n.checked_add(1024))
+            .ok_or("region allocation overflow")?,
+    )?;
+    let mut ids = HashMap::new();
+    for (i, name) in regions.params.iter().enumerate() {
+        budget.charge_work(name.len() + 1)?;
         if ids
-            .insert(name.as_str(), ir::RegionParamId(index as u16))
+            .insert(name.as_str(), ir::RegionParamId(i as u16))
             .is_some()
         {
             return Err(format!("duplicate lifetime parameter {name}"));
         }
     }
-    let id = |name: &str| {
+    let lookup = |name: &str| {
+        budget.charge_work(name.len() + 1)?;
         ids.get(name)
             .copied()
             .ok_or_else(|| format!("undeclared lifetime {name}"))
     };
-    let mut edges = function
-        .regions
-        .outlives
-        .iter()
-        .map(|(a, b)| Ok((id(a)?, id(b)?)))
-        .collect::<Result<Vec<_>, String>>()?;
-    edges.sort_unstable();
-    edges.dedup();
-    for (_, ty) in &function.params {
-        if let Type::Ref {
-            region: Some(name), ..
-        } = ty
-        {
-            id(name)?;
+    let mut edges = Vec::with_capacity(regions.outlives.len());
+    for (long, short) in &regions.outlives {
+        edges.push((lookup(long)?, lookup(short)?));
+    }
+    let legacy = !matches!(result, ir::Ty::Ref { .. })
+        && !matches!(receiver, ReceiverKind::Borrowed { .. })
+        && regions.params.is_empty()
+        && !source_params.iter().any(|(_, t)| {
+            matches!(
+                t,
+                Type::Ref {
+                    region: Some(_),
+                    ..
+                }
+            )
+        });
+    if legacy {
+        budget.retain_bytes(
+            params
+                .len()
+                .checked_mul(std::mem::size_of::<Option<ir::RegionParamId>>())
+                .and_then(|n| n.checked_add(128))
+                .ok_or("region allocation overflow")?,
+        )?;
+        return ir::normalize_ref_contract(
+            &ir::RefContract {
+                param_regions: vec![None; params.len()].into(),
+                ..Default::default()
+            },
+            budget,
+        );
+    }
+    let mut count = ids.len();
+    let mut fresh = |name: Option<&str>| -> Result<ir::RegionParamId, String> {
+        if let Some(name) = name {
+            return lookup(name);
         }
-    }
-    if let Type::Ref {
-        region: Some(name), ..
-    } = &function.result
-    {
-        id(name)?;
-    }
-    if !matches!(result, ir::Ty::Ref { .. }) {
-        if !ids.is_empty()
-            || function.params.iter().any(|(_, t)| {
-                matches!(
-                    t,
-                    Type::Ref {
-                        region: Some(_),
-                        ..
-                    }
-                )
-            })
-        {
-            return Err(
-                "named lifetime contracts on no-reference-result functions are unsupported".into(),
-            );
+        if count >= ir::MAX_REGION_PARAMS {
+            return Err("combined lifetime regions exceed supported limit64".into());
         }
-        return Ok(std::sync::Arc::new(ir::RefContract {
-            param_regions: vec![None; params.len()].into(),
-            ..Default::default()
-        }));
-    }
-    let Type::Ref {
-        kind: result_kind,
-        region: output,
-        ..
-    } = &function.result
-    else {
-        return Err("reference result requires a source reference type".into());
+        let id = ir::RegionParamId(count as u16);
+        count += 1;
+        Ok(id)
     };
-    let mut region_count = ids.len();
-    let mut input_positions = 0usize;
-    let mut input_region = None;
-    let mut param_regions = Vec::with_capacity(params.len());
     let injected = params
         .len()
-        .checked_sub(function.params.len())
+        .checked_sub(source_params.len())
         .ok_or("source parameter arity mismatch")?;
-    param_regions.resize(injected, None);
-    for (_, ty) in &function.params {
-        let region = match ty {
-            Type::Ref { region, .. } => {
-                let region = if let Some(name) = region {
-                    id(name)?
-                } else {
-                    if region_count >= ir::MAX_REGION_PARAMS {
-                        return Err("combined explicit and anonymous lifetime regions exceed supported limit64".into());
-                    }
-                    let region = ir::RegionParamId(region_count as u16);
-                    region_count += 1;
-                    region
-                };
-                input_positions += 1;
-                input_region = Some(region);
-                Some(region)
-            }
-            _ => None,
-        };
-        param_regions.push(region);
-    }
-    let result_region = if let Some(output) = output {
-        id(output)?
-    } else if input_positions == 1 {
-        input_region.ok_or("missing input lifetime for elided reference output")?
+    let mut param_regions = Vec::with_capacity(params.len());
+    let receiver_region = if matches!(receiver, ReceiverKind::Borrowed { .. }) {
+        Some(fresh(regions.receiver.as_deref())?)
     } else {
-        return Err("missing lifetime specifier: elided reference output requires exactly one input reference lifetime position".into());
+        None
     };
-    let mut contract = ir::RefContract {
-        region_count: region_count as u16,
+    if injected > 1 || (injected == 0 && receiver != ReceiverKind::None) {
+        return Err("invalid injected receiver arity".into());
+    }
+    if injected == 1 {
+        param_regions.push(receiver_region);
+    }
+    for (_, ty) in source_params {
+        param_regions.push(match ty {
+            Type::Ref { region, .. } => Some(fresh(region.as_deref())?),
+            _ => None,
+        });
+    }
+    let result_region = if matches!(result, ir::Ty::Ref { .. }) {
+        let Type::Ref { region, .. } = source_result else {
+            return Err("reference result requires source reference type".into());
+        };
+        Some(if let Some(name) = region {
+            lookup(name)?
+        } else if let Some(region) = receiver_region {
+            region
+        } else {
+            let mut used = param_regions.iter().flatten();
+            let first = *used
+                .next()
+                .ok_or("missing lifetime specifier: no input reference position")?;
+            if used.next().is_some() {
+                return Err("missing lifetime specifier: elided reference output requires exactly one input reference lifetime position".into());
+            }
+            first
+        })
+    } else {
+        None
+    };
+    budget.retain_bytes(
+        param_regions
+            .len()
+            .checked_mul(16)
+            .and_then(|n| edges.len().checked_mul(16).and_then(|e| n.checked_add(e)))
+            .and_then(|n| n.checked_add(256))
+            .ok_or("region allocation overflow")?,
+    )?;
+    let raw = ir::RefContract {
+        region_count: count as u16,
         param_regions: param_regions.into(),
-        result_region: Some(result_region),
+        result_region,
         outlives: edges.into(),
         returns: ir::ReturnContract::NoReference,
     };
-    let candidates = contract.eligible_input_paths(params, result)?.into();
-    contract.returns = match result_kind {
-        ir::BorrowKind::Shared => ir::ReturnContract::SharedInputPaths(candidates),
-        ir::BorrowKind::Mut => ir::ReturnContract::MutInputPaths(candidates),
-    };
-    contract.validate(params, result)?;
-    Ok(std::sync::Arc::new(contract))
+    let normalized = ir::normalize_ref_contract(&raw, budget)?;
+    let returns = ir::derive_return_contract(params, result, &normalized, budget)?;
+    budget.retain_bytes(std::mem::size_of::<ir::RefContract>() + 64)?;
+    Ok(Arc::new(ir::RefContract {
+        returns,
+        ..(*normalized).clone()
+    }))
 }
+
 fn checked_local_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
     if matches!(
         ty,
@@ -7211,6 +7431,7 @@ impl<'a> Checker<'a> {
         Self {
             signatures,
             scopes: vec![HashMap::new()],
+            pending_references: Vec::new(),
             locals: Vec::new(),
             exprs: Vec::new(),
             loops: Vec::new(),
@@ -7372,12 +7593,59 @@ impl<'a> Checker<'a> {
         }
         self.local(name, ty, false)
     }
+    fn charge_pending_lookup(&self, n: &str) -> Result<(), String> {
+        if let Some(plan) = &self.signatures.plan {
+            plan.budget.charge_work(self.pending_references.len())?;
+            let bytes = self.pending_references.iter().try_fold(0usize, |sum, p| {
+                sum.checked_add(p.name.len())
+                    .ok_or("pending reference lookup work overflow")
+            })?;
+            let work = bytes
+                .checked_add(
+                    self.pending_references
+                        .len()
+                        .checked_mul(n.len().saturating_add(1))
+                        .ok_or("pending reference lookup work overflow")?,
+                )
+                .and_then(|v| v.checked_mul(self.scopes.len()))
+                .ok_or("pending reference lookup work overflow")?;
+            plan.budget.charge_work(work)?;
+        }
+        Ok(())
+    }
+    fn pending_reference(&self, n: &str) -> Result<Option<usize>, String> {
+        self.charge_pending_lookup(n)?;
+        for scope in (0..self.scopes.len()).rev() {
+            if self.scopes[scope].contains_key(n) {
+                return Ok(None);
+            }
+            if let Some(index) = self
+                .pending_references
+                .iter()
+                .rposition(|p| p.scope == scope && p.name == n && p.local.is_none())
+            {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
     fn lookup(&self, n: &str) -> Result<ir::LocalId, String> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|s| s.get(n).copied())
-            .ok_or_else(|| format!("unresolved local {n}"))
+        self.charge_pending_lookup(n)?;
+        for scope in (0..self.scopes.len()).rev() {
+            if let Some(local) = self.scopes[scope].get(n) {
+                return Ok(*local);
+            }
+            if self
+                .pending_references
+                .iter()
+                .any(|p| p.scope == scope && p.name == n && p.local.is_none())
+            {
+                return Err(format!(
+                    "deferred local {n} requires an independently typed reference assignment before use"
+                ));
+            }
+        }
+        Err(format!("unresolved local {n}"))
     }
     fn flow(&self, id: ir::ExprId) -> Flow {
         let e = &self.exprs[id.0];
@@ -7609,13 +7877,11 @@ impl<'a> Checker<'a> {
                 type_args,
                 ..
             } => {
-                let evidence = self.inference_evidence(receiver, 0)?;
-                let solver = Inference {
-                    checker: self,
-                    env: None,
-                    slots: Vec::new(),
-                };
-                if let Some(owner) = solver.resolve(&evidence, false, 0)? {
+                if let Some(owner) = self.scalar_hint(receiver)? {
+                    let owner = match owner {
+                        ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                        ty => ty,
+                    };
                     let plan = self
                         .signatures
                         .plan
@@ -7642,6 +7908,15 @@ impl<'a> Checker<'a> {
                 } else {
                     None
                 }
+            }
+            Expr::Struct { .. } | Expr::EnumVariant { .. } => {
+                let evidence = self.inference_evidence(e, 0)?;
+                Inference {
+                    checker: self,
+                    env: None,
+                    slots: Vec::new(),
+                }
+                .resolve(&evidence, false, 0)?
             }
             Expr::Cast { target, .. } => Some(checked_local_ty(target, self.signatures)?),
             Expr::Deref { value } => match self.scalar_hint(value)? {
@@ -8162,6 +8437,59 @@ impl<'a> Checker<'a> {
         }
         Ok((value, flow))
     }
+    fn deref_assignment(
+        &mut self,
+        carrier: &Expr,
+        value: &Expr,
+        statements: &mut Vec<ir::Stmt>,
+    ) -> Result<(ir::Stmt, bool), String> {
+        let carrier_ty = self
+            .scalar_hint(carrier)?
+            .ok_or("unresolved reference call assignment carrier")?;
+        let ir::Ty::Ref { referent, .. } = &carrier_ty else {
+            return Err("call assignment carrier must return a reference".into());
+        };
+        let referent = referent.as_ref().clone();
+        let rhs = self.expr_expected(value, Some(&referent))?;
+        let rhs_flow = self.flow(rhs);
+        self.require(&rhs_flow, &referent)?;
+        let saved = self.local(
+            &format!("$rhs{}", self.locals.len()),
+            referent.clone(),
+            false,
+        )?;
+        self.charge_node(std::mem::size_of::<ir::Stmt>() * 3)?;
+        statements.push(ir::Stmt::Let {
+            local: saved,
+            value: rhs,
+        });
+        let pointer =
+            self.expr_expected_when(carrier, self.reachable && rhs_flow.completes, None)?;
+        let pf = self.flow(pointer);
+        self.require(&pf, &carrier_ty)?;
+        let handle = self.local(&format!("$carrier{}", self.locals.len()), carrier_ty, false)?;
+        statements.push(ir::Stmt::Let {
+            local: handle,
+            value: pointer,
+        });
+        let loaded = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: referent,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Local(saved),
+        });
+        Ok((
+            ir::Stmt::AssignPlace {
+                place: ir::Place {
+                    local: handle,
+                    projection: vec![ir::Projection::Deref],
+                },
+                value: loaded,
+            },
+            rhs_flow.completes && pf.completes,
+        ))
+    }
     fn block_when(&mut self, b: &Block, reachable: bool) -> Result<(ir::Block, Flow), String> {
         self.block_expected_when(b, reachable, None)
     }
@@ -8193,6 +8521,7 @@ impl<'a> Checker<'a> {
         expectation: Expectation<'_>,
     ) -> Result<(ir::Block, Flow), String> {
         let entered_reachable = self.reachable;
+        let pending_start = self.pending_references.len();
         self.scopes.push(HashMap::new());
         let mut live = true;
         let mut statements = Vec::with_capacity(b.statements.len());
@@ -8200,7 +8529,21 @@ impl<'a> Checker<'a> {
             self.reachable = entered_reachable && live;
             let (statement, completes) = match s {
                 Stmt::Declare { name, ty, mutable } => {
-                    if matches!(ty, Type::Infer | Type::Never) {
+                    if matches!(ty, Type::Infer) {
+                        self.charge_node(
+                            std::mem::size_of::<PendingReferenceDecl>() * 4 + name.len(),
+                        )?;
+                        self.scopes.last_mut().unwrap().remove(name);
+                        self.pending_references.push(PendingReferenceDecl {
+                            name: name.clone(),
+                            mutable: *mutable,
+                            scope: self.scopes.len() - 1,
+                            position: statements.len(),
+                            local: None,
+                        });
+                        continue;
+                    }
+                    if matches!(ty, Type::Never) {
                         return Err(
                             "deferred declarations require a concrete supported source type".into(),
                         );
@@ -8293,7 +8636,32 @@ impl<'a> Checker<'a> {
                         flow.completes,
                     )
                 }
+                Stmt::AssignDeref { carrier, value } => {
+                    self.deref_assignment(carrier, value, &mut statements)?
+                }
                 Stmt::Assign { name, value } => {
+                    if let Some(pending) = self.pending_reference(name)? {
+                        let value = self.expr(value)?;
+                        let flow = self.flow(value);
+                        if !matches!(flow.ty, ir::Ty::Ref { .. }) {
+                            return Err("untyped deferred declarations require an independently known reference type; general backward inference is unsupported".into());
+                        }
+                        let local = ir::LocalId(self.locals.len());
+                        self.charge_node(
+                            std::mem::size_of::<ir::LocalDecl>() + name.len() * 2 + 128,
+                        )?;
+                        let declaration = &mut self.pending_references[pending];
+                        declaration.local = Some(local);
+                        self.locals.push(ir::LocalDecl {
+                            name: name.clone(),
+                            ty: flow.ty,
+                            mutable: declaration.mutable,
+                        });
+                        self.scopes[declaration.scope].insert(name.clone(), local);
+                        statements.push(ir::Stmt::Assign { local, value });
+                        live &= flow.completes;
+                        continue;
+                    }
                     let local = self.lookup(name)?;
                     let declaration = &self.locals[local.0];
                     let t = declaration.ty.clone();
@@ -8454,6 +8822,21 @@ impl<'a> Checker<'a> {
             |e| self.flow(e),
         );
         flow.completes &= live;
+        let count = self.pending_references.len() - pending_start;
+        if let Some(plan) = &self.signatures.plan {
+            plan.budget.charge_work(
+                count
+                    .checked_mul(statements.len().saturating_add(count))
+                    .ok_or("pending declaration insertion work overflow")?,
+            )?;
+        }
+        self.charge_node(count.saturating_mul(std::mem::size_of::<ir::Stmt>() * 4))?;
+        for (offset, pending) in self.pending_references.drain(pending_start..).enumerate() {
+            let local = pending
+                .local
+                .ok_or("untyped deferred reference declaration remains underconstrained")?;
+            statements.insert(pending.position + offset, ir::Stmt::Declare { local });
+        }
         self.scopes.pop();
         Ok((ir::Block { statements, tail }, flow))
     }
@@ -8486,13 +8869,160 @@ impl<'a> Checker<'a> {
         }
         self.expr_without_cast(e, expectation)
     }
+    fn borrow_expression(
+        &mut self,
+        kind: ir::BorrowKind,
+        place: ir::Place,
+    ) -> Result<ir::ExprId, String> {
+        let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
+        Self::reject_aggregate_ref(&referent)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::Ref {
+                kind,
+                referent: Arc::new(referent),
+            },
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Borrow {
+                kind,
+                place,
+                timing: ir::BorrowTiming::Immediate,
+            },
+        });
+        Ok(id)
+    }
+    fn call_argument(
+        &mut self,
+        source: &Expr,
+        expected: &ir::Ty,
+        reachable: bool,
+    ) -> Result<(ir::ExprId, Option<ir::ImplicitBorrowKind>), String> {
+        if let (
+            Expr::Var(name),
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            },
+        ) = (source, expected)
+        {
+            let local = self.lookup(name)?;
+            if let ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: actual,
+            } = &self.locals[local.0].ty
+            {
+                let budget = &self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("call requires plan")?
+                    .budget;
+                if metered_type_equal(actual, referent, budget, 0)? {
+                    let carrier = self.expr(source)?;
+                    let id = self.borrow_expression(
+                        ir::BorrowKind::Mut,
+                        ir::Place {
+                            local,
+                            projection: vec![ir::Projection::Deref],
+                        },
+                    )?;
+                    return Ok((
+                        id,
+                        Some(ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier }),
+                    ));
+                }
+            }
+        }
+        self.expr_expected_when(source, reachable, Some(expected))
+            .map(|id| (id, None))
+    }
+    fn finish_checked_call(
+        &mut self,
+        target: ir::Callee,
+        name: &str,
+        signature: ir::Signature,
+        source_args: &[Expr],
+        receiver: Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>,
+    ) -> Result<ir::ExprId, String> {
+        let offset = usize::from(receiver.is_some());
+        if signature.params.len() != source_args.len() + offset {
+            return Err(format!("wrong arity for {name}"));
+        }
+        self.infer_storage(
+            source_args
+                .len()
+                .checked_mul(4)
+                .and_then(|n| n.checked_add(8))
+                .ok_or("call allocation overflow")?,
+        )?;
+        let mut arguments = Vec::with_capacity(signature.params.len());
+        let mut pending = Vec::with_capacity(signature.params.len());
+        let mut completes = true;
+        if let Some((id, reason)) = receiver {
+            self.require(&self.flow(id), &signature.params[0])?;
+            completes = self.flow(id).completes;
+            arguments.push(id);
+            if let Some(reason) = reason {
+                pending.push((id, 0, reason));
+            }
+        }
+        for (i, (source, ty)) in source_args
+            .iter()
+            .zip(&signature.params[offset..])
+            .enumerate()
+        {
+            let (id, reason) = self.call_argument(source, ty, self.reachable && completes)?;
+            let flow = self.flow(id);
+            self.require(&flow, ty)?;
+            completes &= flow.completes;
+            arguments.push(id);
+            if let Some(reason) = reason {
+                pending.push((id, i + offset, reason));
+            }
+        }
+        for ty in signature
+            .params
+            .iter()
+            .chain(std::iter::once(&signature.result))
+        {
+            self.accessible(ty)?;
+        }
+        let id = ir::ExprId(self.exprs.len());
+        for (borrow, argument, reason) in pending {
+            let ir::ExprKind::Borrow { timing, .. } = &mut self.exprs[borrow.0].kind else {
+                return Err("invalid implicit borrow argument".into());
+            };
+            *timing = ir::BorrowTiming::TwoPhase {
+                activation: id,
+                argument,
+                reason,
+            };
+        }
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + name.len())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: signature.result.clone(),
+            completion: if completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::Call {
+                target,
+                name: name.to_owned(),
+                args: arguments,
+                signature,
+            },
+        });
+        Ok(id)
+    }
     fn associated_expression(&mut self, expression: &Expr) -> Result<ir::ExprId, String> {
         let plan = self
             .signatures
             .plan
             .clone()
             .ok_or("associated call requires registry")?;
-        let no_type_args = Vec::new();
+        let empty = Vec::new();
         let (owner, name, type_args, args, receiver) = match expression {
             Expr::MethodCall {
                 receiver,
@@ -8500,8 +9030,14 @@ impl<'a> Checker<'a> {
                 type_args,
                 args,
             } => {
-                let id = self.expr(receiver)?;
-                (self.flow(id).ty, name, type_args, args, Some(id))
+                let ty = self
+                    .scalar_hint(receiver)?
+                    .ok_or("unsupported unresolved receiver type; use a typed local")?;
+                let owner = match ty {
+                    ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                    ty => ty,
+                };
+                (owner, name, type_args, args, Some(receiver.as_ref()))
             }
             Expr::AssociatedCall {
                 owner,
@@ -8520,7 +9056,7 @@ impl<'a> Checker<'a> {
             } => (
                 checked_local_ty(owner, self.signatures)?,
                 name,
-                &no_type_args,
+                &empty,
                 args,
                 None,
             ),
@@ -8531,15 +9067,15 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|t| checked_local_ty(t, self.signatures))
             .collect::<Result<Vec<_>, _>>()?;
-        let (target, signature, _) = if let Expr::TraitCall { trait_path, .. } = expression {
-            let trait_id = *plan
+        let (target, signature, mode) = if let Expr::TraitCall { trait_path, .. } = expression {
+            let tid = *plan
                 .registry
                 .traits
                 .get(trait_path)
                 .ok_or("unresolved UFCS trait")?;
             plan.select_trait(
                 &owner,
-                trait_id,
+                tid,
                 name,
                 &actuals,
                 self.facts(),
@@ -8558,49 +9094,41 @@ impl<'a> Checker<'a> {
                 &plan.budget,
             )?
         };
-        let offset = usize::from(receiver.is_some());
-        if signature.params.len() != args.len() + offset {
-            return Err(format!("wrong arity for associated item {name}"));
-        }
-        let mut arguments = Vec::with_capacity(args.len() + offset);
-        let mut completes = true;
-        if let Some(id) = receiver {
-            let flow = self.flow(id);
-            self.require(&flow, &signature.params[0])?;
-            completes = flow.completes;
-            arguments.push(id);
-        }
-        for (arg, ty) in args.iter().zip(&signature.params[offset..]) {
-            let id = self.expr_expected_when(arg, self.reachable && completes, Some(ty))?;
-            let flow = self.flow(id);
-            self.require(&flow, ty)?;
-            completes &= flow.completes;
-            arguments.push(id);
-        }
-        for ty in signature
-            .params
-            .iter()
-            .chain(std::iter::once(&signature.result))
-        {
-            self.accessible(ty)?;
-        }
-        let id = ir::ExprId(self.exprs.len());
-        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
-        self.exprs.push(ir::TypedExpr {
-            ty: signature.result.clone(),
-            completion: if completes {
-                ir::Completion::Returns
-            } else {
-                ir::Completion::Never
-            },
-            kind: ir::ExprKind::Call {
-                target,
-                name: name.clone(),
-                args: arguments,
-                signature,
-            },
-        });
-        Ok(id)
+        let adjusted = if let Some(receiver) = receiver {
+            match mode {
+                ReceiverKind::None => return Err("associated function has no receiver".into()),
+                ReceiverKind::Value { .. } => Some((self.expr(receiver)?, None)),
+                ReceiverKind::Borrowed { kind } => {
+                    if genuine_call(receiver) {
+                        let id = self.expr(receiver)?;
+                        Some((id, None))
+                    } else {
+                        let source = static_source_place(receiver)?;
+                        let (mut place, ty, _) = self.checked_place(&source)?;
+                        if matches!(ty, ir::Ty::Ref { .. }) {
+                            if place.projection.contains(&ir::Projection::Deref) {
+                                return Err(
+                                    "multiple receiver autodereferences are unsupported".into()
+                                );
+                            }
+                            place.projection.push(ir::Projection::Deref);
+                        }
+                        let id = self.borrow_expression(kind, place)?;
+                        Some((
+                            id,
+                            if kind == ir::BorrowKind::Mut {
+                                Some(ir::ImplicitBorrowKind::MutableReceiver)
+                            } else {
+                                None
+                            },
+                        ))
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        self.finish_checked_call(target, name, signature, args, adjusted)
     }
     fn cast_expression(&mut self, value: &Expr, target: &Type) -> Result<ir::ExprId, String> {
         let target = checked_local_ty(target, self.signatures)?;
@@ -8664,13 +9192,14 @@ impl<'a> Checker<'a> {
         let (kind, flow) = match e {
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
-                if self.signatures.param_env.is_some() {
-                    return Err("references in generic bodies are unsupported".into());
-                }
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
                 Self::reject_aggregate_ref(&referent)?;
                 (
-                    ir::ExprKind::Borrow { kind: *kind, place },
+                    ir::ExprKind::Borrow {
+                        kind: *kind,
+                        place,
+                        timing: ir::BorrowTiming::Immediate,
+                    },
                     Flow::value(ir::Ty::Ref {
                         kind: *kind,
                         referent: std::sync::Arc::new(referent),
@@ -8678,7 +9207,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Deref { value } => {
-                if !matches!(value.as_ref(), Expr::Var(_) | Expr::Call { .. }) {
+                if !matches!(value.as_ref(), Expr::Var(_)) && !genuine_call(value) {
                     return Err("non-local-root dereference carriers are unsupported except genuine reference call results".into());
                 }
                 let value = self.expr(value)?;
@@ -9189,7 +9718,7 @@ impl<'a> Checker<'a> {
                 let mut base = self.expr(base)?;
                 let mut flow = self.flow(base);
                 if let ir::Ty::Ref { referent, .. } = &flow.ty {
-                    if !matches!(receiver, Expr::Var(_) | Expr::Call { .. }) {
+                    if !matches!(receiver, Expr::Var(_)) && !genuine_call(receiver) {
                         return Err("complex reference field receivers are unsupported; use a local or genuine call result".into());
                     }
                     let ty = referent.as_ref().clone();
@@ -9446,7 +9975,7 @@ impl<'a> Checker<'a> {
                         .iter()
                         .chain(std::iter::once(&signature.result))
                     {
-                        validate_argument(ty, self.facts(), &plan.budget, 0)?;
+                        validate_root_carrier(ty, self.facts(), &plan.budget)?;
                     }
                 }
                 for ty in signature
@@ -9463,28 +9992,7 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
-                let mut completes = true;
-                let mut arguments = Vec::with_capacity(args.len());
-                for (a, t) in args.iter().zip(&signature.params) {
-                    let value = self.expr_expected_when(a, self.reachable && completes, Some(t))?;
-                    let f = self.flow(value);
-                    self.require(&f, t)?;
-                    completes &= f.completes;
-                    arguments.push(value);
-                }
-                let result_ty = signature.result.clone();
-                (
-                    ir::ExprKind::Call {
-                        target: target.into(),
-                        name: name.clone(),
-                        args: arguments,
-                        signature,
-                    },
-                    Flow {
-                        ty: result_ty,
-                        completes,
-                    },
-                )
+                return self.finish_checked_call(target.into(), name, signature, args, None);
             }
             Expr::If {
                 condition,
@@ -9658,9 +10166,10 @@ pub fn type_callable_with_plan(
     let module = context.module.join("::");
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
     let mut params = Vec::new();
-    let offset = if let ReceiverKind::Value { mutable } = context.receiver {
+    let offset = if context.receiver != ReceiverKind::None {
         let local = c.bind("self", signature.params[0].clone())?;
-        c.locals[local.0].mutable = mutable;
+        c.locals[local.0].mutable =
+            matches!(context.receiver, ReceiverKind::Value { mutable: true });
         params.push(local);
         1
     } else {
@@ -9677,7 +10186,7 @@ pub fn type_callable_with_plan(
         .map_err(|e| format!("in callable {}: {e}", f.name))?;
     c.require(&flow, &c.result)?;
     validate_shift_counts(&c.exprs, &c.count_queries)?;
-    Ok(ir::CheckedFunction {
+    let checked = ir::CheckedFunction {
         name: f.name.clone(),
         ref_contract: signature.ref_contract.clone(),
         params,
@@ -9685,7 +10194,11 @@ pub fn type_callable_with_plan(
         locals: c.locals,
         exprs: c.exprs,
         body,
-    })
+    };
+    let facts = plan.callable_facts(declaration)?;
+    let mut cx = plan.clone();
+    ir::canonicalize_checked_calls(&checked, &facts, &mut cx, budget)
+        .map_err(|e| e.into_legacy_diagnostic(budget))
 }
 pub fn type_function_with_plan(
     program: &Program,
@@ -9766,6 +10279,106 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn generic_reference_declarations_keep_rigid_envelopes_and_canonical_regions() {
+        check(&parse("fn id<T>(x:&T)->&T{x}fn wrap(x:&i32)->&i32{id(x)}fn main(){let x=7;let r=wrap(&x);let n=*r;}").unwrap()).unwrap();
+        let p=parse("fn first<'a,'b,T,U>(x:&'a T,y:&'b U)->&'a T{let _=y;x}fn renamed<'z,'w,T,U>(x:&'z T,y:&'w U)->&'z T{let _=y;x}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let schema = plan.signature(declaration).unwrap();
+        assert_eq!(
+            schema.signature.ref_contract,
+            plan.signature(plan.function_decl(1).unwrap())
+                .unwrap()
+                .signature
+                .ref_contract
+        );
+        assert!(
+            matches!(&schema.signature.ref_contract.returns,ir::ReturnContract::SharedInputEnvelopes(rows) if rows.len()==1&&rows[0].param==0)
+        );
+        let closed = plan
+            .instantiate_signature(
+                &ir::CallTarget {
+                    declaration,
+                    type_args: vec![ir::Ty::Int(ir::IntTy::I32); 2].into(),
+                },
+                ir::FactsCtx::Concrete,
+                &budget,
+            )
+            .unwrap();
+        assert_eq!(closed.ref_contract, schema.signature.ref_contract);
+        for i in 0..plan.callable_count() {
+            let d = plan.callable_decl(i).unwrap();
+            type_callable_with_plan(&p, d, &plan, &budget).unwrap();
+        }
+        for source in [
+            "fn id<T>(x:T)->T{x}fn main(){let x=1;let r=id::<&i32>(&x);}",
+            "fn bad<T>(x:&&T){}fn main(){}",
+            "struct W<T>{x:T}fn main(){let x=1;let w=W::<&i32>{x:&x};}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err());
+        }
+    }
+    #[test]
+    fn borrowed_receiver_and_argument_adjustments_bind_exact_calls_without_owner_moves() {
+        let p=parse("struct S{x:i32}impl S{fn get(&self)->i32{self.x}fn set(&mut self,n:i32){self.x=n;}}fn put(r:&mut i32,n:i32){*r=n;}fn main(){let mut s=S{x:1};s.set(s.get()+1);let mut x=1;let r=&mut x;put(r,*r+1);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let main = plan.callable_decl(1).unwrap();
+        let typed = type_callable_with_plan(&p, main, &plan, &budget).unwrap();
+        let mut receiver = false;
+        let mut argument = false;
+        for (index, expr) in typed.exprs.iter().enumerate() {
+            if let ir::ExprKind::Borrow {
+                timing:
+                    ir::BorrowTiming::TwoPhase {
+                        activation,
+                        argument: slot,
+                        reason,
+                    },
+                ..
+            } = &expr.kind
+            {
+                let ir::ExprKind::Call { args, .. } = &typed.exprs[activation.0].kind else {
+                    panic!("missing activation");
+                };
+                assert_eq!(args[*slot], ir::ExprId(index));
+                match reason {
+                    ir::ImplicitBorrowKind::MutableReceiver => receiver = true,
+                    ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier } => {
+                        argument = true;
+                        assert!(matches!(
+                            typed.exprs[carrier.0].kind,
+                            ir::ExprKind::Local(_)
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(receiver && argument);
+        assert!(typed.exprs.iter().any(|e| matches!(
+            e.kind,
+            ir::ExprKind::Borrow {
+                timing: ir::BorrowTiming::Immediate,
+                ..
+            }
+        )));
+        check(&p).unwrap();
+    }
+    #[test]
+    fn receiver_regions_call_carriers_and_explicit_immediate_conflicts_remain_distinct() {
+        let p=parse("trait Get{fn get<'a>(&'a self)->&'a i32;}struct S{x:i32}impl Get for S{fn get<'z>(&'z self)->&'z i32{&self.x}}impl S{fn choose(&self,other:&i32)->&i32{let _=other;&self.x}}fn id<T>(x:&mut T)->&mut T{x}fn main(){let mut a=[1];*id::<i32>(&mut a[0])=2;let s=S{x:3};let r;{let other=1;r=s.choose(&other);}let n=*r;let p=<S as Get>::get(&s);}").unwrap();
+        check(&p).unwrap();
+        for source in [
+            "struct S{x:i32}impl S{fn get(&self)->i32{self.x}fn set(&mut self,n:i32){self.x=n;}}fn main(){let mut s=S{x:1};S::set(&mut s,s.get());}",
+            "fn put(r:&mut i32,n:i32){*r=n;}fn main(){let mut x=1;let r=&mut x;put(&mut *r,*r);}",
+            "fn bad<'a,'b,T,U>(x:&'a T,y:&'b U)->&'a U{let _=x;y}fn main(){}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err());
+        }
+    }
 
     #[test]
     fn trait_required_schemas_and_bound_calls_retain_authoritative_identities() {
@@ -10049,6 +10662,10 @@ mod typed_tests {
             "struct W<T>{v:T}fn main(){let x=1;let w=W::<&i32>{v:&x};}",
             "fn bad<T>(x:T){return;let r=&x;}fn main(){}",
         ] {
+            if source.contains("return;let r=&x;") {
+                check(&parse(source).unwrap()).unwrap();
+                continue;
+            }
             assert!(
                 parse(source).and_then(|p| check(&p)).is_err(),
                 "accepted {source}"
@@ -10855,7 +11472,7 @@ mod typed_tests {
         ));
         let weaken = type_function_with_signatures(&p, 0, &env).unwrap();
         assert!(
-            matches!(&weaken.exprs[weaken.body.tail.unwrap().0].kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Shared,place} if place.local==weaken.params[0]&&place.projection==vec![ir::Projection::Deref])
+            matches!(&weaken.exprs[weaken.body.tail.unwrap().0].kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Shared,place,..} if place.local==weaken.params[0]&&place.projection==vec![ir::Projection::Deref])
         );
         assert!(
             !weaken
@@ -10888,11 +11505,11 @@ mod typed_tests {
         let env = signature_table(&p).unwrap();
         assert_eq!(
             env.functions["rigid"].ref_contract.param_regions.as_ref(),
-            &[Some(ir::RegionParamId(1)), Some(ir::RegionParamId(2))]
+            &[Some(ir::RegionParamId(0)), Some(ir::RegionParamId(1))]
         );
         assert_eq!(
             env.functions["rigid"].ref_contract.result_region,
-            Some(ir::RegionParamId(0))
+            Some(ir::RegionParamId(2))
         );
         assert!(check_function_with_signatures(&p, 0, &env).is_err());
         let names = (0..63)
@@ -11036,15 +11653,15 @@ mod typed_tests {
             env.functions["mut_explicit"].ref_contract
         );
         let unused = &env.functions["unused_names"].ref_contract;
-        assert_eq!(unused.region_count, 3);
-        assert_eq!(unused.param_regions.as_ref(), &[Some(ir::RegionParamId(2))]);
-        assert_eq!(unused.result_region, Some(ir::RegionParamId(2)));
+        assert_eq!(unused.region_count, 1);
+        assert_eq!(unused.param_regions.as_ref(), &[Some(ir::RegionParamId(0))]);
+        assert_eq!(unused.result_region, Some(ir::RegionParamId(0)));
         let rigid = &env.functions["rigid"].ref_contract;
         assert_eq!(
             rigid.param_regions.as_ref(),
-            &[Some(ir::RegionParamId(1)), Some(ir::RegionParamId(2))]
+            &[Some(ir::RegionParamId(0)), Some(ir::RegionParamId(1))]
         );
-        assert_eq!(rigid.result_region, Some(ir::RegionParamId(0)));
+        assert_eq!(rigid.result_region, Some(ir::RegionParamId(2)));
         assert!(rigid.outlives.is_empty());
         assert_eq!(
             rigid.returns,
@@ -11090,10 +11707,10 @@ mod typed_tests {
         ))
         .unwrap();
         let env = signature_table(&p).unwrap();
-        assert_eq!(env.functions["at_limit"].ref_contract.region_count, 64);
+        assert_eq!(env.functions["at_limit"].ref_contract.region_count, 1);
         assert_eq!(
             env.functions["at_limit"].ref_contract.result_region,
-            Some(ir::RegionParamId(63))
+            Some(ir::RegionParamId(0))
         );
         let p = parse(&format!(
             "fn over_limit<{}>(x:&i32)->&i32{{x}}fn main(){{}}",
@@ -11203,7 +11820,7 @@ mod typed_tests {
         };
         assert!(matches!(moved.exprs[value.0].kind,ir::ExprKind::Local(id) if id==moved.params[0]));
         assert!(
-            matches!(&moved.exprs[moved.body.tail.unwrap().0].kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Mut,place} if place.local==local && place.projection==vec![ir::Projection::Deref])
+            matches!(&moved.exprs[moved.body.tail.unwrap().0].kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Mut,place,..} if place.local==local && place.projection==vec![ir::Projection::Deref])
         );
         assert!(std::sync::Arc::ptr_eq(
             &moved.ref_contract,
@@ -11232,7 +11849,11 @@ mod typed_tests {
             "fn id<'a>(r:&'a mut i32)->&'a mut i32{r}fn main(){let mut x=1;*id(&mut x)=2;}",
             "fn id<'a>(r:&'a mut i32)->&'a mut i32{r}fn main(){let mut x=1;let q=&mut *id(&mut x);}",
         ] {
-            assert!(parse(source).unwrap_err().contains("unsupported"));
+            if source.contains("*id(&mut x)=2") {
+                check(&parse(source).unwrap()).unwrap();
+            } else {
+                assert!(parse(source).unwrap_err().contains("unsupported"));
+            }
         }
         for source in [
             "fn bad<'a>(x:&'a i32)->&'a mut i32{loop{}}fn main(){}",
@@ -11339,6 +11960,10 @@ mod typed_tests {
             "fn f<'a>(x:&'a i32){}fn main(){}",
             "fn f<'fn>(x:&'fn i32)->&'fn i32{x}fn main(){}",
         ] {
+            if source == "fn f<'a>(x:&'a i32){}fn main(){}" {
+                check(&parse(source).unwrap()).unwrap();
+                continue;
+            }
             assert!(
                 parse(source).and_then(|p| signature_table(&p)).is_err(),
                 "accepted {source}"
@@ -11428,7 +12053,7 @@ mod typed_tests {
         let typed = type_function_with_signatures(&program, 0, &env).unwrap();
         assert!(typed.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::Field(0)])));
         assert!(typed.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::ConstantIndex(0)])));
-        assert!(typed.exprs.iter().any(|e|matches!(&e.kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Shared,place} if place.projection==vec![ir::Projection::Deref])));
+        assert!(typed.exprs.iter().any(|e|matches!(&e.kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Shared,place,..} if place.projection==vec![ir::Projection::Deref])));
         for source in [
             "fn main(){let mut x=1;let r=&mut x;let moved=r;let _=*r;match *r{_=>()};}",
             "fn main(){let r:&i32;let _=*r;match *r{_=>()};}",
@@ -11711,7 +12336,11 @@ mod typed_tests {
             "fn main(){let x:!;}",
             "enum E{A}use E::A;fn main(){let A:E;}",
         ] {
-            assert!(parse(source).is_err(), "accepted {source}");
+            if matches!(source, "fn main(){let x;}" | "fn main(){let mut x;}") {
+                assert!(check(&parse(source).unwrap()).is_err(), "accepted {source}");
+            } else {
+                assert!(parse(source).is_err(), "accepted {source}");
+            }
         }
     }
 

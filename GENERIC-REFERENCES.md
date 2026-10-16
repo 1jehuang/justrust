@@ -432,3 +432,23 @@ exact-revision native acceptance. Export selected path-redacted profiles,
 append findings without deleting history, commit and push working improvements
 and raw evidence separately. Never install the experimental package or claim
 full Rust, standard-library compatibility or a speedup from bounded cases.
+
+## Implementation checkpoint
+
+The frozen sources are supported without rewriting their bytes. Genuine
+reference Call-result dereference assignment uses an RHS snapshot and a
+once-evaluated checked carrier, with no new CFG operation. Untyped deferred
+reference bindings use lexical pending metadata until a first independently
+typed reference assignment creates their real local. These are narrow necessary
+source integrations, not general future-use inference or owned-rvalue borrowing.
+Omitted generic call evidence models reference kind/referent privately while
+actual type arguments remain recursively reference-free.
+
+A Subtree result can satisfy an already-declared exact return candidate only
+for an authoritative identical integer or bool leaf at the SAME input/anchor.
+This does not change its contract or precision, add candidates or bypass region
+dependencies. General unresolved aggregate containment is explicitly unsupported.
+The cached CONCRETE_PROOFS114 root barrier joins every concrete analysis before
+any object request, and each object awaits the same barrier. All unused and dead
+metadata checks remain mandatory. Validation profiles and append-only findings
+record the full hosted gate and separate cumulative exact-revision native gate.

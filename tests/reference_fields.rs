@@ -367,12 +367,12 @@ fn main() { if run() == 7 { println!("reference fields oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_user_method_autoderef() {
-    // Stock accepts and runs this fixture, outside the bounded E2 slice.
-    rejects(
-        "user_method_autoderef",
+fn accepts_user_method_autoderef() {
+    // Exact historical bytes, independently proved under borrowed receivers.
+    runs(
         r#"struct S{x:i32} impl S{fn value(&self)->i32{self.x}} fn run()->i32{let s=S{x:7};let r=&s;r.value()}
 fn main() { if run() == 7 { println!("reference fields oracle ok"); } }
 "#,
+        "reference fields oracle ok\n",
     );
 }

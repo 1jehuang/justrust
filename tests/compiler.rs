@@ -665,6 +665,7 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 }
                 if !check_only {
                     expected.push(Key::new(105, vec![]));
+                    expected.push(Key::new(114, vec![]));
                     assert!(report.intern_hits > 0, "check and build should share work");
                 }
                 assert_eq!(report.node_evaluations.len(), expected.len());

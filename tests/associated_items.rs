@@ -473,12 +473,12 @@ fn main(){if run()==7{println!("associated items oracle ok");}}
 }
 
 #[test]
-fn rejects_legal_unsupported_borrowed_receiver_autoref_autoderef() {
-    rejects(
-        "legalunsupported: borrowed_receiver_autoref_autoderef",
+fn accepts_borrowed_receiver_autoref_autoderef() {
+    runs(
         r###"struct S{x:i32}impl S{fn get(&self)->i32{self.x}}fn run()->i32{let s=S{x:3};let a=s.get();let r=&s;a+r.get()+1}
 fn main(){if run()==7{println!("associated items oracle ok");}}
 "###,
+        "associated items oracle ok\n",
     );
 }
 

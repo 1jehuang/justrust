@@ -4,7 +4,8 @@
 //! stack words. The callee reads them in reverse order above rbp. eax carries
 //! bool results (unit is zero), while rax carries normalized 64-bit integers.
 //! Signed integers are sign-extended and unsigned integers zero-extended from
-//! their declared width. References remain a separate thin-pointer class.
+//! their declared width. References remain a separate thin-pointer class,
+//! including borrowed receiver argument0 and references to aggregate referents.
 //! All registers are caller-saved. Frames use
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
@@ -657,6 +658,9 @@ impl<'a> Emitter<'a> {
                 self.normalize_integer(*to);
             }
             cfg::Rvalue::Borrow(loan) => {
+                // Immediate and two-phase loans both materialize the genuine
+                // place address exactly once. Reservation/activation permission
+                // belongs to the exact ConcreteCfg analysis, not runtime code.
                 let site = self
                     .function()
                     .loan_sites
@@ -1517,6 +1521,124 @@ mod tests {
         let output = run(&program);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"generic-native\n");
+    }
+
+    #[test]
+    fn generic_reference_native_thin_abi_and_two_phase_receiver_order() {
+        let program = frontend::parse(
+            r#"
+            fn shared<T>(value:&T)->&T { value }
+            fn forward<T>(value:&T)->&T { shared::<T>(value) }
+            fn unique<T>(value:&mut T)->&mut T { value }
+            struct Large { words:[u64;9], value:u64 }
+            impl Large {
+                fn get(&self)->u64 { self.value }
+                fn set(&mut self,value:u64) { self.value=value; }
+                fn field(&self,other:&u64)->&u64 { &self.value }
+                fn field_mut(&mut self)->&mut u64 { &mut self.value }
+            }
+            fn carrier(value:&mut Large)->&mut Large { println!("carrier"); value }
+            fn argument()->u64 { println!("argument"); 1u64 }
+            fn add(value:&mut u64,more:u64) { *value=*value+more; }
+            fn main() {
+                let mut big=Large { words:[18446744073709551615u64;9],value:7u64 };
+                let first=forward::<Large>(&big);
+                let copied=first;
+                if first.words[8] != 18446744073709551615u64 { 1/0; }
+                if copied.value != 7u64 { 1/0; }
+                let changed=unique::<Large>(&mut big);
+                changed.value=9u64;
+                big.set(big.get()+argument());
+                if big.get() != 10u64 { 1/0; }
+                carrier(&mut big).set(argument());
+                let mut count=0;
+                while count < 2 { big.set(big.get()+1u64); count=count+1; }
+                if big.get() != 3u64 { 1/0; }
+                let output=big.field_mut();
+                *output=9223372036854775808u64;
+                let chosen:&u64;
+                { let other=13u64; chosen=big.field(&other); }
+                if *chosen != 9223372036854775808u64 { 1/0; }
+                let mut scalar=5u64;
+                let reference=&mut scalar;
+                add(reference,*reference);
+                if *reference != 10u64 { 1/0; }
+                println!("generic-reference-native");
+            }
+            "#,
+        )
+        .unwrap();
+        let serial = emit(&program).unwrap();
+        let parallel = super::super::compile_program_observed(program, 4, false)
+            .unwrap()
+            .executable
+            .unwrap();
+        assert_eq!(serial, parallel, "borrowed ABI depends on worker order");
+        let path = executable_bytes(&serial);
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            output.stdout,
+            b"argument\ncarrier\nargument\ngeneric-reference-native\n"
+        );
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+
+    #[test]
+    fn generic_reference_native_trait_refinement_preserves_actual_return_pointers() {
+        let program = frontend::parse(
+            r#"
+            trait View {
+                fn field(&self)->&u64;
+                fn field_mut(&mut self)->&mut u64;
+            }
+            trait Pick { fn pick<'a>(known:&'a u64,whole:&'a Self)->&'a Self; }
+            mod hidden {
+                pub struct Data { pad:[u64;9],value:u64 }
+                impl crate::View for Data {
+                    fn field<'p>(&'p self)->&'p u64 { &self.value }
+                    fn field_mut<'q>(&'q mut self)->&'q mut u64 { &mut self.value }
+                }
+                impl crate::Pick for Data {
+                    fn pick<'a>(known:&'a u64,whole:&'a Self)->&'a Self { whole }
+                }
+                pub fn make()->Data {
+                    Data { pad:[18446744073709551615u64;9],value:18446744073709551615u64 }
+                }
+            }
+            struct Wrapper<T> { inner:T }
+            impl<T:View> View for Wrapper<T> {
+                fn field(&self)->&u64 { self.inner.field() }
+                fn field_mut(&mut self)->&mut u64 { self.inner.field_mut() }
+            }
+            fn view<T:View>(value:&T)->&u64 { value.field() }
+            fn view_mut<T:View>(value:&mut T)->&mut u64 { value.field_mut() }
+            fn concrete(value:&hidden::Data)->&u64 { value.field() }
+            fn pick<'a,T:Pick>(known:&'a u64,whole:&'a T)->&'a T { T::pick(known,whole) }
+            fn choose<'a,'b,T,U>(left:&'a T,right:&'b U)->&'a T { left }
+            fn main() {
+                let mut wrapped=Wrapper::<hidden::Data> { inner:hidden::make() };
+                if *view::<Wrapper<hidden::Data>>(&wrapped) != 18446744073709551615u64 { 1/0; }
+                *view_mut::<Wrapper<hidden::Data>>(&mut wrapped)=9223372036854775808u64;
+                if *concrete(&wrapped.inner) != 9223372036854775808u64 { 1/0; }
+                let known=1u64;
+                let selected=pick::<hidden::Data>(&known,&wrapped.inner);
+                if *selected.field() != 9223372036854775808u64 { 1/0; }
+                let outer=17u64;
+                let chosen:&u64;
+                { let short=19u64; chosen=choose::<u64,u64>(&outer,&short); }
+                if *chosen != 17u64 { 1/0; }
+                println!("generic-reference-trait-native");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"generic-reference-trait-native\n");
+        assert!(output.stderr.is_empty(), "{output:?}");
     }
 
     #[test]

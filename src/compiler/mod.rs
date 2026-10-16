@@ -78,6 +78,7 @@ const TEMPLATE_BODY: u32 = 110;
 const UNIVERSAL_LOWER: u32 = 111;
 const UNIVERSAL_ANALYZE: u32 = 112;
 const MONO_PLAN: u32 = 113;
+const CONCRETE_PROOFS: u32 = 114;
 
 enum Input {
     Text(String),
@@ -385,6 +386,22 @@ impl Provider for CompilerProvider {
                     publish(&this.0.native, native)?;
                     publish(&this.0.plan, plan)?;
                 }
+                CONCRETE_PROOFS => {
+                    cx.read(cx.request(root(MONO_PLAN)).get(0)).await?;
+                    let plan = this
+                        .0
+                        .plan
+                        .get()
+                        .ok_or_else(|| Error::new("missing instance plan"))?;
+                    let (mut handles, _handles_reservation) =
+                        this.scratch_vec(plan.entries.len())?;
+                    for index in 0..plan.entries.len() {
+                        handles.push(cx.request(function(ANALYZE, index)).get(0));
+                    }
+                    for handle in handles {
+                        cx.read(handle).await?;
+                    }
+                }
                 BODY | LOWER | ANALYZE | OBJECT => {
                     let [index] = key.params.as_slice() else {
                         return Err(Error::new("missing instance index"));
@@ -492,6 +509,7 @@ impl Provider for CompilerProvider {
                             }
                         }
                     } else {
+                        cx.read(cx.request(root(CONCRETE_PROOFS)).get(0)).await?;
                         cx.read(cx.request(function(ANALYZE, index)).get(0)).await?;
                         let concrete = slot
                             .concrete
@@ -505,6 +523,11 @@ impl Provider for CompilerProvider {
                 }
                 CHECK | BUILD => {
                     cx.read(cx.request(root(MONO_PLAN)).get(0)).await?;
+                    if key.kind == BUILD {
+                        // No object task is requested until every concrete
+                        // body has passed the same sealed analysis path.
+                        cx.read(cx.request(root(CONCRETE_PROOFS)).get(0)).await?;
+                    }
                     let plan = this
                         .0
                         .plan

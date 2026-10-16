@@ -168,6 +168,30 @@ pub struct CallTarget {
 pub enum ReceiverMode {
     None,
     Value,
+    Borrowed { kind: BorrowKind },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImplicitBorrowKind {
+    MutableReceiver,
+    MutableArgumentReborrow { carrier: ExprId },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BorrowTiming {
+    #[default]
+    Immediate,
+    TwoPhase {
+        activation: ExprId,
+        argument: usize,
+        reason: ImplicitBorrowKind,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SignatureSubject<'a> {
+    Body,
+    Call(&'a Callee),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TraitRef {
@@ -230,37 +254,15 @@ pub fn validate_callee(
         facts.validate_ty(ty)?;
     }
     if let Some(authority) = facts.validated() {
-        authority
-            .budget()
-            .charge_work(signature.params.len().saturating_add(1))?;
-        let agrees = match target {
-            Callee::Direct(target) => {
-                let proof = authority
-                    .service()
-                    .discharge_direct(target, authority)
-                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
-                authority
-                    .world()
-                    .signatures_equal(proof.signature(), signature)
-                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
-            }
-            Callee::TraitItem(call) => {
-                if authority.phase() == super::traits::FactsPhase::Closed {
-                    return Err("unresolved trait call in closed body".into());
-                }
-                let actual = authority
-                    .service()
-                    .instantiate_trait_signature(call, authority)
-                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
-                authority
-                    .world()
-                    .signatures_equal(&actual, signature)
-                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
-            }
-        };
-        if !agrees {
-            return Err("call signature disagrees with canonical declaration".into());
+        if authority.phase() == super::traits::FactsPhase::Closed
+            && matches!(target, Callee::TraitItem(_))
+        {
+            return Err("unresolved trait call in closed body".into());
         }
+        authority
+            .service()
+            .validate_signature(SignatureSubject::Call(target), signature, authority)
+            .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
     } else if matches!(target, Callee::TraitItem(_)) {
         return Err("trait call requires validated facts".into());
     }
@@ -273,37 +275,23 @@ pub fn validate_body_signature(
     if facts.phase() == super::traits::FactsPhase::Schema {
         return Err("trait schema cannot authorize executable body".into());
     }
-    let target = if let Some(target) = facts.target() {
-        target.clone()
-    } else {
-        facts.budget().retain_bytes(
-            facts.env().total_arity() * 2 * std::mem::size_of::<Ty>()
-                + 4 * std::mem::size_of::<usize>(),
-        )?;
-        CallTarget {
-            declaration: facts.declaration(),
-            type_args: facts
-                .env()
-                .ordered_params()
-                .map(Ty::Param)
-                .collect::<Vec<_>>()
-                .into(),
-        }
-    };
-    let proof = facts
+    facts
         .service()
-        .discharge_direct(&target, facts)
-        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
-    if !facts
-        .world()
-        .signatures_equal(proof.signature(), signature)
-        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
-    {
-        return Err("body signature disagrees with exact callable facts".into());
-    }
-    Ok(())
+        .validate_signature(SignatureSubject::Body, signature, facts)
+        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))
 }
 pub trait TraitCx: Send + Sync {
+    fn validate_signature(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<(), super::traits::FactsError>;
+    fn callee_receiver(
+        &self,
+        callee: &Callee,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<ReceiverMode, super::traits::FactsError>;
     fn validate_trait_ref(
         &self,
         goal: &TraitRef,
@@ -676,30 +664,15 @@ pub fn instantiate_checked(
             ExprKind::Call {
                 target, signature, ..
             } => {
-                let expected = visitor.signature(signature)?;
-                *target = substitute_callee(target, env, args, closed_facts, visitor.cx, budget)?;
-                let Callee::Direct(direct) = target else {
-                    return Err("unclosed instance call".into());
-                };
-                let proof = closed_facts
-                    .service()
-                    .discharge_direct(direct, closed_facts)
-                    .map_err(|e| e.into_legacy_diagnostic(budget))?;
-                let actual = proof.signature();
-                if actual.params.len() > MAX_PATTERN_PROJECTION_WORK {
-                    return Err("generic call signature resource limit exceeded".into());
-                }
-                for ty in actual.params.iter().chain(std::iter::once(&actual.result)) {
-                    FactsCtx::from_validated(closed_facts).validate_ty_with_budget(ty, budget)?;
-                }
-                if !closed_facts
-                    .world()
-                    .signatures_equal(actual, &expected)
-                    .map_err(|e| e.into_legacy_diagnostic(budget))?
-                {
-                    return Err("substituted call signature disagrees with declaration".into());
-                }
-                *signature = expected;
+                *target = substitute_callee_metadata(
+                    target,
+                    env,
+                    args,
+                    closed_facts,
+                    visitor.cx,
+                    budget,
+                )?;
+                *signature = visitor.signature(signature)?;
             }
             ExprKind::If {
                 then_block,
@@ -735,7 +708,7 @@ pub fn instantiate_checked(
         .map_err(|e| e.into_legacy_diagnostic(budget))
 }
 
-pub fn substitute_callee(
+fn substitute_callee_metadata(
     callee: &Callee,
     env: &GenericEnv,
     args: &[Ty],
@@ -788,6 +761,18 @@ pub fn substitute_callee(
             })
         }
     };
+    Ok(substituted)
+}
+
+pub fn substitute_callee(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+) -> Result<Callee, String> {
+    let substituted = substitute_callee_metadata(callee, env, args, closed_facts, cx, budget)?;
     match substituted {
         Callee::Direct(target) => {
             closed_facts
@@ -805,14 +790,14 @@ pub fn substitute_callee(
     }
 }
 
-pub fn close_checked_calls(
+pub fn canonicalize_checked_calls(
     source: &CheckedFunction,
     facts: &super::traits::ValidatedFacts,
     _cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, super::traits::FactsError> {
     use super::traits::FactsError;
-    if facts.phase() != super::traits::FactsPhase::Closed || !facts.budget().same_authority(budget)
+    if facts.phase() == super::traits::FactsPhase::Schema || !facts.budget().same_authority(budget)
     {
         return Err(FactsError::invalid(
             budget,
@@ -820,7 +805,7 @@ pub fn close_checked_calls(
         ));
     }
     source
-        .preflight_plan(FactsCtx::Concrete, budget)
+        .preflight_plan(FactsCtx::from_validated(facts), budget)
         .map_err(|e| FactsError::from_message(budget, &e))?;
     let mut output = source.clone();
     for expression in &mut output.exprs {
@@ -831,39 +816,65 @@ pub fn close_checked_calls(
             target, signature, ..
         } = &mut expression.kind
         {
-            let (callee, agrees) = match target {
+            facts
+                .service()
+                .validate_signature(SignatureSubject::Call(target), signature, facts)?;
+            budget
+                .retain_bytes(
+                    signature
+                        .params
+                        .len()
+                        .checked_mul(2 * std::mem::size_of::<Ty>())
+                        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Signature>()))
+                        .ok_or_else(|| {
+                            FactsError::resource(budget, "canonical signature storage overflow")
+                        })?,
+                )
+                .map_err(|error| FactsError::from_message(budget, &error))?;
+            let (callee, canonical) = match target {
                 Callee::Direct(target) => {
                     let proof = facts.service().discharge_direct(target, facts)?;
                     (
                         Callee::Direct(proof.target().clone()),
-                        facts
-                            .world()
-                            .signatures_equal(proof.signature(), signature)?,
+                        proof.signature().clone(),
                     )
                 }
                 Callee::TraitItem(call) => {
                     let proof = facts.service().resolve_trait_call(call, facts)?;
-                    (
-                        proof.callee().clone(),
-                        facts
-                            .world()
-                            .signatures_equal(proof.signature(), signature)?,
-                    )
+                    (proof.callee().clone(), proof.signature().clone())
                 }
             };
-            if !matches!(callee, Callee::Direct(_)) || !agrees {
+            if facts.phase() == super::traits::FactsPhase::Closed
+                && !matches!(callee, Callee::Direct(_))
+            {
                 return Err(FactsError::invalid(
                     budget,
                     "closed call signature disagrees with canonical declaration",
                 ));
             }
             *target = callee;
+            *signature = canonical;
         }
     }
     output
         .validate_with_facts(FactsCtx::from_validated(facts))
         .map_err(|e| FactsError::from_message(budget, &e))?;
     Ok(output)
+}
+
+pub fn close_checked_calls(
+    source: &CheckedFunction,
+    facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+) -> Result<CheckedFunction, super::traits::FactsError> {
+    if facts.phase() != super::traits::FactsPhase::Closed {
+        return Err(super::traits::FactsError::invalid(
+            budget,
+            "call closure requires closed facts",
+        ));
+    }
+    canonicalize_checked_calls(source, facts, cx, budget)
 }
 
 pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
@@ -1478,8 +1489,8 @@ impl<'f> FactsCtx<'f> {
                     }
                 }
                 Ty::Ref { referent, .. } => {
-                    if matches!(facts, FactsCtx::Universal(_)) {
-                        return Err("references in generic bodies are unsupported".into());
+                    if depth != 0 {
+                        return Err("nested or aggregate references are unsupported".into());
                     }
                     walk(facts, referent, depth + 1, work, budget)?;
                 }
@@ -1603,12 +1614,19 @@ pub struct InputPath {
     pub projection: Arc<[Projection]>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InputEnvelope {
+    pub param: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ReturnContract {
     #[default]
     NoReference,
     SharedInputPaths(Arc<[InputPath]>),
     MutInputPaths(Arc<[InputPath]>),
+    SharedInputEnvelopes(Arc<[InputEnvelope]>),
+    MutInputEnvelopes(Arc<[InputEnvelope]>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -1618,6 +1636,588 @@ pub struct RefContract {
     pub result_region: Option<RegionParamId>,
     pub outlives: Arc<[(RegionParamId, RegionParamId)]>,
     pub returns: ReturnContract,
+}
+
+fn contract_rows(contract: &RefContract, budget: &PlanBudget) -> Result<[u64; 64], String> {
+    let count = usize::from(contract.region_count);
+    if count > 64
+        || contract.outlives.len() > 4096
+        || contract.param_regions.len() > MAX_PATTERN_PROJECTION_WORK
+    {
+        return Err("reference region resource limit exceeded".into());
+    }
+    budget
+        .charge_work(contract.param_regions.len() + contract.outlives.len() + count * count + 64)?;
+    for region in contract
+        .param_regions
+        .iter()
+        .flatten()
+        .chain(contract.result_region.iter())
+    {
+        if usize::from(region.0) >= count {
+            return Err("reference region is outside declaration".into());
+        }
+    }
+    let mut rows = [0u64; 64];
+    for (index, row) in rows.iter_mut().enumerate().take(count) {
+        *row = 1u64 << index;
+    }
+    for (longer, shorter) in contract.outlives.iter() {
+        if usize::from(longer.0) >= count || usize::from(shorter.0) >= count {
+            return Err("outlives region is outside declaration".into());
+        }
+        rows[usize::from(longer.0)] |= 1u64 << shorter.0;
+    }
+    for via in 0..count {
+        for from in 0..count {
+            if rows[from] & (1u64 << via) != 0 {
+                rows[from] |= rows[via];
+            }
+        }
+    }
+    Ok(rows)
+}
+
+fn stored_candidate_work(contract: &RefContract, budget: &PlanBudget) -> Result<(), String> {
+    match &contract.returns {
+        ReturnContract::NoReference => Ok(()),
+        ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
+            if paths.len() > MAX_INPUT_PATHS {
+                return Err("reference return candidate limit exceeded".into());
+            }
+            let mut steps = 0usize;
+            for path in paths.iter() {
+                if path.projection.len() > MAX_PATTERN_PROJECTION_DEPTH {
+                    return Err("input path depth resource limit exceeded".into());
+                }
+                steps = steps
+                    .checked_add(path.projection.len())
+                    .ok_or("input path step overflow")?;
+                if steps > MAX_INPUT_PATH_STEPS {
+                    return Err("input path step resource limit exceeded".into());
+                }
+                budget.charge_work(1 + path.projection.len())?;
+                if path.projection.iter().any(|step| {
+                    !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                }) {
+                    return Err("forbidden input path projection".into());
+                }
+            }
+            Ok(())
+        }
+        ReturnContract::SharedInputEnvelopes(paths) | ReturnContract::MutInputEnvelopes(paths) => {
+            if paths.len() > MAX_INPUT_PATHS {
+                return Err("reference return candidate limit exceeded".into());
+            }
+            budget.charge_work(paths.len())
+        }
+    }
+}
+
+/// Pure metadata normalization. It grants neither declaration nor body authority.
+pub fn normalize_ref_contract(
+    raw: &RefContract,
+    budget: &PlanBudget,
+) -> Result<Arc<RefContract>, String> {
+    let _scratch = budget.reserve_bytes(
+        64 * 12
+            + raw
+                .param_regions
+                .len()
+                .checked_mul(4)
+                .ok_or("region storage overflow")?,
+    )?;
+    let rows = contract_rows(raw, budget)?;
+    stored_candidate_work(raw, budget)?;
+    let mut map = [None; 64];
+    let mut old = [0usize; 64];
+    let mut count = 0usize;
+    for region in raw
+        .param_regions
+        .iter()
+        .flatten()
+        .chain(raw.result_region.iter())
+    {
+        budget.charge_work(1)?;
+        let index = usize::from(region.0);
+        if map[index].is_none() {
+            map[index] = Some(RegionParamId(count as u16));
+            old[count] = index;
+            count += 1;
+        }
+    }
+    budget.charge_work(count * count * 2 + raw.param_regions.len())?;
+    let edges = (0..count)
+        .map(|from| {
+            (0..count)
+                .filter(|to| *to != from && rows[old[from]] & (1u64 << old[*to]) != 0)
+                .count()
+        })
+        .sum::<usize>();
+    budget.retain_bytes(
+        std::mem::size_of::<RefContract>()
+            + raw.param_regions.len() * 2 * std::mem::size_of::<Option<RegionParamId>>()
+            + edges * 2 * std::mem::size_of::<(RegionParamId, RegionParamId)>()
+            + 8 * std::mem::size_of::<usize>(),
+    )?;
+    let mut outlives = Vec::new();
+    outlives
+        .try_reserve_exact(edges)
+        .map_err(|_| "region normalization allocation failed")?;
+    for from in 0..count {
+        for to in 0..count {
+            if from != to && rows[old[from]] & (1u64 << old[to]) != 0 {
+                outlives.push((RegionParamId(from as u16), RegionParamId(to as u16)));
+            }
+        }
+    }
+    Ok(Arc::new(RefContract {
+        region_count: count as u16,
+        param_regions: raw
+            .param_regions
+            .iter()
+            .map(|region| region.map(|region| map[usize::from(region.0)].expect("used region")))
+            .collect::<Vec<_>>()
+            .into(),
+        result_region: raw
+            .result_region
+            .map(|region| map[usize::from(region.0)].expect("used result region")),
+        outlives: outlives.into(),
+        returns: raw.returns.clone(),
+    }))
+}
+
+fn ref_type_walk(
+    ty: &Ty,
+    root: bool,
+    budget: &PlanBudget,
+    depth: usize,
+    visits: &mut usize,
+) -> Result<bool, String> {
+    fn walk(
+        ty: &Ty,
+        root: bool,
+        budget: &PlanBudget,
+        depth: usize,
+        visits: &mut usize,
+        memo: &mut std::collections::HashMap<(usize, bool), (bool, usize)>,
+    ) -> Result<(bool, usize), String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        *visits += 1;
+        if *visits > MAX_PATTERN_PROJECTION_WORK {
+            return Err("reference type work limit exceeded".into());
+        }
+        let key = (std::ptr::from_ref(ty) as usize, root);
+        if let Some(&(opaque, height)) = memo.get(&key) {
+            budget.check_depth(
+                depth
+                    .checked_add(height)
+                    .ok_or("reference type depth overflow")?,
+            )?;
+            return Ok((opaque, height));
+        }
+        let mut opaque = matches!(ty, Ty::Param(_));
+        let mut height = 0;
+        let mut child = |value: &Ty| -> Result<(), String> {
+            let (is_opaque, child_height) = walk(value, false, budget, depth + 1, visits, memo)?;
+            opaque |= is_opaque;
+            height = height.max(child_height + 1);
+            Ok(())
+        };
+        match ty {
+            Ty::Ref { referent, .. } => {
+                if !root {
+                    return Err("nested or aggregate references are unsupported".into());
+                }
+                child(referent)?;
+            }
+            Ty::Tuple(fields) => {
+                for field in fields.iter() {
+                    child(field)?;
+                }
+            }
+            Ty::Array { element, len } => {
+                if *len > MAX_ARRAY_LEN {
+                    return Err("array length resource limit exceeded".into());
+                }
+                child(element)?;
+            }
+            Ty::Struct(value) => {
+                for argument in value.def().type_args.iter() {
+                    child(argument)?;
+                }
+                for field in value.def().fields.iter() {
+                    child(&field.ty)?;
+                }
+            }
+            Ty::Enum(value) => {
+                for argument in value.def().type_args.iter() {
+                    child(argument)?;
+                }
+                for variant in value.def().variants.iter() {
+                    budget.charge_work(1)?;
+                    for field in variant.fields.iter() {
+                        child(&field.ty)?;
+                    }
+                }
+            }
+            Ty::Param(_) | Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+        }
+        budget.retain_bytes(4 * std::mem::size_of::<((usize, bool), (bool, usize))>())?;
+        memo.try_reserve(1)
+            .map_err(|_| "reference type memo allocation failed")?;
+        memo.insert(key, (opaque, height));
+        Ok((opaque, height))
+    }
+    walk(
+        ty,
+        root,
+        budget,
+        depth,
+        visits,
+        &mut std::collections::HashMap::new(),
+    )
+    .map(|(opaque, _)| opaque)
+}
+
+fn ref_types_equal(
+    left: &Ty,
+    right: &Ty,
+    budget: &PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    fn walk(
+        left: &Ty,
+        right: &Ty,
+        budget: &PlanBudget,
+        depth: usize,
+        memo: &mut std::collections::HashMap<(usize, usize), (bool, usize)>,
+    ) -> Result<(bool, usize), String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        let key = (
+            std::ptr::from_ref(left) as usize,
+            std::ptr::from_ref(right) as usize,
+        );
+        if let Some(&(equal, height)) = memo.get(&key) {
+            budget.check_depth(
+                depth
+                    .checked_add(height)
+                    .ok_or("reference equality depth overflow")?,
+            )?;
+            return Ok((equal, height));
+        }
+        let mut height = 0;
+        let mut child = |left: &Ty, right: &Ty| -> Result<bool, String> {
+            let (equal, child_height) = walk(left, right, budget, depth + 1, memo)?;
+            height = height.max(child_height + 1);
+            Ok(equal)
+        };
+        let equal = match (left, right) {
+            (Ty::Tuple(a), Ty::Tuple(b)) => {
+                if a.len() != b.len() {
+                    false
+                } else {
+                    let mut equal = true;
+                    for (a, b) in a.iter().zip(b.iter()) {
+                        equal &= child(a, b)?;
+                    }
+                    equal
+                }
+            }
+            (Ty::Array { element: a, len: x }, Ty::Array { element: b, len: y }) => {
+                x == y && child(a, b)?
+            }
+            (
+                Ty::Ref {
+                    kind: a,
+                    referent: x,
+                },
+                Ty::Ref {
+                    kind: b,
+                    referent: y,
+                },
+            ) => a == b && child(x, y)?,
+            (Ty::Struct(a), Ty::Struct(b)) => a.def().id == b.def().id,
+            (Ty::Enum(a), Ty::Enum(b)) => a.def().id == b.def().id,
+            (Ty::Param(a), Ty::Param(b)) => a == b,
+            (Ty::Int(a), Ty::Int(b)) => a == b,
+            (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => true,
+            _ => false,
+        };
+        budget.retain_bytes(4 * std::mem::size_of::<((usize, usize), (bool, usize))>())?;
+        memo.try_reserve(1)
+            .map_err(|_| "reference equality memo allocation failed")?;
+        memo.insert(key, (equal, height));
+        Ok((equal, height))
+    }
+    walk(
+        left,
+        right,
+        budget,
+        depth,
+        &mut std::collections::HashMap::new(),
+    )
+    .map(|(equal, _)| equal)
+}
+
+/// Derive declaration authority only on rigid schemas, never on an instance.
+pub fn derive_return_contract(
+    params: &[Ty],
+    result: &Ty,
+    regions: &RefContract,
+    budget: &PlanBudget,
+) -> Result<ReturnContract, String> {
+    let rows = contract_rows(regions, budget)?;
+    let mut visits = 0usize;
+    let result_opaque = ref_type_walk(result, true, budget, 0, &mut visits)?;
+    for param in params {
+        ref_type_walk(param, true, budget, 0, &mut visits)?;
+    }
+    let Ty::Ref {
+        kind: output_kind,
+        referent: output,
+    } = result
+    else {
+        return Ok(ReturnContract::NoReference);
+    };
+    if regions.param_regions.len() != params.len() {
+        return Err("reference contract parameter arity mismatch".into());
+    }
+    let output_region = regions
+        .result_region
+        .ok_or("missing reference result region")?;
+    let _scratch = budget.reserve_bytes(
+        params
+            .len()
+            .checked_mul(2 * std::mem::size_of::<usize>())
+            .ok_or("input candidate storage overflow")?,
+    )?;
+    let mut eligible = Vec::new();
+    eligible
+        .try_reserve_exact(params.len().min(MAX_INPUT_PATHS))
+        .map_err(|_| "input candidate allocation failed")?;
+    let mut opaque = result_opaque;
+    for (index, (param, region)) in params.iter().zip(regions.param_regions.iter()).enumerate() {
+        budget.charge_work(1)?;
+        if let Ty::Ref { kind, referent } = param {
+            let region = region.ok_or("missing reference parameter region")?;
+            if (*output_kind == BorrowKind::Shared || *kind == BorrowKind::Mut)
+                && rows[usize::from(region.0)] & (1u64 << output_region.0) != 0
+            {
+                if eligible.len() == MAX_INPUT_PATHS {
+                    return Err("reference return candidate limit exceeded".into());
+                }
+                eligible.push(index);
+                opaque |= ref_type_walk(referent, false, budget, 0, &mut visits)?;
+            }
+        } else if region.is_some() {
+            return Err("nonreference parameter has reference region".into());
+        }
+    }
+    if opaque {
+        budget.retain_bytes(
+            eligible.len() * 2 * std::mem::size_of::<InputEnvelope>()
+                + 4 * std::mem::size_of::<usize>(),
+        )?;
+        let candidates = eligible
+            .into_iter()
+            .map(|param| InputEnvelope { param })
+            .collect::<Vec<_>>()
+            .into();
+        return Ok(if *output_kind == BorrowKind::Mut {
+            ReturnContract::MutInputEnvelopes(candidates)
+        } else {
+            ReturnContract::SharedInputEnvelopes(candidates)
+        });
+    }
+    fn collect(
+        ty: &Ty,
+        output: &Ty,
+        param: usize,
+        path: &mut Vec<Projection>,
+        out: &mut Vec<InputPath>,
+        counts: &mut (usize, usize),
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        budget.check_depth(path.len())?;
+        budget.charge_work(1)?;
+        counts.1 += 1;
+        if counts.1 > MAX_INPUT_PATH_OCCURRENCES {
+            return Err("input path occurrence resource limit exceeded".into());
+        }
+        if ref_types_equal(ty, output, budget, 0)? {
+            if out.len() == MAX_INPUT_PATHS {
+                return Err("reference return candidate limit exceeded".into());
+            }
+            counts.0 = counts
+                .0
+                .checked_add(path.len())
+                .ok_or("input path storage overflow")?;
+            if counts.0 > MAX_INPUT_PATH_STEPS {
+                return Err("input path step resource limit exceeded".into());
+            }
+            budget.retain_bytes(
+                2 * std::mem::size_of::<InputPath>()
+                    + path.len() * 2 * std::mem::size_of::<Projection>()
+                    + 4 * std::mem::size_of::<usize>(),
+            )?;
+            out.try_reserve_exact(1)
+                .map_err(|_| "input path allocation failed")?;
+            out.push(InputPath {
+                param,
+                projection: path.clone().into(),
+            });
+        }
+        let count = if let Ty::Array { len, .. } = ty {
+            *len
+        } else {
+            ty.field_count().unwrap_or(0)
+        };
+        for index in 0..count {
+            if path.len() >= MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("input path depth resource limit exceeded".into());
+            }
+            let (step, child) = if let Ty::Array { element, .. } = ty {
+                (Projection::ConstantIndex(index), element.as_ref())
+            } else {
+                (
+                    Projection::Field(index),
+                    ty.field_ty(index).ok_or("invalid input field")?,
+                )
+            };
+            path.push(step);
+            collect(child, output, param, path, out, counts, budget)?;
+            path.pop();
+        }
+        Ok(())
+    }
+    let _path_scratch =
+        budget.reserve_bytes(MAX_PATTERN_PROJECTION_DEPTH * std::mem::size_of::<Projection>())?;
+    let mut path = Vec::new();
+    path.try_reserve_exact(MAX_PATTERN_PROJECTION_DEPTH)
+        .map_err(|_| "input path allocation failed")?;
+    let mut candidates = Vec::new();
+    let mut counts = (0, 0);
+    for index in eligible {
+        let Ty::Ref { referent, .. } = &params[index] else {
+            unreachable!()
+        };
+        collect(
+            referent,
+            output,
+            index,
+            &mut path,
+            &mut candidates,
+            &mut counts,
+            budget,
+        )?;
+    }
+    Ok(if *output_kind == BorrowKind::Mut {
+        ReturnContract::MutInputPaths(candidates.into())
+    } else {
+        ReturnContract::SharedInputPaths(candidates.into())
+    })
+}
+
+/// Internal structural half of canonical validation. Call only after the world
+/// has established exact subject/schema agreement. It never derives candidates.
+pub(super) fn validate_stored_ref_contract(
+    params: &[Ty],
+    result: &Ty,
+    contract: &RefContract,
+    budget: &PlanBudget,
+) -> Result<(), String> {
+    let rows = contract_rows(contract, budget)?;
+    stored_candidate_work(contract, budget)?;
+    let mut visits = 0;
+    ref_type_walk(result, true, budget, 0, &mut visits)?;
+    for param in params {
+        ref_type_walk(param, true, budget, 0, &mut visits)?;
+    }
+    if contract.param_regions.len() != params.len()
+        && !(contract.param_regions.is_empty()
+            && matches!(contract.returns, ReturnContract::NoReference))
+    {
+        return Err("reference contract parameter arity mismatch".into());
+    }
+    for (param, region) in params.iter().zip(contract.param_regions.iter()) {
+        if region.is_some() && !matches!(param, Ty::Ref { .. }) {
+            return Err("nonreference parameter has reference region".into());
+        }
+        if contract.region_count != 0 && matches!(param, Ty::Ref { .. }) && region.is_none() {
+            return Err("missing reference parameter region".into());
+        }
+    }
+    let (kind, output) = if let Ty::Ref { kind, referent } = result {
+        (*kind, referent.as_ref())
+    } else {
+        if !matches!(contract.returns, ReturnContract::NoReference)
+            || contract.result_region.is_some()
+        {
+            return Err("reference contract/result mismatch".into());
+        }
+        return Ok(());
+    };
+    let region = contract
+        .result_region
+        .ok_or("missing reference result region")?;
+    let eligible = |index: usize| -> Result<&Ty, String> {
+        let Ty::Ref {
+            kind: input_kind,
+            referent,
+        } = params.get(index).ok_or("invalid return input index")?
+        else {
+            return Err("return input must be reference".into());
+        };
+        let input = contract
+            .param_regions
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or("missing reference input region")?;
+        if (kind == BorrowKind::Mut && *input_kind != BorrowKind::Mut)
+            || rows[usize::from(input.0)] & (1u64 << region.0) == 0
+        {
+            return Err("return input kind or region mismatch".into());
+        }
+        Ok(referent)
+    };
+    match &contract.returns {
+        ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
+            if matches!(contract.returns, ReturnContract::MutInputPaths(_))
+                != (kind == BorrowKind::Mut)
+            {
+                return Err("reference return kind mismatch".into());
+            }
+            for path in paths.iter() {
+                let selected = projected_ty(eligible(path.param)?, &path.projection)?;
+                if !ref_types_equal(selected, output, budget, 0)? {
+                    return Err("return input path type mismatch".into());
+                }
+            }
+        }
+        ReturnContract::SharedInputEnvelopes(paths) | ReturnContract::MutInputEnvelopes(paths) => {
+            if matches!(contract.returns, ReturnContract::MutInputEnvelopes(_))
+                != (kind == BorrowKind::Mut)
+            {
+                return Err("reference return kind mismatch".into());
+            }
+            let mut previous = None;
+            for path in paths.iter() {
+                eligible(path.param)?;
+                if previous.is_some_and(|old| old >= path.param) {
+                    return Err("noncanonical return envelope order".into());
+                }
+                previous = Some(path.param);
+            }
+        }
+        ReturnContract::NoReference => {
+            return Err("reference result requires return contract".into());
+        }
+    }
+    Ok(())
 }
 
 impl RefContract {
@@ -1923,6 +2523,9 @@ impl RefContract {
         self.closure()?;
         work += self.metadata_work() + supplied_work;
         match &self.returns {
+            ReturnContract::SharedInputEnvelopes(_) | ReturnContract::MutInputEnvelopes(_) => {
+                return Err("envelope contract requires canonical signature authority".into());
+            }
             ReturnContract::NoReference => {
                 if matches!(result, Ty::Ref { .. })
                     || self.region_count != 0
@@ -2187,6 +2790,7 @@ pub enum ExprKind {
     Borrow {
         kind: BorrowKind,
         place: Place,
+        timing: BorrowTiming,
     },
     Deref {
         value: ExprId,
@@ -2617,11 +3221,13 @@ impl CheckedFunction {
                 authority,
             )?;
         }
-        self.ref_contract.validate(&parameter_types, &self.result)?;
+        if facts.validated().is_none() {
+            self.ref_contract.validate(&parameter_types, &self.result)?;
+        }
         // Traverse nested blocks iteratively so malformed/deep fixtures cannot
         // exhaust the host call stack inside this diagnostic helper.
         let mut blocks = vec![&self.body];
-        for value in &self.exprs {
+        for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
                 ExprKind::IntCast { value: source, to } => {
                     expr(*source)?;
@@ -2636,7 +3242,11 @@ impl CheckedFunction {
                         return Err("integer cast completion mismatch".into());
                     }
                 }
-                ExprKind::Borrow { kind, place } => {
+                ExprKind::Borrow {
+                    kind,
+                    place,
+                    timing,
+                } => {
                     let root = &self
                         .locals
                         .get(place.local.0)
@@ -2649,6 +3259,83 @@ impl CheckedFunction {
                     };
                     if !pattern_types_equal(&value.ty, &expected, &mut 0)? {
                         return Err("borrow result type mismatch".into());
+                    }
+                    if let BorrowTiming::TwoPhase {
+                        activation,
+                        argument,
+                        reason,
+                    } = timing
+                    {
+                        if *kind != BorrowKind::Mut {
+                            return Err("two-phase borrow must be mutable".into());
+                        }
+                        let call = self
+                            .exprs
+                            .get(activation.0)
+                            .ok_or("invalid borrow activation expression")?;
+                        let ExprKind::Call {
+                            target,
+                            signature,
+                            args,
+                            ..
+                        } = &call.kind
+                        else {
+                            return Err("borrow activation must be a call".into());
+                        };
+                        if args.get(*argument) != Some(&ExprId(borrow_index))
+                            || signature.params.get(*argument) != Some(&expected)
+                        {
+                            return Err(
+                                "two-phase borrow must be the exact mutable call argument".into()
+                            );
+                        }
+                        match reason {
+                            ImplicitBorrowKind::MutableReceiver => {
+                                let authority = facts
+                                    .validated()
+                                    .ok_or("mutable receiver requires canonical authority")?;
+                                if *argument != 0
+                                    || authority
+                                        .service()
+                                        .callee_receiver(target, authority)
+                                        .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+                                        != (ReceiverMode::Borrowed {
+                                            kind: BorrowKind::Mut,
+                                        })
+                                {
+                                    return Err(
+                                        "two-phase receiver is not a canonical mutable receiver"
+                                            .into(),
+                                    );
+                                }
+                            }
+                            ImplicitBorrowKind::MutableArgumentReborrow { carrier } => {
+                                let carrier = self
+                                    .exprs
+                                    .get(carrier.0)
+                                    .ok_or("invalid reborrow carrier")?;
+                                let ExprKind::Local(local) = carrier.kind else {
+                                    return Err(
+                                        "implicit mutable reborrow requires original local carrier"
+                                            .into(),
+                                    );
+                                };
+                                if !matches!(
+                                    carrier.ty,
+                                    Ty::Ref {
+                                        kind: BorrowKind::Mut,
+                                        ..
+                                    }
+                                ) || place.local != local
+                                    || place.projection.as_slice() != [Projection::Deref]
+                                {
+                                    return Err(
+                                        "implicit mutable reborrow carrier provenance mismatch"
+                                            .into(),
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 ExprKind::Deref { value: source } => {
@@ -2823,9 +3510,11 @@ impl CheckedFunction {
                         facts.validate_ty(ty)?;
                     }
                     validate_callee(target, signature, facts)?;
-                    signature
-                        .ref_contract
-                        .validate(&signature.params, &signature.result)?;
+                    if facts.validated().is_none() {
+                        signature
+                            .ref_contract
+                            .validate(&signature.params, &signature.result)?;
+                    }
                     if args.len() != signature.params.len() {
                         return Err(format!("invalid call arity for {name} in {}", self.name));
                     }
@@ -2952,6 +3641,154 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_reference_regions_normalize_mediators_and_preserve_named_noescape() {
+        use super::*;
+        let budget = PlanBudget::default();
+        let mut raw = RefContract {
+            region_count: 4,
+            param_regions: Arc::from([Some(RegionParamId(2)), Some(RegionParamId(2))]),
+            result_region: Some(RegionParamId(0)),
+            outlives: Arc::from([
+                (RegionParamId(2), RegionParamId(3)),
+                (RegionParamId(3), RegionParamId(0)),
+            ]),
+            returns: ReturnContract::SharedInputPaths(Arc::from([])),
+        };
+        let normalized = normalize_ref_contract(&raw, &budget).unwrap();
+        assert_eq!(normalized.region_count, 2);
+        assert_eq!(
+            normalized.param_regions.as_ref(),
+            &[Some(RegionParamId(0)), Some(RegionParamId(0))]
+        );
+        assert_eq!(normalized.result_region, Some(RegionParamId(1)));
+        assert_eq!(
+            normalized.outlives.as_ref(),
+            &[(RegionParamId(0), RegionParamId(1))]
+        );
+        let reference = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Int(IntTy::I32)),
+        };
+        let params = [reference.clone(), reference.clone()];
+        let ReturnContract::SharedInputPaths(paths) =
+            derive_return_contract(&params, &reference, &normalized, &budget).unwrap()
+        else {
+            panic!("concrete declarations retain exact paths");
+        };
+        assert_eq!(
+            paths.iter().map(|path| path.param).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        raw.result_region = None;
+        raw.returns = ReturnContract::NoReference;
+        let normalized = normalize_ref_contract(&raw, &budget).unwrap();
+        assert_eq!(normalized.region_count, 1);
+        assert_eq!(
+            derive_return_contract(&params, &Ty::Unit, &normalized, &budget).unwrap(),
+            ReturnContract::NoReference
+        );
+        validate_stored_ref_contract(&params, &Ty::Unit, &normalized, &budget).unwrap();
+        let tiny = PlanBudget::new(PlanLimits {
+            work: 1,
+            ..PlanLimits::default()
+        });
+        assert!(normalize_ref_contract(&raw, &tiny).is_err());
+        let mut shared = Ty::Int(IntTy::I32);
+        for _ in 0..24 {
+            let node = Arc::from([shared.clone(), shared]);
+            shared = Ty::Tuple(node);
+        }
+        let erased = RefContract {
+            param_regions: Arc::from([None]),
+            ..RefContract::default()
+        };
+        assert_eq!(
+            derive_return_contract(&[shared], &Ty::Unit, &erased, &budget).unwrap(),
+            ReturnContract::NoReference
+        );
+    }
+
+    #[test]
+    fn generic_reference_envelopes_are_rigid_and_transport_without_rederivation() {
+        use super::*;
+        let budget = PlanBudget::default();
+        let opaque = Ty::Param(ParamId {
+            owner: BinderId {
+                declaration: test_decl(),
+            },
+            index: 0,
+        });
+        let reference = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let scalar = Ty::Int(IntTy::I32);
+        let mut contract = RefContract {
+            region_count: 1,
+            param_regions: Arc::from([Some(RegionParamId(0)), Some(RegionParamId(0))]),
+            result_region: Some(RegionParamId(0)),
+            outlives: Arc::from([]),
+            returns: ReturnContract::NoReference,
+        };
+        contract.returns = derive_return_contract(
+            &[reference(opaque.clone()), reference(scalar.clone())],
+            &reference(scalar.clone()),
+            &contract,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            contract.returns,
+            ReturnContract::SharedInputEnvelopes(Arc::from([
+                InputEnvelope { param: 0 },
+                InputEnvelope { param: 1 }
+            ]))
+        );
+        validate_stored_ref_contract(
+            &[reference(scalar.clone()), reference(scalar.clone())],
+            &reference(scalar.clone()),
+            &contract,
+            &budget,
+        )
+        .unwrap();
+        assert!(
+            contract
+                .validate(
+                    &[reference(scalar.clone()), reference(scalar.clone())],
+                    &reference(scalar.clone())
+                )
+                .is_err()
+        );
+        contract.param_regions = Arc::from([Some(RegionParamId(0))]);
+        contract.returns = derive_return_contract(
+            &[reference(scalar.clone())],
+            &reference(opaque),
+            &contract,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            contract.returns,
+            ReturnContract::SharedInputEnvelopes(Arc::from([InputEnvelope { param: 0 }]))
+        );
+        let nested = Ty::Array {
+            element: Arc::new(reference(scalar)),
+            len: 0,
+        };
+        assert!(
+            derive_return_contract(
+                &[nested],
+                &Ty::Unit,
+                &RefContract {
+                    param_regions: Arc::from([None]),
+                    ..RefContract::default()
+                },
+                &budget
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn trait_goal_and_diagnostic_limits_share_authority_without_hidden_reservations() {
         let budget = PlanBudget::default();

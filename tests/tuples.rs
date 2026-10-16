@@ -517,6 +517,7 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                 }
                 if !check {
                     expected.push(Key::new(105, vec![]));
+                    expected.push(Key::new(114, vec![]));
                 }
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {

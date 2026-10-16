@@ -468,12 +468,11 @@ fn main() { if run() == 7 { println!("mutable returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_computed_call_assignment() {
-    // Stock accepts and runs this fixture, outside the bounded B3b slice.
-    rejects(
-        "computed_call_assignment",
+fn accepts_computed_call_assignment() {
+    runs(
         r#"fn id<'a>(r:&'a mut i32)->&'a mut i32{r} fn run()->i32{let mut x=3;*id(&mut x)=7;x}
 fn main() { if run() == 7 { println!("mutable returns oracle ok"); } }
 "#,
+        "mutable returns oracle ok\n",
     );
 }

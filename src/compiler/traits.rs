@@ -4,7 +4,8 @@
 //! claimed successful analysis can manufacture body facts or dispatch evidence.
 use super::ir::{
     self, CallTarget, Callee, DeclId, DeclKind, GenericEnv, ParamEnv, ParamId, PlanBudget,
-    Predicate, Projection, ReceiverMode, Signature, SnapshotId, TraitCall, TraitCx, TraitRef, Ty,
+    Predicate, Projection, ReceiverMode, Signature, SignatureSubject, SnapshotId, TraitCall,
+    TraitCx, TraitRef, Ty,
 };
 use std::sync::{Arc, Mutex};
 
@@ -344,6 +345,16 @@ impl ValidatedFacts {
     pub fn registry_snapshot(&self) -> SnapshotId {
         self.world.registry
     }
+    pub fn validate_signature(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+    ) -> Result<()> {
+        TraitCx::validate_signature(self.world.as_ref(), subject, signature, self)
+    }
+    pub fn callee_receiver(&self, callee: &Callee) -> Result<ReceiverMode> {
+        TraitCx::callee_receiver(self.world.as_ref(), callee, self)
+    }
     pub fn validate_ty(&self, ty: &Ty) -> Result<()> {
         self.validate_ty_with_budget(ty, self.budget())
     }
@@ -439,6 +450,7 @@ pub struct ResolvedTraitCall {
     callee: Callee,
     signature: Signature,
     _evidence: ProofEvidence,
+    _refinement: Option<Arc<ReturnRefinementProof>>,
 }
 impl ResolvedTraitCall {
     pub fn callee(&self) -> &Callee {
@@ -466,6 +478,40 @@ struct MemoEntry {
     state: MemoState,
 }
 
+#[derive(Clone, Copy)]
+struct ProofContext<'a> {
+    predicates: &'a PredicateEnv,
+    phase: FactsPhase,
+}
+impl<'a> ProofContext<'a> {
+    fn from_facts(facts: &'a ValidatedFacts) -> Self {
+        Self {
+            predicates: &facts.predicates,
+            phase: facts.phase(),
+        }
+    }
+    fn env(self) -> &'a Arc<GenericEnv> {
+        &self.predicates.env
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ReturnRefinementProof {
+    world: WorldId,
+    item: DeclId,
+    implementation: DeclId,
+    required: Arc<ir::RefContract>,
+    provided: Arc<ir::RefContract>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypeUse {
+    Root,
+    Referent,
+    Aggregate,
+    Actual,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TypeNode {
     Struct(ir::NominalAppId, usize),
@@ -476,11 +522,11 @@ enum TypeNode {
 }
 #[derive(Default)]
 struct TypeWalk {
-    complete: Vec<(TypeNode, usize)>,
+    complete: Vec<((TypeNode, TypeUse), usize)>,
     reservations: Vec<ir::PlanReservation>,
     visits: usize,
     maybe_unsized: Option<ParamId>,
-    root_top: bool,
+    has_parameters: bool,
 }
 impl TypeWalk {
     fn key(ty: &Ty) -> Option<TypeNode> {
@@ -503,7 +549,7 @@ impl TypeWalk {
             _ => None,
         }
     }
-    fn lookup(&self, key: TypeNode, budget: &PlanBudget) -> Result<Option<usize>> {
+    fn lookup(&self, key: (TypeNode, TypeUse), budget: &PlanBudget) -> Result<Option<usize>> {
         for (old, height) in &self.complete {
             charged(budget, budget.charge_work(1))?;
             if *old == key {
@@ -512,11 +558,16 @@ impl TypeWalk {
         }
         Ok(None)
     }
-    fn insert(&mut self, key: TypeNode, height: usize, budget: &PlanBudget) -> Result<()> {
+    fn insert(
+        &mut self,
+        key: (TypeNode, TypeUse),
+        height: usize,
+        budget: &PlanBudget,
+    ) -> Result<()> {
         let reservation = charged(
             budget,
             budget.reserve_bytes(
-                2 * std::mem::size_of::<(TypeNode, usize)>()
+                2 * std::mem::size_of::<((TypeNode, TypeUse), usize)>()
                     + 2 * std::mem::size_of::<ir::PlanReservation>()
                     + 32,
             ),
@@ -744,7 +795,11 @@ impl ValidatedTraitWorld {
                 "unsupported: generic trait arguments",
             ));
         }
-        self.validate_ty(&goal.self_ty, env, maybe_unsized, true, 0)
+        self.validate_ty(&goal.self_ty, env, maybe_unsized, true, 0)?;
+        charged(
+            &self.budget,
+            ir::reject_references(&goal.self_ty, &self.budget),
+        )
     }
     fn validate_predicates(
         &self,
@@ -770,10 +825,23 @@ impl ValidatedTraitWorld {
     ) -> Result<()> {
         let mut walk = TypeWalk {
             maybe_unsized,
-            root_top: top,
             ..TypeWalk::default()
         };
-        self.validate_ty_inner(ty, env, depth, &mut walk)
+        self.validate_ty_inner(
+            ty,
+            env,
+            depth,
+            if top {
+                TypeUse::Root
+            } else {
+                TypeUse::Aggregate
+            },
+            &mut walk,
+        )
+        .map(|_| ())
+    }
+    fn validate_actual(&self, ty: &Ty, env: &GenericEnv) -> Result<()> {
+        self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut TypeWalk::default())
             .map(|_| ())
     }
     fn validate_ty_inner(
@@ -781,6 +849,7 @@ impl ValidatedTraitWorld {
         ty: &Ty,
         env: &GenericEnv,
         depth: usize,
+        usage: TypeUse,
         walk: &mut TypeWalk,
     ) -> Result<usize> {
         charged(&self.budget, self.budget.check_depth(depth))?;
@@ -790,7 +859,7 @@ impl ValidatedTraitWorld {
             .visits
             .checked_add(1)
             .ok_or_else(|| FactsError::resource(&self.budget, "type walk visit count overflow"))?;
-        let key = TypeWalk::key(ty);
+        let key = TypeWalk::key(ty).map(|node| (node, usage));
         if let Some(key) = key
             && let Some(height) = walk.lookup(key, &self.budget)?
         {
@@ -801,17 +870,17 @@ impl ValidatedTraitWorld {
             return Ok(height);
         }
         let maybe_unsized = walk.maybe_unsized;
-        let top = depth == 0 && walk.root_top;
         let mut height = 0usize;
-        let mut child = |t: &Ty| -> Result<()> {
+        let mut child = |t: &Ty, next_use: TypeUse| -> Result<()> {
             height = height.max(
-                self.validate_ty_inner(t, env, depth + 1, walk)?
+                self.validate_ty_inner(t, env, depth + 1, next_use, walk)?
                     .saturating_add(1),
             );
             Ok(())
         };
         match ty {
             Ty::Param(param) => {
+                walk.has_parameters = true;
                 charged(&self.budget, self.budget.charge_work(env.scopes().len()))?;
                 if !env.contains(*param) {
                     return Err(FactsError::invalid(
@@ -819,7 +888,9 @@ impl ValidatedTraitWorld {
                         "type parameter outside authoritative environment",
                     ));
                 }
-                if Some(*param) == maybe_unsized && !top {
+                if Some(*param) == maybe_unsized
+                    && !matches!(usage, TypeUse::Root | TypeUse::Referent)
+                {
                     return Err(FactsError::unsupported(
                         &self.budget,
                         "unsupported: possibly-unsized trait Self in a Sized aggregate position",
@@ -834,7 +905,14 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 for t in parts.iter() {
-                    child(t)?;
+                    child(
+                        t,
+                        if usage == TypeUse::Actual {
+                            TypeUse::Actual
+                        } else {
+                            TypeUse::Aggregate
+                        },
+                    )?;
                 }
             }
             Ty::Array { element, len } => {
@@ -844,16 +922,23 @@ impl ValidatedTraitWorld {
                         "array length limit exceeded",
                     ));
                 }
-                child(element)?;
+                child(
+                    element,
+                    if usage == TypeUse::Actual {
+                        TypeUse::Actual
+                    } else {
+                        TypeUse::Aggregate
+                    },
+                )?;
             }
             Ty::Ref { referent, .. } => {
-                if maybe_unsized.is_some() || env.is_generic() {
+                if usage != TypeUse::Root {
                     return Err(FactsError::unsupported(
                         &self.budget,
-                        "unsupported: references in trait schemas or generic bodies",
+                        "unsupported: nested, aggregate or type-actual reference",
                     ));
                 }
-                child(referent)?;
+                child(referent, TypeUse::Referent)?;
             }
             Ty::Struct(t) => {
                 if t.def().id.snapshot != self.registry
@@ -866,10 +951,10 @@ impl ValidatedTraitWorld {
                 }
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
-                    child(t)?;
+                    child(t, TypeUse::Actual)?;
                 }
                 for field in t.def().fields.iter() {
-                    child(&field.ty)?;
+                    child(&field.ty, TypeUse::Aggregate)?;
                 }
             }
             Ty::Enum(t) => {
@@ -883,12 +968,12 @@ impl ValidatedTraitWorld {
                 }
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
-                    child(t)?;
+                    child(t, TypeUse::Actual)?;
                 }
                 for variant in t.def().variants.iter() {
                     charged(&self.budget, self.budget.charge_work(1))?;
                     for field in variant.fields.iter() {
-                        child(&field.ty)?;
+                        child(&field.ty, TypeUse::Aggregate)?;
                     }
                 }
             }
@@ -899,17 +984,16 @@ impl ValidatedTraitWorld {
         }
         Ok(height)
     }
-    fn validate_signature(
+    fn validate_signature_shape(
         &self,
         signature: &Signature,
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
     ) -> Result<()> {
-        // Prewalk and meter before the existing reference-contract validator can
-        // construct its bounded structural scratch data.
+        // This validates formation and stored metadata, never deriving new
+        // origins from coincident types after specialization.
         let mut walk = TypeWalk {
             maybe_unsized,
-            root_top: true,
             ..TypeWalk::default()
         };
         for t in signature
@@ -917,40 +1001,161 @@ impl ValidatedTraitWorld {
             .iter()
             .chain(std::iter::once(&signature.result))
         {
-            self.validate_ty_inner(t, env, 0, &mut walk)?;
+            self.validate_ty_inner(t, env, 0, TypeUse::Root, &mut walk)?;
         }
-        let c = &signature.ref_contract;
+        charged(
+            &self.budget,
+            ir::validate_stored_ref_contract(
+                &signature.params,
+                &signature.result,
+                &signature.ref_contract,
+                &self.budget,
+            ),
+        )
+    }
+    fn validate_schema_signature(
+        &self,
+        signature: &Signature,
+        env: &GenericEnv,
+        maybe_unsized: Option<ParamId>,
+    ) -> Result<()> {
+        let normalized = charged(
+            &self.budget,
+            ir::normalize_ref_contract(&signature.ref_contract, &self.budget),
+        )?;
+        if !self.eq_contract(&signature.ref_contract, &normalized)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "noncanonical declaration region contract",
+            ));
+        }
+        let derived = charged(
+            &self.budget,
+            ir::derive_return_contract(
+                &signature.params,
+                &signature.result,
+                &normalized,
+                &self.budget,
+            ),
+        )?;
+        self.charge_returns(&derived)?;
+        self.charge_returns(&signature.ref_contract.returns)?;
+        if derived != signature.ref_contract.returns {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "declaration return origins are not the complete rigid canonical contract",
+            ));
+        }
+        self.validate_signature_shape(signature, env, maybe_unsized)
+    }
+    fn charge_returns(&self, returns: &ir::ReturnContract) -> Result<()> {
+        use ir::ReturnContract::*;
+        match returns {
+            NoReference => charged(&self.budget, self.budget.charge_work(1)),
+            SharedInputPaths(paths) | MutInputPaths(paths) => {
+                charged(&self.budget, self.budget.charge_work(paths.len()))?;
+                for path in paths.iter() {
+                    charged(
+                        &self.budget,
+                        self.budget
+                            .charge_work(path.projection.len().saturating_add(1)),
+                    )?;
+                }
+                Ok(())
+            }
+            SharedInputEnvelopes(inputs) | MutInputEnvelopes(inputs) => charged(
+                &self.budget,
+                self.budget.charge_work(inputs.len().saturating_add(1)),
+            ),
+        }
+    }
+    fn eq_contract(&self, ca: &ir::RefContract, cb: &ir::RefContract) -> Result<bool> {
         charged(
             &self.budget,
             self.budget.charge_work(
-                c.param_regions
+                ca.param_regions
                     .len()
-                    .saturating_add(c.outlives.len())
-                    .saturating_add(usize::from(c.region_count).saturating_pow(2))
+                    .saturating_add(cb.param_regions.len())
+                    .saturating_add(ca.outlives.len())
+                    .saturating_add(cb.outlives.len())
                     .saturating_add(1),
             ),
         )?;
-        let scratch = walk
-            .visits
-            .checked_mul(192)
-            .and_then(|s| s.checked_add(4096))
-            .ok_or_else(|| FactsError::resource(&self.budget, "signature scratch size overflow"))?;
-        let scratch = if matches!(signature.result, Ty::Ref { .. }) {
-            scratch
-                .saturating_add(
-                    ir::MAX_INPUT_PATH_STEPS.saturating_mul(std::mem::size_of::<Projection>()),
-                )
-                .saturating_add(
-                    ir::MAX_INPUT_PATHS.saturating_mul(std::mem::size_of::<ir::InputPath>()),
-                )
-        } else {
-            scratch
-        };
-        let _scratch = charged(&self.budget, self.budget.reserve_bytes(scratch))?;
+        self.charge_returns(&ca.returns)?;
+        self.charge_returns(&cb.returns)?;
+        Ok(ca == cb)
+    }
+    fn same_regions(&self, a: &ir::RefContract, b: &ir::RefContract) -> Result<bool> {
         charged(
             &self.budget,
-            c.validate(&signature.params, &signature.result),
-        )
+            self.budget.charge_work(
+                a.param_regions
+                    .len()
+                    .saturating_add(b.param_regions.len())
+                    .saturating_add(a.outlives.len())
+                    .saturating_add(b.outlives.len())
+                    .saturating_add(1),
+            ),
+        )?;
+        Ok(a.region_count == b.region_count
+            && a.param_regions == b.param_regions
+            && a.result_region == b.result_region
+            && a.outlives == b.outlives)
+    }
+    fn return_refines(
+        &self,
+        required: &ir::RefContract,
+        provided: &ir::RefContract,
+    ) -> Result<bool> {
+        use ir::ReturnContract::*;
+        if !self.same_regions(required, provided)? {
+            return Ok(false);
+        }
+        self.charge_returns(&required.returns)?;
+        self.charge_returns(&provided.returns)?;
+        let allowed = match &required.returns {
+            SharedInputEnvelopes(inputs)
+                if matches!(
+                    &provided.returns,
+                    SharedInputPaths(_) | SharedInputEnvelopes(_)
+                ) =>
+            {
+                inputs
+            }
+            MutInputEnvelopes(inputs)
+                if matches!(&provided.returns, MutInputPaths(_) | MutInputEnvelopes(_)) =>
+            {
+                inputs
+            }
+            _ => return Ok(required.returns == provided.returns),
+        };
+        let contains = |param: usize| -> Result<bool> {
+            for input in allowed.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if input.param == param {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
+        match &provided.returns {
+            SharedInputPaths(paths) | MutInputPaths(paths) => {
+                for path in paths.iter() {
+                    if !contains(path.param)? {
+                        return Ok(false);
+                    }
+                }
+            }
+            SharedInputEnvelopes(inputs) | MutInputEnvelopes(inputs) => {
+                for input in inputs.iter() {
+                    if !contains(input.param)? {
+                        return Ok(false);
+                    }
+                }
+            }
+            NoReference => return Ok(false),
+        }
+        Ok(true)
     }
     fn eq_ty(&self, left: &Ty, right: &Ty, depth: usize) -> Result<bool> {
         charged(&self.budget, self.budget.check_depth(depth))?;
@@ -1008,29 +1213,7 @@ impl ValidatedTraitWorld {
         if !self.eq_types(&a.params, &b.params, 0)? || !self.eq_ty(&a.result, &b.result, 0)? {
             return Ok(false);
         }
-        let ca = &a.ref_contract;
-        let cb = &b.ref_contract;
-        let size = ca
-            .param_regions
-            .len()
-            .saturating_add(cb.param_regions.len())
-            .saturating_add(ca.outlives.len())
-            .saturating_add(cb.outlives.len());
-        charged(&self.budget, self.budget.charge_work(size))?;
-        for contract in [ca, cb] {
-            if let ir::ReturnContract::SharedInputPaths(paths)
-            | ir::ReturnContract::MutInputPaths(paths) = &contract.returns
-            {
-                for path in paths.iter() {
-                    charged(
-                        &self.budget,
-                        self.budget
-                            .charge_work(path.projection.len().saturating_add(1)),
-                    )?;
-                }
-            }
-        }
-        Ok(ca == cb)
+        self.eq_contract(&a.ref_contract, &b.ref_contract)
     }
     fn append_predicate(&self, output: &mut Vec<Predicate>, predicate: &Predicate) -> Result<()> {
         for old in output.iter() {
@@ -1110,7 +1293,7 @@ impl ValidatedTraitWorld {
                     "required trait item schema/owner mismatch",
                 ));
             }
-            self.validate_signature(
+            self.validate_schema_signature(
                 &item.schema.signature,
                 &item.schema.env,
                 Some(trait_header.self_param),
@@ -1128,6 +1311,16 @@ impl ValidatedTraitWorld {
                     "trait receiver is not its owner-qualified Self",
                 ));
             }
+            if let ReceiverMode::Borrowed { kind } = item.receiver
+                && !matches!(item.schema.signature.params.first(),
+                    Some(Ty::Ref { kind: actual, referent }) if *actual == kind
+                        && matches!(referent.as_ref(), Ty::Param(p) if *p == trait_header.self_param))
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "borrowed trait receiver is not a reference to its owner-qualified Self",
+                ));
+            }
         }
         for callable in self.headers.callables.iter() {
             let info = self.info(callable.declaration)?;
@@ -1139,7 +1332,16 @@ impl ValidatedTraitWorld {
                     "callable schema disagrees with registry",
                 ));
             }
-            self.validate_signature(&callable.schema.signature, &callable.schema.env, None)?;
+            self.validate_schema_signature(&callable.schema.signature, &callable.schema.env, None)?;
+            if let ReceiverMode::Borrowed { kind } = info.receiver
+                && !matches!(callable.schema.signature.params.first(),
+                    Some(Ty::Ref { kind: actual, .. }) if *actual == kind)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "borrowed callable receiver disagrees with canonical parameter zero",
+                ));
+            }
             self.validate_predicates(&callable.schema.predicates, &callable.schema.env, None)?;
         }
         for implementation in self.headers.impls.iter() {
@@ -1259,9 +1461,29 @@ impl ValidatedTraitWorld {
                 &h.schema_env,
                 &self.budget,
             )?;
-            self.validate_signature(&expected.signature, &h.schema_env, None)?;
+            if !self.eq_contract(
+                &expected.signature.ref_contract,
+                &item.schema.signature.ref_contract,
+            )? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "schema substitution changed declaration return authority",
+                ));
+            }
+            self.validate_signature_shape(&expected.signature, &h.schema_env, None)?;
             self.validate_predicates(&expected.predicates, &h.schema_env, None)?;
-            if !self.eq_signature(&expected.signature, &target.schema.signature)? {
+            if !self.eq_types(
+                &expected.signature.params,
+                &target.schema.signature.params,
+                0,
+            )? || !self.eq_ty(
+                &expected.signature.result,
+                &target.schema.signature.result,
+                0,
+            )? || !self.return_refines(
+                &expected.signature.ref_contract,
+                &target.schema.signature.ref_contract,
+            )? {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "trait implementation signature does not match required declaration",
@@ -1653,11 +1875,11 @@ impl ValidatedTraitWorld {
             predicates,
         })
     }
-    fn instantiate(
+    fn instantiate_in(
         &self,
         schema: &GenericSchema,
         args: &[Ty],
-        facts: &ValidatedFacts,
+        facts: ProofContext<'_>,
     ) -> Result<InstantiatedSchema> {
         if args.len() != schema.env.total_arity() {
             return Err(FactsError::invalid(
@@ -1666,23 +1888,31 @@ impl ValidatedTraitWorld {
             ));
         }
         for arg in args {
-            facts.validate_ty(arg)?;
-            charged(&self.budget, ir::reject_references(arg, &self.budget))?;
+            self.validate_actual(arg, facts.env())?;
         }
         let result = self
             .schema
             .instantiate_schema(schema, args, facts.env(), &self.budget)?;
-        self.validate_signature(&result.signature, facts.env(), None)?;
+        if !self.eq_contract(
+            &schema.signature.ref_contract,
+            &result.signature.ref_contract,
+        )? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "instantiation changed declaration-derived return authority",
+            ));
+        }
+        self.validate_signature_shape(&result.signature, facts.env(), None)?;
         self.validate_predicates(&result.predicates, facts.env(), None)?;
         Ok(result)
     }
-    fn require(
+    fn require_in(
         &self,
         predicate: &Predicate,
-        facts: &ValidatedFacts,
+        facts: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<ProofEvidence> {
-        match self.prove(predicate, facts, active)? {
+        match self.prove_in(predicate, facts, active)? {
             ProofOutcome::Proved(p) => Ok(p),
             ProofOutcome::NotProven => Err(FactsError::unproved(
                 &self.budget,
@@ -1701,13 +1931,21 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
         active: &mut Vec<GoalKey>,
     ) -> Result<ProofOutcome> {
+        self.prove_in(predicate, ProofContext::from_facts(facts), active)
+    }
+    fn prove_in(
+        &self,
+        predicate: &Predicate,
+        facts: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<ProofOutcome> {
         charged(&self.budget, self.budget.check_depth(active.len()))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         let Predicate::Implements(goal) = predicate;
         self.validate_ref_in(goal, facts.env(), None)?;
         let key = GoalKey {
             environment: facts.predicates.index,
-            phase: facts.phase(),
+            phase: facts.phase,
             goal: predicate.clone(),
         };
         for old in active.iter() {
@@ -1776,14 +2014,14 @@ impl ValidatedTraitWorld {
     fn evidence(
         &self,
         predicate: &Predicate,
-        facts: &ValidatedFacts,
+        facts: ProofContext<'_>,
         origin: ProofOrigin,
     ) -> Result<ProofOutcome> {
         retain::<ProofRecord>(&self.budget, 1)?;
         Ok(ProofOutcome::Proved(ProofEvidence(Arc::new(ProofRecord {
             world: self.id,
             environment: facts.predicates.index,
-            phase: facts.phase(),
+            phase: facts.phase,
             goal: predicate.clone(),
             origin,
         }))))
@@ -1791,7 +2029,7 @@ impl ValidatedTraitWorld {
     fn prove_uncached(
         &self,
         predicate: &Predicate,
-        facts: &ValidatedFacts,
+        facts: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<ProofOutcome> {
         for assumption in facts.predicates.predicates.iter() {
@@ -1844,7 +2082,7 @@ impl ValidatedTraitWorld {
                 },
                 predicates: implementation.predicates.clone(),
             };
-            let instantiated = self.instantiate(&schema, &args, facts)?;
+            let instantiated = self.instantiate_in(&schema, &args, facts)?;
             if !self.eq_ty(&instantiated.signature.result, &goal.self_ty, 0)? {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -1853,7 +2091,7 @@ impl ValidatedTraitWorld {
             }
             let mut satisfied = true;
             for required in instantiated.predicates.iter() {
-                match self.prove(required, facts, active)? {
+                match self.prove_in(required, facts, active)? {
                     ProofOutcome::Proved(_) => {}
                     ProofOutcome::NotProven => {
                         satisfied = false;
@@ -1884,6 +2122,65 @@ impl ValidatedTraitWorld {
         } else {
             Ok(ProofOutcome::NotProven)
         }
+    }
+    fn trait_signature_in(&self, call: &TraitCall, context: ProofContext<'_>) -> Result<Signature> {
+        self.validate_ref_in(&call.trait_ref, context.env(), None)?;
+        let item = self.item_header(call.item)?;
+        if item.trait_decl != call.trait_ref.declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "trait call item belongs to another trait",
+            ));
+        }
+        if !call.method_args.is_empty() {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: generic trait method arguments",
+            ));
+        }
+        self.require_in(
+            &Predicate::Implements(call.trait_ref.clone()),
+            context,
+            &mut Vec::new(),
+        )?;
+        let instantiated = self.instantiate_in(
+            &item.schema,
+            std::slice::from_ref(&call.trait_ref.self_ty),
+            context,
+        )?;
+        for predicate in instantiated.predicates.iter() {
+            self.require_in(predicate, context, &mut Vec::new())?;
+        }
+        Ok(instantiated.signature)
+    }
+    fn discharge_in(
+        &self,
+        target: &CallTarget,
+        context: ProofContext<'_>,
+    ) -> Result<DirectCallProof> {
+        let schema = self.callable_schema(target.declaration)?;
+        let instantiated = self.instantiate_in(&schema, &target.type_args, context)?;
+        let mut evidence = Vec::new();
+        for predicate in instantiated.predicates.iter() {
+            push(
+                &self.budget,
+                &mut evidence,
+                self.require_in(predicate, context, &mut Vec::new())?,
+            )?;
+        }
+        Ok(DirectCallProof {
+            target: target.clone(),
+            signature: instantiated.signature,
+            evidence: evidence.into(),
+        })
+    }
+    fn goal_is_closed(&self, goal: &TraitRef, env: &GenericEnv) -> Result<bool> {
+        let mut walk = TypeWalk::default();
+        self.validate_ty_inner(&goal.self_ty, env, 0, TypeUse::Actual, &mut walk)?;
+        for ty in goal.args.iter() {
+            self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut walk)?;
+        }
+        Ok(!walk.has_parameters)
     }
     fn match_head(
         &self,
@@ -1946,6 +2243,58 @@ impl ValidatedTraitWorld {
 }
 
 impl TraitCx for ValidatedTraitWorld {
+    fn validate_signature(
+        &self,
+        subject: SignatureSubject<'_>,
+        signature: &Signature,
+        facts: &ValidatedFacts,
+    ) -> Result<()> {
+        self.check_facts(facts, true)?;
+        let expected = match subject {
+            SignatureSubject::Body => match &facts.subject {
+                FactsSubject::UniversalCallable(declaration) => {
+                    let signature = &self.callable_header(*declaration)?.schema.signature;
+                    retain::<Ty>(&self.budget, signature.params.len())?;
+                    signature.clone()
+                }
+                FactsSubject::ClosedInstance(target) => {
+                    self.discharge_direct(target, facts)?.signature
+                }
+                FactsSubject::SchemaItem(_) => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "schema facts cannot validate an executable body",
+                    ));
+                }
+            },
+            SignatureSubject::Call(Callee::Direct(target)) => {
+                self.discharge_direct(target, facts)?.signature
+            }
+            SignatureSubject::Call(Callee::TraitItem(call)) => {
+                self.instantiate_trait_signature(call, facts)?
+            }
+        };
+        if !self.eq_signature(&expected, signature)? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "signature differs from its exact canonical world subject",
+            ));
+        }
+        self.validate_signature_shape(signature, facts.env(), None)
+    }
+    fn callee_receiver(&self, callee: &Callee, facts: &ValidatedFacts) -> Result<ReceiverMode> {
+        self.check_facts(facts, true)?;
+        match callee {
+            Callee::Direct(target) => {
+                self.discharge_direct(target, facts)?;
+                Ok(self.info(target.declaration)?.receiver)
+            }
+            Callee::TraitItem(call) => {
+                self.instantiate_trait_signature(call, facts)?;
+                Ok(self.item_header(call.item)?.receiver)
+            }
+        }
+    }
     fn validate_trait_ref(&self, goal: &TraitRef, facts: &ValidatedFacts) -> Result<()> {
         self.check_facts(facts, true)?;
         self.validate_ref_in(goal, facts.env(), None)
@@ -1956,34 +2305,7 @@ impl TraitCx for ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<Signature> {
         self.check_facts(facts, true)?;
-        self.validate_trait_ref(&call.trait_ref, facts)?;
-        let item = self.item_header(call.item)?;
-        if item.trait_decl != call.trait_ref.declaration {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "trait call item belongs to another trait",
-            ));
-        }
-        if !call.method_args.is_empty() {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: generic trait method arguments",
-            ));
-        }
-        self.require(
-            &Predicate::Implements(call.trait_ref.clone()),
-            facts,
-            &mut Vec::new(),
-        )?;
-        let instantiated = self.instantiate(
-            &item.schema,
-            std::slice::from_ref(&call.trait_ref.self_ty),
-            facts,
-        )?;
-        for predicate in instantiated.predicates.iter() {
-            self.require(predicate, facts, &mut Vec::new())?;
-        }
-        Ok(instantiated.signature)
+        self.trait_signature_in(call, ProofContext::from_facts(facts))
     }
     fn prove_goal(&self, goal: &Predicate, facts: &ValidatedFacts) -> Result<ProofOutcome> {
         self.check_facts(facts, true)?;
@@ -1995,37 +2317,36 @@ impl TraitCx for ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<DirectCallProof> {
         self.check_facts(facts, true)?;
-        let schema = self.callable_schema(target.declaration)?;
-        let instantiated = self.instantiate(&schema, &target.type_args, facts)?;
-        let mut evidence = Vec::new();
-        for predicate in instantiated.predicates.iter() {
-            push(
-                &self.budget,
-                &mut evidence,
-                self.require(predicate, facts, &mut Vec::new())?,
-            )?;
-        }
-        Ok(DirectCallProof {
-            target: target.clone(),
-            signature: instantiated.signature,
-            evidence: evidence.into(),
-        })
+        self.discharge_in(target, ProofContext::from_facts(facts))
     }
     fn resolve_trait_call(
         &self,
         call: &TraitCall,
         facts: &ValidatedFacts,
     ) -> Result<ResolvedTraitCall> {
-        let signature = self.instantiate_trait_signature(call, facts)?;
+        self.check_facts(facts, true)?;
+        let caller = ProofContext::from_facts(facts);
+        let signature = self.trait_signature_in(call, caller)?;
         let predicate = Predicate::Implements(call.trait_ref.clone());
-        let evidence = self.require(&predicate, facts, &mut Vec::new())?;
-        if facts.phase() == FactsPhase::Universal {
+        if facts.phase() == FactsPhase::Universal
+            && !self.goal_is_closed(&call.trait_ref, facts.env())?
+        {
+            let evidence = self.require_in(&predicate, caller, &mut Vec::new())?;
             return Ok(ResolvedTraitCall {
                 callee: Callee::TraitItem(call.clone()),
                 signature,
                 _evidence: evidence,
+                _refinement: None,
             });
         }
+        // The same obligation engine runs with the world's private empty
+        // environment, even when a caller body has unrelated generic bounds.
+        let closed = ProofContext {
+            predicates: &self.empty,
+            phase: FactsPhase::Closed,
+        };
+        let signature = self.trait_signature_in(call, closed)?;
+        let evidence = self.require_in(&predicate, closed, &mut Vec::new())?;
         let ProofOrigin::Implementation {
             declaration,
             arguments,
@@ -2037,8 +2358,8 @@ impl TraitCx for ValidatedTraitWorld {
             ));
         };
         if evidence.0.world != self.id
-            || evidence.0.environment != facts.predicates.index
-            || evidence.0.phase != facts.phase()
+            || evidence.0.environment != self.empty.index
+            || evidence.0.phase != FactsPhase::Closed
             || !self.eq_predicate(&evidence.0.goal, &predicate)?
         {
             return Err(FactsError::invalid(
@@ -2069,17 +2390,47 @@ impl TraitCx for ValidatedTraitWorld {
                 "selected implementation has no required item mapping",
             )
         })?;
-        let direct = self.discharge_direct(&target, facts)?;
-        if !self.eq_signature(&signature, &direct.signature)? {
+        let direct = self.discharge_in(&target, closed)?;
+        if !self.eq_types(&signature.params, &direct.signature.params, 0)?
+            || !self.eq_ty(&signature.result, &direct.signature.result, 0)?
+            || !self.return_refines(&signature.ref_contract, &direct.signature.ref_contract)?
+        {
             return Err(FactsError::invalid(
                 &self.budget,
                 "resolved implementation signature disagrees with trait declaration",
             ));
         }
+        let item = self.item_header(call.item)?;
+        let implementation = self.callable_header(target.declaration)?;
+        retain::<ReturnRefinementProof>(&self.budget, 1)?;
+        let refinement = Arc::new(ReturnRefinementProof {
+            world: self.id,
+            item: call.item,
+            implementation: target.declaration,
+            required: item.schema.signature.ref_contract.clone(),
+            provided: implementation.schema.signature.ref_contract.clone(),
+        });
+        // Retain exact rigid source identities, never derive a widened list
+        // from the specialized signature or retain an ArcWorld backreference.
+        if refinement.world != self.id
+            || refinement.item != call.item
+            || refinement.implementation != target.declaration
+            || !self.eq_contract(&refinement.required, &item.schema.signature.ref_contract)?
+            || !self.eq_contract(
+                &refinement.provided,
+                &implementation.schema.signature.ref_contract,
+            )?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "return refinement changed canonical authority",
+            ));
+        }
         Ok(ResolvedTraitCall {
             callee: Callee::Direct(direct.target),
-            signature,
+            signature: direct.signature,
             _evidence: evidence,
+            _refinement: Some(refinement),
         })
     }
 }
@@ -2631,7 +2982,9 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ir::{BinderId, FieldDef, IntTy, NominalAppId, RefContract, StructDef, StructTy};
+    use ir::{
+        BinderId, BorrowKind, FieldDef, IntTy, NominalAppId, RefContract, StructDef, StructTy,
+    };
 
     struct Case {
         budget: PlanBudget,
@@ -2832,6 +3185,217 @@ mod tests {
                 method_args: Arc::from([]),
             }
         }
+    }
+
+    fn reference(ty: Ty) -> Ty {
+        Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        }
+    }
+
+    fn reference_signature(params: Vec<Ty>, result: Ty, budget: &PlanBudget) -> Signature {
+        let raw = RefContract {
+            region_count: 1,
+            param_regions: params
+                .iter()
+                .map(|ty| matches!(ty, Ty::Ref { .. }).then_some(ir::RegionParamId(0)))
+                .collect(),
+            result_region: matches!(result, Ty::Ref { .. }).then_some(ir::RegionParamId(0)),
+            ..RefContract::default()
+        };
+        let mut contract = (*ir::normalize_ref_contract(&raw, budget).unwrap()).clone();
+        contract.returns = ir::derive_return_contract(&params, &result, &contract, budget).unwrap();
+        Signature {
+            params,
+            result,
+            ref_contract: Arc::new(contract),
+        }
+    }
+
+    fn borrowed_case() -> Case {
+        let mut c = case();
+        let item = &mut Arc::make_mut(&mut c.headers.items)[0];
+        item.receiver = ReceiverMode::Borrowed {
+            kind: BorrowKind::Shared,
+        };
+        item.schema.signature = reference_signature(
+            vec![reference(item.schema.signature.params[0].clone())],
+            reference(Ty::Int(IntTy::I32)),
+            &c.budget,
+        );
+        let implementation = &mut Arc::make_mut(&mut c.headers.callables)[0];
+        implementation.schema.signature = reference_signature(
+            vec![reference(implementation.schema.signature.params[0].clone())],
+            reference(Ty::Int(IntTy::I32)),
+            &c.budget,
+        );
+        c
+    }
+
+    #[test]
+    fn generic_reference_world_transport_and_type_context() {
+        let budget = PlanBudget::default();
+        let declaration = DeclId {
+            snapshot: SnapshotId::allocate().unwrap(),
+            index: 0,
+        };
+        let scope = scope(declaration, 2, &budget);
+        let environment = env(std::slice::from_ref(&scope), &budget);
+        let parameter = |index| {
+            Ty::Param(ParamId {
+                owner: scope.binder(),
+                index,
+            })
+        };
+        let signature = reference_signature(
+            vec![reference(parameter(0)), reference(parameter(1))],
+            reference(parameter(0)),
+            &budget,
+        );
+        let world = test_support::world(
+            &[CallableHeader {
+                declaration,
+                schema: GenericSchema {
+                    env: environment,
+                    signature: signature.clone(),
+                    predicates: Arc::from([]),
+                },
+            }],
+            &budget,
+        )
+        .unwrap();
+        let universal = world.callable_facts(declaration).unwrap();
+        universal
+            .validate_signature(SignatureSubject::Body, &signature)
+            .unwrap();
+        let target = CallTarget {
+            declaration,
+            type_args: Arc::from([Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]),
+        };
+        let closed = world.instance_facts(&target).unwrap();
+        let canonical = world.discharge_direct(&target, &closed).unwrap();
+        assert!(matches!(
+            canonical.signature().ref_contract.returns,
+            ir::ReturnContract::SharedInputEnvelopes(_)
+        ));
+        closed
+            .validate_signature(SignatureSubject::Body, canonical.signature())
+            .unwrap();
+        let mut forged = canonical.signature().clone();
+        Arc::make_mut(&mut forged.ref_contract).returns =
+            ir::ReturnContract::SharedInputPaths(Arc::from([
+                ir::InputPath {
+                    param: 0,
+                    projection: Arc::from([]),
+                },
+                ir::InputPath {
+                    param: 1,
+                    projection: Arc::from([]),
+                },
+            ]));
+        assert!(
+            closed
+                .validate_signature(SignatureSubject::Body, &forged)
+                .is_err()
+        );
+        assert!(
+            world
+                .instance_facts(&CallTarget {
+                    declaration,
+                    type_args: Arc::from([reference(Ty::Int(IntTy::I32)), Ty::Int(IntTy::I32)])
+                })
+                .is_err()
+        );
+        let root = reference(parameter(0));
+        let mut walk = TypeWalk::default();
+        world
+            .validate_ty_inner(&root, universal.env(), 0, TypeUse::Root, &mut walk)
+            .unwrap();
+        assert!(
+            world
+                .validate_ty_inner(&root, universal.env(), 0, TypeUse::Aggregate, &mut walk)
+                .is_err()
+        );
+        assert!(universal.must_copy(&root).unwrap());
+    }
+
+    #[test]
+    fn generic_reference_world_private_refinement_and_universal_closed_goal() {
+        let c = borrowed_case();
+        let world = c.build().unwrap();
+        let universal = world.callable_facts(c.caller).unwrap();
+        let open = world
+            .resolve_trait_call(&c.call(c.caller_parameter.clone()), &universal)
+            .unwrap();
+        assert!(matches!(open.callee(), Callee::TraitItem(_)));
+        assert!(open._refinement.is_none());
+        let resolved = world
+            .resolve_trait_call(&c.call(c.boxed.clone()), &universal)
+            .unwrap();
+        let Callee::Direct(target) = resolved.callee() else {
+            panic!("closed goal was not privately resolved")
+        };
+        assert_eq!(target.declaration, c.body);
+        assert!(resolved._refinement.is_some());
+        // Generic implementation declaration origins stay abstract even when
+        // this particular instantiation has fully concrete actuals.
+        assert!(matches!(
+            resolved.signature().ref_contract.returns,
+            ir::ReturnContract::SharedInputEnvelopes(_)
+        ));
+        assert_eq!(
+            world
+                .callee_receiver(resolved.callee(), &universal)
+                .unwrap(),
+            ReceiverMode::Borrowed {
+                kind: BorrowKind::Shared
+            }
+        );
+        let old = Callee::TraitItem(c.call(c.boxed.clone()));
+        let required = world
+            .instantiate_trait_signature(&c.call(c.boxed.clone()), &universal)
+            .unwrap();
+        universal
+            .validate_signature(SignatureSubject::Call(&old), &required)
+            .unwrap();
+        universal
+            .validate_signature(
+                SignatureSubject::Call(resolved.callee()),
+                resolved.signature(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn generic_reference_world_schema_self_regions_and_refinement_denials() {
+        let mut c = borrowed_case();
+        let world = c.build().unwrap();
+        let schema = world.schema_facts(c.item).unwrap();
+        let self_ty = Ty::Param(schema.env().ordered_params().next().unwrap());
+        schema.validate_ty(&reference(self_ty.clone())).unwrap();
+        assert!(
+            schema
+                .validate_ty(&reference(Ty::Array {
+                    element: Arc::new(self_ty),
+                    len: 0
+                }))
+                .is_err()
+        );
+        assert!(schema.must_copy(&reference(Ty::Int(IntTy::I32))).is_err());
+        let required = &c.headers.items[0].schema.signature.ref_contract;
+        let mut narrowed = (**required).clone();
+        narrowed.returns = ir::ReturnContract::SharedInputPaths(Arc::from([ir::InputPath {
+            param: 0,
+            projection: Arc::from([]),
+        }]));
+        assert!(world.return_refines(required, &narrowed).unwrap());
+        Arc::make_mut(&mut narrowed.param_regions)[0] = None;
+        assert!(!world.return_refines(required, &narrowed).unwrap());
+        Arc::make_mut(&mut c.headers.items)[0].receiver = ReceiverMode::Borrowed {
+            kind: BorrowKind::Mut,
+        };
+        assert!(c.build().is_err());
     }
 
     #[test]

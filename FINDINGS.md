@@ -9236,3 +9236,86 @@ Observed31,851,391ns total/7,189,597ns engine time is contended functional
 evidence, not a pinned-suite speedup measurement. Full Rust, canonical
 Copy/Clone language items, borrowed receivers, Drop, libraries and existing
 project acceptance remain open and autonomous work continues.
+
+## 2026-10-16: generic reference contracts and genuine two-phase borrowing
+
+The independently classified contract e52f166bf is implemented with the SAME
+ownership and borrowing solver. Generic reference formals/results and borrowed
+inherent/required-trait receivers use canonical declaration-derived regions and
+return provenance. Input envelopes are selected on rigid declarations when an
+eligible input or result referent is opaque, then transported unchanged through
+specialization. Private world refinement can narrow trait-call contracts without
+inventing Self layout, adding input indices or rediscovering paths after T/U
+type coincidence. Required borrowed Self remains signature-only possibly unsized.
+Reference-containing type actuals, nested references and reference aggregates
+remain excluded. No canonical Copy/Clone permission is inferred from a trait name.
+
+Implicit mutable receiver and local-carrier argument reborrows carry exact
+reservation/activation identities. The shared solver uses metered MAY-ACTIVATED
+state, retains candidate-specific parent authority and returned dependencies,
+checks activation before call effects, and supports iteration-local loans that
+die before a backedge. Explicit source mutable borrows stay immediately exclusive.
+Dead calls after diverging arguments remain genuine typed disconnected CFG calls,
+not sentinels, fake edges or downgraded loans. Subtree return targets retain their
+input anchor independently from the result's typed view. Abstract writes never
+establish whole-anchor initialization. A narrow exact-return containment check
+recognizes only an authoritative identical integer or bool leaf; unresolved
+aggregate containment remains an explicit legal unsupported boundary.
+
+All1419 hosted tests pass in run20261016-080622568-1538294, with all-target check
+080621023-1537867 and strict all-target lint080625349-1538428. Formatting and
+diff whitespace checks pass. The dedicated frozen32 CLI cases and four graph
+tests pass in075300618-1431303. Independent actual-source soundness review clears
+the canonical signature, metadata, activation, envelope and all-body gates.
+Independent resource review also clears the final snapshot after a narrow
+precharge-order correction charges pending-reference sizing traversal before it
+runs. The three final redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-generic-references.jsonl`.
+Timings are contended functional observations, not a pinned-suite speedup claim.
+
+The32 corpus contains16 supported,12 invalid and4 legal excluded cases, with
+frozen artifact SHA256
+5d13d72b1a7b006e507621c6a43a339ea92344b185655ca0c31113f81d7a38c7.
+Root independently recompiles stock BUILD/CHECK and executes all20 valid sources.
+N18 has a genuine structured code-less lifetime diagnostic. Only its runner and
+expected-message metadata were corrected, with original artifacts preserved;
+all32 source/stdout/status/group/hash values and all31 other dictionaries remain
+unchanged. No source was adjusted to obtain native acceptance.
+
+Required unchanged sources exposed two necessary frontend seams: a genuine
+reference Call-result dereference assignment now snapshots the RHS first and
+evaluates its reference carrier once using existing checked locals/assignment;
+an untyped deferred reference can acquire its type from its first independently
+typed assignment in its declaring lexical scope without a fake type or local ID.
+Private omitted-type inference now models reference kind/referent evidence while
+keeping actual type arguments recursively reference-free. The old private
+diverging-return CFG fixture explicitly declares its second region after unused
+source-region pruning, preserving the original cycle and divergence assertions.
+
+An explicit-immediate-borrow graph regression exposed object publication before
+an unrelated invalid nongeneric body's analysis completed. A single cached
+CONCRETE_PROOFS operation114 now joins every sealed instance's analysis before
+BUILD requests any OBJECT, and each OBJECT independently awaits that same fact.
+There is no analysis-to-barrier cycle or per-object quadratic analysis fanout.
+Historical exact graph expectations add this one operation, retaining all counts
+and exact-once checks. All unused/dead metadata gates remain mandatory.
+
+Four historical cases are promoted only after unchanged-source stock plus native
+workers1/8 BUILD/CHECK/runtime parity: associated-items borrowed receiver
+825ef0e1000e4befc7ec9cfa5a778e0eda695348d8a88e0c0b9a22fe3387646a,
+reference-fields user method
+7d69691954718b08b5c582daaa762d1c4d50a540428f387631b0228cac74a4d7,
+mutable-reference-return computed Call assignment
+a9691e51d9e6f02b860ac34139f21a2449b90e526b05824cd1beb5e676cf2d79,
+and reference-return mutable result
+730edcbbf8fd49e5e3f95329677d3ffec7f96d3861ec732fa603b0e0048f0ac1.
+Only classification fields and the corresponding positive test helper change;
+all other historical dictionaries and every source/stdout byte are preserved.
+
+The1131-byte actual example compiles and executes with8 workers and exact
+`generic references compiled correctly` stdout. Capture records9 callables,
+59 nodes/140 edges,27 CFG blocks/21 edges/72 locals, zero failures/drops and
+complete capture. Its source SHA256 is
+00c380d3f24f3ea425bb9dad384645a992f76f383507374cfaea044a81306498.
+Independent cumulative exact-revision native evidence remains a separate gate.
+No experimental install, default promotion, full-Rust claim or speedup is made.

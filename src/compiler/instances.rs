@@ -3,7 +3,7 @@
 use super::{frontend, ir};
 use std::sync::Arc;
 
-const SEMANTICS: &[u8] = b"jr-native-traits-v1/linux-x86_64/checked/private-leaf8";
+const SEMANTICS: &[u8] = b"jr-native-generic-references-v1/linux-x86_64/checked/two-phase";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -96,6 +96,12 @@ impl Encoder<'_> {
                 frontend::ReceiverKind::None => 0,
                 frontend::ReceiverKind::Value { mutable: false } => 1,
                 frontend::ReceiverKind::Value { mutable: true } => 2,
+                frontend::ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Shared,
+                } => 3,
+                frontend::ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Mut,
+                } => 4,
             }])
         } else {
             self.append(b"F")
@@ -643,6 +649,40 @@ mod tests {
             "trait B{fn item(self)->i32;}fn unrelated(){}struct W<U>{x:U}impl<X> B for W<X>{fn item(self)->i32{3}}trait A{fn item(self)->i32;}impl<Y> A for W<Y>{fn item(self)->i32{2}}impl<Z> W<Z>{fn item(self)->i32{1}}fn main(){}",
         );
         assert_eq!(first, reordered);
+    }
+
+    #[test]
+    fn borrowed_receiver_keys_ignore_region_names_and_preserve_borrow_kind() {
+        fn key(source: &str) -> Vec<u8> {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = (0..context.callable_count())
+                .map(|index| context.callable_decl(index).unwrap())
+                .find(|declaration| context.semantic_path(*declaration).unwrap().item == "value")
+                .unwrap();
+            identity(
+                &ir::CallTarget {
+                    declaration,
+                    type_args: Arc::from([]),
+                },
+                &context,
+                &budget,
+            )
+            .unwrap()
+            .canonical
+            .to_vec()
+        }
+        let shared =
+            key("struct S{x:i32}impl S{fn value<'a>(&'a self)->&'a i32{&self.x}}fn main(){}");
+        let renamed = key(
+            "fn unused(){}struct S{x:i32}impl S{fn value<'b>(&'b self)->&'b i32{&self.x}}fn main(){}",
+        );
+        let mutable = key(
+            "struct S{x:i32}impl S{fn value<'a>(&'a mut self)->&'a mut i32{&mut self.x}}fn main(){}",
+        );
+        assert_eq!(shared, renamed);
+        assert_ne!(shared, mutable);
     }
 
     #[test]

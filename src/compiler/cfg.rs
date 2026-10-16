@@ -12,11 +12,22 @@ pub struct BlockId(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LoanId(pub usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LoanTiming {
+    #[default]
+    Immediate,
+    TwoPhase {
+        activation: BlockId,
+        argument: usize,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub struct LoanSite {
     pub kind: ir::BorrowKind,
     pub place: Place,
     pub origin: Option<ExprId>,
+    pub timing: LoanTiming,
 }
 
 #[derive(Clone, Debug)]
@@ -386,6 +397,276 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
 }
 
 impl Function {
+    fn validate_loan_timing(&self, facts: ir::FactsCtx<'_>) -> Result<(), String> {
+        let mut work = 0usize;
+        let mut spend = |amount: usize| -> Result<(), String> {
+            work = work
+                .checked_add(amount)
+                .ok_or("two-phase validation work overflow")?;
+            if work > ir::MAX_PATTERN_PROJECTION_WORK {
+                return Err("two-phase validation work limit exceeded".into());
+            }
+            if let Some(authority) = facts.validated() {
+                authority.budget().charge_work(amount)?;
+            }
+            Ok(())
+        };
+        for (loan_index, site) in self.loan_sites.iter().enumerate() {
+            spend(1)?;
+            let LoanTiming::TwoPhase {
+                activation,
+                argument,
+            } = site.timing
+            else {
+                continue;
+            };
+            if site.kind != ir::BorrowKind::Mut {
+                return Err("two-phase loan must be mutable".into());
+            }
+            let activation_block = self
+                .blocks
+                .get(activation.0)
+                .ok_or("invalid two-phase activation block")?;
+            let Terminator::Call {
+                target,
+                signature,
+                args,
+                ..
+            } = &activation_block.terminator.value
+            else {
+                return Err("two-phase activation must be a call".into());
+            };
+            let Some(Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            }) = signature.params.get(argument)
+            else {
+                return Err("two-phase activation requires mutable reference formal".into());
+            };
+            let site_ty = self.place_ty(&site.place)?;
+            let agrees = if let Some(authority) = facts.validated() {
+                authority
+                    .world()
+                    .types_equal(
+                        std::slice::from_ref(site_ty),
+                        std::slice::from_ref(referent.as_ref()),
+                    )
+                    .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?
+            } else {
+                site_ty == referent.as_ref()
+            };
+            if !agrees {
+                return Err("two-phase referent/formal mismatch".into());
+            }
+            let Some(Operand::Move(carrier)) = args.get(argument) else {
+                return Err("two-phase activation must move its unique carrier".into());
+            };
+            if !carrier.projection.is_empty()
+                || self.params.contains(&carrier.local)
+                || carrier.local == self.return_local
+            {
+                return Err("two-phase carrier must be a dedicated temporary".into());
+            }
+            let receiver = if let Some(authority) = facts.validated() {
+                argument == 0
+                    && authority
+                        .service()
+                        .callee_receiver(target, authority)
+                        .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+                        == (ir::ReceiverMode::Borrowed {
+                            kind: ir::BorrowKind::Mut,
+                        })
+            } else {
+                false
+            };
+            let reborrow = site.place.projection.as_slice() == [Projection::Deref]
+                && matches!(
+                    self.locals.get(site.place.local.0).map(|local| &local.ty),
+                    Some(Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        ..
+                    })
+                );
+            if !receiver && !reborrow {
+                return Err(
+                    "two-phase loan is neither a mutable receiver nor local mutable reborrow"
+                        .into(),
+                );
+            }
+            let mut issue = None;
+            let mut uses = 0usize;
+            for (block_index, block) in self.blocks.iter().enumerate() {
+                spend(1)?;
+                for statement in &block.statements {
+                    spend(1)?;
+                    let check_place = |place: &Place| -> Result<(), String> {
+                        if place.local == carrier.local {
+                            Err("two-phase carrier has an aliased or extra use".into())
+                        } else {
+                            Ok(())
+                        }
+                    };
+                    let mut check_operand = |operand: &Operand| -> Result<(), String> {
+                        spend(1)?;
+                        match operand {
+                            Operand::Copy(place) | Operand::Move(place) => check_place(place),
+                            Operand::Constant(_) => Ok(()),
+                        }
+                    };
+                    match &statement.value {
+                        Statement::StorageLive(_) | Statement::StorageDead(_) => {}
+                        Statement::Assign {
+                            destination,
+                            value: Rvalue::Borrow(id),
+                        } if id.0 == loan_index => {
+                            if destination != carrier
+                                || issue.replace(BlockId(block_index)).is_some()
+                            {
+                                return Err(
+                                    "two-phase loan must have one dedicated issuance".into()
+                                );
+                            }
+                        }
+                        Statement::Assign { destination, value } => {
+                            check_place(destination)?;
+                            value.visit_operands(&mut check_operand)?;
+                            match value {
+                                Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
+                                    check_place(array)?
+                                }
+                                _ => {}
+                            }
+                        }
+                        Statement::Inspect(place) => check_place(place)?,
+                        Statement::IndexInspect { array, index } => {
+                            check_place(array)?;
+                            check_operand(index)?;
+                        }
+                        Statement::IndexAssign {
+                            array,
+                            index,
+                            value,
+                        }
+                        | Statement::IndexAssignOp {
+                            array,
+                            index,
+                            value,
+                            ..
+                        } => {
+                            check_place(array)?;
+                            check_operand(index)?;
+                            check_operand(value)?;
+                        }
+                    }
+                }
+                let check_place = |place: &Place| -> Result<(), String> {
+                    if place.local == carrier.local {
+                        Err("two-phase carrier escapes activation".into())
+                    } else {
+                        Ok(())
+                    }
+                };
+                match &block.terminator.value {
+                    Terminator::Call {
+                        args, destination, ..
+                    } => {
+                        check_place(destination)?;
+                        for (slot, operand) in args.iter().enumerate() {
+                            spend(1)?;
+                            if let Operand::Copy(place) | Operand::Move(place) = operand
+                                && place.local == carrier.local
+                            {
+                                if block_index != activation.0
+                                    || slot != argument
+                                    || !matches!(operand, Operand::Move(_))
+                                    || place != carrier
+                                {
+                                    return Err(
+                                        "two-phase carrier used outside exact activation argument"
+                                            .into(),
+                                    );
+                                }
+                                uses += 1;
+                            }
+                        }
+                    }
+                    Terminator::Switch {
+                        condition: Operand::Copy(place) | Operand::Move(place),
+                        ..
+                    }
+                    | Terminator::SwitchVariant { place, .. } => check_place(place)?,
+                    Terminator::Goto(_)
+                    | Terminator::Switch { .. }
+                    | Terminator::Return
+                    | Terminator::Unreachable => {}
+                }
+            }
+            for other in &self.loan_sites {
+                spend(1)?;
+                if other.place.local == carrier.local {
+                    return Err("two-phase carrier borrowed or aliased".into());
+                }
+            }
+            let issue = issue.ok_or("two-phase reservation has no issuance")?;
+            if uses != 1 {
+                return Err("two-phase carrier must have exactly one activation use".into());
+            }
+            let bytes = self
+                .blocks
+                .len()
+                .checked_mul(4 * std::mem::size_of::<usize>() + 2)
+                .ok_or("two-phase dominance storage overflow")?;
+            let _reservation = facts
+                .validated()
+                .map(|authority| authority.budget().reserve_bytes(bytes))
+                .transpose()?;
+            let mut reachable = |excluded: Option<BlockId>| -> Result<bool, String> {
+                let mut seen = vec![false; self.blocks.len()];
+                let mut pending = Vec::new();
+                pending
+                    .try_reserve_exact(self.blocks.len())
+                    .map_err(|_| "two-phase dominance allocation failed")?;
+                if Some(self.entry) != excluded {
+                    seen[self.entry.0] = true;
+                    pending.push(self.entry);
+                }
+                while let Some(current) = pending.pop() {
+                    spend(1)?;
+                    if current == activation {
+                        return Ok(true);
+                    }
+                    let mut push = |next: BlockId| {
+                        if Some(next) != excluded && !seen[next.0] {
+                            seen[next.0] = true;
+                            pending.push(next);
+                        }
+                    };
+                    match self.blocks[current.0].terminator.value {
+                        Terminator::Goto(next) | Terminator::Call { next, .. } => push(next),
+                        Terminator::Switch {
+                            then_block,
+                            else_block,
+                            ..
+                        }
+                        | Terminator::SwitchVariant {
+                            then_block,
+                            else_block,
+                            ..
+                        } => {
+                            push(then_block);
+                            push(else_block);
+                        }
+                        Terminator::Return | Terminator::Unreachable => {}
+                    }
+                }
+                Ok(false)
+            };
+            if reachable(None)? && reachable(Some(issue))? {
+                return Err("two-phase reservation does not dominate reachable activation".into());
+            }
+        }
+        Ok(())
+    }
     fn preflight_plan(
         &self,
         facts: ir::FactsCtx<'_>,
@@ -835,7 +1116,9 @@ impl Function {
             .iter()
             .map(|param| self.place_ty(&place(*param)).cloned())
             .collect::<Result<Vec<_>, _>>()?;
-        self.ref_contract.validate(&parameter_types, &self.result)?;
+        if facts.validated().is_none() {
+            self.ref_contract.validate(&parameter_types, &self.result)?;
+        }
         if let Some(authority) = facts.validated() {
             ir::validate_body_signature(
                 &ir::Signature {
@@ -1008,9 +1291,11 @@ impl Function {
                         validate_type(ty, 0)?;
                     }
                     validate_type(&signature.result, 0)?;
-                    signature
-                        .ref_contract
-                        .validate(&signature.params, &signature.result)?;
+                    if facts.validated().is_none() {
+                        signature
+                            .ref_contract
+                            .validate(&signature.params, &signature.result)?;
+                    }
                     for (arg, ty) in args.iter().zip(&signature.params) {
                         self.require_operand_with_facts(arg, ty, facts)?;
                     }
@@ -1026,7 +1311,7 @@ impl Function {
         if loan_uses.iter().any(|count| *count != 1) {
             return Err("CFG loan site must have exactly one borrow instruction".into());
         }
-        Ok(())
+        self.validate_loan_timing(facts)
     }
 }
 
@@ -1058,6 +1343,7 @@ struct Lowerer<'a> {
     lowering_work: usize,
     origins: usize,
     loans: Vec<Option<LoanId>>,
+    call_blocks: Vec<Option<BlockId>>,
     used_loans: std::collections::HashSet<LoanId>,
     source: &'a ir::CheckedFunction,
     result: Function,
@@ -1700,7 +1986,7 @@ impl Lowerer<'_> {
             ir::ExprKind::Deref { .. } => {
                 let source = self.pattern_source(id)?;
                 let operand = self.consume(source)?;
-                self.result.operand_ty(&operand)?;
+                self.result.operand_ty_with_facts(&operand, self.facts)?;
                 self.assign(destination.clone(), Rvalue::Use(operand), origin);
             }
             ir::ExprKind::DynamicIndex { base, index } => {
@@ -1929,6 +2215,14 @@ impl Lowerer<'_> {
                     .map(|id| self.expression(*id))
                     .collect::<Result<Vec<_>, _>>()?;
                 let next = self.block();
+                if self.call_blocks[id.0].replace(self.current).is_some() {
+                    if let Some(budget) = self.budget {
+                        budget.charge_work(self.source.exprs.len())?;
+                    }
+                    if self.source.exprs.iter().any(|expression| matches!(&expression.kind, ir::ExprKind::Borrow { timing: ir::BorrowTiming::TwoPhase { activation, .. }, .. } if *activation == id)) {
+                        return Err("two-phase call expression was materialized more than once".into());
+                    }
+                }
                 self.terminate(
                     Terminator::Call {
                         target: target.clone(),
@@ -2099,9 +2393,19 @@ fn lower_internal(
         }
     }
     let mut loan_sites = Vec::new();
+    if let Some(budget) = budget {
+        budget.charge_work(source.exprs.len())?;
+        budget.retain_bytes(
+            source
+                .exprs
+                .len()
+                .checked_mul(std::mem::size_of::<Option<BlockId>>())
+                .ok_or("activation map storage overflow")?,
+        )?;
+    }
     let mut loans = vec![None; source.exprs.len()];
     for (index, expression) in source.exprs.iter().enumerate() {
-        if let ir::ExprKind::Borrow { kind, place } = &expression.kind {
+        if let ir::ExprKind::Borrow { kind, place, .. } = &expression.kind {
             if loan_sites.len() >= ir::MAX_LOAN_SITES - formal_origins {
                 return Err("CFG loan site limit exceeded".into());
             }
@@ -2110,6 +2414,7 @@ fn lower_internal(
                 kind: *kind,
                 place: place.clone(),
                 origin: Some(ExprId(index)),
+                timing: LoanTiming::Immediate,
             });
         }
     }
@@ -2142,6 +2447,7 @@ fn lower_internal(
         lowering_work: 0,
         origins: formal_parameter_origins + loan_sites.len(),
         loans,
+        call_blocks: vec![None; source.exprs.len()],
         used_loans: std::collections::HashSet::new(),
         source,
         result: Function {
@@ -2180,6 +2486,30 @@ fn lower_internal(
     body_result?;
     lowerer.cleanup(0, None);
     lowerer.terminate(Terminator::Return, None)?;
+    for (index, expression) in source.exprs.iter().enumerate() {
+        if let ir::ExprKind::Borrow {
+            timing:
+                ir::BorrowTiming::TwoPhase {
+                    activation,
+                    argument,
+                    ..
+                },
+            ..
+        } = &expression.kind
+        {
+            let loan = lowerer.loans[index].ok_or("missing two-phase loan site")?;
+            let activation = lowerer
+                .call_blocks
+                .get(activation.0)
+                .copied()
+                .flatten()
+                .ok_or("missing typed call activation block")?;
+            lowerer.result.loan_sites[loan.0].timing = LoanTiming::TwoPhase {
+                activation,
+                argument: *argument,
+            };
+        }
+    }
     lowerer.result.blocks = lowerer
         .blocks
         .into_iter()
@@ -2633,6 +2963,75 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn generic_reference_two_phase_protocol_rejects_aliases_and_keeps_dead_activation() {
+        use super::super::frontend;
+        for argument in ["*r", "loop{}"] {
+            let text = format!(
+                "fn sink(x:&mut i32,n:i32){{*x=n;}} fn f(r:&mut i32){{sink(r,{argument});}} fn main(){{}}"
+            );
+            let program = frontend::parse(&text).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.callable_decl(1).unwrap();
+            let source =
+                frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
+            let facts = plan.callable_facts(declaration).unwrap();
+            let function =
+                lower_internal(&source, ir::FactsCtx::from_validated(&facts), Some(&budget))
+                    .unwrap();
+            function
+                .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                .unwrap();
+            let (site, activation, argument) = function
+                .loan_sites
+                .iter()
+                .enumerate()
+                .find_map(|(index, site)| {
+                    if let LoanTiming::TwoPhase {
+                        activation,
+                        argument,
+                    } = site.timing
+                    {
+                        Some((index, activation, argument))
+                    } else {
+                        None
+                    }
+                })
+                .expect("implicit mutable argument reborrow reserves a loan");
+            let Terminator::Call { args, .. } = &function.blocks[activation.0].terminator.value
+            else {
+                panic!("activation is a real typed call");
+            };
+            let Operand::Move(carrier) = &args[argument] else {
+                panic!("activation moves unique carrier");
+            };
+            let mut aliased = function.clone();
+            aliased.blocks[activation.0].statements.push(Located {
+                origin: None,
+                value: Statement::Assign {
+                    destination: carrier.clone(),
+                    value: Rvalue::Use(Operand::Move(carrier.clone())),
+                },
+            });
+            assert!(
+                aliased
+                    .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                    .is_err()
+            );
+            let mut invalid_slot = function.clone();
+            invalid_slot.loan_sites[site].timing = LoanTiming::TwoPhase {
+                activation,
+                argument: usize::MAX,
+            };
+            assert!(
+                invalid_slot
+                    .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn mutable_returns_move_handles_and_reject_dead_copy_mut() {
         let program = super::super::frontend::parse(
             "fn id<'a>(x:&'a mut i32)->&'a mut i32{x} fn main(){let mut x=7;let n=*id(&mut x);}",
@@ -2838,6 +3237,7 @@ mod tests {
                     expr(
                         reference.clone(),
                         ir::ExprKind::Borrow {
+                            timing: ir::BorrowTiming::Immediate,
                             kind,
                             place: place(LocalId(0)),
                         },
@@ -2955,6 +3355,7 @@ mod tests {
                 projection: vec![Projection::Deref],
             },
             origin: None,
+            timing: LoanTiming::Immediate,
         });
         assert!(
             mixed
@@ -2997,6 +3398,7 @@ mod tests {
                 expr(
                     reference.clone(),
                     ir::ExprKind::Borrow {
+                        timing: ir::BorrowTiming::Immediate,
                         kind: ir::BorrowKind::Mut,
                         place: place(LocalId(0)),
                     },
@@ -3896,6 +4298,7 @@ mod tests {
             lowering_work: ir::MAX_PATTERN_PROJECTION_WORK,
             origins: 0,
             loans: vec![],
+            call_blocks: vec![],
             used_loans: Default::default(),
             source: &source,
             result: function,

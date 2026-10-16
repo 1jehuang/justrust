@@ -61,11 +61,12 @@ receives universal type and move analysis with parameters treated as opaque
 non-Copy values. Demanded concrete instances substitute checked typed metadata,
 then lower and analyze again before sealed native emission. Exact instance
 recursion is deduplicated, while growing instantiations fail boundedly. Generic
-bodies and their recursively expanded type arguments cannot contain references
-in this milestone. Positive local trait bounds use the separate canonical
+signatures and bodies admit standalone shared/mutable reference carriers with
+reference-free referents, including rigid parameters. Recursively expanded type
+arguments remain reference-free. Positive local trait bounds use the canonical
 obligation foundation below. Const generics and generic function values remain
-unsupported. Ordinary nongeneric reference support is
-unchanged. See `GENERICS.md` for the universal/concrete trust boundary and shared
+unsupported. See `GENERIC-REFERENCES.md` for transported reference contracts,
+borrowed receivers and genuine bounded two-phase loans. See `GENERICS.md` for the universal/concrete trust boundary and shared
 planning limits, and `GENERIC-INFERENCE.md` for the private evidence grammar,
 fallible no-fallback hints and exactly-once ordinary elaboration. This foundation
 is not full Rust generic compatibility.
@@ -78,8 +79,10 @@ simultaneous substitution and one authoritative callable enumeration preserve
 universal validation of every unused associated body. Receiver selection matches
 impl parameters against rigid actual types, while a separate bounded overlap
 check rejects conflicting same-name items. Receiver and arguments are checked
-once in source order. Borrowed receivers, autoref/autoderef and omitted method
-type arguments remain unsupported. See `ASSOCIATED-ITEMS.md`.
+once in source order. Borrowed receivers support one bounded explicit adjustment
+and shared/mutable autoref of admitted places, not general trait autoderef.
+Omitted method type arguments remain unsupported. See `ASSOCIATED-ITEMS.md` and
+`GENERIC-REFERENCES.md`.
 The associated checkpoint passes1318 hosted tests and988 independently verified
 cases across28 corpora, including an actually executed96-worker example. Raw
 receipts are retained under `experiments/results/20261016-m8a-associated-items-*`.
@@ -98,8 +101,10 @@ facts and successful ownership analysis remain prerequisites for native emission
 The obligation engine uses one shared ledger, bounded memoization and
 operation-local cycle detection. Required declaration `Self` is not silently
 assumed Sized in executable code. Traits named `Copy` grant no Copy permission.
+Borrowed required receivers and projected reference returns use canonical input
+envelopes and private implementation refinements, never invented opaque fields.
 Default bodies, trait or trait-method generics, supertraits, associated types,
-trait objects, borrowed trait receivers and standard-library trait integration
+trait objects and standard-library trait integration
 remain explicit boundaries. See `TRAITS.md` for authority, resource limits and
 the fixed resource-exhaustion diagnostic transport exception.
 
@@ -141,8 +146,9 @@ Shared reference results may point to shared or mutable parameter referents,
 while mutable results derive only from mutable inputs. Either kind may accept
 unrelated inputs of either capability. Results may name typed static tuple,
 struct and constant-array subpaths under normalized lifetime contracts. Omitted input lifetimes receive fresh rigid declaration IDs. An omitted
-output lifetime requires exactly one input reference lifetime position, even when
-multiple input positions explicitly share the same name. Explicit output bounds
+output lifetime on free/static/value functions requires exactly one input
+reference lifetime position, even when multiple input positions explicitly share
+the same name. Borrowed methods instead prioritize the receiver lifetime. Explicit output bounds
 remain rigid, and unrelated anonymous inputs do not gain inferred outlives edges. Complete declaration-derived InputPath candidates, rigid body outlives
 obligations and separate transitive lifetime dependencies gate returned pointers.
 Each suffix stays correlated with its original argument and source authority.
@@ -151,20 +157,25 @@ are consumed unique handles, not copied capabilities, and keep overlapping paren
 authority frozen until their last use. Input kinds remain genuine capabilities,
 while all region-related inputs constrain output lifetimes independently of target
 eligibility. See `MIXED-REFERENCE-RETURNS.md`. Enum payload paths, dynamic borrowed
-indices, trait-based autoderef, bare reference indexing, method/general elision
+indices, trait-based autoderef, bare reference indexing and general elision
 and reference-containing aggregates remain unsupported.
 Builtin `r.field` and `r.0` insert one real Deref before field lookup in reads,
 assignments and borrows. Privacy and pointee capability are checked after peeling
 the reference, without moving its carrier or snapshotting its aggregate. Genuine
-reference Call-result field reads use the existing result temporary. Computed
-Call LHS, borrowing Call rvalues, runtime indexing through references and enum
+reference Call-result field reads use the existing result temporary. Assignment
+through a genuine reference Call result snapshots the RHS first, evaluates the
+carrier once and uses the same checked dereference assignment. Borrowing Call
+rvalues, runtime indexing through references and enum
 downcasts through Deref remain unsupported.
 See `BORROWING.md`, `REFERENCE-CALLS.md`, `REFERENCE-RETURNS.md`,
 `MUTABLE-REFERENCE-RETURNS.md`, `PROJECTED-REFERENCE-RETURNS.md` and
 `LIFETIME-ELISION.md` and `REFERENCE-FIELDS.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
-initialization and immutable assignment history. Untyped/backward-inferred and
-deferred destructuring declarations remain unsupported. See `DEFERRED.md`.
+initialization and immutable assignment history. A narrow untyped deferred
+reference declaration can acquire its type from its first independently typed
+reference assignment in the declaring lexical scope. Backward inference,
+underconstrained deferred values and deferred destructuring remain unsupported.
+See `DEFERRED.md` and `GENERIC-REFERENCES.md`.
 `main` takes no arguments and returns unit. Arithmetic has overflow checks,
 matching Rust debug behavior. Runtime arithmetic failure exits 101. This first
 runtime does not yet reproduce Rust panic text or unwind behavior.
@@ -219,6 +230,9 @@ implemented boundary. Semantic coverage must be expanded explicitly.
   definite-initialization, storage-lifetime, move-path, loan-origin and bounded
   signature-region dataflow to fixed points.
   Both check and emission require this successful immutable analysis fact.
+- Join all concrete analyses in one cached publication barrier (114) before
+  requesting any native object. Unused invalid nongeneric bodies therefore
+  cannot race an unrelated object's publication.
 - Emit each instance only from a privately constructed `ConcreteCfg` tied to that
   exact immutable closed CFG and its successful analysis, resolving call symbols
   exclusively through the sealed plan. Parameter-bearing types have no layout.

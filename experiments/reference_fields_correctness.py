@@ -2,9 +2,9 @@
 """Bounded E2 reference-fields differential corpus, not full Rust compatibility.
 
 Exact frozen stock-classified source bytes/stdout mirror bear's E2 acceptance
-corpus. Only builtin single-dereference field access is claimed.
-Computed assignment, runtime reference indexing and methods
-remain explicit boundaries. Valid runs must exit zero, exact stdout, empty stderr.
+corpus. Builtin single-dereference fields and the independently proved unchanged
+user_method_autoderef source are supported. General computed assignment and
+runtime reference indexing remain explicit boundaries. Valid runs must exit zero, exact stdout, empty stderr.
 Reuse module_correctness Case/run_case/process, deadline-bound file-backed
 capture and supplied-native workers 1/8 check/build. Never build a binary here.
 """
@@ -176,7 +176,7 @@ FIXTURES = json.loads(r'''
     "expected_stdout": "reference fields oracle ok\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "user_method_autoderef",
     "source": "struct S{x:i32} impl S{fn value(&self)->i32{self.x}} fn run()->i32{let s=S{x:7};let r=&s;r.value()}",
     "expected": 7,

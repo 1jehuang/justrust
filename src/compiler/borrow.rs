@@ -2,7 +2,7 @@
 //! Runtime pointers are never used as provenance. Canonical targets and parent
 //! authority are frozen at issuance, independently of later carrier rebinding.
 use super::cfg::{self, BlockId, LoanId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{BorrowKind, LocalId, Place, Projection, ReturnContract, Ty};
+use super::ir::{BorrowKind, FactsCtx, LocalId, Place, Projection, ReturnContract, Ty};
 use super::ownership::{Budget, Exhausted};
 use std::collections::VecDeque;
 use std::mem::size_of;
@@ -23,6 +23,8 @@ pub(super) enum Access {
     StorageEnd,
     SharedBorrow,
     MutBorrow,
+    ReserveMut,
+    ActivateMut(LoanId),
 }
 #[derive(Clone, Debug)]
 pub(super) enum Problem {
@@ -58,11 +60,40 @@ impl CanonicalPlace {
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TargetPrecision {
+    Exact,
+    Subtree,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Target {
     pub place: CanonicalPlace,
+    /// A subtree is an analysis footprint, never coordinates in the result type.
+    pub precision: TargetPrecision,
     /// Only this candidate's ancestors, never a union of alternative exemptions.
     pub authority: Vec<usize>,
+}
+
+fn return_inputs(
+    contract: &ReturnContract,
+) -> impl Iterator<Item = (usize, &[Projection], TargetPrecision)> {
+    let (paths, envelopes): (&[super::ir::InputPath], &[super::ir::InputEnvelope]) = match contract
+    {
+        ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
+            (paths, &[])
+        }
+        ReturnContract::SharedInputEnvelopes(inputs)
+        | ReturnContract::MutInputEnvelopes(inputs) => (&[], inputs),
+        ReturnContract::NoReference => (&[], &[]),
+    };
+    paths
+        .iter()
+        .map(|p| (p.param, p.projection.as_ref(), TargetPrecision::Exact))
+        .chain(
+            envelopes
+                .iter()
+                .map(|p| (p.param, &[][..], TargetPrecision::Subtree)),
+        )
 }
 #[derive(Clone, Default, PartialEq, Eq)]
 struct Set(Vec<u64>);
@@ -75,6 +106,16 @@ impl Set {
     }
     fn insert(&mut self, n: usize) {
         self.0[n / 64] |= 1 << (n % 64);
+    }
+    fn remove(&mut self, n: usize) {
+        self.0[n / 64] &= !(1 << (n % 64));
+    }
+    fn intersect(&mut self, other: &Self, budget: &mut Budget) -> Result<(), Exhausted> {
+        budget.spend(self.0.len())?;
+        for (ours, theirs) in self.0.iter_mut().zip(&other.0) {
+            *ours &= *theirs;
+        }
+        Ok(())
     }
     fn clear(&mut self) {
         self.0.fill(0);
@@ -110,6 +151,7 @@ type Origins = Vec<Set>;
 struct Point {
     origins: Origins,
     live: Set,
+    activated: Set,
 }
 
 pub(super) struct Plan {
@@ -121,6 +163,8 @@ pub(super) struct Plan {
     lifetime_deps: Vec<Set>,
     targets: Vec<Vec<Target>>,
     kinds: Vec<BorrowKind>,
+    two_phase: Set,
+    activations: Vec<Vec<LoanId>>,
     pub problems: Vec<(BlockId, Option<usize>, Problem)>,
     pub bytes: usize,
 }
@@ -375,12 +419,25 @@ fn append_target(
     next: &mut Vec<Target>,
     target: &Target,
     suffix: &[Projection],
+    precision: TargetPrecision,
     parent: usize,
     allocation: (&mut usize, &mut usize, usize),
     budget: &mut Budget,
 ) -> Result<(), Exhausted> {
     let (bytes, memberships, max_bytes) = allocation;
-    let path_len = add(target.place.projection.len(), suffix.len())?;
+    let precision = if target.precision == TargetPrecision::Subtree {
+        TargetPrecision::Subtree
+    } else {
+        precision
+    };
+    let path_len = add(
+        target.place.projection.len(),
+        if precision == TargetPrecision::Exact {
+            suffix.len()
+        } else {
+            0
+        },
+    )?;
     if path_len > 128 {
         return Err(Exhausted);
     }
@@ -400,7 +457,10 @@ fn append_target(
     }
     budget.reserve_bytes(added_bytes)?;
     let mut candidate = target.clone();
-    candidate.place.projection.extend_from_slice(suffix);
+    candidate.precision = precision;
+    if candidate.precision == TargetPrecision::Exact {
+        candidate.place.projection.extend_from_slice(suffix);
+    }
     if let Err(position) = candidate.authority.binary_search(&parent) {
         candidate.authority.insert(position, parent);
     }
@@ -486,6 +546,19 @@ impl Plan {
             )?,
         )?;
         bytes = add(bytes, mul(loans, add(256, mul(loans.div_ceil(64), 16)?)?)?)?;
+        // Dense retained snapshots, entry states and masking/worklist scratch.
+        // Check the full point-by-loan product before allocating any of it.
+        let activation_size = add(size_of::<Set>(), mul(loans.div_ceil(64), 8)?)?;
+        bytes = add(
+            bytes,
+            add(
+                mul(add(p, add(mul(b, 4)?, 8)?)?, activation_size)?,
+                add(
+                    mul(b, 4 * (size_of::<Vec<LoanId>>() + size_of::<usize>()))?,
+                    mul(loans, 4 * (size_of::<LoanId>() + size_of::<usize>()))?,
+                )?,
+            )?,
+        )?;
         // Reserve bounded access scratch alongside persistent targets. Two copies
         // cover the caller's resolved targets while active-loan checks run.
         bytes = add(bytes, mul(loans, 64)?)?;
@@ -637,6 +710,7 @@ impl Plan {
                 points[offsets[block] + statement] = Some(Point {
                     origins: state.clone(),
                     live,
+                    activated: Set::new(loans),
                 });
                 if let Some(item) = f.blocks[block].statements.get(statement) {
                     if let Statement::Assign {
@@ -667,6 +741,7 @@ impl Plan {
             outgoing[block] = Some(Point {
                 origins: state,
                 live: exits[block].clone(),
+                activated: Set::new(loans),
             });
         }
         budget.spend(mul(loans, mul(loans.div_ceil(64), 3)?)?)?;
@@ -704,10 +779,13 @@ impl Plan {
             )?;
             let closure = contract.closure().expect("validated reference contract");
             let result = contract.result_region.expect("reference result region");
-            let (ReturnContract::SharedInputPaths(candidates)
-            | ReturnContract::MutInputPaths(candidates)) = &contract.returns
-            else {
-                unreachable!()
+            let candidate_count = match &contract.returns {
+                ReturnContract::SharedInputPaths(paths) | ReturnContract::MutInputPaths(paths) => {
+                    paths.len()
+                }
+                ReturnContract::SharedInputEnvelopes(inputs)
+                | ReturnContract::MutInputEnvelopes(inputs) => inputs.len(),
+                ReturnContract::NoReference => 0,
             };
             for (index, arg) in args.iter().enumerate() {
                 let Some(region) = contract.param_regions[index] else {
@@ -717,8 +795,8 @@ impl Plan {
                     unreachable!()
                 };
                 let actual = &point.origins[refs[place.local.0].expect("reference actual")];
-                budget.spend(candidates.len())?;
-                if candidates.iter().any(|candidate| candidate.param == index) {
+                budget.spend(candidate_count)?;
+                if return_inputs(&contract.returns).any(|(param, _, _)| param == index) {
                     parents[row].union(actual, budget)?;
                 }
                 if closure[region.0 as usize] & (1u64 << result.0) != 0 {
@@ -767,6 +845,7 @@ impl Plan {
                     root: CanonicalRoot::ParameterReferent(*local),
                     projection: vec![],
                 },
+                precision: TargetPrecision::Exact,
                 authority: vec![],
             });
             ready[row] = true;
@@ -795,7 +874,11 @@ impl Plan {
                             )?;
                             let path_len = add(
                                 target.place.projection.len(),
-                                site.place.projection.len() - 1,
+                                if target.precision == TargetPrecision::Exact {
+                                    site.place.projection.len() - 1
+                                } else {
+                                    0
+                                },
                             )?;
                             if path_len > 128 {
                                 return Err(Exhausted);
@@ -826,14 +909,20 @@ impl Plan {
                             }
                             budget.reserve_bytes(bytes - old_bytes)?;
                             let mut place = target.place.clone();
-                            place
-                                .projection
-                                .extend_from_slice(&site.place.projection[1..]);
+                            if target.precision == TargetPrecision::Exact {
+                                place
+                                    .projection
+                                    .extend_from_slice(&site.place.projection[1..]);
+                            }
                             let mut authority = target.authority.clone();
                             if let Err(position) = authority.binary_search(&parent) {
                                 authority.insert(position, parent);
                             }
-                            let candidate = Target { place, authority };
+                            let candidate = Target {
+                                place,
+                                precision: target.precision,
+                                authority,
+                            };
                             let mut duplicate = false;
                             for existing in &next {
                                 budget.spend(path_len + candidate.authority.len() + 1)?;
@@ -868,6 +957,7 @@ impl Plan {
                     budget.reserve_bytes(bytes - old_bytes)?;
                     next.push(Target {
                         place: CanonicalPlace::owned(&site.place),
+                        precision: TargetPrecision::Exact,
                         authority: vec![],
                     });
                 }
@@ -888,19 +978,14 @@ impl Plan {
                 else {
                     unreachable!()
                 };
-                let (ReturnContract::SharedInputPaths(candidates)
-                | ReturnContract::MutInputPaths(candidates)) = &signature.ref_contract.returns
-                else {
-                    unreachable!()
-                };
                 let Some(point) = &points[offsets[block + 1] - 1] else {
                     continue;
                 };
                 let mut next = vec![];
-                for candidate in candidates.iter() {
-                    budget.spend(candidate.projection.len() + 1)?;
-                    let (Operand::Copy(actual) | Operand::Move(actual)) = &args[candidate.param]
-                    else {
+                for (param, projection, precision) in return_inputs(&signature.ref_contract.returns)
+                {
+                    budget.spend(projection.len() + 1)?;
+                    let (Operand::Copy(actual) | Operand::Move(actual)) = &args[param] else {
                         unreachable!()
                     };
                     let actual = &point.origins[refs[actual.local.0].expect("reference actual")];
@@ -910,7 +995,8 @@ impl Plan {
                             append_target(
                                 &mut next,
                                 target,
-                                &candidate.projection,
+                                projection,
+                                precision,
                                 parent,
                                 (&mut bytes, &mut memberships, max_bytes),
                                 budget,
@@ -939,6 +1025,15 @@ impl Plan {
         }
         // Deriving CallReturn kinds visits all blocks, including no-result calls.
         budget.spend(f.blocks.len())?;
+        let mut two_phase = Set::new(loans);
+        let mut activations = vec![vec![]; b];
+        for (loan, site) in f.loan_sites.iter().enumerate() {
+            budget.spend(1)?;
+            if let cfg::LoanTiming::TwoPhase { activation, .. } = site.timing {
+                two_phase.insert(loan);
+                activations[activation.0].push(LoanId(loan));
+            }
+        }
         let mut plan = Self {
             refs,
             offsets,
@@ -967,9 +1062,12 @@ impl Plan {
                     Some(*kind)
                 }))
                 .collect(),
+            two_phase,
+            activations,
             problems,
             bytes,
         };
+        plan.compute_activation(f, &mut memberships, budget)?;
         // DFS backedges and SCC membership are computed without recursion.
         let mut colors = vec![0u8; b];
         let mut order = vec![];
@@ -1046,7 +1144,131 @@ impl Plan {
         }
         Ok(plan)
     }
-    fn point(&self, block: BlockId, statement: Option<usize>, phase: Phase) -> (&Origins, &Set) {
+    fn compute_activation(
+        &mut self,
+        f: &cfg::Function,
+        memberships: &mut usize,
+        budget: &mut Budget,
+    ) -> Result<(), Exhausted> {
+        budget.spend(self.two_phase.0.len())?;
+        if self.two_phase.count() == 0 {
+            return Ok(());
+        }
+        let loans = self.kinds.len();
+        let mut entries = vec![Set::new(loans); f.blocks.len()];
+        let mut seen = vec![false; f.blocks.len()];
+        let mut queued = vec![false; f.blocks.len()];
+        let mut reentrant = Set::new(loans);
+        let mut queue = VecDeque::from([f.entry.0]);
+        seen[f.entry.0] = true;
+        queued[f.entry.0] = true;
+        while let Some(block) = queue.pop_front() {
+            queued[block] = false;
+            budget.spend(entries[block].0.len() + 1)?;
+            let mut state = entries[block].clone();
+            for statement in 0..=f.blocks[block].statements.len() {
+                let index = self.offsets[block] + statement;
+                let point = self.points[index].as_ref().expect("reachable point");
+                let live = self.active(&point.origins, &point.live, budget)?;
+                state.intersect(&live, budget)?;
+                Self::store_activation(
+                    self.points[index].as_mut().expect("reachable point"),
+                    &state,
+                    memberships,
+                    budget,
+                )?;
+                if let Some(item) = f.blocks[block].statements.get(statement)
+                    && let Statement::Assign {
+                        value: Rvalue::Borrow(id),
+                        ..
+                    } = item.value
+                    && self.two_phase.has(id.0)
+                {
+                    if live.has(id.0) {
+                        // A fresh execution cannot recycle a still-live origin.
+                        // Ordinary per-iteration loans die before their backedge.
+                        reentrant.insert(id.0);
+                    }
+                    state.remove(id.0);
+                }
+            }
+            budget.spend(self.activations[block].len())?;
+            for loan in &self.activations[block] {
+                state.insert(loan.0);
+            }
+            let point = self.outgoing[block]
+                .as_ref()
+                .expect("reachable outgoing point");
+            let live = self.active(&point.origins, &point.live, budget)?;
+            state.intersect(&live, budget)?;
+            Self::store_activation(
+                self.outgoing[block]
+                    .as_mut()
+                    .expect("reachable outgoing point"),
+                &state,
+                memberships,
+                budget,
+            )?;
+            for next in successors(&f.blocks[block].terminator.value)
+                .into_iter()
+                .flatten()
+            {
+                budget.spend(state.0.len() * 2 + 1)?;
+                let before = entries[next.0].count();
+                let changed = entries[next.0].union(&state, budget)?;
+                *memberships = add(*memberships, entries[next.0].count() - before)?;
+                if *memberships > MAX_MEMBERSHIPS {
+                    return Err(Exhausted);
+                }
+                if (changed || !seen[next.0]) && !queued[next.0] {
+                    queue.push_back(next.0);
+                    queued[next.0] = true;
+                }
+                seen[next.0] = true;
+            }
+        }
+        budget.spend(reentrant.0.len())?;
+        for loan in reentrant.members() {
+            if self.problems.len() >= 256 {
+                return Err(Exhausted);
+            }
+            let cfg::LoanTiming::TwoPhase { activation, .. } = f.loan_sites[loan].timing else {
+                unreachable!()
+            };
+            self.problems.push((
+                activation,
+                None,
+                Problem::Unsupported(
+                    "reentrant two-phase origin is still live at fresh issuance".into(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn store_activation(
+        point: &mut Point,
+        state: &Set,
+        memberships: &mut usize,
+        budget: &mut Budget,
+    ) -> Result<(), Exhausted> {
+        budget.spend(state.0.len() * 3)?;
+        *memberships = add(
+            *memberships,
+            state.count().saturating_sub(point.activated.count()),
+        )?;
+        if *memberships > MAX_MEMBERSHIPS {
+            return Err(Exhausted);
+        }
+        point.activated.0.copy_from_slice(&state.0);
+        Ok(())
+    }
+
+    pub fn activations(&self, block: BlockId) -> &[LoanId] {
+        &self.activations[block.0]
+    }
+
+    fn point_data(&self, block: BlockId, statement: Option<usize>, phase: Phase) -> &Point {
         let end = self.offsets[block.0 + 1] - 1;
         let current = self.offsets[block.0] + statement.unwrap_or(end - self.offsets[block.0]);
         let point = if matches!(phase, Phase::Write) && current < end {
@@ -1058,13 +1280,16 @@ impl Plan {
             .as_ref()
             .expect("reachable ownership point");
         if matches!(phase, Phase::Write) && current == end {
-            let outgoing = self.outgoing[block.0]
+            self.outgoing[block.0]
                 .as_ref()
-                .expect("reachable outgoing point");
-            (&outgoing.origins, &outgoing.live)
+                .expect("reachable outgoing point")
         } else {
-            (&data.origins, &data.live)
+            data
         }
+    }
+    fn point(&self, block: BlockId, statement: Option<usize>, phase: Phase) -> (&Origins, &Set) {
+        let point = self.point_data(block, statement, phase);
+        (&point.origins, &point.live)
     }
     fn active(&self, origins: &Origins, live: &Set, budget: &mut Budget) -> Result<Set, Exhausted> {
         budget.spend(live.0.len() + self.kinds.len().div_ceil(64))?;
@@ -1096,6 +1321,7 @@ impl Plan {
         if place.projection.first() != Some(&Projection::Deref) {
             return Ok(Ok(vec![Target {
                 place: CanonicalPlace::owned(place),
+                precision: TargetPrecision::Exact,
                 authority: vec![],
             }]));
         }
@@ -1116,9 +1342,11 @@ impl Plan {
                         + 1,
                 )?;
                 let mut next = target.clone();
-                next.place
-                    .projection
-                    .extend_from_slice(&place.projection[1..]);
+                if next.precision == TargetPrecision::Exact {
+                    next.place
+                        .projection
+                        .extend_from_slice(&place.projection[1..]);
+                }
                 if next.place.projection.len() > 128 {
                     return Err(Exhausted);
                 }
@@ -1153,13 +1381,12 @@ impl Plan {
         &self,
         f: &cfg::Function,
         block: BlockId,
+        facts: FactsCtx<'_>,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
-        let (ReturnContract::SharedInputPaths(allowed) | ReturnContract::MutInputPaths(allowed)) =
-            &f.ref_contract.returns
-        else {
+        if matches!(f.ref_contract.returns, ReturnContract::NoReference) {
             return Ok(None);
-        };
+        }
         let regions = usize::from(f.ref_contract.region_count);
         budget.spend(
             regions * regions
@@ -1193,18 +1420,34 @@ impl Plan {
             }
             for target in &self.targets[origin] {
                 budget.spend(f.params.len() + target.place.projection.len() + 1)?;
-                for candidate in allowed.iter() {
-                    budget.spend(candidate.projection.len() + 1)?;
-                }
                 let CanonicalRoot::ParameterReferent(local) = target.place.root else {
                     return Ok(Some(Problem::Invalid(
                         "cannot return a reference to owned frame storage".into(),
                     )));
                 };
-                if !allowed.iter().any(|candidate| {
-                    f.params[candidate.param] == local
-                        && candidate.projection.as_ref() == target.place.projection.as_slice()
-                }) {
+                // A scalar anchor has no proper descendants. This proves only
+                // one existing expected path, never reclassifies the canonical
+                // signature or turns the target into Exact for other accesses.
+                let singleton = target.precision == TargetPrecision::Subtree
+                    && Self::scalar_return_footprint(f, target, facts, budget)?;
+                let mut contained = false;
+                let mut declared_input = false;
+                for (param, projection, precision) in return_inputs(&f.ref_contract.returns) {
+                    budget.spend(projection.len() + 1)?;
+                    if f.params[param] == local {
+                        declared_input = true;
+                        contained |= precision == TargetPrecision::Subtree
+                            || ((target.precision == TargetPrecision::Exact || singleton)
+                                && projection == target.place.projection.as_slice());
+                    }
+                }
+                if !contained {
+                    if target.precision == TargetPrecision::Subtree && declared_input {
+                        return Ok(Some(Problem::Unsupported(
+                            "abstract aggregate return footprint cannot establish an exact path"
+                                .into(),
+                        )));
+                    }
                     return Ok(Some(Problem::Invalid(
                         "returned input does not satisfy declared output lifetime".into(),
                     )));
@@ -1242,6 +1485,50 @@ impl Plan {
         }
         Ok(None)
     }
+
+    fn scalar_return_footprint(
+        f: &cfg::Function,
+        target: &Target,
+        facts: FactsCtx<'_>,
+        budget: &mut Budget,
+    ) -> Result<bool, Exhausted> {
+        let FactsCtx::Validated(authority) = facts else {
+            return Ok(false);
+        };
+        let CanonicalRoot::ParameterReferent(local) = target.place.root else {
+            return Ok(false);
+        };
+        let Ty::Ref {
+            referent: input, ..
+        } = &f.locals[local.0].ty
+        else {
+            return Ok(false);
+        };
+        let Ty::Ref {
+            referent: output, ..
+        } = &f.result
+        else {
+            return Ok(false);
+        };
+        budget.spend(target.place.projection.len() + 1)?;
+        if let Err(error) = authority.validate_ty(output) {
+            return if error.is_resource() {
+                Err(Exhausted)
+            } else {
+                Ok(false)
+            };
+        }
+        let anchor = match authority.projected_ty(input, &target.place.projection) {
+            Ok(anchor) => anchor,
+            Err(error) if error.is_resource() => return Err(Exhausted),
+            Err(_) => return Ok(false),
+        };
+        Ok(match (anchor, output.as_ref()) {
+            (Ty::Int(a), Ty::Int(b)) => a == b,
+            (Ty::Bool, Ty::Bool) => true,
+            _ => false,
+        })
+    }
     pub fn check(
         &self,
         target: &Target,
@@ -1251,16 +1538,25 @@ impl Plan {
         phase: Phase,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
-        let (origins, live) = self.point(block, statement, phase);
-        let active = self.active(origins, live, budget)?;
+        let point = self.point_data(block, statement, phase);
+        let active = self.active(&point.origins, &point.live, budget)?;
         for loan in active.members() {
             budget.spend(target.authority.len() + 1)?;
-            if target.authority.contains(&loan) {
+            if target.authority.contains(&loan)
+                || matches!(access, Access::ActivateMut(id) if id.0 == loan)
+            {
                 continue;
             }
+            budget.spend(self.activations[block.0].len())?;
+            let activating =
+                statement.is_none() && self.activations[block.0].contains(&LoanId(loan));
+            let reserved = self.two_phase.has(loan) && !point.activated.has(loan) && !activating;
             if matches!(access, Access::Read | Access::SharedBorrow)
-                && self.kinds[loan] == BorrowKind::Shared
+                && (self.kinds[loan] == BorrowKind::Shared || reserved)
             {
+                continue;
+            }
+            if matches!(access, Access::ReserveMut) && self.kinds[loan] == BorrowKind::Shared {
                 continue;
             }
             for borrowed in &self.targets[loan] {

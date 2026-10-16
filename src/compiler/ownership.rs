@@ -3,7 +3,9 @@
 //! Includes bounded B1 local-reference checking, not general Rust borrowing or
 //! Drop elaboration. Private `Move` operands consume even Copy-typed places so that
 //! move-path analysis can be tested before non-Copy syntax is supported.
-use super::borrow::{self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target};
+use super::borrow::{
+    self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target, TargetPrecision,
+};
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
 use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, Ty};
 use super::traits::{FactsPhase, ValidatedFacts};
@@ -335,12 +337,13 @@ impl Budget {
 /// repeated shared aggregate types that could otherwise expand exponentially.
 #[cfg(test)]
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
-    preflight_with_plan(f, limits, None).map(|_| ())
+    preflight_with_plan(f, limits, None, FactsCtx::Concrete).map(|_| ())
 }
 fn preflight_with_plan(
     f: &cfg::Function,
     limits: Limits,
     plan: Option<&super::ir::PlanBudget>,
+    facts: FactsCtx<'_>,
 ) -> Result<usize, Exhausted> {
     fn contract_scratch(
         type_work: usize,
@@ -350,15 +353,23 @@ fn preflight_with_plan(
         contract: &super::ir::RefContract,
         budget: &mut Budget,
     ) -> Result<Option<super::ir::PlanReservation>, Exhausted> {
-        let candidates = match &contract.returns {
-            super::ir::ReturnContract::NoReference => &[][..],
-            super::ir::ReturnContract::SharedInputPaths(paths)
-            | super::ir::ReturnContract::MutInputPaths(paths) => paths.as_ref(),
-        };
-        if candidates.len() > 4096 {
+        let (candidates, envelopes): (&[super::ir::InputPath], &[super::ir::InputEnvelope]) =
+            match &contract.returns {
+                super::ir::ReturnContract::NoReference => (&[], &[]),
+                super::ir::ReturnContract::SharedInputPaths(paths)
+                | super::ir::ReturnContract::MutInputPaths(paths) => (paths, &[]),
+                super::ir::ReturnContract::SharedInputEnvelopes(inputs)
+                | super::ir::ReturnContract::MutInputEnvelopes(inputs) => (&[], inputs),
+            };
+        if candidates
+            .len()
+            .checked_add(envelopes.len())
+            .ok_or(Exhausted)?
+            > 4096
+        {
             return Err(Exhausted);
         }
-        budget.spend(candidates.len() + 1)?;
+        budget.spend(candidates.len() + envelopes.len() + 1)?;
         let mut steps = 0usize;
         for candidate in candidates {
             if candidate.projection.len() > 128 {
@@ -376,6 +387,13 @@ fn preflight_with_plan(
             .len()
             .checked_mul(std::mem::size_of::<super::ir::InputPath>())
             .and_then(|n| n.checked_add(steps.checked_mul(std::mem::size_of::<Projection>())?))
+            .and_then(|n| {
+                n.checked_add(
+                    envelopes
+                        .len()
+                        .checked_mul(std::mem::size_of::<super::ir::InputEnvelope>())?,
+                )
+            })
             .ok_or(Exhausted)?;
         let generated_bytes = if matches!(contract.returns, super::ir::ReturnContract::NoReference)
         {
@@ -551,13 +569,30 @@ fn preflight_with_plan(
         };
         param_types.push(local.ty.clone());
     }
-    if !charge_contract(
-        f.ref_contract.validation_work(&param_types, &f.result),
-        &mut budget,
-    )? {
+    let own_valid = if let FactsCtx::Validated(authority) = facts {
+        match authority.validate_signature(
+            super::ir::SignatureSubject::Body,
+            &super::ir::Signature {
+                params: param_types,
+                result: f.result.clone(),
+                ref_contract: f.ref_contract.clone(),
+            },
+        ) {
+            Ok(()) => true,
+            Err(error) if error.is_resource() => return Err(Exhausted),
+            Err(_) => false,
+        }
+    } else {
+        let valid = charge_contract(
+            f.ref_contract.validation_work(&param_types, &f.result),
+            &mut budget,
+        )?;
+        drop(param_types);
+        valid
+    };
+    if !own_valid {
         return Ok(budget.peak_scratch); // Full verifier owns malformed-contract diagnostics.
     }
-    drop(param_types);
     drop(own_scratch);
     for site in &f.loan_sites {
         place_type(f, &site.place, &mut budget)?;
@@ -684,12 +719,23 @@ fn preflight_with_plan(
                     &signature.ref_contract,
                     &mut budget,
                 )?;
-                if !charge_contract(
-                    signature
-                        .ref_contract
-                        .validation_work(&signature.params, &signature.result),
-                    &mut budget,
-                )? {
+                let call_valid = if let FactsCtx::Validated(authority) = facts {
+                    match authority
+                        .validate_signature(super::ir::SignatureSubject::Call(target), signature)
+                    {
+                        Ok(()) => true,
+                        Err(error) if error.is_resource() => return Err(Exhausted),
+                        Err(_) => false,
+                    }
+                } else {
+                    charge_contract(
+                        signature
+                            .ref_contract
+                            .validation_work(&signature.params, &signature.result),
+                        &mut budget,
+                    )?
+                };
+                if !call_valid {
                     return Ok(budget.peak_scratch);
                 }
                 for arg in args {
@@ -1176,6 +1222,7 @@ impl Transfer<'_> {
         } else {
             Ok(vec![Target {
                 place: CanonicalPlace::owned(place),
+                precision: TargetPrecision::Exact,
                 authority: vec![],
             }])
         }
@@ -1559,6 +1606,7 @@ impl Transfer<'_> {
                 let site = &self.f.loan_sites[id.0];
                 let source = site.place.clone();
                 let kind = site.kind;
+                let timing = site.timing;
                 self.carrier_read(state, &source)?;
                 if kind == super::ir::BorrowKind::Mut {
                     if source.projection.first() == Some(&Projection::Deref) {
@@ -1582,7 +1630,11 @@ impl Transfer<'_> {
                     self.check_access(
                         &target,
                         if kind == super::ir::BorrowKind::Mut {
-                            Access::MutBorrow
+                            if matches!(timing, cfg::LoanTiming::TwoPhase { .. }) {
+                                Access::ReserveMut
+                            } else {
+                                Access::MutBorrow
+                            }
                         } else {
                             Access::SharedBorrow
                         },
@@ -1654,6 +1706,7 @@ impl Transfer<'_> {
                 Statement::StorageLive(local) => {
                     self.check_access(
                         &Target {
+                            precision: TargetPrecision::Exact,
                             place: CanonicalPlace::owned(&root_place(*local)),
                             authority: vec![],
                         },
@@ -1679,6 +1732,7 @@ impl Transfer<'_> {
                 Statement::StorageDead(local) => {
                     self.check_access(
                         &Target {
+                            precision: TargetPrecision::Exact,
                             place: CanonicalPlace::owned(&root_place(*local)),
                             authority: vec![],
                         },
@@ -1723,6 +1777,17 @@ impl Transfer<'_> {
                 signature,
                 ..
             } => {
+                // All arguments have already been evaluated into snapshots.
+                // Activate only this call's exact reservations, before moves or
+                // mutable effects. Other activating loans are never exempted.
+                if let Some(loans) = self.loans {
+                    self.budget.spend(loans.activations(self.block).len())?;
+                    for &id in loans.activations(self.block) {
+                        for target in loans.issued(id, self.budget)? {
+                            self.check_access(&target, Access::ActivateMut(id))?;
+                        }
+                    }
+                }
                 // Snapshot effects before consuming reference handles. A bounded
                 // node bitmap deduplicates alias targets instead of retaining
                 // an argument-count product of cloned canonical target vectors.
@@ -1789,7 +1854,8 @@ impl Transfer<'_> {
                     self.inspect_return(state)?;
                 }
                 if let Some(loans) = self.loans
-                    && let Some(problem) = loans.check_return(self.f, self.block, self.budget)?
+                    && let Some(problem) =
+                        loans.check_return(self.f, self.block, self.facts, self.budget)?
                 {
                     self.problem(problem, root_place(self.f.return_local));
                 }
@@ -1867,7 +1933,7 @@ fn analyze_with_facts(
         complete: true,
     };
     let result = (|| -> Result<(), Exhausted> {
-        let scratch = preflight_with_plan(f, limits, plan)?;
+        let scratch = preflight_with_plan(f, limits, plan, facts)?;
         let mut budget = Budget::for_plan(limits.work, plan);
         let verification_scratch = budget.scratch(scratch)?;
         if let Err(error) = f.validate_with_facts(facts) {
@@ -2212,6 +2278,229 @@ mod tests {
                 _ => None,
             })
             .unwrap()
+    }
+
+    fn reference_template(source: &str, name: &str) -> cfg::TemplateCfg {
+        let budget = super::super::ir::PlanBudget::default();
+        let (checked, facts) = trait_callable_fixture(source, name, &budget);
+        cfg::lower_template(checked, facts, &budget).unwrap()
+    }
+
+    #[test]
+    fn generic_references_two_phase_activation_explicit_borrows_and_loop_reset() {
+        for source in [
+            "struct Cell{n:i32} impl Cell{fn read(&self)->i32{self.n} fn bump(&mut self,n:i32){self.n=self.n+n;}} fn main(){let mut s=Cell{n:1};s.bump(s.read());}",
+            "fn read(p:&i32)->i32{*p} fn set(p:&mut i32,n:i32){*p=n;} fn main(){let mut n=1;let r=&mut n;set(r,read(r));*r=3;}",
+            "struct Cell{n:i32} impl Cell{fn read(&self)->i32{self.n} fn bump(&mut self,n:i32){self.n=self.n+n;}} fn main(){let mut s=Cell{n:1};let mut i=0;while i<2{s.bump(s.read());i=i+1;}}",
+            "fn read(p:&i32)->i32{*p} fn take(p:&mut i32,n:i32)->&mut i32{*p=n;p} fn main(){let mut n=1;let r=&mut n;let q=take(r,read(r));let v=*q;*r=v;}",
+        ] {
+            let template = reference_template(source, "main");
+            assert!(
+                template
+                    .function()
+                    .loan_sites
+                    .iter()
+                    .any(|s| matches!(s.timing, cfg::LoanTiming::TwoPhase { .. }))
+            );
+            let proof = verify_template(template)
+                .unwrap_or_else(|failure| panic!("{source}: {:?}", failure.diagnostics));
+            assert!(proof.analysis().passed());
+        }
+        for source in [
+            "struct Cell{n:i32} impl Cell{fn read(&self)->i32{self.n} fn bump(&mut self,n:i32){self.n=n;}} fn main(){let mut s=Cell{n:1};Cell::bump(&mut s,s.read());}",
+            "fn read(p:&i32)->i32{*p} fn set(p:&mut i32,n:i32){*p=n;} fn main(){let mut n=1;let r=&mut n;set(&mut *r,read(r));}",
+            "fn set(p:&mut i32,n:i32){*p=n;} fn main(){let mut n=1;let r=&mut n;set(r,{*r=2;3});}",
+            "fn two(a:&mut i32,b:&mut i32){} fn main(){let mut n=1;let r=&mut n;two(r,r);}",
+            "fn both(a:&mut i32,b:&i32){} fn main(){let mut n=1;let r=&mut n;both(r,r);}",
+            "fn read(p:&i32)->i32{*p} fn take(p:&mut i32,n:i32)->&mut i32{*p=n;p} fn main(){let mut n=1;let r=&mut n;let q=take(r,read(r));*r=3;let v=*q;}",
+        ] {
+            let failure = verify_template(reference_template(source, "main")).unwrap_err();
+            assert!(failure.complete, "{source}: {:?}", failure.diagnostics);
+            assert!(
+                failure
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_))),
+                "{source}: {:?}",
+                failure.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn generic_references_subtree_views_preserve_input_anchors_and_exact_authority() {
+        use super::super::ir::{InputEnvelope, ReturnContract};
+        let source = "struct Inner{a:i32,b:i32} struct Outer{pad:bool,inner:Inner} trait View{fn view(&self)->&Inner;} impl View for Outer{fn view(&self)->&Inner{&self.inner}} fn forward<T:View>(x:&T)->&i32{let v=x.view();&v.b} fn main(){}";
+        let template = reference_template(source, "forward");
+        assert!(
+            matches!(&template.function().ref_contract.returns, ReturnContract::SharedInputEnvelopes(inputs) if inputs.as_ref() == [InputEnvelope { param: 0 }])
+        );
+        let proof = verify_template(template).unwrap();
+        let f = proof.function();
+        let mut budget = Budget::for_plan(Limits::default().work, Some(proof.budget()));
+        let plan = borrow::Plan::build(f, &mut budget, Limits::default().state_bytes).unwrap();
+        let last = cfg::LoanId(f.loan_sites.len() - 1);
+        let targets = plan.issued(last, &mut budget).unwrap();
+        assert!(!targets.is_empty());
+        assert!(
+            targets
+                .iter()
+                .all(|t| t.precision == TargetPrecision::Subtree
+                    && t.place.root == CanonicalRoot::ParameterReferent(f.params[0])
+                    && t.place.projection.is_empty())
+        );
+        // `Inner.b` is not `Outer` field1, nor a field of opaque T. The
+        // conservative input anchor must not acquire the returned view suffix.
+        let mut forged = f.as_ref().clone();
+        Arc::make_mut(&mut forged.ref_contract).returns =
+            ReturnContract::SharedInputEnvelopes(vec![InputEnvelope { param: 1 }].into());
+        let failure = analyze_with_facts(
+            &forged,
+            Limits::default(),
+            FactsCtx::Validated(proof.facts()),
+            Some(proof.budget()),
+        );
+        assert!(failure.complete);
+        assert!(
+            failure
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::InvalidCfg(_)))
+        );
+        for source in [
+            "fn identity<T>(x:&T)->&T{x} fn main(){}",
+            "fn identity<T>(x:&mut T)->&mut T{x} fn main(){}",
+            "fn identity<T>(x:&(T,[T;0]))->&(T,[T;0]){x} fn main(){}",
+        ] {
+            assert!(
+                verify_template(reference_template(source, "identity"))
+                    .unwrap()
+                    .analysis()
+                    .passed()
+            );
+        }
+        for scalar in ["i32", "bool"] {
+            let source = format!(
+                "fn id<T>(x:&T)->&T{{x}} fn wrap(x:&{scalar})->&{scalar}{{id(x)}} fn main(){{}}"
+            );
+            let proof = verify_template(reference_template(&source, "wrap")).unwrap();
+            assert!(proof.analysis().passed());
+            let mut mismatched = proof.function().as_ref().clone();
+            mismatched.result = Ty::Ref {
+                kind: super::super::ir::BorrowKind::Shared,
+                referent: Arc::new(if scalar == "i32" {
+                    Ty::Bool
+                } else {
+                    Ty::Int(IntTy::I32)
+                }),
+            };
+            assert!(
+                !analyze_with_facts(
+                    &mismatched,
+                    Limits::default(),
+                    FactsCtx::Validated(proof.facts()),
+                    Some(proof.budget())
+                )
+                .passed()
+            );
+        }
+        // General aggregate footprint refinement is not granted by the leaf
+        // proof, and remains a legal unsupported boundary, not invalid Rust.
+        let aggregate =
+            "fn id<T>(x:&T)->&T{x} fn wrap(x:&(i32,bool))->&(i32,bool){id(x)} fn main(){}";
+        let failure = verify_template(reference_template(aggregate, "wrap")).unwrap_err();
+        assert!(failure.complete);
+        assert!(
+            failure
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::UnsupportedBorrowing(_)))
+        );
+    }
+
+    #[test]
+    fn generic_references_dead_activation_metadata_and_dense_resource_caps_fail_closed() {
+        let template = reference_template(
+            "fn set(p:&mut i32,n:i32){*p=n;} fn main(){let mut n=1;let r=&mut n;set(r,{return;3});}",
+            "main",
+        );
+        let proof = verify_template(template).unwrap();
+        let f = proof.function();
+        assert!(proof.analysis().stats.blocks_reachable < f.blocks.len());
+        let (loan, activation, argument) = f
+            .loan_sites
+            .iter()
+            .enumerate()
+            .find_map(|(loan, site)| match site.timing {
+                cfg::LoanTiming::TwoPhase {
+                    activation,
+                    argument,
+                } => Some((loan, activation, argument)),
+                cfg::LoanTiming::Immediate => None,
+            })
+            .unwrap();
+        assert!(matches!(
+            f.blocks[activation.0].terminator.value,
+            Terminator::Call { .. }
+        ));
+        for bad in [
+            cfg::LoanTiming::TwoPhase {
+                activation: BlockId(f.blocks.len()),
+                argument,
+            },
+            cfg::LoanTiming::TwoPhase {
+                activation,
+                argument: usize::MAX,
+            },
+        ] {
+            let mut forged = f.as_ref().clone();
+            forged.loan_sites[loan].timing = bad;
+            let failure = analyze_with_facts(
+                &forged,
+                Limits::default(),
+                FactsCtx::Validated(proof.facts()),
+                Some(proof.budget()),
+            );
+            assert!(failure.complete);
+            assert!(
+                failure
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.kind, ErrorKind::InvalidCfg(_)))
+            );
+        }
+        let mut forged = f.as_ref().clone();
+        let Terminator::Call { args, .. } = &forged.blocks[activation.0].terminator.value else {
+            unreachable!()
+        };
+        let Operand::Move(carrier) = &args[argument] else {
+            unreachable!()
+        };
+        let carrier = carrier.clone();
+        forged.blocks[activation.0]
+            .statements
+            .push(located(Statement::Inspect(carrier)));
+        assert!(
+            !analyze_with_facts(
+                &forged,
+                Limits::default(),
+                FactsCtx::Validated(proof.facts()),
+                Some(proof.budget())
+            )
+            .passed()
+        );
+        let mut tiny = Budget::for_plan(Limits::default().work, Some(proof.budget()));
+        assert!(borrow::Plan::build(f, &mut tiny, 0).is_err());
+        let foreign = super::super::ir::PlanBudget::default();
+        assert!(
+            !analyze_with_facts(
+                f,
+                Limits::default(),
+                FactsCtx::Validated(proof.facts()),
+                Some(&foreign)
+            )
+            .passed()
+        );
     }
 
     #[test]
@@ -3027,6 +3316,7 @@ mod tests {
                 ]);
                 f.params.push(LocalId(1));
                 f.loan_sites.push(cfg::LoanSite {
+                    timing: cfg::LoanTiming::Immediate,
                     kind: BorrowKind::Shared,
                     place: place(1),
                     origin: None,
@@ -3179,6 +3469,7 @@ mod tests {
         ]);
         f.params.push(LocalId(1));
         f.loan_sites.push(cfg::LoanSite {
+            timing: cfg::LoanTiming::Immediate,
             kind: BorrowKind::Shared,
             place: place(1),
             origin: None,
@@ -3456,11 +3747,13 @@ mod tests {
         f.params.push(LocalId(3));
         f.loan_sites.extend([
             cfg::LoanSite {
+                timing: cfg::LoanTiming::Immediate,
                 kind: BorrowKind::Mut,
                 place: place(1),
                 origin: None,
             },
             cfg::LoanSite {
+                timing: cfg::LoanTiming::Immediate,
                 kind: BorrowKind::Shared,
                 place: place(3),
                 origin: None,
@@ -4017,6 +4310,10 @@ mod tests {
         // to fabricate an eligible returned pointer.
         let mut f = borrowed_source("fn f<'a,'b>(p:&'a i32)->&'a i32{p}");
         let contract = std::sync::Arc::make_mut(&mut f.ref_contract);
+        // Canonical source normalization removes unused 'b. This private
+        // diverging fixture deliberately introduces a distinct output region,
+        // so declare that region before assigning its canonical ID.
+        contract.region_count = 2;
         contract.result_region = Some(super::super::ir::RegionParamId(1));
         contract.returns = super::super::ir::ReturnContract::SharedInputPaths(vec![].into());
         f.blocks = vec![BasicBlock {
@@ -4072,6 +4369,7 @@ mod tests {
         let p = f.params[0];
         f.loan_sites = vec![
             cfg::LoanSite {
+                timing: cfg::LoanTiming::Immediate,
                 kind: super::super::ir::BorrowKind::Shared,
                 place: Place {
                     local: p,
@@ -4409,6 +4707,7 @@ mod tests {
             };
             f.locals.push(local(reference.clone()));
             f.loan_sites.push(cfg::LoanSite {
+                timing: cfg::LoanTiming::Immediate,
                 kind,
                 place: place(1),
                 origin: None,
@@ -4484,6 +4783,7 @@ mod tests {
         };
         for index in 0..2 {
             f.loan_sites.push(cfg::LoanSite {
+                timing: cfg::LoanTiming::Immediate,
                 kind: BorrowKind::Mut,
                 place: member(index),
                 origin: None,
