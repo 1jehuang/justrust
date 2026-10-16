@@ -3,8 +3,11 @@
 Status: implemented with 798 hosted tests, strict all-target lint, formatting
 and bounded resource/provenance review passing. The frozen 30-case stock corpus
 and four graph acceptance tests pass. Tracked fifteen-corpus native verification
-remains the delivery gate. Full Rust, mutable escaping references and general
-regions remain open.
+passed all 632 cases at revision bb3bc5613: 378 successful parity cases, 186 invalid
+rejections, nine declared runtime-101 traps and 59 legal-unsupported boundaries.
+Raw receipts and the executed 96-worker example are retained under
+`experiments/results/20261016-m8a-reference-returns-*`. Full Rust, mutable escaping
+references and general regions remain open.
 
 ## Proposed bounded first slice
 

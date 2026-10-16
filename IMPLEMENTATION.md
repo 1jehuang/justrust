@@ -74,7 +74,10 @@ Shared whole-parameter reference returns are implemented under
 pass hosted acceptance after fixing named-lifetime scanning in filesystem module
 loading. The final frozen hosted suite passes 798 tests, strict all-target lint,
 formatting and bounded resource/provenance review. Tracked fifteen-corpus native
-verification remains the delivery gate. Mutable/projected returns,
+verification passed all 632 cases at bb3bc5613: 378 successful parity cases, 186
+invalid rejections, nine declared runtime-101 traps and 59 legal-unsupported
+boundaries. Raw receipts and the executed 96-worker example are retained under
+`experiments/results/20261016-m8a-reference-returns-*`. Mutable/projected returns,
 general regions and full Rust remain open.
 
 Genuine nonescaping local references are implemented under `BORROWING.md`, with

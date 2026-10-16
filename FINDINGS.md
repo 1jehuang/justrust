@@ -8434,3 +8434,16 @@ redacted profiles are retained in
 `data/runs/prototype-bootstrap/2026-10-reference-returns.jsonl`. Fifteen-corpus
 native validation follows after commit. No speedup, cold-build or full-Rust claim
 follows from these correctness gates.
+
+Tracked run `compiler-reference-returns-20261016-0829` built revision
+`bb3bc56135c2bfce36ee71269dad07b08032199b` and passed all 632 cases across
+fifteen corpora: 378 successful parity cases, 186 invalid rejections, nine
+declared runtime-101 traps and 59 explicit legal-unsupported boundaries.
+Independent parsing verified every summary and all 128 generated cases, including
+zero native/reference compile and runtime exits for each generated case. Exact
+raw receipts are retained as `experiments/results/20261016-m8a-reference-returns-*`.
+The 96-worker shared-return example executed successfully with complete capture,
+18 nodes, 23 edges and zero failures or dropped events. Observed 14.723 ms total
+and 3.354 ms engine times are contended/uncontrolled observations, not speedup
+or cold-build claims. Mutable/projected returns, general lifetimes and full Rust
+remain open.
