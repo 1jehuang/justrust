@@ -62,7 +62,10 @@ canonical issuance-time loan origins, explicit reborrows, backward carrier
 liveness and native thin-pointer addressing. The frozen 35-case external oracle
 contains 17 accepted programs, 14 invalid programs and four later-stage boundaries.
 All 701 hosted tests, strict all-target lint, formatting and final peak-memory
-accounting review pass. Tracked native receipts remain pending. Reference parameters,
+accounting review pass. Tracked M8a validation passed 572 cases across thirteen
+corpora: 343 accepted parity, 170 invalid rejections, nine declared runtime-101
+cases and 50 legal-unsupported boundaries. Raw receipts and the successful
+96-worker native borrowing example are retained. Reference parameters,
 implicit expected-site reborrows, escaping/reference results, general regions and
 reference-containing aggregates remain open B2/B3 work. This does not close the
 ownership or full-Rust checklist.

@@ -8335,5 +8335,16 @@ The exact historical tuple-reference source is promoted unchanged to acceptance.
 Reference parameters/results, implicit expected-site reborrows, aggregate refs,
 temporary lifetime extension, general regions and Drop remain open. SCC-born
 loans carried across backedges explicitly reject as unsupported. This is B1,
-not a complete Rust borrow checker or full Rust compatibility. Tracked native
-thirteen-corpus comparison follows the implementation commit.
+not a complete Rust borrow checker or full Rust compatibility.
+
+Tracked M8a run `compiler-borrowing-20261016-0747` at revision
+`1feed152f9249b3dda43d6fb91d4ebe449b9e449` passed all 572 cases across thirteen
+corpora: 343 accepted parity, 170 invalid rejections, nine declared runtime-101
+cases and 50 explicit legal-unsupported boundaries. Independent parsing verified
+every summary passed with zero failures and both generated 64-case suites had
+matched successful compile/execution outcomes. All raw receipts are retained
+under `experiments/results/20261016-m8a-borrowing-*.jsonl`.
+The 523-byte, two-function native borrowing example ran at 96 workers, with
+complete capture and no dropped events/failures, producing the expected marker.
+Observed total was 9,903,700 ns and engine 3,146,186 ns, explicitly
+contended/uncontrolled, not a cold benchmark or speedup claim.

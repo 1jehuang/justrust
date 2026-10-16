@@ -1,8 +1,9 @@
 # Local references and borrowing, staged contract
 
 Status: B1 local-reference implementation passes 701 hosted tests, strict
-all-target lint and formatting. Resource-limit review is complete; tracked native
-comparison is pending. Full Rust language and borrow-checker completion remain open.
+all-target lint and formatting. Resource-limit review is complete. The tracked
+thirteen-corpus native comparison passed all 572 cases, including 35 borrowing
+fixtures. Full Rust language and borrow-checker completion remain open.
 
 ## B1: genuine nonescaping local references
 
