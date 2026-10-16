@@ -60,7 +60,10 @@ Payload enums now pass 533 hosted tests plus strict all-target lint.
 patterns, typed downcasts and separate must-selected-variant proofs. The exact
 historical payload fixture is promoted unchanged to accepted. The independent
 44-case corpus separates 23 accepted programs, 15 invalid programs and six
-legal-unsupported boundaries. Full Rust remains open, including arrays/numerics,
+legal-unsupported boundaries. The tracked M8a run passed 475 fixtures across
+ten corpora: 298 accepted parity cases, 137 invalid rejections and 40 explicit
+legal-unsupported boundaries, plus a successful 96-worker native example.
+Full Rust remains open, including arrays/numerics,
 general patterns, references/borrows/destruction, abstractions and project support.
 
 Typed deferred initialization now passes 465 hosted tests, including branch/match

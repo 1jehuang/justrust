@@ -32,6 +32,15 @@ in `data/runs/prototype-bootstrap/2026-10-payload.jsonl`. Agent JSON now reports
 variant proof checks, refinements and invalidations, and retained CFG edges include
 typed switches. This is not a performance, platform-layout or full Rust claim.
 
+Tracked M8a run `compiler-payload-20261016-0646` on source `a050aed7e`
+passed all **475 fixtures** across ten corpora: 298 accepted parity cases,
+137 invalid rejections and 40 explicit legal-unsupported boundaries. Full raw
+receipts are retained in `experiments/results/20261016-m8a-payload-*.jsonl`.
+The real payload example executed successfully with 96 workers, 18 once-evaluated
+nodes, seven checked downcasts, three variant refinements, zero failures or
+dropped events and complete capture. Its 15,518,330 ns total is explicitly
+contended/uncontrolled and is not a cold-build comparison or speed claim.
+
 ## 2026-10-16: Typed deferred initialization uses cached flow analysis
 
 Added explicit `let [mut] name: Type;` declarations with fresh shadow identities.
