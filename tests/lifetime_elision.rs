@@ -356,13 +356,12 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_implicit_autoderef_projected() {
-    // Stock accepts and runs this fixture, outside the bounded E1 slice.
-    rejects(
-        "implicit_autoderef_projected",
+fn accepts_implicit_autoderef_projected() {
+    runs(
         r#"struct S{x:i32} fn get(p:&S)->&i32{&p.x} fn run()->i32{let p=S{x:7};*get(&p)}
 fn main() { if run() == 7 { println!("elision oracle ok"); } }
 "#,
+        "elision oracle ok\n",
     );
 }
 

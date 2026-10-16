@@ -67,11 +67,17 @@ Private-field getters do not grant callers direct private access. Mutable result
 are consumed unique handles, not copied capabilities, and keep overlapping parent
 authority frozen until their last use. Returning functions require all reference
 inputs to match the result kind. Enum payload paths, dynamic borrowed indices,
-implicit field autoderef, mixed-kind returning inputs, general elision and
-reference-containing aggregates remain unsupported.
+trait-based autoderef, bare reference indexing, mixed-kind returning inputs,
+method/general elision and reference-containing aggregates remain unsupported.
+Builtin `r.field` and `r.0` insert one real Deref before field lookup in reads,
+assignments and borrows. Privacy and pointee capability are checked after peeling
+the reference, without moving its carrier or snapshotting its aggregate. Genuine
+reference Call-result field reads use the existing result temporary. Computed
+Call LHS, borrowing Call rvalues, runtime indexing through references and enum
+downcasts through Deref remain unsupported.
 See `BORROWING.md`, `REFERENCE-CALLS.md`, `REFERENCE-RETURNS.md`,
 `MUTABLE-REFERENCE-RETURNS.md`, `PROJECTED-REFERENCE-RETURNS.md` and
-`LIFETIME-ELISION.md`.
+`LIFETIME-ELISION.md` and `REFERENCE-FIELDS.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.

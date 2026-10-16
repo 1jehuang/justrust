@@ -23,6 +23,8 @@ ACCEPTANCE_CORPUS_SHA256 = "87a4940bb3b2800a6d285102ede7658ef1ed019149f7e73d17ff
 # Original immutable acceptance artifact hash retained above.
 # E1 native-pass promotion: elided_result is now positive; source/stdout/value unchanged.
 # Authoritative bear source bytes. full_source has no added wrapper.
+# E2 native-pass promotion: projected_result is positive; source/stdout/value unchanged.
+# Original immutable acceptance artifact hash above is retained.
 FIXTURES = json.loads(r'''
 [
   {
@@ -237,7 +239,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "reference returns oracle ok\n",
     "full_source": "struct S{x:i32} fn get<'a>(x:&'a S)->&'a i32{&x.x} fn run()->i32{let x=S{x:7};*get(&x)}\nfn main() { if run() == 7 { println!(\"reference returns oracle ok\"); } }\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "projected_result",
     "source": "struct S{x:i32} fn get<'a>(x:&'a S)->&'a i32{&x.x} fn run()->i32{let x=S{x:7};*get(&x)}"
   },

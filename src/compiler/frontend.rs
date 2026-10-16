@@ -3194,6 +3194,22 @@ impl<'a> Checker<'a> {
                     projection.push(ir::Projection::ConstantIndex(*index));
                 }
                 _ => {
+                    if let ir::Ty::Ref { kind, referent } = &ty {
+                        if derefs != 0 {
+                            return Err(
+                                "multiple dereferences in one field place are unsupported".into()
+                            );
+                        }
+                        if place.fields.len() >= 128 {
+                            return Err(
+                                "normalized place projection nesting exceeds limit128".into()
+                            );
+                        }
+                        derefs += 1;
+                        writable = *kind == ir::BorrowKind::Mut;
+                        ty = referent.as_ref().clone();
+                        projection.push(ir::Projection::Deref);
+                    }
                     let (index, field) = self.field_type(&ty, selector)?;
                     ty = field;
                     projection.push(ir::Projection::Field(index));
@@ -3247,9 +3263,14 @@ impl<'a> Checker<'a> {
             Expr::Binary { left, right, .. } => {
                 self.scalar_hint(left).or_else(|| self.scalar_hint(right))
             }
-            Expr::Field { base, field } => self
-                .scalar_hint(base)
-                .and_then(|t| self.field_type(&t, field).ok().map(|(_, t)| t)),
+            Expr::Field { base, field } => self.scalar_hint(base).and_then(|t| {
+                let receiver = if let ir::Ty::Ref { referent, .. } = &t {
+                    referent.as_ref()
+                } else {
+                    &t
+                };
+                self.field_type(receiver, field).ok().map(|(_, t)| t)
+            }),
             Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
                 self.scalar_hint(base).and_then(|t| {
                     if let ir::Ty::Array { element, .. } = t {
@@ -3263,13 +3284,15 @@ impl<'a> Checker<'a> {
             _ => None,
         }
     }
-    fn deref_source(e: &Expr) -> bool {
-        match e {
-            Expr::Deref { .. } => true,
-            Expr::Index { base, .. }
-            | Expr::Field { base, .. }
-            | Expr::DynamicIndex { base, .. } => Self::deref_source(base),
-            _ => false,
+    fn deref_source(&self, mut id: ir::ExprId) -> bool {
+        loop {
+            match &self.exprs[id.0].kind {
+                ir::ExprKind::Deref { .. } => return true,
+                ir::ExprKind::Index { base, .. }
+                | ir::ExprKind::Field { base, .. }
+                | ir::ExprKind::DynamicIndex { base, .. } => id = *base,
+                _ => return false,
+            }
         }
     }
     fn dynamic_place(e: &Expr) -> bool {
@@ -3645,16 +3668,16 @@ impl<'a> Checker<'a> {
                     } else {
                         Some(checked_local_ty(ty, self.signatures)?)
                     };
-                    if Self::deref_source(value)
+                    let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
+                    let direct_wildcard = matches!(pattern, Pattern::Wildcard);
+                    let value = self.expr_expected(value, annotation.as_ref())?;
+                    if self.deref_source(value)
                         && matches!(pattern, Pattern::Path(_) | Pattern::Variant { .. })
                     {
                         return Err(
                             "enum downcasts after a dereference are unsupported in B1".into()
                         );
                     }
-                    let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
-                    let direct_wildcard = matches!(pattern, Pattern::Wildcard);
-                    let value = self.expr_expected(value, annotation.as_ref())?;
                     let flow = self.flow(value);
                     if direct_dynamic && !flow.ty.is_copy() && !direct_wildcard {
                         return Err("non-Copy runtime indexed pattern extraction is unsupported; only direct let _ inspection is admitted".into());
@@ -3945,13 +3968,13 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::DynamicIndex { base, index } => {
-                if Self::deref_source(base) {
-                    return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
-                }
                 if Self::dynamic_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
                 let base = self.expr(base)?;
+                if self.deref_source(base) {
+                    return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
+                }
                 let source = self.flow(base);
                 let ir::Ty::Array { element, .. } = &source.ty else {
                     return Err("runtime indexing requires an array".into());
@@ -4059,17 +4082,17 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Match { scrutinee, arms } => {
-                if Self::deref_source(scrutinee)
+                if arms.len() > 4096 {
+                    return Err("match arm count exceeds limit 4096".into());
+                }
+                let scrutinee = self.expr(scrutinee)?;
+                if self.deref_source(scrutinee)
                     && arms.iter().any(|arm| {
                         matches!(arm.pattern, Pattern::Path(_) | Pattern::Variant { .. })
                     })
                 {
                     return Err("enum downcasts after a dereference are unsupported in B1".into());
                 }
-                if arms.len() > 4096 {
-                    return Err("match arm count exceeds limit 4096".into());
-                }
-                let scrutinee = self.expr(scrutinee)?;
                 let source = self.flow(scrutinee);
                 let mut domain = source.ty.clone();
                 // A divergent operand can coerce to the concrete type named by
@@ -4312,8 +4335,24 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Field { base, field } => {
-                let base = self.expr(base)?;
-                let flow = self.flow(base);
+                let receiver = base.as_ref();
+                let mut base = self.expr(base)?;
+                let mut flow = self.flow(base);
+                if let ir::Ty::Ref { referent, .. } = &flow.ty {
+                    if !matches!(receiver, Expr::Var(_) | Expr::Call { .. }) {
+                        return Err("complex reference field receivers are unsupported; use a local or genuine call result".into());
+                    }
+                    let ty = referent.as_ref().clone();
+                    self.accessible(&ty)?;
+                    let deref = ir::ExprId(self.exprs.len());
+                    self.exprs.push(ir::TypedExpr {
+                        ty: ty.clone(),
+                        completion: self.exprs[base.0].completion,
+                        kind: ir::ExprKind::Deref { value: base },
+                    });
+                    base = deref;
+                    flow.ty = ty;
+                }
                 let (index, ty) = self.field_type(&flow.ty, field)?;
                 (
                     ir::ExprKind::Field { base, index },
@@ -4662,6 +4701,102 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn e2_implicit_and_explicit_fields_have_identical_ir_and_current_carrier_places() {
+        let p=parse("struct S{x:i32,y:i32}fn implicit(r:&mut S){let n=r.x;r.x=n+1;let q=&mut r.y;*q=4;}fn explicit(r:&mut S){let n=(*r).x;(*r).x=n+1;let q=&mut (*r).y;*q=4;}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        check_function_with_signatures(&p, 0, &env).unwrap();
+        check_function_with_signatures(&p, 1, &env).unwrap();
+        let implicit = type_function_with_signatures(&p, 0, &env).unwrap();
+        let explicit = type_function_with_signatures(&p, 1, &env).unwrap();
+        assert_eq!(
+            format!("{:?}", implicit.exprs),
+            format!("{:?}", explicit.exprs)
+        );
+        assert_eq!(
+            format!("{:?}", implicit.body),
+            format!("{:?}", explicit.body)
+        );
+        let p=parse("struct S{x:i32}fn implicit(){let mut x=S{x:1};let mut y=S{x:2};let mut r=&mut x;r.x={r=&mut y;3};}fn explicit(){let mut x=S{x:1};let mut y=S{x:2};let mut r=&mut x;(*r).x={r=&mut y;3};}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        check_function_with_signatures(&p, 0, &env).unwrap();
+        check_function_with_signatures(&p, 1, &env).unwrap();
+        let implicit = type_function_with_signatures(&p, 0, &env).unwrap();
+        let explicit = type_function_with_signatures(&p, 1, &env).unwrap();
+        assert_eq!(
+            format!("{:?}", implicit.exprs),
+            format!("{:?}", explicit.exprs)
+        );
+        assert_eq!(
+            format!("{:?}", implicit.body),
+            format!("{:?}", explicit.body)
+        );
+        assert!(implicit.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::Field(0)])));
+    }
+
+    #[test]
+    fn e2_field_reads_use_one_genuine_call_temp_and_usize_peer_hints() {
+        let p=parse("struct Wide{u:usize}fn get<'a>(r:&'a Wide)->&'a Wide{r}fn get_mut<'a>(r:&'a mut Wide)->&'a mut Wide{r}fn main(){let mut s=Wide{u:4294967296usize};let r=&s;let sum=1+r.u;let bigger=r.u>1;let x=get(&s).u;let y=get_mut(&mut s).u;let mut tuple=(1,2);let t=&mut tuple;t.0=3;let n=t.1;}").unwrap();
+        let env = signature_table(&p).unwrap();
+        check_function_with_signatures(&p, 2, &env).unwrap();
+        let main = type_function_with_signatures(&p, 2, &env).unwrap();
+        assert_eq!(
+            main.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            2
+        );
+        assert!(
+            main.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Usize(1)))
+                .count()
+                >= 2
+        );
+        for expr in &main.exprs {
+            if let ir::ExprKind::Field { base, .. } = expr.kind {
+                assert!(matches!(
+                    main.exprs[base.0].kind,
+                    ir::ExprKind::Deref { .. }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn e2_field_normalization_preserves_authority_privacy_and_deferred_boundaries() {
+        for source in [
+            "struct S{x:i32}fn main(){let mut s=S{x:1};let r=&s;r.x=2;}",
+            "struct S{x:i32}fn main(){let s=S{x:1};let r=&s;let q=&mut r.x;}",
+            "struct T{x:i32}struct S{child:T}fn main(){let s=S{child:T{x:1}};let r=&s;let moved=r.child;}",
+            "mod m{pub struct S{x:i32}pub fn make()->S{S{x:1}}}fn main(){let s=m::make();let r=&s;let n=r.x;}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        for source in [
+            "struct S{a:[i32;1]}fn main(){let s=S{a:[1]};let r=&s;let i=0usize;let _=r.a[i];}",
+            "struct S{a:[i32;1]}fn main(){let mut s=S{a:[1]};let r=&mut s;let i=0usize;r.a[i]=2;}",
+            "enum E{A}struct S{e:E}fn main(){let s=S{e:E::A};let r=&s;match r.e{E::A=>()};}",
+            "enum E{A}struct S{e:E}fn main(){let s=S{e:E::A};let r=&s;let E::A=r.e;}",
+            "struct S{x:i32}fn main(){let s=S{x:1};let r=&s;let n=({r}).x;}",
+        ] {
+            let p = parse(source).unwrap();
+            let env = signature_table(&p).unwrap();
+            assert!(
+                type_function_with_signatures(&p, p.functions.len() - 1, &env)
+                    .unwrap_err()
+                    .contains("unsupported"),
+                "lost boundary {source}"
+            );
+        }
+        check(&parse("struct S{x:i32}fn main(){let s=S{x:1};let r=&s;return;r.x=2;}").unwrap())
+            .unwrap();
+    }
 
     #[test]
     fn e1_elision_matches_explicit_contracts_and_keeps_anonymous_inputs_rigid() {

@@ -21,6 +21,8 @@ from module_correctness import Case, accepted, process, rejected, run_case
 ACCEPTANCE_CORPUS_SHA256 = "8245335da3b4dbc4872b01a13e3ab9565d867593d5914b49b68179045195ce26"
 
 # Authoritative frozen bear oracle. full_source has no added wrapper.
+# E2 native-pass promotion: implicit_autoderef_projected is positive; source/stdout/value unchanged.
+# Original immutable acceptance artifact hash above is retained.
 FIXTURES = json.loads(r'''
 [
   {
@@ -171,7 +173,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "elision oracle ok\n",
     "full_source": "struct S{x:i32} fn get(p:&S)->&i32{&p.x} fn run()->i32{let p=S{x:7};*get(&p)}\nfn main() { if run() == 7 { println!(\"elision oracle ok\"); } }\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "implicit_autoderef_projected",
     "source": "struct S{x:i32} fn get(p:&S)->&i32{&p.x} fn run()->i32{let p=S{x:7};*get(&p)}"
   },

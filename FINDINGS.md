@@ -8607,3 +8607,30 @@ elided recursive/private-field/high64 example executed with exact expected stdou
 complete capture, 26 nodes, 35 edges, zero failures and zero dropped events.
 Observed 14.397 ms total and 3.334 ms engine time are contended/uncontrolled, not
 speedup evidence. Full Rust remains open.
+
+### Builtin reference fields: one real Deref across reads and places
+
+Implemented frontend-only normalization of `r.field` and `r.0` into actual
+Deref/Field IR and place projections, preserving original carrier, receiver-once
+evaluation, reference kind authority and nominal field privacy. Scalar hints
+peel the same type without evaluation. Typed-IR guards replace AST-only Deref
+detection so implicit runtime reference indexing and enum downcasts remain
+unsupported. Existing CFG assignment snapshots still precede current-carrier
+address resolution, including RHS retargeting. No IR/CFG/provenance/ABI change.
+
+The frozen 20-case corpus contributes ten accepted programs, six invalid programs
+and four legal-unsupported boundaries. Stock20/20 and CLI workers1/8 check/build/run
+pass, along with four retained graph tests and the external-stock high64/private
+field/recursive example. Corpus SHA256:
+`01a34702d4e36424cc5d0ce35d900ee4ad00a2b6af174b3589fedeb2877b4f8b`.
+Three historical implicit getters become accepted without changing any source,
+stdout or expected value. Computed Call writes, borrowing Call rvalues, methods
+and bare reference indexing remain unsupported. Both actual-code reviews clear.
+
+Final hosted check `20261016-022536200-3016542`, all-target test
+`20261016-022537240-3016699` (942 passed) and strict all-target clippy
+`20261016-022539319-3017310` pass after source freeze. Formatting/diff checks pass.
+Three exact redacted gate profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-reference-fields.jsonl`. Tracked
+nineteen-corpus native verification follows after commit. Full Rust remains open;
+these correctness checks do not establish a speedup.

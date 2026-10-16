@@ -1,7 +1,9 @@
 # Builtin reference field access
 
-Status: frozen after frontend feasibility and a bounded stock-classified corpus.
-Implementation has not started. This is one Rust correctness slice, not full Rust.
+Status: implemented. All 942 hosted tests, strict all-target lint, formatting
+and both independent actual-code reviews pass. The frozen 20-case stock/native
+CLI corpus and four retained graph tests pass. Tracked nineteen-corpus native
+verification follows. This is one Rust correctness slice, not full Rust.
 
 ## One real dereference, not a field-type shortcut
 

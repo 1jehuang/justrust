@@ -6,6 +6,14 @@ subset is a bootstrap milestone, not the intended final language or architecture
 Normal Rust tools may build our implementation and act as external test oracles.
 They must not compile user programs on our native implementation path.
 
+## Builtin reference field slice
+
+`REFERENCE-FIELDS.md` normalizes builtin reference field access to existing real
+Deref/Field paths. Privacy, initialized storage, loans, unique mutable authority
+and last-use lifetime checks remain the external correctness contract. This is
+not trait-based autoderef, method resolution, bare reference indexing, computed
+Call-place writes or broader nested-reference support.
+
 ## Lifetime elision normalization slice
 
 `LIFETIME-ELISION.md` extends the bounded free-function reference-result contracts

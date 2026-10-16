@@ -23,6 +23,8 @@ ACCEPTANCE_CORPUS_SHA256 = "5049cb8e2f69028b9df552a92db2e3d8640b4ea6d40e68e372d5
 # Original immutable acceptance artifact hash retained above.
 # E1 native-pass promotion: elided_mutable_result is now positive; source/stdout/value unchanged.
 # Authoritative bear source bytes. full_source has no added wrapper.
+# E2 native-pass promotion: projected_mutable_result is positive; source/stdout/value unchanged.
+# Original immutable acceptance artifact hash above is retained.
 FIXTURES = json.loads(r'''
 [
   {
@@ -234,7 +236,7 @@ FIXTURES = json.loads(r'''
     "expected_stdout": ""
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "projected_mutable_result",
     "source": "struct S{x:i32} fn get<'a>(x:&'a mut S)->&'a mut i32{&mut x.x} fn run()->i32{let mut s=S{x:3};let q=get(&mut s);*q=7;s.x}",
     "expected": 7,

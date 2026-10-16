@@ -437,13 +437,12 @@ fn main() { if run() == 7 { println!("reference returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_projected_result() {
-    // Stock accepts and runs this fixture, outside the bounded B3a slice.
-    rejects(
-        "projected_result",
+fn accepts_projected_result() {
+    runs(
         r#"struct S{x:i32} fn get<'a>(x:&'a S)->&'a i32{&x.x} fn run()->i32{let x=S{x:7};*get(&x)}
 fn main() { if run() == 7 { println!("reference returns oracle ok"); } }
 "#,
+        "reference returns oracle ok\n",
     );
 }
 

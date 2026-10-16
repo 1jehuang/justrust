@@ -438,13 +438,12 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_projected_mutable_result() {
-    // Stock accepts and runs this fixture, outside the bounded B3b slice.
-    rejects(
-        "projected_mutable_result",
+fn accepts_projected_mutable_result() {
+    runs(
         r#"struct S{x:i32} fn get<'a>(x:&'a mut S)->&'a mut i32{&mut x.x} fn run()->i32{let mut s=S{x:3};let q=get(&mut s);*q=7;s.x}
 fn main() { if run() == 7 { println!("mutable returns oracle ok"); } }
 "#,
+        "mutable returns oracle ok\n",
     );
 }
 

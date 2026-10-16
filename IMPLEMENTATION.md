@@ -58,6 +58,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Builtin reference field access is implemented under `REFERENCE-FIELDS.md`.
+Frontend normalization inserts actual Deref for `r.field`/`r.0` across reads,
+places and scalar hints, preserving original receiver, authority and privacy.
+Typed guards keep dynamic reference indexing and enum downcasts unsupported.
+All 942 hosted tests, strict all-target lint, formatting and both independent
+actual-code reviews pass. The new 20-case stock/CLI corpus and four graph tests
+pass. Three historical implicit getter sources are promoted unchanged. Tracked
+nineteen-corpus native verification follows. Full Rust remains open.
+
 Free-function lifetime elision is implemented under `LIFETIME-ELISION.md`.
 Stock E0106 probes corrected the initial distinct-ID proposal before release:
 output elision counts input reference lifetime positions, not distinct IDs. Fresh
