@@ -14,6 +14,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Unlabelled loop values, break/continue and exact native temporary cleanup.
 - [x] Separate semantic Never typing from completion, including typed dead tails.
 - [x] Nested Copy tuples, field projections/mutation and by-value aggregate calls.
+- [x] Explicit cached CFG facts shared by check and native emission, with provenance.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -48,11 +49,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
-Lower checked functions once into explicit per-function control-flow graphs,
-with owning expression temporaries, conditional/loop edges and source-expression
-provenance. Cache this fact and use it in both checking and native code generation.
-This prepares definite-initialization and move analysis before exposing non-Copy
-structs. Existing scalar/tuple semantics and private ABI must remain unchanged.
+Definite-initialization and move-path analysis over the cached CFG: fixed-point
+states at joins/backedges, storage lifetime, whole/partial moves and aggregate
+ancestor initialization. Validate this internal analysis before exposing non-Copy
+structs, then integrate its fact into both check and build. This is not a borrow
+checker and must not be described as full ownership or Rust support.
+
+Explicit CFG lowering passed 178 hosted tests and 254 M8a differential fixtures:
+186 accepted parity cases, 55 invalid rejections and 13 legal-unsupported boundaries.
+The old structured native emitter is removed. Both roots share the exact validated
+CFG, retained for inspection and explicit trace output.
 
 Copy tuple values passed 169 hosted tests, 38 M8a tuple differential cases and
 the existing 28-case Never corpus. These are completed prerequisite slices, not

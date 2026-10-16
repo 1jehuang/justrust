@@ -1,5 +1,48 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Cached explicit control-flow facts replace structured native lowering
+
+Revision `38da4ff44300d78a584219fa85ed58c9b57e72d1` introduces per-function
+lowering operation 108 after semantic body operation 102. Check and build share
+that exact validated CFG fact. Native object emission consumes its ordered
+assignments, place snapshots and explicit branch/call/return edges. The previous
+structured native emitter is removed, rather than maintained as a second path.
+A direct checked-function API remains a convenience that lowers once.
+
+CFG facts retain expression-ID provenance and shared post-compilation handles.
+CLI accounting distinguishes CFG blocks/edges/locals from the scheduler's work
+graph, and explicit traces include the actual retained CFG. No CFG is rebuilt
+for tracing or the check root. This is not yet ownership, borrow or lifetime
+validation: the current verifier checks structural/type invariants. Scope-marker
+regressions explore reachable live-storage sets through branches and backedges;
+review found and fixed conditional-RHS cleanup and double-dead while-exit edges.
+
+Hosted check `20261015-165904225-945608`, all 178 tests
+`20261015-165904998-945762`, and strict all-target Clippy
+`20261015-165906475-945873` passed. Exported profiles are in
+`data/runs/prototype-bootstrap/2026-10-cfg.jsonl`. An earlier plain check was local
+because a hosted timeout had set the client's 10-minute fallback backoff. Final
+gates used explicit `--remote` and verified hosted execution.
+
+Charged M8a experiment `compiler-cfg-20261016-0001` passed all five existing
+corpora against Rust 1.99.0 edition 2024: 64 generated scalar, 64 generated loop,
+38 tuple, 28 Never and 60 module cases. Across 254 fixtures there were 186
+accepted parity cases, 55 invalid rejections and 13 explicit legal-unsupported
+boundaries. Boundaries are not semantic parity successes. Raw results are
+`experiments/results/20261016-m8a-cfg-{scalar,loops,tuples,never,modules}.jsonl`.
+The 96-worker tuple example also ran successfully, with retained control-flow
+counts distinct from the dependency graph. These are correctness runs, not
+representative performance or speedup measurements.
+
+The first broad experiment `compiler-cfg-20261016-0000` correctly surfaced a
+stale validation boundary: the module harness still required external modules
+to reject, although that feature had already shipped. The compiler accepted and
+executed the stock-valid input. Revision `8588a6c19ffb9d98997cd18b6139399fb4e2e318`
+moves the same fixture into positive executable/check parity and the full rerun
+passes. The initial failure is retained as
+`experiments/results/20261016-m8a-cfg-modules-stale-boundary.jsonl`, not discarded
+or reported as a compiler regression.
+
 ## 2026-10-15: Copy tuples and caller-owned aggregate snapshots
 
 Revision `c37ba8c90973b07e8a2e88de448ff34205f82037` adds nested tuple types,
