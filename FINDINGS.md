@@ -8873,3 +8873,25 @@ clear the final correction. The real example prints
 `checked shifts compiled correctly` with stock/native parity. Independent
 tracked24corpus evidence follows the implementation commit. Full Rust and
 performance acceptance remain open, and no experimental installation occurred.
+
+### Independent heterogeneous shift follow-through, 2026-10-16
+
+Tracked run `compiler-shifts-20261016-1053` on exact pushed revision
+`53908ec4983305d7a97cee9caa298f4b195df47f` passed all868cases across24corpora:
+526accepted parity,244invalid rejected,27declared runtime101 and71unsupported
+boundaries. Independent raw parsing verified source hashes, process stream
+hashes, summaries, complete failure-free graphs, zero CHECK executable bytes,
+796normal workers1/8 runtime comparisons,54declared trap worker runs and128
+generated compile/runtime exit sets. The two static shift invalids preserve
+stock metadata status0 and codegen arithmetic_overflow rejection rather than
+misclassifying metadata acceptance as BUILD acceptance. All receipts share
+native binary SHA256 `806291476638283c8c5f4ae3f480143e8f0d950fe4c152d1c29e73d696ce103b`.
+
+The unchanged992-byte example actually executed at96workers and printed
+`checked shifts compiled correctly`, exit0. Its graph has18nodes/23edges,
+36CFGblocks,94locals,110analysis paths and a12322-byte ELF, with no failures,
+dropped events or incomplete capture. Observed21.36ms wall/3.79ms engine is
+contended/uncontrolled, not a speedup comparison. Twenty-five raw receipts are
+retained as `experiments/results/20261016-m8a-shifts-*`. Together with1145hosted
+tests and strict lint, this validates the declared bounded shift milestone,
+not full Rust, general consteval, Cargo/core/std or performance acceptance.

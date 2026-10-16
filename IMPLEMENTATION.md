@@ -306,5 +306,7 @@ The private bounded typed count diagnostic preserves runtime effects, distinguis
 semantic Never from typed noncompletion and shares memo/work/depth limits.
 All1145 hosted tests, exact32 stock/native cases, four graph tests and strict
 all-target lint pass. Earlier CHECK diagnostics than stock metadata are explicit
-for two static invalid fixtures. Independent24corpus evidence is pending.
+for two static invalid fixtures. Independent24corpus evidence passes868cases,
+with796normal worker comparisons,54declared trap runs,128generated exit checks
+and actual96worker example execution retained in25raw receipts.
 Compound assignments, general consteval and full Rust remain open.

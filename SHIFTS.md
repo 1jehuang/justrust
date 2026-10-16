@@ -106,5 +106,11 @@ redacted summaries in data/runs/prototype-bootstrap/2026-10-shifts.jsonl.
 Both actual-code reviews are clear after correcting effectful blocks to Dynamic
 opaque barriers without changing the original snapshot regression. The real
 high-bit/reference/once-evaluation example executes with stock/native stdout
-parity. Independent tracked24corpus native follow-through is pending this
-implementation commit. No speedup or full Rust claim is made.
+parity. Independent tracked24corpus native follow-through on53908ec49 passes
+all868cases:526accepted,244invalid rejected,27declared trap101 and71unsupported
+boundaries. Run compiler-shifts-20261016-1053 retains24raw corpus receipts plus
+the actually executed96worker example under experiments/results/20261016-m8a-shifts-*.
+Independent parsing verifies796normal worker comparisons,54declared trap runs,
+128generated compile/runtime exit checks, source/process hashes and complete
+successful graphs. Both static-invalid stock metadata0/build-error phase receipts
+are preserved. No speedup or full Rust claim is made.
