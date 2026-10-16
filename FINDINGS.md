@@ -1,5 +1,47 @@
 # Findings: where agent build time goes
 
+## 2026-10-15: Nominal structs and source-level partial moves
+
+The clean-room compiler now accepts nonempty braced named structs, nominal type
+annotations and import aliases, source-ordered construction, field privacy,
+whole/partial moves, mutable reinitialization and aggregate calls/returns. Each
+compilation prepares one immutable nominal environment. Identity uses a checked,
+non-reused snapshot namespace and declaration index, not structural field equality
+or an unversioned index that could escape its owner.
+
+The typed IR retains source field evaluation order. CFG lowering snapshots each
+initializer before reordering operands to declaration order, and consumes only
+the projected place. Scalar fields copy without moving their containing struct.
+Non-Copy fields move their subtrees. Tuples containing structs are also non-Copy.
+The existing cached analysis fact 109 gates both checking and code generation.
+The graph does not repeat lowering or analysis in the emitter. Standalone checked
+emission helpers now lower and analyze once before calling the trusted raw emitter.
+
+Review fixed inferred private-type access through call results, field results,
+intermediate assignment paths and divergent constructor values. It also caught
+width being mistaken for declaration depth and exponential inhabitance traversal
+of compact shared declaration DAGs. Depth is checked dependency-first, inhabitance
+visits distinct definitions, nominal debug output is shallow/bounded, and field
+lookup uses a per-definition index. Analyzer traversal remains budgeted by expanded
+work before path allocation. These are correctness/resource fixes, not speed claims.
+
+Final hosted gates on the 96-core host, nightly-2026-10-08:
+- check: `20261015-225029653-1291328`, passed.
+- test: `20261015-225030192-1291440`, **278 passed**, no failures.
+- strict all-target clippy: `20261015-225031346-1291549`, passed without warnings.
+- `cargo fmt --check` and `git diff --check` passed.
+
+The exact run summaries are in `data/runs/prototype-bootstrap/2026-10-structs.jsonl`.
+Tests cover checked convenience rejection, field moves and snapshots, recursive
+aggregate ABI, privacy, nominal identity, DAG resource limits, and exactly-once
+shared graph analysis for both roots. The obsolete tuple-era struct-declaration
+rejection was promoted to a positive check/build regression, not silently deleted.
+
+Empty/unit/tuple structs, derives, destructuring, references, loans, lifetimes,
+destructors, enums, platform layout and full Rust remain open. This is not a
+completed borrow checker or a general Rust performance comparison. A tracked
+source-to-native differential run follows this tested implementation commit.
+
 ## 2026-10-15: Cached initialization and move-path analysis gates native emission
 
 Per-function operation 109 now consumes the immutable CFG from operation 108.

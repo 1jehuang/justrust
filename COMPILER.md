@@ -1,7 +1,7 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with inline and external modules,
-2026-10-15.
+Status: executable Rust-subset implementation with nominal structs and moves,
+2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
 
@@ -21,8 +21,9 @@ an executable and does not require `-o`. Existing outputs and traces are never
 overwritten. Invalid and unsupported programs fail explicitly. Output is not
 published until every required check and code generation operation succeeds.
 
-Initial supported syntax: free functions with `i32`, `bool`, unit and nested
-Copy tuple parameters/results, tuple literals and numeric field projections,
+Initial supported syntax: free functions with `i32`, `bool`, unit, nested tuples
+and nonempty braced named structs as parameters/results, aggregate literals and
+numeric/named field projections,
 local bindings and shadowing, `mut`, whole-value and local-rooted field assignment,
 integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
 `while`, unlabelled `loop` expressions, `break` with supported value types,
@@ -49,7 +50,8 @@ Canonical paths detect active inclusion cycles, not enforce a filesystem sandbox
 Not supported: crates/manifests, grouped or
 glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
 standard-library APIs beyond the documented print form, general macros, traits,
-generics, structs/enums, references/borrowing, strings as values, closures, async,
+generics, enums, empty/unit/tuple structs, derives, struct update/shorthand,
+references/borrowing, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
 positions, or other targets.
 This list does not turn unsupported syntax into permission to accept programs
@@ -62,7 +64,8 @@ implemented boundary. Semantic coverage must be expanded explicitly.
   retaining source-file/original-byte accounting and failure events.
 - Parse immutable source into a retained unresolved module/declaration arena.
 - Resolve paths, imports and visibility once, publishing canonical item identities.
-- Validate declarations and publish the callable signatures.
+- Validate declarations, reject recursive by-value types and publish one immutable
+  nominal type environment with callable signatures (operation 101).
 - Check and lower each function body independently against those signatures,
   publishing an immutable typed-function fact (operation 102).
 - Lower each checked function once into an explicit control-flow graph
@@ -130,29 +133,38 @@ Joins and backedges use a worklist fixed point. Diagnostics are produced from
 converged reachable states, with block, statement, expression-origin and place
 provenance. Structural validation includes unreachable blocks. Resource exhaustion
 fails closed rather than publishing a successful analysis of partial work.
-Current source values remain Copy. Explicit CFG Move operations exercise the
-analysis foundation, not new source-level non-Copy support. This is not loan,
-reference, lifetime, destructor or borrow checking.
+Source-level named structs are non-Copy, including scalar-only structs. Tuples
+are Copy exactly when every component is Copy. Source consumption lowers to
+Copy or Move of the projected place, never an accidental move of its parent.
+This is not loan, reference, lifetime, destructor or borrow checking.
 
 ## Aggregate implementation boundary
 
-Nested tuples contain only the currently supported Copy types. Reads produce
-by-value snapshots, including tuple fields, arguments and control-flow joins.
-Every tuple-typed expression has its own frame buffer, so later mutation of a
-local cannot change an already evaluated argument. Mutable field assignment
-requires a mutable local root and evaluates its complete RHS before writing.
-General destructuring, tuple comparisons, references and named structs are not
-included in this slice. In particular, a named struct is not made Copy merely
-because its fields are scalar.
+Named nonempty braced structs have nominal identity scoped to one immutable
+compilation environment. Distinct declarations never become interchangeable
+because their fields match. Named types, simple import aliases and field privacy
+are checked, including inferred private call results. By-value declaration cycles
+are rejected before immutable handles are constructed. Initializers evaluate in
+source order before operands are arranged in declaration order.
+
+Aggregate reads produce independent by-value snapshots. Non-Copy consumption
+moves only the selected place. Scalar field reads leave the containing struct
+available, partial moves preserve siblings, and mutable field reinitialization
+restores the selected subtree. Joins and loops must retain definite initialization.
+Assignments evaluate their full RHS before writing and require mutable roots
+except for a first whole-local initialization. General destructuring, aggregate
+comparisons, references, derives and destructors remain unsupported.
 
 The private ABI passes one 8-byte word per argument, containing a scalar or a
-pointer to a caller-owned tuple snapshot. Callees copy tuple arguments before
-executing their bodies. Tuple-returning calls add a final hidden caller-buffer
-pointer, and all return paths copy into that buffer. Nested tuples currently use
-recursive 8-byte leaf slots, including unit dummy slots. This is an internal
-representation, not a Rust platform-layout or FFI promise. `size_of` and general
-memory inspection are not supported. Concrete frame limits and implementation
-validation are recorded with the aggregate milestone in `FINDINGS.md`.
+pointer to a caller-owned aggregate snapshot. Callees copy aggregate arguments
+before executing their bodies. Aggregate-returning calls add a final hidden
+caller-buffer pointer, and all return paths copy into that buffer. Tuples and
+structs currently use recursive 8-byte leaf slots, including unit dummy slots.
+This is an internal representation, not a Rust platform-layout or FFI promise.
+`size_of` and general memory inspection are not supported. Frame size is bounded
+to 1 MiB. The trusted raw CFG emitter requires successful analysis of the exact
+unchanged CFG. Checked standalone convenience APIs lower and analyze once before
+calling it. The graph consumes its cached analysis without repeating those checks.
 
 ## Running the compiler
 

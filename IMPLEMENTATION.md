@@ -16,6 +16,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Nested Copy tuples, field projections/mutation and by-value aggregate calls.
 - [x] Explicit cached CFG facts shared by check and native emission, with provenance.
 - [x] Cached storage/initialization/move-path dataflow shared by check and emission.
+- [x] Nonempty nominal structs, field privacy and source-level whole/partial moves.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -50,10 +51,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
-Named nonempty structs with nominal identity, field visibility, construction,
-projections and move-aware CFG lowering. Extend the validated initialization
-analysis to nominal aggregates before permitting source-level non-Copy values.
-References, loans, lifetimes and destructors remain separate future work.
+Named nonempty structs now extend the cached initialization foundation with
+nominal identity, field privacy, whole/partial moves and native aggregate calls.
+The following slices remain open: destructuring and patterns, references, loans,
+lifetimes, destructors, enums, broader types and all remaining categories above.
+The current milestone is undergoing full hosted and stock differential validation.
 
 The internal initialization/move-analysis foundation passed 209 hosted tests and
 all 254 existing M8a source fixtures. Both check and emission require the same

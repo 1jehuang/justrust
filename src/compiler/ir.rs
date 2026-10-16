@@ -1,11 +1,114 @@
-//! Checked scalar and tuple bodies shared by semantic analysis and code generation.
+//! Checked scalar, tuple and nominal struct bodies shared by analysis and codegen.
 //!
 //! IDs are local to one immutable function, not persistent cache identities.
 //! Allocate a new LocalId for every binding, including shadowing. Names are for
 //! diagnostics only. This structured representation is a migration boundary,
 //! not yet an ownership-checking CFG or a target layout/ABI representation.
 use super::frontend::{BinaryOp, UnaryOp};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Process-local namespace for one validated declaration environment. IDs must
+/// not be persisted as cache identities or reused by another environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SnapshotId(u64);
+
+impl SnapshotId {
+    pub fn allocate() -> Result<Self, String> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self::allocate_from(&NEXT)
+    }
+
+    fn allocate_from(next: &AtomicU64) -> Result<Self, String> {
+        let mut id = next.load(Ordering::Relaxed);
+        loop {
+            let successor = id
+                .checked_add(1)
+                .ok_or("nominal type snapshot IDs exhausted")?;
+            match next.compare_exchange_weak(id, successor, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return Ok(Self(id)),
+                Err(observed) => id = observed,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DefId {
+    pub snapshot: SnapshotId,
+    pub index: usize,
+}
+
+/// Immutable nominal handle. Equality and hashing use declaration identity,
+/// never field shape, names or Arc's structural pointee equality.
+#[derive(Clone)]
+pub struct StructTy(Arc<StructDef>);
+
+impl std::fmt::Debug for StructTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Types are a shared DAG, not a tree to expand into diagnostics. Names
+        // themselves can be long, so bound their diagnostic rendering as well.
+        let name = &self.0.name;
+        let end = name
+            .char_indices()
+            .nth(128)
+            .map_or(name.len(), |(at, _)| at);
+        f.debug_struct("StructTy")
+            .field("id", &self.0.id)
+            .field("name", &&name[..end])
+            .finish_non_exhaustive()
+    }
+}
+
+impl StructTy {
+    /// The declaration builder must validate the entire by-value dependency DAG
+    /// before constructing definitions in dependency-first order.
+    pub(super) fn new(def: StructDef) -> Self {
+        Self(Arc::new(def))
+    }
+
+    pub fn def(&self) -> &StructDef {
+        &self.0
+    }
+
+    pub fn field_index(&self, name: &str) -> Option<usize> {
+        self.0.fields.iter().position(|field| field.name == name)
+    }
+}
+
+impl PartialEq for StructTy {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id == other.0.id
+    }
+}
+
+impl Eq for StructTy {}
+
+impl Hash for StructTy {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.id.hash(state);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StructDef {
+    pub id: DefId,
+    /// Canonical module-qualified name, used for diagnostics, not identity.
+    pub name: String,
+    /// Defining module, used for owner/descendant field visibility checks.
+    pub module: String,
+    pub public: bool,
+    /// Declaration order. No layout offsets or implicit Copy permission.
+    pub fields: Arc<[FieldDef]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FieldDef {
+    pub name: String,
+    pub ty: Ty,
+    pub public: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalId(pub usize);
@@ -26,8 +129,36 @@ pub enum Ty {
     /// Nonempty structural tuple. The empty tuple is canonically Unit.
     /// Rust Copy semantics for admitted tuples do not make this host enum Copy.
     Tuple(Arc<[Ty]>),
+    /// Nominal and always non-Copy in this slice, even with only scalar fields.
+    Struct(StructTy),
     /// The semantic never type, distinct from runtime completion information.
     Never,
+}
+
+impl Ty {
+    pub fn field_count(&self) -> Option<usize> {
+        match self {
+            Self::Tuple(fields) => Some(fields.len()),
+            Self::Struct(ty) => Some(ty.def().fields.len()),
+            _ => None,
+        }
+    }
+
+    pub fn field_ty(&self, index: usize) -> Option<&Ty> {
+        match self {
+            Self::Tuple(fields) => fields.get(index),
+            Self::Struct(ty) => ty.def().fields.get(index).map(|field| &field.ty),
+            _ => None,
+        }
+    }
+
+    pub fn is_copy(&self) -> bool {
+        match self {
+            Self::I32 | Self::Bool | Self::Unit | Self::Never => true,
+            Self::Tuple(fields) => fields.iter().all(Self::is_copy),
+            Self::Struct(_) => false,
+        }
+    }
 }
 
 /// Static normal-completion summary, independent of semantic value type.
@@ -92,7 +223,7 @@ pub struct Block {
 }
 
 /// A resolved local-rooted storage location. Field indices are in source
-/// projection order and are checked against the nested tuple type by typing.
+/// projection order and are checked against tuple/struct types by typing.
 /// Empty fields denote the whole local. No byte offsets or target ABI here.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Place {
@@ -131,6 +262,12 @@ pub enum ExprKind {
     Local(LocalId),
     /// Elements are evaluated left to right into a new value snapshot.
     Tuple(Vec<ExprId>),
+    /// Initializers retain source evaluation order. Each index names a field in
+    /// declaration order; lowering permutes snapshots, never source evaluation.
+    Struct {
+        ty: StructTy,
+        fields: Vec<(usize, ExprId)>,
+    },
     /// Projects from an arbitrary expression snapshot, not a live local alias.
     Field {
         base: ExprId,
@@ -220,6 +357,11 @@ impl CheckedFunction {
                         expr(id)?;
                     }
                 }
+                ExprKind::Struct { fields, .. } => {
+                    for &(_, id) in fields {
+                        expr(id)?;
+                    }
+                }
                 ExprKind::Field { base, .. } => expr(*base)?,
                 ExprKind::Unary { value, .. } => expr(*value)?,
                 ExprKind::Binary { left, right, .. } => {
@@ -287,6 +429,116 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nominal(id: DefId, name: &str, fields: Vec<Ty>) -> StructTy {
+        StructTy::new(StructDef {
+            id,
+            name: name.into(),
+            module: String::new(),
+            public: false,
+            fields: fields
+                .into_iter()
+                .enumerate()
+                .map(|(index, ty)| FieldDef {
+                    name: format!("f{index}"),
+                    ty,
+                    public: false,
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        })
+    }
+
+    #[test]
+    fn nominal_identity_is_not_name_shape_or_declaration_index_alone() {
+        let snapshot = SnapshotId::allocate().unwrap();
+        let first = nominal(DefId { snapshot, index: 0 }, "S", vec![Ty::I32]);
+        let same_shape = nominal(DefId { snapshot, index: 1 }, "S", vec![Ty::I32]);
+        let next_snapshot = nominal(
+            DefId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            "S",
+            vec![Ty::I32],
+        );
+        assert_eq!(first, first.clone());
+        assert_ne!(first, same_shape);
+        assert_ne!(first, next_snapshot);
+        let mut identities = std::collections::HashSet::new();
+        assert!(identities.insert(first.clone()));
+        assert!(!identities.insert(first));
+        assert!(identities.insert(same_shape));
+        assert!(identities.insert(next_snapshot));
+    }
+
+    #[test]
+    fn aggregate_helpers_preserve_nominal_non_copy_and_projected_copy() {
+        let handle = nominal(
+            DefId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            "S",
+            vec![Ty::I32, Ty::Tuple(vec![Ty::Bool, Ty::Unit].into())],
+        );
+        assert_eq!(handle.field_index("f1"), Some(1));
+        assert_eq!(handle.field_index("missing"), None);
+        let ty = Ty::Struct(handle);
+        assert_eq!(ty.field_count(), Some(2));
+        assert_eq!(ty.field_ty(0), Some(&Ty::I32));
+        assert_eq!(ty.field_ty(2), None);
+        assert!(!ty.is_copy());
+        assert!(ty.field_ty(1).unwrap().is_copy());
+        assert!(Ty::Tuple(vec![Ty::Bool, Ty::Unit].into()).is_copy());
+        assert!(!Ty::Tuple(vec![Ty::Bool, ty].into()).is_copy());
+        assert_eq!(Ty::I32.field_count(), None);
+        assert_eq!(Ty::I32.field_ty(0), None);
+    }
+
+    #[test]
+    fn snapshot_allocation_fails_at_exhaustion_without_wrapping() {
+        let next = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(SnapshotId::allocate_from(&next).unwrap().0, u64::MAX - 1);
+        assert!(SnapshotId::allocate_from(&next).is_err());
+        assert!(SnapshotId::allocate_from(&next).is_err());
+        assert_eq!(next.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    #[test]
+    fn snapshot_allocation_is_unique_across_threads() {
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    (0..32)
+                        .map(|_| SnapshotId::allocate().unwrap())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let ids: std::collections::HashSet<_> = workers
+            .into_iter()
+            .flat_map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 256);
+    }
+
+    #[test]
+    fn nominal_debug_bounds_unicode_names_and_does_not_expand_shared_fields() {
+        let snapshot = SnapshotId::allocate().unwrap();
+        let mut ty = Ty::I32;
+        for index in 0..16 {
+            ty = Ty::Struct(nominal(
+                DefId { snapshot, index },
+                &"é".repeat(1000),
+                vec![ty.clone(), ty],
+            ));
+        }
+        let diagnostic = format!("{ty:?}");
+        assert!(diagnostic.len() < 512, "unbounded nominal diagnostic");
+        assert!(!diagnostic.contains("fields"));
+        assert!(diagnostic.contains("DefId"));
+    }
 
     #[test]
     fn tuple_types_are_structural_and_cheaply_cloned() {

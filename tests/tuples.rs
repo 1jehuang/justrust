@@ -418,10 +418,26 @@ fn tuple_type_arity_projection_and_assignment_errors_reject() {
 }
 
 #[test]
+fn named_struct_declaration_is_no_longer_a_tuple_milestone_boundary() {
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let compiled = justrust_engine::compiler::compile(
+                "struct Point {x:i32} fn main(){}".to_owned(),
+                workers,
+                check,
+            )
+            .unwrap();
+            assert_eq!(compiled.structs, 1);
+            assert_eq!(compiled.executable.is_none(), check);
+            assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
+        }
+    }
+}
+
+#[test]
 fn tuple_milestone_unsupported_features_reject_explicitly() {
     // Some are valid stock Rust, but outside this native tuple milestone.
     for (label, source) in [
-        ("struct declaration", "struct Point {x:i32} fn main(){}"),
         ("tuple destructuring", "fn main(){let (a,b)=(1,2);}"),
         ("tuple reference", "fn main(){let x=(1,2);let y=&x;}"),
         ("tuple equality", "fn main(){let x=(1,2)==(1,2);}"),

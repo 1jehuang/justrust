@@ -1,7 +1,8 @@
 //! Per-function control-flow lowering of immutable checked bodies.
 //!
 //! Explicit value snapshots and edges preserve source evaluation order. This
-//! module does not establish ownership validity or admit non-Copy source types.
+//! module selects Copy/Move operands from projected semantic types. Ownership
+//! dataflow is established separately by the analyzer before native emission.
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, LocalId, LoopId, Place, Ty};
 
@@ -109,12 +110,15 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
     if depth > 128 {
         return Err("CFG type nesting exceeds limit 128".into());
     }
-    if let Ty::Tuple(fields) = ty {
-        if fields.is_empty() {
-            return Err("empty CFG tuple must be Unit".into());
+    if let Some(count) = ty.field_count() {
+        if count == 0 {
+            return Err("empty CFG aggregates are unsupported; empty tuples must be Unit".into());
         }
-        for field in fields.iter() {
-            validate_type(field, depth + 1)?;
+        for index in 0..count {
+            validate_type(
+                ty.field_ty(index).ok_or("invalid CFG aggregate field")?,
+                depth + 1,
+            )?;
         }
     }
     Ok(())
@@ -128,11 +132,11 @@ impl Function {
             .ok_or("invalid CFG local")?
             .ty;
         for &index in &place.fields {
-            let Ty::Tuple(fields) = ty else {
-                return Err("CFG projection requires a tuple".into());
-            };
-            ty = fields
-                .get(index)
+            if ty.field_count().is_none() {
+                return Err("CFG projection requires an aggregate".into());
+            }
+            ty = ty
+                .field_ty(index)
                 .ok_or("CFG projection index out of bounds")?;
         }
         Ok(ty)
@@ -143,7 +147,14 @@ impl Function {
             Operand::Constant(Constant::I32(_)) => Ok(Ty::I32),
             Operand::Constant(Constant::Bool(_)) => Ok(Ty::Bool),
             Operand::Constant(Constant::Unit) => Ok(Ty::Unit),
-            Operand::Copy(place) | Operand::Move(place) => self.place_ty(place).cloned(),
+            Operand::Copy(place) => {
+                let ty = self.place_ty(place)?;
+                if !ty.is_copy() {
+                    return Err("CFG Copy operand requires a Copy type".into());
+                }
+                Ok(ty.clone())
+            }
+            Operand::Move(place) => self.place_ty(place).cloned(),
         }
     }
 
@@ -152,7 +163,7 @@ impl Function {
         if coerces(&got, want) {
             Ok(())
         } else {
-            Err(format!("CFG expected {want:?}, got {got:?}"))
+            Err("CFG operand type mismatch".into())
         }
     }
 
@@ -199,7 +210,7 @@ impl Function {
                 } else {
                     Ty::I32
                 };
-                if matches!(operand_ty, Ty::Tuple(_)) {
+                if operand_ty.field_count().is_some() {
                     return Err("CFG aggregate comparison is unsupported".into());
                 }
                 self.require_operand(left, &operand_ty)?;
@@ -208,14 +219,17 @@ impl Function {
             }
             Rvalue::Aggregate { ty, fields } => {
                 validate_type(ty, 0)?;
-                let Ty::Tuple(types) = ty else {
-                    return Err("CFG aggregate requires tuple type".into());
-                };
-                if fields.len() != types.len() {
+                let count = ty
+                    .field_count()
+                    .ok_or("CFG aggregate requires aggregate type")?;
+                if fields.len() != count {
                     return Err("CFG aggregate arity mismatch".into());
                 }
-                for (value, ty) in fields.iter().zip(types.iter()) {
-                    self.require_operand(value, ty)?;
+                for (index, value) in fields.iter().enumerate() {
+                    self.require_operand(
+                        value,
+                        ty.field_ty(index).ok_or("invalid CFG aggregate field")?,
+                    )?;
                 }
                 Ok(ty.clone())
             }
@@ -261,7 +275,7 @@ impl Function {
                         let got = self.rvalue_ty(value)?;
                         let want = self.place_ty(destination)?;
                         if !coerces(&got, want) {
-                            return Err(format!("CFG assignment expected {want:?}, got {got:?}"));
+                            return Err("CFG assignment type mismatch".into());
                         }
                     }
                 }
@@ -388,8 +402,8 @@ impl Lowerer<'_> {
         self.statement(Statement::Assign { destination, value }, origin);
     }
 
-    /// Place context does not read/copy its aggregate base. This is already
-    /// equivalent for Copy tuples and is essential for future field moves.
+    /// Place context does not read or consume its aggregate base. Only the
+    /// selected subtree is read when this place enters a value context.
     fn expression_place(&self, id: ExprId) -> Option<Place> {
         match &self.source.exprs.get(id.0)?.kind {
             ir::ExprKind::Local(local) => Some(place(*local)),
@@ -399,6 +413,14 @@ impl Lowerer<'_> {
                 Some(p)
             }
             _ => None,
+        }
+    }
+
+    fn consume(&self, place: Place) -> Result<Operand, String> {
+        if self.result.place_ty(&place)?.is_copy() {
+            Ok(Operand::Copy(place))
+        } else {
+            Ok(Operand::Move(place))
         }
     }
 
@@ -509,6 +531,13 @@ impl Lowerer<'_> {
     }
 
     fn expression(&mut self, id: ExprId) -> Result<Operand, String> {
+        let storage = self.materialize_expression(id)?;
+        self.consume(storage)
+    }
+
+    /// Evaluate once into an independent owned snapshot without consuming that
+    /// snapshot. Projection can address it before selecting a field to consume.
+    fn materialize_expression(&mut self, id: ExprId) -> Result<Place, String> {
         let expression = self
             .source
             .exprs
@@ -535,21 +564,18 @@ impl Lowerer<'_> {
             ),
             ir::ExprKind::Local(local) => self.assign(
                 destination.clone(),
-                Rvalue::Use(Operand::Copy(place(*local))),
+                Rvalue::Use(self.consume(place(*local))?),
                 origin,
             ),
             ir::ExprKind::Field { base, index } => {
                 let p = if let Some(p) = self.expression_place(id) {
                     p
                 } else {
-                    let base = self.expression(*base)?;
-                    let Operand::Copy(mut p) = base else {
-                        return Err("field base is not an owned temporary".into());
-                    };
+                    let mut p = self.materialize_expression(*base)?;
                     p.fields.push(*index);
                     p
                 };
-                self.assign(destination.clone(), Rvalue::Use(Operand::Copy(p)), origin);
+                self.assign(destination.clone(), Rvalue::Use(self.consume(p)?), origin);
             }
             ir::ExprKind::Tuple(fields) => {
                 let operands = fields
@@ -561,6 +587,34 @@ impl Lowerer<'_> {
                     Rvalue::Aggregate {
                         ty: expression.ty.clone(),
                         fields: operands,
+                    },
+                    origin,
+                );
+            }
+            ir::ExprKind::Struct { ty, fields } => {
+                if expression.ty != Ty::Struct(ty.clone()) {
+                    return Err("checked struct expression type mismatch".into());
+                }
+                let mut operands = vec![None; ty.def().fields.len()];
+                for &(index, value) in fields {
+                    if index >= operands.len() || operands[index].is_some() {
+                        return Err("invalid checked struct initializer field".into());
+                    }
+                    // Evaluate in source order. Only the resulting independent
+                    // snapshots are permuted into declaration order below.
+                    operands[index] = Some(self.expression(value)?);
+                }
+                let fields = operands
+                    .into_iter()
+                    .map(|value| {
+                        value.ok_or_else(|| "missing checked struct initializer field".to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Aggregate {
+                        ty: expression.ty.clone(),
+                        fields,
                     },
                     origin,
                 );
@@ -729,12 +783,12 @@ impl Lowerer<'_> {
                 self.assign(destination.clone(), Rvalue::Println(text.clone()), origin)
             }
         }
-        Ok(Operand::Copy(destination))
+        Ok(destination)
     }
 }
 
-/// Lower without modifying the checked input. All current admitted values are
-/// Copy; Move is reserved for the subsequent ownership-checked milestone.
+/// Lower without modifying the checked input. Each value transfer selects Copy
+/// or Move from its projected type. The result still requires ownership analysis.
 pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
     let mut locals = source.locals.clone();
     let expressions = source
@@ -805,10 +859,359 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    fn nominal(fields: Vec<Ty>) -> ir::StructTy {
+        ir::StructTy::new(ir::StructDef {
+            id: ir::DefId {
+                snapshot: ir::SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "S".into(),
+            module: String::new(),
+            public: false,
+            fields: fields
+                .into_iter()
+                .enumerate()
+                .map(|(index, ty)| ir::FieldDef {
+                    name: format!("f{index}"),
+                    ty,
+                    public: false,
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        })
+    }
+
+    fn expr(ty: Ty, kind: ir::ExprKind) -> ir::TypedExpr {
+        ir::TypedExpr {
+            ty,
+            completion: ir::Completion::Returns,
+            kind,
+        }
+    }
+
+    fn with_root(
+        root: Ty,
+        exprs: Vec<ir::TypedExpr>,
+        statements: Vec<ir::Stmt>,
+    ) -> ir::CheckedFunction {
+        ir::CheckedFunction {
+            name: "nominal_fixture".into(),
+            params: vec![LocalId(0)],
+            result: Ty::Unit,
+            locals: vec![ir::LocalDecl {
+                name: "root".into(),
+                ty: root,
+                mutable: true,
+            }],
+            exprs,
+            body: ir::Block {
+                statements,
+                tail: None,
+            },
+        }
+    }
+
+    fn nominal_lowered(source: &ir::CheckedFunction) -> Function {
+        source.validate().unwrap();
+        let function = lower(source).unwrap();
+        function.validate().unwrap();
+        function
+    }
+
+    fn root_reads(function: &Function) -> Vec<&Operand> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::Use(operand),
+                    ..
+                } => match operand {
+                    Operand::Copy(p) | Operand::Move(p) if p.local == LocalId(0) => Some(operand),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scalar_field_reads_copy_only_the_projection_before_whole_struct_move() {
+        let root = Ty::Struct(nominal(vec![Ty::I32]));
+        let source = with_root(
+            root.clone(),
+            vec![
+                expr(root, ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::Field {
+                        base: ExprId(0),
+                        index: 0,
+                    },
+                ),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::Field {
+                        base: ExprId(0),
+                        index: 0,
+                    },
+                ),
+            ],
+            vec![
+                ir::Stmt::Expr(ExprId(1)),
+                ir::Stmt::Expr(ExprId(2)),
+                ir::Stmt::Expr(ExprId(0)),
+            ],
+        );
+        let function = nominal_lowered(&source);
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 3);
+        assert!(matches!(reads[0], Operand::Copy(p) if p.fields == [0]));
+        assert!(matches!(reads[1], Operand::Copy(p) if p.fields == [0]));
+        assert!(matches!(reads[2], Operand::Move(p) if p.fields.is_empty()));
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn non_copy_field_moves_preserve_siblings_but_not_parent_or_moved_field() {
+        let inner = Ty::Struct(nominal(vec![Ty::I32]));
+        let root = Ty::Struct(nominal(vec![inner.clone(), inner.clone()]));
+        let mut source = with_root(
+            root.clone(),
+            vec![
+                expr(root, ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    inner.clone(),
+                    ir::ExprKind::Field {
+                        base: ExprId(0),
+                        index: 0,
+                    },
+                ),
+                expr(
+                    inner,
+                    ir::ExprKind::Field {
+                        base: ExprId(0),
+                        index: 1,
+                    },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(1)), ir::Stmt::Expr(ExprId(2))],
+        );
+        let function = nominal_lowered(&source);
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 2);
+        assert!(matches!(reads[0], Operand::Move(p) if p.fields == [0]));
+        assert!(matches!(reads[1], Operand::Move(p) if p.fields == [1]));
+        assert!(super::super::ownership::analyze(&function).passed());
+        source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+        assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+        source.body.statements.pop();
+        source.body.statements.push(ir::Stmt::Expr(ExprId(1)));
+        assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+    }
+
+    #[test]
+    fn arbitrary_expression_base_moves_whole_source_once_before_projection() {
+        let inner = Ty::Struct(nominal(vec![Ty::I32]));
+        let root = Ty::Struct(nominal(vec![inner.clone(), Ty::I32]));
+        let mut source = with_root(
+            root.clone(),
+            vec![
+                expr(root.clone(), ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    root,
+                    ir::ExprKind::Block(ir::Block {
+                        statements: vec![],
+                        tail: Some(ExprId(0)),
+                    }),
+                ),
+                expr(
+                    inner,
+                    ir::ExprKind::Field {
+                        base: ExprId(1),
+                        index: 0,
+                    },
+                ),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::Field {
+                        base: ExprId(0),
+                        index: 1,
+                    },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(2))],
+        );
+        let function = nominal_lowered(&source);
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 1);
+        assert!(matches!(reads[0], Operand::Move(p) if p.fields.is_empty()));
+        assert!(super::super::ownership::analyze(&function).passed());
+        source.body.statements.push(ir::Stmt::Expr(ExprId(3)));
+        assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+    }
+
+    #[test]
+    fn struct_initializer_evaluates_source_order_then_permutates_snapshots() {
+        let ty = nominal(vec![Ty::I32, Ty::I32]);
+        let call = |name: &str| {
+            expr(
+                Ty::I32,
+                ir::ExprKind::Call {
+                    name: name.into(),
+                    args: vec![],
+                    signature: ir::Signature {
+                        params: vec![],
+                        result: Ty::I32,
+                    },
+                },
+            )
+        };
+        let source = with_root(
+            Ty::I32,
+            vec![
+                call("first"),
+                call("second"),
+                expr(
+                    Ty::Struct(ty.clone()),
+                    ir::ExprKind::Struct {
+                        ty,
+                        fields: vec![(1, ExprId(0)), (0, ExprId(1))],
+                    },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(2))],
+        );
+        let function = nominal_lowered(&source);
+        let calls: Vec<_> = function
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator.value {
+                Terminator::Call { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, ["first", "second"]);
+        let aggregate = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::Aggregate { fields, .. },
+                    ..
+                } => Some(fields),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            matches!(&aggregate[0], Operand::Copy(p) if function.locals[p.local.0].name == "$expr1")
+        );
+        assert!(
+            matches!(&aggregate[1], Operand::Copy(p) if function.locals[p.local.0].name == "$expr0")
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn validator_rejects_non_copy_operands_even_in_disconnected_blocks() {
+        let root = Ty::Struct(nominal(vec![Ty::I32]));
+        let source = with_root(root.clone(), vec![], vec![]);
+        let mut function = nominal_lowered(&source);
+        let target = LocalId(function.locals.len());
+        function.locals.push(ir::LocalDecl {
+            name: "target".into(),
+            ty: root,
+            mutable: true,
+        });
+        function.blocks.push(BasicBlock {
+            statements: vec![Located {
+                value: Statement::Assign {
+                    destination: place(target),
+                    value: Rvalue::Use(Operand::Copy(place(LocalId(0)))),
+                },
+                origin: None,
+            }],
+            terminator: Located {
+                value: Terminator::Unreachable,
+                origin: None,
+            },
+        });
+        assert!(function.validate().unwrap_err().contains("Copy type"));
+        function.locals[0].ty = Ty::Tuple(vec![function.locals[0].ty.clone()].into());
+        assert!(!function.locals[0].ty.is_copy());
+        assert!(function.validate().unwrap_err().contains("Copy type"));
+    }
+
     fn checked(source: &str, index: usize) -> ir::CheckedFunction {
         let program = super::super::frontend::parse(source).unwrap();
         let signatures = super::super::frontend::signature_table(&program).unwrap();
         super::super::frontend::type_function_with_signatures(&program, index, &signatures).unwrap()
+    }
+
+    #[test]
+    fn nominal_branch_and_loop_results_transfer_ownership_without_copy() {
+        for source in [
+            "struct S{x:i32} fn f(p:S,flag:bool)->S{if flag{p}else{p}} fn main(){}",
+            "struct S{x:i32} fn f(p:S)->S{loop{break p;}} fn main(){}",
+            "struct S{x:i32} fn f(p:S)->(S,i32){(p,7)} fn main(){}",
+        ] {
+            let function = nominal_lowered(&checked(source, 0));
+            assert!(
+                super::super::ownership::analyze(&function).passed(),
+                "{source}"
+            );
+            for statement in function.blocks.iter().flat_map(|block| &block.statements) {
+                if let Statement::Assign {
+                    value: Rvalue::Use(Operand::Copy(place)),
+                    ..
+                } = &statement.value
+                {
+                    assert!(function.place_ty(place).unwrap().is_copy());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nested_place_projection_does_not_consume_non_copy_intermediate_field() {
+        let source = "struct I{x:i32} struct S{child:I} fn main(){let s=S{child:I{x:1}};let a=s.child.x;let b=s.child.x;let child=s.child;}";
+        let function = nominal_lowered(&checked(source, 0));
+        assert!(super::super::ownership::analyze(&function).passed());
+        let s = LocalId(
+            function
+                .locals
+                .iter()
+                .position(|local| local.name == "s")
+                .unwrap(),
+        );
+        let reads: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::Use(operand),
+                    ..
+                } => match operand {
+                    Operand::Copy(p) | Operand::Move(p) if p.local == s => Some(operand),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reads.len(), 3);
+        assert!(matches!(reads[0], Operand::Copy(p) if p.fields == [0, 0]));
+        assert!(matches!(reads[1], Operand::Copy(p) if p.fields == [0, 0]));
+        assert!(matches!(reads[2], Operand::Move(p) if p.fields == [0]));
+    }
+
+    #[test]
+    fn nominal_argument_moves_are_observed_before_later_arguments() {
+        let source = "struct S{x:i32} fn take(s:S,n:i32){} fn main(){let s=S{x:1};take(s,s.x);}";
+        let function = nominal_lowered(&checked(source, 1));
+        assert!(!super::super::ownership::analyze(&function).passed());
     }
 
     fn live_operand(value: &Operand, live: &[bool]) {

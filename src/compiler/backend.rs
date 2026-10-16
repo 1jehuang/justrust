@@ -6,11 +6,13 @@
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
 //! Aggregate layout is private: each scalar/unit leaf occupies eight bytes,
-//! tuples concatenate their fields. Tuple arguments carry snapshot pointers.
-//! Tuple results use a caller-owned destination, passed last at rbp+16.
+//! tuples and nominal structs concatenate their fields. Aggregate arguments
+//! carry snapshot pointers. Aggregate results use a caller-owned destination,
+//! passed last at rbp+16, even for a one-field aggregate.
 use super::cfg;
 use super::frontend::{self, BinaryOp, Program, UnaryOp};
 use super::ir::{self, LocalId};
+use super::ownership;
 use std::collections::HashMap;
 
 const MAX_ARGS: usize = 4096;
@@ -19,22 +21,27 @@ const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
 
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
-    match ty {
-        ir::Ty::Tuple(fields) => fields.iter().try_fold(0_i32, |size, field| {
+    match ty.field_count() {
+        Some(fields) => (0..fields).try_fold(0_i32, |size, index| {
+            let field = ty
+                .field_ty(index)
+                .ok_or("invalid checked aggregate field")?;
             size.checked_add(value_size(field)?)
                 .filter(|size| *size <= MAX_FRAME_BYTES)
                 .ok_or_else(|| "aggregate exceeds private frame limit".to_string())
         }),
-        _ => Ok(8),
+        None => Ok(8),
     }
 }
 
 fn field_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
-    let ir::Ty::Tuple(fields) = ty else {
-        return Err("invalid checked tuple projection".into());
-    };
-    let field = fields.get(index).ok_or("invalid checked tuple field")?;
-    let offset = fields[..index].iter().try_fold(0_i32, |offset, ty| {
+    let field = ty
+        .field_ty(index)
+        .ok_or("invalid checked aggregate field")?;
+    let offset = (0..index).try_fold(0_i32, |offset, index| {
+        let ty = ty
+            .field_ty(index)
+            .ok_or("invalid checked aggregate field")?;
         offset
             .checked_add(value_size(ty)?)
             .ok_or_else(|| "aggregate layout too large".to_string())
@@ -138,7 +145,7 @@ impl<'a> Emitter<'a> {
         }
     }
     fn store_value(&mut self, offset: i32, ty: &ir::Ty) -> Result<(), String> {
-        if matches!(ty, ir::Ty::Tuple(_)) {
+        if ty.field_count().is_some() {
             self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
             self.i32(offset);
             self.copy_pointer_value(value_size(ty)?);
@@ -157,13 +164,19 @@ impl<'a> Emitter<'a> {
                 cfg::Constant::Unit => 0,
             }),
             cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
-                let (offset, ty) = self.place(place)?;
-                if matches!(ty, ir::Ty::Tuple(_)) {
-                    self.address(offset);
-                } else {
-                    self.load(offset);
-                }
+                self.load_place(place)?;
             }
+        }
+        Ok(())
+    }
+    // Physical transport only. Ownership permissions were established by 109,
+    // so returning a non-Copy aggregate must not invent a Copy operand.
+    fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
+        let (offset, ty) = self.place(place)?;
+        if ty.field_count().is_some() {
+            self.address(offset);
+        } else {
+            self.load(offset);
         }
         Ok(())
     }
@@ -280,7 +293,7 @@ impl<'a> Emitter<'a> {
     }
     fn statement(&mut self, statement: &cfg::Statement) -> Result<(), String> {
         match statement {
-            // Copy-only locals have fixed storage for the whole invocation.
+            // Admitted values have fixed storage and no destructors this slice.
             cfg::Statement::StorageLive(_) | cfg::Statement::StorageDead(_) => {}
             cfg::Statement::Assign { destination, value } => {
                 self.rvalue(value)?;
@@ -317,7 +330,7 @@ impl<'a> Emitter<'a> {
                     self.operand(operand)?;
                     self.bytes(&[0x50]);
                 }
-                let aggregate = matches!(signature.result, ir::Ty::Tuple(_));
+                let aggregate = signature.result.field_count().is_some();
                 let (offset, ty) = self.place(destination)?;
                 if aggregate {
                     self.address(offset);
@@ -338,10 +351,10 @@ impl<'a> Emitter<'a> {
                 self.edge(&[0xe9], *next);
             }
             cfg::Terminator::Return => {
-                self.operand(&cfg::Operand::Copy(ir::Place {
+                self.load_place(&ir::Place {
                     local: self.function.return_local,
                     fields: Vec::new(),
-                }))?;
+                })?;
                 let at = self.jump(&[0xe9]);
                 self.returns.push(at);
             }
@@ -351,7 +364,11 @@ impl<'a> Emitter<'a> {
     }
 }
 
-/// Emit an already-lowered immutable CFG without source or semantic rechecking.
+/// Trusted, unchecked code-generation entry point for an immutable CFG.
+/// The caller must obtain a successful `ownership::analyze` result for this
+/// exact CFG and leave it unchanged afterward. No structural or ownership
+/// validation is repeated here. Graph callers satisfy this through fact 109,
+/// while standalone checked-body callers should use `emit_checked_function`.
 /// Every local and lowering temporary has stable invocation-owned frame storage.
 pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     if function.params.len() > MAX_ARGS {
@@ -380,7 +397,7 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     let aggregate_scratch = -frame_bytes;
-    let aggregate_result = matches!(function.result, ir::Ty::Tuple(_));
+    let aggregate_result = function.result.field_count().is_some();
     let result_size = value_size(&function.result)?;
     let mut emitter = Emitter {
         object: Object {
@@ -437,10 +454,19 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     Ok(emitter.object)
 }
 
-/// Compatibility entry point for direct checked-body callers. Graph compilation
-/// owns the lowered CFG fact and calls emit_cfg_function without lowering again.
+/// Compatibility entry point for direct checked-body callers, lowering and
+/// analyzing once. Graph compilation owns both facts and calls the
+/// raw emit_cfg_function without lowering or analyzing again.
 pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
-    emit_cfg_function(&cfg::lower(function)?)
+    let lowered = cfg::lower(function)?;
+    let analysis = ownership::analyze(&lowered);
+    if !analysis.passed() {
+        return Err(format!(
+            "{}: initialization/move analysis (complete={}): {:?}",
+            lowered.name, analysis.complete, analysis.diagnostics
+        ));
+    }
+    emit_cfg_function(&lowered)
 }
 
 fn put16(bytes: &mut [u8], at: usize, n: u16) {
@@ -614,7 +640,10 @@ mod tests {
             Type::Unit,
             block(statements, None),
         ));
-        Program { functions: others }
+        Program {
+            functions: others,
+            structs: vec![],
+        }
     }
     fn executable(program: &Program) -> std::path::PathBuf {
         executable_bytes(&emit(program).unwrap())
@@ -1334,7 +1363,7 @@ mod tests {
             },
         };
         assert!(
-            emit_checked_function(&checked)
+            emit_cfg_function(&cfg::lower(&checked).unwrap())
                 .unwrap_err()
                 .contains("limit")
         );
@@ -1391,6 +1420,8 @@ mod tests {
                 },
                 cfg::BasicBlock {
                     statements: vec![
+                        located(cfg::Statement::StorageLive(LocalId(0))),
+                        located(cfg::Statement::StorageLive(LocalId(2))),
                         located(cfg::Statement::StorageLive(LocalId(1))),
                         assign(
                             place(1, &[]),
@@ -1455,6 +1486,7 @@ mod tests {
                 },
             ],
         };
+        assert!(ownership::analyze(&function).passed());
         let object = emit_cfg_function(&function).unwrap();
         let bytes = link(&[("main".into(), object.clone())]).unwrap();
         let path = executable_bytes(&bytes);
@@ -1470,6 +1502,116 @@ mod tests {
                 statement.origin = Some(ir::ExprId(usize::MAX));
             }
         }
+        assert!(ownership::analyze(&function).passed());
         assert_eq!(emit_cfg_function(&function).unwrap().code, object.code);
+    }
+
+    #[test]
+    fn nominal_aggregate_abi_handles_one_field_nested_unit_and_recursive_returns() {
+        let p = frontend::parse(
+            r#"
+            struct One { value: i32 }
+            struct Flags { ready: bool, unit: () }
+            struct Pack { left: One, middle: (Flags, i32), right: One }
+            fn one(value: i32) -> One { One { value: value } }
+            fn descend(n: i32, item: One) -> One {
+                if n == 0 { return item; }
+                descend(n - 1, One { value: item.value + 1 })
+            }
+            fn relay(first: One, flag: bool, item: Pack) -> Pack {
+                if first.value != 7 { 1 / 0; }
+                if !flag { 1 / 0; }
+                item
+            }
+            fn main() {
+                let mut p = Pack {
+                    right: one(3),
+                    middle: (Flags { unit: (), ready: true }, 2),
+                    left: descend(3, one(1)),
+                };
+                p.left.value = 9;
+                let p = relay(one(7), true, p);
+                if p.left.value != 9 { 1 / 0; }
+                if !p.middle.0.ready { 1 / 0; }
+                if p.middle.1 != 2 { 1 / 0; }
+                if p.right.value != 3 { 1 / 0; }
+                if one(42).value != 42 { 1 / 0; }
+                println!("nominal");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"nominal\n");
+        let env = frontend::signature_table(&p).unwrap();
+        let index = p.functions.iter().position(|f| f.name == "one").unwrap();
+        let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
+        assert_eq!(checked.result.field_count(), Some(1));
+        assert_eq!(value_size(&checked.result).unwrap(), 8);
+        let object = emit_checked_function(&checked).unwrap();
+        assert!(
+            object
+                .code
+                .windows(5)
+                .any(|bytes| bytes == [0x48, 0x89, 0xf8, 0xc9, 0xc3]),
+            "one-field nominal return must still use the aggregate destination ABI"
+        );
+    }
+
+    #[test]
+    fn nominal_initializer_order_and_move_through_tuple_branch_and_loop() {
+        let p = frontend::parse(
+            r#"
+            struct One { value: i32 }
+            struct Pair { first: One, second: One }
+            fn one(value: i32) -> One { One { value: value } }
+            fn relay(item: (One, i32)) -> (One, i32) { item }
+            fn main() {
+                let p = Pair {
+                    second: { println!("second"); one(2) },
+                    first: { println!("first"); one(1) },
+                };
+                let first = p.first;
+                let second = p.second;
+                let item = if true { (first, 3) } else { (one(9), 8) };
+                let item = relay(item);
+                let result = loop { break Pair { first: item.0, second: second }; };
+                if result.first.value != 1 { 1 / 0; }
+                if result.second.value != 2 { 1 / 0; }
+                println!("moves");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"second\nfirst\nmoves\n");
+    }
+
+    #[test]
+    fn checked_and_program_conveniences_reject_use_after_nominal_move() {
+        let p = frontend::parse(
+            r#"
+            struct One { value: i32 }
+            fn take(item: One) -> i32 { item.value }
+            fn main() {
+                let item = One { value: 7 };
+                take(item);
+                take(item);
+            }
+        "#,
+        )
+        .unwrap();
+        let env = frontend::signature_table(&p).unwrap();
+        let index = p.functions.iter().position(|f| f.name == "main").unwrap();
+        let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
+        let error = emit_checked_function(&checked).unwrap_err();
+        assert!(error.contains("initialization/move analysis"), "{error}");
+        assert!(
+            emit(&p)
+                .unwrap_err()
+                .contains("initialization/move analysis")
+        );
     }
 }

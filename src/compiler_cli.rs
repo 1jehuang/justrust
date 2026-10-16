@@ -125,9 +125,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let analysis_move_paths: usize = compiled.analyses.iter().map(|a| a.stats.move_paths).sum();
     let analysis_moves: usize = compiled.analyses.iter().map(|a| a.stats.moves).sum();
     println!(
-        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"analysis_worklist_pops\":{analysis_worklist_pops},\"analysis_move_paths\":{analysis_move_paths},\"analysis_moves\":{analysis_moves},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
+        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"structs\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"analysis_worklist_pops\":{analysis_worklist_pops},\"analysis_move_paths\":{analysis_move_paths},\"analysis_moves\":{analysis_moves},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
         if check { "check" } else { "build" },
         compiled.functions,
+        compiled.structs,
         compiled.cfg_blocks,
         compiled.cfg_edges,
         compiled.cfg_locals,

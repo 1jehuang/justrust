@@ -5,8 +5,10 @@
 //! Explicit semicolons discard expression values, while omitted-semicolon
 //! blocklike statements require unit. While loops do not establish return flow.
 //! Numeric literals are decimal i32 only. Unsupported syntax is rejected.
-//! Inline modules, public/private functions/modules, and simple module-level
-//! imports have separate module/value namespaces. External modules, restricted
+//! Inline modules, named nonempty braced structs, ordinary visibility, and
+//! simple module-level imports have separate type/value namespaces. Named
+//! structs are nominal and non-Copy. Move checking belongs to CFG analysis, not
+//! this semantic checker. External modules, restricted
 //! visibility, reexports, grouped/glob imports, and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
 use super::ir;
@@ -15,6 +17,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub structs: Vec<StructDecl>,
 }
 /// Syntax-only result. Resolve this once before publishing callable signatures.
 #[derive(Clone, Debug)]
@@ -31,6 +34,7 @@ struct Item {
 enum ItemKind {
     Module,
     Function,
+    Struct,
     Import(String),
 }
 
@@ -51,12 +55,30 @@ pub struct Function {
     pub result: Type,
     pub body: Block,
 }
+#[derive(Clone, Debug)]
+pub struct StructDecl {
+    pub name: String,
+    pub public: bool,
+    pub fields: Vec<FieldDecl>,
+}
+#[derive(Clone, Debug)]
+pub struct FieldDecl {
+    pub name: String,
+    pub ty: Type,
+    pub public: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FieldSelector {
+    Tuple(usize),
+    Named(String),
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     I32,
     Bool,
     Unit,
     Tuple(Vec<Type>),
+    Named(String),
     /// Semantic-only never type, not an admitted source type annotation.
     Never,
     /// Unannotated locals only, resolved independently during function checking.
@@ -70,7 +92,7 @@ pub struct Block {
 #[derive(Clone, Debug)]
 pub struct Place {
     pub local: String,
-    pub fields: Vec<usize>,
+    pub fields: Vec<FieldSelector>,
 }
 #[derive(Clone, Debug)]
 pub enum Stmt {
@@ -100,9 +122,13 @@ pub enum Stmt {
 #[derive(Clone, Debug)]
 pub enum Expr {
     Tuple(Vec<Expr>),
+    Struct {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
     Field {
         base: Box<Expr>,
-        index: usize,
+        field: FieldSelector,
     },
     Int(i32),
     Bool(bool),
@@ -395,6 +421,7 @@ struct Parser {
     tokens: Vec<Token>,
     at: usize,
     nesting: usize,
+    allow_struct: bool,
 }
 impl Parser {
     fn token(&self) -> &Token {
@@ -484,7 +511,7 @@ impl Parser {
             self.expect(")")?;
             Ok(Type::Tuple(fields))
         } else {
-            Err(self.error("expected scalar or tuple type"))
+            self.path().map(Type::Named)
         }
     }
     fn path(&mut self) -> Result<String, String> {
@@ -553,6 +580,36 @@ impl Parser {
                 };
                 self.expect(";")?;
                 (name, ItemKind::Import(path))
+            } else if self.eat("struct") {
+                let name = self.ident()?;
+                self.expect("{")?;
+                let mut fields = Vec::new();
+                while !self.is("}") {
+                    let public = self.eat("pub");
+                    if public && self.is("(") {
+                        return Err(self.error("restricted field visibility is unsupported"));
+                    }
+                    let name = self.ident()?;
+                    self.expect(":")?;
+                    fields.push(FieldDecl {
+                        name,
+                        ty: self.ty()?,
+                        public,
+                    });
+                    if !self.eat(",") {
+                        break;
+                    }
+                }
+                self.expect("}")?;
+                if fields.is_empty() {
+                    return Err(self.error("empty structs are unsupported"));
+                }
+                parsed.program.structs.push(StructDecl {
+                    name: qualify(module, &name),
+                    public,
+                    fields,
+                });
+                (name, ItemKind::Struct)
             } else if self.is("fn") {
                 let mut function = self.function()?;
                 let name = function.name.clone();
@@ -578,7 +635,11 @@ impl Parser {
         if bindings.iter().any(|item| {
             matches!(
                 (&item.kind, &kind),
-                (ItemKind::Module, ItemKind::Module) | (ItemKind::Function, ItemKind::Function)
+                (ItemKind::Module, ItemKind::Module)
+                    | (ItemKind::Module, ItemKind::Struct)
+                    | (ItemKind::Struct, ItemKind::Module)
+                    | (ItemKind::Struct, ItemKind::Struct)
+                    | (ItemKind::Function, ItemKind::Function)
             )
         }) {
             return Err(self.error(&format!("duplicate item {path}")));
@@ -619,7 +680,10 @@ impl Parser {
             return Err(self.error("syntax nesting exceeds limit 128"));
         }
         self.nesting += 1;
+        let previous = self.allow_struct;
+        self.allow_struct = true;
         let result = self.block_inner();
+        self.allow_struct = previous;
         self.nesting -= 1;
         result
     }
@@ -670,7 +734,7 @@ impl Parser {
                 }
                 statements.push(Stmt::Return(value));
             } else if self.eat("while") {
-                let condition = self.expr(0)?;
+                let condition = self.condition()?;
                 let body = self.block()?;
                 statements.push(Stmt::While { condition, body });
             } else {
@@ -707,10 +771,24 @@ impl Parser {
         loop {
             match expr {
                 Expr::Var(local) => { fields.reverse(); return Ok(Place { local, fields }); }
-                Expr::Field { base, index } => { fields.push(index); expr = *base; }
+                Expr::Field { base, field } => { fields.push(field); expr = *base; }
                 _ => return Err(self.error("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported")),
             }
         }
+    }
+    fn nested_expr(&mut self) -> Result<Expr, String> {
+        let previous = self.allow_struct;
+        self.allow_struct = true;
+        let result = self.expr(0);
+        self.allow_struct = previous;
+        result
+    }
+    fn condition(&mut self) -> Result<Expr, String> {
+        let previous = self.allow_struct;
+        self.allow_struct = false;
+        let result = self.expr(0);
+        self.allow_struct = previous;
+        result
     }
     fn expr(&mut self, min: u8) -> Result<Expr, String> {
         if self.nesting >= 128 {
@@ -755,7 +833,7 @@ impl Parser {
         } else if self.eat("continue") {
             Expr::Continue
         } else if self.eat("if") {
-            let condition = Box::new(self.expr(0)?);
+            let condition = Box::new(self.condition()?);
             let then_block = self.block()?;
             let else_block = if self.eat("else") {
                 if self.is("if") {
@@ -786,11 +864,11 @@ impl Parser {
                     tail: None,
                 })
             } else {
-                let first = self.expr(0)?;
+                let first = self.nested_expr()?;
                 if self.eat(",") {
                     let mut fields = vec![first];
                     while !self.is(")") {
-                        fields.push(self.expr(0)?);
+                        fields.push(self.nested_expr()?);
                         if !self.eat(",") {
                             break;
                         }
@@ -832,7 +910,7 @@ impl Parser {
                 let mut args = Vec::new();
                 if !self.is(")") {
                     loop {
-                        args.push(self.expr(0)?);
+                        args.push(self.nested_expr()?);
                         if !self.eat(",") || self.is(")") {
                             break;
                         }
@@ -840,6 +918,22 @@ impl Parser {
                 }
                 self.expect(")")?;
                 Expr::Call { name, args }
+            } else if self.allow_struct && self.eat("{") {
+                let mut fields = Vec::new();
+                while !self.is("}") {
+                    let field = self.ident()?;
+                    let value = if self.eat(":") {
+                        self.expr(0)?
+                    } else {
+                        Expr::Var(field.clone())
+                    };
+                    fields.push((field, value));
+                    if !self.eat(",") {
+                        break;
+                    }
+                }
+                self.expect("}")?;
+                Expr::Struct { name, fields }
             } else {
                 if name.contains("::") || matches!(name.as_str(), "crate" | "self" | "super") {
                     return Err(self.error("qualified paths are supported only as function calls"));
@@ -850,22 +944,28 @@ impl Parser {
         let mut compared = false;
         loop {
             if self.eat(".") {
-                let token = self.token();
-                if token.string
-                    || token.text.is_empty()
-                    || !token.text.bytes().all(|c| c.is_ascii_digit())
-                    || (token.text.len() > 1 && token.text.starts_with('0'))
-                {
-                    return Err(self.error("tuple field index must be a canonical unsigned decimal integer; named fields are unsupported"));
-                }
-                let index = token
-                    .text
-                    .parse::<usize>()
-                    .map_err(|_| self.error("tuple field index is out of range"))?;
-                self.at += 1;
+                let field = if self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
+                    let token = self.token();
+                    if token.string
+                        || !token.text.bytes().all(|c| c.is_ascii_digit())
+                        || (token.text.len() > 1 && token.text.starts_with('0'))
+                    {
+                        return Err(self.error(
+                            "tuple field index must be a canonical unsigned decimal integer",
+                        ));
+                    }
+                    let index = token
+                        .text
+                        .parse::<usize>()
+                        .map_err(|_| self.error("tuple field index is out of range"))?;
+                    self.at += 1;
+                    FieldSelector::Tuple(index)
+                } else {
+                    FieldSelector::Named(self.ident()?)
+                };
                 left = Expr::Field {
                     base: Box::new(left),
-                    index,
+                    field,
                 };
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
                 continue;
@@ -927,10 +1027,12 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
         tokens: lex(source)?,
         at: 0,
         nesting: 0,
+        allow_struct: true,
     };
     let mut parsed = ParsedProgram {
         program: Program {
             functions: Vec::new(),
+            structs: Vec::new(),
         },
         items: HashMap::new(),
     };
@@ -954,6 +1056,7 @@ pub fn parse(source: &str) -> Result<Program, String> {
 struct ResolvedItem {
     path: String,
     module: bool,
+    structure: bool,
 }
 struct Resolver<'a> {
     items: &'a HashMap<String, Vec<Item>>,
@@ -983,10 +1086,17 @@ impl Resolver<'_> {
                 ItemKind::Module if module => Some(ResolvedItem {
                     path: path.into(),
                     module: true,
+                    structure: false,
                 }),
                 ItemKind::Function if !module => Some(ResolvedItem {
                     path: path.into(),
                     module: false,
+                    structure: false,
+                }),
+                ItemKind::Struct if module => Some(ResolvedItem {
+                    path: path.into(),
+                    module: true,
+                    structure: true,
                 }),
                 ItemKind::Import(_) => self.import(path, index, module)?,
                 _ => None,
@@ -1003,7 +1113,7 @@ impl Resolver<'_> {
                 if result.replace(resolved).is_some() {
                     return Err(format!(
                         "duplicate item {path} in {} namespace",
-                        if module { "module" } else { "function" }
+                        if module { "type" } else { "value" }
                     ));
                 }
             }
@@ -1052,6 +1162,7 @@ impl Resolver<'_> {
                 ResolvedItem {
                     path: String::new(),
                     module: true,
+                    structure: false,
                 }
             }
             "self" => {
@@ -1059,6 +1170,7 @@ impl Resolver<'_> {
                 ResolvedItem {
                     path: from.into(),
                     module: true,
+                    structure: false,
                 }
             }
             "super" => {
@@ -1073,6 +1185,7 @@ impl Resolver<'_> {
                 ResolvedItem {
                     path: module.into(),
                     module: true,
+                    structure: false,
                 }
             }
             name => {
@@ -1090,7 +1203,7 @@ impl Resolver<'_> {
             }
         };
         while let Some(name) = parts.get(at) {
-            if !current.module {
+            if !current.module || current.structure {
                 return Err(format!("{} is not a module in path {path}", current.path));
             }
             let Some(item) = self.item(
@@ -1107,6 +1220,26 @@ impl Resolver<'_> {
         }
         Ok((current.module == module).then_some(current))
     }
+    fn ty(&mut self, ty: &mut Type, module: &str) -> Result<(), String> {
+        match ty {
+            Type::Named(name) => {
+                let item = self
+                    .path(name, module, true, false)?
+                    .ok_or_else(|| format!("unresolved type {name}"))?;
+                if !item.structure {
+                    return Err(format!("{} is a module, not a struct type", item.path));
+                }
+                *name = item.path;
+            }
+            Type::Tuple(fields) => {
+                for ty in fields {
+                    self.ty(ty, module)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
     fn block(
         &mut self,
         block: &mut Block,
@@ -1116,7 +1249,10 @@ impl Resolver<'_> {
         locals.push(std::collections::HashSet::new());
         for stmt in &mut block.statements {
             match stmt {
-                Stmt::Let { name, value, .. } => {
+                Stmt::Let {
+                    name, ty, value, ..
+                } => {
+                    self.ty(ty, module)?;
                     self.expr(value, module, locals)?;
                     locals.last_mut().unwrap().insert(name.clone());
                 }
@@ -1164,6 +1300,18 @@ impl Resolver<'_> {
             Expr::Tuple(fields) => {
                 for field in fields {
                     self.expr(field, module, locals)?;
+                }
+            }
+            Expr::Struct { name, fields } => {
+                let item = self
+                    .path(name, module, true, false)?
+                    .ok_or_else(|| format!("unresolved struct {name}"))?;
+                if !item.structure {
+                    return Err(format!("{} is not a struct", item.path));
+                }
+                *name = item.path;
+                for (_, value) in fields {
+                    self.expr(value, module, locals)?;
                 }
             }
             Expr::Field { base, .. } => self.expr(base, module, locals)?,
@@ -1217,7 +1365,17 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver.item(&path, parent(&path), false, false)?;
     }
     let mut program = parsed.program.clone();
+    for structure in &mut program.structs {
+        for field in &mut structure.fields {
+            validate_depth(DepthNode::Type(&field.ty))?;
+            resolver.ty(&mut field.ty, parent(&structure.name))?;
+        }
+    }
     for function in &mut program.functions {
+        resolver.ty(&mut function.result, parent(&function.name))?;
+        for (_, ty) in &mut function.params {
+            resolver.ty(ty, parent(&function.name))?;
+        }
         validate_depth(DepthNode::Block(&function.body))?;
         let mut locals = vec![function.params.iter().map(|(n, _)| n.clone()).collect()];
         resolver
@@ -1249,6 +1407,11 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 Expr::Tuple(fields) => {
                     for field in fields {
                         push(DepthNode::Expr(field));
+                    }
+                }
+                Expr::Struct { fields, .. } => {
+                    for (_, value) in fields {
+                        push(DepthNode::Expr(value));
                     }
                 }
                 Expr::Field { base, .. } => push(DepthNode::Expr(base)),
@@ -1302,39 +1465,212 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
     }
     Ok(())
 }
-pub type Signatures = HashMap<String, (Vec<Type>, Type)>;
-fn signatures(program: &Program) -> Result<Signatures, String> {
-    let mut signatures: Signatures = HashMap::new();
-    for f in &program.functions {
-        for ty in std::iter::once(&f.result).chain(f.params.iter().map(|(_, ty)| ty)) {
-            validate_depth(DepthNode::Type(ty))
-                .and_then(|_| checked_ty(ty).map(|_| ()))
-                .map_err(|e| format!("in function {}: {e}", f.name))?;
-        }
-        if f.result == Type::Infer || f.params.iter().any(|(_, t)| *t == Type::Infer) {
-            return Err(format!(
-                "in function {}: signature types cannot be inferred",
-                f.name
-            ));
-        }
-        if signatures
-            .insert(
-                f.name.clone(),
-                (
-                    f.params.iter().map(|(_, t)| t.clone()).collect(),
-                    f.result.clone(),
-                ),
-            )
+/// One immutable semantic environment shared by every checked function.
+#[derive(Clone, Debug)]
+pub struct TypeEnv {
+    pub structs: HashMap<String, ir::StructTy>,
+    pub functions: HashMap<String, ir::Signature>,
+}
+pub type Signatures = TypeEnv;
+
+fn visible_from(owner: &str, requester: &str) -> bool {
+    owner.is_empty()
+        || requester == owner
+        || requester
+            .strip_prefix(owner)
+            .is_some_and(|s| s.starts_with("::"))
+}
+
+/// Validate every declaration, including unused types, before creating any Arc DAG.
+pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
+    let mut declarations = HashMap::new();
+    for (index, declaration) in program.structs.iter().enumerate() {
+        if declarations
+            .insert(declaration.name.clone(), index)
             .is_some()
         {
-            return Err(format!("duplicate function {}", f.name));
+            return Err(format!("duplicate struct {}", declaration.name));
+        }
+        if declaration.fields.is_empty() {
+            return Err(format!("empty struct {} is unsupported", declaration.name));
+        }
+        let mut names = std::collections::HashSet::new();
+        for field in &declaration.fields {
+            if !names.insert(&field.name) {
+                return Err(format!(
+                    "duplicate field {} in {}",
+                    field.name, declaration.name
+                ));
+            }
         }
     }
-    match signatures.get("main") {
-        Some((p, Type::Unit)) if p.is_empty() => {}
-        _ => return Err("main must exist, take no arguments and return ()".into()),
+    fn dependencies(
+        ty: &Type,
+        declarations: &HashMap<String, usize>,
+        structs: &[StructDecl],
+        module: &str,
+    ) -> Result<Vec<usize>, String> {
+        validate_depth(DepthNode::Type(ty))?;
+        let mut work = vec![ty];
+        let mut dependencies = Vec::new();
+        while let Some(ty) = work.pop() {
+            match ty {
+                Type::Named(name) => {
+                    let index = *declarations
+                        .get(name)
+                        .ok_or_else(|| format!("unknown struct type {name}"))?;
+                    let declaration = &structs[index];
+                    if !declaration.public && !visible_from(parent(name), module) {
+                        return Err(format!("private struct type {name}"));
+                    }
+                    dependencies.push(index);
+                }
+                Type::Tuple(fields) => {
+                    if fields.is_empty() {
+                        return Err("empty tuple types must use ()".into());
+                    }
+                    work.extend(fields);
+                }
+                Type::Infer => return Err("signature types cannot be inferred".into()),
+                _ => {}
+            }
+        }
+        Ok(dependencies)
     }
-    Ok(signatures)
+    let mut edges = vec![Vec::new(); program.structs.len()];
+    for (index, declaration) in program.structs.iter().enumerate() {
+        for field in &declaration.fields {
+            edges[index].extend(dependencies(
+                &field.ty,
+                &declarations,
+                &program.structs,
+                parent(&declaration.name),
+            )?);
+        }
+    }
+    let mut names = std::collections::HashSet::new();
+    for function in &program.functions {
+        if !names.insert(&function.name) {
+            return Err(format!("duplicate function {}", function.name));
+        }
+        let mut params = std::collections::HashSet::new();
+        for (name, _) in &function.params {
+            if !params.insert(name) {
+                return Err(format!(
+                    "in function {}: duplicate parameter {name}",
+                    function.name
+                ));
+            }
+        }
+        for ty in std::iter::once(&function.result).chain(function.params.iter().map(|(_, ty)| ty))
+        {
+            dependencies(ty, &declarations, &program.structs, parent(&function.name))?;
+        }
+    }
+    if !program
+        .functions
+        .iter()
+        .any(|f| f.name == "main" && f.params.is_empty() && f.result == Type::Unit)
+    {
+        return Err("main must exist, take no arguments and return ()".into());
+    }
+    let mut state = vec![0u8; edges.len()];
+    let mut order = Vec::new();
+    for root in 0..edges.len() {
+        if state[root] != 0 {
+            continue;
+        }
+        let mut work = vec![(root, false, 0usize)];
+        while let Some((index, exit, depth)) = work.pop() {
+            if exit {
+                state[index] = 2;
+                order.push(index);
+                continue;
+            }
+            if state[index] == 2 {
+                continue;
+            }
+            if state[index] == 1 {
+                return Err(format!(
+                    "by-value struct cycle involving {}",
+                    program.structs[index].name
+                ));
+            }
+            if depth > 128 {
+                return Err("struct dependency nesting exceeds limit 128".into());
+            }
+            state[index] = 1;
+            work.push((index, true, depth));
+            for &dependency in edges[index].iter().rev() {
+                work.push((dependency, false, depth + 1));
+            }
+        }
+    }
+    // Declaration order must not bypass the expanded semantic nesting limit.
+    fn type_height(ty: &Type, declarations: &HashMap<String, usize>, heights: &[usize]) -> usize {
+        match ty {
+            Type::Named(name) => heights[declarations[name]],
+            Type::Tuple(fields) => {
+                1 + fields
+                    .iter()
+                    .map(|ty| type_height(ty, declarations, heights))
+                    .max()
+                    .unwrap_or(0)
+            }
+            _ => 1,
+        }
+    }
+    let mut heights = vec![0usize; program.structs.len()];
+    for &index in &order {
+        heights[index] = 1 + program.structs[index]
+            .fields
+            .iter()
+            .map(|field| type_height(&field.ty, &declarations, &heights))
+            .max()
+            .unwrap_or(0);
+        if heights[index] > 128 {
+            return Err("expanded struct type nesting exceeds limit 128".into());
+        }
+    }
+    let snapshot = ir::SnapshotId::allocate()?;
+    let mut env = TypeEnv {
+        structs: HashMap::new(),
+        functions: HashMap::new(),
+    };
+    for index in order {
+        let declaration = &program.structs[index];
+        let fields = declaration
+            .fields
+            .iter()
+            .map(|field| {
+                Ok(ir::FieldDef {
+                    name: field.name.clone(),
+                    ty: checked_ty(&field.ty, &env)?,
+                    public: field.public,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let ty = ir::StructTy::new(ir::StructDef {
+            id: ir::DefId { snapshot, index },
+            name: declaration.name.clone(),
+            module: parent(&declaration.name).into(),
+            public: declaration.public,
+            fields: fields.into(),
+        });
+        env.structs.insert(declaration.name.clone(), ty);
+    }
+    for function in &program.functions {
+        let signature = ir::Signature {
+            params: function
+                .params
+                .iter()
+                .map(|(_, ty)| checked_ty(ty, &env))
+                .collect::<Result<_, _>>()?,
+            result: checked_ty(&function.result, &env)?,
+        };
+        env.functions.insert(function.name.clone(), signature);
+    }
+    Ok(env)
 }
 struct LoopFrame {
     id: ir::LoopId,
@@ -1352,6 +1688,8 @@ struct Checker<'a> {
     next_loop: usize,
     reachable: bool,
     result: ir::Ty,
+    module: String,
+    field_indices: std::cell::RefCell<HashMap<ir::DefId, HashMap<String, usize>>>,
 }
 // Semantic type and possible normal completion are independent. In particular,
 // an unreachable explicit block tail retains its type, unlike a pure never value.
@@ -1374,7 +1712,7 @@ impl Flow {
         }
     }
 }
-fn checked_ty(ty: &Type) -> Result<ir::Ty, String> {
+fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
     match ty {
         Type::I32 => Ok(ir::Ty::I32),
         Type::Bool => Ok(ir::Ty::Bool),
@@ -1382,19 +1720,33 @@ fn checked_ty(ty: &Type) -> Result<ir::Ty, String> {
         Type::Never => Ok(ir::Ty::Never),
         Type::Tuple(fields) if !fields.is_empty() => fields
             .iter()
-            .map(checked_ty)
+            .map(|ty| checked_ty(ty, env))
             .collect::<Result<Vec<_>, _>>()
             .map(|fields| ir::Ty::Tuple(fields.into())),
         Type::Tuple(_) => Err("empty tuple types must use ()".into()),
+        Type::Named(name) => env
+            .structs
+            .get(name)
+            .cloned()
+            .map(ir::Ty::Struct)
+            .ok_or_else(|| format!("unknown struct type {name}")),
         Type::Infer => Err("signature types cannot be inferred".into()),
     }
 }
 fn inhabited(ty: &ir::Ty) -> bool {
-    match ty {
-        ir::Ty::Never => false,
-        ir::Ty::Tuple(fields) => fields.iter().all(inhabited),
-        _ => true,
+    let mut work = vec![ty];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(ty) = work.pop() {
+        match ty {
+            ir::Ty::Never => return false,
+            ir::Ty::Tuple(fields) => work.extend(fields.iter()),
+            ir::Ty::Struct(ty) if seen.insert(ty.def().id) => {
+                work.extend(ty.def().fields.iter().map(|field| &field.ty))
+            }
+            _ => {}
+        }
     }
+    true
 }
 fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
     if *got == ir::Ty::Never || got == want {
@@ -1408,7 +1760,7 @@ fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
     }
 }
 impl<'a> Checker<'a> {
-    fn new(signatures: &'a Signatures, result: ir::Ty) -> Self {
+    fn new(signatures: &'a Signatures, result: ir::Ty, module: String) -> Self {
         Self {
             signatures,
             scopes: vec![HashMap::new()],
@@ -1418,6 +1770,8 @@ impl<'a> Checker<'a> {
             next_loop: 0,
             reachable: true,
             result,
+            module,
+            field_indices: std::cell::RefCell::new(HashMap::new()),
         }
     }
     fn enter_loop(&mut self, accepts_value: bool) -> ir::LoopId {
@@ -1503,18 +1857,62 @@ impl<'a> Checker<'a> {
         }
         Err(format!("{context} differ: {a:?} and {b:?}"))
     }
-    fn field_type(&self, ty: &ir::Ty, index: usize) -> Result<ir::Ty, String> {
-        match ty {
-            ir::Ty::Tuple(fields) => fields.get(index).cloned().ok_or_else(|| {
-                format!(
-                    "tuple field {index} is out of bounds for {} fields",
-                    fields.len()
-                )
-            }),
-            _ => Err(format!(
-                "tuple field projection requires a tuple, got {ty:?}"
-            )),
+    fn accessible(&self, ty: &ir::Ty) -> Result<(), String> {
+        let mut work = vec![ty];
+        while let Some(ty) = work.pop() {
+            match ty {
+                ir::Ty::Tuple(fields) => work.extend(fields.iter()),
+                ir::Ty::Struct(ty)
+                    if !ty.def().public && !visible_from(&ty.def().module, &self.module) =>
+                {
+                    return Err(format!(
+                        "private type {} is inaccessible from module {}",
+                        ty.def().name,
+                        self.module
+                    ));
+                }
+                _ => {}
+            }
         }
+        Ok(())
+    }
+    fn field_type(&self, ty: &ir::Ty, field: &FieldSelector) -> Result<(usize, ir::Ty), String> {
+        let (index, projected) = match (ty, field) {
+            (ir::Ty::Tuple(fields), FieldSelector::Tuple(index)) => fields
+                .get(*index)
+                .cloned()
+                .map(|ty| (*index, ty))
+                .ok_or_else(|| {
+                    format!(
+                        "tuple field {index} is out of bounds for {} fields",
+                        fields.len()
+                    )
+                }),
+            (ir::Ty::Struct(ty), FieldSelector::Named(name)) => {
+                let index = {
+                    let mut cache = self.field_indices.borrow_mut();
+                    let indices = cache.entry(ty.def().id).or_insert_with(|| {
+                        ty.def()
+                            .fields
+                            .iter()
+                            .enumerate()
+                            .map(|(index, field)| (field.name.clone(), index))
+                            .collect()
+                    });
+                    *indices
+                        .get(name)
+                        .ok_or_else(|| format!("unknown field {name} in {}", ty.def().name))?
+                };
+                let field = &ty.def().fields[index];
+                if !field.public && !visible_from(&ty.def().module, &self.module) {
+                    return Err(format!("private field {name} in {}", ty.def().name));
+                }
+                Ok((index, field.ty.clone()))
+            }
+            _ => Err(format!("invalid field projection {field:?} on {ty:?}")),
+        }?;
+        self.accessible(&projected)?;
+        Ok((index, projected))
     }
     fn expr_when(&mut self, e: &Expr, reachable: bool) -> Result<ir::ExprId, String> {
         let previous = self.reachable;
@@ -1549,7 +1947,8 @@ impl<'a> Checker<'a> {
                     let t = if *ty == Type::Infer {
                         f.ty.clone()
                     } else {
-                        let ty = checked_ty(ty)?;
+                        let ty = checked_ty(ty, self.signatures)?;
+                        self.accessible(&ty)?;
                         self.require(&f, &ty)?;
                         ty
                     };
@@ -1575,18 +1974,18 @@ impl<'a> Checker<'a> {
                         return Err(format!("assignment to immutable local {}", place.local));
                     }
                     let mut ty = declaration.ty.clone();
-                    for &index in &place.fields {
-                        ty = self.field_type(&ty, index)?;
+                    let mut fields = Vec::with_capacity(place.fields.len());
+                    for field in &place.fields {
+                        let (index, field_ty) = self.field_type(&ty, field)?;
+                        ty = field_ty;
+                        fields.push(index);
                     }
                     let value = self.expr(value)?;
                     let flow = self.flow(value);
                     self.require(&flow, &ty)?;
                     (
                         ir::Stmt::AssignPlace {
-                            place: ir::Place {
-                                local,
-                                fields: place.fields.clone(),
-                            },
+                            place: ir::Place { local, fields },
                             value,
                         },
                         flow.completes,
@@ -1670,15 +2069,53 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Field { base, index } => {
+            Expr::Struct { name, fields } => {
+                let ty = self
+                    .signatures
+                    .structs
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("unknown struct {name}"))?;
+                if !ty.def().public && !visible_from(&ty.def().module, &self.module) {
+                    return Err(format!("private struct {name}"));
+                }
+                let mut seen = std::collections::HashSet::new();
+                let mut values = Vec::with_capacity(fields.len());
+                let mut completes = true;
+                for (name, value) in fields {
+                    let (index, expected) = self.field_type(
+                        &ir::Ty::Struct(ty.clone()),
+                        &FieldSelector::Named(name.clone()),
+                    )?;
+                    if !seen.insert(index) {
+                        return Err(format!("duplicate field {name}"));
+                    }
+                    let value = self.expr_when(value, self.reachable && completes)?;
+                    let flow = self.flow(value);
+                    self.require(&flow, &expected)?;
+                    completes &= flow.completes;
+                    values.push((index, value));
+                }
+                if seen.len() != ty.def().fields.len() {
+                    return Err(format!("missing fields in struct {}", ty.def().name));
+                }
+                (
+                    ir::ExprKind::Struct {
+                        ty: ty.clone(),
+                        fields: values,
+                    },
+                    Flow {
+                        ty: ir::Ty::Struct(ty),
+                        completes,
+                    },
+                )
+            }
+            Expr::Field { base, field } => {
                 let base = self.expr(base)?;
                 let flow = self.flow(base);
-                let ty = self.field_type(&flow.ty, *index)?;
+                let (index, ty) = self.field_type(&flow.ty, field)?;
                 (
-                    ir::ExprKind::Field {
-                        base,
-                        index: *index,
-                    },
+                    ir::ExprKind::Field { base, index },
                     Flow {
                         ty,
                         completes: flow.completes,
@@ -1732,8 +2169,10 @@ impl<'a> Checker<'a> {
                 let l = self.flow(left);
                 let r = self.flow(right);
                 let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
-                if matches!(l.ty, ir::Ty::Tuple(_)) || matches!(r.ty, ir::Ty::Tuple(_)) {
-                    return Err("tuple operators and comparisons are unsupported".into());
+                if matches!(l.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
+                    || matches!(r.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
+                {
+                    return Err("aggregate operators and comparisons are unsupported".into());
                 }
                 let (operand, result) = match op {
                     BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
@@ -1766,21 +2205,26 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Call { name, args } => {
-                let (params, result) = self
+                let signature = self
                     .signatures
+                    .functions
                     .get(name)
+                    .cloned()
                     .ok_or_else(|| format!("unresolved function {name}"))?;
-                if params.len() != args.len() {
+                for ty in signature
+                    .params
+                    .iter()
+                    .chain(std::iter::once(&signature.result))
+                {
+                    self.accessible(ty)?;
+                }
+                if signature.params.len() != args.len() {
                     return Err(format!(
                         "wrong arity for {name}: expected {}, got {}",
-                        params.len(),
+                        signature.params.len(),
                         args.len()
                     ));
                 }
-                let signature = ir::Signature {
-                    params: params.iter().map(checked_ty).collect::<Result<_, _>>()?,
-                    result: checked_ty(result)?,
-                };
                 let mut completes = true;
                 let mut arguments = Vec::with_capacity(args.len());
                 for (a, t) in args.iter().zip(&signature.params) {
@@ -1869,6 +2313,7 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Block(block), flow)
             }
         };
+        self.accessible(&flow.ty)?;
         let id = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {
             ty: flow.ty,
@@ -1882,21 +2327,9 @@ impl<'a> Checker<'a> {
         Ok(id)
     }
 }
-/// Validate signatures, lexical scopes, types, mutability, calls and return flow.
+/// Validate all declarations and publish one shared nominal type environment.
 pub fn signature_table(program: &Program) -> Result<Signatures, String> {
-    let table = signatures(program)?;
-    for f in &program.functions {
-        let mut names = std::collections::HashSet::new();
-        for (name, _) in &f.params {
-            if !names.insert(name) {
-                return Err(format!(
-                    "in function {}: duplicate parameter {name}",
-                    f.name
-                ));
-            }
-        }
-    }
-    Ok(table)
+    type_env(program)
 }
 pub fn check_signatures(program: &Program) -> Result<(), String> {
     signature_table(program).map(|_| ())
@@ -1920,23 +2353,32 @@ pub fn type_function_with_signatures(
     index: usize,
     signatures: &Signatures,
 ) -> Result<ir::CheckedFunction, String> {
+    type_function_with_env(program, index, signatures)
+}
+/// Check one body with the same nominal environment used for all signatures.
+pub fn type_function_with_env(
+    program: &Program,
+    index: usize,
+    signatures: &TypeEnv,
+) -> Result<ir::CheckedFunction, String> {
     let f = program
         .functions
         .get(index)
         .ok_or_else(|| format!("invalid function index {index}"))?;
     validate_depth(DepthNode::Block(&f.body))?;
-    let mut c = Checker::new(
-        signatures,
-        checked_ty(&f.result).map_err(|e| format!("in function {}: {e}", f.name))?,
-    );
+    let signature = signatures
+        .functions
+        .get(&f.name)
+        .ok_or_else(|| format!("missing signature for {}", f.name))?;
+    if signature.params.len() != f.params.len() {
+        return Err(format!("signature parameter count mismatch for {}", f.name));
+    }
+    let mut c = Checker::new(signatures, signature.result.clone(), parent(&f.name).into());
     let mut params = Vec::with_capacity(f.params.len());
-    for (n, t) in &f.params {
+    for ((n, _), t) in f.params.iter().zip(&signature.params) {
         params.push(
-            c.bind(
-                n,
-                checked_ty(t).map_err(|e| format!("in function {}: {e}", f.name))?,
-            )
-            .map_err(|e| format!("in function {}: {e}", f.name))?,
+            c.bind(n, t.clone())
+                .map_err(|e| format!("in function {}: {e}", f.name))?,
         );
     }
     let (body, flow) = c
@@ -2408,6 +2850,156 @@ mod typed_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structs_share_nominal_handles_within_one_environment_only() {
+        let program = parse("struct S{x:i32} use S as Alias; fn id(x:Alias)->S{x} fn main(){let x=Alias{x:1};let y=id(x);y.x;}").unwrap();
+        let env = type_env(&program).unwrap();
+        let ty = ir::Ty::Struct(env.structs["S"].clone());
+        assert_eq!(env.functions["id"].params, vec![ty.clone()]);
+        assert_eq!(env.functions["id"].result, ty);
+        assert!(!ty.is_copy());
+        assert!(!ir::Ty::Tuple(vec![ty.clone()].into()).is_copy());
+        let separate = type_env(&program).unwrap();
+        assert_ne!(env.structs["S"], separate.structs["S"]);
+        for index in 0..program.functions.len() {
+            type_function_with_env(&program, index, &env).unwrap();
+        }
+    }
+
+    #[test]
+    fn struct_initializers_retain_source_order_and_checked_field_indices() {
+        let program =
+            parse("struct S{a:i32,b:bool} fn main(){let mut s=S{b:true,a:3};s.a=4;s.b;}").unwrap();
+        let env = type_env(&program).unwrap();
+        let body = type_function_with_env(&program, 0, &env).unwrap();
+        let fields = body
+            .exprs
+            .iter()
+            .find_map(|expr| match &expr.kind {
+                ir::ExprKind::Struct { fields, .. } => Some(fields),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            fields.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+        assert!(
+            body.body.statements.iter().any(
+                |stmt| matches!(stmt,ir::Stmt::AssignPlace{place,..} if place.fields==vec![0])
+            )
+        );
+    }
+
+    #[test]
+    fn structs_reject_invalid_unused_declarations_and_nominal_mismatches() {
+        for source in [
+            "struct A{x:A} fn main(){}",
+            "struct A{x:(B,)} struct B{x:A} fn main(){}",
+            "struct A{x:Missing} fn main(){}",
+            "struct A{x:i32,x:bool} fn main(){}",
+            "struct A{} fn main(){}",
+            "struct A{x:i32} struct B{x:i32} fn main(){let x:A=B{x:1};}",
+            "struct A{x:i32} struct B{x:i32} fn main(){if true{A{x:1}}else{B{x:1}};}",
+            "struct A{x:i32} fn main(){A{x:true};}",
+            "struct A{x:i32} fn main(){A{};}",
+            "struct A{x:i32} fn main(){A{x:1,x:2};}",
+            "struct A{x:i32} fn main(){A{x:1,y:2};}",
+            "struct A{x:i32} fn main(){A{x:1}==A{x:1};}",
+        ] {
+            assert!(
+                parse(source).and_then(|program| check(&program)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn struct_privacy_and_type_value_namespaces_are_distinct() {
+        let legal = "mod m{pub struct S{x:i32} pub fn S()->i32{7} pub fn make()->S{S{x:1}} mod child{fn read(s:super::S)->i32{s.x}}} use m::S; fn main(){let s=m::make();S();}";
+        check(&parse(legal).unwrap()).unwrap();
+        for source in [
+            "mod m{pub struct S{x:i32}} fn main(){m::S{x:1};}",
+            "mod m{pub struct S{x:i32} pub fn make()->S{S{x:1}}} fn main(){m::make().x;}",
+            "mod m{struct S{pub x:i32}} fn main(){let x:m::S=loop{};}",
+            "mod m{} fn main(){let x:m=loop{};}",
+            "mod S{} struct S{x:i32} fn main(){}",
+        ] {
+            assert!(
+                parse(source).and_then(|program| check(&program)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn inferred_private_types_are_not_exposed_through_calls_or_public_fields() {
+        for source in [
+            "mod m{struct S{pub x:i32} pub fn make()->S{S{x:1}}} fn main(){m::make();}",
+            "mod m{struct H{pub x:i32} pub struct O{pub inner:H} pub fn make()->O{O{inner:H{x:1}}}} fn main(){m::make().inner;}",
+            "mod m{struct H{x:i32} pub fn take(x:H){}} fn main(){m::take(loop{});}",
+            "mod m{struct H{pub x:i32} pub struct O{pub inner:H} pub fn make()->O{O{inner:H{x:1}}}} fn main(){let mut s=m::make();s.inner.x=2;}",
+            "mod m{struct H{pub x:i32} pub struct O{pub inner:H} pub fn make()->O{O{inner:H{x:1}}}} fn main(){let mut s=m::make();s.inner=loop{};}",
+            "mod m{struct H{pub x:i32} pub struct O{pub inner:H}} fn main(){m::O{inner:loop{}};}",
+        ] {
+            assert!(
+                parse(source).and_then(|program| check(&program)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn struct_conditions_allow_parenthesized_literals_and_nested_blocks() {
+        check(&parse("struct S{x:bool} fn test(s:S)->bool{s.x} fn main(){if (S{x:true}).x {} while test(S{x:false}) {} if {let s=S{x:true};s.x} {}}").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn struct_expanded_depth_is_bounded_independent_of_declaration_order() {
+        let mut source = "struct S0{x:i32}".to_owned();
+        for index in 1..140 {
+            source.push_str(&format!("struct S{index}{{x:S{}}}", index - 1));
+        }
+        source.push_str("fn main(){}");
+        let program = parse(&source).unwrap();
+        assert!(type_env(&program).unwrap_err().contains("nesting"));
+        let mut source = "struct S0{x:i32}".to_owned();
+        for index in 1..40 {
+            source.push_str(&format!(
+                "struct S{index}{{a:S{},b:S{}}}",
+                index - 1,
+                index - 1
+            ));
+        }
+        source.push_str("fn f(x:S39){x;} fn main(){}");
+        check(&parse(&source).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn struct_dependency_width_is_not_dependency_depth() {
+        let fields = (0..140)
+            .map(|i| format!("f{i}:Leaf"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let program = parse(&format!(
+            "struct Leaf{{x:i32}} struct Wide{{{fields}}} fn main(){{}}"
+        ))
+        .unwrap();
+        let env = type_env(&program).unwrap();
+        assert_eq!(env.structs["Wide"].def().fields.len(), 140);
+        let values = (0..140)
+            .rev()
+            .map(|i| format!("f{i}:Leaf{{x:1}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let program = parse(&format!(
+            "struct Leaf{{x:i32}} struct Wide{{{fields}}} fn main(){{Wide{{{values}}};}}"
+        ))
+        .unwrap();
+        check(&program).unwrap();
+    }
+
     #[test]
     fn module_paths_are_canonical_and_main_stays_root() {
         let p = parse(

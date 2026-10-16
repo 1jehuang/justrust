@@ -92,7 +92,7 @@ impl Budget {
 }
 
 /// Bound type traversal before calling the full structural verifier, including
-/// repeated shared tuple types that could otherwise expand exponentially.
+/// repeated shared aggregate types that could otherwise expand exponentially.
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     if f.blocks.len() > limits.blocks || f.locals.len() > limits.locals {
         return Err(Exhausted);
@@ -106,10 +106,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         };
         let mut ty = &local.ty;
         for &index in &place.fields {
-            let Ty::Tuple(fields) = ty else {
-                return Ok(());
-            };
-            let Some(field) = fields.get(index) else {
+            let Some(field) = ty.field_ty(index) else {
                 return Ok(());
             };
             ty = field;
@@ -184,9 +181,9 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
     if depth > 128 {
         return Err(Exhausted);
     }
-    if let Ty::Tuple(fields) = ty {
-        for field in fields.iter() {
-            preflight_ty(field, depth + 1, budget)?;
+    if let Some(count) = ty.field_count() {
+        for index in 0..count {
+            preflight_ty(ty.field_ty(index).ok_or(Exhausted)?, depth + 1, budget)?;
         }
     }
     Ok(())
@@ -219,9 +216,9 @@ impl Paths {
                 children: Vec::new(),
                 end: 0,
             });
-            if let Ty::Tuple(fields) = ty {
-                for ty in fields.iter() {
-                    let child = add(paths, ty, Some(id), limit)?;
+            if let Some(count) = ty.field_count() {
+                for index in 0..count {
+                    let child = add(paths, ty.field_ty(index).ok_or(Exhausted)?, Some(id), limit)?;
                     paths.nodes[id].children.push(child);
                 }
             }
@@ -716,7 +713,7 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
 
 #[cfg(test)]
 mod tests {
-    use super::super::ir::LocalDecl;
+    use super::super::ir::{DefId, FieldDef, LocalDecl, SnapshotId, StructDef, StructTy};
     use super::*;
     use cfg::{BasicBlock, Constant, Located};
 
@@ -738,6 +735,27 @@ mod tests {
             ty,
             mutable: true,
         }
+    }
+    fn nominal(fields: Vec<Ty>) -> Ty {
+        Ty::Struct(StructTy::new(StructDef {
+            id: DefId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "Paths".into(),
+            module: String::new(),
+            public: false,
+            fields: fields
+                .into_iter()
+                .enumerate()
+                .map(|(index, ty)| FieldDef {
+                    name: format!("f{index}"),
+                    ty,
+                    public: false,
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        }))
     }
     fn fixture() -> cfg::Function {
         cfg::Function {
@@ -927,5 +945,41 @@ mod tests {
         }
         assert!(preflight_ty(&ty, 0, &mut Budget(1000)).is_err());
         assert!(preflight_ty(&ty, 0, &mut Budget(3000)).is_ok());
+    }
+
+    #[test]
+    fn nominal_fields_get_distinct_nested_move_paths() {
+        let inner = nominal(vec![Ty::Unit, Ty::Bool]);
+        let outer = nominal(vec![Ty::I32, Ty::Tuple(vec![inner.clone(), inner].into())]);
+        let mut f = fixture();
+        f.locals.push(local(outer.clone()));
+        let paths = Paths::new(&f, 10).unwrap();
+        assert_eq!(paths.nodes.len(), 10);
+        assert!(Paths::new(&f, 9).is_err());
+        let projected = |fields| Place {
+            local: LocalId(1),
+            fields,
+        };
+        assert_eq!(paths.resolve(&projected(vec![1, 0, 0])), 5);
+        assert_eq!(paths.resolve(&projected(vec![1, 1, 0])), 8);
+        assert_eq!(paths.nodes[8].parent, Some(7));
+        assert_eq!(paths.nodes[7].end, 10);
+        assert!(preflight_ty(&outer, 0, &mut Budget(15)).is_err());
+        assert!(preflight_ty(&outer, 0, &mut Budget(30)).is_ok());
+    }
+
+    #[test]
+    fn shared_nominal_dag_expansion_is_bounded_before_paths() {
+        let mut ty = Ty::I32;
+        for _ in 0..20 {
+            ty = nominal(vec![ty.clone(), ty]);
+        }
+        let mut f = fixture();
+        f.locals.push(local(ty));
+        let result = analyze(&f);
+        assert!(!result.complete);
+        assert_eq!(result.diagnostics[0].kind, ErrorKind::ResourceLimit);
+        assert_eq!(result.stats.move_paths, 0);
+        assert_eq!(result.stats.worklist_pops, 0);
     }
 }

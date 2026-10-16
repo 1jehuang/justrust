@@ -71,7 +71,23 @@ Full Rust is a substantial compiler program, not a feature that this document
 claims is already solved. No completion date or full compatibility claim follows
 from these milestones.
 
-## Current slice: inline modules and item resolution
+## Current slice: nominal aggregate ownership
+
+Nonempty braced named structs now use snapshot-scoped nominal identities and
+immutable declaration handles. Source values remain non-Copy unless their type
+is a supported scalar or a tuple whose every component is Copy. Local-rooted
+field consumption moves only the projected non-Copy subtree. The cached CFG
+analysis gates both checking and native emission, including whole/partial moves,
+reinitialization and control-flow joins. Field privacy includes the accessibility
+of inferred and intermediate projected types, not only field names.
+
+The private aggregate ABI is not a platform representation contract. Empty/unit/
+tuple structs, struct update/shorthand, destructuring, derives, references, loans,
+lifetimes, destructors, enums and general Rust data/abstraction features remain
+open. Compact shared declaration DAGs and diagnostics have explicit resource
+bounds. This slice does not complete ownership or full Rust compatibility.
+
+## Completed source slice: inline modules and item resolution
 
 Implement nested `mod name { ... }`, ordinary `pub` on modules/functions,
 `crate::`, `self::`, `super::` and relative qualified function paths, plus

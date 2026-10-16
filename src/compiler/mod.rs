@@ -32,7 +32,7 @@ struct Snapshot {
     source: OnceLock<source::LoadedSource>,
     parsed: OnceLock<frontend::ParsedProgram>,
     program: OnceLock<frontend::Program>,
-    signatures: OnceLock<frontend::Signatures>,
+    types: OnceLock<frontend::TypeEnv>,
     checked: OnceLock<Vec<OnceLock<ir::CheckedFunction>>>,
     lowered: OnceLock<Vec<OnceLock<Arc<cfg::Function>>>>,
     analyses: OnceLock<Vec<OnceLock<Arc<ownership::Analysis>>>>,
@@ -136,12 +136,11 @@ impl Provider for CompilerProvider {
                 }
                 SIGNATURES => {
                     cx.read(cx.request(root(RESOLVE)).get(0)).await?;
-                    let signatures =
-                        frontend::signature_table(this.program()?).map_err(Error::new)?;
+                    let types = frontend::type_env(this.program()?).map_err(Error::new)?;
                     this.0
-                        .signatures
-                        .set(signatures)
-                        .map_err(|_| Error::new("duplicate signatures"))?;
+                        .types
+                        .set(types)
+                        .map_err(|_| Error::new("duplicate type environment"))?;
                 }
                 BODY | LOWER | ANALYZE | OBJECT => {
                     let [index] = key.params.as_slice() else {
@@ -151,17 +150,14 @@ impl Provider for CompilerProvider {
                         .map_err(|_| Error::new("invalid function index"))?;
                     if key.kind == BODY {
                         cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
-                        let signatures = this
+                        let types = this
                             .0
-                            .signatures
+                            .types
                             .get()
-                            .ok_or_else(|| Error::new("missing signatures"))?;
-                        let checked = frontend::type_function_with_signatures(
-                            this.program()?,
-                            index,
-                            signatures,
-                        )
-                        .map_err(Error::new)?;
+                            .ok_or_else(|| Error::new("missing type environment"))?;
+                        let checked =
+                            frontend::type_function_with_env(this.program()?, index, types)
+                                .map_err(Error::new)?;
                         this.0
                             .checked
                             .get()
@@ -279,6 +275,7 @@ pub struct Compilation {
     pub executable: Option<Vec<u8>>,
     pub report: Report,
     pub functions: usize,
+    pub structs: usize,
     /// Explicit control-flow graph counts, distinct from the work dependency graph.
     pub cfg_blocks: usize,
     pub cfg_edges: usize,
@@ -349,7 +346,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         source: OnceLock::new(),
         parsed: OnceLock::new(),
         program: OnceLock::new(),
-        signatures: OnceLock::new(),
+        types: OnceLock::new(),
         checked: OnceLock::new(),
         lowered: OnceLock::new(),
         analyses: OnceLock::new(),
@@ -427,6 +424,10 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         executable,
         report,
         functions,
+        structs: snapshot
+            .program
+            .get()
+            .map_or(0, |program| program.structs.len()),
         cfg_blocks,
         cfg_edges,
         cfg_locals,
