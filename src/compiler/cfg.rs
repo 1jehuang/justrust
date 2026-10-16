@@ -588,6 +588,13 @@ impl Lowerer<'_> {
         self.scopes.push(Vec::new());
         for statement in &body.statements {
             match statement {
+                ir::Stmt::Declare { local } => {
+                    self.result.place_ty(&place(*local))?;
+                    if self.parameters.contains(local) {
+                        return Err("declaration local aliases parameter".into());
+                    }
+                    self.live(*local, None);
+                }
                 ir::Stmt::Let { local, value } => {
                     let operand = self.expression(*value)?;
                     self.live(*local, Some(*value));
@@ -1357,6 +1364,76 @@ mod tests {
         let program = super::super::frontend::parse(source).unwrap();
         let signatures = super::super::frontend::signature_table(&program).unwrap();
         super::super::frontend::type_function_with_signatures(&program, index, &signatures).unwrap()
+    }
+
+    #[test]
+    fn deferred_declarations_start_live_without_initializing_storage() {
+        let function = lower(&checked("fn f(){let x:i32;} fn main(){}", 0)).unwrap();
+        function.validate().unwrap();
+        let local = LocalId(0);
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .any(|s| matches!(s.value, Statement::StorageLive(id) if id == local))
+        );
+        assert!(!function.blocks.iter().flat_map(|b| &b.statements).any(|s| matches!(&s.value, Statement::Assign { destination, .. } if destination.local == local)));
+        assert!(
+            super::super::ownership::analyze(&function)
+                .diagnostics
+                .is_empty()
+        );
+        assert_storage_paths(&function);
+    }
+
+    #[test]
+    fn empty_never_match_has_no_reachable_result_read() {
+        let source = checked("fn f()->i32{match loop{} {}} fn main(){}", 0);
+        source.validate().unwrap();
+        let function = lower(&source).unwrap();
+        function.validate().unwrap();
+        assert!(
+            super::super::ownership::analyze(&function)
+                .diagnostics
+                .is_empty()
+        );
+        assert_storage_paths(&function);
+    }
+
+    #[test]
+    fn deferred_immutable_first_initialization_joins_both_branches() {
+        let function = lower(&checked(
+            "fn f(flag:bool)->i32{let x:i32;if flag{x=1;}else{x=2;}x} fn main(){}",
+            0,
+        ))
+        .unwrap();
+        function.validate().unwrap();
+        assert!(
+            super::super::ownership::analyze(&function)
+                .diagnostics
+                .is_empty()
+        );
+        assert_storage_paths(&function);
+    }
+
+    #[test]
+    fn deferred_reads_reassignment_and_loop_backedges_are_rejected() {
+        for source in [
+            "fn f()->i32{let x:i32;x} fn main(){}",
+            "fn f(){let x:i32;x=1;x=2;} fn main(){}",
+            "fn f(flag:bool)->i32{let x:i32;if flag{x=1;}x} fn main(){}",
+            "fn f(flag:bool){let x:i32;while flag{x=1;}} fn main(){}",
+        ] {
+            let function = lower(&checked(source, 0)).unwrap();
+            function.validate().unwrap();
+            assert!(
+                !super::super::ownership::analyze(&function)
+                    .diagnostics
+                    .is_empty(),
+                "{source}"
+            );
+        }
     }
 
     #[test]

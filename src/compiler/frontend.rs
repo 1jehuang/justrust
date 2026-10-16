@@ -124,6 +124,11 @@ pub enum Pattern {
 }
 #[derive(Clone, Debug)]
 pub enum Stmt {
+    Declare {
+        name: String,
+        ty: Type,
+        mutable: bool,
+    },
     Let {
         name: String,
         mutable: bool,
@@ -535,6 +540,9 @@ impl Parser {
         result
     }
     fn ty_inner(&mut self) -> Result<Type, String> {
+        if self.is("_") || self.is("!") {
+            return Err(self.error("inferred and never source type annotations are unsupported"));
+        }
         if self.eat("i32") {
             Ok(Type::I32)
         } else if self.eat("bool") {
@@ -911,6 +919,14 @@ impl Parser {
                 } else {
                     None
                 };
+                if self.eat(";") {
+                    let Pattern::Binding { name, mutable } = pattern else {
+                        return Err(self.error("deferred pattern declarations are unsupported"));
+                    };
+                    let ty = annotation.ok_or_else(||self.error("untyped deferred declarations are unsupported; add a concrete type annotation"))?;
+                    statements.push(Stmt::Declare { name, ty, mutable });
+                    continue;
+                }
                 self.expect("=")?;
                 let value = self.expr(0)?;
                 self.expect(";")?;
@@ -1594,6 +1610,17 @@ impl Resolver<'_> {
                 };
             }
             match stmt {
+                Stmt::Declare { name, ty, .. } => {
+                    self.ty(ty, module)?;
+                    if let Some(item) = self.path(name, module, false, false)?
+                        && item.kind == ResolvedKind::Variant
+                    {
+                        return Err(format!(
+                            "enum variant patterns in deferred declarations are unsupported: {name}"
+                        ));
+                    }
+                    locals.last_mut().unwrap().insert(name.clone());
+                }
                 Stmt::Let {
                     name, ty, value, ..
                 } => {
@@ -1860,6 +1887,7 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
             DepthNode::Block(block) => {
                 for stmt in &block.statements {
                     match stmt {
+                        Stmt::Declare { ty, .. } => push(DepthNode::Type(ty)),
                         Stmt::Let { value, ty, .. } => {
                             push(DepthNode::Expr(value));
                             push(DepthNode::Type(ty));
@@ -2574,6 +2602,17 @@ impl<'a> Checker<'a> {
         for s in &b.statements {
             self.reachable = entered_reachable && live;
             let (statement, completes) = match s {
+                Stmt::Declare { name, ty, mutable } => {
+                    if matches!(ty, Type::Infer | Type::Never) {
+                        return Err(
+                            "deferred declarations require a concrete supported source type".into(),
+                        );
+                    }
+                    let ty = checked_ty(ty, self.signatures)?;
+                    self.accessible(&ty)?;
+                    let local = self.local(name, ty, *mutable)?;
+                    (ir::Stmt::Declare { local }, true)
+                }
                 Stmt::Let {
                     name,
                     mutable,
@@ -2639,9 +2678,6 @@ impl<'a> Checker<'a> {
                     let local = self.lookup(name)?;
                     let declaration = &self.locals[local.0];
                     let t = declaration.ty.clone();
-                    if !declaration.mutable {
-                        return Err(format!("assignment to immutable local {name}"));
-                    }
                     let value = self.expr(value)?;
                     let f = self.flow(value);
                     self.require(&f, &t)?;
@@ -2650,7 +2686,7 @@ impl<'a> Checker<'a> {
                 Stmt::AssignPlace { place, value } => {
                     let local = self.lookup(&place.local)?;
                     let declaration = &self.locals[local.0];
-                    if !declaration.mutable {
+                    if !declaration.mutable && !place.fields.is_empty() {
                         return Err(format!("assignment to immutable local {}", place.local));
                     }
                     let mut ty = declaration.ty.clone();
@@ -3156,12 +3192,23 @@ pub fn check_function(program: &Program, index: usize) -> Result<(), String> {
     check_function_with_signatures(program, index, &signatures)
 }
 /// `signatures` must be the validated table for this same immutable program.
+/// Direct semantic checking includes CFG initialization/move analysis once.
+/// Graph callers use the pure type_function_with_env operation instead.
 pub fn check_function_with_signatures(
     program: &Program,
     index: usize,
     signatures: &Signatures,
 ) -> Result<(), String> {
-    type_function_with_signatures(program, index, signatures).map(|_| ())
+    let typed = type_function_with_signatures(program, index, signatures)?;
+    let lowered = super::cfg::lower(&typed)?;
+    let analysis = super::ownership::analyze(&lowered);
+    if !analysis.passed() {
+        return Err(format!(
+            "{}: initialization/move analysis (complete={}): {:?}",
+            lowered.name, analysis.complete, analysis.diagnostics
+        ));
+    }
+    Ok(())
 }
 /// Check and lower one body using the validated signatures for this program.
 /// The returned arena owns all resolved locals, expression types and call facts.
@@ -3223,6 +3270,68 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn typed_deferred_declarations_publish_fresh_uninitialized_locals() {
+        let source = "enum E{A,B} struct S{e:E} fn main(){let x=1;let x:i32;let mut y:(i32,bool);let s:S;x=2;y=(x,true);s=S{e:E::A};let x=true;match s.e{E::A=>(),E::B=>()};}";
+        let program = parse(source).unwrap();
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        assert_eq!(checked.locals.len(), 5);
+        assert_eq!(checked.locals[0].name, "x");
+        assert_eq!(checked.locals[1].name, "x");
+        assert!(!checked.locals[1].mutable);
+        assert!(checked.locals[2].mutable);
+        assert!(matches!(
+            checked.body.statements[1],
+            ir::Stmt::Declare {
+                local: ir::LocalId(1)
+            }
+        ));
+        checked.validate().unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn deferred_declarations_keep_flow_checks_outside_pure_typing() {
+        for source in [
+            "fn main(){let x:i32;x=1;let y=x;}",
+            "fn f(b:bool)->i32{let x:i32;if b{x=1;}else{x=2;}x}fn main(){}",
+            "fn main(){let mut x:i32;x=1;x=2;}",
+            "fn main(){return;let x=1;x=2;}",
+            "fn main(){let x=1;return;x=2;}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+        for source in [
+            "fn main(){let x:i32;let y=x;}",
+            "fn main(){let x:i32;x=1;x=2;}",
+            "fn main(){let x=1;x=2;}",
+            "fn f(b:bool){let x:i32;if b{x=1;}let y=x;}fn main(){}",
+            "fn main(){let x:i32;loop{x=1;}}",
+        ] {
+            let program = parse(source).unwrap();
+            let env = type_env(&program).unwrap();
+            type_function_with_env(&program, 0, &env).unwrap();
+            assert!(
+                check_function_with_signatures(&program, 0, &env).is_err(),
+                "accepted {source}"
+            );
+            assert!(check_function(&program, 0).is_err());
+            assert!(check(&program).is_err());
+        }
+        for source in [
+            "fn main(){let x;}",
+            "fn main(){let mut x;}",
+            "fn main(){let (x,y):(i32,i32);}",
+            "fn main(){let _:i32;}",
+            "fn main(){let x:_;}",
+            "fn main(){let x:!;}",
+            "enum E{A}use E::A;fn main(){let A:E;}",
+        ] {
+            assert!(parse(source).is_err(), "accepted {source}");
+        }
+    }
 
     #[test]
     fn enum_match_types_paths_scopes_and_nominal_identity() {
@@ -3703,7 +3812,6 @@ mod typed_tests {
         for source in [
             "fn main(){ return; let x=true+1; }",
             "fn main(){ return; let x:bool=1; }",
-            "fn main(){ return; let x=1; x=2; }",
             "fn main(){ if true { 1 } else { 2 } let x=0; }",
             "fn f()->i32 { while true { return 1; } } fn main(){}",
         ] {
@@ -4011,7 +4119,12 @@ mod tests {
             ));
         }
         source.push_str("fn f(x:S39){x;} fn main(){}");
-        check(&parse(&source).unwrap()).unwrap();
+        let program = parse(&source).unwrap();
+        let env = type_env(&program).unwrap();
+        // This fixture intentionally has an exponentially large value layout.
+        // Its shared semantic DAG is shallow, independent of backend/analysis
+        // resource limits when expanding concrete move paths or storage.
+        type_function_with_env(&program, 0, &env).unwrap();
     }
 
     #[test]

@@ -1,5 +1,28 @@
 # Findings: where agent build time goes
 
+## 2026-10-16: Typed deferred initialization uses cached flow analysis
+
+Added explicit `let [mut] name: Type;` declarations with fresh shadow identities.
+Lowering emits StorageLive without a fabricated value or assignment. First whole
+local writes use cached analysis 109 rather than a blanket frontend immutable
+assignment rejection. Branch/match joins, missing initialization and immutable
+history across moves/backedges use the same fixed-point analysis. Direct semantic
+check helpers lower and analyze once, while graph body typing remains pure.
+
+The exact historical wildcard/uninitialized match source is promoted from
+legal-unsupported to accepted. The new corpus has 10 accepted cases, seven invalid
+programs and three explicit unsupported inference/destructuring boundaries.
+Graph tests prove once-only facts, retained failed analyses and no-read wildcard
+semantics. Immutable reassignment still fails both checked backend conveniences
+and check/build roots, including unused functions. Valid assignment after an
+unconditional return is not misclassified. Empty Never matches remain valid.
+
+Final hosted gates: check `20261015-232901274-1612259`, test
+`20261015-232901788-1612499` (**465 passed**), strict all-target clippy
+`20261015-232903155-1612244`. Formatting and diff checks passed. Exact redacted
+profiles are in `data/runs/prototype-bootstrap/2026-10-deferred.jsonl`. This is
+correctness evidence, not a speedup or full inference/borrow-checking claim.
+
 ## 2026-10-16: Fieldless enums and match preserve static ownership paths
 
 Implemented nonempty unit-variant nominal enums and native match expressions over

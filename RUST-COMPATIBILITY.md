@@ -106,6 +106,16 @@ guards, or/range patterns, general nested refutable patterns, derives, explicit
 discriminants and empty enums remain open. This does not complete Rust enums,
 match, ownership or the full language.
 
+## Current follow-on: typed deferred initialization
+
+`DEFERRED.md` exposes first initialization through explicit plain-binding type
+annotations. One cached analysis handles uninitialized reads, immutable write
+history, branch/match joins and loop backedges. A fresh shadow has a fresh
+initialization state immediately. Wildcard-only enum matching remains no-read.
+Direct semantic check helpers lower and analyze once, while graph body typing
+remains pure and both roots share analysis 109. Backward inference and deferred
+destructuring remain open. This is not completion of borrow checking or inference.
+
 ## Completed source slice: inline modules and item resolution
 
 Implement nested `mod name { ... }`, ordinary `pub` on modules/functions,

@@ -310,7 +310,6 @@ fn checked_ir_rejects_invalid_unused_bodies_without_publishing_typed_results() {
         || {
             for body in [
                 "let x:i32=true;",
-                "let x=1; x=2;",
                 "let flag:bool=1;",
                 "take(true);",
                 "return true;",

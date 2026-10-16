@@ -502,13 +502,12 @@ fn main() { if run() == 2 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_wildcard_uninitialized() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "wildcard_uninitialized",
+fn accepts_wildcard_uninitialized() {
+    runs(
         r#"enum E { A, B, C } fn run()->i32{let e:E;match e{_=>7}}
 fn main() { if run() == 7 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 

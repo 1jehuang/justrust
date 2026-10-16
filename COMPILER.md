@@ -24,7 +24,8 @@ published until every required check and code generation operation succeeds.
 Initial supported syntax: free functions with `i32`, `bool`, unit, nested tuples
 and nonempty braced named structs or fieldless enums as parameters/results, aggregate literals and
 numeric/named field projections,
-local bindings and shadowing, irrefutable tuple/struct let patterns, wildcard,
+local bindings and shadowing, typed deferred local initialization,
+irrefutable tuple/struct let patterns, wildcard,
 per-binding `mut`, struct-pattern `..`, whole-value and local-rooted field assignment,
 integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
 `while`, unlabelled `loop` expressions, `break` with supported value types,
@@ -32,6 +33,9 @@ integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`
 and `println!("literal")`. Match supports variant/literal, wildcard and whole-value
 binding arms, with exhaustive bool/unit/enum coverage and an i32 catchall. Guards,
 or/range and nested refutable patterns remain following work. See `ENUMS.md`.
+Typed declarations `let [mut] name: Type;` use cached flow analysis for first
+initialization and immutable assignment history. Untyped/backward-inferred and
+deferred destructuring declarations remain unsupported. See `DEFERRED.md`.
 `main` takes no arguments and returns unit. Arithmetic has overflow checks,
 matching Rust debug behavior. Runtime arithmetic failure exits 101. This first
 runtime does not yet reproduce Rust panic text or unwind behavior.

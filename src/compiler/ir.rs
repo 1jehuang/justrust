@@ -356,6 +356,10 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
+    /// Starts a fresh binding's lifetime without initializing its value.
+    Declare {
+        local: LocalId,
+    },
     Let {
         local: LocalId,
         value: ExprId,
@@ -473,14 +477,16 @@ impl CheckedFunction {
         arms: &[MatchArm],
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
-        if arms.is_empty() || arms.len() > MAX_MATCH_ARMS {
-            return Err("match arm count must be between 1 and 4096".into());
-        }
         let ty = &self
             .exprs
             .get(scrutinee.0)
             .ok_or("invalid match scrutinee")?
             .ty;
+        if arms.len() > MAX_MATCH_ARMS || (arms.is_empty() && *ty != Ty::Never) {
+            return Err(
+                "match arm count must be between 1 and 4096 unless scrutinee is never".into(),
+            );
+        }
         if let Ty::Enum(ty) = ty {
             ty.validate()?;
         }
@@ -686,6 +692,12 @@ impl CheckedFunction {
             }
             for statement in &block.statements {
                 match statement {
+                    Stmt::Declare { local: id } => {
+                        local(*id)?;
+                        if parameters.contains(id) {
+                            return Err("declaration local aliases parameter".into());
+                        }
+                    }
                     Stmt::Let { local: id, value } | Stmt::Assign { local: id, value } => {
                         local(*id)?;
                         expr(*value)?;
@@ -720,6 +732,26 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferred_declaration_references_require_nonparameter_locals() {
+        let mut function = fixture();
+        function
+            .body
+            .statements
+            .push(Stmt::Declare { local: LocalId(1) });
+        function.validate().unwrap();
+        function
+            .body
+            .statements
+            .push(Stmt::Declare { local: LocalId(0) });
+        assert!(function.validate().unwrap_err().contains("parameter"));
+        function.body.statements.pop();
+        function.body.statements.push(Stmt::Declare {
+            local: LocalId(usize::MAX),
+        });
+        assert!(function.validate().unwrap_err().contains("invalid local"));
+    }
 
     #[test]
     fn enum_identity_copy_debug_and_variant_bounds() {

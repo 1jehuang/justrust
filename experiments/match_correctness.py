@@ -17,7 +17,7 @@ import tempfile
 from module_correctness import Case, accepted, process, rejected, run_case
 
 
-ACCEPTANCE_CORPUS_SHA256 = "7f52eeb5c3d67652f49d30f05dd1df6311ea8e157b8a2bf97ff48d237e7b8e95"
+ACCEPTANCE_CORPUS_SHA256 = "1f124303d810c6b417d98de2db98e862589bcfc12a800bb9128d53a89dbd7112"
 
 # Frozen bear stock oracle. full_source is authoritative, with no added wrapper.
 FIXTURES = json.loads(r'''
@@ -271,7 +271,7 @@ FIXTURES = json.loads(r'''
     "expected_stdout": "match oracle ok\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "wildcard_uninitialized",
     "source": "enum E { A, B, C } fn run()->i32{let e:E;match e{_=>7}}",
     "expected": 7,

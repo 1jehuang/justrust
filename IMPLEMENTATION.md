@@ -19,6 +19,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Nonempty nominal structs, field privacy and source-level whole/partial moves.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
+- [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -52,6 +53,14 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       libraries, real projects and self-hosting. Self-hosting alone is not enough.
 
 ## Active slice
+
+Typed deferred initialization now passes 465 hosted tests, including branch/match
+first writes, loop assignment history, fresh-shadow reads and graph failure
+analysis retention. `DEFERRED.md` records the contract. The exact historical
+wildcard/uninitialized match fixture is now accepted rather than unsupported.
+The dedicated differential corpus contains 10 accepted cases, seven invalid
+programs and three explicit inference/pattern boundaries. Payload enums remain
+the next design/implementation slice, not a completed capability.
 
 Fieldless enums and scalar/enum match now pass 434 hosted tests. `ENUMS.md`
 records nonconsuming variant inspection, selected binding moves, finite coverage
