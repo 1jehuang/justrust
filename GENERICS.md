@@ -269,6 +269,9 @@ The explicit reference-free foundation is implemented with one universal move
 solver, capture-free checked-IR substitution, application-qualified nominal
 identity and sealed concrete native instances. All 1,235 hosted tests, strict
 all-target lint, the exact 28 source cases and four graph gates pass. The actual
-native example runs successfully with eight workers. Independent whole-corpus
-follow-through on the committed revision remains pending. This is not full Rust
+native example runs successfully with eight workers. Tracked independent run
+`compiler-generics-20261016-1152` verifies all 928 cases across 26 corpora on
+revision `714a034d90d308e635fd17bbfb6cef653288a96d`, plus the actual 96-worker
+example. Raw case and example receipts are retained under
+`experiments/results/20261016-m8a-generics-*`. This is not full Rust
 compatibility or a measured performance improvement.

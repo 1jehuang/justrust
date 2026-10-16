@@ -8994,3 +8994,32 @@ the corrected source. These are source-level budget checks, not measured peak
 memory proof. Independent whole-corpus receipts on the implementation commit
 are still pending. No install replaced stable justrust, no source compilation
 was delegated, and no speedup or full Rust completion is claimed.
+
+### Independent generic campaign follow-through
+
+Tracked experiment `compiler-generics-20261016-1152` completed on
+`714a034d90d308e635fd17bbfb6cef653288a96d` using the independent 96-core
+M8a host. All 928 cases in 26 corpora passed: 560 accepted parity, 35 declared
+trap101, 258 invalid rejected, 74 legal unsupported boundaries and one distinct
+bounded-instantiation resource rejection. Independent parsing verified each
+source hash, process stream hash, worker status and corpus summary, including
+864 normal workers1/8 runtime comparisons, 70 declared trap runtime checks and
+128 generated compile/runtime exit checks. Successful CHECK graphs publish no
+executable, and all successful captures report zero failures/dropped events.
+
+The resource fixture preserves stock BUILD recursion-limit rejection and
+metadata acceptance separately. Both native CHECK and BUILD at workers1/8
+reject1 with generic+limit diagnostics, no panic/syntax substitute, no native
+files and no runtime attempt. It is not counted as invalid Rust or parity.
+The 96-worker generic example actually executed with exit0 and the exact
+expected stdout. Its graph has 65 nodes/138 edges, 30 CFG blocks/24 edges/75
+locals and complete capture. Raw case and example receipts are retained in
+27 files under `experiments/results/20261016-m8a-generics-*`. All case receipts
+identify one native binary SHA256
+`6442ebfd9868a932a3ba3b535db043b855384478465ffc0e91dc6053eeff9005`.
+
+The first tracked attempt could not connect to the host's stale public address.
+The refreshed running-instance address succeeded without bypassing metering or
+isolation. Timings are contended/uncontrolled functional evidence, not a
+speedup claim or full Rust completion. Generic inference, traits, references in
+generic values, Drop, full libraries and existing-project acceptance remain open.

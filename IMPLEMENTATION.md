@@ -66,9 +66,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 The full requested outcome is not reached. The generic foundation passes 1,235
 hosted tests, strict all-target lint, its 28 exact source cases and four
-instance/trust graph tests. The last retained independent campaign covers 900
-native cases before this foundation. Its expanded independent campaign remains
-open until exact-revision receipts are retained. There is no successful
+instance/trust graph tests. The tracked 26-corpus independent campaign verifies
+928 native cases on revision 714a034d90d308e635fd17bbfb6cef653288a96d, including
+the distinct bounded-instantiation resource outcome. There is no successful
 core/alloc/std build, broad existing-project acceptance or representative full-Rust
 performance comparison. INTEGER-TYPES.md now records delivered signed/unsigned
 primitives through64 bits, typed literals/patterns and existing checked operations.
