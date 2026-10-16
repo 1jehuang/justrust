@@ -68,8 +68,14 @@ corpus native verification passed all 602 cases: 361 successful parity cases,
 178 invalid rejections, nine declared runtime-101 traps and 54 explicit legal-
 unsupported boundaries. Raw receipts and the executed 96-worker example are
 retained under `experiments/results/20261016-m8a-reference-calls-*`.
-Reference returns and signature regions remain open under the read-only
-`REFERENCE-RETURNS.md` design checkpoint, not an implemented capability.
+
+Shared whole-parameter reference returns are implemented under
+`REFERENCE-RETURNS.md`. The frozen 30-case corpus and four retained graph tests
+pass hosted acceptance after fixing named-lifetime scanning in filesystem module
+loading. The final frozen hosted suite passes 798 tests, strict all-target lint,
+formatting and bounded resource/provenance review. Tracked fifteen-corpus native
+verification remains the delivery gate. Mutable/projected returns,
+general regions and full Rust remain open.
 
 Genuine nonescaping local references are implemented under `BORROWING.md`, with
 canonical issuance-time loan origins, explicit reborrows, backward carrier

@@ -8394,3 +8394,43 @@ The 96-worker reference-call example executed successfully with complete capture
 18 nodes, 23 edges and zero failures or dropped events. Its observed 11.364 ms
 total and 3.108 ms engine times are contended/uncontrolled observations, not a
 speedup or cold-build claim. Full Rust and escaping reference lifetimes remain open.
+
+## Shared whole-parameter reference returns: hosted gate (2026-10-16)
+
+Implemented `REFERENCE-RETURNS.md`: explicit named signature regions and bounded
+shared reference returns to whole shared-parameter referents. One canonical
+RefContract is retained from declarations through checked functions and CFGs.
+Eligible target indices are complete declaration-derived original parameter
+positions, not optimistic body summaries. Calls still depend only on declarations.
+
+Private CallReturn origins retain issuance-time target alternatives separately
+from actual-loan lifetime dependencies, including unrelated-pointee inputs and
+upstream returned references. Normal returns prove rigid universal outlives
+obligations and whole external roots. Fresh call instantiations never infer a
+missing relation between body formal regions. True outgoing call-result origin
+states and backward destination definitions preserve provenance after argument
+temporaries die. Shared results use the existing thin 64-bit ABI, without copying
+referents or returning frame storage. Mutable/projected results remain unsupported.
+
+The combined 4096-origin cap includes explicit loans, formal origins and returned
+call origins. Contract closure, candidate comparisons, outgoing states, retained
+authority/dependency membership and peak validation scratch are bounded. Resource
+exhaustion stays incomplete and fail-closed, distinct from malformed contracts.
+Parameter scratch is dropped before nested call validation, including in the CFG
+verifier. Loan-use scratch is included in peak estimates.
+
+Actual CLI acceptance exposed a filesystem module scanner treating lifetimes as
+unterminated character literals. It now preserves named lifetime tokens while
+hiding quoted character/string delimiters. Two source regressions and all ten
+loader tests pass. The exact unchanged 30-case corpus passes stock and native
+acceptance: 17 supported programs, eight invalid programs, five legal-unsupported
+boundaries. Four graph tests retain exact shared analysis and failed lifetime
+facts, including unrelated-pointee owner death and missing universal outlives.
+
+Final hosted check `20261016-012538554-2540662`, full test
+`20261016-012540177-2540907` (798 passed) and strict all-target clippy
+`20261016-012542487-2540599` passed. Formatting/diff checks are clean. Exact
+redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-reference-returns.jsonl`. Fifteen-corpus
+native validation follows after commit. No speedup, cold-build or full-Rust claim
+follows from these correctness gates.

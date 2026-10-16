@@ -389,12 +389,14 @@ pub struct LocalDecl {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signature {
+    pub ref_contract: Arc<RefContract>,
     pub params: Vec<Ty>,
     pub result: Ty,
 }
 
 #[derive(Clone, Debug)]
 pub struct CheckedFunction {
+    pub ref_contract: Arc<RefContract>,
     pub name: String,
     /// Ordered parameter bindings, distinct entries in `locals`.
     pub params: Vec<LocalId>,
@@ -402,6 +404,254 @@ pub struct CheckedFunction {
     pub locals: Vec<LocalDecl>,
     pub exprs: Vec<TypedExpr>,
     pub body: Block,
+}
+
+pub const MAX_REGION_PARAMS: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RegionParamId(pub u16);
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum ReturnContract {
+    #[default]
+    NoReference,
+    SharedWholeParams(Arc<[usize]>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct RefContract {
+    pub region_count: u16,
+    pub param_regions: Arc<[Option<RegionParamId>]>,
+    pub result_region: Option<RegionParamId>,
+    pub outlives: Arc<[(RegionParamId, RegionParamId)]>,
+    pub returns: ReturnContract,
+}
+
+impl RefContract {
+    fn validate_shapes(params: &[Ty], result: &Ty) -> Result<usize, String> {
+        if params.len() >= MAX_PATTERN_PROJECTION_WORK {
+            return Err("reference contract type work limit exceeded".into());
+        }
+        let mut pending: Vec<_> = params
+            .iter()
+            .chain(std::iter::once(result))
+            .map(|ty| (ty, 0usize))
+            .collect();
+        let mut work = 0;
+        let mut seen = std::collections::HashSet::new();
+        let mut structs = std::collections::HashSet::new();
+        let mut enums = std::collections::HashSet::new();
+        while let Some((ty, depth)) = pending.pop() {
+            work += 1;
+            if work > MAX_PATTERN_PROJECTION_WORK || depth > MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("reference contract type resource limit exceeded".into());
+            }
+            match ty {
+                Ty::Ref { referent, .. } => {
+                    if depth != 0 {
+                        return Err("unsupported: nested or aggregate references".into());
+                    }
+                    pending.push((referent, depth + 1));
+                }
+                Ty::Tuple(fields) if seen.insert((0, fields.as_ptr() as usize)) => {
+                    if fields.len()
+                        > MAX_PATTERN_PROJECTION_WORK.saturating_sub(work + pending.len())
+                    {
+                        return Err("reference contract type work limit exceeded".into());
+                    }
+                    pending.extend(fields.iter().map(|ty| (ty, depth + 1)));
+                }
+                Ty::Array { element, .. } if seen.insert((1, Arc::as_ptr(element) as usize)) => {
+                    pending.push((element, depth + 1))
+                }
+                Ty::Struct(ty) if structs.insert(ty.def().id) => {
+                    if ty.def().fields.len()
+                        > MAX_PATTERN_PROJECTION_WORK.saturating_sub(work + pending.len())
+                    {
+                        return Err("reference contract type work limit exceeded".into());
+                    }
+                    pending.extend(ty.def().fields.iter().map(|field| (&field.ty, depth + 1)));
+                }
+                Ty::Enum(ty) if enums.insert(ty.def().id) => {
+                    if ty.def().variants.len() > MAX_ENUM_VARIANTS
+                        || ty.def().variants.len() > MAX_PATTERN_PROJECTION_WORK - work
+                    {
+                        return Err("reference contract enum work limit exceeded".into());
+                    }
+                    work += ty.def().variants.len();
+                    for variant in ty.def().variants.iter() {
+                        if variant.fields.len()
+                            > MAX_PATTERN_PROJECTION_WORK.saturating_sub(work + pending.len())
+                        {
+                            return Err("reference contract type work limit exceeded".into());
+                        }
+                        pending.extend(variant.fields.iter().map(|field| (&field.ty, depth + 1)));
+                    }
+                }
+                _ => {}
+            }
+            if pending.len() > MAX_PATTERN_PROJECTION_WORK - work {
+                return Err("reference contract type work limit exceeded".into());
+            }
+        }
+        Ok(work)
+    }
+    /// Reflexive declaration closure only. Body universals never infer edges.
+    pub fn closure(&self) -> Result<Vec<u64>, String> {
+        let count = usize::from(self.region_count);
+        if count > MAX_REGION_PARAMS || self.outlives.len() > MAX_REGION_PARAMS * MAX_REGION_PARAMS
+        {
+            return Err("reference contract region resource limit exceeded".into());
+        }
+        if self.param_regions.len() > MAX_PATTERN_PROJECTION_WORK {
+            return Err("reference contract parameter resource limit exceeded".into());
+        }
+        for region in self
+            .param_regions
+            .iter()
+            .flatten()
+            .chain(self.result_region.iter())
+        {
+            if usize::from(region.0) >= count {
+                return Err("invalid reference contract region ID".into());
+            }
+        }
+        for (longer, shorter) in self.outlives.iter() {
+            if usize::from(longer.0) >= count || usize::from(shorter.0) >= count {
+                return Err("invalid reference contract outlives region ID".into());
+            }
+        }
+        let mut rows: Vec<u64> = (0..count).map(|index| 1u64 << index).collect();
+        for (longer, shorter) in self.outlives.iter() {
+            rows[usize::from(longer.0)] |= 1u64 << shorter.0;
+        }
+        for middle in 0..count {
+            let reachable = rows[middle];
+            for row in &mut rows {
+                if *row & (1u64 << middle) != 0 {
+                    *row |= reachable;
+                }
+            }
+        }
+        Ok(rows)
+    }
+
+    pub fn outlives_region(
+        &self,
+        longer: RegionParamId,
+        shorter: RegionParamId,
+    ) -> Result<bool, String> {
+        let rows = self.closure()?;
+        if usize::from(longer.0) >= rows.len() || usize::from(shorter.0) >= rows.len() {
+            return Err("invalid reference contract query region ID".into());
+        }
+        Ok(rows[usize::from(longer.0)] & (1u64 << shorter.0) != 0)
+    }
+
+    pub fn eligible_params(&self, params: &[Ty], result: &Ty) -> Result<Vec<usize>, String> {
+        self.eligible_params_counted(params, result)
+            .map(|(params, _)| params)
+    }
+
+    fn metadata_work(&self) -> usize {
+        let count = usize::from(self.region_count);
+        self.param_regions.len() * 2 + self.outlives.len() * 2 + count * count + count + 1
+    }
+
+    fn eligible_params_counted(
+        &self,
+        params: &[Ty],
+        result: &Ty,
+    ) -> Result<(Vec<usize>, usize), String> {
+        let shape_work = Self::validate_shapes(params, result)?;
+        let rows = self.closure()?;
+        if self.param_regions.len() != params.len() {
+            return Err("reference contract parameter arity mismatch".into());
+        }
+        let Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: output,
+        } = result
+        else {
+            return Err("shared return contract requires shared reference result".into());
+        };
+        let region = self
+            .result_region
+            .ok_or("missing reference result region")?;
+        let mut eligible = Vec::new();
+        let mut work = 0;
+        for (index, (ty, param_region)) in params.iter().zip(self.param_regions.iter()).enumerate()
+        {
+            match ty {
+                Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent,
+                } => {
+                    let input = param_region.ok_or("missing reference parameter region")?;
+                    if rows[usize::from(input.0)] & (1u64 << region.0) != 0
+                        && pattern_types_equal(referent, output, &mut work)?
+                    {
+                        if eligible.len() >= MAX_LOAN_SITES {
+                            return Err("reference return candidate limit exceeded".into());
+                        }
+                        eligible.push(index);
+                    }
+                }
+                Ty::Ref { .. } => {
+                    return Err(
+                        "unsupported: mutable input to shared reference-return function".into(),
+                    );
+                }
+                _ if param_region.is_some() => {
+                    return Err("nonreference parameter has reference region".into());
+                }
+                _ => {}
+            }
+        }
+        Ok((
+            eligible,
+            shape_work + self.metadata_work() + params.len() + work,
+        ))
+    }
+
+    pub fn validate(&self, params: &[Ty], result: &Ty) -> Result<(), String> {
+        self.validation_work(params, result).map(|_| ())
+    }
+
+    /// Work for this exact structural validation, for the caller's shared
+    /// preflight budget. Charge before repeating validation/publication.
+    pub fn validation_work(&self, params: &[Ty], result: &Ty) -> Result<usize, String> {
+        let mut work = Self::validate_shapes(params, result)?;
+        self.closure()?;
+        work += self.metadata_work();
+        match &self.returns {
+            ReturnContract::NoReference => {
+                if matches!(result, Ty::Ref { .. })
+                    || self.region_count != 0
+                    || self.result_region.is_some()
+                    || !self.outlives.is_empty()
+                    || self.param_regions.iter().any(Option::is_some)
+                    || (!self.param_regions.is_empty() && self.param_regions.len() != params.len())
+                {
+                    return Err("invalid noescape reference contract".into());
+                }
+            }
+            ReturnContract::SharedWholeParams(candidates) => {
+                if candidates.len() > MAX_LOAN_SITES {
+                    return Err("reference return candidate limit exceeded".into());
+                }
+                let (eligible, candidate_work) = self.eligible_params_counted(params, result)?;
+                work += candidate_work + candidates.len();
+                if candidates.as_ref() != eligible.as_slice() {
+                    return Err("reference return candidates must equal complete declaration-derived parameters".into());
+                }
+            }
+        }
+        if work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("reference contract validation work limit exceeded".into());
+        }
+        Ok(work)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -832,6 +1082,15 @@ impl CheckedFunction {
                 ));
             }
         }
+        if self.params.len() >= MAX_PATTERN_PROJECTION_WORK {
+            return Err("reference contract parameter resource limit exceeded".into());
+        }
+        let parameter_types: Vec<_> = self
+            .params
+            .iter()
+            .map(|id| self.locals[id.0].ty.clone())
+            .collect();
+        self.ref_contract.validate(&parameter_types, &self.result)?;
         // Traverse nested blocks iteratively so malformed/deep fixtures cannot
         // exhaust the host call stack inside this diagnostic helper.
         let mut blocks = vec![&self.body];
@@ -959,6 +1218,9 @@ impl CheckedFunction {
                     args,
                     signature,
                 } => {
+                    signature
+                        .ref_contract
+                        .validate(&signature.params, &signature.result)?;
                     if args.len() != signature.params.len() {
                         return Err(format!("invalid call arity for {name} in {}", self.name));
                     }
@@ -1050,6 +1312,104 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reference_contract_closure_candidates_and_malformed_metadata() {
+        use super::*;
+        let shared = |ty| Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(ty),
+        };
+        let params = vec![Ty::Bool, shared(Ty::Bool), shared(Ty::I32), shared(Ty::I32)];
+        let result = shared(Ty::I32);
+        let contract = RefContract {
+            region_count: 3,
+            param_regions: Arc::from([
+                None,
+                Some(RegionParamId(0)),
+                Some(RegionParamId(0)),
+                Some(RegionParamId(1)),
+            ]),
+            result_region: Some(RegionParamId(2)),
+            outlives: Arc::from([
+                (RegionParamId(0), RegionParamId(1)),
+                (RegionParamId(1), RegionParamId(2)),
+            ]),
+            returns: ReturnContract::SharedWholeParams(Arc::from([2, 3])),
+        };
+        contract.validate(&params, &result).unwrap();
+        assert!(
+            contract
+                .outlives_region(RegionParamId(0), RegionParamId(2))
+                .unwrap()
+        );
+        assert!(
+            !contract
+                .outlives_region(RegionParamId(2), RegionParamId(0))
+                .unwrap()
+        );
+        assert_eq!(
+            contract.eligible_params(&params, &result).unwrap(),
+            vec![2, 3]
+        );
+        assert!(contract.validation_work(&params, &result).unwrap() >= params.len());
+        let mut invalid = contract.clone();
+        invalid.returns = ReturnContract::SharedWholeParams(Arc::from([2]));
+        assert!(invalid.validate(&params, &result).is_err());
+        invalid.returns = ReturnContract::SharedWholeParams(Arc::from([3, 2]));
+        assert!(invalid.validate(&params, &result).is_err());
+        invalid.returns = ReturnContract::SharedWholeParams(Arc::from([2, 2, 3]));
+        assert!(invalid.validate(&params, &result).is_err());
+        for region in [3, u16::MAX] {
+            let mut invalid = contract.clone();
+            invalid.result_region = Some(RegionParamId(region));
+            assert!(invalid.validate(&params, &result).is_err());
+            assert!(
+                contract
+                    .outlives_region(RegionParamId(region), RegionParamId(0))
+                    .is_err()
+            );
+        }
+        let mut invalid = contract.clone();
+        invalid.region_count = 65;
+        assert!(invalid.closure().is_err());
+        invalid = contract.clone();
+        invalid.outlives = Arc::from([(RegionParamId(0), RegionParamId(63))]);
+        assert!(invalid.closure().is_err());
+        invalid = contract.clone();
+        invalid.param_regions = Arc::from([Some(RegionParamId(0))]);
+        assert!(invalid.validate(&params, &result).is_err());
+        let mut no_edges = contract.clone();
+        no_edges.outlives = Arc::from([]);
+        no_edges.returns = ReturnContract::SharedWholeParams(Arc::from([]));
+        no_edges.validate(&params, &result).unwrap();
+        assert!(
+            !no_edges
+                .outlives_region(RegionParamId(0), RegionParamId(2))
+                .unwrap()
+        );
+        assert!(
+            contract
+                .validate(
+                    &params,
+                    &Ty::Ref {
+                        kind: BorrowKind::Mut,
+                        referent: Arc::new(Ty::I32)
+                    }
+                )
+                .is_err()
+        );
+        assert!(RefContract::default().validate(&params, &result).is_err());
+        RefContract::default().validate(&params, &Ty::Unit).unwrap();
+        let canonical = RefContract {
+            param_regions: vec![None; params.len()].into(),
+            ..Default::default()
+        };
+        canonical.validate(&params, &Ty::Unit).unwrap();
+        let mut nested = params.clone();
+        nested[2] = shared(shared(Ty::I32));
+        assert!(contract.validate(&nested, &result).is_err());
+    }
+
     #[test]
     fn reference_copy_and_projection_contract() {
         use super::*;
@@ -1701,6 +2061,7 @@ mod tests {
 
     fn fixture() -> CheckedFunction {
         CheckedFunction {
+            ref_contract: Default::default(),
             name: "f".into(),
             params: vec![LocalId(0)],
             result: Ty::Unit,
@@ -1825,6 +2186,7 @@ mod tests {
                 name: "g".into(),
                 args: vec![],
                 signature: Signature {
+                    ref_contract: Default::default(),
                     params: vec![Ty::I32],
                     result: Ty::Unit,
                 },

@@ -105,6 +105,44 @@ impl Budget {
 /// Bound type traversal before calling the full structural verifier, including
 /// repeated shared aggregate types that could otherwise expand exponentially.
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
+    fn contract_scratch(
+        type_work: usize,
+        arity: usize,
+        loan_sites: usize,
+        max_bytes: usize,
+    ) -> Result<(), Exhausted> {
+        // A structural type visit can retain a comparison pair, depth, Vec
+        // growth and hash-table slot. Helpers never expand array elements and
+        // deduplicate DAGs, so the preceding expanded type walk bounds visits.
+        let bytes = type_work
+            .checked_mul(128)
+            .and_then(|n| n.checked_add(arity.checked_mul(std::mem::size_of::<Ty>())?))
+            .and_then(|n| n.checked_add(loan_sites.checked_mul(std::mem::size_of::<usize>())?))
+            .and_then(|n| n.checked_add(4096))
+            .ok_or(Exhausted)?;
+        if bytes > max_bytes {
+            return Err(Exhausted);
+        }
+        Ok(())
+    }
+    fn charge_contract(
+        result: Result<usize, String>,
+        budget: &mut Budget,
+    ) -> Result<bool, Exhausted> {
+        match result {
+            Ok(work) => {
+                budget.spend(work)?;
+                Ok(true)
+            }
+            // Shared helpers use explicit limit diagnostics for every work,
+            // depth, candidate and region cap. Never turn exhaustion into a
+            // complete semantic rejection by replaying it through validate().
+            Err(message) if message.contains("limit") || message.contains("exhaust") => {
+                Err(Exhausted)
+            }
+            Err(_) => Ok(false),
+        }
+    }
     if f.blocks.len() > limits.blocks
         || f.locals.len() > limits.locals
         || f.params.len() > limits.locals
@@ -114,6 +152,16 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     }
     let mut budget = Budget(limits.operations);
     budget.spend(f.params.len())?;
+    budget.spend(f.blocks.len())?;
+    let call_origins = f
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(&block.terminator.value,
+                Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. })
+            )
+        })
+        .count();
     let formal_origins = f
         .params
         .iter()
@@ -128,6 +176,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         || f.loan_sites
             .len()
             .checked_add(formal_origins)
+            .and_then(|n| n.checked_add(call_origins))
             .ok_or(Exhausted)?
             > super::ir::MAX_LOAN_SITES
     {
@@ -185,13 +234,34 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         }
         preflight_ty(ty, 0, budget)
     }
+    let before_types = budget.0;
     for local in &f.locals {
         preflight_ty(&local.ty, 0, &mut budget)?;
     }
+    preflight_ty(&f.result, 0, &mut budget)?;
+    contract_scratch(
+        before_types - budget.0,
+        f.params.len(),
+        f.loan_sites.len(),
+        limits.state_bytes,
+    )?;
+    let mut param_types = Vec::with_capacity(f.params.len());
+    for param in &f.params {
+        let Some(local) = f.locals.get(param.0) else {
+            return Ok(());
+        };
+        param_types.push(local.ty.clone());
+    }
+    if !charge_contract(
+        f.ref_contract.validation_work(&param_types, &f.result),
+        &mut budget,
+    )? {
+        return Ok(()); // Full verifier owns malformed-contract diagnostics.
+    }
+    drop(param_types);
     for site in &f.loan_sites {
         place_type(f, &site.place, &mut budget)?;
     }
-    preflight_ty(&f.result, 0, &mut budget)?;
     let operand = |op: &Operand, budget: &mut Budget| -> Result<(), Exhausted> {
         budget.spend(1)?;
         if let Operand::Copy(p) | Operand::Move(p) = op {
@@ -271,10 +341,25 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                 destination,
                 ..
             } => {
+                let before_types = budget.0;
                 for param in &signature.params {
                     preflight_ty(param, 0, &mut budget)?;
                 }
                 preflight_ty(&signature.result, 0, &mut budget)?;
+                contract_scratch(
+                    before_types - budget.0,
+                    signature.params.len(),
+                    f.loan_sites.len(),
+                    limits.state_bytes,
+                )?;
+                if !charge_contract(
+                    signature
+                        .ref_contract
+                        .validation_work(&signature.params, &signature.result),
+                    &mut budget,
+                )? {
+                    return Ok(());
+                }
                 for arg in args {
                     operand(arg, &mut budget)?;
                 }
@@ -1137,7 +1222,12 @@ impl Transfer<'_> {
                 self.write(state, destination)?;
             }
             Terminator::Return => {
-                self.operand(state, &Operand::Copy(root_place(self.f.return_local)))?
+                self.operand(state, &Operand::Copy(root_place(self.f.return_local)))?;
+                if let Some(loans) = self.loans
+                    && let Some(problem) = loans.check_return(self.f, self.block, self.budget)?
+                {
+                    self.problem(problem, root_place(self.f.return_local));
+                }
             }
             Terminator::Goto(_) | Terminator::Unreachable => {}
         }
@@ -1414,6 +1504,188 @@ mod tests {
     }
 
     #[test]
+    fn shared_returns_preserve_transitive_origins_and_parent_authority() {
+        for source in [
+            "fn f<'a>(p:&'a i32)->&'a i32{p}",
+            "fn f<'a:'b,'b>(s:&'a bool,x:&'b i32)->&'b i32{pick(s,x)} fn pick<'a>(s:&'a bool,x:&'a i32)->&'a i32{x}",
+            "fn f()->i32{let x=7;*id(id(&x))} fn id<'a>(x:&'a i32)->&'a i32{x}",
+            "fn f()->i32{let mut x=1;let r=&mut x;let q=id(r);let n=*r;n+*q} fn id<'a>(x:&'a i32)->&'a i32{x}",
+            "fn f()->i32{let mut x=1;let r=&mut x;let q=id(r);let n=*q;*r=2;n+*r} fn id<'a>(x:&'a i32)->&'a i32{x}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn shared_return_lifetime_dependencies_do_not_launder_universal_bounds() {
+        for source in [
+            "fn f<'a,'b>(s:&'a bool,x:&'b i32)->&'b i32{pick(s,x)} fn pick<'a>(s:&'a bool,x:&'a i32)->&'a i32{x}",
+            "fn f<'a,'b>(s:&'a bool,x:&'b i32)->&'b i32{id(pick(s,x))} fn pick<'a>(s:&'a bool,x:&'a i32)->&'a i32{x} fn id<'a>(x:&'a i32)->&'a i32{x}",
+            "fn f<'a>(x:&'a i32)->&'a i32{let s=true;pick(&s,x)} fn pick<'a>(s:&'a bool,x:&'a i32)->&'a i32{x}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(!result.passed(), "accepted {source}");
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.kind, ErrorKind::InvalidReference(_))),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn shared_returns_pin_non_target_inputs_but_not_independent_regions() {
+        let same = "fn f()->i32{let x=7;let r:&i32;{let s=true;r=pick(&s,&x);}*r} fn pick<'a>(s:&'a bool,x:&'a i32)->&'a i32{x}";
+        let result = analyze(&borrowed_source(same));
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_)))
+        );
+        let independent = "fn f()->i32{let x=7;let r:&i32;{let s=true;r=pick(&s,&x);}*r} fn pick<'a,'b>(s:&'a bool,x:&'b i32)->&'b i32{x}";
+        let result = analyze(&borrowed_source(independent));
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        let mutation = "fn f()->i32{let mut x=1;let r=&mut x;let q=id(r);*r=2;*q} fn id<'a>(x:&'a i32)->&'a i32{x}";
+        let result = analyze(&borrowed_source(mutation));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_)))
+        );
+    }
+
+    #[test]
+    fn shared_return_call_defines_real_outgoing_origin_without_sites() {
+        let f = borrowed_source("fn f(p:&i32)->i32{*id(p)} fn id<'a>(x:&'a i32)->&'a i32{x}");
+        assert!(f.loan_sites.is_empty());
+        let (block, destination) = f
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(index, block)| match &block.terminator.value {
+                Terminator::Call { destination, .. } => Some((BlockId(index), destination.clone())),
+                _ => None,
+            })
+            .unwrap();
+        let deref = Place {
+            local: destination.local,
+            projection: vec![Projection::Deref],
+        };
+        let mut budget = Budget(32 * 1024 * 1024);
+        let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+        assert!(
+            plan.resolve(&deref, block, None, Phase::Read, &mut budget)
+                .unwrap()
+                .is_err()
+        );
+        let after = plan
+            .resolve(&deref, block, None, Phase::Write, &mut budget)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            after[0].place.root,
+            CanonicalRoot::ParameterReferent(f.params[0])
+        );
+        let mut budget = Budget(32 * 1024 * 1024);
+        assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
+        assert!(analyze(&f).passed());
+    }
+
+    #[test]
+    fn shared_return_origin_contract_and_scratch_caps_fail_incomplete() {
+        let mut f = borrowed_source("fn f(p:&i32)->i32{*id(p)} fn id<'a>(x:&'a i32)->&'a i32{x}");
+        let call = f
+            .blocks
+            .iter()
+            .find(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+            .unwrap()
+            .clone();
+        f.blocks
+            .extend(std::iter::repeat_n(call, super::super::ir::MAX_LOAN_SITES));
+        let result = analyze(&f);
+        assert!(!result.complete);
+        assert_eq!(result.diagnostics[0].kind, ErrorKind::ResourceLimit);
+        for count in [64, 65] {
+            let mut f =
+                borrowed_source("fn f(p:&i32)->i32{*id(p)} fn id<'a>(x:&'a i32)->&'a i32{x}");
+            for block in &mut f.blocks {
+                if let Terminator::Call { signature, .. } = &mut block.terminator.value {
+                    std::sync::Arc::make_mut(&mut signature.ref_contract).region_count = count;
+                }
+            }
+            let result = analyze_with_limits(
+                &f,
+                Limits {
+                    operations: 512,
+                    ..Limits::default()
+                },
+            );
+            assert!(!result.complete, "count={count}: {:?}", result.diagnostics);
+            assert!(!result.passed());
+        }
+        let f = borrowed_source("fn f<'a>(p:&'a i32)->&'a i32{p}");
+        let result = analyze_with_limits(
+            &f,
+            Limits {
+                state_bytes: 1024,
+                ..Limits::default()
+            },
+        );
+        assert!(!result.complete);
+        assert!(!result.passed());
+        let mut malformed = f;
+        std::sync::Arc::make_mut(&mut malformed.ref_contract).result_region =
+            Some(super::super::ir::RegionParamId(4));
+        let result = analyze(&malformed);
+        assert!(result.complete);
+        assert!(matches!(
+            result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
+    }
+
+    #[test]
+    fn shared_return_cycles_fail_closed_and_empty_diverging_contract_can_pass() {
+        let f = borrowed_source(
+            "fn f(p:&i32)->i32{let mut r=p;loop{r=id(r);if true{break;}}*r} fn id<'a>(x:&'a i32)->&'a i32{x}",
+        );
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::UnsupportedBorrowing(_))),
+            "{:?}",
+            result.diagnostics
+        );
+        // Loop-result contextual typing is a separate frontend boundary. This
+        // valid private CFG has no normal return and therefore no obligation
+        // to fabricate an eligible returned pointer.
+        let mut f = borrowed_source("fn f<'a,'b>(p:&'a i32)->&'a i32{p}");
+        let contract = std::sync::Arc::make_mut(&mut f.ref_contract);
+        contract.result_region = Some(super::super::ir::RegionParamId(1));
+        contract.returns = super::super::ir::ReturnContract::SharedWholeParams(vec![].into());
+        f.blocks = vec![BasicBlock {
+            statements: vec![],
+            terminator: located(Terminator::Goto(BlockId(0))),
+        }];
+        f.entry = BlockId(0);
+        f.validate().unwrap();
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
     fn reference_parameters_without_sites_have_independent_external_paths() {
         for source in [
             "fn f(p:&mut i32)->i32{*p=3;*p}",
@@ -1625,6 +1897,7 @@ mod tests {
     }
     fn fixture() -> cfg::Function {
         cfg::Function {
+            ref_contract: Default::default(),
             name: "caps".into(),
             params: vec![],
             result: Ty::Unit,
@@ -1798,6 +2071,7 @@ mod tests {
             f.blocks[1].terminator = located(Terminator::Call {
                 name: "callee".into(),
                 signature: super::super::ir::Signature {
+                    ref_contract: Default::default(),
                     params: vec![reference],
                     result: Ty::Unit,
                 },
@@ -1904,6 +2178,7 @@ mod tests {
             terminator: located(Terminator::Call {
                 name: "callee".into(),
                 signature: super::super::ir::Signature {
+                    ref_contract: Default::default(),
                     params: vec![reference],
                     result: Ty::Unit,
                 },

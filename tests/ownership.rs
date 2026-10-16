@@ -61,6 +61,7 @@ fn function(decls: Vec<(Ty, bool)>, blocks: Vec<BasicBlock>) -> cfg::Function {
             }),
     );
     let mut function = cfg::Function {
+        ref_contract: Default::default(),
         name: "synthetic".into(),
         loan_sites: vec![],
         params: vec![],
@@ -380,6 +381,7 @@ fn call_arguments_move_before_destination_is_initialized() {
                 Terminator::Call {
                     name: "identity".into(),
                     signature: Signature {
+                        ref_contract: Default::default(),
                         params: vec![Ty::I32],
                         result: Ty::I32,
                     },
@@ -415,6 +417,7 @@ fn call_cannot_move_the_same_argument_twice() {
                 Terminator::Call {
                     name: "pair".into(),
                     signature: Signature {
+                        ref_contract: Default::default(),
                         params: vec![Ty::I32, Ty::I32],
                         result: Ty::I32,
                     },

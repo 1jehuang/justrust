@@ -1,8 +1,10 @@
 # B3a design checkpoint: shared reference returns
 
-Status: read-only architecture proposal, not implemented and not authorized for
-implementation yet. B2 must finish its native acceptance and evidence first.
-Full Rust, mutable escaping references and general regions remain open.
+Status: implemented with 798 hosted tests, strict all-target lint, formatting
+and bounded resource/provenance review passing. The frozen 30-case stock corpus
+and four graph acceptance tests pass. Tracked fifteen-corpus native verification
+remains the delivery gate. Full Rust, mutable escaping references and general
+regions remain open.
 
 ## Proposed bounded first slice
 
@@ -34,6 +36,40 @@ independently reconstructed metadata. Eligible returned parameters come from the
 declared region/type relation. Every body proves its returns satisfy that
 contract. Calls depend on declarations, never callee-body completion, so
 recursive calls add no graph fact cycle or optimistic summary.
+
+## Frozen shared API and implementation seams
+
+Use `ir::RegionParamId(pub u16)`, the ReturnContract above, and
+`RefContract { region_count: u16, param_regions: Arc<[Option<RegionParamId>]>,
+result_region: Option<RegionParamId>, outlives: Arc<[(RegionParamId,
+RegionParamId)]>, returns: ReturnContract }`. The canonical
+`Arc<RefContract>` is stored as `ref_contract` on Signature, CheckedFunction and
+CFG Function, copied unchanged between them. Indices in SharedWholeParams are
+original Signature.params positions, not reference ordinals or LocalIds.
+
+NoReference uses zero regions, all-None parameter regions of the signature's
+arity, no result region and no edges. Existing B2 elided reference parameters
+remain call-extent-only and do not acquire named regions or a new 64-parameter
+limit. Existing fixtures may use an erased/default contract with empty parameter
+regions as a compatibility spelling only for NoReference; canonical source
+signatures retain full arity. Returning contracts require explicit Some regions
+on every reference input and exactly the declaration-derived sorted candidate
+list. Empty candidates do not by themselves make a diverging function invalid.
+All normal returns must still prove provenance and lifetime obligations.
+
+Closure helpers are shared, bounded and validate IDs before indexing. Body
+formal regions are rigid universals: never infer a missing declared outlives
+edge. Fresh call-site instantiation is existential. In particular, forwarding
+`pick<'a>(s: &'a bool, x: &'a i32) -> &'a i32` from independent input regions
+requires proving the bool input outlives the output even though it cannot be a
+pointer target. Lifetime dependencies retain actual loan origins and upstream
+constraints, not mutable carrier slots or target roots alone.
+
+Genuine Shared-reference Call results may be materialized once into their real
+result temporary for `*id(&x)` and `(*id(&x)).field`. The analyzer must seed that
+outgoing origin before use. Borrowing call rvalues remains unsupported. No new
+CFG opcode or fabricated alias place is needed. Existing reference-result hard
+guards are removed only in coordination with complete contract/return analysis.
 
 ## Provenance and lifetime dependencies are different
 

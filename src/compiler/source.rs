@@ -329,6 +329,24 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
                 continue;
             }
         }
+        // A named lifetime has no closing quote. Keep the apostrophe in the
+        // token so names such as 'mod cannot masquerade as module keywords.
+        // A closing quote immediately after the identifier instead denotes a
+        // character literal, whose delimiters must remain hidden below.
+        if b[i] == b'\''
+            && b.get(i + 1)
+                .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
+        {
+            let mut end = i + 2;
+            while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_') {
+                end += 1;
+            }
+            if b.get(end) != Some(&b'\'') {
+                i = end;
+                out.push(Token { start, end: i });
+                continue;
+            }
+        }
         if b[i] == b'"' || b[i] == b'\'' {
             let quote = b[i];
             i += 1;
@@ -345,7 +363,7 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
                 }
             }
             if !closed {
-                return Err("unterminated string or unsupported lifetime syntax".into());
+                return Err("unterminated string or character literal".into());
             }
         } else if b[i].is_ascii_alphabetic() || b[i] == b'_' {
             i += 1;
@@ -424,6 +442,32 @@ fn main(){println!("mod absent; }"); let x = r##"mod raw; {"##; let c = '}';}
         let loaded = tree.load().unwrap();
         assert_eq!(loaded.text, root);
         assert_eq!(loaded.files, 1);
+    }
+
+    #[test]
+    fn named_lifetimes_survive_external_module_expansion() {
+        let tree = Tree::new();
+        let root = "mod child; fn id<'a>(x:&'a i32)->&'a i32{x} fn main(){}";
+        let child = "pub fn shorten<'long:'short,'short>(x:&'long i32)->&'short i32{x}";
+        tree.put("main.rs", root);
+        tree.put("child.rs", child);
+        let loaded = tree.load().unwrap();
+        assert_eq!(loaded.files, 2);
+        assert_eq!(loaded.source_bytes, root.len() + child.len());
+        assert!(loaded.text.contains("fn id<'a>(x:&'a i32)->&'a i32{x}"));
+        assert!(loaded.text.contains(child));
+        super::super::frontend::parse(&loaded.text).unwrap();
+    }
+
+    #[test]
+    fn lifetime_tokens_do_not_hide_delimiters_or_expose_literal_contents() {
+        let text = "fn f<'mod>(x:&'mod i32){let a='}';let b='a';let c='\\'';}";
+        let actual: Vec<_> = tokens(text).unwrap().iter().map(|t| t.text(text)).collect();
+        assert_eq!(actual.iter().filter(|t| **t == "'mod").count(), 2);
+        assert_eq!(actual.iter().filter(|t| **t == "}").count(), 1);
+        assert!(actual.contains(&"'}'"));
+        assert!(actual.contains(&"'a'"));
+        assert!(actual.contains(&"'\\''"));
     }
 
     #[test]

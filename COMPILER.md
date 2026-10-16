@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with noescape reference calls, local borrowing, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
+Status: executable Rust-subset implementation with bounded shared reference returns, noescape reference calls, local borrowing, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -55,8 +55,12 @@ referents have separate invocation-lived canonical roots. Mutable calls invalida
 all candidate referent selection proofs without inventing initialization. Every
 body must pass analysis before executable publication. Standalone checked-function
 emission rejects reference calls without whole-program signature/noescape evidence.
-Reference returns and reference-containing aggregates remain unsupported.
-See `BORROWING.md` and `REFERENCE-CALLS.md`.
+Shared reference results may point to whole shared-reference parameter referents
+under explicit named lifetime contracts. Declaration-derived candidates, rigid
+body outlives obligations and separate transitive lifetime dependencies gate
+returned pointers. Mutable/projected reference results, general elision and
+reference-containing aggregates remain unsupported.
+See `BORROWING.md`, `REFERENCE-CALLS.md` and `REFERENCE-RETURNS.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.
@@ -84,7 +88,8 @@ glob imports, public re-exports, restricted `pub(...)`, block-local items/import
 standard-library APIs beyond the documented print form, general macros, traits,
 generics, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
-reference results, escaping references, general lifetimes, strings as values, closures, async,
+general reference results and escaping references beyond the bounded shared whole-parameter slice,
+general lifetimes, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
 positions, or other targets.
 This list does not turn unsupported syntax into permission to accept programs
@@ -105,7 +110,8 @@ implemented boundary. Semantic coverage must be expanded explicitly.
   (operation 108), with ordered value snapshots, branches, loop edges and calls.
   Publishing the CFG does not imply it passed initialization analysis.
 - Analyze each CFG once (operation 109), validating structure and running bounded
-  definite-initialization, storage-lifetime, move-path and local-loan dataflow to fixed points.
+  definite-initialization, storage-lifetime, move-path, loan-origin and bounded
+  signature-region dataflow to fixed points.
   Both check and emission require this successful immutable analysis fact.
 - Emit each function from that exact cached CFG fact without repeating lowering
   or waiting for other bodies.

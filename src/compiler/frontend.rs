@@ -58,9 +58,15 @@ fn parent(path: &str) -> &str {
 #[derive(Clone, Debug)]
 pub struct Function {
     pub name: String,
+    pub regions: RegionDecls,
     pub params: Vec<(String, Type)>,
     pub result: Type,
     pub body: Block,
+}
+#[derive(Clone, Debug, Default)]
+pub struct RegionDecls {
+    pub params: Vec<String>,
+    pub outlives: Vec<(String, String)>,
 }
 #[derive(Clone, Debug)]
 pub struct StructDecl {
@@ -97,6 +103,7 @@ pub enum FieldSelector {
 pub enum Type {
     Ref {
         kind: ir::BorrowKind,
+        region: Option<String>,
         referent: Box<Type>,
     },
     Array(Box<Type>, usize),
@@ -439,17 +446,22 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 return Err(format!("{sl}:{sc}: unterminated string"));
             }
             advance(&chars, &mut i, &mut line, &mut column);
+        } else if c == '\'' {
+            text.push(c);
+            advance(&chars, &mut i, &mut line, &mut column);
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                text.push(chars[i]);
+                advance(&chars, &mut i, &mut line, &mut column);
+            }
+            if text.len() == 1 || chars.get(i) == Some(&'\'') {
+                return Err(format!("{sl}:{sc}: character literals are unsupported"));
+            }
         } else if c.is_ascii_alphabetic() || c == '_' || c.is_ascii_digit() {
             while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
                 text.push(chars[i]);
                 advance(&chars, &mut i, &mut line, &mut column);
             }
         } else {
-            if c == '\'' {
-                return Err(format!(
-                    "{line}:{column}: labels, lifetimes and character literals are unsupported"
-                ));
-            }
             if !c.is_ascii() {
                 return Err(format!(
                     "{line}:{column}: non-ASCII identifiers are unsupported"
@@ -603,6 +615,11 @@ impl Parser {
             return Err(self.error("inferred and never source type annotations are unsupported"));
         }
         if self.eat("&") {
+            let region = if self.token().text.starts_with('\'') {
+                Some(self.lifetime()?)
+            } else {
+                None
+            };
             let kind = if self.eat("mut") {
                 ir::BorrowKind::Mut
             } else {
@@ -610,6 +627,7 @@ impl Parser {
             };
             return Ok(Type::Ref {
                 kind,
+                region,
                 referent: Box::new(self.ty()?),
             });
         }
@@ -900,9 +918,77 @@ impl Parser {
         bindings.push(Item { public, kind });
         Ok(())
     }
+    fn lifetime(&mut self) -> Result<String, String> {
+        if self.token().string {
+            return Err(self.error("expected named lifetime, not a string"));
+        }
+        let text = self.token().text.clone();
+        let name = text
+            .strip_prefix('\'')
+            .ok_or_else(|| self.error("expected named lifetime"))?;
+        if name == "static" || name == "_" {
+            return Err(self.error("static and inferred lifetimes are unsupported"));
+        }
+        if [
+            "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn",
+            "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+            "return", "self", "Self", "struct", "super", "trait", "true", "type", "unsafe", "use",
+            "where", "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final",
+            "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try", "gen",
+        ]
+        .contains(&name)
+        {
+            return Err(self.error("keyword lifetime names are unsupported"));
+        }
+        if !name
+            .as_bytes()
+            .first()
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
+        {
+            return Err(self.error("expected named ASCII lifetime"));
+        }
+        self.at += 1;
+        Ok(text)
+    }
+    fn region_bounds(&mut self, long: &str, regions: &mut RegionDecls) -> Result<(), String> {
+        if self.eat(":") {
+            loop {
+                let short = self.lifetime()?;
+                if regions.outlives.len() >= 4096 {
+                    return Err(self.error("lifetime bounds exceed supported limit 4096"));
+                }
+                regions.outlives.push((long.to_owned(), short));
+                if !self.eat("+") {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
     fn function(&mut self) -> Result<Function, String> {
         self.expect("fn")?;
         let name = self.ident()?;
+        let mut regions = RegionDecls::default();
+        if self.eat("<") {
+            if self.is(">") {
+                return Err(self.error("empty generic parameter lists are unsupported"));
+            }
+            loop {
+                if regions.params.len() >= 64 {
+                    return Err(self.error("declared lifetimes exceed supported limit 64"));
+                }
+                if !self.token().text.starts_with('\'') {
+                    return Err(self.error("type and const generic parameters are unsupported"));
+                }
+                let region = self.lifetime()?;
+                regions.params.push(region.clone());
+                self.region_bounds(&region, &mut regions)?;
+                if !self.eat(",") || self.is(">") {
+                    break;
+                }
+            }
+            self.expect(">")?;
+        }
         self.expect("(")?;
         let mut params = Vec::new();
         if !self.is(")") {
@@ -921,8 +1007,21 @@ impl Parser {
         } else {
             Type::Unit
         };
+        if self.eat("where") {
+            loop {
+                let long = self.lifetime()?;
+                if !self.is(":") {
+                    return Err(self.error("only lifetime outlives where bounds are supported"));
+                }
+                self.region_bounds(&long, &mut regions)?;
+                if !self.eat(",") || self.is("{") {
+                    break;
+                }
+            }
+        }
         Ok(Function {
             name,
+            regions,
             params,
             result,
             body: self.block()?,
@@ -1218,6 +1317,9 @@ impl Parser {
         self.expr_inner_mode(min, false)
     }
     fn expr_inner_mode(&mut self, min: u8, statement: bool) -> Result<Expr, String> {
+        if !self.token().string && self.token().text.starts_with('\'') {
+            return Err(self.error("labels and lifetime expressions are unsupported"));
+        }
         let statement_blocklike =
             statement && matches!(self.token().text.as_str(), "if" | "match" | "loop" | "{");
         if self.is("&&") {
@@ -2492,7 +2594,12 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
                 ));
             }
         }
-        dependencies(&function.result, &indices, &all, parent(&function.name))?;
+        let result_ty = if let Type::Ref { referent, .. } = &function.result {
+            referent.as_ref()
+        } else {
+            &function.result
+        };
+        dependencies(result_ty, &indices, &all, parent(&function.name))?;
         for (_, ty) in &function.params {
             validate_depth(DepthNode::Type(ty))?;
             let referent = if let Type::Ref { referent, .. } = ty {
@@ -2628,13 +2735,17 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         }
     }
     for function in &program.functions {
+        let params = function
+            .params
+            .iter()
+            .map(|(_, ty)| checked_ty(ty, &env))
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = checked_ty(&function.result, &env)?;
+        let ref_contract = canonical_ref_contract(function, &params, &result)?;
         let signature = ir::Signature {
-            params: function
-                .params
-                .iter()
-                .map(|(_, ty)| checked_ty(ty, &env))
-                .collect::<Result<_, _>>()?,
-            result: checked_ty(&function.result, &env)?,
+            params,
+            result,
+            ref_contract,
         };
         env.functions.insert(function.name.clone(), signature);
     }
@@ -2687,12 +2798,117 @@ impl Flow {
         }
     }
 }
+fn canonical_ref_contract(
+    function: &Function,
+    params: &[ir::Ty],
+    result: &ir::Ty,
+) -> Result<std::sync::Arc<ir::RefContract>, String> {
+    let mut ids = HashMap::new();
+    if function.regions.params.len() > 64 || function.regions.outlives.len() > 4096 {
+        return Err("declared lifetime resources exceed supported limits".into());
+    }
+    for (index, name) in function.regions.params.iter().enumerate() {
+        if ids
+            .insert(name.as_str(), ir::RegionParamId(index as u16))
+            .is_some()
+        {
+            return Err(format!("duplicate lifetime parameter {name}"));
+        }
+    }
+    let id = |name: &str| {
+        ids.get(name)
+            .copied()
+            .ok_or_else(|| format!("undeclared lifetime {name}"))
+    };
+    let mut edges = function
+        .regions
+        .outlives
+        .iter()
+        .map(|(a, b)| Ok((id(a)?, id(b)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    edges.sort_unstable();
+    edges.dedup();
+    for (_, ty) in &function.params {
+        if let Type::Ref {
+            region: Some(name), ..
+        } = ty
+        {
+            id(name)?;
+        }
+    }
+    if let Type::Ref {
+        region: Some(name), ..
+    } = &function.result
+    {
+        id(name)?;
+    }
+    if !matches!(result, ir::Ty::Ref { .. }) {
+        if !ids.is_empty()
+            || function.params.iter().any(|(_, t)| {
+                matches!(
+                    t,
+                    Type::Ref {
+                        region: Some(_),
+                        ..
+                    }
+                )
+            })
+        {
+            return Err(
+                "named lifetime contracts on no-reference-result functions are unsupported".into(),
+            );
+        }
+        return Ok(std::sync::Arc::new(ir::RefContract {
+            param_regions: vec![None; params.len()].into(),
+            ..Default::default()
+        }));
+    }
+    let Type::Ref {
+        kind: ir::BorrowKind::Shared,
+        region: Some(output),
+        ..
+    } = &function.result
+    else {
+        return Err("reference returns require an explicit named shared lifetime; mutable results and lifetime elision are unsupported".into());
+    };
+    let mut param_regions = Vec::with_capacity(params.len());
+    for (_, ty) in &function.params {
+        param_regions.push(match ty {
+            Type::Ref { kind:ir::BorrowKind::Shared, region:Some(name), .. }=>Some(id(name)?),
+            Type::Ref { .. }=>return Err("reference-return functions require explicitly named shared reference inputs; mutable inputs and elision are unsupported".into()),
+            _=>None,
+        });
+    }
+    let mut contract = ir::RefContract {
+        region_count: ids.len() as u16,
+        param_regions: param_regions.into(),
+        result_region: Some(id(output)?),
+        outlives: edges.into(),
+        returns: ir::ReturnContract::NoReference,
+    };
+    contract.returns =
+        ir::ReturnContract::SharedWholeParams(contract.eligible_params(params, result)?.into());
+    contract.validate(params, result)?;
+    Ok(std::sync::Arc::new(contract))
+}
+fn checked_local_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
+    if matches!(
+        ty,
+        Type::Ref {
+            region: Some(_),
+            ..
+        }
+    ) {
+        return Err("named lifetime annotations on locals are unsupported; use an elided local reference annotation".into());
+    }
+    checked_ty(ty, env)
+}
 fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
     checked_ty_at(ty, env, true)
 }
 fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, String> {
     match ty {
-        Type::Ref { kind, referent } => {
+        Type::Ref { kind, referent, .. } => {
             if !allow_ref || matches!(referent.as_ref(), Type::Never | Type::Infer) {
                 return Err("nested or aggregate reference types are unsupported in B1".into());
             }
@@ -3365,7 +3581,7 @@ impl<'a> Checker<'a> {
                             "deferred declarations require a concrete supported source type".into(),
                         );
                     }
-                    let ty = checked_ty(ty, self.signatures)?;
+                    let ty = checked_local_ty(ty, self.signatures)?;
                     self.accessible(&ty)?;
                     let local = self.local(name, ty, *mutable)?;
                     (ir::Stmt::Declare { local }, true)
@@ -3379,14 +3595,14 @@ impl<'a> Checker<'a> {
                     let annotation = if *ty == Type::Infer {
                         None
                     } else {
-                        Some(checked_ty(ty, self.signatures)?)
+                        Some(checked_local_ty(ty, self.signatures)?)
                     };
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     let f = self.flow(value);
                     let t = if *ty == Type::Infer {
                         f.ty.clone()
                     } else {
-                        let ty = checked_ty(ty, self.signatures)?;
+                        let ty = checked_local_ty(ty, self.signatures)?;
                         self.accessible(&ty)?;
                         self.require(&f, &ty)?;
                         ty
@@ -3399,7 +3615,7 @@ impl<'a> Checker<'a> {
                     let annotation = if *ty == Type::Infer {
                         None
                     } else {
-                        Some(checked_ty(ty, self.signatures)?)
+                        Some(checked_local_ty(ty, self.signatures)?)
                     };
                     if Self::deref_source(value)
                         && matches!(pattern, Pattern::Path(_) | Pattern::Variant { .. })
@@ -3418,7 +3634,7 @@ impl<'a> Checker<'a> {
                     let seed = if *ty == Type::Infer {
                         flow.ty.clone()
                     } else {
-                        let ty = checked_ty(ty, self.signatures)?;
+                        let ty = checked_local_ty(ty, self.signatures)?;
                         self.accessible(&ty)?;
                         self.require(&flow, &ty)?;
                         ty
@@ -3617,14 +3833,18 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Deref { value } => {
-                if !matches!(value.as_ref(), Expr::Var(_)) {
-                    return Err("non-local-root dereference carriers and borrowed rvalues are unsupported in B1".into());
+                if !matches!(value.as_ref(), Expr::Var(_) | Expr::Call { .. }) {
+                    return Err("non-local-root dereference carriers are unsupported except genuine shared reference call results".into());
                 }
+                let call_carrier = matches!(value.as_ref(), Expr::Call { .. });
                 let value = self.expr(value)?;
                 let flow = self.flow(value);
-                let ir::Ty::Ref { referent, .. } = &flow.ty else {
+                let ir::Ty::Ref { kind, referent } = &flow.ty else {
                     return Err("dereference requires a reference".into());
                 };
+                if call_carrier && *kind != ir::BorrowKind::Shared {
+                    return Err("mutable reference call-result carriers are unsupported".into());
+                }
                 let ty = referent.as_ref().clone();
                 self.accessible(&ty)?;
                 (
@@ -4399,6 +4619,7 @@ pub fn type_function_with_env(
         .map_err(|e| format!("in function {}: {e}", f.name))?;
     Ok(ir::CheckedFunction {
         name: f.name.clone(),
+        ref_contract: signature.ref_contract.clone(),
         params,
         result: c.result,
         locals: c.locals,
@@ -4417,6 +4638,91 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn b3a_contracts_are_alpha_canonical_and_keep_original_parameter_indices() {
+        let source = "fn pick<'a>(flag:bool,s:&'a bool,x:&'a i32,y:&'a i32)->&'a i32{if flag{x}else{y}}fn renamed<'z>(flag:bool,s:&'z bool,x:&'z i32,y:&'z i32)->&'z i32{if flag{x}else{y}}fn main(){}";
+        let p = parse(source).unwrap();
+        let env = signature_table(&p).unwrap();
+        let first = &env.functions["pick"];
+        assert_eq!(first.ref_contract, env.functions["renamed"].ref_contract);
+        assert_eq!(
+            first.ref_contract.param_regions.as_ref(),
+            &[
+                None,
+                Some(ir::RegionParamId(0)),
+                Some(ir::RegionParamId(0)),
+                Some(ir::RegionParamId(0))
+            ]
+        );
+        assert_eq!(
+            first.ref_contract.returns,
+            ir::ReturnContract::SharedWholeParams(vec![2, 3].into())
+        );
+        let checked = type_function_with_signatures(&p, 0, &env).unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            &first.ref_contract,
+            &checked.ref_contract
+        ));
+        assert_eq!(env.functions["main"].ref_contract.param_regions.len(), 0);
+    }
+
+    #[test]
+    fn b3a_outlives_bounds_and_call_result_dereference_are_structural() {
+        let p=parse("struct S{x:i32}fn id<'a>(x:&'a S)->&'a S{x}fn short<'a,'b>(x:&'a i32)->&'b i32 where 'a:'b{x}fn missing<'a,'b>(x:&'a i32)->&'b i32{x}fn main(){let s=S{x:7};let n=(*id(&s)).x;}").unwrap();
+        let env = signature_table(&p).unwrap();
+        assert_eq!(
+            env.functions["short"].ref_contract.returns,
+            ir::ReturnContract::SharedWholeParams(vec![0].into())
+        );
+        assert_eq!(
+            env.functions["missing"].ref_contract.returns,
+            ir::ReturnContract::SharedWholeParams(vec![].into())
+        );
+        let checked = type_function_with_signatures(&p, 3, &env).unwrap();
+        assert_eq!(
+            checked
+                .exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            checked
+                .exprs
+                .iter()
+                .any(|e| matches!(e.kind, ir::ExprKind::Deref { .. }))
+        );
+        // Missing universal outlives relations are analyzer obligations, not type inference.
+        type_function_with_signatures(&p, 2, &env).unwrap();
+    }
+
+    #[test]
+    fn b3a_rejects_unbound_duplicate_and_deferred_lifetime_forms() {
+        for source in [
+            "fn f<'a,'a>(x:&'a i32)->&'a i32{x}fn main(){}",
+            "fn f<'a>(x:&'b i32)->&'a i32{x}fn main(){}",
+            "fn f<'a:'b>(x:&'a i32)->&'a i32{x}fn main(){}",
+            "fn f<'a>(x:&'a mut i32)->&'a i32{&*x}fn main(){}",
+            "fn f<'a>(x:&'a i32)->&'a mut i32{loop{}}fn main(){}",
+            "fn f(x:&i32)->&i32{x}fn main(){}",
+            "fn f<'a>(x:&'a i32){}fn main(){}",
+            "fn f<'fn>(x:&'fn i32)->&'fn i32{x}fn main(){}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| signature_table(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        let p = parse("fn f<'a>(x:&'a i32)->&'a i32{let q:&'a i32=x;q}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        assert!(
+            type_function_with_signatures(&p, 0, &env)
+                .unwrap_err()
+                .contains("unsupported")
+        );
+    }
 
     #[test]
     fn b2_expected_reference_sites_reborrow_the_carrier_without_a_prior_move() {

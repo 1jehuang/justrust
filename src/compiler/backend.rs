@@ -783,7 +783,10 @@ impl<'a> Emitter<'a> {
 /// validation is repeated here. Graph callers satisfy this through fact 109,
 /// while standalone checked-body callers should use `emit_checked_function`.
 /// Reference calls additionally require whole-program noescape and exact callee
-/// signature evidence. Local analysis alone cannot establish that contract.
+/// signature evidence. Shared reference returns require the exact canonical
+/// RefContract and successful return-provenance/region verification as part of
+/// that analysis. Mutable reference results remain unsupported. Local analysis
+/// alone cannot establish the whole-program reference-call contract.
 /// Every local and lowering temporary has stable invocation-owned frame storage.
 pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     if function.params.len() > MAX_ARGS {
@@ -1033,6 +1036,7 @@ mod tests {
     fn function(name: &str, params: Vec<(String, Type)>, result: Type, body: Block) -> Function {
         Function {
             name: name.into(),
+            regions: Default::default(),
             params,
             result,
             body,
@@ -1244,6 +1248,111 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn shared_reference_return_standalone_requires_provenance_and_call_evidence() {
+        let p = frontend::parse(
+            r#"
+            fn identity<'a>(value: &'a usize) -> &'a usize { value }
+            fn main() { let value = 7usize; let observed = *identity(&value); }
+        "#,
+        )
+        .unwrap();
+        let env = frontend::signature_table(&p).unwrap();
+        let identity = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
+        assert!(emit_checked_function(&identity).is_ok());
+        let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
+        assert!(
+            emit_checked_function(&main)
+                .unwrap_err()
+                .contains("whole-program noescape")
+        );
+        for source in [
+            "fn bad<'a>(value: &'a usize) -> &'a usize { let local = 1usize; &local } fn main() {}",
+            "fn bad<'a>(value: &'a mut usize) -> &'a mut usize { value } fn main() {}",
+        ] {
+            let invalid = frontend::parse(source).unwrap();
+            assert!(emit(&invalid).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn shared_reference_returns_preserve_thin_pointer_through_selection_and_recursion() {
+        let p = frontend::parse(
+            r#"
+            struct Record { before: usize, items: [usize; 9], after: usize }
+            fn identity<'a>(value: &'a usize) -> &'a usize { value }
+            fn record_identity<'z>(value: &'z Record) -> &'z Record { value }
+            fn choose<'a>(a: &'a usize, b: &'a usize, first: bool) -> &'a usize {
+                if first { a } else { b }
+            }
+            fn recurse<'a>(value: &'a usize, depth: i32) -> &'a usize {
+                if depth == 0 { value } else { recurse(value, depth - 1) }
+            }
+            fn forward<'a>(value: &'a usize) -> &'a usize { recurse(value, 4) }
+            fn main() {
+                let mut first = 9223372036854775808usize;
+                let second = 18446744073709551615usize;
+                if *identity(&first) != 9223372036854775808usize { 1 / 0; }
+                let selected = choose(&first, &second, false);
+                if *selected != 18446744073709551615usize { 1 / 0; }
+                let returned = forward(&first);
+                if *returned != 9223372036854775808usize { 1 / 0; }
+                first = 13usize;
+                if first != 13usize { 1 / 0; }
+                let record = Record {
+                    before: 17usize, items: [9223372036854775808usize; 9], after: 29usize
+                };
+                if (*record_identity(&record)).after != 29usize { 1 / 0; }
+                let copy = (*record_identity(&record)).items;
+                if copy[8] != 9223372036854775808usize { 1 / 0; }
+                if record.before != 17usize { 1 / 0; }
+                println!("shared-return");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"shared-return\n");
+    }
+
+    #[test]
+    fn shared_reference_returns_separate_lifetime_inputs_from_pointer_candidates() {
+        let p = frontend::parse(
+            r#"
+            fn independent<'a, 'b>(flag: &'b bool, value: &'a usize) -> &'a usize { value }
+            fn shorter<'long: 'short, 'short>(value: &'long usize, flag: &'short bool) -> &'short usize { value }
+            fn main() {
+                let value = 18446744073709551615usize;
+                let returned: &usize;
+                { let flag = true; returned = independent(&flag, &value); }
+                if *returned != 18446744073709551615usize { 1 / 0; }
+                let flag = false;
+                if *shorter(&value, &flag) != 18446744073709551615usize { 1 / 0; }
+                println!("return-regions");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"return-regions\n");
+
+        let same_region = frontend::parse(
+            r#"
+            fn pick<'a>(flag: &'a bool, value: &'a usize) -> &'a usize { value }
+            fn main() {
+                let value = 9usize;
+                let returned: &usize;
+                { let flag = true; returned = pick(&flag, &value); }
+                let observed = *returned;
+            }
+        "#,
+        )
+        .unwrap();
+        assert!(emit(&same_region).is_err());
     }
 
     #[test]
@@ -1629,6 +1738,7 @@ mod tests {
             len: 0,
         };
         let function = cfg::Function {
+            ref_contract: Default::default(),
             loan_sites: vec![],
             name: "main".into(),
             params: vec![],
@@ -1825,6 +1935,7 @@ mod tests {
                 terminator: located(cfg::Terminator::Return),
             };
             let function = cfg::Function {
+                ref_contract: Default::default(),
                 loan_sites: vec![],
                 name: "main".into(),
                 params: vec![],
@@ -1949,6 +2060,7 @@ mod tests {
         assert!(indirect(&ir::Ty::Enum(ty.clone())));
         assert_eq!(value_size(&ir::Ty::Enum(ty.clone())).unwrap(), 32);
         let function = cfg::Function {
+            ref_contract: Default::default(),
             loan_sites: vec![],
             name: "main".into(),
             params: vec![],
@@ -2699,6 +2811,7 @@ mod tests {
         let too_large = ir::Ty::Tuple(vec![ir::Ty::I32; MAX_FRAME_BYTES as usize / 8 + 1].into());
         assert!(value_size(&too_large).is_err());
         let checked = ir::CheckedFunction {
+            ref_contract: Default::default(),
             name: "oversized".into(),
             params: vec![],
             result: ir::Ty::Unit,
@@ -2742,6 +2855,7 @@ mod tests {
         }
         let pair = ir::Ty::Tuple(vec![ir::Ty::I32, ir::Ty::I32].into());
         let mut function = cfg::Function {
+            ref_contract: Default::default(),
             loan_sites: vec![],
             name: "main".into(),
             params: vec![],

@@ -27,6 +27,7 @@ pub struct Located<T> {
 
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub ref_contract: std::sync::Arc<ir::RefContract>,
     pub loan_sites: Vec<LoanSite>,
     pub name: String,
     /// Parameters are implicitly live and initialized on entry, before the
@@ -456,15 +457,31 @@ impl Function {
             validate_type(&local.ty, 0)?;
         }
         validate_type(&self.result, 0)?;
-        if matches!(self.result, Ty::Ref { .. }) {
-            return Err("unsupported: reference result".into());
+        if self.params.len() >= ir::MAX_PATTERN_PROJECTION_WORK {
+            return Err("reference contract parameter resource limit exceeded".into());
         }
+        let parameter_types = self
+            .params
+            .iter()
+            .map(|param| self.place_ty(&place(*param)).cloned())
+            .collect::<Result<Vec<_>, _>>()?;
+        self.ref_contract.validate(&parameter_types, &self.result)?;
+        drop(parameter_types);
         if self.loan_sites.len() > ir::MAX_LOAN_SITES {
             return Err("CFG loan site limit exceeded".into());
         }
         let mut origins = self.loan_sites.len();
         for param in &self.params {
             if matches!(self.place_ty(&place(*param))?, Ty::Ref { .. }) {
+                origins += 1;
+                if origins > ir::MAX_LOAN_SITES {
+                    return Err("CFG combined reference origin limit exceeded".into());
+                }
+            }
+        }
+        for block in &self.blocks {
+            if matches!(&block.terminator.value, Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. }))
+            {
                 origins += 1;
                 if origins > ir::MAX_LOAN_SITES {
                     return Err("CFG combined reference origin limit exceeded".into());
@@ -488,6 +505,7 @@ impl Function {
                 return Err("CFG return local aliases parameter".into());
             }
         }
+        drop(params);
         for item in &self.blocks {
             for statement in &item.statements {
                 match &statement.value {
@@ -568,9 +586,9 @@ impl Function {
                         validate_type(ty, 0)?;
                     }
                     validate_type(&signature.result, 0)?;
-                    if matches!(signature.result, Ty::Ref { .. }) {
-                        return Err("unsupported: reference call result".into());
-                    }
+                    signature
+                        .ref_contract
+                        .validate(&signature.params, &signature.result)?;
                     for (arg, ty) in args.iter().zip(&signature.params) {
                         self.require_operand(arg, ty)?;
                     }
@@ -611,6 +629,7 @@ struct LoopTarget {
 }
 
 struct Lowerer<'a> {
+    origins: usize,
     loans: Vec<Option<LoanId>>,
     used_loans: std::collections::HashSet<LoanId>,
     source: &'a ir::CheckedFunction,
@@ -1361,6 +1380,12 @@ impl Lowerer<'_> {
                 args,
                 signature,
             } => {
+                if matches!(signature.result, Ty::Ref { .. }) {
+                    if self.origins >= ir::MAX_LOAN_SITES {
+                        return Err("CFG combined reference origin limit exceeded".into());
+                    }
+                    self.origins += 1;
+                }
                 let args = args
                     .iter()
                     .map(|id| self.expression(*id))
@@ -1478,6 +1503,17 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
             }
         }
     }
+    let formal_parameter_origins = formal_origins;
+    for expression in &source.exprs {
+        if matches!(expression.kind, ir::ExprKind::Call { .. })
+            && matches!(expression.ty, Ty::Ref { .. })
+        {
+            formal_origins += 1;
+            if formal_origins > ir::MAX_LOAN_SITES {
+                return Err("CFG combined reference origin limit exceeded".into());
+            }
+        }
+    }
     let mut loan_sites = Vec::new();
     let mut loans = vec![None; source.exprs.len()];
     for (index, expression) in source.exprs.iter().enumerate() {
@@ -1515,10 +1551,12 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
         mutable: true,
     });
     let mut lowerer = Lowerer {
+        origins: formal_parameter_origins + loan_sites.len(),
         loans,
         used_loans: std::collections::HashSet::new(),
         source,
         result: Function {
+            ref_contract: source.ref_contract.clone(),
             loan_sites,
             name: source.name.clone(),
             params: source.params.clone(),
@@ -1565,6 +1603,72 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn shared_return_contracts_keep_canonical_arcs_and_real_call_carriers() {
+        let program = super::super::frontend::parse(
+            "fn id<'a>(x:&'a i32)->&'a i32{x} fn main(){let x=7;let r=id(&x);let n=*id(&x);}",
+        )
+        .unwrap();
+        let signatures = super::super::frontend::signature_table(&program).unwrap();
+        let callee =
+            super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
+                .unwrap();
+        let lowered = nominal_lowered(&callee);
+        assert!(std::sync::Arc::ptr_eq(
+            &callee.ref_contract,
+            &lowered.ref_contract
+        ));
+        assert!(matches!(
+            lowered.ref_contract.returns,
+            ir::ReturnContract::SharedWholeParams(_)
+        ));
+        let source =
+            super::super::frontend::type_function_with_signatures(&program, 1, &signatures)
+                .unwrap();
+        let function = nominal_lowered(&source);
+        let call_block = function
+            .blocks
+            .iter()
+            .find(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+            .unwrap();
+        let call_count = function.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. }))).count();
+        assert_eq!(call_count, 2);
+        let call_expr = source
+            .exprs
+            .iter()
+            .find_map(|expr| {
+                if let ir::ExprKind::Deref { value } = expr.kind {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let actual_carrier = LocalId(source.locals.len() + call_expr.0);
+        assert!(function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { value: Rvalue::Use(Operand::Copy(place)), .. } if place.local == actual_carrier && place.projection == [Projection::Deref])));
+        let mut malformed = function.clone();
+        for block in &mut malformed.blocks {
+            if let Terminator::Call { signature, .. } = &mut block.terminator.value {
+                signature.ref_contract = Default::default();
+                break;
+            }
+        }
+        assert!(
+            malformed
+                .validate()
+                .unwrap_err()
+                .contains("invalid noescape reference contract")
+        );
+        let mut excess = function.clone();
+        excess.blocks = vec![call_block.clone(); ir::MAX_LOAN_SITES];
+        assert!(
+            excess
+                .validate()
+                .unwrap_err()
+                .contains("combined reference origin limit")
+        );
+    }
 
     #[test]
     fn dereferenced_enum_variant_matches_fail_closed_without_refinement() {
@@ -1652,6 +1756,7 @@ mod tests {
                             name: "callee".into(),
                             args: vec![ExprId(0)],
                             signature: ir::Signature {
+                                ref_contract: Default::default(),
                                 params: vec![reference.clone()],
                                 result: Ty::Unit,
                             },
@@ -1713,7 +1818,7 @@ mod tests {
                 invalid
                     .validate()
                     .unwrap_err()
-                    .contains("reference call result")
+                    .contains("invalid noescape reference contract")
             );
             let mut invalid = function.clone();
             let Terminator::Call { signature, .. } =
@@ -1932,6 +2037,7 @@ mod tests {
         statements: Vec<ir::Stmt>,
     ) -> ir::CheckedFunction {
         ir::CheckedFunction {
+            ref_contract: Default::default(),
             name: "nominal_fixture".into(),
             params: vec![LocalId(0)],
             result: Ty::Unit,
@@ -2263,6 +2369,7 @@ mod tests {
                         name: "index".into(),
                         args: vec![],
                         signature: ir::Signature {
+                            ref_contract: Default::default(),
                             params: vec![],
                             result: Ty::Usize,
                         },
@@ -2695,6 +2802,7 @@ mod tests {
                     name: name.into(),
                     args: vec![],
                     signature: ir::Signature {
+                        ref_contract: Default::default(),
                         params: vec![],
                         result: Ty::I32,
                     },
@@ -2790,6 +2898,7 @@ mod tests {
                     name: name.into(),
                     args: vec![],
                     signature: ir::Signature {
+                        ref_contract: Default::default(),
                         params: vec![],
                         result: Ty::I32,
                     },

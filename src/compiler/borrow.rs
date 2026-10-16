@@ -2,7 +2,7 @@
 //! Runtime pointers are never used as provenance. Canonical targets and parent
 //! authority are frozen at issuance, independently of later carrier rebinding.
 use super::cfg::{self, BlockId, LoanId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{BorrowKind, LocalId, Place, Projection, Ty};
+use super::ir::{BorrowKind, LocalId, Place, Projection, ReturnContract, Ty};
 use super::ownership::{Budget, Exhausted};
 use std::collections::VecDeque;
 use std::mem::size_of;
@@ -116,8 +116,9 @@ pub(super) struct Plan {
     refs: Vec<Option<usize>>,
     offsets: Vec<usize>,
     points: Vec<Option<Point>>,
-    exits: Vec<Set>,
+    outgoing: Vec<Option<Point>>,
     parents: Vec<Set>,
+    lifetime_deps: Vec<Set>,
     targets: Vec<Vec<Target>>,
     kinds: Vec<BorrowKind>,
     pub problems: Vec<(BlockId, Option<usize>, Problem)>,
@@ -239,6 +240,11 @@ fn point_uses(
                 if destination.projection.contains(&Projection::Deref) {
                     visit(destination, false);
                 }
+                if destination.projection.is_empty()
+                    && let Some(carrier) = refs[destination.local.0]
+                {
+                    defs.insert(carrier);
+                }
             }
             Terminator::Return => visit(
                 &Place {
@@ -314,9 +320,13 @@ fn origin_terminator(
     state: &mut Origins,
     term: &Terminator,
     loans: usize,
+    call_return: Option<usize>,
     budget: &mut Budget,
 ) -> Result<(), Exhausted> {
-    if let Terminator::Call { args, .. } = term {
+    if let Terminator::Call {
+        args, destination, ..
+    } = term
+    {
         budget.spend(add(args.len(), mul(state.len(), loans.div_ceil(64))?)?)?;
         for arg in args {
             if let Operand::Move(place) = arg
@@ -325,6 +335,11 @@ fn origin_terminator(
             {
                 state[carrier].clear();
             }
+        }
+        if let Some(origin) = call_return {
+            let carrier = refs[destination.local.0].expect("reference result carrier");
+            state[carrier].clear();
+            state[carrier].insert(origin);
         }
     }
     Ok(())
@@ -349,6 +364,47 @@ fn overlap(a: &CanonicalPlace, b: &CanonicalPlace, budget: &mut Budget) -> Resul
     Ok(true)
 }
 
+fn append_target(
+    next: &mut Vec<Target>,
+    target: &Target,
+    suffix: &[Projection],
+    parent: usize,
+    allocation: (&mut usize, &mut usize, usize),
+    budget: &mut Budget,
+) -> Result<(), Exhausted> {
+    let (bytes, memberships, max_bytes) = allocation;
+    let path_len = add(target.place.projection.len(), suffix.len())?;
+    if path_len > 128 {
+        return Err(Exhausted);
+    }
+    budget.spend(path_len + target.authority.len() + 1)?;
+    let size = add(
+        size_of::<Target>(),
+        add(
+            mul(path_len + 128, size_of::<Projection>())?,
+            mul(target.authority.len() + 3, size_of::<usize>())?,
+        )?,
+    )?;
+    *bytes = add(*bytes, mul(4, size)?)?;
+    *memberships = add(*memberships, target.authority.len() + 2)?;
+    if *bytes > max_bytes || *memberships > MAX_MEMBERSHIPS {
+        return Err(Exhausted);
+    }
+    let mut candidate = target.clone();
+    candidate.place.projection.extend_from_slice(suffix);
+    if let Err(position) = candidate.authority.binary_search(&parent) {
+        candidate.authority.insert(position, parent);
+    }
+    for existing in next.iter() {
+        budget.spend(path_len + candidate.authority.len() + 1)?;
+        if existing == &candidate {
+            return Ok(());
+        }
+    }
+    next.push(candidate);
+    Ok(())
+}
+
 impl Plan {
     pub fn build(
         f: &cfg::Function,
@@ -361,7 +417,17 @@ impl Plan {
             .copied()
             .filter(|local| matches!(f.locals[local.0].ty, Ty::Ref { .. }))
             .collect();
-        let loans = add(f.loan_sites.len(), parameter_origins.len())?;
+        let base = add(f.loan_sites.len(), parameter_origins.len())?;
+        let call_count = f
+            .blocks
+            .iter()
+            .filter(|block| {
+                matches!(&block.terminator.value,
+                    Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. })
+                )
+            })
+            .count();
+        let loans = add(base, call_count)?;
         if loans > MAX_LOANS {
             return Err(Exhausted);
         }
@@ -374,6 +440,14 @@ impl Plan {
             }
         }
         let b = f.blocks.len();
+        let mut next_call = base;
+        let call_rows: Vec<_> = f.blocks.iter().map(|block| {
+            if matches!(&block.terminator.value, Terminator::Call { signature, .. } if matches!(signature.result, Ty::Ref { .. })) {
+                let row = next_call;
+                next_call += 1;
+                Some(row)
+            } else { None }
+        }).collect();
         let mut offsets = Vec::with_capacity(b + 1);
         offsets.push(0usize);
         for block in &f.blocks {
@@ -388,8 +462,8 @@ impl Plan {
         // Peak includes solver entry states, point snapshots, scratch and sets
         // used by the backward solver. Check before the dense products allocate.
         let mut bytes = add(
-            mul(add(add(p, b)?, 2)?, origin_size)?,
-            mul(add(mul(p, 3)?, add(mul(b, 2)?, 4)?)?, live_size)?,
+            mul(add(add(p, mul(b, 2)?)?, 2)?, origin_size)?,
+            mul(add(mul(p, 3)?, add(mul(b, 3)?, 4)?)?, live_size)?,
         )?;
         bytes = add(
             bytes,
@@ -401,7 +475,7 @@ impl Plan {
                 )?,
             )?,
         )?;
-        bytes = add(bytes, mul(loans, add(128, mul(loans.div_ceil(64), 8)?)?)?)?;
+        bytes = add(bytes, mul(loans, add(256, mul(loans.div_ceil(64), 16)?)?)?)?;
         // Reserve bounded access scratch alongside persistent targets. Two copies
         // cover the caller's resolved targets while active-loan checks run.
         bytes = add(bytes, mul(loans, 64)?)?;
@@ -496,6 +570,7 @@ impl Plan {
                 &mut out,
                 &f.blocks[block].terminator.value,
                 loans,
+                call_rows[block],
                 budget,
             )?;
             for next in successors(&f.blocks[block].terminator.value)
@@ -525,6 +600,7 @@ impl Plan {
             }
         }
         let mut points: Vec<Option<Point>> = (0..p).map(|_| None).collect();
+        let mut outgoing: Vec<Option<Point>> = (0..b).map(|_| None).collect();
         let mut births = vec![None; loans];
         for block in 0..b {
             if !reachable[block] {
@@ -562,7 +638,27 @@ impl Plan {
                     origin_step(f, &refs, &mut state, &item.value, loans, budget)?;
                 }
             }
+            if let Some(row) = call_rows[block] {
+                births[row] = Some((block, f.blocks[block].statements.len()));
+            }
+            origin_terminator(
+                &refs,
+                &mut state,
+                &f.blocks[block].terminator.value,
+                loans,
+                call_rows[block],
+                budget,
+            )?;
+            memberships = add(memberships, state.iter().map(Set::count).sum())?;
+            if memberships > MAX_MEMBERSHIPS {
+                return Err(Exhausted);
+            }
+            outgoing[block] = Some(Point {
+                origins: state,
+                live: exits[block].clone(),
+            });
         }
+        budget.spend(mul(loans, mul(loans.div_ceil(64), 3)?)?)?;
         let mut parents = vec![Set::new(loans); loans];
         for (loan, site) in f.loan_sites.iter().enumerate() {
             if site.place.projection.first() == Some(&Projection::Deref)
@@ -574,11 +670,72 @@ impl Plan {
                 memberships = add(memberships, parents[loan].count())?;
             }
         }
+        let mut lifetime_deps = parents.clone();
+        for (block, row) in call_rows.iter().enumerate() {
+            let Some(row) = *row else { continue };
+            let Some(point) = &points[offsets[block + 1] - 1] else {
+                continue;
+            };
+            let Terminator::Call {
+                args, signature, ..
+            } = &f.blocks[block].terminator.value
+            else {
+                unreachable!()
+            };
+            let contract = &signature.ref_contract;
+            let regions = usize::from(contract.region_count);
+            budget.spend(
+                regions * regions
+                    + contract.param_regions.len()
+                    + contract.outlives.len() * 2
+                    + args.len()
+                    + 1,
+            )?;
+            let closure = contract.closure().expect("validated reference contract");
+            let result = contract.result_region.expect("reference result region");
+            let ReturnContract::SharedWholeParams(candidates) = &contract.returns else {
+                unreachable!()
+            };
+            for (index, arg) in args.iter().enumerate() {
+                let Some(region) = contract.param_regions[index] else {
+                    continue;
+                };
+                let (Operand::Copy(place) | Operand::Move(place)) = arg else {
+                    unreachable!()
+                };
+                let actual = &point.origins[refs[place.local.0].expect("reference actual")];
+                if candidates.binary_search(&index).is_ok() {
+                    parents[row].union(actual, budget)?;
+                }
+                if closure[region.0 as usize] & (1u64 << result.0) != 0 {
+                    lifetime_deps[row].union(actual, budget)?;
+                }
+            }
+            memberships = add(
+                memberships,
+                parents[row].count() + lifetime_deps[row].count(),
+            )?;
+        }
+        memberships = add(
+            memberships,
+            lifetime_deps
+                .iter()
+                .take(f.loan_sites.len())
+                .map(Set::count)
+                .sum(),
+        )?;
         if memberships > MAX_MEMBERSHIPS {
             return Err(Exhausted);
         }
         let mut targets: Vec<Vec<Target>> = vec![vec![]; loans];
         let mut ready = vec![false; loans];
+        for (block, row) in call_rows.iter().enumerate() {
+            if let Some(row) = row
+                && !reachable[block]
+            {
+                ready[*row] = true;
+            }
+        }
         for (index, local) in parameter_origins.iter().enumerate() {
             let row = f.loan_sites.len() + index;
             bytes = add(
@@ -607,7 +764,7 @@ impl Plan {
                 }
                 budget.spend(1 + parents[loan].0.len())?;
                 let reborrow = site.place.projection.first() == Some(&Projection::Deref);
-                if reborrow && parents[loan].members().any(|parent| !ready[parent]) {
+                if reborrow && lifetime_deps[loan].members().any(|parent| !ready[parent]) {
                     continue;
                 }
                 let mut next = vec![];
@@ -698,6 +855,28 @@ impl Plan {
                 ready[loan] = true;
                 changed = true;
             }
+            for row in call_rows.iter().flatten().copied() {
+                if ready[row] || lifetime_deps[row].members().any(|parent| !ready[parent]) {
+                    continue;
+                }
+                budget.spend(lifetime_deps[row].0.len() + parents[row].0.len() + 1)?;
+                let mut next = vec![];
+                for parent in parents[row].members() {
+                    for target in &targets[parent] {
+                        append_target(
+                            &mut next,
+                            target,
+                            &[],
+                            parent,
+                            (&mut bytes, &mut memberships, max_bytes),
+                            budget,
+                        )?;
+                    }
+                }
+                targets[row] = next;
+                ready[row] = true;
+                changed = true;
+            }
             if !changed {
                 break;
             }
@@ -706,9 +885,9 @@ impl Plan {
             if !ready && let Some((block, statement)) = births[loan] {
                 problems.push((
                     BlockId(block),
-                    Some(statement),
+                    (statement < f.blocks[block].statements.len()).then_some(statement),
                     Problem::Unsupported(
-                        "cyclic reborrow parent provenance is unsupported in B1".into(),
+                        "cyclic reference origin dependencies are unsupported".into(),
                     ),
                 ));
             }
@@ -717,8 +896,9 @@ impl Plan {
             refs,
             offsets,
             points,
-            exits,
+            outgoing,
             parents,
+            lifetime_deps,
             targets,
             kinds: f
                 .loan_sites
@@ -730,6 +910,7 @@ impl Plan {
                     };
                     kind
                 }))
+                .chain(std::iter::repeat_n(BorrowKind::Shared, call_count))
                 .collect(),
             problems,
             bytes,
@@ -788,7 +969,7 @@ impl Plan {
             }
         }
         for (block, next) in backedges {
-            let point = plan.points[plan.offsets[block + 1] - 1].as_ref().unwrap();
+            let point = plan.outgoing[block].as_ref().unwrap();
             let active = plan.active(&point.origins, &ins[next], budget)?;
             for loan in active.members() {
                 if let Some((birth, _)) = births[loan]
@@ -822,7 +1003,10 @@ impl Plan {
             .as_ref()
             .expect("reachable ownership point");
         if matches!(phase, Phase::Write) && current == end {
-            (&data.origins, &self.exits[block.0])
+            let outgoing = self.outgoing[block.0]
+                .as_ref()
+                .expect("reachable outgoing point");
+            (&outgoing.origins, &outgoing.live)
         } else {
             (&data.origins, &data.live)
         }
@@ -835,8 +1019,8 @@ impl Plan {
         }
         let mut queue: Vec<usize> = active.members().collect();
         while let Some(loan) = queue.pop() {
-            budget.spend(self.parents[loan].0.len() + 1)?;
-            for parent in self.parents[loan].members() {
+            budget.spend(self.lifetime_deps[loan].0.len() + 1)?;
+            for parent in self.lifetime_deps[loan].members() {
                 if !active.has(parent) {
                     active.insert(parent);
                     queue.push(parent);
@@ -891,9 +1075,15 @@ impl Plan {
             }
         }
         if resolved.is_empty() {
-            Ok(Err(Problem::Invalid(
-                "reference has no issued canonical provenance".into(),
-            )))
+            if origins[carrier].count() != 0 {
+                Ok(Err(Problem::Unsupported(
+                    "reference has no supported whole-input target".into(),
+                )))
+            } else {
+                Ok(Err(Problem::Invalid(
+                    "reference has no issued canonical provenance".into(),
+                )))
+            }
         } else {
             Ok(Ok(resolved))
         }
@@ -903,6 +1093,93 @@ impl Plan {
             budget.spend(target.place.projection.len() + target.authority.len() + 1)?;
         }
         Ok(self.targets[id.0].clone())
+    }
+    pub fn check_return(
+        &self,
+        f: &cfg::Function,
+        block: BlockId,
+        budget: &mut Budget,
+    ) -> Result<Option<Problem>, Exhausted> {
+        let ReturnContract::SharedWholeParams(allowed) = &f.ref_contract.returns else {
+            return Ok(None);
+        };
+        let regions = usize::from(f.ref_contract.region_count);
+        budget.spend(
+            regions * regions
+                + f.ref_contract.param_regions.len()
+                + f.ref_contract.outlives.len() * 2
+                + 1,
+        )?;
+        let closure = f
+            .ref_contract
+            .closure()
+            .expect("validated universal contract");
+        let result = f.ref_contract.result_region.expect("shared result region");
+        let (origins, _) = self.point(block, None, Phase::Read);
+        let carrier = self.refs[f.return_local.0].expect("reference return carrier");
+        budget.spend(origins[carrier].0.len())?;
+        if origins[carrier].count() == 0 {
+            return Ok(Some(Problem::Invalid(
+                "returned reference has no issued provenance".into(),
+            )));
+        }
+        let mut dependencies = origins[carrier].clone();
+        let mut queue: Vec<_> = dependencies.members().collect();
+        for origin in origins[carrier].members() {
+            if self.targets[origin].is_empty() {
+                return Ok(Some(Problem::Unsupported(
+                    "reference result has no supported whole-input target".into(),
+                )));
+            }
+            for target in &self.targets[origin] {
+                budget.spend(f.params.len() + allowed.len() + target.place.projection.len() + 1)?;
+                let CanonicalRoot::ParameterReferent(local) = target.place.root else {
+                    return Ok(Some(Problem::Invalid(
+                        "cannot return a reference to owned frame storage".into(),
+                    )));
+                };
+                if !target.place.projection.is_empty() {
+                    return Ok(Some(Problem::Unsupported(
+                        "projected reference returns are unsupported".into(),
+                    )));
+                }
+                if !allowed.iter().any(|index| f.params[*index] == local) {
+                    return Ok(Some(Problem::Invalid(
+                        "returned input does not satisfy declared output lifetime".into(),
+                    )));
+                }
+            }
+        }
+        while let Some(origin) = queue.pop() {
+            budget.spend(self.lifetime_deps[origin].0.len() + 1)?;
+            for target in &self.targets[origin] {
+                budget.spend(f.params.len() + 1)?;
+                let CanonicalRoot::ParameterReferent(local) = target.place.root else {
+                    return Ok(Some(Problem::Invalid(
+                        "returned reference lifetime depends on owned frame storage".into(),
+                    )));
+                };
+                let position = f
+                    .params
+                    .iter()
+                    .position(|param| *param == local)
+                    .expect("formal canonical root");
+                let region =
+                    f.ref_contract.param_regions[position].expect("named shared input region");
+                if closure[region.0 as usize] & (1u64 << result.0) == 0 {
+                    return Ok(Some(Problem::Invalid(
+                        "reference return requires an undeclared universal outlives bound".into(),
+                    )));
+                }
+            }
+            for parent in self.lifetime_deps[origin].members() {
+                if !dependencies.has(parent) {
+                    dependencies.insert(parent);
+                    queue.push(parent);
+                }
+            }
+        }
+        Ok(None)
     }
     pub fn check(
         &self,
