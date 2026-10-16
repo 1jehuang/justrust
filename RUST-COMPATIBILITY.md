@@ -14,7 +14,8 @@ and width-aware checked native operations. The private eight-byte leaf ABI is
 not Rust platform layout or FFI support. `INTEGER-CASTS.md` adds all 100
 integer-to-integer conversions with source-signed extension and destination
 truncation/normalization, nontrapping casts and private soft source expectations.
-Noninteger casts, shifts, binary bitwise operators, 128-bit integers, floats and
+Eager integer/Boolean `&`, `|`, `^` preserve exact types and left-to-right evaluation.
+Noninteger casts, shifts, compound assignments, 128-bit integers, floats and
 broader inference remain separate work. The full Rust compatibility goal remains
 open.
 

@@ -287,3 +287,12 @@ not completion of source organization, general types, ownership or full Rust.
 
 No checkbox for an entire category is closed by implementing one slice. Unsupported
 legal programs remain tracked as gaps, never counted as conformance successes.
+
+### Eager bitwise checkpoint
+
+`BITWISE.md` is implemented for all ten integer primitives and Bool. Exact types,
+eager left-to-right snapshots, canonical normalized results and short-circuit
+And/Or separation are validated. All1100 hosted tests and strict all-target lint
+pass, including exact20 stock/native cases and four graph tests. Independent
+23corpus native follow-through is pending. Shifts and compound assignments
+remain separate work, and full Rust remains open.

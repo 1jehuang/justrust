@@ -31,7 +31,9 @@ signedness before destination truncation/normalization without overflow traps.
 Unsuffixed cast operands receive a soft destination hint through literals, unary
 operators and block tails, not arithmetic or branch unification. Concrete source
 types retain their identity. See `INTEGER-TYPES.md` and `INTEGER-CASTS.md`.
-Shifts, binary bitwise operators, 128-bit integers, floats and noninteger casts
+Eager `&`, `|` and `^` accept identical integer types or Boolean operands and
+evaluate both operands once, left to right. Logical `&&`/`||` remain short-circuit.
+Shifts, compound assignments, 128-bit integers, floats and noninteger casts
 remain unsupported. Parenthesized cast target types are an explicit boundary.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples

@@ -414,6 +414,9 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 #[derive(Clone, Debug)]
@@ -641,6 +644,8 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | ">"
                     | ">="
                     | "&"
+                    | "|"
+                    | "^"
                     | "&&"
                     | "||"
             ) {
@@ -1472,22 +1477,22 @@ impl Parser {
             } else {
                 ir::BorrowKind::Shared
             };
-            let value = self.expr(8)?;
+            let value = self.expr(11)?;
             let place=self.assignment_place(value).map_err(|_|self.error("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
             Expr::Borrow { kind, place }
         } else if self.eat("*") {
             Expr::Deref {
-                value: Box::new(self.expr(8)?),
+                value: Box::new(self.expr(11)?),
             }
         } else if self.eat("-") {
             Expr::Unary {
                 op: UnaryOp::Neg,
-                value: Box::new(self.expr(8)?),
+                value: Box::new(self.expr(11)?),
             }
         } else if self.eat("!") {
             Expr::Unary {
                 op: UnaryOp::Not,
-                value: Box::new(self.expr(8)?),
+                value: Box::new(self.expr(11)?),
             }
         } else if self.eat("true") {
             Expr::Bool(true)
@@ -1756,7 +1761,7 @@ impl Parser {
                 break;
             }
             if self.is("as") {
-                if min > 7 {
+                if min > 10 {
                     break;
                 }
                 left = self.cast_after_as(left)?;
@@ -1771,17 +1776,28 @@ impl Parser {
                 "<=" => (3, BinaryOp::Le),
                 ">" => (3, BinaryOp::Gt),
                 ">=" => (3, BinaryOp::Ge),
-                "+" => (5, BinaryOp::Add),
-                "-" => (5, BinaryOp::Sub),
-                "*" => (6, BinaryOp::Mul),
-                "/" => (6, BinaryOp::Div),
-                "%" => (6, BinaryOp::Rem),
+                "|" => (4, BinaryOp::BitOr),
+                "^" => (5, BinaryOp::BitXor),
+                "&" => (6, BinaryOp::BitAnd),
+                "+" => (8, BinaryOp::Add),
+                "-" => (8, BinaryOp::Sub),
+                "*" => (9, BinaryOp::Mul),
+                "/" => (9, BinaryOp::Div),
+                "%" => (9, BinaryOp::Rem),
                 _ => break,
             };
             if self.token().string || precedence < min {
                 break;
             }
-            if precedence == 3 || precedence == 4 {
+            if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+                && self
+                    .tokens
+                    .get(self.at + 1)
+                    .is_some_and(|token| !token.string && token.text == "=")
+            {
+                return Err(self.error("compound bitwise assignments are unsupported"));
+            }
+            if precedence == 3 {
                 if compared {
                     return Err(self.error("chained comparisons require parentheses"));
                 }
@@ -4705,6 +4721,15 @@ impl<'a> Checker<'a> {
                 };
                 let (operand, result) = match op {
                     BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                        let operand = self.join(&l.ty, &r.ty, "bitwise operands")?;
+                        if !matches!(operand, ir::Ty::Int(_) | ir::Ty::Bool) {
+                            return Err(
+                                "bitwise operands require identical integer types or Bool".into()
+                            );
+                        }
+                        (operand.clone(), operand)
+                    }
                     BinaryOp::Eq | BinaryOp::Ne => {
                         (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
                     }
@@ -4950,6 +4975,128 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn bitwise_exact_integer_and_boolean_types_preserve_operand_hints() {
+        for name in [
+            "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+        ] {
+            let source = format!("fn f(x:{name})->{name}{{(x & 3) | (1 ^ x)}}fn main(){{}}");
+            let p = parse(&source).unwrap();
+            check(&p).unwrap();
+            let f = type_function_with_signatures(&p, 0, &signature_table(&p).unwrap()).unwrap();
+            for expr in &f.exprs {
+                if matches!(
+                    expr.kind,
+                    ir::ExprKind::Binary {
+                        op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor,
+                        ..
+                    }
+                ) {
+                    assert_eq!(expr.ty, f.result);
+                }
+            }
+        }
+        check(&parse("fn f(x:bool)->bool{(x & true) | (false ^ x)}fn main(){let x=(1i8<2i8)&(3i16<4i16);let y=(200+100)|1;let z=((200+100)|1) as u8;}").unwrap()).unwrap();
+        for source in [
+            "fn main(){let x=1u8 & 2u16;}",
+            "fn main(){let x=true | 1;}",
+            "fn main(){let x=() ^ ();}",
+            "fn main(){let x=(1,2) & (3,4);}",
+            "fn main(){let x=1;let r=&x;let z=r|r;}",
+            "fn main(){let x:u8=256 | 0;}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn bitwise_pratt_precedence_and_compound_boundaries() {
+        let p = parse("fn main(){let x=1 | 2 ^ 3 & 4 + 5 * 6i16 as i32;}").unwrap();
+        let Stmt::Let {
+            value:
+                Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    right,
+                    ..
+                },
+            ..
+        } = &p.functions[0].body.statements[0]
+        else {
+            panic!("OR precedence")
+        };
+        let Expr::Binary {
+            op: BinaryOp::BitXor,
+            right,
+            ..
+        } = right.as_ref()
+        else {
+            panic!("XOR precedence")
+        };
+        let Expr::Binary {
+            op: BinaryOp::BitAnd,
+            right,
+            ..
+        } = right.as_ref()
+        else {
+            panic!("AND precedence")
+        };
+        let Expr::Binary {
+            op: BinaryOp::Add,
+            right,
+            ..
+        } = right.as_ref()
+        else {
+            panic!("addition precedence")
+        };
+        let Expr::Binary {
+            op: BinaryOp::Mul,
+            right,
+            ..
+        } = right.as_ref()
+        else {
+            panic!("multiplication precedence")
+        };
+        assert!(matches!(right.as_ref(), Expr::Cast { .. }));
+        check(&parse("fn main(){let x=1i32;let r=&x;let a=*r & -1 | !0 ^ 3;let b=1|2|3;let c=1|2==3;let d=true || false & true && false;}").unwrap()).unwrap();
+        for op in ["&=", "|=", "^="] {
+            let source = format!("fn main(){{let mut x=1;x{op}2;}}");
+            assert!(parse(&source).unwrap_err().contains("unsupported"));
+        }
+        for source in [
+            "fn main(){let x=1 \"|\" 2;}",
+            "fn main(){let x=1 \"^\" 2;}",
+            "fn main(){let x=1<2<3;}",
+        ] {
+            assert!(parse(source).is_err());
+        }
+    }
+
+    #[test]
+    fn bitwise_eager_completion_and_once_only_operands() {
+        let p = parse("fn source()->bool{true}fn f()->bool{source() & source()}fn dead()->bool{false & {return true;false}}fn main(){}").unwrap();
+        check(&p).unwrap();
+        let env = signature_table(&p).unwrap();
+        let f = type_function_with_signatures(&p, 1, &env).unwrap();
+        assert_eq!(
+            f.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            2
+        );
+        let dead = type_function_with_signatures(&p, 2, &env).unwrap();
+        assert_eq!(
+            dead.exprs[dead.body.tail.unwrap().0].completion,
+            ir::Completion::Never
+        );
+        // An eager RHS read is checked even when the left Boolean decides the value.
+        assert!(check(&parse("fn main(){let x:bool;let y=false & x;}").unwrap()).is_err());
+        assert!(check(&parse("fn main(){let x:bool;let y=true | x;}").unwrap()).is_err());
+    }
 
     #[test]
     fn cast_soft_expectations_preserve_concrete_sources_and_drop_at_operators() {

@@ -115,3 +115,13 @@ checks before x86 masking. Left shifts truncate lost value bits without arithmet
 overflow trapping; signed right shifts are arithmetic and unsigned right shifts
 logical. Count inference, static overflow policy and traps require their own
 frozen corpus and implementation gates. No shift support is implied here.
+
+## Implemented validation checkpoint
+
+The frozen20 stock/native CLI cases and four graph tests pass. All1100 hosted
+tests, strict all-target Clippy, formatting and both actual-code reviews pass.
+The real high-bit/reference/eager-Boolean example executes with exact stock
+stdout parity. Final hosted runs: check20261016-033737817-3594778,
+tests20261016-033749376-3596675 and
+lint20261016-033750943-3596876. The independent23corpus campaign remains pending
+this implementation commit. No speedup or full Rust claim is made.

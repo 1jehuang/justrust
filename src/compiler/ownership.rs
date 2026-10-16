@@ -1586,6 +1586,166 @@ mod tests {
     }
 
     #[test]
+    fn eager_bitwise_reads_both_operands_once_in_left_to_right_order() {
+        use super::super::frontend::BinaryOp;
+        for op in [BinaryOp::BitAnd, BinaryOp::BitOr, BinaryOp::BitXor] {
+            for ty in [Ty::Bool, Ty::Int(IntTy::U8), Ty::Int(IntTy::I64)] {
+                let constant = if ty == Ty::Bool {
+                    Constant::Bool(matches!(op, BinaryOp::BitOr))
+                } else {
+                    let Ty::Int(kind) = ty else { unreachable!() };
+                    Constant::Int(IntValue {
+                        ty: kind,
+                        bits: if matches!(op, BinaryOp::BitOr) {
+                            kind.mask()
+                        } else {
+                            0
+                        },
+                    })
+                };
+                let mut f = fixture();
+                f.locals.extend([local(ty.clone()), local(ty)]);
+                f.blocks[0].statements.extend([
+                    located(Statement::StorageLive(LocalId(1))),
+                    located(Statement::StorageLive(LocalId(2))),
+                    located(Statement::Assign {
+                        destination: place(2),
+                        value: Rvalue::Binary {
+                            op,
+                            left: Operand::Constant(constant),
+                            right: Operand::Copy(place(1)),
+                        },
+                    }),
+                ]);
+                let result = analyze(&f);
+                assert!(result.complete);
+                assert_eq!(result.stats.operands_read, 4);
+                assert_eq!(
+                    result.diagnostics.len(),
+                    1,
+                    "{op:?}: {:?}",
+                    result.diagnostics
+                );
+                assert_eq!(
+                    result.diagnostics[0].kind,
+                    ErrorKind::ReadNotDefinitelyInitialized
+                );
+                f.params.push(LocalId(1));
+                f.blocks[0]
+                    .statements
+                    .retain(|item| !matches!(item.value, Statement::StorageLive(LocalId(1))));
+                for moved_first in [false, true] {
+                    let mut ordered = f.clone();
+                    ordered.blocks[0].statements.last_mut().unwrap().value = Statement::Assign {
+                        destination: place(2),
+                        value: Rvalue::Binary {
+                            op,
+                            left: if moved_first {
+                                Operand::Move(place(1))
+                            } else {
+                                Operand::Copy(place(1))
+                            },
+                            right: if moved_first {
+                                Operand::Copy(place(1))
+                            } else {
+                                Operand::Move(place(1))
+                            },
+                        },
+                    };
+                    let result = analyze(&ordered);
+                    assert_eq!(
+                        result.passed(),
+                        !moved_first,
+                        "{op:?}: {:?}",
+                        result.diagnostics
+                    );
+                    assert_eq!(result.stats.operands_read, 4);
+                    assert_eq!(result.stats.moves, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eager_boolean_bitwise_deref_retains_each_operand_loan_until_last_read() {
+        use super::super::{frontend::BinaryOp, ir::BorrowKind};
+        for op in [BinaryOp::BitAnd, BinaryOp::BitOr, BinaryOp::BitXor] {
+            for deref_left in [false, true] {
+                let mut f = fixture();
+                f.locals.extend([
+                    local(Ty::Bool),
+                    local(Ty::Ref {
+                        kind: BorrowKind::Shared,
+                        referent: std::sync::Arc::new(Ty::Bool),
+                    }),
+                    local(Ty::Bool),
+                ]);
+                f.params.push(LocalId(1));
+                f.loan_sites.push(cfg::LoanSite {
+                    kind: BorrowKind::Shared,
+                    place: place(1),
+                    origin: None,
+                });
+                let source = Operand::Copy(Place {
+                    local: LocalId(2),
+                    projection: vec![Projection::Deref],
+                });
+                let constant = Operand::Constant(Constant::Bool(matches!(op, BinaryOp::BitOr)));
+                let value = Rvalue::Binary {
+                    op,
+                    left: if deref_left {
+                        source.clone()
+                    } else {
+                        constant.clone()
+                    },
+                    right: if deref_left { constant } else { source },
+                };
+                let write = located(Statement::Assign {
+                    destination: place(1),
+                    value: Rvalue::Use(Operand::Constant(Constant::Bool(true))),
+                });
+                f.blocks[0].statements.extend([
+                    located(Statement::StorageLive(LocalId(2))),
+                    located(Statement::StorageLive(LocalId(3))),
+                    located(Statement::Assign {
+                        destination: place(2),
+                        value: Rvalue::Borrow(cfg::LoanId(0)),
+                    }),
+                    write.clone(),
+                    located(Statement::Assign {
+                        destination: place(3),
+                        value: value.clone(),
+                    }),
+                ]);
+                let result = analyze(&f);
+                assert!(
+                    result
+                        .diagnostics
+                        .iter()
+                        .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_))),
+                    "{op:?}/{deref_left}: {:?}",
+                    result.diagnostics
+                );
+                let length = f.blocks[0].statements.len();
+                f.blocks[0].statements.remove(length - 2);
+                f.blocks[0].statements.push(write);
+                assert!(analyze(&f).passed());
+                f.blocks[0].statements.pop();
+                f.blocks[0].statements.last_mut().unwrap().value = Statement::Assign {
+                    destination: place(1),
+                    value,
+                };
+                let result = analyze(&f);
+                assert!(
+                    result.passed(),
+                    "{op:?}/{deref_left}: {:?}",
+                    result.diagnostics
+                );
+            }
+        }
+    }
+
+    #[test]
     fn integer_cast_reads_one_operand_and_preserves_private_move_semantics() {
         for moved in [false, true] {
             let mut f = fixture();

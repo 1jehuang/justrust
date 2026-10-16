@@ -480,6 +480,18 @@ impl<'a> Emitter<'a> {
     }
     fn binary_integer(&mut self, op: BinaryOp, ty: ir::IntTy) -> Result<(), String> {
         match op {
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                self.bytes(&[
+                    0x48,
+                    match op {
+                        BinaryOp::BitAnd => 0x21,
+                        BinaryOp::BitOr => 0x09,
+                        _ => 0x31,
+                    },
+                    0xc8,
+                ]);
+                self.normalize_integer(ty);
+            }
             BinaryOp::Add | BinaryOp::Sub => {
                 self.bytes(&[
                     0x48,
@@ -553,6 +565,20 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
     fn binary_noninteger(&mut self, op: BinaryOp) -> Result<(), String> {
+        if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
+            // Exact CFG validation limits this dispatch to canonical Booleans.
+            // The eager fullword operations retain 0/1 without integer checks.
+            self.bytes(&[
+                0x48,
+                match op {
+                    BinaryOp::BitAnd => 0x21,
+                    BinaryOp::BitOr => 0x09,
+                    _ => 0x31,
+                },
+                0xc8,
+            ]);
+            return Ok(());
+        }
         let cc = match op {
             BinaryOp::Eq => 0x94,
             BinaryOp::Ne => 0x95,
@@ -1285,6 +1311,86 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn bitwise_integer_widths_signed_high_bits_and_scalar_transport() {
+        use ir::IntTy;
+        for ty in [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ] {
+            let name = ty.name();
+            let high = 1_i128 << (ty.bits() - 1);
+            let (all, top, low) = if ty.is_signed() {
+                (-1, -high, high - 1)
+            } else {
+                (high * 2 - 1, high, high - 1)
+            };
+            let source = format!(
+                "struct Value {{ padding: [u8; 9], bits: {name} }}
+                 fn and(a:{name}, b:{name})->{name} {{ a & b }}
+                 fn or(a:{name}, b:{name})->{name} {{ a | b }}
+                 fn xor(a:{name}, b:{name})->{name} {{ a ^ b }}
+                 fn record()->Value {{ Value {{ padding:[0u8;9], bits:{all}{name} }} }}
+                 fn main() {{
+                    let value=record(); let reference=&value;
+                    if and(reference.bits,{top}{name}) != {top}{name} {{ 1/0; }}
+                    if or({low}{name},{top}{name}) != {all}{name} {{ 1/0; }}
+                    if xor(reference.bits,{top}{name}) != {low}{name} {{ 1/0; }}
+                    if (reference.bits ^ reference.bits) != 0{name} {{ 1/0; }}
+                 }}"
+            );
+            let program = frontend::parse(&source).unwrap();
+            let output = run(&program);
+            assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn bitwise_boolean_eager_order_snapshot_truth_tables_and_traps() {
+        let program = frontend::parse(
+            r#"
+            fn value(trace:&mut i32, digit:i32, result:bool)->bool {
+                *trace = *trace * 10 + digit; result
+            }
+            fn main() {
+                let mut trace=0;
+                if value(&mut trace,1,false) & value(&mut trace,2,true) { 1/0; }
+                if !(value(&mut trace,3,true) | value(&mut trace,4,false)) { 1/0; }
+                if !(value(&mut trace,5,false) ^ value(&mut trace,6,true)) { 1/0; }
+                if trace != 123456 { 1/0; }
+                if !(true & true) { 1/0; }
+                if false | false { 1/0; }
+                if true ^ true { 1/0; }
+                let mut original=true;
+                let snapshot=original & { original=false; true };
+                if !snapshot { 1/0; }
+                if original { 1/0; }
+                println!("eager-bitwise");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"eager-bitwise\n");
+        for expression in ["false & fail()", "true | fail()", "false ^ fail()"] {
+            let source = format!(
+                "fn fail()->bool {{ let zero=0; 1/zero; true }} fn main() {{ let result={expression}; }}"
+            );
+            let program = frontend::parse(&source).unwrap();
+            let output = run(&program);
+            assert_eq!(output.status.code(), Some(101), "{expression}: {output:?}");
+        }
     }
 
     #[test]

@@ -1435,9 +1435,31 @@ impl CheckedFunction {
                 }
                 ExprKind::Field { base, .. } => expr(*base)?,
                 ExprKind::Unary { value, .. } => expr(*value)?,
-                ExprKind::Binary { left, right, .. } => {
+                ExprKind::Binary { op, left, right } => {
                     expr(*left)?;
                     expr(*right)?;
+                    if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
+                        let left = &self.exprs[left.0];
+                        let right = &self.exprs[right.0];
+                        if !matches!(left.ty, Ty::Int(_) | Ty::Bool)
+                            || left.ty != right.ty
+                            || value.ty != left.ty
+                        {
+                            return Err(
+                                "bitwise operator requires identical integer or bool types".into(),
+                            );
+                        }
+                        let completion = if left.completion == Completion::Returns
+                            && right.completion == Completion::Returns
+                        {
+                            Completion::Returns
+                        } else {
+                            Completion::Never
+                        };
+                        if value.completion != completion {
+                            return Err("bitwise operator completion mismatch".into());
+                        }
+                    }
                 }
                 ExprKind::Call {
                     name,
@@ -1541,6 +1563,62 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bitwise_validates_exact_types_dead_operands_and_eager_completion() {
+        for op in [BinaryOp::BitAnd, BinaryOp::BitOr, BinaryOp::BitXor] {
+            let mut function = fixture();
+            function.exprs.push(TypedExpr {
+                ty: Ty::Int(IntTy::I32),
+                completion: Completion::Returns,
+                kind: ExprKind::Binary {
+                    op,
+                    left: ExprId(0),
+                    right: ExprId(0),
+                },
+            });
+            let binary = function.exprs.len() - 1;
+            function.validate().unwrap();
+            function.exprs[binary].ty = Ty::Int(IntTy::U32);
+            assert!(function.validate().is_err());
+            function.exprs[binary].ty = Ty::Int(IntTy::I32);
+            function.exprs[0].completion = Completion::Never;
+            assert!(function.validate().unwrap_err().contains("completion"));
+            function.exprs[binary].completion = Completion::Never;
+            function.validate().unwrap();
+            function.exprs[0] = TypedExpr {
+                ty: Ty::Bool,
+                completion: Completion::Returns,
+                kind: ExprKind::Bool(false),
+            };
+            function.exprs[binary].ty = Ty::Bool;
+            function.exprs[binary].completion = Completion::Returns;
+            function.validate().unwrap();
+            for ty in [
+                Ty::Unit,
+                Ty::Never,
+                Ty::Tuple(Arc::from([Ty::Bool])),
+                Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: Arc::new(Ty::Bool),
+                },
+            ] {
+                function.exprs[0].ty = ty.clone();
+                function.exprs[binary].ty = ty;
+                assert!(function.validate().is_err());
+            }
+            function.exprs[0] = TypedExpr {
+                ty: Ty::Int(IntTy::U8),
+                completion: Completion::Returns,
+                kind: ExprKind::Int(IntValue {
+                    ty: IntTy::U8,
+                    bits: 256,
+                }),
+            };
+            function.exprs[binary].ty = Ty::Int(IntTy::U8);
+            assert!(function.validate().unwrap_err().contains("noncanonical"));
+        }
+    }
+
     #[test]
     fn casts_validate_dead_endpoints_edges_and_typed_noncompletion() {
         let mut function = fixture();

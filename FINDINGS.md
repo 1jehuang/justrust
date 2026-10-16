@@ -8804,3 +8804,30 @@ The actual96worker example printed `integer casts compiled correctly`. Its
 dropped events. Observed total19,449,689ns and engine3,691,388ns are
 contended/uncontrolled, not a speedup comparison. FullRust, additional operators,
 wider numerics, libraries and existing-project acceptance remain open.
+
+## 2026-10-16: eager integer and Boolean bitwise operators
+
+`BITWISE.md` now has native implementation of exact same-type integer/Boolean
+`&`, `|`, `^`. These take the existing eager left snapshot followed by right
+snapshot, never the logical And/Or short-circuit branch. Native fullword
+operations normalize integer results and preserve canonical Boolean values
+without arithmetic range traps. Precedence was coherently renumbered through
+cast10/prefix11, with shift7 reserved but not enabled.
+
+The frozen20-case corpus SHA256
+`1b3f06ed4dae9915ffb67625f18898193c12feb21f396cd1385b63c8dba8d7e9`
+passed independent stock classification and native workers1/8 execution.
+Four graph tests cover fact reuse, CHECK object exclusion, invalid unused
+bodies, loan violations and eager RHS noncompletion. All1100 hosted tests pass.
+Exact final check/test/lint runs are20261016-033737817-3594778,
+20261016-033749376-3596675 and20261016-033750943-3596876, retained in
+`data/runs/prototype-bootstrap/2026-10-bitwise.jsonl`. Formatting and both
+actual-code reviews are clear. A test-only BinaryOp equality compilation error
+was corrected using discriminants without expanding the public API.
+
+The real high-bit/reference/eager-Boolean example prints
+`bitwise operations compiled correctly` with identical stock/native output.
+Its initial use of unsupported panic syntax was removed before acceptance,
+not treated as native support. Independent tracked23corpus validation follows
+the implementation commit. No speedup or full Rust claim is made. Shifts,
+compound assignments, wider numerics and full library/project support remain.

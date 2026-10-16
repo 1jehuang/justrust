@@ -402,6 +402,8 @@ impl Function {
                 if !matches!(operand_ty, Ty::Int(_))
                     && !(matches!(op, BinaryOp::Eq | BinaryOp::Ne)
                         && matches!(operand_ty, Ty::Bool | Ty::Unit))
+                    && !(matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+                        && operand_ty == Ty::Bool)
                 {
                     return Err("CFG binary operator requires compatible integer operands".into());
                 }
@@ -2188,6 +2190,173 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn bitwise_exact_scalars_dead_constants_and_eager_call_order() {
+        let function = nominal_lowered(&with_root(Ty::Unit, vec![], vec![]));
+        for op in [BinaryOp::BitAnd, BinaryOp::BitOr, BinaryOp::BitXor] {
+            for ty in [
+                IntTy::I8,
+                IntTy::I16,
+                IntTy::I32,
+                IntTy::I64,
+                IntTy::Isize,
+                IntTy::U8,
+                IntTy::U16,
+                IntTy::U32,
+                IntTy::U64,
+                IntTy::Usize,
+            ] {
+                let operand = Operand::Constant(Constant::Int(IntValue {
+                    ty,
+                    bits: ty.mask(),
+                }));
+                assert_eq!(
+                    function
+                        .rvalue_ty(&Rvalue::Binary {
+                            op,
+                            left: operand.clone(),
+                            right: operand.clone()
+                        })
+                        .unwrap(),
+                    Ty::Int(ty)
+                );
+                assert!(
+                    function
+                        .rvalue_ty(&Rvalue::Binary {
+                            op,
+                            left: operand,
+                            right: Operand::Constant(Constant::Bool(true))
+                        })
+                        .is_err()
+                );
+            }
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: Operand::Constant(Constant::Bool(false)),
+                        right: Operand::Constant(Constant::Bool(true))
+                    })
+                    .unwrap(),
+                Ty::Bool
+            );
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: Operand::Constant(Constant::Unit),
+                        right: Operand::Constant(Constant::Unit)
+                    })
+                    .is_err()
+            );
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: Operand::Constant(Constant::Int(IntValue::i32(1))),
+                        right: Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::U32,
+                            bits: 1
+                        }))
+                    })
+                    .is_err()
+            );
+            let mut dead = function.clone();
+            dead.blocks.push(BasicBlock {
+                statements: vec![Located {
+                    value: Statement::Assign {
+                        destination: place(LocalId(0)),
+                        value: Rvalue::Binary {
+                            op,
+                            left: Operand::Constant(Constant::Int(IntValue {
+                                ty: IntTy::U8,
+                                bits: 256,
+                            })),
+                            right: Operand::Constant(Constant::Int(IntValue {
+                                ty: IntTy::U8,
+                                bits: 0,
+                            })),
+                        },
+                    },
+                    origin: None,
+                }],
+                terminator: Located {
+                    value: Terminator::Unreachable,
+                    origin: None,
+                },
+            });
+            assert!(dead.validate().unwrap_err().contains("noncanonical"));
+            let source = with_root(
+                Ty::Unit,
+                vec![
+                    expr(
+                        Ty::Bool,
+                        ir::ExprKind::Call {
+                            name: "left".into(),
+                            args: vec![],
+                            signature: ir::Signature {
+                                ref_contract: Default::default(),
+                                params: vec![],
+                                result: Ty::Bool,
+                            },
+                        },
+                    ),
+                    expr(
+                        Ty::Bool,
+                        ir::ExprKind::Call {
+                            name: "right".into(),
+                            args: vec![],
+                            signature: ir::Signature {
+                                ref_contract: Default::default(),
+                                params: vec![],
+                                result: Ty::Bool,
+                            },
+                        },
+                    ),
+                    expr(
+                        Ty::Bool,
+                        ir::ExprKind::Binary {
+                            op,
+                            left: ExprId(0),
+                            right: ExprId(1),
+                        },
+                    ),
+                ],
+                vec![ir::Stmt::Expr(ExprId(2))],
+            );
+            let lowered = nominal_lowered(&source);
+            let calls: Vec<_> = lowered
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.terminator.value {
+                    Terminator::Call { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(calls, ["left", "right"]);
+            assert!(
+                !lowered
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(block.terminator.value, Terminator::Switch { .. }))
+            );
+            assert_eq!(lowered.blocks.iter().flat_map(|block| &block.statements).filter(|statement| matches!(statement.value, Statement::Assign { value: Rvalue::Binary { op: actual, .. }, .. } if std::mem::discriminant(&actual) == std::mem::discriminant(&op))).count(), 1);
+            assert_storage_paths(&lowered);
+            assert!(super::super::ownership::analyze(&lowered).passed());
+        }
+        for op in [BinaryOp::And, BinaryOp::Or] {
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: Operand::Constant(Constant::Bool(false)),
+                        right: Operand::Constant(Constant::Bool(true))
+                    })
+                    .is_err()
+            );
+        }
     }
 
     #[test]
