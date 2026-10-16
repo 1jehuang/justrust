@@ -622,9 +622,11 @@ impl RefContract {
         for (index, (ty, param_region)) in params.iter().zip(self.param_regions.iter()).enumerate()
         {
             match ty {
-                Ty::Ref { kind, referent } if kind == result_kind => {
+                Ty::Ref { kind, referent } => {
                     let input = param_region.ok_or("missing reference parameter region")?;
-                    if rows[usize::from(input.0)] & (1u64 << region.0) != 0 {
+                    if (*result_kind == BorrowKind::Shared || *kind == BorrowKind::Mut)
+                        && rows[usize::from(input.0)] & (1u64 << region.0) != 0
+                    {
                         occurrences += 1;
                         if occurrences > MAX_INPUT_PATH_OCCURRENCES {
                             return Err("input path occurrence resource limit exceeded".into());
@@ -680,12 +682,6 @@ impl RefContract {
                             break;
                         }
                     }
-                }
-                Ty::Ref { .. } => {
-                    return Err(
-                        "unsupported: reference input kind differs from reference result kind"
-                            .into(),
-                    );
                 }
                 _ if param_region.is_some() => {
                     return Err("nonreference parameter has reference region".into());
@@ -1709,6 +1705,158 @@ mod tests {
             .into()
     }
     #[test]
+    fn mixed_reference_candidates_preserve_capability_regions_and_complete_paths() {
+        let reference = |kind, ty| Ty::Ref {
+            kind,
+            referent: Arc::new(ty),
+        };
+        let pair = Ty::Tuple(Arc::from([Ty::I32, Ty::Bool]));
+        let params = vec![
+            Ty::Bool,
+            reference(BorrowKind::Shared, pair.clone()),
+            reference(BorrowKind::Mut, pair),
+            reference(BorrowKind::Shared, Ty::I32),
+            reference(BorrowKind::Mut, Ty::Bool),
+        ];
+        let path = |param| InputPath {
+            param,
+            projection: Arc::from([Projection::Field(0)]),
+        };
+        let mut contract = RefContract {
+            region_count: 2,
+            param_regions: Arc::from([
+                None,
+                Some(RegionParamId(0)),
+                Some(RegionParamId(0)),
+                Some(RegionParamId(1)),
+                Some(RegionParamId(0)),
+            ]),
+            result_region: Some(RegionParamId(0)),
+            outlives: Arc::from([]),
+            returns: ReturnContract::SharedInputPaths(Arc::from([path(1), path(2)])),
+        };
+        let shared_result = reference(BorrowKind::Shared, Ty::I32);
+        assert_eq!(
+            contract
+                .eligible_input_paths(&params, &shared_result)
+                .unwrap(),
+            vec![path(1), path(2)]
+        );
+        contract.validate(&params, &shared_result).unwrap();
+        for candidates in [
+            vec![path(1)],
+            vec![path(2), path(1)],
+            vec![path(1), path(2), path(2)],
+        ] {
+            let forged = RefContract {
+                returns: ReturnContract::SharedInputPaths(candidates.into()),
+                ..contract.clone()
+            };
+            assert!(forged.validate(&params, &shared_result).is_err());
+        }
+        let mutable_result = reference(BorrowKind::Mut, Ty::I32);
+        contract.returns = ReturnContract::MutInputPaths(Arc::from([path(2)]));
+        assert_eq!(
+            contract
+                .eligible_input_paths(&params, &mutable_result)
+                .unwrap(),
+            vec![path(2)]
+        );
+        contract.validate(&params, &mutable_result).unwrap();
+        for candidates in [vec![path(1)], vec![path(1), path(2)], vec![]] {
+            let forged = RefContract {
+                returns: ReturnContract::MutInputPaths(candidates.into()),
+                ..contract.clone()
+            };
+            assert!(forged.validate(&params, &mutable_result).is_err());
+        }
+        contract.outlives = Arc::from([(RegionParamId(1), RegionParamId(0))]);
+        assert_eq!(
+            contract
+                .eligible_input_paths(&params, &mutable_result)
+                .unwrap(),
+            vec![path(2)]
+        );
+        assert_eq!(
+            contract
+                .eligible_input_paths(&params, &shared_result)
+                .unwrap(),
+            vec![
+                path(1),
+                path(2),
+                InputPath {
+                    param: 3,
+                    projection: Arc::from([])
+                }
+            ]
+        );
+        contract.param_regions = Arc::from([
+            None,
+            None,
+            Some(RegionParamId(0)),
+            Some(RegionParamId(1)),
+            Some(RegionParamId(0)),
+        ]);
+        assert!(
+            contract
+                .eligible_input_paths(&params, &mutable_result)
+                .unwrap_err()
+                .contains("missing reference parameter region")
+        );
+    }
+
+    #[test]
+    fn mutable_inputs_to_shared_results_keep_existing_candidate_resource_caps() {
+        let reference = |kind, ty| Ty::Ref {
+            kind,
+            referent: Arc::new(ty),
+        };
+        let array = Ty::Array {
+            element: Arc::new(Ty::I32),
+            len: MAX_INPUT_PATHS,
+        };
+        let shared_result = reference(BorrowKind::Shared, Ty::I32);
+        let mut contract = RefContract {
+            region_count: 1,
+            param_regions: Arc::from([Some(RegionParamId(0))]),
+            result_region: Some(RegionParamId(0)),
+            outlives: Arc::from([]),
+            returns: ReturnContract::SharedInputPaths(Arc::from([])),
+        };
+        let params = [reference(BorrowKind::Mut, array.clone())];
+        let candidates = contract
+            .eligible_input_paths(&params, &shared_result)
+            .unwrap();
+        assert_eq!(candidates.len(), MAX_INPUT_PATHS);
+        assert_eq!(
+            candidates[MAX_INPUT_PATHS - 1].projection.as_ref(),
+            [Projection::ConstantIndex(MAX_INPUT_PATHS - 1)]
+        );
+        contract.returns = ReturnContract::SharedInputPaths(candidates.into());
+        contract.validate(&params, &shared_result).unwrap();
+        let overflow = [reference(
+            BorrowKind::Mut,
+            Ty::Tuple(Arc::from([array.clone(), Ty::I32])),
+        )];
+        assert!(
+            contract
+                .eligible_input_paths(&overflow, &shared_result)
+                .unwrap_err()
+                .contains("candidate limit")
+        );
+        let shared_params = [reference(BorrowKind::Shared, array)];
+        let mutable_result = reference(BorrowKind::Mut, Ty::I32);
+        contract.returns = ReturnContract::MutInputPaths(Arc::from([]));
+        contract.validate(&shared_params, &mutable_result).unwrap();
+        assert!(
+            contract
+                .eligible_input_paths(&shared_params, &mutable_result)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn mutable_reference_contracts_require_exact_kinds_and_complete_candidates() {
         let mutable = |ty| Ty::Ref {
             kind: BorrowKind::Mut,
@@ -1777,12 +1925,7 @@ mod tests {
             kind: BorrowKind::Shared,
             referent: Arc::new(Ty::Bool),
         };
-        assert!(
-            contract
-                .validate(&mixed, &result)
-                .unwrap_err()
-                .contains("input kind differs")
-        );
+        contract.validate(&mixed, &result).unwrap();
         RefContract::default().validate(&mixed, &Ty::Unit).unwrap();
         let divergent = RefContract {
             region_count: 1,

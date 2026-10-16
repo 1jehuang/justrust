@@ -23,8 +23,9 @@ outputs require exactly one input reference lifetime position, not one distinct
 ID: repeated explicit names in multiple input positions remain ambiguous. An
 external stock E0106 oracle corrected the initial design before release. Explicit
 outputs never infer missing anonymous-input bounds, and erased NoReference call
-contracts remain unchanged. Method elision, `'_`, implicit field autoderef,
-mixed-kind result contracts and general Rust lifetimes remain open.
+contracts remain unchanged. Builtin reference fields and mixed-capability result
+inputs are separate delivered slices. Method elision, `'_`, trait autoderef and
+general Rust lifetimes remain open.
 
 ## Contract and completion criteria
 
@@ -122,13 +123,15 @@ whole-parameter reference results under explicit named lifetime contracts, with
 separate target authority and lifetime dependencies and rigid universal body
 proofs. `MUTABLE-REFERENCE-RETURNS.md` adds whole mutable-parameter results as
 consumed unique handles, with kind-correct returned origins and parent-loan
-freeze/resume. Returning functions require all reference inputs to match the
-result kind. `PROJECTED-REFERENCE-RETURNS.md` extends results to complete typed
+freeze/resume. `MIXED-REFERENCE-RETURNS.md` permits mixed inputs: shared results
+may derive from either kind, mutable results only from mutable inputs, while
+unrelated inputs retain their own capabilities and lifetime constraints.
+`PROJECTED-REFERENCE-RETURNS.md` extends results to complete typed
 static Field/ConstantIndex input paths, including internal private-field paths
 without changing source privacy. Candidate suffixes remain correlated with their
 original argument authority, while lifetime dependencies are checked separately.
-Enum payload paths, dynamic borrowed indices, implicit field autoderef, mixed-kind
-returning inputs, aggregate reference fields, temporary lifetime extension and
+Enum payload paths, dynamic borrowed indices, trait-based autoderef,
+aggregate reference fields, temporary lifetime extension and
 general Rust regions remain later work.
 Loans born within an SCC and carried over a backedge receive an explicit
 unsupported diagnostic. Current acceptance does not establish full Rust

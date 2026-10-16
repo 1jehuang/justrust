@@ -21,6 +21,8 @@ from module_correctness import Case, accepted, process, rejected, run_case
 ACCEPTANCE_CORPUS_SHA256 = "bd1c90a96f02023841f1ee68c4d8b0d863fea94a5f2e14b8118a3dc2ce1bb207"
 
 # Authoritative frozen bear oracle. full_source has no added wrapper.
+# E3 classification promotion: mutable_input_shared_projection; exact source/stdout/value retained.
+# Original immutable acceptance artifact hash above is unchanged.
 FIXTURES = json.loads(r'''
 [
   {
@@ -256,7 +258,7 @@ FIXTURES = json.loads(r'''
     "expected_stdout": "projected returns oracle ok\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "mutable_input_shared_projection",
     "source": "fn get<'a>(p:&'a mut(i32,i32))->&'a i32{&(*p).1} fn run()->i32{let mut p=(3,7);*get(&mut p)}",
     "expected": 7,

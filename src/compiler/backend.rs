@@ -1254,6 +1254,86 @@ mod tests {
     }
 
     #[test]
+    fn mixed_reference_returns_shared_from_mutable_projected_high64_and_recursion() {
+        let p = frontend::parse(
+            r#"
+            struct Record { guard: [usize; 9], value: usize }
+            fn shared<'a>(value: &'a mut usize) -> &'a usize { value }
+            fn projected<'a>(value: &'a mut Record, depth: i32) -> &'a usize {
+                if depth == 0 { &value.value } else { projected(value, depth - 1) }
+            }
+            fn main() {
+                let mut scalar = 18446744073709551615usize;
+                let returned = shared(&mut scalar);
+                let copied = returned;
+                if *copied != 18446744073709551615usize { 1 / 0; }
+                scalar = 13usize;
+                if scalar != 13usize { 1 / 0; }
+                let mut record = Record { guard: [17usize; 9], value: 9223372036854775808usize };
+                let field = projected(&mut record, 3);
+                if *field != 9223372036854775808usize { 1 / 0; }
+                record.value = 29usize;
+                if record.value != 29usize { 1 / 0; }
+                if record.guard[8] != 17usize { 1 / 0; }
+                println!("mixed-shared-return");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"mixed-shared-return\n");
+    }
+
+    #[test]
+    fn mixed_reference_returns_mutable_with_unrelated_shared_lifetime_and_standalone_gate() {
+        let p = frontend::parse(
+            r#"
+            struct Record { guard: [usize; 9], value: usize }
+            fn target<'a, 'b>(flag: &'b bool, value: &'a mut Record) -> &'a mut usize {
+                &mut value.value
+            }
+            fn main() {
+                let mut record = Record { guard: [17usize; 9], value: 1usize };
+                let returned: &mut usize;
+                { let flag = true; returned = target(&flag, &mut record); }
+                *returned = 18446744073709551615usize;
+                if record.value != 18446744073709551615usize { 1 / 0; }
+                if record.guard[8] != 17usize { 1 / 0; }
+                println!("mixed-mutable-return");
+            }
+        "#,
+        )
+        .unwrap();
+        let env = frontend::signature_table(&p).unwrap();
+        let target = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
+        assert!(emit_checked_function(&target).is_ok());
+        let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
+        assert!(
+            emit_checked_function(&main)
+                .unwrap_err()
+                .contains("whole-program noescape")
+        );
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"mixed-mutable-return\n");
+
+        let dependent = frontend::parse(
+            r#"
+            fn target<'a>(flag: &'a bool, value: &'a mut usize) -> &'a mut usize { value }
+            fn main() {
+                let mut value = 1usize;
+                let returned: &mut usize;
+                { let flag = true; returned = target(&flag, &mut value); }
+                *returned = 2usize;
+            }
+        "#,
+        )
+        .unwrap();
+        assert!(emit(&dependent).is_err());
+    }
+
+    #[test]
     fn projected_reference_returns_native_tuple_array_aggregate_and_recursion() {
         let p = frontend::parse(
             r#"

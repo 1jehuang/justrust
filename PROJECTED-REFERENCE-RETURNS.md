@@ -1,5 +1,10 @@
 # Projected input reference returns: design checkpoint
 
+Follow-on scope: `MIXED-REFERENCE-RETURNS.md` supersedes this milestone's
+same-kind input restriction with capability-sensitive eligibility. Shared outputs
+may derive from either input kind, mutable outputs only from mutable inputs.
+All region-related inputs still constrain lifetimes independently of candidates.
+
 Status: implemented with the frozen 30-case stock corpus and four retained
 workers1/8 graph tests passing. All 888 hosted tests pass, and both independent
 actual-code soundness/resource reviews are clear. Final strict all-target lint

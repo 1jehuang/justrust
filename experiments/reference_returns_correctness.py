@@ -25,6 +25,8 @@ ACCEPTANCE_CORPUS_SHA256 = "87a4940bb3b2800a6d285102ede7658ef1ed019149f7e73d17ff
 # Authoritative bear source bytes. full_source has no added wrapper.
 # E2 native-pass promotion: projected_result is positive; source/stdout/value unchanged.
 # Original immutable acceptance artifact hash above is retained.
+# E3 classification promotion: mutable_input_shared_result; exact source/stdout/value retained.
+# Original immutable acceptance artifact hash above is unchanged.
 FIXTURES = json.loads(r'''
 [
   {
@@ -263,7 +265,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "reference returns oracle ok\n",
     "full_source": "fn id<'a>(x:&'a mut i32)->&'a i32{&*x} fn run()->i32{let mut x=7;*id(&mut x)}\nfn main() { if run() == 7 { println!(\"reference returns oracle ok\"); } }\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "mutable_input_shared_result",
     "source": "fn id<'a>(x:&'a mut i32)->&'a i32{&*x} fn run()->i32{let mut x=7;*id(&mut x)}"
   }

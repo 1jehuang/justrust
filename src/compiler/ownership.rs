@@ -1580,6 +1580,149 @@ mod tests {
     }
 
     #[test]
+    fn mixed_result_candidates_preserve_capabilities_and_reject_shared_to_mut() {
+        for source in [
+            "fn f<'a>(p:&'a mut i32)->&'a i32{p}",
+            "fn f<'a>(p:&'a mut (i32,bool),q:&'a i32,b:bool)->&'a i32{if b{&p.0}else{q}}",
+            "fn f()->i32{let mut x=1;let r=&mut x;let q=view(r);let n=*q;*r=2;n+x} fn view(p:&mut i32)->&i32{p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        let source = "fn f()->i32{let mut x=1;let r=&mut x;let q=view(r);let n=*r;n+*q} fn view(p:&mut i32)->&i32{p}";
+        assert!(!analyze(&borrowed_source(source)).passed());
+        let mut forged = borrowed_source("fn f<'a>(p:&'a i32,q:&'a mut i32)->&'a mut i32{q}");
+        std::sync::Arc::make_mut(&mut forged.ref_contract).returns =
+            super::super::ir::ReturnContract::MutInputPaths(
+                vec![
+                    super::super::ir::InputPath {
+                        param: 0,
+                        projection: vec![].into(),
+                    },
+                    super::super::ir::InputPath {
+                        param: 1,
+                        projection: vec![].into(),
+                    },
+                ]
+                .into(),
+            );
+        assert!(forged.validate().is_err());
+        let result = analyze(&forged);
+        assert!(result.complete);
+        assert!(matches!(
+            result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
+    }
+
+    #[test]
+    fn mixed_noncandidate_dependencies_retain_only_declared_lifetimes() {
+        let same = "fn f()->i32{let x=7;let r:&i32;{let mut s=true;r=pick(&mut s,&x);}*r} fn pick<'a>(s:&'a mut bool,x:&'a i32)->&'a i32{x}";
+        let result = analyze(&borrowed_source(same));
+        assert!(result.complete);
+        assert!(!result.passed());
+        let independent = "fn f()->i32{let x=7;let r:&i32;{let mut s=true;r=pick(&mut s,&x);}*r} fn pick<'a,'b>(s:&'a mut bool,x:&'b i32)->&'b i32{x}";
+        let result = analyze(&borrowed_source(independent));
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        let universal = "fn f<'a,'b>(s:&'a mut bool,x:&'b i32)->&'b i32{pick(s,x)} fn pick<'a>(s:&'a mut bool,x:&'a i32)->&'a i32{x}";
+        let result = analyze(&borrowed_source(universal));
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::InvalidReference(_)))
+        );
+    }
+
+    #[test]
+    fn mixed_mutable_noncandidate_call_kills_proofs_without_initializing() {
+        use super::super::ir::{
+            BorrowKind, InputPath, RefContract, RegionParamId, ReturnContract, Signature,
+        };
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let mut f = payload_fixture(&ty);
+        let mutable = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: std::sync::Arc::new(Ty::Enum(ty.clone())),
+        };
+        let shared = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: std::sync::Arc::new(Ty::I32),
+        };
+        f.locals.extend([
+            local(Ty::I32),
+            local(mutable.clone()),
+            local(shared.clone()),
+            local(shared.clone()),
+        ]);
+        f.params.push(LocalId(3));
+        f.loan_sites.extend([
+            cfg::LoanSite {
+                kind: BorrowKind::Mut,
+                place: place(1),
+                origin: None,
+            },
+            cfg::LoanSite {
+                kind: BorrowKind::Shared,
+                place: place(3),
+                origin: None,
+            },
+        ]);
+        split_payload(&mut f, &ty);
+        for index in 4..=6 {
+            f.blocks[1]
+                .statements
+                .push(located(Statement::StorageLive(LocalId(index))));
+        }
+        for (destination, loan) in [(4, 0), (5, 1)] {
+            f.blocks[1].statements.push(located(Statement::Assign {
+                destination: place(destination),
+                value: Rvalue::Borrow(cfg::LoanId(loan)),
+            }));
+        }
+        f.blocks[1].terminator = located(Terminator::Call {
+            name: "mixed".into(),
+            signature: Signature {
+                ref_contract: std::sync::Arc::new(RefContract {
+                    region_count: 1,
+                    param_regions: vec![Some(RegionParamId(0)); 2].into(),
+                    result_region: Some(RegionParamId(0)),
+                    outlives: vec![].into(),
+                    returns: ReturnContract::SharedInputPaths(
+                        vec![InputPath {
+                            param: 1,
+                            projection: vec![].into(),
+                        }]
+                        .into(),
+                    ),
+                }),
+                params: vec![mutable, shared.clone()],
+                result: shared,
+            },
+            args: vec![Operand::Move(place(4)), Operand::Copy(place(5))],
+            destination: place(6),
+            next: BlockId(3),
+        });
+        f.blocks.push(BasicBlock {
+            statements: vec![
+                read_payload(payload_field(&ty, 0, 0)),
+                located(Statement::Inspect(place(1))),
+            ],
+            terminator: located(Terminator::Return),
+        });
+        f.validate().unwrap();
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::VariantNotDefinitelySelected
+        );
+        assert_eq!(result.stats.variant_proofs_killed, 1);
+    }
+
+    #[test]
     fn projected_returns_preserve_nested_places_and_unique_parent_freeze() {
         for source in [
             "fn f<'a>(p:&'a (bool,[i32;2]))->&'a i32{&(*p).1[1]}",

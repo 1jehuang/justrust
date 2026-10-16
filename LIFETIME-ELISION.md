@@ -1,5 +1,10 @@
 # Free-function lifetime elision
 
+Follow-on scope: `MIXED-REFERENCE-RETURNS.md` supersedes this milestone's
+same-kind input restriction with capability-sensitive eligibility. Shared outputs
+may derive from either input kind, mutable outputs only from mutable inputs.
+All region-related inputs still constrain lifetimes independently of candidates.
+
 Status: implemented after correcting the initial proposal against stock rustc's
 E0106 oracle. All 915 hosted tests, strict all-target lint, formatting and both
 independent actual-code reviews pass. The frozen 20-case CLI/stock corpus and four

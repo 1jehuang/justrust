@@ -48,8 +48,9 @@ that detects Deref from source AST must recognize inserted implicit Deref too.
 In particular runtime indexing through references and enum downcasts/matching
 through Deref remain unsupported. Static field/ConstantIndex composition stays
 within the existing single-Deref path and depth limits. Bare reference indexing,
-methods, trait-based Deref, autoref, nested reference types, mixed-kind reference
-result contracts and reference-containing aggregates are not enabled.
+methods, trait-based Deref, autoref, nested reference types and reference-containing
+aggregates are not enabled. Mixed-kind result contracts are a separate follow-on
+under `MIXED-REFERENCE-RETURNS.md`, not part of field normalization.
 
 ## Acceptance and delivery
 

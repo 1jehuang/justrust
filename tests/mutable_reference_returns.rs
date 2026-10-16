@@ -448,13 +448,12 @@ fn main() { if run() == 7 { println!("mutable returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_shared_input_mutable_result() {
-    // Stock accepts and runs this fixture, outside the bounded B3b slice.
-    rejects(
-        "shared_input_mutable_result",
+fn accepts_shared_input_mutable_result() {
+    runs(
         r#"fn pick<'a>(x:&'a mut i32,y:&'a bool)->&'a mut i32{x} fn run()->i32{let mut x=3;let y=true;let q=pick(&mut x,&y);*q=7;x}
 fn main() { if run() == 7 { println!("mutable returns oracle ok"); } }
 "#,
+        "mutable returns oracle ok\n",
     );
 }
 

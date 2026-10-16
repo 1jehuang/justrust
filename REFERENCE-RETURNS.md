@@ -1,5 +1,10 @@
 # B3a design checkpoint: shared reference returns
 
+Follow-on scope: `MIXED-REFERENCE-RETURNS.md` supersedes this milestone's
+same-kind input restriction with capability-sensitive eligibility. Shared outputs
+may derive from either input kind, mutable outputs only from mutable inputs.
+All region-related inputs still constrain lifetimes independently of candidates.
+
 Status: implemented with 798 hosted tests, strict all-target lint, formatting
 and bounded resource/provenance review passing. The frozen 30-case stock corpus
 and four graph acceptance tests pass. Tracked fifteen-corpus native verification

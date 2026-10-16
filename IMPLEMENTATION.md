@@ -58,6 +58,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Mixed-capability reference-result inputs are implemented under
+`MIXED-REFERENCE-RETURNS.md`. Shared outputs derive from shared or mutable input
+paths, mutable outputs only from mutable inputs, and unrelated inputs retain
+their own kinds and region dependencies. Genuine reborrow/unique-return semantics
+and all existing limits remain unchanged. All 975 hosted tests, strict all-target
+lint, formatting, exact stock20/native20 and four graph tests pass. Four historical
+sources execute unchanged after capability promotion. Tracked twenty-corpus native
+verification follows. Full Rust remains open.
+
 Builtin reference field access is implemented under `REFERENCE-FIELDS.md`.
 Frontend normalization inserts actual Deref for `r.field`/`r.0` across reads,
 places and scalar hints, preserving original receiver, authority and privacy.

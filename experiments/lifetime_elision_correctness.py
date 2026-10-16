@@ -23,6 +23,8 @@ ACCEPTANCE_CORPUS_SHA256 = "8245335da3b4dbc4872b01a13e3ab9565d867593d5914b49b681
 # Authoritative frozen bear oracle. full_source has no added wrapper.
 # E2 native-pass promotion: implicit_autoderef_projected is positive; source/stdout/value unchanged.
 # Original immutable acceptance artifact hash above is retained.
+# E3 classification promotion: mixed_kind_inputs; exact source/stdout/value retained.
+# Original immutable acceptance artifact hash above is unchanged.
 FIXTURES = json.loads(r'''
 [
   {
@@ -181,7 +183,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "elision oracle ok\n",
     "full_source": "fn pick<'a>(x:&'a mut i32,y:&'a bool)->&'a mut i32{x} fn run()->i32{let mut x=3;let y=true;let r=pick(&mut x,&y);*r=7;x}\nfn main() { if run() == 7 { println!(\"elision oracle ok\"); } }\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "mixed_kind_inputs",
     "source": "fn pick<'a>(x:&'a mut i32,y:&'a bool)->&'a mut i32{x} fn run()->i32{let mut x=3;let y=true;let r=pick(&mut x,&y);*r=7;x}"
   }

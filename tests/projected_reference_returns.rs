@@ -470,12 +470,11 @@ fn main() { if run() == 7 { println!("projected returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_mutable_input_shared_projection() {
-    // Stock accepts and runs this fixture, outside the bounded projected-return slice.
-    rejects(
-        "mutable_input_shared_projection",
+fn accepts_mutable_input_shared_projection() {
+    runs(
         r#"fn get<'a>(p:&'a mut(i32,i32))->&'a i32{&(*p).1} fn run()->i32{let mut p=(3,7);*get(&mut p)}
 fn main() { if run() == 7 { println!("projected returns oracle ok"); } }
 "#,
+        "projected returns oracle ok\n",
     );
 }

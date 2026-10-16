@@ -2877,7 +2877,7 @@ fn canonical_ref_contract(
     let mut param_regions = Vec::with_capacity(params.len());
     for (_, ty) in &function.params {
         let region = match ty {
-            Type::Ref { kind, region, .. } if kind == result_kind => {
+            Type::Ref { region, .. } => {
                 let region = if let Some(name) = region {
                     id(name)?
                 } else {
@@ -2892,7 +2892,6 @@ fn canonical_ref_contract(
                 input_region = Some(region);
                 Some(region)
             }
-            Type::Ref { .. } => return Err("reference-return functions require same-kind reference inputs; mixed kinds are unsupported".into()),
             _ => None,
         };
         param_regions.push(region);
@@ -4703,6 +4702,109 @@ mod typed_tests {
     use super::*;
 
     #[test]
+    fn e3_mixed_contracts_preserve_formal_kinds_and_real_shared_return_reborrows() {
+        let p=parse("fn weaken<'a>(r:&'a mut i32)->&'a i32{r}fn mix<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{s}else{m}}fn mut_target<'a>(s:&'a i32,m:&'a mut i32)->&'a mut i32{m}fn no_mut_target<'a>(s:&'a i32)->&'a mut i32{loop{}}fn pin<'a>(m:&'a mut bool,s:&'a i32)->&'a i32{s}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        let empty = |param| ir::InputPath {
+            param,
+            projection: vec![].into(),
+        };
+        assert_eq!(
+            env.functions["mix"].ref_contract.returns,
+            ir::ReturnContract::SharedInputPaths(vec![empty(0), empty(1)].into())
+        );
+        assert_eq!(
+            env.functions["mut_target"].ref_contract.returns,
+            ir::ReturnContract::MutInputPaths(vec![empty(1)].into())
+        );
+        assert_eq!(
+            env.functions["no_mut_target"].ref_contract.returns,
+            ir::ReturnContract::MutInputPaths(vec![].into())
+        );
+        assert_eq!(
+            env.functions["pin"].ref_contract.returns,
+            ir::ReturnContract::SharedInputPaths(vec![empty(1)].into())
+        );
+        assert_eq!(
+            env.functions["pin"].ref_contract.param_regions.as_ref(),
+            &[Some(ir::RegionParamId(0)), Some(ir::RegionParamId(0))]
+        );
+        assert!(matches!(
+            env.functions["weaken"].params[0],
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                ..
+            }
+        ));
+        let weaken = type_function_with_signatures(&p, 0, &env).unwrap();
+        assert!(
+            matches!(&weaken.exprs[weaken.body.tail.unwrap().0].kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Shared,place} if place.local==weaken.params[0]&&place.projection==vec![ir::Projection::Deref])
+        );
+        assert!(
+            !weaken
+                .exprs
+                .iter()
+                .any(|e| matches!(e.kind,ir::ExprKind::Local(local) if local==weaken.params[0]))
+        );
+        for index in 0..p.functions.len() {
+            if p.functions[index].name == "no_mut_target" {
+                assert!(
+                    check_function_with_signatures(&p, index, &env)
+                        .unwrap_err()
+                        .contains("unsupported")
+                );
+            } else {
+                check_function_with_signatures(&p, index, &env).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn e3_all_input_positions_regions_and_deferred_adjustments_remain_enforced() {
+        let p = parse("fn ambiguous<'a>(s:&'a i32,m:&'a mut bool)->&i32{s}fn main(){}").unwrap();
+        assert!(
+            signature_table(&p)
+                .unwrap_err()
+                .contains("missing lifetime specifier")
+        );
+        let p = parse("fn rigid<'a>(s:&bool,m:&mut i32)->&'a i32{&*m}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        assert_eq!(
+            env.functions["rigid"].ref_contract.param_regions.as_ref(),
+            &[Some(ir::RegionParamId(1)), Some(ir::RegionParamId(2))]
+        );
+        assert_eq!(
+            env.functions["rigid"].ref_contract.result_region,
+            Some(ir::RegionParamId(0))
+        );
+        assert!(check_function_with_signatures(&p, 0, &env).is_err());
+        let names = (0..63)
+            .map(|i| format!("'r{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let p = parse(&format!(
+            "fn cap<{names}>(other:&bool,r:&mut i32)->&'r0 mut i32{{loop{{}}}}fn main(){{}}"
+        ))
+        .unwrap();
+        assert!(signature_table(&p).unwrap_err().contains("limit64"));
+        let p = parse("fn invalid<'a>(s:&'a i32)->&'a mut i32{s}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        assert!(check_function_with_signatures(&p, 0, &env).is_err());
+        for source in [
+            "fn deferred<'a>(m:&'a mut i32)->&'a i32{&mut *m}fn main(){}",
+            "struct S{x:i32}fn deferred<'a>(m:&'a mut S)->&'a i32{&mut m.x}fn main(){}",
+        ] {
+            let p = parse(source).unwrap();
+            let env = signature_table(&p).unwrap();
+            assert!(
+                type_function_with_signatures(&p, 0, &env)
+                    .unwrap_err()
+                    .contains("unsupported")
+            );
+        }
+    }
+
+    #[test]
     fn e2_implicit_and_explicit_fields_have_identical_ir_and_current_carrier_places() {
         let p=parse("struct S{x:i32,y:i32}fn implicit(r:&mut S){let n=r.x;r.x=n+1;let q=&mut r.y;*q=4;}fn explicit(r:&mut S){let n=(*r).x;(*r).x=n+1;let q=&mut (*r).y;*q=4;}fn main(){}").unwrap();
         let env = signature_table(&p).unwrap();
@@ -5015,7 +5117,16 @@ mod typed_tests {
             "fn bad<'a>(x:&'a mut i32)->&'a i32{&*x}fn main(){}",
         ] {
             let p = parse(source).unwrap();
-            assert!(signature_table(&p).unwrap_err().contains("unsupported"));
+            let env = signature_table(&p).unwrap();
+            if source.contains("{loop{}}") {
+                assert!(
+                    check_function_with_signatures(&p, 0, &env)
+                        .unwrap_err()
+                        .contains("unsupported")
+                );
+            } else {
+                check_function_with_signatures(&p, 0, &env).unwrap();
+            }
         }
     }
 
@@ -5102,8 +5213,6 @@ mod typed_tests {
             "fn f<'a,'a>(x:&'a i32)->&'a i32{x}fn main(){}",
             "fn f<'a>(x:&'b i32)->&'a i32{x}fn main(){}",
             "fn f<'a:'b>(x:&'a i32)->&'a i32{x}fn main(){}",
-            "fn f<'a>(x:&'a mut i32)->&'a i32{&*x}fn main(){}",
-            "fn f<'a>(x:&'a i32)->&'a mut i32{loop{}}fn main(){}",
             "fn f<'a>(x:&'a i32){}fn main(){}",
             "fn f<'fn>(x:&'fn i32)->&'fn i32{x}fn main(){}",
         ] {

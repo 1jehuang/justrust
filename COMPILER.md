@@ -55,9 +55,10 @@ referents have separate invocation-lived canonical roots. Mutable calls invalida
 all candidate referent selection proofs without inventing initialization. Every
 body must pass analysis before executable publication. Standalone checked-function
 emission rejects reference calls without whole-program signature/noescape evidence.
-Shared or mutable reference results may point to same-kind parameter referents
-or typed static tuple/struct/constant-array subpaths under normalized lifetime
-contracts. Omitted input lifetimes receive fresh rigid declaration IDs. An omitted
+Shared reference results may point to shared or mutable parameter referents,
+while mutable results derive only from mutable inputs. Either kind may accept
+unrelated inputs of either capability. Results may name typed static tuple,
+struct and constant-array subpaths under normalized lifetime contracts. Omitted input lifetimes receive fresh rigid declaration IDs. An omitted
 output lifetime requires exactly one input reference lifetime position, even when
 multiple input positions explicitly share the same name. Explicit output bounds
 remain rigid, and unrelated anonymous inputs do not gain inferred outlives edges. Complete declaration-derived InputPath candidates, rigid body outlives
@@ -65,10 +66,11 @@ obligations and separate transitive lifetime dependencies gate returned pointers
 Each suffix stays correlated with its original argument and source authority.
 Private-field getters do not grant callers direct private access. Mutable results
 are consumed unique handles, not copied capabilities, and keep overlapping parent
-authority frozen until their last use. Returning functions require all reference
-inputs to match the result kind. Enum payload paths, dynamic borrowed indices,
-trait-based autoderef, bare reference indexing, mixed-kind returning inputs,
-method/general elision and reference-containing aggregates remain unsupported.
+authority frozen until their last use. Input kinds remain genuine capabilities,
+while all region-related inputs constrain output lifetimes independently of target
+eligibility. See `MIXED-REFERENCE-RETURNS.md`. Enum payload paths, dynamic borrowed
+indices, trait-based autoderef, bare reference indexing, method/general elision
+and reference-containing aggregates remain unsupported.
 Builtin `r.field` and `r.0` insert one real Deref before field lookup in reads,
 assignments and borrows. Privacy and pointee capability are checked after peeling
 the reference, without moving its carrier or snapshotting its aggregate. Genuine
@@ -105,7 +107,7 @@ glob imports, public re-exports, restricted `pub(...)`, block-local items/import
 standard-library APIs beyond the documented print form, general macros, traits,
 generics, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
-general reference results and escaping references beyond the bounded same-kind whole-parameter slice,
+general reference results and escaping references beyond bounded static input paths,
 general lifetimes, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
 positions, or other targets.

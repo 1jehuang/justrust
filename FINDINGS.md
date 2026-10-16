@@ -8657,3 +8657,30 @@ produced an 8,228-byte ELF: five functions, 19 CFG blocks, 51 locals, 95 move pa
 26 graph nodes and 35 edges. Observed total 14,349,635 ns and engine 3,126,518 ns
 are contended/uncontrolled observations, not a speedup claim. Full Rust remains
 open, including mixed reference-result capabilities and general autoderef.
+
+### Mixed reference-result capabilities without pointer reinterpretation
+
+The E3 slice removes only blanket same-kind input restrictions in frontend
+region normalization and IR candidate eligibility. Shared results admit shared
+or mutable input paths; mutable results admit only mutable candidates. Unrelated
+inputs retain their true kinds and all region-derived lifetime dependencies.
+No borrower/backend production changes or public API/ABI changes were needed.
+Existing real Shared reborrows, per-candidate authority, all-mutable-actual proof
+invalidation and proof-before-unique-Move returns remain authoritative.
+
+Frozen corpus SHA256
+`0cc633f928bdf504c092c6124eafa4f4edb20b200575c59470bf71e8466497ae`
+contains 12 positive, six invalid and two explicit coercion boundaries. Root
+independent stock classification and exact20 workers1/8 CLI check/build/runtime
+plus four retained graph tests pass. Four historical source/output/value bytes
+remain unchanged after actual runtime acceptance. Independently checked all110
+historical harness fixtures for exact source/stdout parity and only four approved
+classification changes. Actual-code architectural review is clear.
+
+Final hosted check `20261016-023916199-3125059`, all-target test
+`20261016-023917325-3125237` (975 passed), and strict all-target clippy
+`20261016-023919086-3125036` pass. Formatting and diff checks pass. Exactly three
+redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-mixed-reference-returns.jsonl`.
+Tracked twenty-corpus native verification follows the implementation commit.
+Full Rust remains open. Correctness gates do not establish a speedup.

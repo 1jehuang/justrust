@@ -1,6 +1,8 @@
 # Mixed-capability reference-result inputs
 
-Status: frozen design pending independent review and explicit implementation GO.
+Status: implemented. All 975 hosted tests, strict all-target lint and formatting
+pass. Exact stock20/native CLI20 and four graph tests pass, with actual-code
+review clear. Tracked twenty-corpus native verification follows before delivery.
 Builtin reference fields are delivered with 942 hosted tests and 732 independently
 verified native cases, implementation a0f8ba730 and evidence bcc845ce9. This next
 slice does not complete Rust references or full Rust.

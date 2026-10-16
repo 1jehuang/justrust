@@ -25,6 +25,8 @@ ACCEPTANCE_CORPUS_SHA256 = "5049cb8e2f69028b9df552a92db2e3d8640b4ea6d40e68e372d5
 # Authoritative bear source bytes. full_source has no added wrapper.
 # E2 native-pass promotion: projected_mutable_result is positive; source/stdout/value unchanged.
 # Original immutable acceptance artifact hash above is retained.
+# E3 classification promotion: shared_input_mutable_result; exact source/stdout/value retained.
+# Original immutable acceptance artifact hash above is unchanged.
 FIXTURES = json.loads(r'''
 [
   {
@@ -244,7 +246,7 @@ FIXTURES = json.loads(r'''
     "expected_stdout": "mutable returns oracle ok\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "shared_input_mutable_result",
     "source": "fn pick<'a>(x:&'a mut i32,y:&'a bool)->&'a mut i32{x} fn run()->i32{let mut x=3;let y=true;let q=pick(&mut x,&y);*q=7;x}",
     "expected": 7,

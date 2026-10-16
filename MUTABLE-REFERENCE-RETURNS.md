@@ -1,5 +1,10 @@
 # B3b design checkpoint: mutable whole-parameter reference returns
 
+Follow-on scope: `MIXED-REFERENCE-RETURNS.md` supersedes this milestone's
+same-kind input restriction with capability-sensitive eligibility. Shared outputs
+may derive from either input kind, mutable outputs only from mutable inputs.
+All region-related inputs still constrain lifetimes independently of candidates.
+
 Status: implemented with 844 hosted tests, strict all-target lint, formatting
 and independent soundness/resource reviews passing. The exact frozen 30-case
 stock corpus and four retained graph acceptance tests pass: 16 supported, ten

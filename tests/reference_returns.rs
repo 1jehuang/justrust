@@ -468,12 +468,11 @@ fn main() { if run() == 7 { println!("reference returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_mutable_input_shared_result() {
-    // Stock accepts and runs this fixture, outside the bounded B3a slice.
-    rejects(
-        "mutable_input_shared_result",
+fn accepts_mutable_input_shared_result() {
+    runs(
         r#"fn id<'a>(x:&'a mut i32)->&'a i32{&*x} fn run()->i32{let mut x=7;*id(&mut x)}
 fn main() { if run() == 7 { println!("reference returns oracle ok"); } }
 "#,
+        "reference returns oracle ok\n",
     );
 }

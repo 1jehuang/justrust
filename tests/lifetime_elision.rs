@@ -366,12 +366,11 @@ fn main() { if run() == 7 { println!("elision oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_mixed_kind_inputs() {
-    // Stock accepts and runs this fixture, outside the bounded E1 slice.
-    rejects(
-        "mixed_kind_inputs",
+fn accepts_mixed_kind_inputs() {
+    runs(
         r#"fn pick<'a>(x:&'a mut i32,y:&'a bool)->&'a mut i32{x} fn run()->i32{let mut x=3;let y=true;let r=pick(&mut x,&y);*r=7;x}
 fn main() { if run() == 7 { println!("elision oracle ok"); } }
 "#,
+        "elision oracle ok\n",
     );
 }
