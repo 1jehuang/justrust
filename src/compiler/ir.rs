@@ -54,6 +54,9 @@ pub enum DeclKind {
     Enum,
     Impl,
     AssociatedFunction,
+    Trait,
+    TraitItem,
+    TraitImpl,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BinderId {
@@ -154,16 +157,184 @@ impl GenericEnv {
 pub enum FactsCtx<'a> {
     Concrete,
     Universal(&'a GenericEnv),
+    Validated(&'a super::traits::ValidatedFacts),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CallTarget {
     pub declaration: DeclId,
     pub type_args: Arc<[Ty]>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReceiverMode {
+    None,
+    Value,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TraitRef {
+    pub declaration: DeclId,
+    pub self_ty: Ty,
+    pub args: Arc<[Ty]>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Predicate {
+    Implements(TraitRef),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TraitCall {
+    pub trait_ref: TraitRef,
+    pub item: DeclId,
+    pub method_args: Arc<[Ty]>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Callee {
+    Direct(CallTarget),
+    TraitItem(TraitCall),
+}
+impl From<CallTarget> for Callee {
+    fn from(target: CallTarget) -> Self {
+        Self::Direct(target)
+    }
+}
+impl Callee {
+    pub fn type_arguments(&self) -> &[Ty] {
+        match self {
+            Self::Direct(target) => &target.type_args,
+            Self::TraitItem(call) => &call.method_args,
+        }
+    }
+    pub fn metadata_types(&self) -> impl Iterator<Item = &Ty> {
+        let (self_ty, trait_args): (Option<&Ty>, &[Ty]) = match self {
+            Self::Direct(_) => (None, &[]),
+            Self::TraitItem(call) => (Some(&call.trait_ref.self_ty), &call.trait_ref.args),
+        };
+        self.type_arguments()
+            .iter()
+            .chain(self_ty)
+            .chain(trait_args.iter())
+    }
+}
+pub fn validate_callee(
+    target: &Callee,
+    signature: &Signature,
+    facts: FactsCtx<'_>,
+) -> Result<(), String> {
+    if target.type_arguments().len() > 32 {
+        return Err("generic call argument limit exceeded".into());
+    }
+    if let Callee::TraitItem(call) = target
+        && call.trait_ref.args.len() > 32
+    {
+        return Err("trait argument limit exceeded".into());
+    }
+    for ty in target.metadata_types() {
+        facts.validate_ty(ty)?;
+    }
+    if let Some(authority) = facts.validated() {
+        authority
+            .budget()
+            .charge_work(signature.params.len().saturating_add(1))?;
+        let agrees = match target {
+            Callee::Direct(target) => {
+                let proof = authority
+                    .service()
+                    .discharge_direct(target, authority)
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
+                authority
+                    .world()
+                    .signatures_equal(proof.signature(), signature)
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+            }
+            Callee::TraitItem(call) => {
+                if authority.phase() == super::traits::FactsPhase::Closed {
+                    return Err("unresolved trait call in closed body".into());
+                }
+                let actual = authority
+                    .service()
+                    .instantiate_trait_signature(call, authority)
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
+                authority
+                    .world()
+                    .signatures_equal(&actual, signature)
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+            }
+        };
+        if !agrees {
+            return Err("call signature disagrees with canonical declaration".into());
+        }
+    } else if matches!(target, Callee::TraitItem(_)) {
+        return Err("trait call requires validated facts".into());
+    }
+    Ok(())
+}
+pub fn validate_body_signature(
+    signature: &Signature,
+    facts: &super::traits::ValidatedFacts,
+) -> Result<(), String> {
+    if facts.phase() == super::traits::FactsPhase::Schema {
+        return Err("trait schema cannot authorize executable body".into());
+    }
+    let target = if let Some(target) = facts.target() {
+        target.clone()
+    } else {
+        facts.budget().retain_bytes(
+            facts.env().total_arity() * 2 * std::mem::size_of::<Ty>()
+                + 4 * std::mem::size_of::<usize>(),
+        )?;
+        CallTarget {
+            declaration: facts.declaration(),
+            type_args: facts
+                .env()
+                .ordered_params()
+                .map(Ty::Param)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    };
+    let proof = facts
+        .service()
+        .discharge_direct(&target, facts)
+        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+    if !facts
+        .world()
+        .signatures_equal(proof.signature(), signature)
+        .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+    {
+        return Err("body signature disagrees with exact callable facts".into());
+    }
+    Ok(())
+}
+pub trait TraitCx: Send + Sync {
+    fn validate_trait_ref(
+        &self,
+        goal: &TraitRef,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<(), super::traits::FactsError>;
+    fn instantiate_trait_signature(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<Signature, super::traits::FactsError>;
+    fn prove_goal(
+        &self,
+        goal: &Predicate,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<super::traits::ProofOutcome, super::traits::FactsError>;
+    fn discharge_direct(
+        &self,
+        target: &CallTarget,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<super::traits::DirectCallProof, super::traits::FactsError>;
+    fn resolve_trait_call(
+        &self,
+        call: &TraitCall,
+        facts: &super::traits::ValidatedFacts,
+    ) -> Result<super::traits::ResolvedTraitCall, super::traits::FactsError>;
+}
 #[derive(Clone, Debug)]
 pub struct GenericSignature {
     pub env: Arc<GenericEnv>,
     pub signature: Signature,
+    pub predicates: Arc<super::traits::PredicateEnv>,
 }
 #[derive(Clone, Debug)]
 pub struct NominalAppInfo {
@@ -197,6 +368,8 @@ struct PlanUsage {
     nodes: usize,
     work: usize,
     bytes: usize,
+    obligations: usize,
+    diagnostic_bytes: usize,
 }
 #[derive(Clone, Debug)]
 pub struct PlanBudget {
@@ -270,6 +443,12 @@ impl PlanBudget {
     }
     pub fn charge_application(&self) -> Result<(), String> {
         self.charge(1, |u| &mut u.applications, self.limits.applications)
+    }
+    pub fn charge_obligation(&self) -> Result<(), String> {
+        self.charge(1, |u| &mut u.obligations, 4096)
+    }
+    pub fn charge_diagnostic_bytes(&self, bytes: usize) -> Result<(), String> {
+        self.charge(bytes, |u| &mut u.diagnostic_bytes, 64 * 1024)
     }
     pub fn reserve_bytes(&self, bytes: usize) -> Result<PlanReservation, String> {
         self.charge(bytes, |u| &mut u.bytes, self.limits.bytes)?;
@@ -425,6 +604,7 @@ pub fn substitute_ty(
 pub fn instantiate_checked(
     template: &super::ownership::VerifiedTemplateCfg,
     args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, String> {
@@ -432,17 +612,31 @@ pub fn instantiate_checked(
     if !template.budget().same_authority(budget) {
         return Err("generic instance changed planning budget authority".into());
     }
+    let target = closed_facts
+        .target()
+        .ok_or("instance requires closed facts")?;
+    if !closed_facts.budget().same_authority(budget)
+        || !Arc::ptr_eq(closed_facts.world(), template.facts().world())
+        || target.declaration != template.facts().declaration()
+        || !closed_facts
+            .world()
+            .types_equal(&target.type_args, args)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?
+    {
+        return Err("instance facts do not authorize this exact template and arguments".into());
+    }
     if args.len() != env.total_arity() {
         return Err("generic instance argument arity mismatch".into());
     }
     for ty in args {
-        FactsCtx::Concrete.validate_ty_with_budget(ty, budget)?;
+        FactsCtx::from_validated(closed_facts).validate_ty_with_budget(ty, budget)?;
         reject_references(ty, budget)?;
     }
     let source = template.source();
-    source.preflight_plan(FactsCtx::Universal(env), budget)?;
+    source.preflight_plan(FactsCtx::from_validated(template.facts()), budget)?;
     let mut output = source.as_ref().clone();
     let mut visitor = Instantiate {
+        facts: FactsCtx::from_validated(closed_facts),
         env,
         args,
         cx,
@@ -483,30 +677,29 @@ pub fn instantiate_checked(
                 target, signature, ..
             } => {
                 let expected = visitor.signature(signature)?;
-                if target.type_args.len() > 32 {
-                    return Err("generic call argument limit exceeded".into());
-                }
-                budget.retain_bytes(target.type_args.len() * std::mem::size_of::<Ty>())?;
-                target.type_args = target
-                    .type_args
-                    .iter()
-                    .map(|ty| visitor.ty(ty))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into();
-                let actual =
-                    visitor
-                        .cx
-                        .instantiate_signature(target, FactsCtx::Concrete, budget)?;
+                *target = substitute_callee(target, env, args, closed_facts, visitor.cx, budget)?;
+                let Callee::Direct(direct) = target else {
+                    return Err("unclosed instance call".into());
+                };
+                let proof = closed_facts
+                    .service()
+                    .discharge_direct(direct, closed_facts)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?;
+                let actual = proof.signature();
                 if actual.params.len() > MAX_PATTERN_PROJECTION_WORK {
                     return Err("generic call signature resource limit exceeded".into());
                 }
                 for ty in actual.params.iter().chain(std::iter::once(&actual.result)) {
-                    FactsCtx::Concrete.validate_ty_with_budget(ty, budget)?;
+                    FactsCtx::from_validated(closed_facts).validate_ty_with_budget(ty, budget)?;
                 }
-                if actual != expected {
+                if !closed_facts
+                    .world()
+                    .signatures_equal(actual, &expected)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?
+                {
                     return Err("substituted call signature disagrees with declaration".into());
                 }
-                *signature = actual;
+                *signature = expected;
             }
             ExprKind::If {
                 then_block,
@@ -538,11 +731,142 @@ pub fn instantiate_checked(
         }
     }
     visitor.block(&mut output.body, 0)?;
-    output.validate_with_facts(FactsCtx::Concrete)?;
+    close_checked_calls(&output, closed_facts, cx, budget)
+        .map_err(|e| e.into_legacy_diagnostic(budget))
+}
+
+pub fn substitute_callee(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+) -> Result<Callee, String> {
+    if closed_facts.phase() != super::traits::FactsPhase::Closed
+        || !closed_facts.budget().same_authority(budget)
+    {
+        return Err("callee substitution requires exact closed planning authority".into());
+    }
+    let facts = FactsCtx::from_validated(closed_facts);
+    let mut types = |values: &[Ty]| -> Result<Arc<[Ty]>, String> {
+        if values.len() > 32 {
+            return Err("callee type argument limit exceeded".into());
+        }
+        budget.retain_bytes(
+            std::mem::size_of_val(values)
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(4 * std::mem::size_of::<usize>()))
+                .ok_or("callee argument storage overflow")?,
+        )?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(values.len())
+            .map_err(|_| "callee argument allocation resource limit")?;
+        for ty in values {
+            output.push(substitute_ty(ty, env, args, facts, cx, budget)?);
+        }
+        Ok(output.into())
+    };
+    let substituted = match callee {
+        Callee::Direct(target) => Callee::Direct(CallTarget {
+            declaration: target.declaration,
+            type_args: types(&target.type_args)?,
+        }),
+        Callee::TraitItem(call) => {
+            let method_args = types(&call.method_args)?;
+            let trait_args = types(&call.trait_ref.args)?;
+            let self_ty = substitute_ty(&call.trait_ref.self_ty, env, args, facts, cx, budget)?;
+            Callee::TraitItem(TraitCall {
+                trait_ref: TraitRef {
+                    declaration: call.trait_ref.declaration,
+                    self_ty,
+                    args: trait_args,
+                },
+                item: call.item,
+                method_args,
+            })
+        }
+    };
+    match substituted {
+        Callee::Direct(target) => {
+            closed_facts
+                .service()
+                .discharge_direct(&target, closed_facts)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            Ok(Callee::Direct(target))
+        }
+        Callee::TraitItem(call) => Ok(closed_facts
+            .service()
+            .resolve_trait_call(&call, closed_facts)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?
+            .callee()
+            .clone()),
+    }
+}
+
+pub fn close_checked_calls(
+    source: &CheckedFunction,
+    facts: &super::traits::ValidatedFacts,
+    _cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+) -> Result<CheckedFunction, super::traits::FactsError> {
+    use super::traits::FactsError;
+    if facts.phase() != super::traits::FactsPhase::Closed || !facts.budget().same_authority(budget)
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "call closure requires closed facts and same planning authority",
+        ));
+    }
+    source
+        .preflight_plan(FactsCtx::Concrete, budget)
+        .map_err(|e| FactsError::from_message(budget, &e))?;
+    let mut output = source.clone();
+    for expression in &mut output.exprs {
+        budget
+            .charge_work(1)
+            .map_err(|e| FactsError::from_message(budget, &e))?;
+        if let ExprKind::Call {
+            target, signature, ..
+        } = &mut expression.kind
+        {
+            let (callee, agrees) = match target {
+                Callee::Direct(target) => {
+                    let proof = facts.service().discharge_direct(target, facts)?;
+                    (
+                        Callee::Direct(proof.target().clone()),
+                        facts
+                            .world()
+                            .signatures_equal(proof.signature(), signature)?,
+                    )
+                }
+                Callee::TraitItem(call) => {
+                    let proof = facts.service().resolve_trait_call(call, facts)?;
+                    (
+                        proof.callee().clone(),
+                        facts
+                            .world()
+                            .signatures_equal(proof.signature(), signature)?,
+                    )
+                }
+            };
+            if !matches!(callee, Callee::Direct(_)) || !agrees {
+                return Err(FactsError::invalid(
+                    budget,
+                    "closed call signature disagrees with canonical declaration",
+                ));
+            }
+            *target = callee;
+        }
+    }
+    output
+        .validate_with_facts(FactsCtx::from_validated(facts))
+        .map_err(|e| FactsError::from_message(budget, &e))?;
     Ok(output)
 }
 
-fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
+pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
     fn walk(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
         budget.check_depth(depth)?;
         budget.charge_work(1)?;
@@ -580,6 +904,7 @@ fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
     walk(root, budget, 0)
 }
 struct Instantiate<'a, C> {
+    facts: FactsCtx<'a>,
     env: &'a GenericEnv,
     args: &'a [Ty],
     cx: &'a mut C,
@@ -587,14 +912,7 @@ struct Instantiate<'a, C> {
 }
 impl<C: SubstitutionCx> Instantiate<'_, C> {
     fn ty(&mut self, ty: &Ty) -> Result<Ty, String> {
-        substitute_ty(
-            ty,
-            self.env,
-            self.args,
-            FactsCtx::Concrete,
-            self.cx,
-            self.budget,
-        )
+        substitute_ty(ty, self.env, self.args, self.facts, self.cx, self.budget)
     }
     fn enum_ty(&mut self, ty: &mut EnumTy) -> Result<(), String> {
         let Ty::Enum(value) = self.ty(&Ty::Enum(ty.clone()))? else {
@@ -604,6 +922,13 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
         Ok(())
     }
     fn signature(&mut self, signature: &Signature) -> Result<Signature, String> {
+        self.budget.retain_bytes(
+            signature
+                .params
+                .len()
+                .checked_mul(2 * std::mem::size_of::<Ty>())
+                .ok_or("signature storage overflow")?,
+        )?;
         Ok(Signature {
             ref_contract: signature.ref_contract.clone(),
             params: signature
@@ -633,7 +958,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
                 let Ty::Enum(value) = self.cx.intern_nominal(
                     application.source_decl,
                     &args,
-                    FactsCtx::Concrete,
+                    self.facts,
                     self.budget,
                 )?
                 else {
@@ -1094,11 +1419,30 @@ impl Ty {
     }
 }
 
-impl FactsCtx<'_> {
+impl<'f> FactsCtx<'f> {
+    pub fn from_validated(facts: &'f super::traits::ValidatedFacts) -> Self {
+        Self::Validated(facts)
+    }
+    pub fn validated(self) -> Option<&'f super::traits::ValidatedFacts> {
+        match self {
+            Self::Validated(facts) => Some(facts),
+            _ => None,
+        }
+    }
     pub fn validate_ty(self, root: &Ty) -> Result<(), String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .validate_ty(root)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()));
+        }
         self.validate_ty_inner(root, None)
     }
     pub fn validate_ty_with_budget(self, root: &Ty, budget: &PlanBudget) -> Result<(), String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .validate_ty_with_budget(root, budget)
+                .map_err(|e| e.into_legacy_diagnostic(budget));
+        }
         self.validate_ty_inner(root, Some(budget))
     }
     fn validate_ty_inner(self, root: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
@@ -1190,10 +1534,20 @@ impl FactsCtx<'_> {
         walk(self, root, 0, &mut 0, budget)
     }
     pub fn must_copy(self, ty: &Ty) -> Result<bool, String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .must_copy(ty)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()));
+        }
         self.validate_ty(ty)?;
         Ok(ty.is_copy())
     }
     pub fn projected_ty<'a>(self, root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .projected_ty(root, path)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()));
+        }
         self.validate_ty(root)?;
         projected_ty(root, path)
     }
@@ -1886,7 +2240,7 @@ pub enum ExprKind {
         right: ExprId,
     },
     Call {
-        target: CallTarget,
+        target: Callee,
         name: String,
         args: Vec<ExprId>,
         /// Validated at typing time, shared by call lowering and ABI selection.
@@ -2026,12 +2380,11 @@ impl CheckedFunction {
                     storage(budget, name.len(), 1)?;
                     storage(budget, args.len(), std::mem::size_of::<ExprId>())?;
                     storage(budget, signature.params.len(), std::mem::size_of::<Ty>())?;
-                    if target.type_args.len() > 32 {
+                    if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
                     }
                     for ty in target
-                        .type_args
-                        .iter()
+                        .metadata_types()
                         .chain(signature.params.iter())
                         .chain(std::iter::once(&signature.result))
                     {
@@ -2254,6 +2607,16 @@ impl CheckedFunction {
             .iter()
             .map(|id| self.locals[id.0].ty.clone())
             .collect();
+        if let Some(authority) = facts.validated() {
+            validate_body_signature(
+                &Signature {
+                    ref_contract: self.ref_contract.clone(),
+                    params: parameter_types.clone(),
+                    result: self.result.clone(),
+                },
+                authority,
+            )?;
+        }
         self.ref_contract.validate(&parameter_types, &self.result)?;
         // Traverse nested blocks iteratively so malformed/deep fixtures cannot
         // exhaust the host call stack inside this diagnostic helper.
@@ -2339,7 +2702,10 @@ impl CheckedFunction {
                     else {
                         return Err("array repeat requires array type".into());
                     };
-                    if len != count || *len > MAX_ARRAY_LEN || (*len > 1 && !element.is_copy()) {
+                    if len != count
+                        || *len > MAX_ARRAY_LEN
+                        || (*len > 1 && !facts.must_copy(element)?)
+                    {
                         return Err("invalid array repeat type, length or Copy requirement".into());
                     }
                 }
@@ -2446,17 +2812,17 @@ impl CheckedFunction {
                     args,
                     signature,
                 } => {
-                    if target.type_args.len() > 32 {
+                    if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
                     }
                     for ty in target
-                        .type_args
-                        .iter()
+                        .metadata_types()
                         .chain(signature.params.iter())
                         .chain(std::iter::once(&signature.result))
                     {
                         facts.validate_ty(ty)?;
                     }
+                    validate_callee(target, signature, facts)?;
                     signature
                         .ref_contract
                         .validate(&signature.params, &signature.result)?;
@@ -2586,6 +2952,27 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trait_goal_and_diagnostic_limits_share_authority_without_hidden_reservations() {
+        let budget = PlanBudget::default();
+        let alias = budget.clone();
+        for _ in 0..4096 {
+            alias.charge_obligation().unwrap();
+        }
+        assert!(budget.charge_obligation().is_err());
+        budget.charge_diagnostic_bytes(65_535).unwrap();
+        alias.charge_diagnostic_bytes(1).unwrap();
+        assert!(budget.charge_diagnostic_bytes(1).is_err());
+        let tiny = PlanBudget::new(PlanLimits {
+            bytes: 1,
+            ..PlanLimits::default()
+        });
+        let reservation = tiny.reserve_bytes(1).unwrap();
+        assert!(tiny.reserve_bytes(1).is_err());
+        drop(reservation);
+        tiny.reserve_bytes(1).unwrap();
+    }
+
     #[test]
     fn associated_generic_environments_preserve_scope_authority_and_total_limits() {
         let budget = PlanBudget::default();
@@ -2814,11 +3201,11 @@ mod tests {
             index: 0,
         }
     }
-    fn test_target() -> super::CallTarget {
-        super::CallTarget {
+    fn test_target() -> super::Callee {
+        super::Callee::Direct(super::CallTarget {
             declaration: test_decl(),
             type_args: std::sync::Arc::from([]),
-        }
+        })
     }
     #[test]
     fn compounds_validate_closed_domains_dead_statements_and_indices() {

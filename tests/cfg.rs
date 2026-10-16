@@ -103,7 +103,13 @@ fn bounded(name: &str, run: impl FnOnce()) {
         .env(CHILD, name);
     capture(&mut command, &scratch, 30);
 }
-fn checked_function(source: &str, name: &str) -> ir::CheckedFunction {
+fn checked_function(
+    source: &str,
+    name: &str,
+) -> (
+    ir::CheckedFunction,
+    std::sync::Arc<justrust_engine::compiler::traits::ValidatedFacts>,
+) {
     let program = frontend::parse(source).unwrap();
     let budget = ir::PlanBudget::default();
     let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
@@ -111,10 +117,18 @@ fn checked_function(source: &str, name: &str) -> ir::CheckedFunction {
         .map(|index| plan.callable_decl(index).unwrap())
         .find(|declaration| plan.callable_body(&program, *declaration).unwrap().name == name)
         .unwrap();
-    frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap()
+    let checked = frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
+    let facts = plan
+        .instance_facts(&ir::CallTarget {
+            declaration,
+            type_args: [].into(),
+        })
+        .unwrap();
+    (checked, facts)
 }
 fn lowered(source: &str, name: &str) -> cfg::Function {
-    let result = cfg::lower(&checked_function(source, name)).unwrap();
+    let (checked, facts) = checked_function(source, name);
+    let result = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
     result.validate().unwrap();
     result
 }
@@ -164,8 +178,8 @@ fn cfg_conditional_joins_short_circuit_edges_and_origins_are_explicit() {
         "cfg_conditional_joins_short_circuit_edges_and_origins_are_explicit",
         || {
             let source = "fn choose(flag:bool)->i32 {let mut x=1;if flag && {x=2;true} {x=3;}else{x=4;}x} fn main(){}";
-            let checked = checked_function(source, "choose");
-            let function = cfg::lower(&checked).unwrap();
+            let (checked, facts) = checked_function(source, "choose");
+            let function = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
             function.validate().unwrap();
             assert_eq!(function.name, checked.name);
             assert_eq!(function.params, checked.params);
@@ -388,11 +402,11 @@ fn cfg_return_snapshots_and_abrupt_edges_clean_only_exited_scopes() {
     bounded(
         "cfg_return_snapshots_and_abrupt_edges_clean_only_exited_scopes",
         || {
-            let checked = checked_function(
+            let (checked, facts) = checked_function(
                 "fn pick()->(i32,bool){let outer=(3,true);{let inner=outer;return inner;}} fn main(){}",
                 "pick",
             );
-            let function = cfg::lower(&checked).unwrap();
+            let function = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
             function.validate().unwrap();
             for id in reachable(&function) {
                 let block = &function.blocks[id.0];
@@ -412,11 +426,11 @@ fn cfg_return_snapshots_and_abrupt_edges_clean_only_exited_scopes() {
                     }
                 }
             }
-            let checked = checked_function(
+            let (checked, facts) = checked_function(
                 "fn main(){let mut count=0;loop{let local=(count,true);{let nested=local;count=count+1;if count<2{continue;}break;}}}",
                 "main",
             );
-            let function = cfg::lower(&checked).unwrap();
+            let function = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
             function.validate().unwrap();
             let local_id = |name: &str| {
                 ir::LocalId(
@@ -477,7 +491,13 @@ fn cfg_native_emission_preserves_order_snapshots_recursion_and_control_edges() {
                     let checked =
                         frontend::type_callable_with_plan(&program, declaration, &plan, &budget)
                             .unwrap();
-                    let lowered = cfg::lower(&checked).unwrap();
+                    let facts = plan
+                        .instance_facts(&ir::CallTarget {
+                            declaration,
+                            type_args: [].into(),
+                        })
+                        .unwrap();
+                    let lowered = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
                     lowered.validate().unwrap();
                     lowered
                 })

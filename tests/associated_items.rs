@@ -463,12 +463,12 @@ fn main(){run();}
 }
 
 #[test]
-fn rejects_legal_unsupported_trait_dispatch() {
-    rejects(
-        "legalunsupported: trait_dispatch",
+fn accepts_trait_dispatch() {
+    runs(
         r###"struct S{x:i32}trait Take{fn take(self)->i32;}impl Take for S{fn take(self)->i32{self.x}}fn run()->i32{S{x:7}.take()}
 fn main(){if run()==7{println!("associated items oracle ok");}}
 "###,
+        "associated items oracle ok\n",
     );
 }
 

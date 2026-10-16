@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Bounded inherent associated-items differential corpus, not full Rust.
 
-Exact frozen32 stock-classified dictionaries and full_source/stdout bytes.
-By-value dispatch with explicit method arguments only. Trait dispatch,
-borrowed receiver adjustments, omitted method arguments and partial holes
-remain legal unsupported boundaries. Shared bounded Case/run_case/process
+Exact frozen32 stock-classified source/stdout bytes. Current classification is
+19 positive, 10 invalid and 3 legal unsupported after the authorized unchanged
+trait_dispatch promotion. The acceptance hash retains ORIGINAL frozen provenance.
+By-value dispatch with explicit method arguments and admitted required-trait
+static dispatch are supported. Borrowed receiver adjustments, omitted method
+arguments and partial holes remain legal unsupported boundaries.
+Shared bounded Case/run_case/process
 compares supplied-native workers1/8 BUILD/CHECK, never builds a compiler.
 """
 import argparse
@@ -547,7 +550,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "associated items oracle ok\n",
     "full_source": "struct S{x:i32}trait Take{fn take(self)->i32;}impl Take for S{fn take(self)->i32{self.x}}fn run()->i32{S{x:7}.take()}\nfn main(){if run()==7{println!(\"associated items oracle ok\");}}\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "trait_dispatch",
     "proposed_group": "legalunsupported",
     "source": "struct S{x:i32}trait Take{fn take(self)->i32;}impl Take for S{fn take(self)->i32{self.x}}fn run()->i32{S{x:7}.take()}",

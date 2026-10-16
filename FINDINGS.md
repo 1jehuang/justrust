@@ -9139,3 +9139,71 @@ reports done/exit0/lifecycle_ok. Observed34,333,747ns total/6,393,580ns engine
 are contended functional evidence, not pinned-suite speedup measurements.
 Traits/predicates/Copy, borrowed receivers, Drop, libraries and existing-project
 acceptance remain open and autonomous work continues.
+
+## 2026-10-16: canonical trait obligations and sealed static dispatch
+
+Implemented the bounded required-trait-item client from TRAITS.md on one
+immutable validated world. The proof-free raw schema adapter and world have no
+facts/service ownership backedge. Private facts derive exact declaration or
+closed instance subjects, environments, predicates and shared ledger authority.
+Required trait Self remains possibly-unsized signature-only metadata, never a
+body/layout permission. Required items do not create callable or native slots.
+
+Positive conditional impl prerequisites use one bounded proof engine with
+separate assumptions, unique head selection, operation-local active goals and
+shared memoization. Cycles and resource errors are not false/proved cache hits.
+All direct calls discharge instantiated predicates, including dead calls. One
+exhaustive call-closing pass handles nongeneric reuse and generic instances,
+resolves abstract trait items, compares canonical signatures and produces only
+direct closed calls before fresh lowering, analysis and native sealing.
+Ownership still uses the same move paths and transfer/join solver. Traits named
+Copy grant no permission, and explicit moves remain consuming.
+
+The exact corrected32 stock-classified sources and four graph regressions pass.
+Their source/classification/stdout bytes remain frozen. The prefreeze static
+default-body correction and original invalid by-value default-body observation
+are documented in TRAITS.md, not hidden as a native correction. The graph
+regression initially predicted six source functions where the source has five
+callables and six concrete instances. Only that telemetry expectation changed,
+with the six instance/native checks preserved.
+
+Full hosted check20261016-065925315-1008838, all1368 tests
+20261016-065926283-1008947 and strict all-target lint
+20261016-065928758-1009256 pass, with formatting and diff whitespace clean.
+The exact three redacted profiles are retained in
+data/runs/prototype-bootstrap/2026-10-traits.jsonl. Independent actual-source
+soundness and resource reviewers clear the final corrected paths. Real regression
+gates found raw implied-Self entry requirements incorrectly strengthening impl
+signatures, missing receiver reference-contract rows, parser frame growth,
+zero-arity scope authority erasure and unmetered recursive comparisons. Narrow
+corrections preserved conformance rules and existing test sources. The old S39
+shared nominal DAG depth test initially exhausted repeated validation work.
+Operation-local canonical-identity memos now retain subtree heights, recheck
+depth on hits and charge scratch, comparisons and relocation before growth.
+Neither that test nor the resource limits were weakened.
+
+Rich analysis diagnostics stream through the shared allowance before growth,
+stopping traversal when exhausted while preserving the full structured analysis.
+The existing String-returning compatibility boundary has an explicit exception:
+after diagnostic exhaustion it can allocate only a fixed source-independent
+resource-error string of at most80 bytes, with best-effort charging. It never
+formats the original rich error again, returns success or resets the ledger.
+This is not a claim that the snapshot allowance bounds every process allocation.
+
+The1578-byte real trait example compiles and actually executes with8 workers and
+exact `trait obligations compiled correctly` stdout. It exercises conditional
+nested impls, bound forwarding, explicit UFCS, mut-self conformance, multiple
+bounds and receiver-before-argument effects. Complete capture records10 source
+callables,69 graph nodes/145 edges,35 CFG blocks/28 edges/103 locals, zero
+failures and zero dropped events. Functional timings are contended/uncontrolled,
+not a pinned before/after speed comparison.
+
+One unchanged historical associated-items trait_dispatch case was promoted only
+after independent stock plus native workers1/8 BUILD, CHECK and actual runtime
+parity. Full-source SHA256 is
+2b892fda952e7215f317df893b69d7fc2f079c3bcf8b2c393e8d4fce5d66d71b.
+That historical corpus is now19 supported,10 invalid and3 legal exclusions.
+The new32 corpus is unchanged. Independent cumulative native evidence is the
+next separate gate. Canonical Copy/Clone, borrowed receivers, Drop, generic trait
+items, defaults, associated types, libraries and existing-project acceptance
+remain open. No experimental install, default promotion or speedup is claimed.

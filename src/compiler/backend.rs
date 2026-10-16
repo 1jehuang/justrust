@@ -860,6 +860,9 @@ impl<'a> Emitter<'a> {
                 next,
                 ..
             } => {
+                let ir::Callee::Direct(target) = target else {
+                    return Err("unresolved trait dispatch has no native ABI".into());
+                };
                 if args.len() > MAX_ARGS {
                     return Err(format!("at most {MAX_ARGS} arguments are supported"));
                 }
@@ -911,6 +914,9 @@ impl<'a> Emitter<'a> {
 /// Projected returns require exact external-root plus typed suffix membership
 /// and candidate-to-actual-origin correlation, never layout offsets in summaries.
 /// Local analysis alone cannot establish the whole-program call contract.
+/// Every call must already be a canonical Direct target with discharged
+/// predicates. This backend never selects trait implementations or resolves
+/// obligations, including for unreachable metadata.
 /// Every local and lowering temporary has stable invocation-owned frame storage.
 pub fn emit_cfg_function(
     concrete: &ownership::ConcreteCfg,
@@ -1006,10 +1012,10 @@ pub fn emit_cfg_function(
 
 fn seal_concrete_cfg(
     function: cfg::Function,
-    budget: &ir::PlanBudget,
+    facts: std::sync::Arc<super::traits::ValidatedFacts>,
 ) -> Result<ownership::ConcreteCfg, String> {
     let name = function.name.clone();
-    let closed = cfg::close(std::sync::Arc::new(function), budget)?;
+    let closed = cfg::close(std::sync::Arc::new(function), facts.clone(), facts.budget())?;
     ownership::analyze_closed(closed).map_err(|analysis| {
         format!(
             "{name}: initialization/move analysis (complete={}): {:?}",
@@ -1018,11 +1024,16 @@ fn seal_concrete_cfg(
     })
 }
 
-/// Standalone call-free checked-body entry point. Close all metadata and bind
-/// concrete analysis to that exact immutable CFG before requesting layout.
-/// Calls require the common sealed instance plan, available through `emit`.
-pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
-    let lowered = cfg::lower(function)?;
+/// Standalone call-free checked-body entry point. The caller supplies exact
+/// closed instance facts from the validated world, including entry obligations.
+/// Close all metadata and bind concrete analysis to that exact immutable CFG
+/// before requesting layout. Calls require the common sealed instance plan,
+/// available through `emit`.
+pub fn emit_checked_function(
+    function: &ir::CheckedFunction,
+    facts: std::sync::Arc<super::traits::ValidatedFacts>,
+) -> Result<Object, String> {
+    let lowered = cfg::lower_with_facts(function, &facts, facts.budget())?;
     if lowered.blocks.iter().any(|block| {
         matches!(&block.terminator.value, cfg::Terminator::Call { signature, .. }
             if signature.params.iter().any(|ty| matches!(ty, ir::Ty::Ref { .. }))
@@ -1036,7 +1047,7 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
         .blocks
         .iter()
         .any(|block| matches!(block.terminator.value, cfg::Terminator::Call { .. }));
-    let concrete = seal_concrete_cfg(lowered, &ir::PlanBudget::default())?;
+    let concrete = seal_concrete_cfg(lowered, facts)?;
     if has_calls {
         return Err("unsupported standalone call target requires an instance plan".into());
     }
@@ -1155,8 +1166,65 @@ mod tests {
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    fn source_fixture_facts(
+        signatures: &frontend::Signatures,
+        index: usize,
+    ) -> Result<std::sync::Arc<super::super::traits::ValidatedFacts>, String> {
+        let plan = signatures.plan()?;
+        plan.instance_facts(&ir::CallTarget {
+            declaration: plan.callable_decl(index)?,
+            type_args: [].into(),
+        })
+    }
+
+    fn emit_checked_fixture(
+        function: &ir::CheckedFunction,
+        signatures: &frontend::Signatures,
+        index: usize,
+    ) -> Result<Object, String> {
+        super::emit_checked_function(function, source_fixture_facts(signatures, index)?)
+    }
+
+    fn raw_fixture_facts(
+        function: &cfg::Function,
+    ) -> Result<std::sync::Arc<super::super::traits::ValidatedFacts>, String> {
+        if function
+            .blocks
+            .iter()
+            .any(|block| matches!(block.terminator.value, cfg::Terminator::Call { .. }))
+        {
+            return Err("test CFG calls require a sealed instance plan".into());
+        }
+        let signature = ir::Signature {
+            ref_contract: function.ref_contract.clone(),
+            params: function
+                .params
+                .iter()
+                .map(|local| {
+                    function
+                        .locals
+                        .get(local.0)
+                        .map(|local| local.ty.clone())
+                        .ok_or_else(|| "invalid fixture parameter local".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            result: function.result.clone(),
+        };
+        let types = function
+            .locals
+            .iter()
+            .map(|local| local.ty.clone())
+            .collect::<Vec<_>>();
+        super::super::traits::test_support::facts_for_signature(
+            &signature,
+            &types,
+            &ir::PlanBudget::default(),
+        )
+        .map_err(|error| error.to_string())
+    }
+
     fn emit_test_cfg(function: &cfg::Function) -> Result<Object, String> {
-        let concrete = seal_concrete_cfg(function.clone(), &ir::PlanBudget::default())?;
+        let concrete = seal_concrete_cfg(function.clone(), raw_fixture_facts(function)?)?;
         emit_cfg_function(&concrete, &|_| {
             Err("test CFG calls require a sealed instance plan".into())
         })
@@ -1166,7 +1234,12 @@ mod tests {
         let program = frontend::parse("fn main() {}").unwrap();
         let signatures = frontend::signature_table(&program).unwrap();
         let checked = frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
-        seal_concrete_cfg(cfg::lower(&checked).unwrap(), &ir::PlanBudget::default()).unwrap()
+        let facts = source_fixture_facts(&signatures, 0).unwrap();
+        seal_concrete_cfg(
+            cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap(),
+            facts,
+        )
+        .unwrap()
     }
 
     fn block(statements: Vec<Stmt>, tail: Option<Expr>) -> Block {
@@ -1180,6 +1253,7 @@ mod tests {
             name: name.into(),
             regions: Default::default(),
             type_params: vec![],
+            bounds: vec![],
             params,
             result,
             body,
@@ -1232,6 +1306,8 @@ mod tests {
             structs: vec![],
             enums: vec![],
             impls: vec![],
+            traits: vec![],
+            trait_imports: vec![],
         }
     }
     fn executable(program: &Program) -> std::path::PathBuf {
@@ -1444,6 +1520,182 @@ mod tests {
     }
 
     #[test]
+    fn trait_native_conditional_dispatch_preserves_scalar_aggregate_abi_and_receiver_order() {
+        let program = frontend::parse(
+            r#"
+            trait Pass {
+                fn take(value: Self) -> Self;
+                fn relay(self) -> Self;
+                fn code(self) -> u64;
+            }
+            enum Tag { Ready }
+            impl Pass for Tag {
+                fn take(value: Self) -> Self { value }
+                fn relay(self) -> Self { self }
+                fn code(self) -> u64 { 41u64 }
+            }
+            struct Packet<T> { value: T, words: [u64;9] }
+            impl<T: Pass> Pass for Packet<T> {
+                fn take(value: Self) -> Self { value }
+                fn relay(self) -> Self { self }
+                fn code(self) -> u64 {
+                    if self.words[8] != 18446744073709551615u64 { 1/0; }
+                    self.value.code()
+                }
+            }
+            trait Combine { fn combine(self, extra: u64) -> u64; }
+            impl<T: Pass> Combine for Packet<T> {
+                fn combine(mut self, extra: u64) -> u64 {
+                    self.words[0] = extra;
+                    self.value.code() + self.words[0]
+                }
+            }
+            fn relay<T: Pass>(value: T) -> T { T::take(value.relay()) }
+            fn read<T: Pass>(value: T) -> u64 { <T as Pass>::code(value) }
+            fn receiver() -> Packet<Tag> {
+                println!("receiver");
+                Packet::<Tag> { value: Tag::Ready, words: [18446744073709551615u64;9] }
+            }
+            fn argument() -> u64 { println!("argument"); 1u64 }
+            fn main() {
+                if read::<Tag>(relay::<Tag>(Tag::Ready)) != 41u64 { 1/0; }
+                let packet = Packet::<Tag> {
+                    value: Tag::Ready,
+                    words: [18446744073709551615u64;9],
+                };
+                if read::<Packet<Tag>>(relay::<Packet<Tag>>(packet)) != 41u64 { 1/0; }
+                if receiver().combine(argument()) != 42u64 { 1/0; }
+                println!("trait-native");
+            }
+            "#,
+        )
+        .unwrap();
+        let serial = emit(&program).unwrap();
+        let parallel = super::super::compile_program_observed(program, 4, false)
+            .unwrap()
+            .executable
+            .unwrap();
+        assert_eq!(
+            serial, parallel,
+            "trait target symbols depend on worker order"
+        );
+        let path = executable_bytes(&serial);
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"receiver\nargument\ntrait-native\n");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+
+    #[test]
+    fn trait_native_seals_reject_wrong_authority_and_dead_unclosed_calls() {
+        let program = frontend::parse(
+            r#"
+            trait Read { fn read(self) -> u64; }
+            struct Cell { value: u64 }
+            impl Read for Cell { fn read(self) -> u64 { self.value } }
+            fn required<T: Read>(value: T) -> u64 { value.read() }
+            fn other() -> u64 { 7u64 }
+            fn main() {}
+            "#,
+        )
+        .unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let plan = signatures.plan().unwrap();
+        let checked = frontend::type_function_with_signatures(&program, 2, &signatures).unwrap();
+        let facts = source_fixture_facts(&signatures, 2).unwrap();
+        let lowered = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
+        assert!(seal_concrete_cfg(lowered.clone(), facts.clone()).is_ok());
+
+        let universal = plan.callable_facts(plan.callable_decl(2).unwrap()).unwrap();
+        assert!(
+            cfg::close(
+                std::sync::Arc::new(lowered.clone()),
+                universal.clone(),
+                universal.budget(),
+            )
+            .unwrap_err()
+            .contains("phase")
+        );
+        assert!(
+            cfg::close(
+                std::sync::Arc::new(lowered.clone()),
+                facts.clone(),
+                &ir::PlanBudget::default(),
+            )
+            .unwrap_err()
+            .contains("budget")
+        );
+        let wrong_signature = source_fixture_facts(&signatures, 1).unwrap();
+        assert!(
+            seal_concrete_cfg(lowered.clone(), wrong_signature)
+                .unwrap_err()
+                .contains("signature")
+        );
+
+        let unproved = ir::CallTarget {
+            declaration: plan.callable_decl(0).unwrap(),
+            type_args: [ir::Ty::Int(ir::IntTy::I32)].into(),
+        };
+        assert!(plan.instance_facts(&unproved).is_err());
+
+        let with_dead_call = |target| {
+            let mut function = lowered.clone();
+            let destination = ir::LocalId(function.locals.len());
+            function.locals.push(ir::LocalDecl {
+                name: "unreachable_result".into(),
+                ty: ir::Ty::Int(ir::IntTy::U64),
+                mutable: false,
+            });
+            function.blocks.push(cfg::BasicBlock {
+                statements: vec![],
+                terminator: cfg::Located {
+                    origin: None,
+                    value: cfg::Terminator::Call {
+                        target,
+                        name: "diagnostic_name_is_not_dispatch".into(),
+                        signature: ir::Signature {
+                            ref_contract: Default::default(),
+                            params: vec![ir::Ty::Int(ir::IntTy::I32)],
+                            result: ir::Ty::Int(ir::IntTy::U64),
+                        },
+                        args: vec![cfg::Operand::Constant(cfg::Constant::Int(
+                            ir::IntValue::i32(3),
+                        ))],
+                        destination: ir::Place {
+                            local: destination,
+                            projection: vec![],
+                        },
+                        next: function.entry,
+                    },
+                },
+            });
+            function
+        };
+        let direct = with_dead_call(ir::Callee::Direct(unproved));
+        direct.validate().unwrap();
+        assert!(seal_concrete_cfg(direct, facts.clone()).is_err());
+
+        let symbolic = frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let mut trait_call = symbolic
+            .exprs
+            .iter()
+            .find_map(|expression| match &expression.kind {
+                ir::ExprKind::Call {
+                    target: ir::Callee::TraitItem(call),
+                    ..
+                } => Some(call.clone()),
+                _ => None,
+            })
+            .expect("universal dispatch must retain its trait item");
+        trait_call.trait_ref.self_ty = ir::Ty::Int(ir::IntTy::I32);
+        assert!(
+            seal_concrete_cfg(with_dead_call(ir::Callee::TraitItem(trait_call)), facts).is_err()
+        );
+    }
+
+    #[test]
     fn associated_native_scalar_large_aggregate_and_method_generics_preserve_abi() {
         let program = frontend::parse(
             r#"
@@ -1560,7 +1812,8 @@ mod tests {
                 .unwrap_err()
                 .contains("no native layout")
         );
-        let mut forged = unit_concrete_fixture().function().as_ref().clone();
+        let unit = unit_concrete_fixture();
+        let mut forged = unit.function().as_ref().clone();
         forged.locals.push(ir::LocalDecl {
             name: "dead_hidden_parameter".into(),
             ty: ir::Ty::Array {
@@ -1569,7 +1822,14 @@ mod tests {
             },
             mutable: false,
         });
-        assert!(cfg::close(std::sync::Arc::new(forged), &ir::PlanBudget::default()).is_err());
+        assert!(
+            cfg::close(
+                std::sync::Arc::new(forged),
+                unit.facts().clone(),
+                unit.facts().budget(),
+            )
+            .is_err()
+        );
 
         let program = frontend::parse(
             r#"
@@ -1590,7 +1850,7 @@ mod tests {
             .unwrap();
         let checked = frontend::type_function_with_signatures(&program, index, &env).unwrap();
         assert!(
-            emit_checked_function(&checked)
+            emit_checked_fixture(&checked, &env, index)
                 .unwrap_err()
                 .contains("instance plan")
         );
@@ -2182,10 +2442,10 @@ mod tests {
         .unwrap();
         let env = frontend::signature_table(&p).unwrap();
         let target = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
-        assert!(emit_checked_function(&target).is_ok());
+        assert!(emit_checked_fixture(&target, &env, 0).is_ok());
         let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
         assert!(
-            emit_checked_function(&main)
+            emit_checked_fixture(&main, &env, 1)
                 .unwrap_err()
                 .contains("whole-program noescape")
         );
@@ -2319,10 +2579,10 @@ mod tests {
         .unwrap();
         let env = frontend::signature_table(&p).unwrap();
         let identity = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
-        assert!(emit_checked_function(&identity).is_ok());
+        assert!(emit_checked_fixture(&identity, &env, 0).is_ok());
         let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
         assert!(
-            emit_checked_function(&main)
+            emit_checked_fixture(&main, &env, 1)
                 .unwrap_err()
                 .contains("whole-program noescape")
         );
@@ -2427,10 +2687,10 @@ mod tests {
         .unwrap();
         let env = frontend::signature_table(&p).unwrap();
         let identity = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
-        assert!(emit_checked_function(&identity).is_ok());
+        assert!(emit_checked_fixture(&identity, &env, 0).is_ok());
         let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
         assert!(
-            emit_checked_function(&main)
+            emit_checked_fixture(&main, &env, 1)
                 .unwrap_err()
                 .contains("whole-program noescape")
         );
@@ -2535,10 +2795,10 @@ mod tests {
         .unwrap();
         let env = frontend::signature_table(&p).unwrap();
         let read = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
-        assert!(emit_checked_function(&read).is_ok());
+        assert!(emit_checked_fixture(&read, &env, 0).is_ok());
         let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
         assert!(
-            emit_checked_function(&main)
+            emit_checked_fixture(&main, &env, 1)
                 .unwrap_err()
                 .contains("whole-program noescape")
         );
@@ -2641,9 +2901,10 @@ mod tests {
         .unwrap();
         let signatures = frontend::signature_table(&program).unwrap();
         let checked = frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
-        let lowered = cfg::lower(&checked).unwrap();
+        let facts = source_fixture_facts(&signatures, 0).unwrap();
+        let lowered = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
         assert!(!ownership::analyze(&lowered).passed());
-        assert!(emit_checked_function(&checked).is_err());
+        assert!(emit_checked_fixture(&checked, &signatures, 0).is_err());
         assert!(emit(&program).is_err());
     }
 
@@ -3013,7 +3274,7 @@ mod tests {
         .unwrap();
         let signatures = frontend::signature_table(&p).unwrap();
         let checked = frontend::type_function_with_signatures(&p, 0, &signatures).unwrap();
-        let object = emit_checked_function(&checked).unwrap();
+        let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
         assert!(
             object.code.len() < 512,
             "repeat code expanded to {} bytes",
@@ -3142,7 +3403,8 @@ mod tests {
                 "moved={moved}: {:?}",
                 analysis.diagnostics
             );
-            let concrete = seal_concrete_cfg(function.clone(), &ir::PlanBudget::default()).unwrap();
+            let concrete =
+                seal_concrete_cfg(function.clone(), raw_fixture_facts(&function).unwrap()).unwrap();
             let mut branch = Emitter {
                 object: Object {
                     code: vec![],
@@ -3690,7 +3952,7 @@ mod tests {
         assert!(link(&[]).is_err());
         let signatures = frontend::signature_table(&p).unwrap();
         let checked = frontend::type_function_with_signatures(&p, 0, &signatures).unwrap();
-        let object = emit_checked_function(&checked).unwrap();
+        let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
         assert!(link(&[("main".into(), object.clone()), ("main".into(), object)]).is_err());
         assert!(emit(&program(vec![Stmt::Expr(call("missing", vec![]))], vec![])).is_err());
     }
@@ -3717,11 +3979,11 @@ mod tests {
         assert_eq!(run(&p).status.code(), Some(0));
         let signatures = frontend::signature_table(&p).unwrap();
         let mut checked = frontend::type_function_with_signatures(&p, 0, &signatures).unwrap();
-        let original = emit_checked_function(&checked).unwrap();
+        let original = emit_checked_fixture(&checked, &signatures, 0).unwrap();
         for local in &mut checked.locals {
             local.name = "not_a_source_binding".into();
         }
-        let renamed = emit_checked_function(&checked).unwrap();
+        let renamed = emit_checked_fixture(&checked, &signatures, 0).unwrap();
         assert_eq!(original.code, renamed.code);
         assert_eq!(original.calls, renamed.calls);
         assert_eq!(original.strings, renamed.strings);
@@ -3941,7 +4203,7 @@ mod tests {
         let signatures = frontend::signature_table(&p).unwrap();
         let index = p.functions.iter().position(|f| f.name == "make").unwrap();
         let checked = frontend::type_function_with_signatures(&p, index, &signatures).unwrap();
-        let object = emit_checked_function(&checked).unwrap();
+        let object = emit_checked_fixture(&checked, &signatures, index).unwrap();
         assert!(
             object
                 .code
@@ -3986,7 +4248,22 @@ mod tests {
                 tail: None,
             },
         };
-        let error = emit_test_cfg(&cfg::lower(&checked).unwrap()).unwrap_err();
+        let facts = super::super::traits::test_support::facts_for_signature(
+            &ir::Signature {
+                ref_contract: checked.ref_contract.clone(),
+                params: vec![],
+                result: checked.result.clone(),
+            },
+            &checked
+                .locals
+                .iter()
+                .map(|local| local.ty.clone())
+                .collect::<Vec<_>>(),
+            &ir::PlanBudget::default(),
+        )
+        .unwrap();
+        let lowered = cfg::lower_with_facts(&checked, &facts, facts.budget()).unwrap();
+        let error = seal_concrete_cfg(lowered, facts).unwrap_err();
         assert!(error.contains("ResourceLimit"), "{error}");
     }
 
@@ -4173,7 +4450,7 @@ mod tests {
         let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
         assert_eq!(checked.result.field_count(), Some(1));
         assert_eq!(value_size(&checked.result).unwrap(), 8);
-        let object = emit_checked_function(&checked).unwrap();
+        let object = emit_checked_fixture(&checked, &env, index).unwrap();
         assert!(
             object
                 .code
@@ -4230,7 +4507,7 @@ mod tests {
         let env = frontend::signature_table(&p).unwrap();
         let index = p.functions.iter().position(|f| f.name == "main").unwrap();
         let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
-        let error = emit_checked_function(&checked).unwrap_err();
+        let error = emit_checked_fixture(&checked, &env, index).unwrap_err();
         assert!(error.contains("initialization/move analysis"), "{error}");
         assert!(
             emit(&p)
@@ -4317,7 +4594,7 @@ mod tests {
             let env = frontend::signature_table(&p).unwrap();
             let index = p.functions.iter().position(|f| f.name == "main").unwrap();
             let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
-            let error = emit_checked_function(&checked).unwrap_err();
+            let error = emit_checked_fixture(&checked, &env, index).unwrap_err();
             assert!(error.contains("initialization/move analysis"), "{error}");
             assert!(
                 emit(&p)

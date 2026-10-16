@@ -90,11 +90,20 @@ fn initialized_immutable_unused_body_is_typed_but_never_emitted() {
         .iter()
         .position(|f| f.name == "unused")
         .unwrap();
-    let checked = frontend::type_function_with_signatures(&program, index, &env).unwrap();
+    let budget = compiler::ir::PlanBudget::default();
+    let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let declaration = plan.callable_decl(index).unwrap();
+    let checked = frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
+    let facts = plan
+        .instance_facts(&compiler::ir::CallTarget {
+            declaration,
+            type_args: std::sync::Arc::from([]),
+        })
+        .unwrap();
     let lowered = cfg::lower(&checked).unwrap();
     assert!(!ownership::analyze(&lowered).passed());
     assert!(frontend::check_function_with_signatures(&program, index, &env).is_err());
-    assert!(backend::emit_checked_function(&checked).is_err());
+    assert!(backend::emit_checked_function(&checked, facts).is_err());
     assert!(backend::emit(&program).is_err());
     for check in [true, false] {
         let failed = compiler::compile_observed(source.to_owned(), 8, check)

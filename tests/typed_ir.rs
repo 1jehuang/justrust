@@ -357,10 +357,19 @@ fn checked_ir_native_lowering_and_cli_preserve_shadow_calls_and_return_execution
             use std::os::unix::fs::PermissionsExt;
             let source = "fn choose(flag:bool,x:i32)->i32 { let x=x+1; if flag { let x=x+2; return x; } x } fn main() { let x=10; let x=x+1; let flag=choose(true,x)==14 && choose(false,x)==12; if flag { println!(\"typed native ok\"); } }";
             let program = frontend::parse(source).unwrap();
-            let signatures = frontend::signature_table(&program).unwrap();
-            for index in 0..program.functions.len() {
+            let budget = ir::PlanBudget::default();
+            let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            for index in 0..plan.callable_count() {
+                let declaration = plan.callable_decl(index).unwrap();
                 let checked =
-                    frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
+                    frontend::type_callable_with_plan(&program, declaration, &plan, &budget)
+                        .unwrap();
+                let facts = plan
+                    .instance_facts(&ir::CallTarget {
+                        declaration,
+                        type_args: std::sync::Arc::from([]),
+                    })
+                    .unwrap();
                 checked.validate().unwrap();
                 if checked
                     .exprs
@@ -368,7 +377,7 @@ fn checked_ir_native_lowering_and_cli_preserve_shadow_calls_and_return_execution
                     .any(|expr| matches!(expr.kind, ExprKind::Call { .. }))
                 {
                     assert!(
-                        backend::emit_checked_function(&checked)
+                        backend::emit_checked_function(&checked, facts.clone())
                             .unwrap_err()
                             .contains("instance plan")
                     );

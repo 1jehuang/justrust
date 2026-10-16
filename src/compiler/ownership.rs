@@ -6,6 +6,7 @@
 use super::borrow::{self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target};
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
 use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, Ty};
+use super::traits::{FactsPhase, ValidatedFacts};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -82,8 +83,11 @@ impl VerifiedTemplateCfg {
     pub fn source(&self) -> &Arc<CheckedFunction> {
         self.template.source()
     }
+    pub fn facts(&self) -> &Arc<ValidatedFacts> {
+        self.template.facts()
+    }
     pub fn env(&self) -> &Arc<GenericEnv> {
-        self.template.env()
+        self.facts().env()
     }
     pub fn function(&self) -> &Arc<cfg::Function> {
         self.template.function()
@@ -92,7 +96,7 @@ impl VerifiedTemplateCfg {
         &self.analysis
     }
     pub fn budget(&self) -> &super::ir::PlanBudget {
-        self.template.budget()
+        self.facts().budget()
     }
 }
 
@@ -104,6 +108,9 @@ pub struct ConcreteCfg {
     _reservation: Arc<super::ir::PlanReservation>,
 }
 impl ConcreteCfg {
+    pub fn facts(&self) -> &Arc<ValidatedFacts> {
+        self.closed.facts()
+    }
     pub fn function(&self) -> &Arc<cfg::Function> {
         self.closed.function()
     }
@@ -111,7 +118,7 @@ impl ConcreteCfg {
         &self.analysis
     }
     pub fn budget(&self) -> &super::ir::PlanBudget {
-        self.closed.budget()
+        self.facts().budget()
     }
 }
 
@@ -119,10 +126,17 @@ impl ConcreteCfg {
 // lossy error summary or a second allocation on the failure path.
 #[allow(clippy::result_large_err)]
 pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg, Analysis> {
+    if template.facts().phase() != FactsPhase::Universal {
+        return Err(invalid_facts_analysis(
+            template.function(),
+            "template ownership requires universal facts",
+            template.facts().budget(),
+        ));
+    }
     let analysis = analyze_with_facts(
         template.function(),
         Limits::default(),
-        FactsCtx::Universal(template.env()),
+        FactsCtx::Validated(template.facts()),
         Some(template.budget()),
     );
     if !analysis.passed() {
@@ -143,10 +157,17 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
 
 #[allow(clippy::result_large_err)]
 pub fn analyze_closed(closed: cfg::ClosedCfg) -> Result<ConcreteCfg, Analysis> {
+    if closed.facts().phase() != FactsPhase::Closed {
+        return Err(invalid_facts_analysis(
+            closed.function(),
+            "concrete ownership requires closed facts",
+            closed.facts().budget(),
+        ));
+    }
     let analysis = analyze_with_facts(
         closed.function(),
         Limits::default(),
-        FactsCtx::Concrete,
+        FactsCtx::Validated(closed.facts()),
         Some(closed.budget()),
     );
     if !analysis.passed() {
@@ -163,6 +184,36 @@ pub fn analyze_closed(closed: cfg::ClosedCfg) -> Result<ConcreteCfg, Analysis> {
         analysis,
         _reservation: reservation,
     })
+}
+
+fn invalid_facts_analysis(
+    function: &cfg::Function,
+    message: &str,
+    budget: &super::ir::PlanBudget,
+) -> Analysis {
+    let error = super::traits::FactsError::invalid(budget, message);
+    let kind = if error.is_resource() {
+        ErrorKind::ResourceLimit
+    } else {
+        ErrorKind::InvalidCfg(error.into_legacy_diagnostic(budget))
+    };
+    let complete = kind != ErrorKind::ResourceLimit;
+    Analysis {
+        stats: AnalysisStats {
+            blocks_total: function.blocks.len(),
+            locals: function.locals.len(),
+            ..AnalysisStats::default()
+        },
+        diagnostics: vec![Diagnostic {
+            kind,
+            block: function.entry,
+            statement: None,
+            origin: None,
+            place: None,
+        }]
+        .into_boxed_slice(),
+        complete,
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -606,9 +657,20 @@ fn preflight_with_plan(
                 ..
             } => {
                 let before_types = budget.remaining;
-                budget.spend(target.type_args.len())?;
-                for argument in target.type_args.iter() {
-                    preflight_ty(argument, 0, &mut budget)?;
+                match target {
+                    super::ir::Callee::Direct(target) => {
+                        budget.spend(target.type_args.len() + 1)?;
+                        for argument in target.type_args.iter() {
+                            preflight_ty(argument, 0, &mut budget)?;
+                        }
+                    }
+                    super::ir::Callee::TraitItem(call) => {
+                        budget.spend(call.trait_ref.args.len() + call.method_args.len() + 1)?;
+                        preflight_ty(&call.trait_ref.self_ty, 0, &mut budget)?;
+                        for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
+                            preflight_ty(argument, 0, &mut budget)?;
+                        }
+                    }
                 }
                 for param in &signature.params {
                     preflight_ty(param, 0, &mut budget)?;
@@ -699,9 +761,23 @@ enum MoveShape<'a> {
 impl<'a> MoveShape<'a> {
     fn of(ty: &'a Ty, facts: FactsCtx<'_>, budget: &mut Budget) -> Result<Self, Exhausted> {
         budget.spend(1)?;
+        if matches!(facts, FactsCtx::Validated(authority) if authority.phase() == FactsPhase::Schema)
+        {
+            return Err(Exhausted);
+        }
         Ok(match ty {
             Ty::Param(param) => {
-                if !matches!(facts, FactsCtx::Universal(env) if env.contains(*param)) {
+                let env = match facts {
+                    FactsCtx::Universal(env) => env,
+                    FactsCtx::Validated(authority)
+                        if authority.phase() == FactsPhase::Universal =>
+                    {
+                        authority.env()
+                    }
+                    _ => return Err(Exhausted),
+                };
+                budget.spend(env.scopes().len())?;
+                if !env.contains(*param) {
                     return Err(Exhausted);
                 }
                 Self::OpaqueParam
@@ -1303,10 +1379,51 @@ impl Transfer<'_> {
         }
         Ok(())
     }
+    fn copy_permission(&mut self, place: &Place) -> Result<Option<bool>, Exhausted> {
+        let ty = self.f.place_ty(place).expect("structurally verified place");
+        preflight_ty(ty, 0, self.budget)?;
+        if let FactsCtx::Validated(authority) = self.facts {
+            return match authority.must_copy(ty) {
+                Ok(permission) => Ok(Some(permission)),
+                Err(error) if error.is_resource() => Err(Exhausted),
+                Err(error) => {
+                    let message = error.into_legacy_diagnostic(authority.budget());
+                    self.diagnostic(ErrorKind::InvalidCfg(message), place.clone());
+                    Ok(None)
+                }
+            };
+        }
+        // Structural-only bootstrap and fixture contexts cannot mint a native
+        // capability. Production always queries the exact retained authority.
+        self.facts.must_copy(ty).map(Some).map_err(|_| Exhausted)
+    }
+    fn deny_copy(&mut self, place: &Place, message: &'static str) -> Result<(), Exhausted> {
+        let message = if let FactsCtx::Validated(authority) = self.facts {
+            let error = super::traits::FactsError::invalid(authority.budget(), message);
+            if error.is_resource() {
+                return Err(Exhausted);
+            }
+            error.into_legacy_diagnostic(authority.budget())
+        } else {
+            message.into()
+        };
+        self.diagnostic(ErrorKind::InvalidCfg(message), place.clone());
+        Ok(())
+    }
     fn operand(&mut self, state: &mut State, op: &Operand) -> Result<(), Exhausted> {
         self.budget.spend(1)?;
         if let Some(report) = &mut self.report {
             report.stats.operands_read += 1;
+        }
+        if let Operand::Copy(place) = op {
+            match self.copy_permission(place)? {
+                Some(true) => {}
+                Some(false) => {
+                    self.deny_copy(place, "Copy operand requires Copy permission")?;
+                    return Ok(());
+                }
+                None => return Ok(()),
+            }
         }
         if let Operand::Move(place) = op {
             self.budget.spend(place.projection.len() + 1)?;
@@ -1318,16 +1435,16 @@ impl Transfer<'_> {
                 // The CFG verifier also rejects this, including in dead blocks.
                 // Keep transfer fail-closed independently, and meter repeated
                 // element Copy checks rather than recursively walking for free.
-                let ty = self.f.place_ty(place).expect("structurally verified place");
-                preflight_ty(ty, 0, self.budget)?;
-                if !self.facts.must_copy(ty).map_err(|_| Exhausted)? {
-                    self.diagnostic(
-                        ErrorKind::InvalidCfg(
-                            "non-Copy move through array indexing is unsupported".into(),
-                        ),
-                        place.clone(),
-                    );
-                    return Ok(());
+                match self.copy_permission(place)? {
+                    Some(true) => {}
+                    Some(false) => {
+                        self.deny_copy(
+                            place,
+                            "non-Copy move through array indexing is unsupported",
+                        )?;
+                        return Ok(());
+                    }
+                    None => return Ok(()),
                 }
             }
         }
@@ -1367,6 +1484,15 @@ impl Transfer<'_> {
             }
         }
         Ok(())
+    }
+    /// Returning a value inspects initialization, not executable Copy permission.
+    /// In particular opaque parameters and non-Copy nominals may be returned.
+    fn inspect_return(&mut self, state: &mut State) -> Result<(), Exhausted> {
+        self.budget.spend(1)?;
+        if let Some(report) = &mut self.report {
+            report.stats.operands_read += 1;
+        }
+        self.read(state, &root_place(self.f.return_local))
     }
     fn write_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
         self.budget.spend(1)?;
@@ -1660,7 +1786,7 @@ impl Transfer<'_> {
                     }
                 );
                 if !mutable_reference {
-                    self.operand(state, &Operand::Copy(root_place(self.f.return_local)))?;
+                    self.inspect_return(state)?;
                 }
                 if let Some(loans) = self.loans
                     && let Some(problem) = loans.check_return(self.f, self.block, self.budget)?
@@ -1715,6 +1841,22 @@ fn analyze_with_facts(
     facts: FactsCtx<'_>,
     plan: Option<&super::ir::PlanBudget>,
 ) -> Analysis {
+    if let FactsCtx::Validated(authority) = facts {
+        if authority.phase() == FactsPhase::Schema {
+            return invalid_facts_analysis(
+                f,
+                "schema facts cannot analyze executable ownership",
+                authority.budget(),
+            );
+        }
+        if plan.is_none_or(|budget| !authority.budget().same_authority(budget)) {
+            return invalid_facts_analysis(
+                f,
+                "ownership facts changed planning budget authority",
+                authority.budget(),
+            );
+        }
+    }
     let mut report = Report {
         stats: AnalysisStats {
             blocks_total: f.blocks.len(),
@@ -1967,6 +2109,282 @@ mod tests {
         cfg::lower(&checked).unwrap()
     }
 
+    fn fixture_world(
+        env: Arc<GenericEnv>,
+        signature: super::super::ir::Signature,
+        budget: &super::super::ir::PlanBudget,
+    ) -> Result<(DeclId, Arc<super::super::traits::ValidatedTraitWorld>), String> {
+        use super::super::traits::{CallableHeader, GenericSchema};
+        let declaration = env.scopes().last().unwrap().binder().declaration;
+        let header = CallableHeader {
+            declaration,
+            schema: GenericSchema {
+                env,
+                signature,
+                predicates: Arc::from([]),
+            },
+        };
+        let world = super::super::traits::test_support::world(&[header], budget)
+            .map_err(|error| error.to_string())?;
+        Ok((declaration, world))
+    }
+
+    fn lower_fixture_template(
+        source: Arc<CheckedFunction>,
+        env: Arc<GenericEnv>,
+        budget: &super::super::ir::PlanBudget,
+    ) -> Result<cfg::TemplateCfg, String> {
+        let signature = super::super::ir::Signature {
+            params: source
+                .params
+                .iter()
+                .map(|id| source.locals[id.0].ty.clone())
+                .collect(),
+            result: source.result.clone(),
+            ref_contract: source.ref_contract.clone(),
+        };
+        let (declaration, world) = fixture_world(env, signature, budget)?;
+        let facts = world
+            .callable_facts(declaration)
+            .map_err(|error| error.to_string())?;
+        cfg::lower_template(source, facts, budget)
+    }
+
+    fn close_fixture(
+        function: Arc<cfg::Function>,
+        budget: &super::super::ir::PlanBudget,
+    ) -> Result<cfg::ClosedCfg, String> {
+        use super::super::ir::{BinderId, CallTarget, ParamEnv, Signature};
+        let declaration = DeclId {
+            snapshot: SnapshotId::allocate()?,
+            index: 0,
+        };
+        let scope = Arc::new(ParamEnv::new(BinderId { declaration }, 0)?);
+        let env = Arc::new(GenericEnv::new(&[scope], budget)?);
+        let signature = Signature {
+            params: function
+                .params
+                .iter()
+                .map(|id| function.locals[id.0].ty.clone())
+                .collect(),
+            result: function.result.clone(),
+            ref_contract: function.ref_contract.clone(),
+        };
+        let (_, world) = fixture_world(env, signature, budget)?;
+        let facts = world
+            .instance_facts(&CallTarget {
+                declaration,
+                type_args: Arc::from([]),
+            })
+            .map_err(|error| error.to_string())?;
+        cfg::close(function, facts, budget)
+    }
+
+    fn trait_callable_fixture(
+        source: &str,
+        name: &str,
+        budget: &super::super::ir::PlanBudget,
+    ) -> (Arc<CheckedFunction>, Arc<ValidatedFacts>) {
+        use super::super::frontend;
+        let program = frontend::parse(source).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, budget).unwrap();
+        let declaration = (0..plan.callable_count())
+            .map(|index| plan.callable_decl(index).unwrap())
+            .find(|declaration| plan.callable_body(&program, *declaration).unwrap().name == name)
+            .unwrap();
+        let checked =
+            frontend::type_callable_with_plan(&program, declaration, &plan, budget).unwrap();
+        let facts = plan.callable_facts(declaration).unwrap();
+        // Facts must retain their immutable world and structural adapter after
+        // both the source program and the frontend planning handle are dropped.
+        (Arc::new(checked), facts)
+    }
+
+    fn required_item(source: &CheckedFunction) -> DeclId {
+        source
+            .exprs
+            .iter()
+            .find_map(|expression| match &expression.kind {
+                super::super::ir::ExprKind::Call {
+                    target: super::super::ir::Callee::TraitItem(call),
+                    ..
+                } => Some(call.item),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn trait_facts_bind_exact_template_and_reject_schema_and_foreign_ledger() {
+        use super::super::ir::PlanBudget;
+        let budget = PlanBudget::default();
+        let (source, facts) = trait_callable_fixture(
+            "trait Take { fn take(self) -> Self; } fn forward<T: Take>(value:T)->T { value.take() } fn main() {}",
+            "forward",
+            &budget,
+        );
+        let parameter = &source.locals[source.params[0].0].ty;
+        assert!(!facts.must_copy(parameter).unwrap());
+        let template = cfg::lower_template(source.clone(), facts.clone(), &budget).unwrap();
+        let function = template.function().clone();
+        let schema = facts.world().schema_facts(required_item(&source)).unwrap();
+        assert!(schema.must_copy(&Ty::Unit).is_err());
+        assert!(cfg::lower_template(source.clone(), schema.clone(), &budget).is_err());
+        let invalid_schema = analyze_with_facts(
+            &function,
+            Limits::default(),
+            FactsCtx::Validated(&schema),
+            Some(&budget),
+        );
+        assert!(!invalid_schema.passed());
+        let mut path_budget = Budget::for_plan(Limits::default().work, Some(&budget));
+        assert!(
+            Paths::with_facts(
+                &function,
+                Limits::default().paths,
+                FactsCtx::Validated(&schema),
+                &mut path_budget,
+            )
+            .is_err()
+        );
+        let foreign_budget = PlanBudget::default();
+        assert!(
+            !analyze_with_facts(
+                &function,
+                Limits::default(),
+                FactsCtx::Validated(&facts),
+                Some(&foreign_budget),
+            )
+            .passed()
+        );
+        let proof = verify_template(template).unwrap();
+        assert!(Arc::ptr_eq(proof.facts(), &facts));
+        assert!(Arc::ptr_eq(proof.env(), facts.env()));
+        assert!(Arc::ptr_eq(proof.source(), &source));
+        assert!(Arc::ptr_eq(proof.function(), &function));
+        assert!(proof.analysis().passed());
+        assert!(proof.analysis().stats.moves > 0);
+        assert!(proof.analysis().stats.operands_read > proof.analysis().stats.moves);
+    }
+
+    #[test]
+    fn trait_named_copy_cannot_grant_permission_and_explicit_moves_still_consume() {
+        use super::super::ir::PlanBudget;
+        let budget = PlanBudget::default();
+        let source = "trait Copy {} fn once<T: Copy>(value:T)->T { value } fn twice<T: Copy>(value:T)->(T,T) { (value,value) } fn main() {}";
+        let (once, facts) = trait_callable_fixture(source, "once", &budget);
+        assert!(!facts.predicates().predicates().is_empty());
+        assert!(!facts.must_copy(&once.locals[once.params[0].0].ty).unwrap());
+        let proof = verify_template(cfg::lower_template(once, facts, &budget).unwrap()).unwrap();
+        assert!(proof.analysis().passed());
+        let (twice, facts) = trait_callable_fixture(source, "twice", &budget);
+        let failure =
+            verify_template(cfg::lower_template(twice, facts, &budget).unwrap()).unwrap_err();
+        assert!(
+            failure
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+        );
+        let mut explicit = fixture();
+        explicit.locals.extend([
+            local(Ty::Int(IntTy::I32)),
+            local(Ty::Int(IntTy::I32)),
+            local(Ty::Int(IntTy::I32)),
+        ]);
+        explicit.params.push(LocalId(1));
+        explicit.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }),
+            located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }),
+        ]);
+        let failure =
+            analyze_closed(close_fixture(Arc::new(explicit), &budget).unwrap()).unwrap_err();
+        assert!(
+            failure
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+        );
+    }
+
+    #[test]
+    fn trait_dead_foreign_item_metadata_and_unproved_closed_instances_fail_sealed() {
+        use super::super::ir::{CallTarget, Callee, PlanBudget};
+        let budget = PlanBudget::default();
+        let source = "trait Take { fn take(self)->Self; } fn forward<T: Take>(value:T)->T { value.take() } fn main() {}";
+        let (checked, facts) = trait_callable_fixture(source, "forward", &budget);
+        let (foreign, foreign_facts) = trait_callable_fixture(source, "forward", &budget);
+        assert!(!Arc::ptr_eq(facts.world(), foreign_facts.world()));
+        let template = cfg::lower_template(checked, facts.clone(), &budget).unwrap();
+        assert!(
+            !analyze_with_facts(
+                template.function(),
+                Limits::default(),
+                FactsCtx::Validated(&foreign_facts),
+                Some(&budget),
+            )
+            .passed()
+        );
+        let mut forged = template.function().as_ref().clone();
+        let mut dead = forged
+            .blocks
+            .iter()
+            .find(|block| {
+                matches!(
+                    &block.terminator.value,
+                    Terminator::Call {
+                        target: Callee::TraitItem(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap()
+            .clone();
+        let Terminator::Call {
+            target: Callee::TraitItem(call),
+            ..
+        } = &mut dead.terminator.value
+        else {
+            unreachable!()
+        };
+        call.item = required_item(&foreign);
+        forged.blocks.push(dead);
+        assert!(
+            !analyze_with_facts(
+                &forged,
+                Limits::default(),
+                FactsCtx::Validated(&facts),
+                Some(&budget),
+            )
+            .passed()
+        );
+        let target = CallTarget {
+            declaration: facts.declaration(),
+            type_args: Arc::from([Ty::Int(IntTy::I32)]),
+        };
+        let failure = facts.world().instance_facts(&target).unwrap_err();
+        assert_eq!(
+            failure.kind(),
+            super::super::traits::FactsErrorKind::Unproved
+        );
+        let closed = close_fixture(Arc::new(fixture()), &budget).unwrap();
+        let exact_cfg = closed.function().clone();
+        let closed_facts = closed.facts().clone();
+        assert!(cfg::close(template.function().clone(), closed_facts.clone(), &budget).is_err());
+        let proof = analyze_closed(closed).unwrap();
+        assert!(Arc::ptr_eq(proof.function(), &exact_cfg));
+        assert!(Arc::ptr_eq(proof.facts(), &closed_facts));
+        assert!(proof.analysis().passed());
+    }
+
     fn symbolic_parameter() -> (Arc<GenericEnv>, Ty) {
         use super::super::ir::{BinderId, ParamEnv, ParamId, PlanBudget};
         let binder = BinderId {
@@ -1987,11 +2405,15 @@ mod tests {
     }
 
     fn symbolic_pair() -> (Arc<GenericEnv>, [Ty; 2]) {
-        let (first, a) = symbolic_parameter();
-        let (second, b) = symbolic_parameter();
-        let scopes = [first.scopes()[0].clone(), second.scopes()[0].clone()];
-        let env = GenericEnv::new(&scopes, &super::super::ir::PlanBudget::default()).unwrap();
-        (Arc::new(env), [a, b])
+        use super::super::ir::{BinderId, ParamEnv, ParamId, PlanBudget};
+        let snapshot = SnapshotId::allocate().unwrap();
+        let binders = [0, 1].map(|index| BinderId {
+            declaration: DeclId { snapshot, index },
+        });
+        let scopes = binders.map(|binder| Arc::new(ParamEnv::new(binder, 1).unwrap()));
+        let env = GenericEnv::new(&scopes, &PlanBudget::default()).unwrap();
+        let parameters = binders.map(|owner| Ty::Param(ParamId { owner, index: 0 }));
+        (Arc::new(env), parameters)
     }
 
     #[test]
@@ -2090,32 +2512,45 @@ mod tests {
             },
         });
         let budget = PlanBudget::default();
-        let template = cfg::lower_template(source.clone(), env.clone(), &budget).unwrap();
+        let template = lower_fixture_template(source.clone(), env.clone(), &budget).unwrap();
         let exact_cfg = template.function().clone();
         let proof = verify_template(template).unwrap();
         assert!(Arc::ptr_eq(proof.env(), &env));
         assert!(Arc::ptr_eq(proof.source(), &source));
         assert!(Arc::ptr_eq(proof.function(), &exact_cfg));
         assert!(proof.analysis().passed());
-        assert!(cfg::close(exact_cfg, &budget).is_err());
+        assert!(close_fixture(exact_cfg, &budget).is_err());
         for scope in env.scopes() {
             let partial = Arc::new(GenericEnv::new(std::slice::from_ref(scope), &budget).unwrap());
-            assert!(cfg::lower_template(source.clone(), partial, &budget).is_err());
+            assert!(lower_fixture_template(source.clone(), partial, &budget).is_err());
         }
         let program = super::super::frontend::parse("fn main() {}").unwrap();
         let mut cx = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
         let actuals = [Ty::Int(IntTy::I32), Ty::Bool];
-        let instance =
-            super::super::ir::instantiate_checked(&proof, &actuals, &mut cx, &budget).unwrap();
+        let target = super::super::ir::CallTarget {
+            declaration: proof.facts().declaration(),
+            type_args: Arc::from(actuals.clone()),
+        };
+        let closed_facts = proof.facts().world().instance_facts(&target).unwrap();
+        let instance = super::super::ir::instantiate_checked(
+            &proof,
+            &actuals,
+            &closed_facts,
+            &mut cx,
+            &budget,
+        )
+        .unwrap();
         assert_eq!(instance.result, Ty::Tuple(actuals.to_vec().into()));
+        let lowered = cfg::lower_with_facts(&instance, &closed_facts, &budget).unwrap();
         let concrete =
-            analyze_closed(cfg::close(Arc::new(cfg::lower(&instance).unwrap()), &budget).unwrap())
+            analyze_closed(cfg::close(Arc::new(lowered), closed_facts.clone(), &budget).unwrap())
                 .unwrap();
         assert!(concrete.analysis().passed());
         assert!(
             super::super::ir::instantiate_checked(
                 &proof,
                 &actuals,
+                &closed_facts,
                 &mut cx,
                 &PlanBudget::default()
             )
@@ -2140,7 +2575,7 @@ mod tests {
         let (_, foreign) = symbolic_parameter();
         let mut forged = source.as_ref().clone();
         forged.locals.push(local(array(foreign, 0)));
-        assert!(cfg::lower_template(Arc::new(forged), env, &budget).is_err());
+        assert!(lower_fixture_template(Arc::new(forged), env, &budget).is_err());
     }
 
     #[test]
@@ -2250,13 +2685,13 @@ mod tests {
             },
         });
         let budget = PlanBudget::default();
-        let structural = cfg::lower_template(source.clone(), env.clone(), &budget).unwrap();
+        let structural = lower_fixture_template(source.clone(), env.clone(), &budget).unwrap();
         let exact_cfg = structural.function().clone();
         let verified = verify_template(structural).unwrap();
         assert!(Arc::ptr_eq(verified.source(), &source));
         assert!(Arc::ptr_eq(verified.function(), &exact_cfg));
         assert!(verified.analysis().passed());
-        assert!(cfg::close(exact_cfg, &budget).is_err());
+        assert!(close_fixture(exact_cfg, &budget).is_err());
         let mut duplicated = source.as_ref().clone();
         duplicated.result = Ty::Tuple(vec![parameter.clone(), parameter.clone()].into());
         duplicated.exprs.push(TypedExpr {
@@ -2265,10 +2700,12 @@ mod tests {
             kind: ExprKind::Tuple(vec![ExprId(0), ExprId(0)]),
         });
         duplicated.body.tail = Some(ExprId(1));
-        let structural = cfg::lower_template(Arc::new(duplicated), env.clone(), &budget).unwrap();
+        let structural =
+            lower_fixture_template(Arc::new(duplicated), env.clone(), &budget).unwrap();
         assert!(verify_template(structural).is_err());
         let exact_closed = Arc::new(fixture());
-        let concrete = analyze_closed(cfg::close(exact_closed.clone(), &budget).unwrap()).unwrap();
+        let concrete =
+            analyze_closed(close_fixture(exact_closed.clone(), &budget).unwrap()).unwrap();
         assert!(Arc::ptr_eq(concrete.function(), &exact_closed));
         assert!(concrete.analysis().passed());
         let mut invalid = fixture();
@@ -2277,9 +2714,9 @@ mod tests {
             located(Statement::StorageLive(LocalId(1))),
             located(Statement::Inspect(place(1))),
         ]);
-        assert!(analyze_closed(cfg::close(Arc::new(invalid), &budget).unwrap()).is_err());
+        assert!(analyze_closed(close_fixture(Arc::new(invalid), &budget).unwrap()).is_err());
         let (foreign_env, _) = symbolic_parameter();
-        assert!(cfg::lower_template(source, foreign_env, &budget).is_err());
+        assert!(lower_fixture_template(source, foreign_env, &budget).is_err());
         let mut hidden = fixture();
         hidden.locals.push(local(array(
             Ty::Ref {
@@ -2315,7 +2752,7 @@ mod tests {
             })],
             terminator: located(Terminator::Unreachable),
         });
-        assert!(cfg::close(Arc::new(forged.clone()), &budget).is_err());
+        assert!(close_fixture(Arc::new(forged.clone()), &budget).is_err());
         assert!(
             !analyze_with_facts(&forged, Limits::default(), FactsCtx::Universal(&env), None)
                 .passed()
@@ -3781,14 +4218,14 @@ mod tests {
             mutable: true,
         }
     }
-    fn synthetic_call_target() -> super::super::ir::CallTarget {
-        super::super::ir::CallTarget {
+    fn synthetic_call_target() -> super::super::ir::Callee {
+        super::super::ir::Callee::Direct(super::super::ir::CallTarget {
             declaration: DeclId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
             },
             type_args: Arc::from([]),
-        }
+        })
     }
     fn nominal(fields: Vec<Ty>) -> Ty {
         let snapshot = SnapshotId::allocate().unwrap();

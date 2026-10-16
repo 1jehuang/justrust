@@ -62,8 +62,9 @@ non-Copy values. Demanded concrete instances substitute checked typed metadata,
 then lower and analyze again before sealed native emission. Exact instance
 recursion is deduplicated, while growing instantiations fail boundedly. Generic
 bodies and their recursively expanded type arguments cannot contain references
-in this milestone. Traits, bounds, const generics and generic function values
-remain unsupported. Ordinary nongeneric reference support is
+in this milestone. Positive local trait bounds use the separate canonical
+obligation foundation below. Const generics and generic function values remain
+unsupported. Ordinary nongeneric reference support is
 unchanged. See `GENERICS.md` for the universal/concrete trust boundary and shared
 planning limits, and `GENERIC-INFERENCE.md` for the private evidence grammar,
 fallible no-fallback hints and exactly-once ordinary elaboration. This foundation
@@ -77,12 +78,30 @@ simultaneous substitution and one authoritative callable enumeration preserve
 universal validation of every unused associated body. Receiver selection matches
 impl parameters against rigid actual types, while a separate bounded overlap
 check rejects conflicting same-name items. Receiver and arguments are checked
-once in source order. Borrowed receivers, autoref/autoderef, traits and omitted
-method type arguments remain unsupported. See `ASSOCIATED-ITEMS.md`.
+once in source order. Borrowed receivers, autoref/autoderef and omitted method
+type arguments remain unsupported. See `ASSOCIATED-ITEMS.md`.
 The associated checkpoint passes1318 hosted tests and988 independently verified
 cases across28 corpora, including an actually executed96-worker example. Raw
 receipts are retained under `experiments/results/20261016-m8a-associated-items-*`.
 These are bounded correctness gates, not full Rust or performance certification.
+
+Local nongeneric traits support required static and owning-value methods,
+including signature-only `Self` results, canonical inline `T: Trait + Other`
+bounds, explicit UFCS, unique bound/scoped trait method lookup and conditional
+generic nominal implementations. Every header is validated for conformance and
+coherence before any body succeeds. Required signatures have no executable body
+or native slot. Every direct call discharges its declaration prerequisites,
+while abstract trait calls retain real trait/item identities until unique closed
+implementation selection. The same exhaustive call-closing pass covers concrete
+instances and reused nongeneric bodies, including dead metadata. Exact closed
+facts and successful ownership analysis remain prerequisites for native emission.
+The obligation engine uses one shared ledger, bounded memoization and
+operation-local cycle detection. Required declaration `Self` is not silently
+assumed Sized in executable code. Traits named `Copy` grant no Copy permission.
+Default bodies, trait or trait-method generics, supertraits, associated types,
+trait objects, borrowed trait receivers and standard-library trait integration
+remain explicit boundaries. See `TRAITS.md` for authority, resource limits and
+the fixed resource-exhaustion diagnostic transport exception.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and

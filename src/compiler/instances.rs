@@ -3,7 +3,7 @@
 use super::{frontend, ir};
 use std::sync::Arc;
 
-const SEMANTICS: &[u8] = b"jr-native-associated-v2/linux-x86_64/checked/private-leaf8";
+const SEMANTICS: &[u8] = b"jr-native-traits-v1/linux-x86_64/checked/private-leaf8";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -59,6 +59,9 @@ impl Encoder<'_> {
             ir::DeclKind::Enum => 2,
             ir::DeclKind::Impl => 3,
             ir::DeclKind::AssociatedFunction => 4,
+            ir::DeclKind::Trait => 5,
+            ir::DeclKind::TraitItem => 6,
+            ir::DeclKind::TraitImpl => 7,
         }])?;
         self.count(path.module.len())?;
         for component in path.module.iter() {
@@ -76,6 +79,19 @@ impl Encoder<'_> {
             let env = self.context.param_env(owner.impl_decl)?;
             self.count(env.arity())?;
             self.pattern(&owner.self_pattern, &env, 0)?;
+            match (owner.trait_decl, owner.trait_item) {
+                (None, None) => self.append(b"I")?,
+                (Some(trait_decl), Some(trait_item)) => {
+                    self.append(b"T")?;
+                    self.declaration(trait_decl)?;
+                    let item = self.context.semantic_path(trait_item)?;
+                    if item.kind != ir::DeclKind::TraitItem {
+                        return Err("trait instance key has non-item owner".into());
+                    }
+                    self.text(&item.item)?;
+                }
+                _ => return Err("trait instance key has incomplete semantic owner".into()),
+            }
             self.append(&[match owner.receiver {
                 frontend::ReceiverKind::None => 0,
                 frontend::ReceiverKind::Value { mutable: false } => 1,
@@ -377,12 +393,9 @@ pub(super) fn build(
                 .declarations
                 .get(&target.declaration)
                 .ok_or("generic call does not resolve to a function declaration")?;
-            ir::SubstitutionCx::instantiate_signature(
-                context,
-                &target,
-                ir::FactsCtx::Concrete,
-                budget,
-            )?;
+            // Entry predicates are proved even if the body has no calls.
+            // Caller-side discharge remains separate in substitute_callee.
+            context.instance_facts(&target)?;
             budget.charge_application()?;
             budget.charge_nodes(1)?;
             let reservation = budget.reserve_bytes(
@@ -475,42 +488,24 @@ pub(super) fn build(
         let depth = queue.depths[cursor];
         let schema = context.function_schema(target.declaration)?;
         let env = schema.env;
+        let closed_facts = context.instance_facts(&target)?;
         let source = sources
             .get(source_index)
             .ok_or("missing universally checked declaration body")?;
         for expression in &source.exprs {
             budget.charge_work(1)?;
             if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
-                let count = callee.type_args.len();
-                let scratch = budget.reserve_bytes(
-                    count
-                        .checked_mul(2 * std::mem::size_of::<ir::Ty>())
-                        .ok_or("generic call argument byte limit exceeded")?,
+                let resolved = ir::substitute_callee(
+                    callee,
+                    &env,
+                    &target.type_args,
+                    &closed_facts,
+                    context,
+                    budget,
                 )?;
-                let mut arguments = Vec::new();
-                arguments
-                    .try_reserve_exact(count)
-                    .map_err(|_| "generic call argument allocation limit exceeded")?;
-                for argument in callee.type_args.iter() {
-                    arguments.push(ir::substitute_ty(
-                        argument,
-                        &env,
-                        &target.type_args,
-                        ir::FactsCtx::Concrete,
-                        context,
-                        budget,
-                    )?);
-                }
-                let next = ir::CallTarget {
-                    declaration: callee.declaration,
-                    type_args: Arc::from(arguments),
+                let ir::Callee::Direct(next) = resolved else {
+                    return Err("unresolved trait callee in concrete instance frontier".into());
                 };
-                // Retain the argument storage charge until the sealed plan dies.
-                queue
-                    .reservations
-                    .try_reserve_exact(1)
-                    .map_err(|_| "generic plan reservation allocation limit exceeded")?;
-                queue.reservations.push(scratch);
                 queue.add(next, depth + 1, context, budget)?;
             }
         }
@@ -608,6 +603,46 @@ mod tests {
         let wide = identity(&empty_target(owners[1]), &specialized, &budget).unwrap();
         assert_ne!(small.canonical, wide.canonical);
         assert_ne!(small.symbol, wide.symbol);
+    }
+
+    #[test]
+    fn trait_owner_keys_distinguish_inherent_items_and_ignore_impl_discovery_order() {
+        fn keys(source: &str) -> Vec<Vec<u8>> {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let mut result = Vec::new();
+            for index in 0..context.callable_count() {
+                let declaration = context.callable_decl(index).unwrap();
+                let path = context.semantic_path(declaration).unwrap();
+                if path.item == "item" && path.associated.is_some() {
+                    result.push(
+                        identity(
+                            &ir::CallTarget {
+                                declaration,
+                                type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32)]),
+                            },
+                            &context,
+                            &budget,
+                        )
+                        .unwrap()
+                        .canonical
+                        .to_vec(),
+                    );
+                }
+            }
+            result.sort();
+            assert_eq!(result.len(), 3);
+            assert!(result.windows(2).all(|pair| pair[0] != pair[1]));
+            result
+        }
+        let first = keys(
+            "struct W<T>{x:T}trait A{fn item(self)->i32;}trait B{fn item(self)->i32;}impl<T> W<T>{fn item(self)->i32{1}}impl<T> A for W<T>{fn item(self)->i32{2}}impl<T> B for W<T>{fn item(self)->i32{3}}fn main(){}",
+        );
+        let reordered = keys(
+            "trait B{fn item(self)->i32;}fn unrelated(){}struct W<U>{x:U}impl<X> B for W<X>{fn item(self)->i32{3}}trait A{fn item(self)->i32;}impl<Y> A for W<Y>{fn item(self)->i32{2}}impl<Z> W<Z>{fn item(self)->i32{1}}fn main(){}",
+        );
+        assert_eq!(first, reordered);
     }
 
     #[test]

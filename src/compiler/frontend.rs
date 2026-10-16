@@ -16,6 +16,7 @@
 //! visibility, reexports, grouped/glob imports, and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
 use super::ir;
+use super::traits as tr;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,8 @@ pub struct Program {
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
     pub impls: Vec<ImplDecl>,
+    pub traits: Vec<TraitDecl>,
+    pub trait_imports: Vec<(String, String)>,
 }
 /// Syntax-only result. Resolve this once before publishing callable signatures.
 #[derive(Clone, Debug)]
@@ -42,6 +45,7 @@ enum ItemKind {
     Function,
     Struct,
     Enum,
+    Trait,
     Variant(ir::VariantShape),
     Import(String),
 }
@@ -58,6 +62,7 @@ fn parent(path: &str) -> &str {
 }
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub bounds: Vec<TypeBound>,
     pub name: String,
     pub regions: RegionDecls,
     pub type_params: Vec<String>,
@@ -72,10 +77,37 @@ pub enum ReceiverKind {
 }
 #[derive(Clone, Debug)]
 pub struct ImplDecl {
+    pub trait_path: Option<String>,
+    pub bounds: Vec<TypeBound>,
     pub module: String,
     pub type_params: Vec<String>,
     pub self_ty: Type,
     pub items: Vec<AssociatedFunction>,
+}
+#[derive(Clone, Debug)]
+pub struct TypeBound {
+    pub parameter: String,
+    pub traits: Vec<String>,
+}
+#[derive(Clone, Debug)]
+pub struct TraitDecl {
+    pub name: String,
+    pub public: bool,
+    pub items: Vec<TraitItemDecl>,
+}
+#[derive(Clone, Debug)]
+pub struct TraitItemDecl {
+    pub signature: FunctionHead,
+    pub receiver: ReceiverKind,
+}
+#[derive(Clone, Debug)]
+pub struct FunctionHead {
+    pub name: String,
+    pub regions: RegionDecls,
+    pub type_params: Vec<String>,
+    pub bounds: Vec<TypeBound>,
+    pub params: Vec<(String, Type)>,
+    pub result: Type,
 }
 #[derive(Clone, Debug)]
 pub struct AssociatedFunction {
@@ -92,6 +124,8 @@ pub struct CallableContext {
 }
 #[derive(Clone, Debug)]
 pub struct AssociatedSemanticOwner {
+    pub trait_decl: Option<ir::DeclId>,
+    pub trait_item: Option<ir::DeclId>,
     pub nominal: ir::DeclId,
     pub impl_decl: ir::DeclId,
     pub self_pattern: ir::Ty,
@@ -398,6 +432,12 @@ impl Expr {
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    TraitCall {
+        owner: Type,
+        trait_path: String,
+        name: String,
+        args: Vec<Expr>,
+    },
     MethodCall {
         receiver: Box<Expr>,
         name: String,
@@ -813,6 +853,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 struct Parser {
+    pending_bounds: Vec<TypeBound>,
     tokens: Vec<Token>,
     at: usize,
     nesting: usize,
@@ -1022,9 +1063,11 @@ impl Parser {
         Ok(GenericPath { segments })
     }
     fn type_parameters(&mut self) -> Result<Vec<String>, String> {
+        self.pending_bounds.clear();
         if !self.eat("<") {
             return Ok(Vec::new());
         }
+        self.pending_bounds.clear();
         let mut params = Vec::new();
         loop {
             if params.len() >= 32 {
@@ -1034,9 +1077,25 @@ impl Parser {
             if params.contains(&name) {
                 return Err(self.error("duplicate type parameter"));
             }
-            params.push(name);
-            if self.is(":") || self.is("=") {
-                return Err(self.error("generic bounds/defaults are unsupported"));
+            params.push(name.clone());
+            if self.eat(":") {
+                let mut traits = Vec::new();
+                loop {
+                    traits.push(self.path()?);
+                    if traits.len() > 256 {
+                        return Err(self.error("predicate limit exceeded"));
+                    }
+                    if !self.eat("+") {
+                        break;
+                    }
+                }
+                self.pending_bounds.push(TypeBound {
+                    parameter: name,
+                    traits,
+                });
+            }
+            if self.is("=") {
+                return Err(self.error("generic defaults are unsupported"));
             }
             if !self.eat(",") || self.token().text.starts_with('>') {
                 break;
@@ -1133,9 +1192,47 @@ impl Parser {
                 };
                 self.expect(";")?;
                 (name, ItemKind::Import(path))
+            } else if self.eat("trait") {
+                let name = self.ident()?;
+                if self.is("<") || self.is(":") {
+                    return Err(self.error("trait generics and supertraits are unsupported"));
+                }
+                self.expect("{")?;
+                let mut items = Vec::new();
+                let mut item_names = std::collections::HashSet::new();
+                while !self.is("}") {
+                    if items.len() >= 4096 {
+                        return Err(self.error("trait item limit exceeded"));
+                    }
+                    let (signature, receiver) = self.function_head(&[], true)?;
+                    if !item_names.insert(signature.name.clone()) {
+                        return Err(self.error("duplicate required trait item"));
+                    }
+                    if !signature.type_params.is_empty() || !signature.regions.params.is_empty() {
+                        return Err(self.error("generic trait methods are unsupported"));
+                    }
+                    if self.is("{") {
+                        return Err(self.error("default trait bodies are unsupported"));
+                    }
+                    self.expect(";")?;
+                    items.push(TraitItemDecl {
+                        signature,
+                        receiver,
+                    });
+                }
+                self.expect("}")?;
+                parsed.program.traits.push(TraitDecl {
+                    name: qualify(module, &name),
+                    public,
+                    items,
+                });
+                (name, ItemKind::Trait)
             } else if self.eat("enum") {
                 let name = self.ident()?;
                 let type_params = self.type_parameters()?;
+                if !self.pending_bounds.is_empty() {
+                    return Err(self.error("bounds on nominal declarations are unsupported"));
+                }
                 self.type_params = type_params.clone();
                 self.expect("{")?;
                 let mut variants: Vec<VariantDecl> = Vec::new();
@@ -1225,6 +1322,9 @@ impl Parser {
             } else if self.eat("struct") {
                 let name = self.ident()?;
                 let type_params = self.type_parameters()?;
+                if !self.pending_bounds.is_empty() {
+                    return Err(self.error("bounds on nominal declarations are unsupported"));
+                }
                 self.type_params = type_params.clone();
                 self.expect("{")?;
                 let mut fields = Vec::new();
@@ -1261,10 +1361,16 @@ impl Parser {
                 }
                 let type_params = self.type_parameters()?;
                 self.type_params = type_params.clone();
-                let self_ty = self.ty()?;
-                if self.is("for") {
-                    return Err(self.error("trait impls are unsupported"));
-                }
+                let bounds = std::mem::take(&mut self.pending_bounds);
+                let first_ty = self.ty()?;
+                let (trait_path, self_ty) = if self.eat("for") {
+                    let Type::Named(name) = first_ty else {
+                        return Err(self.error("trait arguments are unsupported"));
+                    };
+                    (Some(name), self.ty()?)
+                } else {
+                    (None, first_ty)
+                };
                 self.expect("{")?;
                 let mut items = Vec::new();
                 while !self.is("}") {
@@ -1272,6 +1378,9 @@ impl Parser {
                         return Err(self.error("associated item limit exceeded"));
                     }
                     let public = self.eat("pub");
+                    if public && trait_path.is_some() {
+                        return Err(self.error("trait impl items cannot declare pub"));
+                    }
                     let (function, receiver) = self.function_scoped(&type_params, true)?;
                     items.push(AssociatedFunction {
                         function,
@@ -1281,6 +1390,8 @@ impl Parser {
                 }
                 self.expect("}")?;
                 parsed.program.impls.push(ImplDecl {
+                    trait_path,
+                    bounds,
                     module: module.into(),
                     type_params,
                     self_ty,
@@ -1391,10 +1502,30 @@ impl Parser {
         inherited: &[String],
         associated: bool,
     ) -> Result<(Function, ReceiverKind), String> {
+        let (head, receiver) = self.function_head(inherited, associated)?;
+        Ok((
+            Function {
+                name: head.name,
+                regions: head.regions,
+                type_params: head.type_params,
+                bounds: head.bounds,
+                params: head.params,
+                result: head.result,
+                body: self.block()?,
+            },
+            receiver,
+        ))
+    }
+    fn function_head(
+        &mut self,
+        inherited: &[String],
+        associated: bool,
+    ) -> Result<(FunctionHead, ReceiverKind), String> {
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
         let mut type_params = Vec::new();
+        self.pending_bounds.clear();
         if self.is("<")
             && !self
                 .tokens
@@ -1403,6 +1534,7 @@ impl Parser {
         {
             type_params = self.type_parameters()?;
         }
+        let bounds = std::mem::take(&mut self.pending_bounds);
         self.type_params = inherited.to_vec();
         for name in &type_params {
             if self.type_params.contains(name) {
@@ -1473,13 +1605,13 @@ impl Parser {
             }
         }
         Ok((
-            Function {
+            FunctionHead {
                 name,
                 regions,
                 type_params,
+                bounds,
                 params,
                 result,
-                body: self.block()?,
             },
             receiver,
         ))
@@ -1946,8 +2078,39 @@ impl Parser {
         let left = self.expr_prefix(statement)?;
         self.expr_continuation(left, min, statement_blocklike)
     }
+    fn trait_call_prefix(&mut self) -> Result<Expr, String> {
+        let owner = self.ty()?;
+        self.expect("as")?;
+        let trait_path = self.path()?;
+        self.expect(">")?;
+        self.expect("::")?;
+        let name = self.ident()?;
+        if self.is("::") {
+            return Err(self.error("generic trait methods are unsupported"));
+        }
+        self.expect("(")?;
+        let mut args = Vec::new();
+        while !self.is(")") {
+            if args.len() >= 4096 {
+                return Err(self.error("call argument limit exceeded"));
+            }
+            args.push(self.nested_expr()?);
+            if !self.eat(",") {
+                break;
+            }
+        }
+        self.expect(")")?;
+        Ok(Expr::TraitCall {
+            owner,
+            trait_path,
+            name,
+            args,
+        })
+    }
     fn expr_prefix(&mut self, statement: bool) -> Result<Expr, String> {
-        let left = if self.eat("&") {
+        let left = if self.eat("<") {
+            self.trait_call_prefix()?
+        } else if self.eat("&") {
             let kind = if self.eat("mut") {
                 ir::BorrowKind::Mut
             } else {
@@ -2257,6 +2420,7 @@ fn literal_format(text: &str) -> Result<String, String> {
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
 pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
     let mut parser = Parser {
+        pending_bounds: Vec::new(),
         tokens: lex(source)?,
         at: 0,
         nesting: 0,
@@ -2269,6 +2433,8 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
             structs: Vec::new(),
             enums: Vec::new(),
             impls: Vec::new(),
+            traits: Vec::new(),
+            trait_imports: Vec::new(),
         },
         items: HashMap::new(),
     };
@@ -2296,6 +2462,7 @@ struct ResolvedItem {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedKind {
+    Trait,
     Module,
     Function,
     Struct,
@@ -2310,6 +2477,27 @@ struct Resolver<'a> {
     type_params: Vec<String>,
 }
 impl Resolver<'_> {
+    fn trait_path(&mut self, path: &mut String, module: &str) -> Result<(), String> {
+        let item = self
+            .path(path, module, true, false)?
+            .ok_or_else(|| format!("unresolved trait {path}"))?;
+        if item.kind != ResolvedKind::Trait {
+            return Err(format!("{} is not a trait", item.path));
+        }
+        *path = item.path;
+        Ok(())
+    }
+    fn bounds(&mut self, bounds: &mut [TypeBound], module: &str) -> Result<(), String> {
+        for bound in bounds {
+            if !self.type_params.contains(&bound.parameter) {
+                return Err("bound parameter is not in scope".into());
+            }
+            for path in &mut bound.traits {
+                self.trait_path(path, module)?;
+            }
+        }
+        Ok(())
+    }
     fn item(
         &mut self,
         path: &str,
@@ -2338,6 +2526,11 @@ impl Resolver<'_> {
                     path: path.into(),
                     module: false,
                     kind: ResolvedKind::Function,
+                }),
+                ItemKind::Trait if module => Some(ResolvedItem {
+                    path: path.into(),
+                    module: true,
+                    kind: ResolvedKind::Trait,
                 }),
                 ItemKind::Struct if module => Some(ResolvedItem {
                     path: path.into(),
@@ -2540,7 +2733,9 @@ impl Resolver<'_> {
         };
         let item = path.segments.last().unwrap();
         let owner_name = prefix.spelling();
-        let mut owner = if owner_name == "Self" {
+        let mut owner = if self.type_params.contains(&owner_name) {
+            Type::Param(owner_name.clone())
+        } else if owner_name == "Self" {
             if let Some(nominal) = &self.self_nominal
                 && self
                     .items
@@ -2982,6 +3177,18 @@ impl Resolver<'_> {
                     self.expr(value, module, locals)?;
                 }
             }
+            Expr::TraitCall {
+                owner,
+                trait_path,
+                args,
+                ..
+            } => {
+                self.ty(owner, module)?;
+                self.trait_path(trait_path, module)?;
+                for arg in args {
+                    self.expr(arg, module, locals)?;
+                }
+            }
             Expr::Field { base, .. } => self.expr(base, module, locals)?,
             Expr::Unary { value, .. } => self.expr(value, module, locals)?,
             Expr::Binary { left, right, .. } => {
@@ -3035,6 +3242,29 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver.item(&path, parent(&path), false, false)?;
     }
     let mut program = parsed.program.clone();
+    for (path, items) in &parsed.items {
+        for (index, item) in items.iter().enumerate() {
+            if matches!(item.kind, ItemKind::Import(_))
+                && let Some(target) = resolver.import(path, index, true)?
+                && target.kind == ResolvedKind::Trait
+            {
+                program
+                    .trait_imports
+                    .push((parent(path).into(), target.path));
+            }
+        }
+    }
+    for declaration in &mut program.traits {
+        resolver.type_params.clear();
+        resolver.self_nominal = Some("Self".into());
+        for item in &mut declaration.items {
+            resolver.ty(&mut item.signature.result, parent(&declaration.name))?;
+            for (_, ty) in &mut item.signature.params {
+                resolver.ty(ty, parent(&declaration.name))?;
+            }
+        }
+        resolver.self_nominal = None;
+    }
     for enumeration in &mut program.enums {
         resolver.type_params = enumeration.type_params.clone();
         for variant in &mut enumeration.variants {
@@ -3053,6 +3283,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     for function in &mut program.functions {
         resolver.type_params = function.type_params.clone();
+        resolver.bounds(&mut function.bounds, parent(&function.name))?;
         resolver.ty(&mut function.result, parent(&function.name))?;
         for (name, ty) in &mut function.params {
             resolver.ty(ty, parent(&function.name))?;
@@ -3072,6 +3303,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     for block in &mut program.impls {
         resolver.type_params = block.type_params.clone();
+        resolver.bounds(&mut block.bounds, &block.module)?;
+        if let Some(path) = &mut block.trait_path {
+            resolver.trait_path(path, &block.module)?;
+        }
         resolver.ty(&mut block.self_ty, &block.module)?;
         resolver.self_nominal = Some(match &block.self_ty {
             Type::Named(n) => n.clone(),
@@ -3087,6 +3322,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                 }
                 resolver.type_params.push(name.clone());
             }
+            resolver.bounds(&mut f.bounds, &block.module)?;
             resolver.ty(&mut f.result, &block.module)?;
             for (_, ty) in &mut f.params {
                 resolver.ty(ty, &block.module)?;
@@ -3179,6 +3415,12 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                     for ty in type_args {
                         push(DepthNode::Type(ty));
                     }
+                    for arg in args {
+                        push(DepthNode::Expr(arg));
+                    }
+                }
+                Expr::TraitCall { owner, args, .. } => {
+                    push(DepthNode::Type(owner));
                     for arg in args {
                         push(DepthNode::Expr(arg));
                     }
@@ -3317,6 +3559,8 @@ pub struct DeclSemanticPath {
 }
 #[derive(Clone, Debug)]
 pub struct DeclInfo {
+    pub receiver: ReceiverKind,
+    pub owner: Option<ir::DeclId>,
     pub id: ir::DeclId,
     pub kind: ir::DeclKind,
     pub name: String,
@@ -3336,6 +3580,10 @@ pub struct DeclRegistry {
     callable_sources: Vec<CallableSource>,
     impl_ids: Vec<ir::DeclId>,
     associated_ids: Vec<Vec<ir::DeclId>>,
+    traits: HashMap<String, ir::DeclId>,
+    trait_ids: Vec<ir::DeclId>,
+    trait_items: Vec<Vec<ir::DeclId>>,
+    trait_imports: Vec<(String, String)>,
 }
 #[derive(Clone, Copy, Debug)]
 enum CallableSource {
@@ -3364,13 +3612,15 @@ pub struct NominalInterner {
 #[derive(Debug)]
 struct PlanState {
     schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
-    functions: HashMap<ir::DeclId, ir::GenericSignature>,
+    functions: HashMap<ir::DeclId, tr::GenericSchema>,
     nominals: NominalInterner,
     contexts: HashMap<ir::DeclId, CallableContext>,
     reservations: Vec<ir::PlanReservation>,
 }
 #[derive(Clone, Debug)]
 pub struct PlanCtx {
+    world: Option<Arc<tr::ValidatedTraitWorld>>,
+    validated: Arc<HashMap<ir::DeclId, ir::GenericSignature>>,
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
     pub budget: ir::PlanBudget,
@@ -3424,6 +3674,16 @@ fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Resul
 impl PlanCtx {
     pub fn from_program(program: &Program, budget: &ir::PlanBudget) -> Result<Self, String> {
         let snapshot = ir::SnapshotId::allocate()?;
+        let mut import_bytes = 128usize;
+        for (module, path) in &program.trait_imports {
+            budget.charge_work(1)?;
+            import_bytes = import_bytes
+                .checked_add(module.len())
+                .and_then(|n| n.checked_add(path.len()))
+                .and_then(|n| n.checked_add(128))
+                .ok_or("trait import allocation overflow")?;
+        }
+        budget.retain_bytes(import_bytes)?;
         let mut registry = DeclRegistry {
             declarations: Vec::new(),
             functions: HashMap::new(),
@@ -3432,6 +3692,10 @@ impl PlanCtx {
             callable_sources: Vec::new(),
             impl_ids: Vec::new(),
             associated_ids: Vec::new(),
+            traits: HashMap::new(),
+            trait_ids: Vec::new(),
+            trait_items: Vec::new(),
+            trait_imports: program.trait_imports.clone(),
         };
         let mut state = PlanState {
             schemas: HashMap::new(),
@@ -3445,6 +3709,12 @@ impl PlanCtx {
             .len()
             .checked_add(program.structs.len())
             .and_then(|n| n.checked_add(program.enums.len()))
+            .and_then(|n| {
+                program
+                    .traits
+                    .iter()
+                    .try_fold(n, |n, t| n.checked_add(1 + t.items.len()))
+            })
             .and_then(|n| {
                 program
                     .impls
@@ -3548,6 +3818,8 @@ impl PlanCtx {
                 budget,
             )?);
             registry.declarations.push(DeclInfo {
+                receiver: ReceiverKind::None,
+                owner: None,
                 id,
                 kind,
                 name: name.into(),
@@ -3577,11 +3849,35 @@ impl PlanCtx {
             registry.function_ids.push(id);
             registry.callable_sources.push(CallableSource::Free(index));
         }
+        for (index, declaration) in program.traits.iter().enumerate() {
+            let id = insert(
+                &declaration.name,
+                &["Self".into()],
+                ir::DeclKind::Trait,
+                index,
+            )?;
+            registry.traits.insert(declaration.name.clone(), id);
+            registry.trait_ids.push(id);
+            let mut items = Vec::new();
+            for (item, method) in declaration.items.iter().enumerate() {
+                items.push(insert(
+                    &qualify(&declaration.name, &method.signature.name),
+                    &[],
+                    ir::DeclKind::TraitItem,
+                    item,
+                )?);
+            }
+            registry.trait_items.push(items);
+        }
         for (implementation, block) in program.impls.iter().enumerate() {
             let impl_id = insert(
                 &block.module,
                 &block.type_params,
-                ir::DeclKind::Impl,
+                if block.trait_path.is_some() {
+                    ir::DeclKind::TraitImpl
+                } else {
+                    ir::DeclKind::Impl
+                },
                 implementation,
             )?;
             registry.impl_ids.push(impl_id);
@@ -3601,6 +3897,21 @@ impl PlanCtx {
                 ids.push(id);
             }
             registry.associated_ids.push(ids);
+        }
+        for (index, declaration) in program.traits.iter().enumerate() {
+            let id = registry.trait_ids[index];
+            registry.declarations[id.index as usize].public = declaration.public;
+            let trait_env = registry.declarations[id.index as usize].param_env.clone();
+            for (ii, item) in registry.trait_items[index].iter().enumerate() {
+                let info = &mut registry.declarations[item.index as usize];
+                info.receiver = declaration.items[ii].receiver;
+                info.owner = Some(id);
+                info.public = declaration.public;
+                info.env = Arc::new(ir::GenericEnv::new(
+                    &[trait_env.clone(), info.param_env.clone()],
+                    budget,
+                )?);
+            }
         }
         for (implementation, block) in program.impls.iter().enumerate() {
             let id = registry.impl_ids[implementation];
@@ -3623,6 +3934,8 @@ impl PlanCtx {
                     &[impl_env.clone(), info.param_env.clone()],
                     budget,
                 )?);
+                info.receiver = program.impls[implementation].items[info.source_index].receiver;
+                info.owner = Some(registry.impl_ids[implementation]);
                 info.public = program.impls[implementation].items[info.source_index].public;
             }
         }
@@ -3687,6 +4000,41 @@ impl PlanCtx {
             for (item, id) in ids.iter().enumerate() {
                 let method = &block.items[item];
                 let owner = AssociatedSemanticOwner {
+                    trait_decl: block
+                        .trait_path
+                        .as_ref()
+                        .map(|p| {
+                            registry
+                                .traits
+                                .get(p)
+                                .copied()
+                                .ok_or("unknown trait impl header")
+                        })
+                        .transpose()?,
+                    trait_item: if let Some(path) = &block.trait_path {
+                        let tid = *registry.traits.get(path).ok_or("unknown trait impl")?;
+                        let mut required = None;
+                        for (ti, trait_id) in registry.trait_ids.iter().enumerate() {
+                            budget.charge_work(1)?;
+                            if *trait_id == tid {
+                                for item_id in &registry.trait_items[ti] {
+                                    let item_name =
+                                        &registry.declarations[item_id.index as usize].path.item;
+                                    budget.charge_work(
+                                        1 + item_name.len().min(method.function.name.len()),
+                                    )?;
+                                    if item_name == &method.function.name {
+                                        required = Some(*item_id);
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        Some(required.ok_or("extra trait impl item")?)
+                    } else {
+                        None
+                    },
                     nominal,
                     impl_decl: impl_id,
                     self_pattern: self_ty.clone(),
@@ -3780,11 +4128,76 @@ impl PlanCtx {
             };
             state.functions.insert(
                 id,
-                ir::GenericSignature {
+                tr::GenericSchema {
                     env: info.env.clone(),
                     signature,
+                    predicates: {
+                        let mut rows = Vec::new();
+                        if let CallableSource::Associated { implementation, .. } =
+                            registry.callable_sources[index]
+                        {
+                            append_source_bounds(
+                                &registry,
+                                &bindings,
+                                &program.impls[implementation].bounds,
+                                &mut rows,
+                                budget,
+                            )?;
+                        }
+                        append_source_bounds(&registry, &bindings, &f.bounds, &mut rows, budget)?;
+                        rows.into()
+                    },
                 },
             );
+        }
+        for (ti, t) in program.traits.iter().enumerate() {
+            let tid = registry.trait_ids[ti];
+            let self_param = ir::ParamId {
+                owner: registry.declaration(tid)?.param_env.binder(),
+                index: 0,
+            };
+            for (ii, item) in t.items.iter().enumerate() {
+                let id = registry.trait_items[ti][ii];
+                let info = registry.declaration(id)?;
+                let mut bindings = generic_bindings(&registry, &info.env, budget)?;
+                bindings.insert("Self".into(), ir::Ty::Param(self_param));
+                let caller = ir::FactsCtx::Universal(&info.env);
+                let h = &item.signature;
+                budget.retain_bytes(
+                    h.params
+                        .len()
+                        .checked_add(1)
+                        .and_then(|n| n.checked_mul(128))
+                        .ok_or("trait signature allocation overflow")?,
+                )?;
+                let mut params = h
+                    .params
+                    .iter()
+                    .map(|(_, ty)| {
+                        state.source_ty(&registry, ty, &bindings, caller, budget, 0, false)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if matches!(item.receiver, ReceiverKind::Value { .. }) {
+                    params.insert(0, ir::Ty::Param(self_param));
+                }
+                let result =
+                    state.source_ty(&registry, &h.result, &bindings, caller, budget, 0, false)?;
+                state.functions.insert(
+                    id,
+                    tr::GenericSchema {
+                        env: info.env.clone(),
+                        signature: ir::Signature {
+                            ref_contract: Arc::new(ir::RefContract {
+                                param_regions: vec![None; params.len()].into(),
+                                ..ir::RefContract::default()
+                            }),
+                            params,
+                            result,
+                        },
+                        predicates: Arc::from([]),
+                    },
+                );
+            }
         }
         if !program.functions.iter().any(|f| {
             f.name == "main"
@@ -3794,13 +4207,153 @@ impl PlanCtx {
         }) {
             return Err("main must exist, take no arguments and return ()".into());
         }
-        let plan = Self {
+        let mut plan = Self {
+            world: None,
+            validated: Arc::new(HashMap::new()),
             registry,
             state: Arc::new(Mutex::new(state)),
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
+        plan.publish_trait_world(program)?;
         Ok(plan)
+    }
+    fn publish_trait_world(&mut self, program: &Program) -> Result<(), String> {
+        let budget = &self.budget;
+        budget.retain_bytes(
+            self.registry
+                .declarations
+                .len()
+                .checked_mul(1024)
+                .ok_or("trait headers allocation overflow")?,
+        )?;
+        let mut headers = tr::HeaderSet::default();
+        let mut traits = Vec::new();
+        let mut items = Vec::new();
+        let mut impls = Vec::new();
+        let mut callables = Vec::new();
+        for (ti, t) in program.traits.iter().enumerate() {
+            let id = self.registry.trait_ids[ti];
+            let info = self.declaration(id)?;
+            traits.push(tr::TraitHeader {
+                declaration: id,
+                self_param: ir::ParamId {
+                    owner: info.param_env.binder(),
+                    index: 0,
+                },
+                env: info.env.clone(),
+                items: self.registry.trait_items[ti].clone().into(),
+            });
+            for (ii, item) in t.items.iter().enumerate() {
+                let declaration = self.registry.trait_items[ti][ii];
+                items.push(tr::TraitItemHeader {
+                    declaration,
+                    trait_decl: id,
+                    receiver: receiver_mode(item.receiver),
+                    schema: self.raw_schema(declaration)?,
+                });
+            }
+        }
+        for (bi, block) in program.impls.iter().enumerate() {
+            let Some(path) = &block.trait_path else {
+                continue;
+            };
+            let declaration = self.registry.impl_ids[bi];
+            let info = self.declaration(declaration)?;
+            let trait_decl = *self.registry.traits.get(path).ok_or("unknown trait impl")?;
+            let bindings = generic_bindings(&self.registry, &info.env, budget)?;
+            let caller = if info.env.is_generic() {
+                ir::FactsCtx::Universal(&info.env)
+            } else {
+                ir::FactsCtx::Concrete
+            };
+            let self_ty = self.source_ty(&block.self_ty, &bindings, caller, budget)?;
+            let mut predicates = Vec::new();
+            append_source_bounds(
+                &self.registry,
+                &bindings,
+                &block.bounds,
+                &mut predicates,
+                budget,
+            )?;
+            let mut pairs = Vec::new();
+            for id in &self.registry.associated_ids[bi] {
+                budget.charge_work(1)?;
+                let owner = self
+                    .declaration(*id)?
+                    .path
+                    .associated
+                    .as_ref()
+                    .ok_or("missing associated owner")?;
+                pairs.push((owner.trait_item.ok_or("missing required trait item")?, *id));
+            }
+            impls.push(tr::ImplHeader {
+                declaration,
+                trait_ref: ir::TraitRef {
+                    declaration: trait_decl,
+                    self_ty,
+                    args: Arc::from([]),
+                },
+                schema_env: info.env.clone(),
+                predicates: predicates.into(),
+                items: pairs.into(),
+            });
+        }
+        for id in &self.registry.function_ids {
+            budget.charge_work(1)?;
+            callables.push(tr::CallableHeader {
+                declaration: *id,
+                schema: self.raw_schema(*id)?,
+            });
+        }
+        headers.traits = traits.into();
+        headers.items = items.into();
+        headers.impls = impls.into();
+        headers.callables = callables.into();
+        let adapter = Arc::new(SchemaAdapter {
+            registry: self.registry.clone(),
+            state: self.state.clone(),
+            budget: budget.clone(),
+        });
+        let world = tr::ValidatedTraitWorld::build(headers, adapter, budget)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let mut validated = HashMap::new();
+        for id in &self.registry.function_ids {
+            budget.charge_work(1)?;
+            let raw = self.raw_schema(*id)?;
+            let facts = world
+                .callable_facts(*id)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            validated.insert(
+                *id,
+                ir::GenericSignature {
+                    env: raw.env,
+                    signature: raw.signature,
+                    predicates: facts.predicates().clone(),
+                },
+            );
+        }
+        self.validated = Arc::new(validated);
+        self.world = Some(world);
+        Ok(())
+    }
+    pub fn trait_world(&self) -> Result<Arc<tr::ValidatedTraitWorld>, String> {
+        self.world
+            .clone()
+            .ok_or_else(|| "trait world has not been published".into())
+    }
+    pub fn callable_facts(&self, decl: ir::DeclId) -> Result<Arc<tr::ValidatedFacts>, String> {
+        self.trait_world()?
+            .callable_facts(decl)
+            .map_err(|e| e.into_legacy_diagnostic(&self.budget))
+    }
+    pub fn instance_facts(
+        &self,
+        target: &ir::CallTarget,
+    ) -> Result<Arc<tr::ValidatedFacts>, String> {
+        self.trait_world()?
+            .instance_facts(target)
+            .map_err(|e| e.into_legacy_diagnostic(&self.budget))
     }
     fn check_budget(&self, budget: &ir::PlanBudget) -> Result<(), String> {
         if !self.budget.same_authority(budget) {
@@ -3872,6 +4425,13 @@ impl PlanCtx {
         Ok(self.declaration(id)?.param_env.clone())
     }
     pub fn function_schema(&self, id: ir::DeclId) -> Result<ir::GenericSignature, String> {
+        self.budget.charge_work(1)?;
+        self.validated
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "missing validated callable schema".into())
+    }
+    fn raw_schema(&self, id: ir::DeclId) -> Result<tr::GenericSchema, String> {
         let state = self
             .state
             .lock()
@@ -3991,7 +4551,7 @@ impl PlanCtx {
     ) -> Result<ir::Signature, String> {
         self.check_budget(budget)?;
         let info = self.declaration(target.declaration)?;
-        let schema = self.function_schema(target.declaration)?;
+        let schema = self.raw_schema(target.declaration)?;
         if info.env.total_arity() != target.type_args.len() {
             return Err("wrong callable generic arity".into());
         }
@@ -4053,6 +4613,7 @@ impl PlanCtx {
             params: HashMap::new(),
             param_env: None,
             self_ty: None,
+            facts: None,
         };
         for info in &self.registry.declarations {
             if info.kind == ir::DeclKind::Function {
@@ -4089,6 +4650,10 @@ impl PlanCtx {
             if info.env.is_generic() {
                 env.param_env = Some(info.env.clone());
             }
+        }
+        drop(state);
+        if let Some(decl) = decl {
+            env.facts = Some(self.callable_facts(decl)?);
         }
         Ok(env)
     }
@@ -4135,6 +4700,239 @@ impl ir::SubstitutionCx for PlanCtx {
     }
 }
 
+fn receiver_mode(receiver: ReceiverKind) -> ir::ReceiverMode {
+    match receiver {
+        ReceiverKind::None => ir::ReceiverMode::None,
+        ReceiverKind::Value { .. } => ir::ReceiverMode::Value,
+    }
+}
+fn append_source_bounds(
+    registry: &DeclRegistry,
+    bindings: &HashMap<String, ir::Ty>,
+    bounds: &[TypeBound],
+    out: &mut Vec<ir::Predicate>,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    for row in bounds {
+        budget.charge_work(1 + row.parameter.len())?;
+        let ty = bindings
+            .get(&row.parameter)
+            .ok_or("bound parameter outside declaration")?;
+        for path in &row.traits {
+            budget.charge_work(1 + path.len())?;
+            if out.len() >= tr::MAX_PREDICATES {
+                return Err("predicate environment limit exceeded".into());
+            }
+            budget.retain_bytes(256)?;
+            out.push(ir::Predicate::Implements(ir::TraitRef {
+                declaration: *registry
+                    .traits
+                    .get(path)
+                    .ok_or("bound does not name a trait")?,
+                self_ty: ty.clone(),
+                args: Arc::from([]),
+            }));
+        }
+    }
+    Ok(())
+}
+#[derive(Debug)]
+struct SchemaAdapter {
+    registry: Arc<DeclRegistry>,
+    state: Arc<Mutex<PlanState>>,
+    budget: ir::PlanBudget,
+}
+impl SchemaAdapter {
+    fn raw_plan(&self) -> Result<PlanCtx, String> {
+        self.budget.retain_bytes(128)?;
+        Ok(PlanCtx {
+            registry: self.registry.clone(),
+            state: self.state.clone(),
+            budget: self.budget.clone(),
+            world: None,
+            validated: Arc::new(HashMap::new()),
+        })
+    }
+    fn error(&self, e: String) -> tr::FactsError {
+        tr::FactsError::from_message(&self.budget, &e)
+    }
+}
+impl tr::SchemaCx for SchemaAdapter {
+    fn budget(&self) -> &ir::PlanBudget {
+        &self.budget
+    }
+    fn registry_snapshot(&self) -> ir::SnapshotId {
+        self.registry.declarations[0].id.snapshot
+    }
+    fn declaration_info(&self, id: ir::DeclId) -> Result<tr::SchemaDecl, tr::FactsError> {
+        self.budget.charge_work(1).map_err(|e| self.error(e))?;
+        let d = self.registry.declaration(id).map_err(|e| self.error(e))?;
+        let receiver = receiver_mode(d.receiver);
+        Ok(tr::SchemaDecl {
+            declaration: id,
+            kind: d.kind,
+            own_env: d.param_env.clone(),
+            env: d.env.clone(),
+            owner: d.owner,
+            module: d.path.module.clone(),
+            public: d.public,
+            receiver,
+        })
+    }
+    fn instantiate_schema(
+        &self,
+        schema: &tr::GenericSchema,
+        args: &[ir::Ty],
+        caller: &ir::GenericEnv,
+        budget: &ir::PlanBudget,
+    ) -> Result<tr::InstantiatedSchema, tr::FactsError> {
+        if !budget.same_authority(&self.budget) {
+            return Err(tr::FactsError::invalid(
+                budget,
+                "schema budget authority mismatch",
+            ));
+        }
+        budget
+            .retain_bytes(256 + schema.signature.params.len() * 128 + schema.predicates.len() * 256)
+            .map_err(|e| self.error(e))?;
+        let mut cx = self.raw_plan().map_err(|e| self.error(e))?;
+        let facts = ir::FactsCtx::Universal(caller);
+        let mut sub = |ty: &ir::Ty| {
+            ir::substitute_ty(ty, &schema.env, args, facts, &mut cx, budget)
+                .map_err(|e| self.error(e))
+        };
+        let params = schema
+            .signature
+            .params
+            .iter()
+            .map(&mut sub)
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = sub(&schema.signature.result)?;
+        let mut predicates = Vec::new();
+        for ir::Predicate::Implements(r) in schema.predicates.iter() {
+            let self_ty = sub(&r.self_ty)?;
+            let args = r.args.iter().map(&mut sub).collect::<Result<Vec<_>, _>>()?;
+            predicates.push(ir::Predicate::Implements(ir::TraitRef {
+                declaration: r.declaration,
+                self_ty,
+                args: args.into(),
+            }));
+        }
+        Ok(tr::InstantiatedSchema {
+            signature: ir::Signature {
+                params,
+                result,
+                ref_contract: schema.signature.ref_contract.clone(),
+            },
+            predicates: predicates.into(),
+        })
+    }
+    fn validate_nominal(
+        &self,
+        ty: &ir::Ty,
+        env: &ir::GenericEnv,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), tr::FactsError> {
+        if !budget.same_authority(&self.budget) {
+            return Err(tr::FactsError::invalid(
+                budget,
+                "schema budget authority mismatch",
+            ));
+        }
+        fn walk(
+            cx: &SchemaAdapter,
+            ty: &ir::Ty,
+            env: &ir::GenericEnv,
+            b: &ir::PlanBudget,
+            depth: usize,
+            memo: &mut HashMap<ir::NominalAppId, usize>,
+        ) -> Result<usize, String> {
+            b.check_depth(depth)?;
+            b.charge_work(1)?;
+            let nominal = match ty {
+                ir::Ty::Struct(t) => Some((t.def().id, t.def() as *const _ as usize)),
+                ir::Ty::Enum(t) => Some((t.def().id, t.def() as *const _ as usize)),
+                _ => None,
+            };
+            if let Some((id, pointer)) = nominal {
+                let state = cx.state.lock().map_err(|_| "schema interner poisoned")?;
+                let canonical = match state.nominals.ordered.get(id.index) {
+                    Some(ir::Ty::Struct(t)) if matches!(ty, ir::Ty::Struct(_)) => {
+                        t.def() as *const _ as usize
+                    }
+                    Some(ir::Ty::Enum(t)) if matches!(ty, ir::Ty::Enum(_)) => {
+                        t.def() as *const _ as usize
+                    }
+                    _ => return Err("noncanonical nominal application".into()),
+                };
+                if canonical != pointer || id.snapshot != cx.registry.declarations[0].id.snapshot {
+                    return Err("noncanonical nominal application".into());
+                }
+                drop(state);
+                if let Some(height) = memo.get(&id) {
+                    b.check_depth(depth + height)?;
+                    return Ok(*height);
+                }
+            }
+            let mut height = 0usize;
+            let mut child = |t: &ir::Ty| -> Result<(), String> {
+                height = height.max(walk(cx, t, env, b, depth + 1, memo)? + 1);
+                Ok(())
+            };
+            match ty {
+                ir::Ty::Param(p) => {
+                    b.charge_work(env.scopes().len())?;
+                    if !env.contains(*p) {
+                        return Err("parameter outside schema environment".into());
+                    }
+                }
+                ir::Ty::Struct(t) => {
+                    for a in t.def().type_args.iter() {
+                        child(a)?;
+                    }
+                    for f in t.def().fields.iter() {
+                        child(&f.ty)?;
+                    }
+                }
+                ir::Ty::Enum(t) => {
+                    for a in t.def().type_args.iter() {
+                        child(a)?;
+                    }
+                    for v in t.def().variants.iter() {
+                        b.charge_work(1)?;
+                        for f in v.fields.iter() {
+                            child(&f.ty)?;
+                        }
+                    }
+                }
+                ir::Ty::Tuple(v) => {
+                    if v.is_empty() {
+                        return Err("empty tuple must be Unit".into());
+                    }
+                    for t in v.iter() {
+                        child(t)?;
+                    }
+                }
+                ir::Ty::Array { element, len } => {
+                    if *len > ir::MAX_ARRAY_LEN {
+                        return Err("array length limit exceeded".into());
+                    }
+                    child(element)?;
+                }
+                ir::Ty::Ref { referent, .. } => child(referent)?,
+                _ => {}
+            }
+            if let Some((id, _)) = nominal {
+                b.retain_bytes(128)?;
+                memo.insert(id, height);
+            }
+            Ok(height)
+        }
+        walk(self, ty, env, budget, 0, &mut HashMap::new())
+            .map(|_| ())
+            .map_err(|e| self.error(e))
+    }
+}
 fn nominal_parts(ty: &ir::Ty) -> Option<(ir::DeclId, &[ir::Ty])> {
     match ty {
         ir::Ty::Struct(t) => Some((t.def().source_decl, &t.def().type_args)),
@@ -4364,12 +5162,18 @@ impl PlanCtx {
             let Some(ao) = &a.path.associated else {
                 continue;
             };
+            if ao.trait_decl.is_some() {
+                continue;
+            }
             for b in &self.registry.function_ids[index + 1..] {
                 budget.charge_work(1)?;
                 let b = self.declaration(*b)?;
                 let Some(bo) = &b.path.associated else {
                     continue;
                 };
+                if bo.trait_decl.is_some() {
+                    continue;
+                }
                 budget.charge_work(1 + a.path.item.len().min(b.path.item.len()))?;
                 if a.path.item != b.path.item || ao.nominal != bo.nominal {
                     continue;
@@ -4401,14 +5205,9 @@ impl PlanCtx {
         module: &str,
         dot: bool,
         budget: &ir::PlanBudget,
-    ) -> Result<(ir::CallTarget, ir::Signature, ReceiverKind), String> {
+    ) -> Result<(ir::Callee, ir::Signature, ReceiverKind), String> {
         self.check_budget(budget)?;
-        let Some((nominal, _)) = nominal_parts(owner) else {
-            return Err(
-                "method receiver requires a nominal value; receiver adjustments are unsupported"
-                    .into(),
-            );
-        };
+        let nominal = nominal_parts(owner).map(|(id, _)| id);
         let mut selected = None;
         for id in &self.registry.function_ids {
             budget.charge_work(1)?;
@@ -4417,7 +5216,10 @@ impl PlanCtx {
                 continue;
             };
             budget.charge_work(1 + info.path.item.len().min(name.len()))?;
-            if associated.nominal != nominal || info.path.item != name {
+            if associated.trait_decl.is_some()
+                || Some(associated.nominal) != nominal
+                || info.path.item != name
+            {
                 continue;
             }
             let impl_env = self.param_env(associated.impl_decl)?;
@@ -4465,9 +5267,126 @@ impl PlanCtx {
                 type_args: args.into(),
             };
             let signature = self.instantiate_signature(&target, caller, budget)?;
-            selected = Some((target, signature, associated.receiver));
+            let ir::FactsCtx::Validated(facts) = caller else {
+                return Err("associated call requires validated facts".into());
+            };
+            let proof = facts
+                .service()
+                .discharge_direct(&target, facts)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+            if !facts
+                .world()
+                .signatures_equal(proof.signature(), &signature)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+            {
+                return Err("canonical associated signature mismatch".into());
+            }
+            selected = Some((ir::Callee::Direct(target), signature, associated.receiver));
         }
-        selected.ok_or_else(|| format!("no applicable inherent associated item {name}"))
+        if let Some(selected) = selected {
+            return Ok(selected);
+        }
+        let ir::FactsCtx::Validated(facts) = caller else {
+            return Err("trait selection requires validated facts".into());
+        };
+        let mut selected = None;
+        for trait_id in &self.registry.trait_ids {
+            budget.charge_work(1)?;
+            let info = self.declaration(*trait_id)?;
+            let path_module = info.path.module.join("::");
+            let mut visible = path_module == module;
+            for (import_module, path) in &self.registry.trait_imports {
+                budget.charge_work(1 + path.len() + import_module.len())?;
+                if import_module == module && self.registry.traits.get(path) == Some(trait_id) {
+                    visible = true;
+                }
+            }
+            for ir::Predicate::Implements(bound) in facts.predicates().predicates() {
+                budget.charge_work(1)?;
+                if bound.declaration == *trait_id
+                    && metered_type_equal(&bound.self_ty, owner, budget, 0)?
+                {
+                    visible = true;
+                }
+            }
+            if !visible {
+                continue;
+            }
+            if let Some(call) =
+                self.select_trait(owner, *trait_id, name, method_args, caller, dot, budget)?
+            {
+                if selected.is_some() {
+                    return Err("ambiguous in-scope trait item".into());
+                }
+                selected = Some(call);
+            }
+        }
+        selected.ok_or_else(|| format!("no applicable associated item {name}"))
+    }
+}
+impl PlanCtx {
+    #[allow(clippy::too_many_arguments)]
+    fn select_trait(
+        &self,
+        owner: &ir::Ty,
+        trait_id: ir::DeclId,
+        name: &str,
+        method_args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        dot: bool,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<(ir::Callee, ir::Signature, ReceiverKind)>, String> {
+        self.check_budget(budget)?;
+        if !method_args.is_empty() {
+            return Err("unsupported: trait method type arguments".into());
+        }
+        let ir::FactsCtx::Validated(facts) = caller else {
+            return Err("trait call requires validated facts".into());
+        };
+        let mut item = None;
+        for (ti, id) in self.registry.trait_ids.iter().enumerate() {
+            budget.charge_work(1)?;
+            if *id == trait_id {
+                for iid in &self.registry.trait_items[ti] {
+                    let info = self.declaration(*iid)?;
+                    budget.charge_work(1 + info.path.item.len().min(name.len()))?;
+                    if info.path.item == name {
+                        item = Some(*iid);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        let Some(item) = item else {
+            return Ok(None);
+        };
+        let call = ir::TraitCall {
+            trait_ref: ir::TraitRef {
+                declaration: trait_id,
+                self_ty: owner.clone(),
+                args: Arc::from([]),
+            },
+            item,
+            method_args: Arc::from([]),
+        };
+        match facts
+            .service()
+            .prove_goal(&ir::Predicate::Implements(call.trait_ref.clone()), facts)
+            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+        {
+            tr::ProofOutcome::NotProven => return Ok(None),
+            tr::ProofOutcome::Proved(_) => {}
+        }
+        let signature = facts
+            .service()
+            .instantiate_trait_signature(&call, facts)
+            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+        let receiver = self.declaration(item)?.receiver;
+        if dot && receiver == ReceiverKind::None {
+            return Err("trait associated function without self is not dot-callable".into());
+        }
+        Ok(Some((ir::Callee::TraitItem(call), signature, receiver)))
     }
 }
 fn generic_bindings(
@@ -4562,6 +5481,7 @@ fn argument_height(
     match ty {
         ir::Ty::Param(p) => match caller {
             ir::FactsCtx::Universal(env) if env.contains(*p) => {}
+            ir::FactsCtx::Validated(facts) if facts.env().contains(*p) => {}
             _ => return Err("foreign or unresolved generic parameter".into()),
         },
         ir::Ty::Ref { .. } => {
@@ -4936,6 +5856,14 @@ pub struct TypeEnv {
     params: HashMap<String, ir::Ty>,
     param_env: Option<Arc<ir::GenericEnv>>,
     self_ty: Option<ir::Ty>,
+    facts: Option<Arc<tr::ValidatedFacts>>,
+}
+impl TypeEnv {
+    pub fn plan(&self) -> Result<&PlanCtx, String> {
+        self.plan
+            .as_ref()
+            .ok_or_else(|| "missing authoritative plan".into())
+    }
 }
 pub type Signatures = TypeEnv;
 fn visible_from(owner: &str, requester: &str) -> bool {
@@ -5774,7 +6702,7 @@ impl Checker<'_> {
                 None,
                 depth + 1,
             )?,
-            Expr::AssociatedCall { .. } | Expr::MethodCall { .. } => {
+            Expr::TraitCall { .. } | Expr::AssociatedCall { .. } | Expr::MethodCall { .. } => {
                 if let Some(ty) = self.scalar_hint(expr)? {
                     self.infer_type_term(&ty, None, depth + 1)?
                 } else {
@@ -6308,6 +7236,9 @@ impl<'a> Checker<'a> {
         Ok(())
     }
     fn facts(&self) -> ir::FactsCtx<'_> {
+        if let Some(facts) = &self.signatures.facts {
+            return ir::FactsCtx::Validated(facts);
+        }
         self.signatures
             .param_env
             .as_deref()
@@ -6608,6 +7539,30 @@ impl<'a> Checker<'a> {
     }
     fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
+            Expr::TraitCall {
+                owner,
+                trait_path,
+                name,
+                ..
+            } => {
+                let plan = self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("missing trait registry")?;
+                let owner = checked_local_ty(owner, self.signatures)?;
+                let tid = *plan
+                    .registry
+                    .traits
+                    .get(trait_path)
+                    .ok_or("unknown trait")?;
+                Some(
+                    plan.select_trait(&owner, tid, name, &[], self.facts(), false, &plan.budget)?
+                        .ok_or("trait obligation not proven")?
+                        .1
+                        .result,
+                )
+            }
             Expr::Apply { .. } => {
                 let evidence = self.inference_evidence(e, 0)?;
                 Inference {
@@ -7297,7 +8252,7 @@ impl<'a> Checker<'a> {
                         );
                     }
                     let flow = self.flow(value);
-                    if direct_dynamic && !flow.ty.is_copy() && !direct_wildcard {
+                    if direct_dynamic && !self.facts().must_copy(&flow.ty)? && !direct_wildcard {
                         return Err("non-Copy runtime indexed pattern extraction is unsupported; only direct let _ inspection is admitted".into());
                     }
                     let seed = if *ty == Type::Infer {
@@ -7523,7 +8478,10 @@ impl<'a> Checker<'a> {
         if let Expr::Cast { value, target } = e {
             return self.cast_expression(value, target);
         }
-        if matches!(e, Expr::MethodCall { .. } | Expr::AssociatedCall { .. }) {
+        if matches!(
+            e,
+            Expr::TraitCall { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. }
+        ) {
             return self.associated_expression(e);
         }
         self.expr_without_cast(e, expectation)
@@ -7534,6 +8492,7 @@ impl<'a> Checker<'a> {
             .plan
             .clone()
             .ok_or("associated call requires registry")?;
+        let no_type_args = Vec::new();
         let (owner, name, type_args, args, receiver) = match expression {
             Expr::MethodCall {
                 receiver,
@@ -7556,6 +8515,15 @@ impl<'a> Checker<'a> {
                 args,
                 None,
             ),
+            Expr::TraitCall {
+                owner, name, args, ..
+            } => (
+                checked_local_ty(owner, self.signatures)?,
+                name,
+                &no_type_args,
+                args,
+                None,
+            ),
             _ => return Err("not an associated call".into()),
         };
         self.infer_storage(type_args.len() + args.len() + 1)?;
@@ -7563,15 +8531,33 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|t| checked_local_ty(t, self.signatures))
             .collect::<Result<Vec<_>, _>>()?;
-        let (target, signature, _) = plan.select_associated(
-            &owner,
-            name,
-            &actuals,
-            self.facts(),
-            &self.module,
-            receiver.is_some(),
-            &plan.budget,
-        )?;
+        let (target, signature, _) = if let Expr::TraitCall { trait_path, .. } = expression {
+            let trait_id = *plan
+                .registry
+                .traits
+                .get(trait_path)
+                .ok_or("unresolved UFCS trait")?;
+            plan.select_trait(
+                &owner,
+                trait_id,
+                name,
+                &actuals,
+                self.facts(),
+                false,
+                &plan.budget,
+            )?
+            .ok_or("trait obligation not proven")?
+        } else {
+            plan.select_associated(
+                &owner,
+                name,
+                &actuals,
+                self.facts(),
+                &self.module,
+                receiver.is_some(),
+                &plan.budget,
+            )?
+        };
         let offset = usize::from(receiver.is_some());
         if signature.params.len() != args.len() + offset {
             return Err(format!("wrong arity for associated item {name}"));
@@ -7761,7 +8747,7 @@ impl<'a> Checker<'a> {
                     self.require(&flow, expected)?;
                 }
                 let element = hint.cloned().unwrap_or(flow.ty);
-                if *len > 1 && !element.is_copy() {
+                if *len > 1 && !self.facts().must_copy(&element)? {
                     return Err("array repeat of more than one element requires Copy".into());
                 }
                 (
@@ -8143,7 +9129,10 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Apply { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. } => {
+            Expr::TraitCall { .. }
+            | Expr::Apply { .. }
+            | Expr::MethodCall { .. }
+            | Expr::AssociatedCall { .. } => {
                 return Err("application dispatcher invariant".into());
             }
             Expr::Struct { name, fields } => {
@@ -8435,6 +9424,22 @@ impl<'a> Checker<'a> {
                     } else {
                         plan.instantiate_signature(&target, self.facts(), &plan.budget)?
                     };
+                let facts = self
+                    .signatures
+                    .facts
+                    .as_deref()
+                    .ok_or("direct call requires validated facts")?;
+                let proof = facts
+                    .service()
+                    .discharge_direct(&target, facts)
+                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+                if !facts
+                    .world()
+                    .signatures_equal(proof.signature(), &signature)
+                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+                {
+                    return Err("canonical direct signature mismatch".into());
+                }
                 if self.signatures.param_env.is_some() {
                     for ty in signature
                         .params
@@ -8470,7 +9475,7 @@ impl<'a> Checker<'a> {
                 let result_ty = signature.result.clone();
                 (
                     ir::ExprKind::Call {
-                        target,
+                        target: target.into(),
                         name: name.clone(),
                         args: arguments,
                         signature,
@@ -8592,23 +9597,38 @@ pub fn check_function_with_signatures(
             .plan
             .as_ref()
             .ok_or("generic checking requires planning context")?;
-        let env = plan.callable_env(plan.callable_decl(index)?)?;
-        let template = super::cfg::lower_template(Arc::new(typed), env, &plan.budget)?;
+        let facts = plan.callable_facts(plan.callable_decl(index)?)?;
+        let template = super::cfg::lower_template(Arc::new(typed), facts, &plan.budget)?;
         return super::ownership::verify_template(template)
             .map(|_| ())
             .map_err(|analysis| {
-                format!(
-                    "universal initialization/move analysis (complete={}): {:?}",
-                    analysis.complete, analysis.diagnostics
-                )
+                super::analysis_diagnostic(&plan.budget, "universal callable", index, &analysis)
             });
     }
-    let lowered = super::cfg::lower(&typed)?;
-    let analysis = super::ownership::analyze(&lowered);
+    let plan = signatures
+        .plan
+        .as_ref()
+        .ok_or("semantic checking requires authoritative world")?;
+    let target = ir::CallTarget {
+        declaration: plan.callable_decl(index)?,
+        type_args: Arc::from([]),
+    };
+    let facts = plan.instance_facts(&target)?;
+    let mut cx = plan.clone();
+    let typed = ir::close_checked_calls(&typed, &facts, &mut cx, &plan.budget)
+        .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+    let lowered = super::cfg::lower_with_facts(&typed, &facts, &plan.budget)?;
+    let closed = super::cfg::close(Arc::new(lowered), facts, &plan.budget)?;
+    let analysis = match super::ownership::analyze_closed(closed) {
+        Ok(_) => return Ok(()),
+        Err(analysis) => analysis,
+    };
     if !analysis.passed() {
-        return Err(format!(
-            "{}: initialization/move analysis (complete={}): {:?}",
-            lowered.name, analysis.complete, analysis.diagnostics
+        return Err(super::analysis_diagnostic(
+            &plan.budget,
+            &typed.name,
+            index,
+            &analysis,
         ));
     }
     Ok(())
@@ -8748,6 +9768,64 @@ mod typed_tests {
     use super::*;
 
     #[test]
+    fn trait_required_schemas_and_bound_calls_retain_authoritative_identities() {
+        let p=parse("struct S{x:i32}trait Value{fn value(self)->i32;}impl Value for S{fn value(mut self)->i32{self.x=self.x+1;self.x}}fn read<T:Value>(x:T)->i32{<T as Value>::value(x)}fn main(){let n=read::<S>(S{x:6});}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        assert_eq!(plan.callable_count(), 3);
+        let generic = plan.callable_decl(0).unwrap();
+        let facts = plan.callable_facts(generic).unwrap();
+        assert_eq!(facts.predicates().predicates().len(), 1);
+        let typed = type_callable_with_plan(&p, generic, &plan, &budget).unwrap();
+        assert!(typed.exprs.iter().any(|e|matches!(&e.kind,ir::ExprKind::Call{target:ir::Callee::TraitItem(call),..} if matches!(call.trait_ref.self_ty,ir::Ty::Param(_)))));
+        let trait_decl = plan.registry.trait_ids[0];
+        let item = plan.registry.trait_items[0][0];
+        assert!(plan.callable_index(item).is_err());
+        let schema = plan.trait_world().unwrap().schema_facts(item).unwrap();
+        assert_eq!(schema.phase(), tr::FactsPhase::Schema);
+        assert!(schema.must_copy(&ir::Ty::Int(ir::IntTy::I32)).is_err());
+        assert_eq!(plan.declaration(item).unwrap().owner, Some(trait_decl));
+        check(&p).unwrap();
+    }
+    #[test]
+    fn trait_unused_conformance_and_direct_obligations_are_not_body_witnesses() {
+        for source in [
+            "struct S{x:i32}trait V{fn v(self)->i32;}impl V for S{}fn main(){}",
+            "struct S{x:i32}trait V{fn v(self)->i32;}impl V for S{fn v(self)->u8{1u8}}fn main(){}",
+            "struct S{x:i32}trait V{fn v(self)->i32;}impl V for S{fn v(self)->i32{1}}impl V for S{fn v(self)->i32{2}}fn main(){}",
+            "trait V{fn v(self)->i32;}fn bad<T:V>(x:T)->(T,T){(x,x)}fn main(){}",
+            "struct S{x:i32}trait V{fn v(self)->i32;}fn need<T:V>(x:T){}fn main(){if false{need::<S>(S{x:1});}}",
+            "trait V{fn v(self)->i32;}fn need<T:V>(x:T){}fn bad<T>(x:T){need::<T>(x)}fn main(){}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+    #[test]
+    fn trait_scope_inherent_precedence_and_predicate_limits_stay_explicit() {
+        for source in [
+            "mod m{pub struct S{pub x:i32}pub trait V{fn v(self)->i32;}impl V for S{fn v(self)->i32{self.x}}}use m::V;fn main(){let n=m::S{x:1}.v();}",
+            "struct S{x:i32}trait A{fn v(self)->i32;}trait B{fn v(self)->i32;}impl A for S{fn v(self)->i32{1}}impl B for S{fn v(self)->i32{2}}impl S{fn v(self)->i32{3}}fn main(){let n=S{x:1}.v();}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+        for source in [
+            "mod m{pub struct S{pub x:i32}pub trait V{fn v(self)->i32;}impl V for S{fn v(self)->i32{self.x}}}fn main(){let n=m::S{x:1}.v();}",
+            "struct S{x:i32}trait A{fn v(self)->i32;}trait B{fn v(self)->i32;}impl A for S{fn v(self)->i32{1}}impl B for S{fn v(self)->i32{2}}fn main(){let n=S{x:1}.v();}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err());
+        }
+        let bounds = std::iter::repeat_n("V", 257).collect::<Vec<_>>().join("+");
+        assert!(
+            parse(&format!(
+                "trait V{{fn v(self)->i32;}}fn f<T:{bounds}>(x:T){{}}fn main(){{}}"
+            ))
+            .is_err()
+        );
+    }
+    #[test]
     fn generic_paths_are_structured_and_binders_are_rigid() {
         let p=parse("struct W<T>{v:T}fn id<T>(x:T)->T{x}fn forward<U>(x:U)->U{id::<U>(x)}fn shadow<i32>(x:i32)->i32{x}fn main(){let w:W<W<u8>>=W::<W<u8>>{v:W::<u8>{v:7}};let n=1+id::<u8>(w.v.v);}").unwrap();
         let budget = ir::PlanBudget::default();
@@ -8843,7 +9921,7 @@ mod typed_tests {
             calls
                 .iter()
                 .filter(
-                    |(target, _)| plan.declaration(target.declaration).unwrap().path.item == "make"
+                    |(target, _)|matches!(target,ir::Callee::Direct(t) if plan.declaration(t.declaration).unwrap().path.item=="make")
                 )
                 .count(),
             1
@@ -8851,7 +9929,12 @@ mod typed_tests {
         let (target, args) = calls.last().unwrap();
         assert_eq!(args.len(), 2);
         assert_eq!(
-            plan.declaration(target.declaration).unwrap().kind,
+            plan.declaration(match target {
+                ir::Callee::Direct(t) => t.declaration,
+                _ => panic!("expected direct call"),
+            })
+            .unwrap()
+            .kind,
             ir::DeclKind::AssociatedFunction
         );
         check(&p).unwrap();
@@ -11089,7 +12172,7 @@ mod typed_tests {
             unreachable!()
         };
         assert_eq!(name, "m::f");
-        assert!(target.type_args.is_empty());
+        assert!(matches!(target,ir::Callee::Direct(t) if t.type_args.is_empty()));
         assert_eq!(signature.params, vec![ir::Ty::Bool]);
         assert_eq!(signature.result, ir::Ty::Int(ir::IntTy::I32));
         assert_eq!(f.exprs[args[0].0].ty, ir::Ty::Bool);

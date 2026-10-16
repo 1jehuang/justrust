@@ -180,10 +180,15 @@ canonical obligation/cache entries across the snapshot and256 canonical
 predicates per callable environment or declaration header, counting inherited
 and implied predicates. Aggregate world storage remains under shared nodes and
 bytes limits.
-Constructed diagnostic payloads share a64KiB snapshot-total allowance, charged
-before construction; bounded UTF-8-safe truncation is explicit, never a hidden
-uncharged rich-format intermediate. These
-are supported resource boundaries, not Rust language limits.
+Constructed rich diagnostic payloads share a64KiB snapshot-total allowance,
+charged before construction; bounded UTF-8-safe truncation is explicit, never a
+hidden uncharged rich-format intermediate. A legacy `String` error boundary may
+still copy one fixed resource-exhaustion message of at most80bytes per failed
+conversion when that allowance is exhausted. This constant-size transport
+exception contains no source text, goal trace or formatting and never turns
+failure into success or renews any semantic budget. It is not a whole-process
+allocation bound. These are supported resource boundaries, not Rust language
+limits.
 
 Charge rejected candidates, pairwise coherence, structural equality, name-byte
 comparisons, assumptions, cache hits and misses, recursive goals and canonical
@@ -357,3 +362,28 @@ cumulative native campaign. Export selected redacted profiles, preserve all
 historical findings, commit/push working stages and raw evidence separately.
 No experimental install or performance/default claim without comprehensive
 pinned before/after measurement. Full Rust remains open throughout.
+
+## Implemented bounded client and retained acceptance
+
+The required-item client now uses the frozen canonical world, conditional
+obligations, exact subject facts and common all-body call closure. Required
+trait items remain signature-only, while implementation bodies use the same
+universal ownership analysis and closed native instance seals as free and
+inherent functions. Custom traits named Copy do not grant copy permission.
+
+The exact corrected32 sources and four graph regressions pass, including
+worker-deterministic conditional dispatch and the absence of native slots for
+required signatures. All1368 historical and new hosted tests pass with check,
+strict all-target lint and formatting clean. The real traits example executes
+with8 workers and exact expected stdout. Independent cumulative native receipts
+remain a separate gate, not a conclusion from these focused tests.
+
+One unchanged historical associated-items trait_dispatch source was promoted
+only after stock plus native workers1/8 BUILD, CHECK and runtime parity. Its
+full-source SHA256 is
+2b892fda952e7215f317df893b69d7fc2f079c3bcf8b2c393e8d4fce5d66d71b.
+The historical corpus is now19 supported,10 invalid and3 legal exclusions.
+The original frozen32 trait corpus and its classifications are unchanged.
+Copy/Clone language-item semantics, borrowed trait receivers, generic traits
+and trait methods, defaults, associated types, standard libraries and existing
+project acceptance remain open. This is not full Rust or a speedup claim.

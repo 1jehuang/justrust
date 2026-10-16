@@ -7,10 +7,62 @@ mod instances;
 pub mod ir;
 pub mod ownership;
 pub mod source;
+pub mod traits;
 
 use crate::{Context, Engine, Error, Key, Provider, Report, TaskFuture};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
+
+/// Stop formatting immediately when the shared diagnostic allowance is spent.
+/// The complete structured analysis remains published in its graph slot.
+pub(super) fn analysis_diagnostic(
+    budget: &ir::PlanBudget,
+    subject: &str,
+    index: usize,
+    analysis: &ownership::Analysis,
+) -> String {
+    struct Writer<'a> {
+        budget: &'a ir::PlanBudget,
+        text: String,
+    }
+    impl std::fmt::Write for Writer<'_> {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            let retained = text.len().checked_mul(2).ok_or(std::fmt::Error)?;
+            self.budget
+                .charge_work(text.len())
+                .and_then(|()| self.budget.charge_diagnostic_bytes(text.len()))
+                .and_then(|()| self.budget.retain_bytes(retained))
+                .map_err(|_| std::fmt::Error)?;
+            if self.text.capacity() - self.text.len() < text.len() {
+                self.budget
+                    .charge_work(self.text.len())
+                    .map_err(|_| std::fmt::Error)?;
+                self.text
+                    .try_reserve_exact(text.len())
+                    .map_err(|_| std::fmt::Error)?;
+            }
+            self.text.push_str(text);
+            Ok(())
+        }
+    }
+    let mut writer = Writer {
+        budget,
+        text: String::new(),
+    };
+    if std::fmt::write(
+        &mut writer,
+        format_args!(
+            "{subject} {index}: initialization/move analysis (complete={}): {:?}",
+            analysis.complete, analysis.diagnostics
+        ),
+    )
+    .is_err()
+    {
+        return traits::FactsError::resource(budget, "analysis diagnostic resource limit exceeded")
+            .into_legacy_diagnostic(budget);
+    }
+    writer.text
+}
 
 const PARSE: u32 = 100;
 const SIGNATURES: u32 = 101;
@@ -49,6 +101,7 @@ impl DeclarationFacts {
     }
 }
 struct NativeFacts {
+    facts: OnceLock<Arc<traits::ValidatedFacts>>,
     checked: OnceLock<Arc<ir::CheckedFunction>>,
     lowered: OnceLock<Arc<cfg::Function>>,
     concrete: OnceLock<ownership::ConcreteCfg>,
@@ -58,6 +111,7 @@ struct NativeFacts {
 impl NativeFacts {
     fn new() -> Self {
         Self {
+            facts: OnceLock::new(),
             checked: OnceLock::new(),
             lowered: OnceLock::new(),
             concrete: OnceLock::new(),
@@ -231,11 +285,12 @@ impl Provider for CompilerProvider {
                     } else if key.kind == UNIVERSAL_LOWER {
                         cx.read(cx.request(function(TEMPLATE_BODY, index)).get(0))
                             .await?;
-                        let env = this
+                        let declaration = this.types()?.callable_decl(index).map_err(Error::new)?;
+                        let facts = this
                             .types()?
-                            .callable_env(this.types()?.callable_decl(index).map_err(Error::new)?)
+                            .callable_facts(declaration)
                             .map_err(Error::new)?;
-                        if !env.is_generic() {
+                        if !facts.env().is_generic() {
                             return Err(Error::new(
                                 "universal lowering requires generic declaration",
                             ));
@@ -247,7 +302,8 @@ impl Provider for CompilerProvider {
                             .clone();
                         publish(
                             &slot.lowered,
-                            cfg::lower_template(source, env, &this.0.budget).map_err(Error::new)?,
+                            cfg::lower_template(source, facts, &this.0.budget)
+                                .map_err(Error::new)?,
                         )?;
                     } else {
                         cx.read(cx.request(function(UNIVERSAL_LOWER, index)).get(0))
@@ -263,9 +319,11 @@ impl Provider for CompilerProvider {
                                 publish(&slot.verified, proof)?;
                             }
                             Err(analysis) => {
-                                let message = format!(
-                                    "universal generic declaration {index}: initialization/move analysis (complete={}): {:?}",
-                                    analysis.complete, analysis.diagnostics
+                                let message = analysis_diagnostic(
+                                    &this.0.budget,
+                                    "universal generic declaration",
+                                    index,
+                                    &analysis,
                                 );
                                 publish(&slot.analysis, Arc::new(analysis))?;
                                 return Err(Error::new(message));
@@ -346,27 +404,43 @@ impl Provider for CompilerProvider {
                     let slot = this.native(index)?;
                     if key.kind == BODY {
                         let declaration = this.declaration(instance.source_index)?;
+                        let facts = this
+                            .types()?
+                            .instance_facts(&instance.target)
+                            .map_err(Error::new)?;
+                        let mut context = this.types()?.clone();
                         let checked = if instance.target.type_args.is_empty() {
-                            declaration
+                            let source = declaration
                                 .checked
                                 .get()
-                                .ok_or_else(|| Error::new("missing checked body"))?
-                                .clone()
+                                .ok_or_else(|| Error::new("missing checked body"))?;
+                            Arc::new(
+                                ir::close_checked_calls(
+                                    source,
+                                    &facts,
+                                    &mut context,
+                                    &this.0.budget,
+                                )
+                                .map_err(|error| {
+                                    Error::new(error.into_legacy_diagnostic(&this.0.budget))
+                                })?,
+                            )
                         } else {
                             let verified = declaration.verified.get().ok_or_else(|| {
                                 Error::new("missing exact universal template proof")
                             })?;
-                            let mut context = this.types()?.clone();
                             Arc::new(
                                 ir::instantiate_checked(
                                     verified,
                                     &instance.target.type_args,
+                                    &facts,
                                     &mut context,
                                     &this.0.budget,
                                 )
                                 .map_err(Error::new)?,
                             )
                         };
+                        publish(&slot.facts, facts)?;
                         publish(&slot.checked, checked)?;
                     } else if key.kind == LOWER {
                         cx.read(cx.request(function(BODY, index)).get(0)).await?;
@@ -377,8 +451,14 @@ impl Provider for CompilerProvider {
                         publish(
                             &slot.lowered,
                             Arc::new(
-                                cfg::lower_with_budget(checked, &this.0.budget)
-                                    .map_err(Error::new)?,
+                                cfg::lower_with_facts(
+                                    checked,
+                                    slot.facts.get().ok_or_else(|| {
+                                        Error::new("missing exact closed instance facts")
+                                    })?,
+                                    &this.0.budget,
+                                )
+                                .map_err(Error::new)?,
                             ),
                         )?;
                     } else if key.kind == ANALYZE {
@@ -388,16 +468,24 @@ impl Provider for CompilerProvider {
                             .get()
                             .ok_or_else(|| Error::new("missing concrete CFG"))?
                             .clone();
-                        let closed = cfg::close(lowered, &this.0.budget).map_err(Error::new)?;
+                        let facts = slot
+                            .facts
+                            .get()
+                            .cloned()
+                            .ok_or_else(|| Error::new("missing exact closed instance facts"))?;
+                        let closed =
+                            cfg::close(lowered, facts, &this.0.budget).map_err(Error::new)?;
                         match ownership::analyze_closed(closed) {
                             Ok(proof) => {
                                 publish(&slot.analysis, proof.analysis().clone())?;
                                 publish(&slot.concrete, proof)?;
                             }
                             Err(analysis) => {
-                                let message = format!(
-                                    "instance {index}: initialization/move analysis (complete={}): {:?}",
-                                    analysis.complete, analysis.diagnostics
+                                let message = analysis_diagnostic(
+                                    &this.0.budget,
+                                    "instance",
+                                    index,
+                                    &analysis,
                                 );
                                 publish(&slot.analysis, Arc::new(analysis))?;
                                 return Err(Error::new(message));
@@ -679,4 +767,42 @@ pub(super) fn compile_program_observed(
     check_only: bool,
 ) -> Result<Compilation, Failure> {
     compile_input(Input::Program(program), workers, check_only)
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn analysis_diagnostics_stop_before_rich_payload_limit() {
+        let budget = ir::PlanBudget::default();
+        let analysis = ownership::Analysis {
+            stats: ownership::AnalysisStats::default(),
+            diagnostics: vec![ownership::Diagnostic {
+                kind: ownership::ErrorKind::InvalidReference("x".repeat(70 * 1024)),
+                block: cfg::BlockId(0),
+                statement: None,
+                origin: None,
+                place: None,
+            }]
+            .into_boxed_slice(),
+            complete: false,
+        };
+        let message = analysis_diagnostic(&budget, "instance", 0, &analysis);
+        assert!(message.contains("resource"), "{message}");
+        assert!(message.len() <= 80);
+        assert_eq!(analysis.diagnostics.len(), 1);
+        assert!(!analysis.passed());
+
+        let budget = ir::PlanBudget::default();
+        let empty = ownership::Analysis {
+            stats: ownership::AnalysisStats::default(),
+            diagnostics: Box::new([]),
+            complete: true,
+        };
+        assert_eq!(
+            analysis_diagnostic(&budget, "instance", 3, &empty),
+            "instance 3: initialization/move analysis (complete=true): []"
+        );
+    }
 }
