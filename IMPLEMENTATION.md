@@ -69,10 +69,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 The full requested outcome is not reached. Bounded generic inference passes 1,270
 hosted tests, strict all-target lint, its unchanged 28 exact source cases and four
 instance/trust graph tests. One historical generic-enum source is promoted only
-after unchanged stock/native runtime parity. The prior tracked 26-corpus campaign
-verifies 928 native cases on revision 714a034d90d308e635fd17bbfb6cef653288a96d,
-including the distinct bounded-instantiation resource outcome. The expanded
-independent inference campaign is still pending. There is no successful
+after unchanged stock/native runtime parity. The tracked 27-corpus campaign
+verifies 956 native cases on revision 6cef2b5c6feb16ea30692d94b0edb759fd2d91d2,
+including 577 accepted parity, 35 declared traps, 266 invalid rejections,
+77 legal boundaries and one distinct bounded-instantiation resource outcome.
+All raw receipts and the actual 96-worker example are retained. There is no successful
 core/alloc/std build, broad existing-project acceptance or representative full-Rust
 performance comparison. INTEGER-TYPES.md now records delivered signed/unsigned
 primitives through64 bits, typed literals/patterns and existing checked operations.

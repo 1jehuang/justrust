@@ -210,5 +210,10 @@ check/test/strict all-target lint runs are 20261016-052541976-266990,
 The actual eight-worker native example executes with exact expected stdout. One
 historical generic-enum match fixture is promoted after unchanged-source stock
 and native workers1/8 runtime parity, not rewritten to fit the implementation.
-The expanded independent whole-corpus campaign remains a separate pending gate.
+The separately tracked independent campaign on
+`6cef2b5c6feb16ea30692d94b0edb759fd2d91d2` verifies all 956 cases in 27
+corpora, 898 ordinary and 70 declared-trap workers1/8 runtime checks plus 128
+generated compile/runtime exit checks. The actual 96-worker example executes
+with complete capture. Raw receipts are retained under
+`experiments/results/20261016-m8a-generic-inference-*`.
 No full Rust completion or compile-speed improvement is claimed.

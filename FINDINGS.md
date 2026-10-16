@@ -9055,3 +9055,31 @@ rigid result without checking fields twice or changing the frozen sources.
 All owners and reviewers cleared the corrected patch. The independent expanded
 whole-corpus campaign is pending. No experimental stable installation, compiler
 delegation, measured speedup or full Rust completion is claimed.
+
+### Independent first-order inference campaign follow-through
+
+Tracked run `compiler-generic-inference-20261016-1228` completed successfully on
+`6cef2b5c6feb16ea30692d94b0edb759fd2d91d2`. Independent parsing validates
+all 956 cases in 27 corpora: 577 accepted parity, 35 declared runtime101 traps,
+266 invalid rejections, 77 legal excluded boundaries and one distinct resource
+rejection. All source hashes, stream hashes, statuses, success graphs and corpus
+summaries match. Counts include 898 normal workers1/8 runtime comparisons,
+70 declared-trap worker checks and 128 generated compile/runtime exit checks.
+The sole unchanged historical enum promotion is included in these counts.
+
+All case receipts identify one candidate binary SHA256
+`f4021ce1b6e70c9db053f5ebb7714bd81d12f02f436a3dbf558365b69cfc4f5a`.
+Raw case and actual example evidence is retained in 28 files under
+`experiments/results/20261016-m8a-generic-inference-*`. The 96-worker example
+actually executes with exit0 and exact expected stdout. Its source SHA256 is
+`e2422e1a7e7917e7801fc0ee11f877f1e08f4d222c8028801dc926a1ed523526`,
+and its complete graph has 49 nodes/101 edges, 60 CFG blocks/65 edges/137 locals,
+with zero failures or dropped events.
+
+The host had stopped for idle lifecycle management and was restarted through
+the signed-in metered `justrust remote env` path. The charged experiment receipt
+confirms exit0 and successful lifecycle accounting. No billing/isolation bypass
+was used. The observed 33,019,700ns end-to-end and 5,083,259ns engine timings
+are contended/uncontrolled functional evidence, not a speedup comparison.
+Broader inference, traits/methods, generic references, Drop, full libraries and
+existing-project acceptance remain open.
