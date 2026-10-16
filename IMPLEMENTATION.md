@@ -55,7 +55,10 @@ Named nonempty structs now extend the cached initialization foundation with
 nominal identity, field privacy, whole/partial moves and native aggregate calls.
 The following slices remain open: destructuring and patterns, references, loans,
 lifetimes, destructors, enums, broader types and all remaining categories above.
-The current milestone is undergoing full hosted and stock differential validation.
+This milestone passed 278 hosted tests and all 295 M8a source fixtures, including
+19 accepted nominal execution cases, 20 invalid nominal programs and two explicit
+legal-unsupported nominal boundaries. Next is irrefutable let destructuring with
+projected moves and wildcard semantics, not general match or borrowing.
 
 The internal initialization/move-analysis foundation passed 209 hosted tests and
 all 254 existing M8a source fixtures. Both check and emission require the same

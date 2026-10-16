@@ -39,8 +39,19 @@ rejection was promoted to a positive check/build regression, not silently delete
 
 Empty/unit/tuple structs, derives, destructuring, references, loans, lifetimes,
 destructors, enums, platform layout and full Rust remain open. This is not a
-completed borrow checker or a general Rust performance comparison. A tracked
-source-to-native differential run follows this tested implementation commit.
+completed borrow checker or a general Rust performance comparison.
+
+Tracked experiment `compiler-structs-20261016-0552` ran committed `0bc7d5900`
+on the shared M8a host and passed **all 295 source fixtures**: 205 accepted
+execution-parity cases, 75 invalid rejections and 15 explicitly unsupported legal
+boundaries. The new nominal corpus contributed 19 accepted, 20 invalid and two
+unsupported cases. Workers 1/8 cover native check/build in the focused corpora.
+The 96-worker real struct example also ran successfully: 807 source bytes, three
+functions, two structs, 12 CFG blocks, 11 CFG edges, 136 move paths and 12 analyzed
+moves. Its work graph retained 18 nodes/23 edges with no failures or dropped events.
+Full six-corpus receipts and the observed example accounting are committed under
+`experiments/results/20261016-m8a-structs-*`. This is correctness evidence on a
+contended/uncontrolled host, not a cold benchmark or a full-Rust speed claim.
 
 ## 2026-10-15: Cached initialization and move-path analysis gates native emission
 
