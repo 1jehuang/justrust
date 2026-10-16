@@ -9118,3 +9118,24 @@ zero dropped events. These contended functional timings are not a speed claim.
 Independent cumulative native campaign remains a separate next gate. Full Rust,
 traits, borrowed receivers, Drop, standard libraries and existing-project
 compatibility remain open.
+
+## 2026-10-16: independently verified988-case associated-items checkpoint
+
+Tracked metered campaign `compiler-associated-items-20261016-1306` ran exact
+revision `16fadabebcc27b309d935eabebdec9755ebd437e`. Independent parsing of28
+raw corpora verifies988 cases:595 accepted parity,35 declared runtime101,
+276 invalid rejected,81 legal unsupported and1 distinct resource rejection.
+All934 ordinary worker runtime comparisons,70 trap-worker runs and128 generated
+compile/runtime exit checks pass with matching source hashes and complete
+successful graphs. Case receipts identify binary SHA256
+`ab5a6813bd200ba01d9a235e2e84dbc370605d6567083ff52e8b4c323443420c`.
+
+The29 raw/actual-observation receipts are retained under
+`experiments/results/20261016-m8a-associated-items-*`. The actual96-worker
+example executes exit0 with exact expected stdout, source SHA256
+`2e00a7b39216ad51e5f31a8453cf444c02ce3844264d96392a1f35c0d2629c64`,
+complete64-node/134-edge graph and zero failures/drops. Metered lifecycle receipt
+reports done/exit0/lifecycle_ok. Observed34,333,747ns total/6,393,580ns engine
+are contended functional evidence, not pinned-suite speedup measurements.
+Traits/predicates/Copy, borrowed receivers, Drop, libraries and existing-project
+acceptance remain open and autonomous work continues.

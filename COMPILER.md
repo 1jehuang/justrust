@@ -79,6 +79,10 @@ impl parameters against rigid actual types, while a separate bounded overlap
 check rejects conflicting same-name items. Receiver and arguments are checked
 once in source order. Borrowed receivers, autoref/autoderef, traits and omitted
 method type arguments remain unsupported. See `ASSOCIATED-ITEMS.md`.
+The associated checkpoint passes1318 hosted tests and988 independently verified
+cases across28 corpora, including an actually executed96-worker example. Raw
+receipts are retained under `experiments/results/20261016-m8a-associated-items-*`.
+These are bounded correctness gates, not full Rust or performance certification.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and

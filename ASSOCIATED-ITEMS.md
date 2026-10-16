@@ -301,3 +301,24 @@ without weakening frozen sources, nesting limits or expected outcomes.
 Independent cumulative candidate validation is a separate subsequent gate.
 This is bounded inherent value dispatch, not traits, borrowed receiver lookup,
 full Rust/project compatibility or evidence of a performance improvement.
+
+## Independent28-corpus candidate verification
+
+Tracked campaign `compiler-associated-items-20261016-1306` validates exact
+revision `16fadabebcc27b309d935eabebdec9755ebd437e` on the metered96-worker
+M8a host. Independent parsing verifies all988 cases:595 accepted parity,
+35 declared runtime101,276 invalid rejected,81 legal unsupported and1 separate
+resource rejection. It verifies934 ordinary workers1/8 runtime comparisons,
+70 declared-trap worker runs and128 generated compile/runtime exit checks.
+All raw case summaries, source hashes and successful graph captures agree.
+
+The28 corpora and actual executed96-worker example are retained byte-for-byte
+or as explicitly observed example data in29 files under
+`experiments/results/20261016-m8a-associated-items-*`. All case receipts identify
+candidate SHA256 `ab5a6813bd200ba01d9a235e2e84dbc370605d6567083ff52e8b4c323443420c`.
+The example source SHA256 is
+`2e00a7b39216ad51e5f31a8453cf444c02ce3844264d96392a1f35c0d2629c64`,
+with actual exit0 and exact associated-items success stdout. Lifecycle accounting
+reports exit0/done/lifecycle_ok, with no billing or tenant bypass. Observed
+34,333,747ns total and6,393,580ns engine time are contended functional evidence,
+not a speedup measurement. Full Rust and existing-project acceptance remain open.
