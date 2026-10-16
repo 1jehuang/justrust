@@ -113,7 +113,10 @@ match, ownership or the full language.
 once-only repeat evaluation even at length zero, contextual empty literals,
 non-Copy indexed move rejection and distinct element selection proofs. Ignoring
 an indexed element still inspects initialized array storage. Every array uses
-an owning indirect value ABI, including empty arrays. Runtime `usize` indices,
+an owning indirect value ABI, including empty arrays. `USIZE.md` extends this
+with genuine unsigned 64-bit scalars and runtime bounds-checked indexing. Ordered
+CFG operations preserve base/index/RHS effects and unknown-index writes invalidate
+contained enum proofs without guessing a selected child. Chained dynamic bases,
 slices, array patterns, general constants and broader integer inference remain
 open, as do the full compatibility completion gates above.
 

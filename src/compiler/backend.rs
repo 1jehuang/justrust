@@ -2,7 +2,8 @@
 //!
 //! Private ABI: arguments are evaluated left-to-right and pushed as eight-byte
 //! stack words. The callee reads them in reverse order above rbp. eax carries
-//! i32/bool results (unit is zero). All registers are caller-saved. Frames use
+//! i32/bool results (unit is zero), while rax carries full-width usize results.
+//! All registers are caller-saved. Frames use
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
 //! Aggregate layout is private: each scalar/unit leaf occupies eight bytes,
@@ -257,7 +258,14 @@ impl<'a> Emitter<'a> {
     }
     fn operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
         match operand {
+            cfg::Operand::Constant(cfg::Constant::Usize(value)) => {
+                self.bytes(&[0x48, 0xb8]);
+                self.bytes(&value.to_le_bytes());
+            }
             cfg::Operand::Constant(value) => self.immediate(match value {
+                cfg::Constant::Usize(_) => {
+                    unreachable!("usize constants use full-width immediates")
+                }
                 cfg::Constant::I32(value) => *value,
                 cfg::Constant::Bool(value) => i32::from(*value),
                 cfg::Constant::Unit => 0,
@@ -282,9 +290,39 @@ impl<'a> Emitter<'a> {
         if indirect(ty) {
             self.address(offset);
         } else {
+            if *ty == ir::Ty::Usize {
+                self.bytes(&[0x48]);
+            }
             self.load(offset);
         }
         Ok(())
+    }
+    fn index_address(
+        &mut self,
+        array: &ir::Place,
+        index: &cfg::Operand,
+    ) -> Result<&'a ir::Ty, String> {
+        let (offset, ty) = self.place(array)?;
+        let ir::Ty::Array { element, len } = ty else {
+            return Err("runtime index requires array storage".into());
+        };
+        if self.function.operand_ty(index)? != ir::Ty::Usize {
+            return Err("runtime index requires genuine usize operand".into());
+        }
+        self.operand(index)?;
+        // Read the full unsigned index and reject it before scaling or forming
+        // any element address. The array length cap is not an index range cap.
+        self.bytes(&[0x48, 0x3d]);
+        self.i32(i32::try_from(*len).map_err(|_| "array length exceeds backend limit")?);
+        self.trap_if(0x83); // jae
+        if *len != 0 {
+            self.bytes(&[0x48, 0x69, 0xc0]); // rax *= physical element stride
+            self.i32(value_size(element)?);
+            self.bytes(&[0x48, 0x8d, 0x8d]); // rcx = original static array place
+            self.i32(offset);
+            self.bytes(&[0x48, 0x01, 0xc8]);
+        }
+        Ok(element)
     }
     fn enum_variant(
         &mut self,
@@ -368,6 +406,50 @@ impl<'a> Emitter<'a> {
         self.address(self.aggregate_scratch);
         Ok(())
     }
+    fn binary_usize(&mut self, op: BinaryOp) -> Result<(), String> {
+        match op {
+            BinaryOp::Add => {
+                self.bytes(&[0x48, 0x01, 0xc8]);
+                self.trap_if(0x82); // unsigned carry
+            }
+            BinaryOp::Sub => {
+                self.bytes(&[0x48, 0x29, 0xc8]);
+                self.trap_if(0x82); // unsigned borrow
+            }
+            BinaryOp::Mul => {
+                self.bytes(&[0x48, 0xf7, 0xe1]); // rdx:rax = rax * rcx
+                self.trap_if(0x82); // nonzero high product sets carry
+            }
+            BinaryOp::Div | BinaryOp::Rem => {
+                self.bytes(&[0x48, 0x85, 0xc9]);
+                self.trap_if(0x84);
+                self.bytes(&[0x31, 0xd2, 0x48, 0xf7, 0xf1]);
+                if matches!(op, BinaryOp::Rem) {
+                    self.bytes(&[0x48, 0x89, 0xd0]);
+                }
+            }
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge => {
+                let cc = match op {
+                    BinaryOp::Eq => 0x94,
+                    BinaryOp::Ne => 0x95,
+                    BinaryOp::Lt => 0x92,
+                    BinaryOp::Le => 0x96,
+                    BinaryOp::Gt => 0x97,
+                    _ => 0x93,
+                };
+                self.bytes(&[0x48, 0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
+            }
+            BinaryOp::And | BinaryOp::Or => {
+                return Err("usize logical operator is unsupported".into());
+            }
+        }
+        Ok(())
+    }
     fn binary(&mut self, op: BinaryOp) -> Result<(), String> {
         match op {
             BinaryOp::Add => {
@@ -444,6 +526,15 @@ impl<'a> Emitter<'a> {
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::IndexCopy { array, index } => {
+                let element = self.index_address(array, index)?;
+                if !indirect(element) {
+                    if *element == ir::Ty::Usize {
+                        self.bytes(&[0x48]);
+                    }
+                    self.bytes(&[0x8b, 0x00]);
+                }
+            }
             cfg::Rvalue::Repeat { ty, value } => self.repeat(ty, value)?,
             cfg::Rvalue::EnumVariant {
                 ty,
@@ -460,8 +551,11 @@ impl<'a> Emitter<'a> {
                 self.load(offset);
             }
             cfg::Rvalue::Unary { op, value } => {
+                let usize = self.function.operand_ty(value)? == ir::Ty::Usize;
                 self.operand(value)?;
                 match op {
+                    UnaryOp::Neg if usize => return Err("usize negation is unsupported".into()),
+                    UnaryOp::Not if usize => self.bytes(&[0x48, 0xf7, 0xd0]),
                     UnaryOp::Neg => {
                         self.bytes(&[0xf7, 0xd8]);
                         self.trap_if(0x80);
@@ -470,11 +564,19 @@ impl<'a> Emitter<'a> {
                 }
             }
             cfg::Rvalue::Binary { op, left, right } => {
+                let usize = self.function.operand_ty(left)? == ir::Ty::Usize;
                 self.operand(left)?;
-                self.bytes(&[0x41, 0x89, 0xc0]); // r8d = left
-                self.operand(right)?;
-                self.bytes(&[0x89, 0xc1, 0x44, 0x89, 0xc0]); // ecx = right, eax = left
-                self.binary(*op)?;
+                if usize {
+                    self.bytes(&[0x49, 0x89, 0xc0]); // r8 = left, full width
+                    self.operand(right)?;
+                    self.bytes(&[0x48, 0x89, 0xc1, 0x4c, 0x89, 0xc0]);
+                    self.binary_usize(*op)?;
+                } else {
+                    self.bytes(&[0x41, 0x89, 0xc0]); // r8d = left
+                    self.operand(right)?;
+                    self.bytes(&[0x89, 0xc1, 0x44, 0x89, 0xc0]); // ecx = right, eax = left
+                    self.binary(*op)?;
+                }
             }
             cfg::Rvalue::Aggregate { ty, fields } => {
                 // Evaluate the whole aggregate into scratch, so destination
@@ -508,6 +610,24 @@ impl<'a> Emitter<'a> {
             cfg::Statement::StorageLive(_)
             | cfg::Statement::StorageDead(_)
             | cfg::Statement::Inspect(_) => {}
+            cfg::Statement::IndexInspect { array, index } => {
+                self.index_address(array, index)?;
+            }
+            cfg::Statement::IndexAssign {
+                array,
+                index,
+                value,
+            } => {
+                let element = self.index_address(array, index)?;
+                self.bytes(&[0x49, 0x89, 0xc1]); // r9 = checked destination
+                self.operand(value)?;
+                if indirect(element) {
+                    self.bytes(&[0x48, 0x89, 0xc6, 0x4c, 0x89, 0xcf]);
+                    self.copy_pointer_value(value_size(element)?);
+                } else {
+                    self.bytes(&[0x49, 0x89, 0x01]); // full scalar word, including usize
+                }
+            }
             cfg::Statement::Assign { destination, value } => {
                 self.rvalue(value)?;
                 let (offset, ty) = self.place(destination)?;
@@ -1054,6 +1174,113 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn usize_full_width_arithmetic_complement_and_all_transports() {
+        let p = frontend::parse(
+            r#"
+            struct Wrapped { value: usize }
+            enum Carrier { Empty, Data(usize) }
+            fn identity(value: usize) -> usize { value }
+            fn wrapped(value: Wrapped) -> Wrapped { value }
+            fn main() {
+                let high = identity(9223372036854775808usize);
+                let max: usize = !0usize;
+                if max != 18446744073709551615usize { 1 / 0; }
+                if high + 7usize != 9223372036854775815usize { 1 / 0; }
+                if high - 1usize != 9223372036854775807usize { 1 / 0; }
+                if 9223372036854775807usize + 1usize != high { 1 / 0; }
+                if 4611686018427387904usize * 2usize != high { 1 / 0; }
+                if max / high != 1usize { 1 / 0; }
+                if max % high != 9223372036854775807usize { 1 / 0; }
+                if !high != 9223372036854775807usize { 1 / 0; }
+                if high < 1usize { 1 / 0; }
+                if high <= 1usize { 1 / 0; }
+                if !(high > 1usize) { 1 / 0; }
+                if !(high >= 1usize) { 1 / 0; }
+                if !(high <= high) { 1 / 0; }
+                if !(high >= high) { 1 / 0; }
+                if high == 0usize { 1 / 0; }
+                let tuple = (high, max);
+                if tuple.0 != high { 1 / 0; }
+                if tuple.1 != max { 1 / 0; }
+                let w = wrapped(Wrapped { value: high });
+                if w.value != high { 1 / 0; }
+                let carrier = Carrier::Data(max);
+                let payload = match carrier { Carrier::Empty => 0usize, Carrier::Data(n) => n };
+                if payload != max { 1 / 0; }
+                let mut values = [high; 2];
+                let i = 1usize;
+                if values[i] != high { 1 / 0; }
+                values[i] = max;
+                if values[i] != max { 1 / 0; }
+                println!("usize64");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"usize64\n");
+    }
+
+    #[test]
+    fn usize_unsigned_overflow_zero_division_and_full_width_bounds_trap() {
+        for source in [
+            "fn main() { let n = 18446744073709551615usize + 1usize; }",
+            "fn main() { let n = 0usize - 1usize; }",
+            "fn main() { let n = 9223372036854775808usize * 2usize; }",
+            "fn main() { let n = 7usize / 0usize; }",
+            "fn main() { let n = 7usize % 0usize; }",
+            "fn main() { let a = [7]; let i = 4294967296usize; let n = a[i]; }",
+            "fn main() { let a = [7]; let i = 18446744073709551615usize; let n = a[i]; }",
+            "fn main() { let mut a = [7]; let i = 4294967296usize; a[i] = 9; }",
+            "fn main() { let a = [7; 0]; let i = 0usize; let n = a[i]; }",
+            "struct Item { n: i32 } fn main() { let a = [Item { n: 7 }]; let i = 4294967296usize; let _ = a[i]; }",
+        ] {
+            let p = frontend::parse(source).unwrap();
+            let output = run(&p);
+            assert_eq!(output.status.code(), Some(101), "{source}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn dynamic_index_reads_replacements_inspection_and_ordered_snapshots() {
+        let p = frontend::parse(
+            r#"
+            struct Item { value: i32 }
+            fn rhs() -> [usize; 9] {
+                println!("rhs");
+                [9223372036854775808usize; 9]
+            }
+            fn move_items(value: [Item; 1]) -> [Item; 1] { value }
+            fn main() {
+                let mut rows = [[1usize; 9]; 2];
+                rows[{ println!("index"); 1usize }] = rhs();
+                let saved = rows[1usize];
+                rows[1usize] = [3usize; 9];
+                if saved[8] != 9223372036854775808usize { 1 / 0; }
+                let replaced = rows[{ rows = [[5usize; 9]; 2]; 0usize }];
+                if replaced[8] != 5usize { 1 / 0; }
+                let late: [i32; 1];
+                let initialized = late[{ late = [7]; 0usize }];
+                if initialized != 7 { 1 / 0; }
+                let mut items = [Item { value: 17 }];
+                let _ = items[0usize];
+                items[0usize] = Item { value: 21 };
+                let moved = move_items(items);
+                if moved[0].value != 21 { 1 / 0; }
+                let units = [(); 2];
+                let unit = units[1usize];
+                println!("dynamic-index");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"rhs\nindex\ndynamic-index\n");
     }
 
     #[test]

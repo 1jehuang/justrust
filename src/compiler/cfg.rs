@@ -36,6 +36,15 @@ pub struct BasicBlock {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
+    IndexAssign {
+        array: Place,
+        index: Operand,
+        value: Operand,
+    },
+    IndexInspect {
+        array: Place,
+        index: Operand,
+    },
     /// Nonconsuming initialized-place read needed while evaluating an index.
     /// This has no runtime load or value result.
     Inspect(Place),
@@ -49,6 +58,7 @@ pub enum Statement {
 
 #[derive(Clone, Debug)]
 pub enum Constant {
+    Usize(u64),
     Enum { ty: ir::EnumTy, variant: usize },
     I32(i32),
     Bool(bool),
@@ -64,6 +74,10 @@ pub enum Operand {
 
 #[derive(Clone, Debug)]
 pub enum Rvalue {
+    IndexCopy {
+        array: Place,
+        index: Operand,
+    },
     Repeat {
         ty: Ty,
         value: Operand,
@@ -211,6 +225,7 @@ impl Function {
     pub fn operand_ty(&self, operand: &Operand) -> Result<Ty, String> {
         match operand {
             Operand::Constant(Constant::I32(_)) => Ok(Ty::I32),
+            Operand::Constant(Constant::Usize(_)) => Ok(Ty::Usize),
             Operand::Constant(Constant::Bool(_)) => Ok(Ty::Bool),
             Operand::Constant(Constant::Unit) => Ok(Ty::Unit),
             Operand::Constant(Constant::Enum { ty, variant }) => {
@@ -254,8 +269,25 @@ impl Function {
         }
     }
 
+    fn indexed_element_ty(&self, array: &Place, index: &Operand) -> Result<&Ty, String> {
+        self.require_operand(index, &Ty::Usize)?;
+        let array_ty = self.place_ty(array)?;
+        validate_type(array_ty, 0)?;
+        let Ty::Array { element, .. } = array_ty else {
+            return Err("dynamic indexing requires array place".into());
+        };
+        Ok(element)
+    }
+
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         match value {
+            Rvalue::IndexCopy { array, index } => {
+                let element = self.indexed_element_ty(array, index)?;
+                if !element.is_copy() {
+                    return Err("unsupported: non-Copy dynamic array element extraction".into());
+                }
+                Ok(element.clone())
+            }
             Rvalue::Repeat { ty, value } => {
                 validate_type(ty, 0)?;
                 let Ty::Array { element, len } = ty else {
@@ -304,6 +336,7 @@ impl Function {
                 }
                 let want = match op {
                     UnaryOp::Neg => Ty::I32,
+                    UnaryOp::Not if ty == Ty::Usize => Ty::Usize,
                     UnaryOp::Not => Ty::Bool,
                 };
                 self.require_operand(value, &want)?;
@@ -333,6 +366,8 @@ impl Function {
                     } else {
                         left_ty
                     }
+                } else if left_ty == Ty::Usize {
+                    Ty::Usize
                 } else {
                     Ty::I32
                 };
@@ -343,7 +378,7 @@ impl Function {
                 }
                 self.require_operand(left, &operand_ty)?;
                 self.require_operand(right, &operand_ty)?;
-                Ok(if comparison { Ty::Bool } else { Ty::I32 })
+                Ok(if comparison { Ty::Bool } else { operand_ty })
             }
             Rvalue::Aggregate { ty, fields } => {
                 validate_type(ty, 0)?;
@@ -405,6 +440,17 @@ impl Function {
         for item in &self.blocks {
             for statement in &item.statements {
                 match &statement.value {
+                    Statement::IndexAssign {
+                        array,
+                        index,
+                        value,
+                    } => {
+                        let element = self.indexed_element_ty(array, index)?;
+                        self.require_operand(value, element)?;
+                    }
+                    Statement::IndexInspect { array, index } => {
+                        self.indexed_element_ty(array, index)?;
+                    }
                     Statement::Inspect(place) => {
                         self.place_ty(place)?;
                     }
@@ -701,6 +747,34 @@ impl Lowerer<'_> {
         }
     }
 
+    fn dynamic_source(&mut self, base: ExprId, index: ExprId) -> Result<(Place, Operand), String> {
+        // Static place prefixes are evaluated now. In particular a[0][i]
+        // inspects a before evaluating i, unlike a[i]'s final array read.
+        let mut root = base;
+        for depth in 0..=ir::MAX_PATTERN_PROJECTION_DEPTH {
+            let expression = self
+                .source
+                .exprs
+                .get(root.0)
+                .ok_or("invalid dynamic array base")?;
+            match &expression.kind {
+                ir::ExprKind::DynamicIndex { .. } => return Err("unsupported: chained dynamic array indexing; snapshot the intermediate array in a local".into()),
+                ir::ExprKind::Index { base, .. } | ir::ExprKind::Field { base, .. } => {
+                    if depth == ir::MAX_PATTERN_PROJECTION_DEPTH { return Err("dynamic array base projection depth exceeds limit 128".into()); }
+                    root = *base;
+                }
+                _ => break,
+            }
+        }
+        let array = self.pattern_source(base)?;
+        if !matches!(self.result.place_ty(&array)?, Ty::Array { .. }) {
+            return Err("dynamic indexing requires array place".into());
+        }
+        let index = self.expression(index)?;
+        self.result.require_operand(&index, &Ty::Usize)?;
+        Ok((array, index))
+    }
+
     /// Evaluate the non-place root once, retaining field/index chains as
     /// addresses. Fields do not read their parent. An index inspects its array
     /// base even when the selected element is ignored, but never moves it.
@@ -715,6 +789,13 @@ impl Lowerer<'_> {
                 .ok_or("invalid pattern initializer expression")?;
             match &expression.kind {
                 ir::ExprKind::Local(local) => break place(*local),
+                ir::ExprKind::DynamicIndex { .. }
+                    if projection
+                        .iter()
+                        .any(|part| matches!(part, Projection::ConstantIndex(_))) =>
+                {
+                    return Err("unsupported: chained dynamic array indexing; snapshot the intermediate array in a local".into());
+                }
                 ir::ExprKind::Field { base, index } | ir::ExprKind::Index { base, index } => {
                     if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
                         return Err("pattern initializer projection depth exceeds limit 128".into());
@@ -766,6 +847,24 @@ impl Lowerer<'_> {
         self.scopes.push(Vec::new());
         for statement in &body.statements {
             match statement {
+                ir::Stmt::AssignIndex {
+                    array,
+                    index,
+                    value,
+                } => {
+                    // Own the RHS snapshot before any left-hand-side effects.
+                    let value = self.expression(*value)?;
+                    self.inspect_index_prefixes(array, Some(*index))?;
+                    let index_value = self.expression(*index)?;
+                    self.statement(
+                        Statement::IndexAssign {
+                            array: array.clone(),
+                            index: index_value,
+                            value,
+                        },
+                        Some(*index),
+                    );
+                }
                 ir::Stmt::Declare { local } => {
                     self.result.place_ty(&place(*local))?;
                     if self.parameters.contains(local) {
@@ -788,6 +887,18 @@ impl Lowerer<'_> {
                         bindings,
                         &self.parameters,
                     )?;
+                    if bindings.is_empty()
+                        && let ir::ExprKind::DynamicIndex { base, index } = self
+                            .source
+                            .exprs
+                            .get(value.0)
+                            .ok_or("invalid ignored dynamic index")?
+                            .kind
+                    {
+                        let (array, index) = self.dynamic_source(base, index)?;
+                        self.statement(Statement::IndexInspect { array, index }, Some(*value));
+                        continue;
+                    }
                     let source = self.pattern_source(*value)?;
                     let completes =
                         self.source.exprs[value.0].completion == ir::Completion::Returns;
@@ -929,6 +1040,22 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
+            ir::ExprKind::Usize(value) => self.assign(
+                destination.clone(),
+                Rvalue::Use(Operand::Constant(Constant::Usize(*value))),
+                origin,
+            ),
+            ir::ExprKind::DynamicIndex { base, index } => {
+                if !expression.ty.is_copy() {
+                    return Err("unsupported: non-Copy dynamic array element extraction; only direct let _ is supported".into());
+                }
+                let (array, index) = self.dynamic_source(*base, *index)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::IndexCopy { array, index },
+                    origin,
+                );
+            }
             ir::ExprKind::Array(elements) => {
                 let Ty::Array { len, .. } = &expression.ty else {
                     return Err("checked array expression requires array type".into());
@@ -1380,6 +1507,334 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn usize_cfg_operands_and_unsigned_operators_do_not_coerce_i32() {
+        let function = nominal_lowered(&with_root(Ty::Usize, vec![], vec![]));
+        let max = Operand::Constant(Constant::Usize(u64::MAX));
+        let one = Operand::Constant(Constant::Usize(1));
+        assert_eq!(function.operand_ty(&max).unwrap(), Ty::Usize);
+        assert_eq!(
+            function
+                .rvalue_ty(&Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: max.clone(),
+                    right: one.clone()
+                })
+                .unwrap(),
+            Ty::Usize
+        );
+        assert_eq!(
+            function
+                .rvalue_ty(&Rvalue::Binary {
+                    op: BinaryOp::Lt,
+                    left: max.clone(),
+                    right: one.clone()
+                })
+                .unwrap(),
+            Ty::Bool
+        );
+        assert_eq!(
+            function
+                .rvalue_ty(&Rvalue::Unary {
+                    op: UnaryOp::Not,
+                    value: max.clone()
+                })
+                .unwrap(),
+            Ty::Usize
+        );
+        assert!(
+            function
+                .rvalue_ty(&Rvalue::Unary {
+                    op: UnaryOp::Neg,
+                    value: max.clone()
+                })
+                .is_err()
+        );
+        for op in [BinaryOp::Add, BinaryOp::Lt, BinaryOp::Eq] {
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: max.clone(),
+                        right: Operand::Constant(Constant::I32(1))
+                    })
+                    .is_err()
+            );
+        }
+        let root = Ty::Array {
+            element: std::sync::Arc::new(Ty::I32),
+            len: 1,
+        };
+        let function = nominal_lowered(&with_root(root, vec![], vec![]));
+        assert_eq!(
+            function
+                .rvalue_ty(&Rvalue::IndexCopy {
+                    array: place(LocalId(0)),
+                    index: max
+                })
+                .unwrap(),
+            Ty::I32
+        );
+        assert!(
+            function
+                .rvalue_ty(&Rvalue::IndexCopy {
+                    array: place(LocalId(0)),
+                    index: Operand::Constant(Constant::I32(0))
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn dynamic_index_may_initialize_original_array_before_final_read() {
+        let array = Ty::Array {
+            element: std::sync::Arc::new(Ty::I32),
+            len: 1,
+        };
+        let mut source = with_root(
+            array.clone(),
+            vec![
+                expr(Ty::I32, ir::ExprKind::Int(7)),
+                expr(array.clone(), ir::ExprKind::Array(vec![ExprId(0)])),
+                expr(Ty::Usize, ir::ExprKind::Usize(0)),
+                expr(
+                    Ty::Usize,
+                    ir::ExprKind::Block(ir::Block {
+                        statements: vec![ir::Stmt::Assign {
+                            local: LocalId(0),
+                            value: ExprId(1),
+                        }],
+                        tail: Some(ExprId(2)),
+                    }),
+                ),
+                expr(array, ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::DynamicIndex {
+                        base: ExprId(4),
+                        index: ExprId(3),
+                    },
+                ),
+            ],
+            vec![
+                ir::Stmt::Declare { local: LocalId(0) },
+                ir::Stmt::Expr(ExprId(5)),
+            ],
+        );
+        source.params.clear();
+        let function = nominal_lowered(&source);
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .any(|s| matches!(s.value, Statement::Inspect(_)))
+        );
+        let dynamic = function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .find_map(|s| match &s.value {
+                Statement::Assign {
+                    value: Rvalue::IndexCopy { array, .. },
+                    ..
+                } => Some(array),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            dynamic,
+            &place(LocalId(0)),
+            "read must retain original place, not a copied base snapshot"
+        );
+    }
+
+    #[test]
+    fn dynamic_index_static_prefix_read_precedes_current_index_effects() {
+        let child = Ty::Array {
+            element: std::sync::Arc::new(Ty::I32),
+            len: 1,
+        };
+        let array = Ty::Array {
+            element: std::sync::Arc::new(child.clone()),
+            len: 1,
+        };
+        let mut source = with_root(
+            array.clone(),
+            vec![
+                expr(Ty::I32, ir::ExprKind::Int(7)),
+                expr(child.clone(), ir::ExprKind::Array(vec![ExprId(0)])),
+                expr(array.clone(), ir::ExprKind::Array(vec![ExprId(1)])),
+                expr(Ty::Usize, ir::ExprKind::Usize(0)),
+                expr(
+                    Ty::Usize,
+                    ir::ExprKind::Block(ir::Block {
+                        statements: vec![ir::Stmt::Assign {
+                            local: LocalId(0),
+                            value: ExprId(2),
+                        }],
+                        tail: Some(ExprId(3)),
+                    }),
+                ),
+                expr(array, ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    child,
+                    ir::ExprKind::Index {
+                        base: ExprId(5),
+                        index: 0,
+                    },
+                ),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::DynamicIndex {
+                        base: ExprId(6),
+                        index: ExprId(4),
+                    },
+                ),
+            ],
+            vec![
+                ir::Stmt::Declare { local: LocalId(0) },
+                ir::Stmt::Expr(ExprId(7)),
+            ],
+        );
+        source.params.clear();
+        let function = nominal_lowered(&source);
+        assert!(!super::super::ownership::analyze(&function).passed());
+        let statements: Vec<_> = function.blocks.iter().flat_map(|b| &b.statements).collect();
+        let inspect = statements
+            .iter()
+            .position(|s| matches!(s.value, Statement::Inspect(_)))
+            .unwrap();
+        let initialize = statements.iter().position(|s| matches!(&s.value, Statement::Assign { destination, .. } if destination.local == LocalId(0))).unwrap();
+        assert!(inspect < initialize);
+    }
+
+    #[test]
+    fn ignored_noncopy_dynamic_index_has_no_fabricated_element_snapshot() {
+        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let array = Ty::Array {
+            element: std::sync::Arc::new(item.clone()),
+            len: 1,
+        };
+        let mut source = with_root(
+            array.clone(),
+            vec![
+                expr(array, ir::ExprKind::Local(LocalId(0))),
+                expr(Ty::Usize, ir::ExprKind::Usize(0)),
+                expr(
+                    item.clone(),
+                    ir::ExprKind::DynamicIndex {
+                        base: ExprId(0),
+                        index: ExprId(1),
+                    },
+                ),
+            ],
+            vec![ir::Stmt::LetPattern {
+                value: ExprId(2),
+                ty: item.clone(),
+                bindings: vec![],
+            }],
+        );
+        let function = nominal_lowered(&source);
+        let element_local = LocalId(source.locals.len() + 2);
+        assert!(
+            !function.blocks.iter().flat_map(|b| &b.statements).any(
+                |s| matches!(s.value, Statement::StorageLive(local) if local == element_local)
+            )
+        );
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .filter(|s| matches!(s.value, Statement::IndexInspect { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .any(|s| matches!(
+                    s.value,
+                    Statement::Assign {
+                        value: Rvalue::IndexCopy { .. },
+                        ..
+                    }
+                ))
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
+        source.locals.push(ir::LocalDecl {
+            name: "extracted".into(),
+            ty: item,
+            mutable: false,
+        });
+        source.body.statements = vec![ir::Stmt::Let {
+            local: LocalId(1),
+            value: ExprId(2),
+        }];
+        assert!(lower(&source).unwrap_err().contains("unsupported"));
+    }
+
+    #[test]
+    fn dynamic_index_assignment_owns_rhs_before_index_call() {
+        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let array = Ty::Array {
+            element: std::sync::Arc::new(item.clone()),
+            len: 1,
+        };
+        let mut source = with_root(
+            array,
+            vec![
+                expr(item.clone(), ir::ExprKind::Local(LocalId(1))),
+                expr(
+                    Ty::Usize,
+                    ir::ExprKind::Call {
+                        name: "index".into(),
+                        args: vec![],
+                        signature: ir::Signature {
+                            params: vec![],
+                            result: Ty::Usize,
+                        },
+                    },
+                ),
+            ],
+            vec![ir::Stmt::AssignIndex {
+                array: place(LocalId(0)),
+                index: ExprId(1),
+                value: ExprId(0),
+            }],
+        );
+        source.locals.push(ir::LocalDecl {
+            name: "rhs".into(),
+            ty: item,
+            mutable: false,
+        });
+        source.params.push(LocalId(1));
+        let function = nominal_lowered(&source);
+        let head = &function.blocks[function.entry.0];
+        assert!(head.statements.iter().any(|s| matches!(&s.value, Statement::Assign { value: Rvalue::Use(Operand::Move(place)), .. } if place.local == LocalId(1))));
+        assert!(matches!(&head.terminator.value, Terminator::Call { name, .. } if name == "index"));
+        let write = function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .find_map(|s| match &s.value {
+                Statement::IndexAssign { value, .. } => Some(value),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            matches!(write, Operand::Move(place) if function.locals[place.local.0].name == "$expr0")
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
     }
 
     #[test]
@@ -2335,6 +2790,19 @@ mod tests {
             assert!(seen.len() < 10_000, "fixture state exploration limit");
             for statement in &function.blocks[id.0].statements {
                 match &statement.value {
+                    Statement::IndexAssign {
+                        array,
+                        index,
+                        value,
+                    } => {
+                        live_operand(value, &live);
+                        live_operand(index, &live);
+                        assert!(live[array.local.0], "indexed assignment reads dead array");
+                    }
+                    Statement::IndexInspect { array, index } => {
+                        live_operand(index, &live);
+                        assert!(live[array.local.0], "indexed inspection reads dead array");
+                    }
                     Statement::Inspect(place) => {
                         assert!(live[place.local.0], "inspection reads dead storage");
                     }
@@ -2357,6 +2825,10 @@ mod tests {
                     Statement::Assign { destination, value } => {
                         assert!(live[destination.local.0], "destination local is not live");
                         match value {
+                            Rvalue::IndexCopy { array, index } => {
+                                live_operand(index, &live);
+                                assert!(live[array.local.0], "dynamic index reads dead array");
+                            }
                             Rvalue::Use(value)
                             | Rvalue::Unary { value, .. }
                             | Rvalue::Repeat { value, .. } => live_operand(value, &live),

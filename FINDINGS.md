@@ -8268,3 +8268,27 @@ The candidate measurement is withheld pending a usable baseline, and the
 comprehensive comparison remains blocked rather than replaced by a narrow
 fixture. No speedup, zero default overhead, full CPU/span or useful-thread
 ceiling follows. See `docs/dispatch-result-provenance-results-20261015.md`.
+
+## 2026-10-16: genuine usize and runtime indexing
+
+Implemented full-width unsigned 64-bit scalar values and ordered runtime array
+operations through checked IR, cached CFG, ownership analysis and native x86-64.
+No dynamic move paths are fabricated. Unknown writes preserve initialization
+and invalidate contained enum selection proofs. Earlier static index checks
+precede subsequent index effects, while simple-array readiness follows current
+index effects. RHS snapshots precede LHS evaluation. Indexed non-Copy values
+can be ignored only through direct let-wildcard inspection in this slice.
+
+Final hosted check `20261016-001444223-1978091`, test
+`20261016-001445099-1978376` (647 passed) and strict all-target clippy
+`20261016-001447059-1978064` all passed. Exported exact profiles are retained
+in `data/runs/prototype-bootstrap/2026-10-usize.jsonl`. Formatting and diff
+checks passed. Independent review found no remaining concrete implementation
+blocker at the final candidate checkpoint.
+
+The new 32-case external-oracle corpus separates 15 successful executions,
+six invalid programs, nine declared runtime exit-101 cases and two legal
+unsupported boundaries. Trap checks require successful source compilation,
+exact effect stdout and status101, with no claim of native panic-text parity.
+The exact historical array runtime-usize fixture is promoted unchanged.
+No speedup, fully cold timing or full Rust compatibility claim is made.

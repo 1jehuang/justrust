@@ -399,13 +399,12 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_dynamic_usize_index() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "dynamic_usize_index",
+fn accepts_dynamic_usize_index() {
+    runs(
         r#"fn index()->usize{1} fn run()->i32{let a=[3,7];a[index()]}
 fn main() { if run() == 7 { println!("array oracle ok"); } }
 "#,
+        "array oracle ok\n",
     );
 }
 

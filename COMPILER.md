@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with fixed arrays, nominal structs, payload enums and match,
+Status: executable Rust-subset implementation with genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -21,7 +21,7 @@ an executable and does not require `-o`. Existing outputs and traces are never
 overwritten. Invalid and unsupported programs fail explicitly. Output is not
 published until every required check and code generation operation succeeds.
 
-Initial supported syntax: free functions with `i32`, `bool`, unit, nested tuples
+Initial supported syntax: free functions with `i32`, `usize`, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and
 numeric/named field projections,
 local bindings and shadowing, typed deferred local initialization,
@@ -41,9 +41,14 @@ literal indexing are supported up to 4096 elements, subject to independent
 resource limits. Repeats evaluate their operand once even at length zero; indexed
 wildcards still require initialized array storage. Non-Copy moves through an
 index reject, including nested fields. Contextual empty literals are supported,
-while backward inference, runtime indices, slices and array patterns remain
-following work. Every array uses the private indirect aggregate ABI, including
-zero-length arrays. See `ARRAYS.md`.
+while backward inference, slices and array patterns remain following work.
+Runtime indices use genuine unsigned 64-bit `usize`, with full-width bounds checks
+and owning Copy-element snapshots. Direct ignored non-Copy dynamic indexing uses
+readiness and bounds checks without consuming an element. Writes snapshot the RHS
+before LHS effects and invalidate all contained enum selection proofs. Chained
+dynamic place bases and non-Copy dynamic extraction remain unsupported. Every
+array uses the private indirect aggregate ABI, including zero-length arrays.
+See `ARRAYS.md` and `USIZE.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.

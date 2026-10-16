@@ -189,7 +189,7 @@ FIXTURES = json.loads(r'''
     "full_source": "fn run()->i32{let a=[3,7];a[2]}\nfn main() { run(); }\n"
   },
   {
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "dynamic_usize_index",
     "source": "fn index()->usize{1} fn run()->i32{let a=[3,7];a[index()]}",
     "expected": 7,

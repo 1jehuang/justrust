@@ -22,6 +22,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
+- [x] Genuine 64-bit usize and ordered, bounds-checked runtime array operations.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -55,6 +56,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       libraries, real projects and self-hosting. Self-hosting alone is not enough.
 
 ## Active slice
+
+Genuine unsigned 64-bit `usize` and runtime array indexing now pass 647 hosted
+tests and strict all-target lint. `USIZE.md` records ordered index/readiness
+operations, owning RHS snapshots, full-width arithmetic/bounds, direct ignored
+non-Copy indexing and conservative selection-proof invalidation. The dedicated
+32-case corpus distinguishes 15 successful programs, six invalid programs, nine
+explicit exit-101 runtime cases and two legal-unsupported boundaries. The exact
+prior array runtime-index boundary is promoted unchanged to accepted. Backward
+numeric inference, chained dynamic places, slices, broader primitives and
+references/borrowing remain open. Tracked twelve-corpus native validation follows.
 
 Fixed arrays and decimal literal indexing now pass 591 hosted tests and strict
 all-target lint under `ARRAYS.md`. The bound is 4096 elements, with independent

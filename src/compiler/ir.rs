@@ -273,6 +273,7 @@ pub struct LoopId(pub usize);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     I32,
+    Usize,
     Bool,
     Unit,
     /// Nonempty structural tuple. The empty tuple is canonically Unit.
@@ -308,7 +309,7 @@ impl Ty {
 
     pub fn is_copy(&self) -> bool {
         match self {
-            Self::I32 | Self::Bool | Self::Unit | Self::Never => true,
+            Self::I32 | Self::Usize | Self::Bool | Self::Unit | Self::Never => true,
             Self::Struct(_) | Self::Enum(_) => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
@@ -430,6 +431,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
         }
         match (a, b) {
             (Ty::I32, Ty::I32)
+            | (Ty::Usize, Ty::Usize)
             | (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Never, Ty::Never) => {}
@@ -470,6 +472,11 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
+    AssignIndex {
+        array: Place,
+        index: ExprId,
+        value: ExprId,
+    },
     /// Starts a fresh binding's lifetime without initializing its value.
     Declare {
         local: LocalId,
@@ -524,6 +531,11 @@ pub struct MatchArm {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind {
+    Usize(u64),
+    DynamicIndex {
+        base: ExprId,
+        index: ExprId,
+    },
     Array(Vec<ExprId>),
     Repeat {
         value: ExprId,
@@ -767,6 +779,23 @@ impl CheckedFunction {
         let mut blocks = vec![&self.body];
         for value in &self.exprs {
             match &value.kind {
+                ExprKind::DynamicIndex { base, index } => {
+                    expr(*base)?;
+                    expr(*index)?;
+                    if self.exprs[index.0].ty != Ty::Usize && self.exprs[index.0].ty != Ty::Never {
+                        return Err("dynamic array index requires usize".into());
+                    }
+                    let Ty::Array { element, len } = &self.exprs[base.0].ty else {
+                        return Err("dynamic indexing requires array type".into());
+                    };
+                    if *len > MAX_ARRAY_LEN {
+                        return Err("array length exceeds limit 4096".into());
+                    }
+                    let mut work = 0;
+                    if !pattern_types_equal(&value.ty, element, &mut work)? {
+                        return Err("dynamic index result type mismatch".into());
+                    }
+                }
                 ExprKind::Array(elements) => {
                     let Ty::Array { len, .. } = &value.ty else {
                         return Err("array expression requires array type".into());
@@ -869,7 +898,10 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
-                ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Println(_) => {}
+                ExprKind::Int(_)
+                | ExprKind::Usize(_)
+                | ExprKind::Bool(_)
+                | ExprKind::Println(_) => {}
             }
         }
         while let Some(block) = blocks.pop() {
@@ -878,6 +910,25 @@ impl CheckedFunction {
             }
             for statement in &block.statements {
                 match statement {
+                    Stmt::AssignIndex {
+                        array,
+                        index,
+                        value,
+                    } => {
+                        local(array.local)?;
+                        expr(*index)?;
+                        expr(*value)?;
+                        let array_ty =
+                            projected_ty(&self.locals[array.local.0].ty, &array.projection)?;
+                        if !matches!(array_ty, Ty::Array { .. }) {
+                            return Err("dynamic indexed assignment requires array type".into());
+                        }
+                        if self.exprs[index.0].ty != Ty::Usize
+                            && self.exprs[index.0].ty != Ty::Never
+                        {
+                            return Err("dynamic array index requires usize".into());
+                        }
+                    }
                     Stmt::Declare { local: id } => {
                         local(*id)?;
                         if parameters.contains(id) {

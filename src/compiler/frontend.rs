@@ -96,6 +96,7 @@ pub enum FieldSelector {
 pub enum Type {
     Array(Box<Type>, usize),
     I32,
+    Usize,
     Bool,
     Unit,
     Tuple(Vec<Type>),
@@ -160,6 +161,11 @@ pub enum Stmt {
         name: String,
         value: Expr,
     },
+    AssignIndex {
+        array: Place,
+        index: Expr,
+        value: Expr,
+    },
     AssignPlace {
         place: Place,
         value: Expr,
@@ -175,6 +181,12 @@ pub enum Stmt {
 }
 #[derive(Clone, Debug)]
 pub enum Expr {
+    Usize(u64),
+    Unsuffixed(u64),
+    DynamicIndex {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
     Array(Vec<Expr>),
     Repeat {
         value: Box<Expr>,
@@ -582,6 +594,8 @@ impl Parser {
             Ok(Type::Array(Box::new(element), len))
         } else if self.eat("i32") {
             Ok(Type::I32)
+        } else if self.eat("usize") {
+            Ok(Type::Usize)
         } else if self.eat("bool") {
             Ok(Type::Bool)
         } else if self.eat("(") {
@@ -917,12 +931,17 @@ impl Parser {
         }
         if self.is("-") || self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
             let negative = self.eat("-");
+            if self.token().text.ends_with("usize") {
+                return Err(self.error("usize numeric match patterns are unsupported"));
+            }
             let text = if negative {
                 format!("-{}", self.token().text)
             } else {
                 self.token().text.clone()
             };
             let value = text
+                .strip_suffix("i32")
+                .unwrap_or(&text)
                 .parse::<i32>()
                 .map_err(|_| self.error("invalid or out-of-range i32 pattern literal"))?;
             self.at += 1;
@@ -1083,9 +1102,18 @@ impl Parser {
             } else {
                 let expr = self.expr(0)?;
                 if self.eat("=") {
-                    let place = self.assignment_place(expr)?;
                     let value = self.expr(0)?;
                     self.expect(";")?;
+                    if let Expr::DynamicIndex { base, index } = expr {
+                        let array = self.assignment_place(*base)?;
+                        statements.push(Stmt::AssignIndex {
+                            array,
+                            index: *index,
+                            value,
+                        });
+                        continue;
+                    }
+                    let place = self.assignment_place(expr)?;
                     if place.fields.is_empty() {
                         statements.push(Stmt::Assign {
                             name: place.local,
@@ -1148,7 +1176,7 @@ impl Parser {
     }
     fn expr_inner(&mut self, min: u8) -> Result<Expr, String> {
         let mut left = if self.eat("-") {
-            if self.is("2147483648") {
+            if self.is("2147483648") || self.is("2147483648i32") {
                 self.at += 1;
                 Expr::Int(i32::MIN)
             } else {
@@ -1295,13 +1323,30 @@ impl Parser {
         } else if !self.token().string
             && self.token().text.starts_with(|c: char| c.is_ascii_digit())
         {
-            let n = self
-                .token()
-                .text
-                .parse::<i32>()
-                .map_err(|_| self.error("invalid or out-of-range i32 literal"))?;
+            let text = self.token().text.clone();
+            let (digits, suffix) = if let Some(d) = text.strip_suffix("usize") {
+                (d, "usize")
+            } else if let Some(d) = text.strip_suffix("i32") {
+                (d, "i32")
+            } else {
+                (text.as_str(), "")
+            };
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(self.error(
+                    "only decimal integer literals with usize or i32 suffix are supported",
+                ));
+            }
+            let n = digits
+                .parse::<u64>()
+                .map_err(|_| self.error("integer literal exceeds u64"))?;
             self.at += 1;
-            Expr::Int(n)
+            match suffix {
+                "usize" => Expr::Usize(n),
+                "i32" => {
+                    Expr::Int(i32::try_from(n).map_err(|_| self.error("out-of-range i32 literal"))?)
+                }
+                _ => Expr::Unsuffixed(n),
+            }
         } else {
             let name = self.path()?;
             if self.eat("!") {
@@ -1353,12 +1398,29 @@ impl Parser {
         let mut compared = false;
         loop {
             if self.eat("[") {
-                let index = self.array_number("array index")?;
-                self.expect("]")?;
-                left = Expr::Index {
-                    base: Box::new(left),
-                    index,
-                };
+                let literal = self.token().text.clone();
+                let constant = !self.token().string
+                    && !literal.is_empty()
+                    && literal.bytes().all(|b| b.is_ascii_digit())
+                    && self.tokens.get(self.at + 1).is_some_and(|t| t.text == "]");
+                if constant {
+                    let index = literal
+                        .parse::<usize>()
+                        .map_err(|_| self.error("array index exceeds usize"))?;
+                    self.at += 1;
+                    self.expect("]")?;
+                    left = Expr::Index {
+                        base: Box::new(left),
+                        index,
+                    };
+                } else {
+                    let index = self.nested_expr()?;
+                    self.expect("]")?;
+                    left = Expr::DynamicIndex {
+                        base: Box::new(left),
+                        index: Box::new(index),
+                    };
+                }
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
                 continue;
             }
@@ -1819,6 +1881,10 @@ impl Resolver<'_> {
                     self.pattern(pattern, module, &mut names)?;
                     locals.last_mut().unwrap().extend(names);
                 }
+                Stmt::AssignIndex { index, value, .. } => {
+                    self.expr(value, module, locals)?;
+                    self.expr(index, module, locals)?;
+                }
                 Stmt::Assign { value, .. }
                 | Stmt::AssignPlace { value, .. }
                 | Stmt::Expr(value)
@@ -1852,6 +1918,10 @@ impl Resolver<'_> {
                 }
             }
             Expr::Repeat { value, .. } => self.expr(value, module, locals)?,
+            Expr::DynamicIndex { base, index } => {
+                self.expr(base, module, locals)?;
+                self.expr(index, module, locals)?;
+            }
             Expr::Index { base, .. } => self.expr(base, module, locals)?,
             Expr::Var(name) => {
                 if !name.contains("::") && locals.iter().rev().any(|scope| scope.contains(name)) {
@@ -2080,6 +2150,10 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                     }
                 }
                 Expr::Repeat { value, .. } => push(DepthNode::Expr(value)),
+                Expr::DynamicIndex { base, index } => {
+                    push(DepthNode::Expr(base));
+                    push(DepthNode::Expr(index));
+                }
                 Expr::Index { base, .. } => push(DepthNode::Expr(base)),
                 Expr::EnumVariant { fields, .. } => {
                     for (_, e) in fields {
@@ -2139,6 +2213,10 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                             push(DepthNode::Pattern(pattern));
                             push(DepthNode::Type(ty));
                             push(DepthNode::Expr(value));
+                        }
+                        Stmt::AssignIndex { index, value, .. } => {
+                            push(DepthNode::Expr(value));
+                            push(DepthNode::Expr(index));
                         }
                         Stmt::Assign { value, .. }
                         | Stmt::AssignPlace { value, .. }
@@ -2526,6 +2604,7 @@ fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
                 len: *len,
             })
         }
+        Type::Usize => Ok(ir::Ty::Usize),
         Type::I32 => Ok(ir::Ty::I32),
         Type::Bool => Ok(ir::Ty::Bool),
         Type::Unit => Ok(ir::Ty::Unit),
@@ -2731,6 +2810,49 @@ impl<'a> Checker<'a> {
         }
         Ok(())
     }
+    fn require_index(&self, flow: &Flow) -> Result<(), String> {
+        self.require(flow,&ir::Ty::Usize).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
+    }
+    fn scalar_hint(&self, e: &Expr) -> Option<ir::Ty> {
+        match e {
+            Expr::Usize(_) => Some(ir::Ty::Usize),
+            Expr::Int(_) => Some(ir::Ty::I32),
+            Expr::Var(name) => self
+                .lookup(name)
+                .ok()
+                .map(|id| self.locals[id.0].ty.clone()),
+            Expr::Call { name, .. } => self
+                .signatures
+                .functions
+                .get(name)
+                .map(|s| s.result.clone()),
+            Expr::Unary { value, .. } => self.scalar_hint(value),
+            Expr::Binary { left, right, .. } => {
+                self.scalar_hint(left).or_else(|| self.scalar_hint(right))
+            }
+            Expr::Field { base, field } => self
+                .scalar_hint(base)
+                .and_then(|t| self.field_type(&t, field).ok().map(|(_, t)| t)),
+            Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
+                self.scalar_hint(base).and_then(|t| {
+                    if let ir::Ty::Array { element, .. } = t {
+                        Some(element.as_ref().clone())
+                    } else {
+                        None
+                    }
+                })
+            }
+            Expr::Block(b) => b.tail.as_ref().and_then(|e| self.scalar_hint(e)),
+            _ => None,
+        }
+    }
+    fn dynamic_place(e: &Expr) -> bool {
+        match e {
+            Expr::DynamicIndex { .. } => true,
+            Expr::Index { base, .. } | Expr::Field { base, .. } => Self::dynamic_place(base),
+            _ => false,
+        }
+    }
     fn index_type(&self, ty: &ir::Ty, index: usize) -> Result<ir::Ty, String> {
         let ir::Ty::Array { element, len } = ty else {
             return Err("indexing requires an array".into());
@@ -2923,9 +3045,6 @@ impl<'a> Checker<'a> {
         }
         Ok(())
     }
-    fn expr_when(&mut self, e: &Expr, reachable: bool) -> Result<ir::ExprId, String> {
-        self.expr_expected_when(e, reachable, None)
-    }
     fn expr_expected_when(
         &mut self,
         e: &Expr,
@@ -3087,8 +3206,13 @@ impl<'a> Checker<'a> {
                     } else {
                         Some(checked_ty(ty, self.signatures)?)
                     };
+                    let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
+                    let direct_wildcard = matches!(pattern, Pattern::Wildcard);
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     let flow = self.flow(value);
+                    if direct_dynamic && !flow.ty.is_copy() && !direct_wildcard {
+                        return Err("non-Copy runtime indexed pattern extraction is unsupported; only direct let _ inspection is admitted".into());
+                    }
                     let seed = if *ty == Type::Infer {
                         flow.ty.clone()
                     } else {
@@ -3135,6 +3259,50 @@ impl<'a> Checker<'a> {
                     let f = self.flow(value);
                     self.require(&f, &t)?;
                     (ir::Stmt::Assign { local, value }, f.completes)
+                }
+                Stmt::AssignIndex {
+                    array,
+                    index,
+                    value,
+                } => {
+                    let local = self.lookup(&array.local)?;
+                    let declaration = &self.locals[local.0];
+                    if !declaration.mutable {
+                        return Err(format!("assignment to immutable local {}", array.local));
+                    }
+                    let mut ty = declaration.ty.clone();
+                    let mut projection = Vec::with_capacity(array.fields.len());
+                    for field in &array.fields {
+                        if let FieldSelector::ConstantIndex(i) = field {
+                            ty = self.index_type(&ty, *i)?;
+                            projection.push(ir::Projection::ConstantIndex(*i));
+                        } else {
+                            let (i, t) = self.field_type(&ty, field)?;
+                            ty = t;
+                            projection.push(ir::Projection::Field(i));
+                        }
+                    }
+                    let ir::Ty::Array { element, .. } = &ty else {
+                        return Err("runtime index assignment requires an array".into());
+                    };
+                    let value = self.expr_expected(value, Some(element))?;
+                    let flow = self.flow(value);
+                    self.require(&flow, element)?;
+                    let index = self.expr_expected_when(
+                        index,
+                        self.reachable && flow.completes,
+                        Some(&ir::Ty::Usize),
+                    )?;
+                    let index_flow = self.flow(index);
+                    self.require_index(&index_flow)?;
+                    (
+                        ir::Stmt::AssignIndex {
+                            array: ir::Place { local, projection },
+                            index,
+                            value,
+                        },
+                        flow.completes && index_flow.completes,
+                    )
                 }
                 Stmt::AssignPlace { place, value } => {
                     let local = self.lookup(&place.local)?;
@@ -3300,7 +3468,36 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
+            Expr::DynamicIndex { base, index } => {
+                if Self::dynamic_place(base) {
+                    return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
+                }
+                let base = self.expr(base)?;
+                let source = self.flow(base);
+                let ir::Ty::Array { element, .. } = &source.ty else {
+                    return Err("runtime indexing requires an array".into());
+                };
+                let ty = element.as_ref().clone();
+                self.accessible(&ty)?;
+                let index = self.expr_expected_when(
+                    index,
+                    self.reachable && source.completes,
+                    Some(&ir::Ty::Usize),
+                )?;
+                let index_flow = self.flow(index);
+                self.require_index(&index_flow)?;
+                (
+                    ir::ExprKind::DynamicIndex { base, index },
+                    Flow {
+                        ty,
+                        completes: source.completes && index_flow.completes,
+                    },
+                )
+            }
             Expr::Index { base, index } => {
+                if Self::dynamic_place(base) {
+                    return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
+                }
                 let base = self.expr(base)?;
                 let flow = self.flow(base);
                 let ty = self.index_type(&flow.ty, *index)?;
@@ -3431,6 +3628,9 @@ impl<'a> Checker<'a> {
                             (ir::MatchPattern::Bool(*value), Some(i64::from(*value)))
                         }
                         Pattern::Int(value) => {
+                            if domain == ir::Ty::Usize {
+                                return Err("usize numeric match patterns are unsupported".into());
+                            }
                             if domain != ir::Ty::I32 {
                                 return Err(format!(
                                     "integer match pattern does not match {domain:?}"
@@ -3627,6 +3827,15 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
+            Expr::Usize(value) => (ir::ExprKind::Usize(*value), Flow::value(ir::Ty::Usize)),
+            Expr::Unsuffixed(value) => {
+                if matches!(expected, Some(ir::Ty::Usize)) {
+                    (ir::ExprKind::Usize(*value), Flow::value(ir::Ty::Usize))
+                } else {
+                    let value=i32::try_from(*value).map_err(|_|"integer exceeds default i32 range; provide a forward usize context or usize suffix (backward inference unsupported)".to_string())?;
+                    (ir::ExprKind::Int(value), Flow::value(ir::Ty::I32))
+                }
+            }
             Expr::Int(value) => (ir::ExprKind::Int(*value), Flow::value(ir::Ty::I32)),
             Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(ir::Ty::Bool)),
             Expr::Var(n) => {
@@ -3645,10 +3854,15 @@ impl<'a> Checker<'a> {
                 Flow::value(ir::Ty::Unit),
             ),
             Expr::Unary { op, value } => {
-                let value = self.expr(value)?;
+                let hint = expected
+                    .filter(|t| matches!(t, ir::Ty::Usize | ir::Ty::I32 | ir::Ty::Bool))
+                    .cloned()
+                    .or_else(|| self.scalar_hint(value));
+                let value = self.expr_expected(value, hint.as_ref())?;
                 let f = self.flow(value);
                 let t = match op {
                     UnaryOp::Neg => ir::Ty::I32,
+                    UnaryOp::Not if f.ty == ir::Ty::Usize => ir::Ty::Usize,
                     UnaryOp::Not => ir::Ty::Bool,
                 };
                 self.require(&f, &t)?;
@@ -3669,25 +3883,48 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Binary { op, left, right } => {
-                let left = self.expr(left)?;
-                let right = self.expr_when(right, self.reachable && self.flow(left).completes)?;
+                let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
+                let hint = if logical {
+                    Some(ir::Ty::Bool)
+                } else {
+                    expected
+                        .filter(|t| matches!(t, ir::Ty::I32 | ir::Ty::Usize))
+                        .cloned()
+                        .or_else(|| self.scalar_hint(left))
+                        .or_else(|| self.scalar_hint(right))
+                };
+                let left = self.expr_expected(left, hint.as_ref())?;
+                let left_flow = self.flow(left);
+                let right_hint = hint.or_else(|| {
+                    if matches!(left_flow.ty, ir::Ty::Usize | ir::Ty::I32 | ir::Ty::Bool) {
+                        Some(left_flow.ty.clone())
+                    } else {
+                        None
+                    }
+                });
+                let right = self.expr_expected_when(
+                    right,
+                    self.reachable && left_flow.completes,
+                    right_hint.as_ref(),
+                )?;
                 let l = self.flow(left);
                 let r = self.flow(right);
-                let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
                 if matches!(l.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
                     || matches!(r.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
                 {
                     return Err("aggregate operators and comparisons are unsupported".into());
                 }
+                let unsigned = l.ty == ir::Ty::Usize || r.ty == ir::Ty::Usize;
+                let numeric = if unsigned { ir::Ty::Usize } else { ir::Ty::I32 };
                 let (operand, result) = match op {
                     BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
                     BinaryOp::Eq | BinaryOp::Ne => {
                         (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
                     }
                     BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                        (ir::Ty::I32, ir::Ty::Bool)
+                        (numeric.clone(), ir::Ty::Bool)
                     }
-                    _ => (ir::Ty::I32, ir::Ty::I32),
+                    _ => (numeric.clone(), numeric),
                 };
                 self.require(&l, &operand)?;
                 self.require(&r, &operand)?;
@@ -3922,6 +4159,65 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn usize_retains_full_width_and_uses_forward_and_binary_peer_contexts() {
+        let p=parse("fn id(x:usize)->usize{x}fn high()->usize{18446744073709551615}fn main(){let u:usize=4294967296;let s=18446744073709551615usize;let b=1<u;let c=u>1;let r:usize=1+2;let q=1+u;let not=!0usize;let x=id(4294967296);let a:[usize;2]=[1,2];let mut b=[1,2];let i:usize=0;b[i]=3;let n=b[i];let min=-2147483648i32;}").unwrap();
+        let env = signature_table(&p).unwrap();
+        let typed = type_function_with_signatures(&p, 2, &env).unwrap();
+        assert!(
+            typed
+                .exprs
+                .iter()
+                .any(|e| matches!(e.kind, ir::ExprKind::Usize(18446744073709551615)))
+        );
+        assert!(
+            typed
+                .exprs
+                .iter()
+                .any(|e| matches!(e.kind, ir::ExprKind::DynamicIndex { .. }))
+        );
+        assert!(
+            typed
+                .body
+                .statements
+                .iter()
+                .any(|s| matches!(s, ir::Stmt::AssignIndex { .. }))
+        );
+        assert_eq!(
+            type_function_with_signatures(&p, 1, &env).unwrap().result,
+            ir::Ty::Usize
+        );
+    }
+
+    #[test]
+    fn usize_does_not_convert_i32_or_erase_runtime_index_pattern_boundaries() {
+        for source in [
+            "fn main(){let x=0usize;match x{0=>(),_=>()};}",
+            "fn main(){match 0usize{0usize=>(),_=>()};}",
+        ] {
+            assert!(
+                parse(source)
+                    .and_then(|p| check(&p))
+                    .unwrap_err()
+                    .contains("usize numeric match patterns are unsupported")
+            );
+        }
+        for source in [
+            "fn main(){let a=[1];let i:i32=0;let x=a[i];}",
+            "fn main(){let x:usize=1i32;}",
+            "fn main(){let x:i32=1usize;}",
+            "fn main(){let x:usize=-1;}",
+            "fn main(){let x=18446744073709551616usize;}",
+            "fn main(){let a=[[1]];let i=0usize;let x=a[i][0];}",
+            "struct S{x:i32}fn main(){let a=[S{x:1}];let i=0usize;let S{x:_}=a[i];}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
 
     #[test]
     fn arrays_contextualize_empty_literals_and_keep_constant_index_projection() {
