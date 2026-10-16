@@ -754,6 +754,30 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x4c, 0x89, 0xcf]);
                 self.store_address_value(element)?;
             }
+            cfg::Statement::IndexAssignOp {
+                array,
+                index,
+                value,
+                op,
+            } => {
+                let element = self.index_address(array, index)?;
+                // RHS/index effects are already owning CFG snapshots. Keep the
+                // one selected address across every closed scalar kernel,
+                // including multiplication/division's RDX and shifts' RCX.
+                self.bytes(&[0x49, 0x89, 0xc1]); // r9 = checked destination
+                self.operand(value)?;
+                self.bytes(&[0x48, 0x89, 0xc1, 0x49, 0x8b, 0x01]); // rhs RCX, old [r9] RAX
+                match element {
+                    ir::Ty::Int(integer) => {
+                        self.normalize_integer(*integer);
+                        self.binary_integer(*op, *integer)?;
+                    }
+                    ir::Ty::Bool => self.binary_noninteger(*op)?,
+                    _ => return Err("indexed compound update requires scalar operands".into()),
+                }
+                self.bytes(&[0x4c, 0x89, 0xcf]); // same checked destination
+                self.store_address_value(element)?;
+            }
             cfg::Statement::Assign { destination, value } => {
                 self.rvalue(value)?;
                 self.store_place(destination)?;
@@ -1328,6 +1352,126 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn compound_indexed_all_integer_kernels_and_preserved_division_address() {
+        use ir::IntTy;
+        for ty in [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ] {
+            let name = ty.name();
+            let source = format!(
+                "fn main() {{ let mut a=[12{name},7{name}]; let index=0usize;
+                    a[index] += 3{name}; if a[0] != 15{name} {{ 1/0; }}
+                    a[index] -= 3{name}; if a[0] != 12{name} {{ 1/0; }}
+                    a[index] *= 3{name}; if a[0] != 36{name} {{ 1/0; }}
+                    a[index] /= 3{name}; if a[0] != 12{name} {{ 1/0; }}
+                    a[index] %= 5{name}; if a[0] != 2{name} {{ 1/0; }}
+                    a[index] |= 8{name}; if a[0] != 10{name} {{ 1/0; }}
+                    a[index] &= 11{name}; if a[0] != 10{name} {{ 1/0; }}
+                    a[index] ^= 3{name}; if a[0] != 9{name} {{ 1/0; }}
+                    a[index] <<= 1u64; if a[0] != 18{name} {{ 1/0; }}
+                    a[index] >>= 1i8; if a[0] != 9{name} {{ 1/0; }}
+                    if a[1] != 7{name} {{ 1/0; }}
+                }}"
+            );
+            let program = frontend::parse(&source).unwrap();
+            let output = run(&program);
+            assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+        }
+        let program = frontend::parse(
+            r#"
+            fn main() {
+                let index=1usize;
+                let mut a=[7u64,18446744073709551614u64,9u64];
+                a[index] /= 3u64;
+                if a[1] != 6148914691236517204u64 { 1/0; }
+                a[index] *= 3u64;
+                if a[1] != 18446744073709551612u64 { 1/0; }
+                a[index] %= 10u64;
+                if a[1] != 2u64 { 1/0; }
+                if a[0] != 7u64 { 1/0; }
+                if a[2] != 9u64 { 1/0; }
+                let mut signed=[-21i64]; let zero=0usize;
+                signed[zero] /= 3i64;
+                if signed[0] != -7i64 { 1/0; }
+                signed[zero] %= 3i64;
+                if signed[0] != -1i64 { 1/0; }
+                signed[zero] >>= 63u8;
+                if signed[0] != -1i64 { 1/0; }
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+
+    #[test]
+    fn compound_rhs_first_current_carrier_index_once_bool_and_traps() {
+        let program = frontend::parse(
+            r#"
+            fn main() {
+                let mut value=1; value += { value=10; 1 };
+                if value != 11 { 1/0; }
+                let mut deferred:i32; deferred += { deferred=7; 2 };
+                if deferred != 9 { 1/0; }
+                let mut x=1; let mut y=10; let mut pointer=&mut x;
+                *pointer += { pointer=&mut y; 3 };
+                if *pointer != 13 { 1/0; }
+                if x != 1 { 1/0; }
+                let mut array=[1,2]; let mut trace=0;
+                array[{ trace=trace*10+2; array=[10,20]; 1usize }] += {
+                    trace=trace*10+1; 3
+                };
+                if trace != 12 { 1/0; }
+                if array[0] != 10 { 1/0; }
+                if array[1] != 23 { 1/0; }
+                let mut flags=[false]; let index=0usize;
+                flags[index] &= { trace=trace+1; true };
+                if flags[0] { 1/0; }
+                flags[index] |= { trace=trace+1; true };
+                if !flags[0] { 1/0; }
+                flags[index] ^= { trace=trace+1; true };
+                if flags[0] { 1/0; }
+                if trace != 15 { 1/0; }
+                println!("compound-order");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"compound-order\n");
+        for (initial, rhs, operation) in [
+            ("255u8", "1u8", "+="),
+            ("0u8", "1u8", "-="),
+            ("128u8", "2u8", "*="),
+            ("1i64", "0i64", "/="),
+            ("1i64", "0i64", "%="),
+            ("-9223372036854775808i64", "-1i64", "/="),
+            ("-9223372036854775808i64", "-1i64", "%="),
+            ("1u8", "18446744073709551615u64", "<<="),
+            ("1u8", "-1i64", ">>="),
+        ] {
+            let source = format!(
+                "fn main() {{ let mut array=[{initial}]; let index=0usize;
+                 let count={rhs}; array[index] {operation} count; }}"
+            );
+            let program = frontend::parse(&source).unwrap();
+            let output = run(&program);
+            assert_eq!(output.status.code(), Some(101), "{source}: {output:?}");
+        }
     }
 
     #[test]

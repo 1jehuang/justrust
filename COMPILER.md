@@ -38,7 +38,15 @@ LHS integer type. Negative or width-exceeding counts trap101, left shifts trunca
 lost value bits, and signed right shifts preserve sign. A bounded typed static
 count diagnostic rejects known invalid counts, sometimes earlier than stock
 metadata-only checking. This is not general consteval or release wrapping.
-Compound assignments, 128-bit integers, floats and noninteger casts remain unsupported. Parenthesized cast target types are an explicit boundary.
+Builtin statement compound assignments `+= -= *= /= %= &= |= ^= <<= >>=`
+snapshot RHS first, then select the current destination/carrier/index, read the
+initialized scalar and update the same address. Arithmetic uses identical integer
+types, bitwise also supports Bool, and shifts retain independent integer counts.
+Dynamic indices evaluate once with one checked address. Compound shifts share
+the bounded static-count diagnostic budget. See `COMPOUND-ASSIGNMENTS.md`.
+Overloaded trait assignments, compound expressions outside statement contexts,
+128-bit integers, floats and noninteger casts remain unsupported. Parenthesized
+cast target types are an explicit boundary.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and

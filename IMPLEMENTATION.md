@@ -310,3 +310,16 @@ for two static invalid fixtures. Independent24corpus evidence passes868cases,
 with796normal worker comparisons,54declared trap runs,128generated exit checks
 and actual96worker example execution retained in25raw receipts.
 Compound assignments, general consteval and full Rust remain open.
+
+### Builtin compound assignment checkpoint
+
+`COMPOUND-ASSIGNMENTS.md` is implemented for the ten primitive operators in
+statement contexts. RHS snapshots precede current place/carrier/index selection,
+old initialized scalar reads and same-address writes. Dynamic IndexAssignOp
+preserves one checked address across division/multiply/shift kernels. Static
+updates reuse existing Binary read/write phases, and compound counts share the
+same per-function bounded diagnostic evaluator as ordinary shifts. All1191
+hosted tests, strict all-target lint, exact32 stock/native plus four graph gates
+and the actual real native example pass. Two unchanged historical boundaries
+were promoted after native execution. Independent25corpus receipts remain
+pending. Overloaded assignments, full Rust and performance acceptance stay open.

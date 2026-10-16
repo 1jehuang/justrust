@@ -141,3 +141,18 @@ experiments/compound_assignments_correctness.py. Root owns four graph tests,
 example, docs, independent receipts and commits. Reviewers stay read-only.
 Publish production+fixture COMPILE-READY BEFORE bounded focused tests, then wait
 integrated-ready before builds. No implementation GO is implied by this draft.
+
+## Implemented validation checkpoint
+
+The approved protocol is implemented with exact32 stock/native CLI fixtures,
+four all-body graph tests and1191 hosted tests passing. Final check/test/lint
+IDs are20261016-040609216-3829885,20261016-040610524-3830109 and
+20261016-040612566-3829785, retained as three exact redacted profiles in
+data/runs/prototype-bootstrap/2026-10-compound-assignments.jsonl. Formatting and
+both independent actual-code reviews pass. The1451-byte real example executes
+with stock/native stdout parity, including RHS initialization, carrier retarget,
+index once, full-width shifts and dynamic division address preservation.
+Exactly two historical compound boundaries were promoted only after unchanged
+source native execution, preserving stdout/value7. Tracked25corpus native
+follow-through follows the implementation commit. Full Rust and comprehensive
+performance acceptance remain open, with no experimental installation.

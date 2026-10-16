@@ -8895,3 +8895,40 @@ contended/uncontrolled, not a speedup comparison. Twenty-five raw receipts are
 retained as `experiments/results/20261016-m8a-shifts-*`. Together with1145hosted
 tests and strict lint, this validates the declared bounded shift milestone,
 not full Rust, general consteval, Cargo/core/std or performance acceptance.
+
+### Builtin primitive compound assignments, 2026-10-16
+
+Contract1a603b5fd was frozen after complete owner feasibility, primary primitive
+lowering inspection and six external stock runtime order probes. The critical
+rule is RHS FIRST, then current destination/index selection, old initialized
+scalar read and same selected address write. It is not an ordinary eager Binary
+LHS snapshot and does not inherit overloaded trait receiver semantics. The32
+source-frozen oracle cases (16positive,8strict runtime101,6invalid,2boundaries)
+passed independent stock compile/metadata/runtime checks in289263md69 before GO.
+
+The implementation adds checked static/indexed compound statements and one
+dynamic CFG IndexAssignOp, preserving its checked address inR9 across all closed
+scalar kernels. Analysis reads the full conservative array in PhaseRead before
+existing PhaseWrite index_write, retaining initialized bits, authority and proof
+kills. Static compounds use current-place Copy then write after the RHS snapshot.
+Compound shift counts join the SAME private per-function memo/work/depth budget,
+including dead statements. No trait, pointer ABI or origin protocol expansion.
+
+Root exact32CLI+four graph gates pass6016045175; both actual-code reviewers clear
+the final patch. The1451-byte example actually executes stock/native with exact
+`compound assignments compiled correctly` stdout in6270034drl. Its8worker graph
+has22nodes/29edges,46CFGblocks,125locals,146analysis paths and a12328-byte ELF,
+complete with zero failures/drops. First full-suite discovery stopped at the old
+bitwise unsupported assertion, not a compiler error. Both historical compound
+sources were separately built and executed before exact assertion/classification
+promotion: SHA732ac134d01fcb8136f036ef8ba5a9ae35c36f0a019ca8d66020776073e64be1
+and8526c6d343a64baef23b97c4ad6dc483dfec5f6bdf4a7b7a5b28cc0a42b7564b,
+with original stdout/value7 unchanged.
+
+All1191 frozen hosted tests, check, strict all-target Clippy, formatting and diff
+checks pass768324ovpc. Exact check/test/lint summaries20261016-040609216-3829885,
+20261016-040610524-3830109 and20261016-040612566-3829785 are retained in
+`data/runs/prototype-bootstrap/2026-10-compound-assignments.jsonl`. Independent
+tracked25corpus native evidence follows the implementation commit. These are
+bounded correctness receipts, not a full Rust or speedup claim. The experimental
+compiler was never installed over stable justrust.

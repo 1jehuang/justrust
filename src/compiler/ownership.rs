@@ -350,7 +350,17 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                     array,
                     index,
                     value,
+                }
+                | Statement::IndexAssignOp {
+                    array,
+                    index,
+                    value,
+                    ..
                 } => {
+                    // The closed compound operator descriptor has constant cost.
+                    if matches!(item.value, Statement::IndexAssignOp { .. }) {
+                        budget.spend(1)?;
+                    }
                     place_type(f, array, &mut budget)?;
                     operand(value, &mut budget)?;
                     operand(index, &mut budget)?;
@@ -1157,11 +1167,23 @@ impl Transfer<'_> {
                     array,
                     index,
                     value,
+                }
+                | Statement::IndexAssignOp {
+                    array,
+                    index,
+                    value,
+                    ..
                 } => {
                     // Lowering has already snapshotted RHS and index effects.
                     // Preserve that owning-value-before-index transfer order.
                     self.operand(state, value)?;
                     self.operand(state, index)?;
+                    if matches!(item.value, Statement::IndexAssignOp { .. }) {
+                        // Compound assignment reads the current element after
+                        // both snapshots. Unknown indices conservatively read
+                        // the whole array before applying the existing write.
+                        self.read(state, array)?;
+                    }
                     self.phase = Phase::Write;
                     self.index_write(state, array)?;
                 }
@@ -3364,6 +3386,198 @@ mod tests {
             array: place(1),
             index: Operand::Copy(place(2)),
         })
+    }
+
+    #[test]
+    fn compound_index_reads_snapshots_before_initialized_array_and_never_initializes_it() {
+        use super::super::frontend::BinaryOp;
+        for op in [
+            BinaryOp::Add,
+            BinaryOp::Sub,
+            BinaryOp::Mul,
+            BinaryOp::Div,
+            BinaryOp::Rem,
+            BinaryOp::BitAnd,
+            BinaryOp::BitOr,
+            BinaryOp::BitXor,
+            BinaryOp::Shl,
+            BinaryOp::Shr,
+        ] {
+            let mut f = dynamic_fixture(Ty::Int(IntTy::Usize));
+            let update = Statement::IndexAssignOp {
+                array: place(1),
+                index: Operand::Copy(place(2)),
+                value: Operand::Copy(place(2)),
+                op,
+            };
+            f.blocks[0].statements.push(located(update.clone()));
+            assert!(analyze(&f).passed());
+            let mut uninitialized = f.clone();
+            uninitialized.params.retain(|id| *id != LocalId(1));
+            uninitialized.blocks[0]
+                .statements
+                .insert(0, located(Statement::StorageLive(LocalId(1))));
+            let result = analyze(&uninitialized);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+            );
+            f.locals[1].mutable = false;
+            assert!(
+                analyze(&f)
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == ErrorKind::ImmutableReassignment)
+            );
+            f.locals[1].mutable = true;
+            f.blocks[0].statements.last_mut().unwrap().value = Statement::IndexAssignOp {
+                array: place(1),
+                index: Operand::Copy(place(2)),
+                value: Operand::Move(place(2)),
+                op,
+            };
+            let result = analyze(&f);
+            assert!(
+                result.diagnostics.iter().any(|d| d.place == Some(place(2))
+                    && d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+            );
+            f.blocks[0].statements = vec![located(update)];
+            let paths = Paths::new(&f, 100).unwrap();
+            let mut state = State::new(f.locals.len(), paths.nodes.len());
+            state.must_live.set(1, true);
+            state.must_live.set(2, true);
+            state.must_init.set(paths.resolve(&place(2)), true);
+            state.may_init.set(paths.resolve(&place(2)), true);
+            state.must_init.set(paths.resolve(&indexed(1, 0)), true);
+            state.may_init.set(paths.resolve(&indexed(1, 1)), true);
+            let must = state.must_init.clone();
+            let may = state.may_init.clone();
+            let mut budget = Budget(10000);
+            Transfer {
+                f: &f,
+                paths: &paths,
+                budget: &mut budget,
+                report: None,
+                block: BlockId(0),
+                statement: None,
+                origin: None,
+                diagnostic_limit: 10,
+                loans: None,
+                phase: Phase::Read,
+            }
+            .block(&mut state)
+            .unwrap();
+            assert_eq!(state.must_init, must);
+            assert_eq!(state.may_init, may);
+        }
+    }
+
+    #[test]
+    fn compound_source_uses_rhs_initialized_current_carrier_and_active_loan_permissions() {
+        for source in [
+            "fn f()->i32{let mut x:i32;x += {x=10;1};x}",
+            "fn f()->i32{let mut x=1;let mut y=2;let mut r=&mut x;*r += {r=&mut y;3};x+y}",
+            "fn f(i:usize)->i32{let mut a=[1,2];let r=&a[0];let n=*r;a[i]+=1;n}",
+            "fn f(i:usize)->i32{let mut a:[i32;2];a[{a=[7,8];i}]+=1;a[0]}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        for source in [
+            "fn f()->i32{let mut x:i32;x+=1;x}",
+            "fn f()->i32{let x=1;let r=&x;*r+=1;x}",
+            "fn f(i:usize)->i32{let mut a=[1,2];let r=&a[0];a[i]+=1;*r}",
+        ] {
+            assert!(!analyze(&borrowed_source(source)).passed(), "{source}");
+        }
+    }
+
+    #[test]
+    fn compound_index_dead_validation_and_operator_preflight_fail_closed() {
+        use super::super::frontend::BinaryOp;
+        let base = dynamic_fixture(Ty::Int(IntTy::Usize));
+        let ordinary = Statement::IndexAssign {
+            array: place(1),
+            index: Operand::Copy(place(2)),
+            value: Operand::Copy(place(2)),
+        };
+        let compound = Statement::IndexAssignOp {
+            array: place(1),
+            index: Operand::Copy(place(2)),
+            value: Operand::Copy(place(2)),
+            op: BinaryOp::Add,
+        };
+        let mut costs = Vec::new();
+        for statement in [ordinary, compound] {
+            let mut f = base.clone();
+            f.blocks[0].statements.push(located(statement));
+            let minimum = (1..1000)
+                .find(|operations| {
+                    preflight(
+                        &f,
+                        Limits {
+                            operations: *operations,
+                            ..Limits::default()
+                        },
+                    )
+                    .is_ok()
+                })
+                .expect("small fixture has bounded preflight");
+            costs.push(minimum);
+        }
+        assert_eq!(costs[1] - costs[0], 1);
+        for (op, index, value) in [
+            (
+                BinaryOp::And,
+                Operand::Copy(place(2)),
+                Operand::Copy(place(2)),
+            ),
+            (
+                BinaryOp::Eq,
+                Operand::Copy(place(2)),
+                Operand::Copy(place(2)),
+            ),
+            (
+                BinaryOp::Add,
+                Operand::Constant(Constant::Bool(true)),
+                Operand::Copy(place(2)),
+            ),
+            (
+                BinaryOp::Add,
+                Operand::Copy(place(2)),
+                Operand::Constant(Constant::Bool(true)),
+            ),
+            (
+                BinaryOp::Shl,
+                Operand::Copy(place(2)),
+                Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::I8,
+                    bits: 255,
+                })),
+            ),
+        ] {
+            let mut f = base.clone();
+            f.blocks.push(BasicBlock {
+                statements: vec![located(Statement::IndexAssignOp {
+                    array: place(1),
+                    index,
+                    value,
+                    op,
+                })],
+                terminator: located(Terminator::Return),
+            });
+            let result = analyze(&f);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.kind, ErrorKind::InvalidCfg(_))),
+                "{:?}",
+                result.diagnostics
+            );
+        }
     }
 
     #[test]

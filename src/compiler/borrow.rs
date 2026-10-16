@@ -222,6 +222,12 @@ fn point_uses(
                 array,
                 index,
                 value,
+            }
+            | Statement::IndexAssignOp {
+                array,
+                index,
+                value,
+                ..
             } => {
                 visit(array, false);
                 visit_operand(value, &mut visit);

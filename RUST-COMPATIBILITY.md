@@ -19,9 +19,11 @@ Checked heterogeneous integer shifts preserve LHS type and full-count checks;
 known invalid counts are diagnosed during native CHECK/BUILD, including two
 cases stock metadata accepts before its codegen rejects arithmetic_overflow.
 Bounded static diagnostics do not claim general consteval/lint equivalence.
-Noninteger casts, compound assignments, 128-bit integers, floats and
-broader inference remain separate work. The full Rust compatibility goal remains
-open.
+Builtin statement compound assignments preserve RHS-first/current-place order,
+initialized scalar reads and single-address dynamic updates. Trait-overloaded
+assignments and general compound expressions remain open. Noninteger casts,
+128-bit integers, floats and broader inference remain separate work. The full
+Rust compatibility goal remains open.
 
 ## Builtin reference field slice
 

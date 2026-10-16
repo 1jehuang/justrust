@@ -180,6 +180,17 @@ pub enum Stmt {
         index: Expr,
         value: Expr,
     },
+    AssignOp {
+        place: Place,
+        op: BinaryOp,
+        value: Expr,
+    },
+    AssignIndexOp {
+        array: Place,
+        index: Expr,
+        op: BinaryOp,
+        value: Expr,
+    },
     AssignPlace {
         place: Place,
         value: Expr,
@@ -428,6 +439,24 @@ struct Token {
     column: usize,
     string: bool,
 }
+fn compound_operator(token: &Token) -> Option<BinaryOp> {
+    if token.string {
+        return None;
+    }
+    Some(match token.text.as_str() {
+        "+=" => BinaryOp::Add,
+        "-=" => BinaryOp::Sub,
+        "*=" => BinaryOp::Mul,
+        "/=" => BinaryOp::Div,
+        "%=" => BinaryOp::Rem,
+        "&=" => BinaryOp::BitAnd,
+        "|=" => BinaryOp::BitOr,
+        "^=" => BinaryOp::BitXor,
+        "<<=" => BinaryOp::Shl,
+        ">>=" => BinaryOp::Shr,
+        _ => return None,
+    })
+}
 fn lex(source: &str) -> Result<Vec<Token>, String> {
     let chars: Vec<char> = source.chars().collect();
     let (mut i, mut line, mut column) = (0, 1, 1);
@@ -613,10 +642,22 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         | ('&', '&')
                         | ('|', '|')
                         | ('=', '>')
+                        | ('%', '=')
+                        | ('+', '=')
+                        | ('-', '=')
+                        | ('*', '=')
+                        | ('/', '=')
+                        | ('&', '=')
+                        | ('|', '=')
+                        | ('^', '=')
                         | ('.', '.')
                 )
             {
                 text.push(next);
+                advance(&chars, &mut i, &mut line, &mut column);
+            }
+            if matches!(text.as_str(), "<<" | ">>") && chars.get(i) == Some(&'=') {
+                text.push('=');
                 advance(&chars, &mut i, &mut line, &mut column);
             }
             if !matches!(
@@ -649,6 +690,16 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | ">="
                     | "<<"
                     | ">>"
+                    | "+="
+                    | "-="
+                    | "*="
+                    | "/="
+                    | "%="
+                    | "&="
+                    | "|="
+                    | "^="
+                    | "<<="
+                    | ">>="
                     | "&"
                     | "|"
                     | "^"
@@ -1298,6 +1349,23 @@ impl Parser {
         self.expect("}")?;
         Ok(Pattern::Struct { name, fields, rest })
     }
+    fn compound_statement(&mut self, target: Expr, op: BinaryOp) -> Result<Stmt, String> {
+        let value = self.expr(0)?;
+        self.expect(";")?;
+        if let Expr::DynamicIndex { base, index } = target {
+            return Ok(Stmt::AssignIndexOp {
+                array: self.assignment_place(*base)?,
+                index: *index,
+                op,
+                value,
+            });
+        }
+        Ok(Stmt::AssignOp {
+            place: self.assignment_place(target)?,
+            op,
+            value,
+        })
+    }
     fn block_inner(&mut self) -> Result<Block, String> {
         self.expect("{")?;
         let mut statements = Vec::new();
@@ -1361,7 +1429,10 @@ impl Parser {
                 statements.push(Stmt::While { condition, body });
             } else {
                 let expr = self.statement_expr()?;
-                if self.eat("=") {
+                if let Some(op) = compound_operator(self.token()) {
+                    self.at += 1;
+                    statements.push(self.compound_statement(expr, op)?);
+                } else if self.eat("=") {
                     let value = self.expr(0)?;
                     self.expect(";")?;
                     if let Expr::DynamicIndex { base, index } = expr {
@@ -2223,11 +2294,13 @@ impl Resolver<'_> {
                     self.pattern(pattern, module, &mut names)?;
                     locals.last_mut().unwrap().extend(names);
                 }
-                Stmt::AssignIndex { index, value, .. } => {
+                Stmt::AssignIndex { index, value, .. }
+                | Stmt::AssignIndexOp { index, value, .. } => {
                     self.expr(value, module, locals)?;
                     self.expr(index, module, locals)?;
                 }
                 Stmt::Assign { value, .. }
+                | Stmt::AssignOp { value, .. }
                 | Stmt::AssignPlace { value, .. }
                 | Stmt::Expr(value)
                 | Stmt::ImplicitExpr(value)
@@ -2568,11 +2641,13 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                             push(DepthNode::Type(ty));
                             push(DepthNode::Expr(value));
                         }
-                        Stmt::AssignIndex { index, value, .. } => {
+                        Stmt::AssignIndex { index, value, .. }
+                        | Stmt::AssignIndexOp { index, value, .. } => {
                             push(DepthNode::Expr(value));
                             push(DepthNode::Expr(index));
                         }
                         Stmt::Assign { value, .. }
+                        | Stmt::AssignOp { value, .. }
                         | Stmt::AssignPlace { value, .. }
                         | Stmt::Expr(value)
                         | Stmt::ImplicitExpr(value)
@@ -3205,19 +3280,39 @@ fn count_binary(op: BinaryOp, lhs: ir::IntValue, rhs: ir::IntValue) -> Result<Co
     };
     Ok(CountValue::Known(ir::IntValue { ty, bits }))
 }
-fn validate_shift_counts(exprs: &[ir::TypedExpr]) -> Result<(), String> {
-    if !exprs.iter().any(|e| {
-        matches!(
-            e.kind,
-            ir::ExprKind::Binary {
-                op: BinaryOp::Shl | BinaryOp::Shr,
-                ..
-            }
-        )
-    }) {
+fn validate_shift_counts(
+    exprs: &[ir::TypedExpr],
+    queries: &[(ir::IntTy, ir::ExprId)],
+) -> Result<(), String> {
+    if queries.is_empty()
+        && !exprs.iter().any(|e| {
+            matches!(
+                e.kind,
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Shl | BinaryOp::Shr,
+                    ..
+                }
+            )
+        })
+    {
         return Ok(());
     }
     let mut evaluator = CountEvaluator::new(exprs)?;
+    if queries.len() > COUNT_EVAL_WORK {
+        return Err("compound shift query work limit exceeded".into());
+    }
+    for &(ty, value) in queries {
+        evaluator.charge()?;
+        match evaluator.evaluate(value)? {
+            CountValue::Known(value) => {
+                count_shift_amount(value, ty)?;
+            }
+            CountValue::Dynamic => {}
+            CountValue::Unsupported => {
+                return Err("unsupported static-shaped compound shift count expression".into());
+            }
+        }
+    }
     for expr in exprs {
         evaluator.charge()?;
         if let ir::ExprKind::Binary {
@@ -3252,6 +3347,7 @@ struct Checker<'a> {
     reachable: bool,
     result: ir::Ty,
     module: String,
+    count_queries: Vec<(ir::IntTy, ir::ExprId)>,
     field_indices: std::cell::RefCell<HashMap<ir::DefId, HashMap<String, usize>>>,
 }
 #[derive(Clone, Copy)]
@@ -3530,6 +3626,7 @@ impl<'a> Checker<'a> {
             reachable: true,
             result,
             module,
+            count_queries: Vec::new(),
             field_indices: std::cell::RefCell::new(HashMap::new()),
         }
     }
@@ -4115,6 +4212,58 @@ impl<'a> Checker<'a> {
         }
         Ok((ty, variant, selected))
     }
+    fn compound_value(
+        &mut self,
+        op: BinaryOp,
+        ty: &ir::Ty,
+        value: &Expr,
+    ) -> Result<(ir::ExprId, Flow), String> {
+        let shift = matches!(op, BinaryOp::Shl | BinaryOp::Shr);
+        let bitwise = matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor);
+        if !matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Rem
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        ) {
+            return Err("invalid compound assignment operator".into());
+        }
+        if !matches!(ty, ir::Ty::Int(_)) && !(bitwise && *ty == ir::Ty::Bool) {
+            return Err(
+                "compound assignment requires primitive integer or bitwise Bool destination".into(),
+            );
+        }
+        let value = self.expr_expected(value, if shift { None } else { Some(ty) })?;
+        let flow = self.flow(value);
+        if shift {
+            if flow.ty == ir::Ty::Never {
+                return Err("compound shift on semantic Never is unsupported".into());
+            }
+            if !matches!(flow.ty, ir::Ty::Int(_)) {
+                return Err("compound shift count must be an integer".into());
+            }
+            let ir::Ty::Int(ty) = ty else {
+                return Err("compound shift destination must be integer".into());
+            };
+            if self.count_queries.len() >= COUNT_EVAL_WORK {
+                return Err("compound shift query work limit exceeded".into());
+            }
+            self.count_queries.push((*ty, value));
+        } else {
+            if flow.ty == ir::Ty::Never {
+                return Err("compound operator on semantic Never is unsupported".into());
+            }
+            self.require(&flow, ty)?;
+        }
+        Ok((value, flow))
+    }
     fn block_when(&mut self, b: &Block, reachable: bool) -> Result<(ir::Block, Flow), String> {
         self.block_expected_when(b, reachable, None)
     }
@@ -4284,6 +4433,49 @@ impl<'a> Checker<'a> {
                         ir::Stmt::AssignIndex {
                             array,
                             index,
+                            value,
+                        },
+                        flow.completes && index_flow.completes,
+                    )
+                }
+                Stmt::AssignOp { place, op, value } => {
+                    let (place, ty, _) = self.checked_place(place)?;
+                    let (value, flow) = self.compound_value(*op, &ty, value)?;
+                    (
+                        ir::Stmt::AssignOp {
+                            place,
+                            op: *op,
+                            value,
+                        },
+                        flow.completes,
+                    )
+                }
+                Stmt::AssignIndexOp {
+                    array,
+                    index,
+                    op,
+                    value,
+                } => {
+                    let (array, ty, _) = self.checked_place(array)?;
+                    if array.projection.contains(&ir::Projection::Deref) {
+                        return Err("runtime indexed access through references is unsupported; snapshot a Copy referent first".into());
+                    }
+                    let ir::Ty::Array { element, .. } = ty else {
+                        return Err("compound index assignment requires an array".into());
+                    };
+                    let (value, flow) = self.compound_value(*op, &element, value)?;
+                    let index = self.expr_expected_when(
+                        index,
+                        self.reachable && flow.completes,
+                        Some(&ir::Ty::Int(ir::IntTy::Usize)),
+                    )?;
+                    let index_flow = self.flow(index);
+                    self.require_index(&index_flow)?;
+                    (
+                        ir::Stmt::AssignIndexOp {
+                            array,
+                            index,
+                            op: *op,
                             value,
                         },
                         flow.completes && index_flow.completes,
@@ -5307,7 +5499,8 @@ pub fn type_function_with_env(
         .map_err(|e| format!("in function {}: {e}", f.name))?;
     c.require(&flow, &c.result)
         .map_err(|e| format!("in function {}: {e}", f.name))?;
-    validate_shift_counts(&c.exprs).map_err(|e| format!("in function {}: {e}", f.name))?;
+    validate_shift_counts(&c.exprs, &c.count_queries)
+        .map_err(|e| format!("in function {}: {e}", f.name))?;
     Ok(ir::CheckedFunction {
         name: f.name.clone(),
         ref_contract: signature.ref_contract.clone(),
@@ -5329,6 +5522,124 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn compound_statement_tokens_types_and_expression_boundaries() {
+        for name in [
+            "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+        ] {
+            let source = format!(
+                "fn main(){{let mut x:{name}=4;x+=1;x-=1;x*=2;x/=2;x%=3;x&=3;x|=1;x^=2;x<<=1u64;x>>=1i8;}}"
+            );
+            let p = parse(&source).unwrap();
+            check(&p).unwrap();
+            let f = type_function_with_signatures(&p, 0, &signature_table(&p).unwrap()).unwrap();
+            assert_eq!(
+                f.body
+                    .statements
+                    .iter()
+                    .filter(|s| matches!(s, ir::Stmt::AssignOp { .. }))
+                    .count(),
+                10
+            );
+        }
+        check(&parse("fn main(){let mut b=true;b&=false;b|=true;b^=true;let mut a=[1u8];let i=0usize;a[i]+=2;}").unwrap()).unwrap();
+        for source in [
+            "fn main(){let mut x=1;let y=(x+=1);}",
+            "fn main(){let mut x=1;x \"+=\" 1;}",
+            "fn main(){let mut x=1u8;x+=1u16;}",
+            "fn main(){let mut x=true;x+=false;}",
+            "fn main(){let mut x=1;x<<=true;}",
+            "fn main(){let mut x=(1,2);x+=x;}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        let mut p = parse("fn main(){let mut x=1;x+=2;}").unwrap();
+        let Stmt::AssignOp { op, .. } = &mut p.functions[0].body.statements[1] else {
+            panic!("compound root place")
+        };
+        *op = BinaryOp::Eq;
+        assert!(check(&p).unwrap_err().contains("operator"));
+    }
+
+    #[test]
+    fn compound_current_place_rhs_initialization_and_permission_checks() {
+        for source in [
+            "fn main(){let mut x:i32;x+={x=10;1};}",
+            "fn main(){let mut x=1;let mut y=10;let mut p=&mut x;*p+={p=&mut y;2};}",
+            "fn main(){let mut a:[i32;1];let i=0usize;a[i]+={a=[10];2};}",
+            "fn main(){let mut a=[1];a[{a=[10];0usize}]+={a=[3];2};}",
+            "fn main(){let mut x=1;return;x+=1;}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+        for source in [
+            "fn main(){let mut x:i32;x+=1;}",
+            "fn main(){let x=1;x+=1;}",
+            "fn main(){let x=1;let r=&x;*r+=1;}",
+            "fn main(){let a=[1];let i=0usize;a[i]+=1;}",
+            "fn main(){let mut x=1;let r=&x;x+=1;let y=*r;}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        let p =
+            parse("fn rhs()->i32{1}fn idx()->usize{0}fn main(){let mut a=[1];a[idx()]+=rhs();}")
+                .unwrap();
+        let f = type_function_with_signatures(&p, 2, &signature_table(&p).unwrap()).unwrap();
+        assert_eq!(
+            f.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            2
+        );
+        assert!(
+            f.body
+                .statements
+                .iter()
+                .any(|s| matches!(s, ir::Stmt::AssignIndexOp { .. }))
+        );
+    }
+
+    #[test]
+    fn compound_shift_queries_share_count_memo_and_check_dead_statements() {
+        for source in [
+            "fn main(){let mut x=1u8;x<<=8u64;}",
+            "fn main(){let mut x=1u8;x>>=-1i16;}",
+            "fn main(){let mut a=[1u8];let i=0usize;a[i]<<=3u16+5u16;}",
+            "fn main(){let mut x=1u8;return;x<<=8u64;}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        let p = parse("fn main(){let mut x=1u8;let n=8u64;x<<=n;x>>={x=3;1u32};let y=1u8<<1u64;}")
+            .unwrap();
+        check(&p).unwrap();
+        let f = type_function_with_signatures(&p, 0, &signature_table(&p).unwrap()).unwrap();
+        let ir::Stmt::AssignOp { value, .. } = f.body.statements[2] else {
+            panic!("compound shift")
+        };
+        assert_eq!(f.exprs[value.0].ty, ir::Ty::Int(ir::IntTy::U64));
+        let literal = ir::TypedExpr {
+            kind: ir::ExprKind::Int(ir::IntValue::i32(0)),
+            ty: ir::Ty::Int(ir::IntTy::I32),
+            completion: ir::Completion::Returns,
+        };
+        let queries = vec![(ir::IntTy::U8, ir::ExprId(0)); COUNT_EVAL_WORK / 2 + 1];
+        assert!(
+            validate_shift_counts(&[literal], &queries)
+                .unwrap_err()
+                .contains("work")
+        );
+    }
 
     #[test]
     fn shifts_keep_independent_integer_operands_and_parser_precedence() {
@@ -5374,11 +5685,7 @@ mod typed_tests {
             assert!(parse(source).and_then(|p| check(&p)).is_err());
         }
         for op in ["<<=", ">>="] {
-            assert!(
-                parse(&format!("fn main(){{let mut x=1;x{op}1;}} "))
-                    .unwrap_err()
-                    .contains("unsupported")
-            );
+            check(&parse(&format!("fn main(){{let mut x=1;x{op}1;}} ")).unwrap()).unwrap();
         }
     }
 
@@ -5580,7 +5887,7 @@ mod typed_tests {
         check(&parse("fn main(){let x=1i32;let r=&x;let a=*r & -1 | !0 ^ 3;let b=1|2|3;let c=1|2==3;let d=true || false & true && false;}").unwrap()).unwrap();
         for op in ["&=", "|=", "^="] {
             let source = format!("fn main(){{let mut x=1;x{op}2;}}");
-            assert!(parse(&source).unwrap_err().contains("unsupported"));
+            check(&parse(&source).unwrap()).unwrap();
         }
         for source in [
             "fn main(){let x=1 \"|\" 2;}",

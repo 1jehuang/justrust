@@ -2,8 +2,8 @@
 """Bounded bitwise differential corpus, not full Rust compatibility.
 
 Exact frozen stock-classified source bytes/stdout mirror bear's bitwise acceptance
-corpus. Integer and eager boolean &, |, ^ are covered. Compound assignments and
-128-bit integers remain explicit boundaries. Valid runs require zero exit, exact
+corpus. Integer and eager boolean &, |, ^ are covered, including builtin compound
+assignments. 128-bit integers remain an explicit boundary. Valid runs require zero exit, exact
 stdout and empty stderr. Reuse module_correctness Case/run_case/process and
 bounded capture, with supplied-native workers 1/8 check/build. Never build a binary
 here. No trap exceptions apply.
@@ -20,6 +20,8 @@ from module_correctness import Case, accepted, process, rejected, run_case
 
 ACCEPTANCE_CORPUS_SHA256 = "1b3f06ed4dae9915ffb67625f18898193c12feb21f396cd1385b63c8dba8d7e9"
 
+# Native-pass promotion: compound_assignment is positive, source/stdout/value unchanged.
+# Original immutable acceptance artifact hash above is retained.
 # Authoritative frozen bear oracle. full_source has no added wrapper.
 FIXTURES = json.loads(r'''
 [
@@ -171,7 +173,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "bitwise oracle ok\n",
     "full_source": "fn run()->i32{let mut x=15u8;x&=7u8;x|=8u8;x^=8u8;if x==7u8{7}else{0}}\nfn main(){if run()==7{println!(\"bitwise oracle ok\");}}",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "compound_assignment",
     "source": "fn run()->i32{let mut x=15u8;x&=7u8;x|=8u8;x^=8u8;if x==7u8{7}else{0}}"
   },

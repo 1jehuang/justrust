@@ -26,6 +26,8 @@ TRAP_POLICY = ("declared runtime_error only: compile/check0, executable required
                "and fixture reason; native stderr captured but may differ or be empty; "
                "signals/timeouts/truncation/compiler crashes fail")
 
+# Native-pass promotion: compound_shift_assignment is positive, source/stdout/value unchanged.
+# Original immutable acceptance artifact hash above is retained.
 # Frozen bear oracle. full_source is authoritative, without additional wrappers.
 FIXTURES = json.loads(r'''
 [
@@ -284,7 +286,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "shift oracle ok\n",
     "full_source": "fn run()->i32{let mut x=1u8;x<<=3u16;x>>=1i8;if x==4u8{7}else{0}}\nfn main(){if run()==7{println!(\"shift oracle ok\");}}",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "compound_shift_assignment",
     "source": "fn run()->i32{let mut x=1u8;x<<=3u16;x>>=1i8;if x==4u8{7}else{0}}"
   },

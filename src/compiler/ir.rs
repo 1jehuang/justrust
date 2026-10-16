@@ -978,6 +978,17 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
 
 #[derive(Clone, Debug)]
 pub enum Stmt {
+    AssignOp {
+        place: Place,
+        op: BinaryOp,
+        value: ExprId,
+    },
+    AssignIndexOp {
+        array: Place,
+        index: ExprId,
+        op: BinaryOp,
+        value: ExprId,
+    },
     AssignIndex {
         array: Place,
         index: ExprId,
@@ -1013,6 +1024,35 @@ pub enum Stmt {
         condition: ExprId,
         body: Block,
     },
+}
+
+fn validate_compound_types(op: BinaryOp, target: &Ty, value: &TypedExpr) -> Result<(), String> {
+    let value_ty = &value.ty;
+    let valid = match op {
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+            matches!(target, Ty::Int(_)) && target == value_ty
+        }
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+            matches!(target, Ty::Int(_) | Ty::Bool) && target == value_ty
+        }
+        BinaryOp::Shl | BinaryOp::Shr => {
+            if let (Ty::Int(integer), ExprKind::Int(count), Completion::Returns) =
+                (target, &value.kind, value.completion)
+                && count.bits >= u64::from(integer.bits())
+            {
+                return Err(
+                    "constant compound shift count is negative or exceeds LHS width".into(),
+                );
+            }
+            matches!(target, Ty::Int(_)) && matches!(value_ty, Ty::Int(_))
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err("invalid compound assignment operator or operand types".into())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1527,6 +1567,38 @@ impl CheckedFunction {
             }
             for statement in &block.statements {
                 match statement {
+                    Stmt::AssignOp { place, op, value } => {
+                        local(place.local)?;
+                        expr(*value)?;
+                        let target =
+                            projected_ty(&self.locals[place.local.0].ty, &place.projection)?;
+                        validate_compound_types(*op, target, &self.exprs[value.0])?;
+                    }
+                    Stmt::AssignIndexOp {
+                        array,
+                        index,
+                        op,
+                        value,
+                    } => {
+                        local(array.local)?;
+                        expr(*index)?;
+                        expr(*value)?;
+                        if array.projection.contains(&Projection::Deref) {
+                            return Err(
+                                "compound runtime indexing through dereference is unsupported"
+                                    .into(),
+                            );
+                        }
+                        let array_ty =
+                            projected_ty(&self.locals[array.local.0].ty, &array.projection)?;
+                        let Ty::Array { element, .. } = array_ty else {
+                            return Err("compound indexed assignment requires array type".into());
+                        };
+                        if self.exprs[index.0].ty != Ty::Int(IntTy::Usize) {
+                            return Err("compound array index requires usize".into());
+                        }
+                        validate_compound_types(*op, element, &self.exprs[value.0])?;
+                    }
                     Stmt::AssignIndex {
                         array,
                         index,
@@ -1585,6 +1657,136 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compounds_validate_closed_domains_dead_statements_and_indices() {
+        let ops = [
+            BinaryOp::Add,
+            BinaryOp::Sub,
+            BinaryOp::Mul,
+            BinaryOp::Div,
+            BinaryOp::Rem,
+            BinaryOp::BitAnd,
+            BinaryOp::BitOr,
+            BinaryOp::BitXor,
+            BinaryOp::Shl,
+            BinaryOp::Shr,
+        ];
+        for op in ops {
+            let mut function = fixture();
+            function.exprs.push(TypedExpr {
+                ty: Ty::Int(IntTy::I32),
+                completion: Completion::Returns,
+                kind: ExprKind::Int(IntValue::i32(1)),
+            });
+            function.body.statements.push(Stmt::AssignOp {
+                place: Place {
+                    local: LocalId(0),
+                    projection: vec![],
+                },
+                op,
+                value: ExprId(1),
+            });
+            function.validate().unwrap();
+            function.exprs[1] = TypedExpr {
+                ty: Ty::Int(IntTy::U64),
+                completion: Completion::Returns,
+                kind: ExprKind::Int(IntValue {
+                    ty: IntTy::U64,
+                    bits: 1,
+                }),
+            };
+            assert_eq!(
+                function.validate().is_ok(),
+                matches!(op, BinaryOp::Shl | BinaryOp::Shr)
+            );
+            function.locals[0].ty = Ty::Bool;
+            function.exprs[1] = TypedExpr {
+                ty: Ty::Bool,
+                completion: Completion::Returns,
+                kind: ExprKind::Bool(true),
+            };
+            assert_eq!(
+                function.validate().is_ok(),
+                matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+            );
+        }
+        let mut function = fixture();
+        function.body.statements = vec![
+            Stmt::Return(None),
+            Stmt::AssignOp {
+                place: Place {
+                    local: LocalId(0),
+                    projection: vec![],
+                },
+                op: BinaryOp::Eq,
+                value: ExprId(0),
+            },
+        ];
+        for op in [
+            BinaryOp::Eq,
+            BinaryOp::Ne,
+            BinaryOp::Lt,
+            BinaryOp::Le,
+            BinaryOp::Gt,
+            BinaryOp::Ge,
+            BinaryOp::And,
+            BinaryOp::Or,
+        ] {
+            let Stmt::AssignOp { op: actual, .. } = &mut function.body.statements[1] else {
+                unreachable!()
+            };
+            *actual = op;
+            assert!(function.validate().unwrap_err().contains("compound"));
+        }
+        function.locals[0].ty = Ty::Array {
+            element: Arc::new(Ty::Int(IntTy::I32)),
+            len: 2,
+        };
+        function.exprs[0] = TypedExpr {
+            ty: Ty::Int(IntTy::I32),
+            completion: Completion::Returns,
+            kind: ExprKind::Int(IntValue::i32(1)),
+        };
+        function.exprs.push(TypedExpr {
+            ty: Ty::Int(IntTy::Usize),
+            completion: Completion::Returns,
+            kind: ExprKind::Int(IntValue::usize(0)),
+        });
+        function.body.statements[1] = Stmt::AssignIndexOp {
+            array: Place {
+                local: LocalId(0),
+                projection: vec![],
+            },
+            index: ExprId(1),
+            op: BinaryOp::Shl,
+            value: ExprId(0),
+        };
+        function.validate().unwrap();
+        function.exprs[1] = TypedExpr {
+            ty: Ty::Int(IntTy::U64),
+            completion: Completion::Returns,
+            kind: ExprKind::Int(IntValue {
+                ty: IntTy::U64,
+                bits: 0,
+            }),
+        };
+        assert!(function.validate().unwrap_err().contains("usize"));
+        function.exprs[1] = TypedExpr {
+            ty: Ty::Int(IntTy::Usize),
+            completion: Completion::Returns,
+            kind: ExprKind::Int(IntValue::usize(0)),
+        };
+        function.exprs[0].kind = ExprKind::Int(IntValue::i32(32));
+        assert!(function.validate().unwrap_err().contains("shift count"));
+        function.exprs[0].completion = Completion::Never;
+        function.validate().unwrap();
+        let Stmt::AssignIndexOp { index, .. } = &mut function.body.statements[1] else {
+            unreachable!()
+        };
+        *index = ExprId(usize::MAX);
+        assert!(function.validate().is_err());
+    }
+
     #[test]
     fn shifts_validate_independent_integer_types_and_eager_completion() {
         let types = [

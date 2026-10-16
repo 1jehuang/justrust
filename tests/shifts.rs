@@ -452,11 +452,11 @@ fn main(){run();}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_compound_shift_assignment() {
-    rejects(
-        "legalunsupported: compound_shift_assignment",
+fn accepts_compound_shift_assignment() {
+    runs(
         r#"fn run()->i32{let mut x=1u8;x<<=3u16;x>>=1i8;if x==4u8{7}else{0}}
 fn main(){if run()==7{println!("shift oracle ok");}}"#,
+        "shift oracle ok\n",
     );
 }
 

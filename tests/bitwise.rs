@@ -334,11 +334,11 @@ fn main(){run();}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_compound_assignment() {
-    rejects(
-        "legalunsupported: compound_assignment",
+fn accepts_compound_assignment() {
+    runs(
         r#"fn run()->i32{let mut x=15u8;x&=7u8;x|=8u8;x^=8u8;if x==7u8{7}else{0}}
 fn main(){if run()==7{println!("bitwise oracle ok");}}"#,
+        "bitwise oracle ok\n",
     );
 }
 

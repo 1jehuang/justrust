@@ -48,6 +48,12 @@ pub struct BasicBlock {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
+    IndexAssignOp {
+        array: Place,
+        index: Operand,
+        value: Operand,
+        op: BinaryOp,
+    },
     IndexAssign {
         array: Place,
         index: Operand,
@@ -304,6 +310,71 @@ impl Function {
         Ok(element)
     }
 
+    fn binary_ty(op: BinaryOp, left: Ty, right: Ty, count: Option<IntValue>) -> Result<Ty, String> {
+        if left == Ty::Never || right == Ty::Never {
+            return Err("CFG binary operator on never is unsupported".into());
+        }
+        if matches!(op, BinaryOp::And | BinaryOp::Or) {
+            return Err("CFG short-circuit operator must be control flow".into());
+        }
+        if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+            let (Ty::Int(integer), Ty::Int(_)) = (&left, &right) else {
+                return Err("CFG shift requires integer operands".into());
+            };
+            if let Some(count) = count {
+                let negative =
+                    count.ty.is_signed() && count.bits & (1_u64 << (count.ty.bits() - 1)) != 0;
+                if negative || count.bits >= u64::from(integer.bits()) {
+                    return Err("CFG constant shift count is negative or exceeds LHS width".into());
+                }
+            }
+            return Ok(left);
+        }
+        let comparison = matches!(
+            op,
+            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        );
+        if !matches!(left, Ty::Int(_))
+            && !(matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(left, Ty::Bool | Ty::Unit))
+            && !(matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+                && left == Ty::Bool)
+        {
+            return Err("CFG binary operator requires compatible integer operands".into());
+        }
+        if left != right {
+            return Err("CFG operand type mismatch".into());
+        }
+        Ok(if comparison { Ty::Bool } else { left })
+    }
+
+    fn compound_ty(&self, op: BinaryOp, target: &Ty, value: &Operand) -> Result<(), String> {
+        let right = self.operand_ty(value)?;
+        if !matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Rem
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        ) {
+            return Err("invalid CFG compound assignment operator".into());
+        }
+        let count = match value {
+            Operand::Constant(Constant::Int(count)) => Some(*count),
+            _ => None,
+        };
+        let result = Self::binary_ty(op, target.clone(), right, count)?;
+        if result != *target {
+            return Err("CFG compound assignment result type mismatch".into());
+        }
+        Ok(())
+    }
+
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         match value {
             Rvalue::IntCast { value, to } => {
@@ -383,48 +454,15 @@ impl Function {
             Rvalue::Binary { op, left, right } => {
                 let left_ty = self.operand_ty(left)?;
                 let right_ty = self.operand_ty(right)?;
-                if left_ty == Ty::Never || right_ty == Ty::Never {
-                    return Err("CFG binary operator on never is unsupported".into());
-                }
-                if matches!(op, BinaryOp::And | BinaryOp::Or) {
-                    return Err("CFG short-circuit operator must be control flow".into());
-                }
-                if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
-                    let (Ty::Int(left_integer), Ty::Int(_)) = (&left_ty, &right_ty) else {
-                        return Err("CFG shift requires integer operands".into());
-                    };
-                    if let Operand::Constant(Constant::Int(count)) = right {
-                        let negative = count.ty.is_signed()
-                            && count.bits & (1_u64 << (count.ty.bits() - 1)) != 0;
-                        if negative || count.bits >= u64::from(left_integer.bits()) {
-                            return Err(
-                                "CFG constant shift count is negative or exceeds LHS width".into(),
-                            );
-                        }
-                    }
-                    return Ok(left_ty);
-                }
-                let comparison = matches!(
-                    op,
-                    BinaryOp::Eq
-                        | BinaryOp::Ne
-                        | BinaryOp::Lt
-                        | BinaryOp::Le
-                        | BinaryOp::Gt
-                        | BinaryOp::Ge
-                );
-                let operand_ty = left_ty;
-                if !matches!(operand_ty, Ty::Int(_))
-                    && !(matches!(op, BinaryOp::Eq | BinaryOp::Ne)
-                        && matches!(operand_ty, Ty::Bool | Ty::Unit))
-                    && !(matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
-                        && operand_ty == Ty::Bool)
-                {
-                    return Err("CFG binary operator requires compatible integer operands".into());
-                }
-                self.require_operand(left, &operand_ty)?;
-                self.require_operand(right, &operand_ty)?;
-                Ok(if comparison { Ty::Bool } else { operand_ty })
+                Self::binary_ty(
+                    *op,
+                    left_ty,
+                    right_ty,
+                    match right {
+                        Operand::Constant(Constant::Int(count)) => Some(*count),
+                        _ => None,
+                    },
+                )
             }
             Rvalue::Aggregate { ty, fields } => {
                 validate_type(ty, 0)?;
@@ -524,6 +562,21 @@ impl Function {
         for item in &self.blocks {
             for statement in &item.statements {
                 match &statement.value {
+                    Statement::IndexAssignOp {
+                        array,
+                        index,
+                        value,
+                        op,
+                    } => {
+                        if array.projection.contains(&Projection::Deref) {
+                            return Err(
+                                "compound runtime indexing through dereference is unsupported"
+                                    .into(),
+                            );
+                        }
+                        let element = self.indexed_element_ty(array, index)?;
+                        self.compound_ty(*op, element, value)?;
+                    }
                     Statement::IndexAssign {
                         array,
                         index,
@@ -986,6 +1039,38 @@ impl Lowerer<'_> {
         self.scopes.push(Vec::new());
         for statement in &body.statements {
             match statement {
+                ir::Stmt::AssignOp { place, op, value } => {
+                    let operand = self.expression(*value)?;
+                    self.inspect_index_prefixes(place, Some(*value))?;
+                    self.assign(
+                        place.clone(),
+                        Rvalue::Binary {
+                            op: *op,
+                            left: Operand::Copy(place.clone()),
+                            right: operand,
+                        },
+                        Some(*value),
+                    );
+                }
+                ir::Stmt::AssignIndexOp {
+                    array,
+                    index,
+                    op,
+                    value,
+                } => {
+                    let value = self.expression(*value)?;
+                    self.inspect_index_prefixes(array, Some(*index))?;
+                    let index_value = self.expression(*index)?;
+                    self.statement(
+                        Statement::IndexAssignOp {
+                            array: array.clone(),
+                            index: index_value,
+                            value,
+                            op: *op,
+                        },
+                        Some(*index),
+                    );
+                }
                 ir::Stmt::AssignIndex {
                     array,
                     index,
@@ -2205,6 +2290,189 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn compounds_validate_dead_ops_and_lower_rhs_then_single_index_update() {
+        let base = nominal_lowered(&with_root(
+            Ty::Array {
+                element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+                len: 2,
+            },
+            vec![],
+            vec![],
+        ));
+        let update = |op, index, value| Statement::IndexAssignOp {
+            array: place(LocalId(0)),
+            index,
+            value,
+            op,
+        };
+        let index = Operand::Constant(Constant::Int(IntValue::usize(0)));
+        let value = Operand::Constant(Constant::Int(IntValue::i32(1)));
+        for op in [
+            BinaryOp::Add,
+            BinaryOp::Sub,
+            BinaryOp::Mul,
+            BinaryOp::Div,
+            BinaryOp::Rem,
+            BinaryOp::BitAnd,
+            BinaryOp::BitOr,
+            BinaryOp::BitXor,
+            BinaryOp::Shl,
+            BinaryOp::Shr,
+        ] {
+            let mut function = base.clone();
+            function.blocks.push(BasicBlock {
+                statements: vec![Located {
+                    value: update(op, index.clone(), value.clone()),
+                    origin: None,
+                }],
+                terminator: Located {
+                    value: Terminator::Unreachable,
+                    origin: None,
+                },
+            });
+            function.validate().unwrap();
+        }
+        for (op, idx, rhs) in [
+            (BinaryOp::Eq, index.clone(), value.clone()),
+            (BinaryOp::And, index.clone(), value.clone()),
+            (
+                BinaryOp::Add,
+                Operand::Constant(Constant::Int(IntValue::i32(0))),
+                value.clone(),
+            ),
+            (
+                BinaryOp::Add,
+                index.clone(),
+                Operand::Constant(Constant::Bool(true)),
+            ),
+            (
+                BinaryOp::Add,
+                index.clone(),
+                Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::U32,
+                    bits: 1,
+                })),
+            ),
+            (
+                BinaryOp::Shl,
+                index.clone(),
+                Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::U64,
+                    bits: u64::MAX,
+                })),
+            ),
+            (
+                BinaryOp::Shr,
+                index.clone(),
+                Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::U8,
+                    bits: 256,
+                })),
+            ),
+        ] {
+            let mut function = base.clone();
+            function.blocks.push(BasicBlock {
+                statements: vec![Located {
+                    value: update(op, idx, rhs),
+                    origin: None,
+                }],
+                terminator: Located {
+                    value: Terminator::Unreachable,
+                    origin: None,
+                },
+            });
+            assert!(function.validate().is_err());
+        }
+        let source = with_root(
+            Ty::Array {
+                element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+                len: 2,
+            },
+            vec![
+                expr(
+                    Ty::Int(IntTy::I32),
+                    ir::ExprKind::Call {
+                        name: "rhs".into(),
+                        args: vec![],
+                        signature: ir::Signature {
+                            ref_contract: Default::default(),
+                            params: vec![],
+                            result: Ty::Int(IntTy::I32),
+                        },
+                    },
+                ),
+                expr(
+                    Ty::Int(IntTy::Usize),
+                    ir::ExprKind::Call {
+                        name: "index".into(),
+                        args: vec![],
+                        signature: ir::Signature {
+                            ref_contract: Default::default(),
+                            params: vec![],
+                            result: Ty::Int(IntTy::Usize),
+                        },
+                    },
+                ),
+            ],
+            vec![ir::Stmt::AssignIndexOp {
+                array: place(LocalId(0)),
+                index: ExprId(1),
+                op: BinaryOp::Add,
+                value: ExprId(0),
+            }],
+        );
+        let lowered = nominal_lowered(&source);
+        let calls: Vec<_> = lowered
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator.value {
+                Terminator::Call { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, ["rhs", "index"]);
+        let statements: Vec<_> = lowered
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .collect();
+        assert_eq!(
+            statements
+                .iter()
+                .filter(|statement| matches!(statement.value, Statement::IndexAssignOp { .. }))
+                .count(),
+            1
+        );
+        assert!(!statements.iter().any(|statement| matches!(
+            statement.value,
+            Statement::IndexAssign { .. }
+                | Statement::Assign {
+                    value: Rvalue::IndexCopy { .. },
+                    ..
+                }
+        )));
+        assert_storage_paths(&lowered);
+        assert!(super::super::ownership::analyze(&lowered).passed());
+        for (source, passes) in [
+            ("fn f(){let mut x:i32;x+=1;}fn main(){}", false),
+            ("fn f(){let x=1;x+=1;}fn main(){}", false),
+            ("fn f(){let x=1;let p=&x;*p+=1;}fn main(){}", false),
+            ("fn f(){let mut x:i32;x+={x=10;1};}fn main(){}", true),
+            (
+                "fn f(){let mut x=1;let mut y=2;let mut p=&mut x;*p+={p=&mut y;3};}fn main(){}",
+                true,
+            ),
+        ] {
+            let function = nominal_lowered(&checked(source, 0));
+            assert_eq!(
+                super::super::ownership::analyze(&function).passed(),
+                passes,
+                "{source}"
+            );
+        }
     }
 
     #[test]
@@ -4183,6 +4451,12 @@ mod tests {
                         array,
                         index,
                         value,
+                    }
+                    | Statement::IndexAssignOp {
+                        array,
+                        index,
+                        value,
+                        ..
                     } => {
                         live_operand(value, &live);
                         live_operand(index, &live);
