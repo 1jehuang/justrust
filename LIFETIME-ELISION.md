@@ -1,6 +1,6 @@
 # Free-function lifetime elision
 
-Status: frozen after owner feasibility and independent architecture review.
+Status: corrected against stock rustc's E0106 oracle before implementation release.
 Implementation and acceptance gates are pending. This extends projected reference
 returns without changing public IR/CFG/provenance APIs. Full Rust remains open.
 
@@ -12,13 +12,15 @@ its own fresh rigid RegionParamId, allocated after explicit names in original
 parameter order. Repeated explicit names retain the same ID. Synthetic IDs have
 no source spelling and cannot be named by explicit outlives bounds.
 
-An omitted output lifetime resolves only when the set of DISTINCT IDs actually
-occurring in reference inputs has exactly one member. Nonreference arguments and
-unused explicit lifetime declarations do not contribute. Thus two inputs both
-using explicit `'a` permit an elided output, while two omitted input lifetimes
-produce two independent IDs and reject an ambiguous omitted output. Zero input
-regions also reject a missing output lifetime. Count all reference input regions,
-not only parameters whose pointee type can supply a return candidate.
+An omitted output lifetime resolves only when exactly one input reference lifetime
+position occurs. Nonreference arguments and unused explicit lifetime declarations
+do not contribute. Two reference inputs remain ambiguous even when both explicitly
+use the same `'a` ID. Two omitted input lifetimes also reject an ambiguous omitted
+output. Zero input positions reject a missing output lifetime. Count all reference
+input positions, not only parameters whose pointee type can supply a return candidate.
+The initial distinct-ID proposal was incorrect: stock rustc rejects repeated named
+input positions with E0106. Preserve shared IDs for explicit output contracts, but
+never deduplicate positions when deciding output elision.
 
 An explicit output lifetime retains its declared ID and rigid outlives rules.
 Never infer an anonymous input-to-output bound from body use. Body return proofs
@@ -49,7 +51,7 @@ all-mutable-actual proof invalidation and all-body publication gates stay intact
 ## Acceptance and exact historical promotion
 
 Use one bounded new stock-classified corpus with shared/mutable identities,
-projected/forward/recursive returns, repeated explicit input lifetime uniqueness,
+projected/forward/recursive returns, repeated explicit input lifetime ambiguity,
 scalar arguments, explicit output with fresh anonymous inputs, missing/ambiguous
 output errors, local escape and dependent storage lifetime failures. Check combined
 64/65 resource bounds and canonical equivalence with explicit contracts in owner
