@@ -26,8 +26,13 @@ Supported integer primitives are `i8`, `i16`, `i32`, `i64`, `isize`, `u8`,
 checked arithmetic and normalized private eight-byte scalar transport. Decimal,
 binary, octal and hexadecimal literals accept underscores and exact suffixes.
 Signed minimum literals support direct or parenthesized negation, not arbitrary
-block folding. Casts, shifts, binary bitwise operators, 128-bit integers and floats
-remain unsupported. See `INTEGER-TYPES.md`.
+block folding. Integer-to-integer `as` casts cover all 100 pairs, preserving source
+signedness before destination truncation/normalization without overflow traps.
+Unsuffixed cast operands receive a soft destination hint through literals, unary
+operators and block tails, not arithmetic or branch unification. Concrete source
+types retain their identity. See `INTEGER-TYPES.md` and `INTEGER-CASTS.md`.
+Shifts, binary bitwise operators, 128-bit integers, floats and noninteger casts
+remain unsupported. Parenthesized cast target types are an explicit boundary.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and

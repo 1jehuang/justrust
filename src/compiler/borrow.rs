@@ -157,9 +157,10 @@ fn visit_operand(op: &Operand, mut visit: impl FnMut(&Place, bool)) {
 fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place, bool)) {
     match value {
         Rvalue::Borrow(id) => visit(&f.loan_sites[id.0].place, false),
-        Rvalue::Use(op) | Rvalue::Unary { value: op, .. } | Rvalue::Repeat { value: op, .. } => {
-            visit_operand(op, &mut visit)
-        }
+        Rvalue::Use(op)
+        | Rvalue::Unary { value: op, .. }
+        | Rvalue::Repeat { value: op, .. }
+        | Rvalue::IntCast { value: op, .. } => visit_operand(op, &mut visit),
         Rvalue::Binary { left, right, .. } => {
             visit_operand(left, &mut visit);
             visit_operand(right, &mut visit);

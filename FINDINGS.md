@@ -8755,3 +8755,33 @@ Its 1,250-byte source produced a 12,321-byte ELF with four functions, 45 CFG blo
 zero failures/dropped events. Observed total 19,270,229 ns and engine 3,577,317 ns
 are contended/uncontrolled, not a speedup claim. Full Rust, casts, wider numerics,
 libraries and real-project acceptance remain open.
+
+### Integer casts, soft source inference and bounded lowering
+
+INTEGER-CASTS.md implements all 100 ordered primitive integer conversion pairs.
+Source normalization follows source signedness, then destination normalization
+truncates/interprets low bits without arithmetic overflow checks. Private soft
+Castable expectations are separate from hard type equality: literal/unary/block
+source hints do not retarget concrete suffixes or arithmetic/branch operands.
+No reference, pointer, bool, float or 128-bit cast support is implied.
+
+Frozen32 corpus SHA256
+`942778196cb187edd61937b08c38f1c30871af1dff2145dfcbc6857323a782b3`
+contains26positive,3invalid and3legalunsupported cases, including a mathematical
+100-pair runtime oracle. Independent stock32 and native32 plus four graph gates
+pass. The exact historical integer_cast_syntax source executes unchanged before
+its assertion/classification promotion. The real native example executes with
+complete capture and prints `integer casts compiled correctly`.
+
+Final hosted check `20261016-032620762-3504484`, all-target test
+`20261016-032621683-3504761` (1,067 passed), strict all-target clippy
+`20261016-032623486-3504465`, formatting and diff checks pass. Exact three redacted
+profiles are retained in `data/runs/prototype-bootstrap/2026-10-integer-casts.jsonl`.
+Both actual-code reviewers cleared the patch. Concrete regression gates exposed
+parser/checker stack-frame growth: helper extraction preserves the existing128
+cap and admits120cast chains on normal test stacks, without environment or cap
+workarounds. The exact120chain also passes actual native lowering/execution.
+Malformed checked-IR cycles now fail bounded lowering depth/work before unbounded
+recursion. Repeated legal DAG occurrences remain independently lowered.
+Tracked full native campaign follows the source commit. No performance or full
+Rust completion claim follows from these bounded correctness gates.

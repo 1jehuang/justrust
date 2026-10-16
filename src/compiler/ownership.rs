@@ -366,6 +366,10 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                         place_type(f, array, &mut budget)?;
                         operand(index, &mut budget)?;
                     }
+                    Rvalue::IntCast { value, to } => {
+                        preflight_ty(&Ty::Int(*to), 0, &mut budget)?;
+                        operand(value, &mut budget)?;
+                    }
                     Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => operand(op, &mut budget)?,
                     Rvalue::Repeat { ty, value } => {
                         preflight_ty(ty, 0, &mut budget)?;
@@ -1119,7 +1123,9 @@ impl Transfer<'_> {
                 self.operand(state, index)?;
                 self.read(state, array)?;
             }
-            Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => self.operand(state, op)?,
+            Rvalue::Use(op)
+            | Rvalue::Unary { value: op, .. }
+            | Rvalue::IntCast { value: op, .. } => self.operand(state, op)?,
             // Repetition evaluates once even for a zero-length destination.
             Rvalue::Repeat { value, .. } => self.operand(state, value)?,
             Rvalue::Binary { left, right, .. } => {
@@ -1577,6 +1583,200 @@ mod tests {
             super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
                 .unwrap();
         cfg::lower(&checked).unwrap()
+    }
+
+    #[test]
+    fn integer_cast_reads_one_operand_and_preserves_private_move_semantics() {
+        for moved in [false, true] {
+            let mut f = fixture();
+            f.locals
+                .extend([local(Ty::Int(IntTy::I64)), local(Ty::Int(IntTy::U8))]);
+            f.params.push(LocalId(1));
+            f.blocks[0].statements.extend([
+                located(Statement::StorageLive(LocalId(2))),
+                located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::IntCast {
+                        value: if moved {
+                            Operand::Move(place(1))
+                        } else {
+                            Operand::Copy(place(1))
+                        },
+                        to: IntTy::U8,
+                    },
+                }),
+                located(Statement::Inspect(place(2))),
+            ]);
+            let result = analyze(&f);
+            assert!(result.passed(), "{:?}", result.diagnostics);
+            assert_eq!(result.stats.operands_read, 3);
+            assert_eq!(result.stats.moves, usize::from(moved));
+            f.blocks[0]
+                .statements
+                .push(located(Statement::Inspect(place(1))));
+            assert_eq!(analyze(&f).passed(), !moved);
+            f.params.clear();
+            f.blocks[0]
+                .statements
+                .insert(0, located(Statement::StorageLive(LocalId(1))));
+            let result = analyze(&f);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+            );
+        }
+        let mut cast = fixture();
+        cast.locals
+            .extend([local(Ty::Int(IntTy::I64)), local(Ty::Int(IntTy::I64))]);
+        cast.params.push(LocalId(1));
+        cast.blocks[0].statements.push(located(Statement::Assign {
+            destination: place(2),
+            value: Rvalue::IntCast {
+                value: Operand::Copy(place(1)),
+                to: IntTy::I64,
+            },
+        }));
+        let mut ordinary = cast.clone();
+        ordinary.blocks[0].statements.last_mut().unwrap().value = Statement::Assign {
+            destination: place(2),
+            value: Rvalue::Use(Operand::Copy(place(1))),
+        };
+        let cost = |f: &cfg::Function| {
+            (0..1024)
+                .find(|operations| {
+                    preflight(
+                        f,
+                        Limits {
+                            operations: *operations,
+                            ..Limits::default()
+                        },
+                    )
+                    .is_ok()
+                })
+                .unwrap()
+        };
+        assert_eq!(cost(&cast), cost(&ordinary) + 1);
+    }
+
+    #[test]
+    fn integer_cast_deref_keeps_carrier_live_and_last_read_ends_before_write() {
+        use super::super::ir::BorrowKind;
+        let mut f = fixture();
+        f.locals.extend([
+            local(Ty::Int(IntTy::I32)),
+            local(Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+            }),
+            local(Ty::Int(IntTy::I32)),
+        ]);
+        f.params.push(LocalId(1));
+        f.loan_sites.push(cfg::LoanSite {
+            kind: BorrowKind::Shared,
+            place: place(1),
+            origin: None,
+        });
+        let cast = Rvalue::IntCast {
+            value: Operand::Copy(Place {
+                local: LocalId(2),
+                projection: vec![Projection::Deref],
+            }),
+            to: IntTy::I32,
+        };
+        let write = located(Statement::Assign {
+            destination: place(1),
+            value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue::i32(2)))),
+        });
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Borrow(cfg::LoanId(0)),
+            }),
+            write.clone(),
+            located(Statement::Assign {
+                destination: place(3),
+                value: cast.clone(),
+            }),
+        ]);
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_))),
+            "{:?}",
+            result.diagnostics
+        );
+        let length = f.blocks[0].statements.len();
+        f.blocks[0].statements.remove(length - 2);
+        f.blocks[0].statements.push(write);
+        assert!(analyze(&f).passed());
+        f.blocks[0].statements.pop();
+        f.blocks[0].statements.last_mut().unwrap().value = Statement::Assign {
+            destination: place(1),
+            value: cast,
+        };
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn integer_cast_nonnumeric_and_noncanonical_dead_operands_cannot_create_origins() {
+        use super::super::ir::BorrowKind;
+        for source in [
+            Ty::Bool,
+            Ty::Unit,
+            nominal(vec![Ty::Int(IntTy::I32)]),
+            Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+            },
+        ] {
+            let mut f = fixture();
+            f.locals.extend([local(source), local(Ty::Int(IntTy::U8))]);
+            f.blocks.push(BasicBlock {
+                statements: vec![located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::IntCast {
+                        value: Operand::Move(place(1)),
+                        to: IntTy::U8,
+                    },
+                })],
+                terminator: located(Terminator::Unreachable),
+            });
+            let result = analyze(&f);
+            assert!(result.complete);
+            assert!(matches!(
+                result.diagnostics[0].kind,
+                ErrorKind::InvalidCfg(_)
+            ));
+        }
+        let mut f = fixture();
+        f.locals.push(local(Ty::Int(IntTy::U64)));
+        f.blocks.push(BasicBlock {
+            statements: vec![located(Statement::Assign {
+                destination: place(1),
+                value: Rvalue::IntCast {
+                    value: Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::U8,
+                        bits: 256,
+                    })),
+                    to: IntTy::U64,
+                },
+            })],
+            terminator: located(Terminator::Unreachable),
+        });
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(matches!(
+            result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
     }
 
     #[test]

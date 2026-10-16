@@ -1037,6 +1037,10 @@ pub struct MatchArm {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind {
+    IntCast {
+        value: ExprId,
+        to: IntTy,
+    },
     Borrow {
         kind: BorrowKind,
         place: Place,
@@ -1303,6 +1307,19 @@ impl CheckedFunction {
         let mut blocks = vec![&self.body];
         for value in &self.exprs {
             match &value.kind {
+                ExprKind::IntCast { value: source, to } => {
+                    expr(*source)?;
+                    let source = &self.exprs[source.0];
+                    if !matches!(source.ty, Ty::Int(_)) {
+                        return Err("integer cast requires integer source".into());
+                    }
+                    if value.ty != Ty::Int(*to) {
+                        return Err("integer cast result type mismatch".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("integer cast completion mismatch".into());
+                    }
+                }
                 ExprKind::Borrow { kind, place } => {
                     let root = &self
                         .locals
@@ -1524,6 +1541,80 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn casts_validate_dead_endpoints_edges_and_typed_noncompletion() {
+        let mut function = fixture();
+        function.exprs.push(TypedExpr {
+            ty: Ty::Int(IntTy::U8),
+            completion: Completion::Returns,
+            kind: ExprKind::IntCast {
+                value: ExprId(0),
+                to: IntTy::U8,
+            },
+        });
+        function.validate().unwrap();
+        for source in [
+            Ty::Bool,
+            Ty::Unit,
+            Ty::Never,
+            Ty::Tuple(Arc::from([Ty::Int(IntTy::I32)])),
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(IntTy::I32)),
+            },
+        ] {
+            let mut invalid = function.clone();
+            invalid.exprs[0].ty = source;
+            assert!(invalid.validate().unwrap_err().contains("integer source"));
+        }
+        let mut invalid = function.clone();
+        invalid.exprs[1].ty = Ty::Int(IntTy::U64);
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("result type mismatch")
+        );
+        invalid = function.clone();
+        invalid.exprs[1].kind = ExprKind::IntCast {
+            value: ExprId(99),
+            to: IntTy::U8,
+        };
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
+        invalid = function.clone();
+        invalid.exprs[0].kind = ExprKind::Int(IntValue {
+            ty: IntTy::I32,
+            bits: 1u64 << 32,
+        });
+        assert!(invalid.validate().unwrap_err().contains("noncanonical"));
+        invalid = function.clone();
+        invalid.exprs[1].completion = Completion::Never;
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("completion mismatch")
+        );
+        function.exprs.push(TypedExpr {
+            ty: Ty::Int(IntTy::I32),
+            completion: Completion::Returns,
+            kind: ExprKind::Int(IntValue::i32(7)),
+        });
+        function.exprs[0].kind = ExprKind::Block(Block {
+            statements: vec![Stmt::Return(None)],
+            tail: Some(ExprId(2)),
+        });
+        function.exprs[0].completion = Completion::Never;
+        function.exprs[1].completion = Completion::Never;
+        function.validate().unwrap();
+        assert_eq!(function.exprs[1].ty, Ty::Int(IntTy::U8));
+    }
+
     #[test]
     fn integer_descriptors_constants_and_patterns_preserve_exact_identity() {
         let types = [

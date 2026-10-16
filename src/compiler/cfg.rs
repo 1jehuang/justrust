@@ -85,6 +85,10 @@ pub enum Operand {
 
 #[derive(Clone, Debug)]
 pub enum Rvalue {
+    IntCast {
+        value: Operand,
+        to: IntTy,
+    },
     Borrow(LoanId),
     IndexCopy {
         array: Place,
@@ -302,6 +306,12 @@ impl Function {
 
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         match value {
+            Rvalue::IntCast { value, to } => {
+                if !matches!(self.operand_ty(value)?, Ty::Int(_)) {
+                    return Err("CFG integer cast requires integer source".into());
+                }
+                Ok(Ty::Int(*to))
+            }
             Rvalue::Borrow(id) => {
                 let site = self.loan_sites.get(id.0).ok_or("invalid CFG loan site")?;
                 let referent = self.place_ty(&site.place)?;
@@ -617,6 +627,8 @@ struct LoopTarget {
 }
 
 struct Lowerer<'a> {
+    lowering_depth: usize,
+    lowering_work: usize,
     origins: usize,
     loans: Vec<Option<LoanId>>,
     used_loans: std::collections::HashSet<LoanId>,
@@ -631,6 +643,18 @@ struct Lowerer<'a> {
 }
 
 impl Lowerer<'_> {
+    fn enter_lowering(&mut self) -> Result<(), String> {
+        if self.lowering_depth >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("CFG lowering depth resource limit exceeded (128)".into());
+        }
+        if self.lowering_work >= ir::MAX_PATTERN_PROJECTION_WORK {
+            return Err("CFG lowering work resource limit exceeded".into());
+        }
+        self.lowering_depth += 1;
+        self.lowering_work += 1;
+        Ok(())
+    }
+
     fn temporary(&mut self, ty: Ty, origin: Option<ExprId>) -> Place {
         let local = LocalId(self.result.locals.len());
         self.result.locals.push(ir::LocalDecl {
@@ -935,6 +959,13 @@ impl Lowerer<'_> {
     }
 
     fn body(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
+        self.enter_lowering()?;
+        let result = self.body_inner(body, destination);
+        self.lowering_depth -= 1;
+        result
+    }
+
+    fn body_inner(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
         self.scopes.push(Vec::new());
         for statement in &body.statements {
             match statement {
@@ -1117,6 +1148,13 @@ impl Lowerer<'_> {
     /// Evaluate once into an independent owned snapshot without consuming that
     /// snapshot. Projection can address it before selecting a field to consume.
     fn materialize_expression(&mut self, id: ExprId) -> Result<Place, String> {
+        self.enter_lowering()?;
+        let result = self.materialize_expression_inner(id);
+        self.lowering_depth -= 1;
+        result
+    }
+
+    fn materialize_expression_inner(&mut self, id: ExprId) -> Result<Place, String> {
         let expression = self
             .source
             .exprs
@@ -1131,6 +1169,14 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
+            ir::ExprKind::IntCast { value, to } => {
+                let value = self.expression(*value)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::IntCast { value, to: *to },
+                    origin,
+                );
+            }
             ir::ExprKind::Borrow { place, .. } => {
                 let loan = self
                     .loans
@@ -1473,6 +1519,15 @@ impl Lowerer<'_> {
 /// Lower without modifying the checked input. Each value transfer selects Copy
 /// or Move from its projected type. The result still requires ownership analysis.
 pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
+    let arena_size = source
+        .exprs
+        .len()
+        .checked_add(source.locals.len())
+        .and_then(|count| count.checked_add(1))
+        .ok_or("CFG lowering arena resource limit exceeded")?;
+    if arena_size > ir::MAX_PATTERN_PROJECTION_WORK {
+        return Err("CFG lowering arena resource limit exceeded".into());
+    }
     let mut formal_origins = 0usize;
     for param in &source.params {
         let ty = &source
@@ -1535,6 +1590,8 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
         mutable: true,
     });
     let mut lowerer = Lowerer {
+        lowering_depth: 0,
+        lowering_work: 0,
         origins: formal_parameter_origins + loan_sites.len(),
         loans,
         used_loans: std::collections::HashSet::new(),
@@ -2131,6 +2188,206 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn casts_validate_all_integer_pairs_dead_operands_and_evaluate_source_once() {
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ];
+        let function = nominal_lowered(&with_root(Ty::Int(IntTy::I32), vec![], vec![]));
+        for from in types {
+            for to in types {
+                let value = Operand::Constant(Constant::Int(IntValue {
+                    ty: from,
+                    bits: from.mask(),
+                }));
+                assert_eq!(
+                    function.rvalue_ty(&Rvalue::IntCast { value, to }).unwrap(),
+                    Ty::Int(to)
+                );
+            }
+        }
+        for root in [
+            Ty::Bool,
+            Ty::Unit,
+            Ty::Never,
+            Ty::Tuple(std::sync::Arc::from([Ty::Int(IntTy::I32)])),
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+            },
+        ] {
+            let function = nominal_lowered(&with_root(root, vec![], vec![]));
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::IntCast {
+                        value: Operand::Copy(place(LocalId(0))),
+                        to: IntTy::U8
+                    })
+                    .is_err()
+            );
+        }
+        let mut invalid = function.clone();
+        invalid.blocks.push(BasicBlock {
+            statements: vec![Located {
+                value: Statement::Assign {
+                    destination: place(LocalId(0)),
+                    value: Rvalue::IntCast {
+                        value: Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::U8,
+                            bits: 256,
+                        })),
+                        to: IntTy::I32,
+                    },
+                },
+                origin: None,
+            }],
+            terminator: Located {
+                value: Terminator::Unreachable,
+                origin: None,
+            },
+        });
+        assert!(invalid.validate().unwrap_err().contains("noncanonical"));
+        let source = with_root(
+            Ty::Unit,
+            vec![
+                expr(
+                    Ty::Int(IntTy::I64),
+                    ir::ExprKind::Call {
+                        name: "once".into(),
+                        args: vec![],
+                        signature: ir::Signature {
+                            ref_contract: Default::default(),
+                            params: vec![],
+                            result: Ty::Int(IntTy::I64),
+                        },
+                    },
+                ),
+                expr(
+                    Ty::Int(IntTy::U8),
+                    ir::ExprKind::IntCast {
+                        value: ExprId(0),
+                        to: IntTy::U8,
+                    },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(1))],
+        );
+        let lowered = nominal_lowered(&source);
+        assert_eq!(lowered.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call {name, ..} if name == "once")).count(), 1);
+        let casts: Vec<_> = lowered
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| {
+                matches!(
+                    &statement.value,
+                    Statement::Assign {
+                        value: Rvalue::IntCast { to: IntTy::U8, .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(casts.len(), 1);
+        assert_eq!(casts[0].origin, Some(ExprId(1)));
+        assert_storage_paths(&lowered);
+        assert!(super::super::ownership::analyze(&lowered).passed());
+        let mut repeated = source.clone();
+        repeated.body.statements.push(ir::Stmt::Expr(ExprId(1)));
+        let repeated = nominal_lowered(&repeated);
+        assert_eq!(repeated.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call {name, ..} if name == "once")).count(), 2);
+        let mut cyclic = source.clone();
+        cyclic.exprs[0].kind = ir::ExprKind::IntCast {
+            value: ExprId(0),
+            to: IntTy::I64,
+        };
+        cyclic.validate().unwrap();
+        assert!(
+            lower(&cyclic)
+                .unwrap_err()
+                .contains("lowering depth resource")
+        );
+        cyclic.exprs[0].kind = ir::ExprKind::Unary {
+            op: UnaryOp::Not,
+            value: ExprId(1),
+        };
+        cyclic.exprs[1].ty = Ty::Int(IntTy::I64);
+        cyclic.exprs[1].kind = ir::ExprKind::IntCast {
+            value: ExprId(0),
+            to: IntTy::I64,
+        };
+        cyclic.validate().unwrap();
+        assert!(
+            lower(&cyclic)
+                .unwrap_err()
+                .contains("lowering depth resource")
+        );
+        let mut budget = Lowerer {
+            lowering_depth: 0,
+            lowering_work: ir::MAX_PATTERN_PROJECTION_WORK,
+            origins: 0,
+            loans: vec![],
+            used_loans: Default::default(),
+            source: &source,
+            result: function,
+            expressions: vec![],
+            parameters: Default::default(),
+            blocks: vec![],
+            current: BlockId(0),
+            scopes: vec![],
+            loops: vec![],
+        };
+        assert!(
+            budget
+                .materialize_expression(ExprId(usize::MAX))
+                .unwrap_err()
+                .contains("lowering work resource")
+        );
+        assert_eq!(budget.lowering_depth, 0);
+        assert!(budget.blocks.is_empty());
+        let mut chain = vec![expr(
+            Ty::Int(IntTy::I32),
+            ir::ExprKind::Int(IntValue::i32(1)),
+        )];
+        for index in 0..120 {
+            chain.push(expr(
+                Ty::Int(IntTy::U64),
+                ir::ExprKind::IntCast {
+                    value: ExprId(index),
+                    to: IntTy::U64,
+                },
+            ));
+        }
+        let chain = with_root(Ty::Unit, chain, vec![ir::Stmt::Expr(ExprId(120))]);
+        let lowered = nominal_lowered(&chain);
+        assert_eq!(
+            lowered
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter(|statement| matches!(
+                    statement.value,
+                    Statement::Assign {
+                        value: Rvalue::IntCast { .. },
+                        ..
+                    }
+                ))
+                .count(),
+            120
+        );
+        assert!(super::super::ownership::analyze(&lowered).passed());
+        super::super::backend::emit_checked_function(&chain).unwrap();
     }
 
     #[test]
@@ -3576,6 +3833,7 @@ mod tests {
                                 assert!(live[array.local.0], "dynamic index reads dead array");
                             }
                             Rvalue::Use(value)
+                            | Rvalue::IntCast { value, .. }
                             | Rvalue::Unary { value, .. }
                             | Rvalue::Repeat { value, .. } => live_operand(value, &live),
                             Rvalue::Binary { left, right, .. } => {

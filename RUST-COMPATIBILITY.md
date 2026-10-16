@@ -11,9 +11,12 @@ They must not compile user programs on our native implementation path.
 `INTEGER-TYPES.md` defines all ten signed/unsigned primitives through 64 bits,
 canonical typed low-bit constants, radix literals, signed minima, typed patterns
 and width-aware checked native operations. The private eight-byte leaf ABI is
-not Rust platform layout or FFI support. Casts, shifts, binary bitwise operators,
-128-bit integers, floats and broader inference remain separate work. The full
-Rust compatibility goal remains open.
+not Rust platform layout or FFI support. `INTEGER-CASTS.md` adds all 100
+integer-to-integer conversions with source-signed extension and destination
+truncation/normalization, nontrapping casts and private soft source expectations.
+Noninteger casts, shifts, binary bitwise operators, 128-bit integers, floats and
+broader inference remain separate work. The full Rust compatibility goal remains
+open.
 
 ## Builtin reference field slice
 

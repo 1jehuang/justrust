@@ -1,9 +1,9 @@
 # Integer-to-integer casts
 
-Status: frozen implementation contract, 2026-10-16. All component owners and
-read-only reviewers confirmed feasibility against the actual source. The exact
-32-case stock corpus also passed an independent coordinator rerun. Implementation
-is authorized only through the coordinator's scoped GO messages. Integer
+Status: implemented and hosted-validated, 2026-10-16. All component owners
+and both read-only reviewers cleared the actual patch. Exact32 stock/native
+plus four graph gates, 1,067 hosted tests, strict all-target lint and formatting
+pass. The tracked full native campaign follows the implementation commit. Integer
 foundation source 4957a0e7d and evidence
 5004e9bdd delivered 1,021 hosted tests and 784 tracked native differential cases.
 Full Rust remains the requested goal, not a claim made by these bounded gates.
@@ -132,8 +132,8 @@ all32 under rustc1.98.1 edition2024. Ten matrix cases cover all100 type pairs wi
 runtime source parameters and mathematical low-bit expected values;16 focused
 positive cases cover soft source hints, control flow, precedence and once-only
 reference operand effects. There are no expected runtime-overflow cases because
-integer casts themselves never overflow-panic. This is stock classification,
-not a claim that the not-yet-implemented native cast path passes.
+integer casts themselves never overflow-panic. Exact native32 plus four graph
+tests now pass as well, with full tracked native campaign still pending.
 
 ## Required acceptance and ownership
 

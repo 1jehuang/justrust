@@ -587,6 +587,13 @@ impl<'a> Emitter<'a> {
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::IntCast { value, to } => {
+                // Exact CFG validation established an integer source. Operand
+                // transport already extends SOURCE signedness to 64 bits.
+                // Casts only normalize the destination and never range-trap.
+                self.operand(value)?;
+                self.normalize_integer(*to);
+            }
             cfg::Rvalue::Borrow(loan) => {
                 let site = self
                     .function
@@ -1278,6 +1285,96 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn integer_casts_all_hundred_pairs_normalize_mathematical_boundary_values() {
+        use ir::IntTy;
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ];
+        for source in types {
+            let source_modulus = 1_i128 << source.bits();
+            let (minimum, maximum) = if source.is_signed() {
+                (-source_modulus / 2, source_modulus / 2 - 1)
+            } else {
+                (0, source_modulus - 1)
+            };
+            let body = |number: i128| {
+                let mut body = String::new();
+                for target in types {
+                    // Independent mathematical modulo oracle in the host test,
+                    // not the compiler's normalize/mask implementation.
+                    let modulus = 1_i128 << target.bits();
+                    let low = number.rem_euclid(modulus);
+                    let expected = if target.is_signed() && low >= modulus / 2 {
+                        low - modulus
+                    } else {
+                        low
+                    };
+                    let target = target.name();
+                    body.push_str(&format!(
+                        "if (value as {target}) != {expected}{target} {{ return false; }}"
+                    ));
+                }
+                body.push_str("true");
+                body
+            };
+            let name = source.name();
+            let source = format!(
+                "fn minimum(value: {name}) -> bool {{ {} }} fn maximum(value: {name}) -> bool {{ {} }} fn main() {{ if !minimum({minimum}{name}) {{ 1/0; }} if !maximum({maximum}{name}) {{ 1/0; }} }}",
+                body(minimum),
+                body(maximum)
+            );
+            let p = frontend::parse(&source).unwrap();
+            let output = run(&p);
+            assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn integer_casts_operand_once_reference_snapshot_sret_and_typed_divergence() {
+        let p = frontend::parse(
+            r#"
+            struct Record { guard: [u8; 9], value: i16 }
+            fn source(counter: &mut i32) -> i16 { *counter = *counter + 1; -1i16 }
+            fn array() -> [u8; 9] { [300i32 as u8; 9] }
+            fn divergent() -> u8 { ({ return 7u8; 300i32 }) as u8 }
+            fn main() {
+                let mut counter = 0;
+                let wide = source(&mut counter) as u64;
+                if wide != 18446744073709551615u64 { 1 / 0; }
+                if counter != 1 { 1 / 0; }
+                let mut record = Record { guard: array(), value: -1i16 };
+                let reference = &record;
+                let narrow = reference.value as u8;
+                if narrow != 255u8 { 1 / 0; }
+                record.value = 257i16;
+                if (record.value as u8) != 1u8 { 1 / 0; }
+                if record.guard[8] != 44u8 { 1 / 0; }
+                if (-1i16 as u8 as u16) != 255u16 { 1 / 0; }
+                if ((!1i8) as u16) != 65534u16 { 1 / 0; }
+                if ((200 + 100) as u8) != 44u8 { 1 / 0; }
+                if ((if true { 300 } else { 1 }) as u8) != 44u8 { 1 / 0; }
+                if ((match true { true => 300, false => 1 }) as u8) != 44u8 { 1 / 0; }
+                if divergent() != 7u8 { 1 / 0; }
+                println!("integer-casts");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"integer-casts\n");
     }
 
     #[test]

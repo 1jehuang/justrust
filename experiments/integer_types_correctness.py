@@ -25,6 +25,8 @@ TRAP_POLICY = ("declared runtime_error only: compile/check0, executable required
                "and fixture reason; native stderr captured but may differ or be empty; "
                "signals/timeouts/truncation/compiler crashes fail")
 
+# Cast native-pass promotion: integer_cast_syntax is positive; source/stdout/value unchanged.
+# Original immutable acceptance artifact hash above is retained.
 # Frozen bear oracle. full_source is authoritative, without additional wrappers.
 FIXTURES = json.loads(r'''
 [
@@ -293,7 +295,7 @@ FIXTURES = json.loads(r'''
     "expected": 7,
     "expected_stdout": "integer types oracle ok\n",
     "full_source": "fn run()->i32{let x:i8=-1i8;let y=x as u64;if y==18446744073709551615u64{7}else{0}}\nfn main() { if run() == 7 { println!(\"integer types oracle ok\"); } }\n",
-    "group": "legalunsupported",
+    "group": "positive",
     "name": "integer_cast_syntax",
     "source": "fn run()->i32{let x:i8=-1i8;let y=x as u64;if y==18446744073709551615u64{7}else{0}}"
   }

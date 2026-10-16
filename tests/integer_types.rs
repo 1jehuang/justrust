@@ -508,12 +508,12 @@ fn main() { if run() == 7 { println!("integer types oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_integer_cast_syntax() {
-    // Stock accepts and runs this fixture, outside phase-one integer scope.
-    rejects(
-        "integer_cast_syntax",
+fn accepts_integer_cast_syntax() {
+    // Promoted after unchanged-source native build and runtime parity.
+    runs(
         r#"fn run()->i32{let x:i8=-1i8;let y=x as u64;if y==18446744073709551615u64{7}else{0}}
 fn main() { if run() == 7 { println!("integer types oracle ok"); } }
 "#,
+        "integer types oracle ok\n",
     );
 }

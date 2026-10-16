@@ -315,6 +315,10 @@ impl Expr {
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    Cast {
+        value: Box<Expr>,
+        target: Type,
+    },
     Borrow {
         kind: ir::BorrowKind,
         place: Place,
@@ -729,6 +733,9 @@ impl Parser {
         result
     }
     fn ty_inner(&mut self) -> Result<Type, String> {
+        if self.token().string {
+            return Err(self.error("quoted tokens are not types"));
+        }
         if self.is("&&") {
             return Err(self.error("nested reference types are unsupported in B1"));
         }
@@ -1426,6 +1433,27 @@ impl Parser {
         self.nesting -= 1;
         result
     }
+    fn cast_after_as(&mut self, value: Expr) -> Result<Expr, String> {
+        self.expect("as")?;
+        if self.is("(") {
+            return Err(self.error("parenthesized cast target types are unsupported"));
+        }
+        let target = self.ty()?;
+        if self.is("<") {
+            return Err(self.error("parenthesize the cast before a less-than comparison; otherwise '<' starts generic arguments"));
+        }
+        if self.is(".") || self.is("[") || self.is("(") {
+            return Err(self.error(
+                "a cast cannot be followed directly by a postfix operation; parenthesize the cast",
+            ));
+        }
+        let expr = Expr::Cast {
+            value: Box::new(value),
+            target,
+        };
+        validate_depth(DepthNode::Expr(&expr)).map_err(|e| self.error(&e))?;
+        Ok(expr)
+    }
     fn expr_inner(&mut self, min: u8) -> Result<Expr, String> {
         self.expr_inner_mode(min, false)
     }
@@ -1444,22 +1472,22 @@ impl Parser {
             } else {
                 ir::BorrowKind::Shared
             };
-            let value = self.expr(7)?;
+            let value = self.expr(8)?;
             let place=self.assignment_place(value).map_err(|_|self.error("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
             Expr::Borrow { kind, place }
         } else if self.eat("*") {
             Expr::Deref {
-                value: Box::new(self.expr(7)?),
+                value: Box::new(self.expr(8)?),
             }
         } else if self.eat("-") {
             Expr::Unary {
                 op: UnaryOp::Neg,
-                value: Box::new(self.expr(7)?),
+                value: Box::new(self.expr(8)?),
             }
         } else if self.eat("!") {
             Expr::Unary {
                 op: UnaryOp::Not,
-                value: Box::new(self.expr(7)?),
+                value: Box::new(self.expr(8)?),
             }
         } else if self.eat("true") {
             Expr::Bool(true)
@@ -1726,6 +1754,13 @@ impl Parser {
                 )
             {
                 break;
+            }
+            if self.is("as") {
+                if min > 7 {
+                    break;
+                }
+                left = self.cast_after_as(left)?;
+                continue;
             }
             let (precedence, op) = match self.token().text.as_str() {
                 "||" => (1, BinaryOp::Or),
@@ -2194,6 +2229,10 @@ impl Resolver<'_> {
                     self.expr(e, module, locals)?;
                 }
             }
+            Expr::Cast { value, target } => {
+                self.expr(value, module, locals)?;
+                self.ty(target, module)?;
+            }
             Expr::Deref { value } => self.expr(value, module, locals)?,
             Expr::Borrow { .. } => {}
             Expr::Repeat { value, .. } => self.expr(value, module, locals)?,
@@ -2424,6 +2463,10 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 }
             }
             DepthNode::Expr(expr) => match expr {
+                Expr::Cast { value, target } => {
+                    push(DepthNode::Expr(value));
+                    push(DepthNode::Type(target));
+                }
                 Expr::Array(elements) => {
                     for e in elements {
                         push(DepthNode::Expr(e));
@@ -2869,6 +2912,33 @@ struct Checker<'a> {
     module: String,
     field_indices: std::cell::RefCell<HashMap<ir::DefId, HashMap<String, usize>>>,
 }
+#[derive(Clone, Copy)]
+enum Expectation<'a> {
+    None,
+    HasType(&'a ir::Ty),
+    CastableToInt(ir::IntTy),
+}
+impl<'a> Expectation<'a> {
+    fn hard(self) -> Option<&'a ir::Ty> {
+        match self {
+            Self::HasType(ty) => Some(ty),
+            _ => None,
+        }
+    }
+    fn literal(self, literal: &IntegerLiteral, negative: bool) -> Result<ir::IntValue, String> {
+        let cast_hint = match self {
+            Self::CastableToInt(to) if literal.suffix.is_none() => Some(ir::Ty::Int(to)),
+            _ => None,
+        };
+        resolve_integer(literal, negative, self.hard().or(cast_hint.as_ref()))
+    }
+}
+impl<'a> From<Option<&'a ir::Ty>> for Expectation<'a> {
+    fn from(ty: Option<&'a ir::Ty>) -> Self {
+        ty.map_or(Self::None, Self::HasType)
+    }
+}
+
 // Semantic type and possible normal completion are independent. In particular,
 // an unreachable explicit block tail retains its type, unlike a pure never value.
 #[derive(Clone)]
@@ -3331,6 +3401,7 @@ impl<'a> Checker<'a> {
     }
     fn scalar_hint(&self, e: &Expr) -> Option<ir::Ty> {
         match e {
+            Expr::Cast { target, .. } => checked_local_ty(target, self.signatures).ok(),
             Expr::Deref { value } => self.scalar_hint(value).and_then(|ty| {
                 if let ir::Ty::Ref { referent, .. } = ty {
                     Some(referent.as_ref().clone())
@@ -3720,6 +3791,13 @@ impl<'a> Checker<'a> {
         b: &Block,
         expected: Option<&ir::Ty>,
     ) -> Result<(ir::Block, Flow), String> {
+        self.block_with_expectation(b, expected.into())
+    }
+    fn block_with_expectation(
+        &mut self,
+        b: &Block,
+        expectation: Expectation<'_>,
+    ) -> Result<(ir::Block, Flow), String> {
         let entered_reachable = self.reachable;
         self.scopes.push(HashMap::new());
         let mut live = true;
@@ -3925,7 +4003,7 @@ impl<'a> Checker<'a> {
         let tail = b
             .tail
             .as_ref()
-            .map(|e| self.expr_expected(e, expected))
+            .map(|e| self.expr_with_expectation(e, expectation))
             .transpose()?;
         self.reachable = entered_reachable;
         let mut flow = tail.map_or_else(
@@ -3946,6 +4024,50 @@ impl<'a> Checker<'a> {
         self.expr_expected(e, None)
     }
     fn expr_expected(&mut self, e: &Expr, expected: Option<&ir::Ty>) -> Result<ir::ExprId, String> {
+        self.expr_with_expectation(e, expected.into())
+    }
+    fn expr_with_expectation(
+        &mut self,
+        e: &Expr,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
+        if let Expr::Cast { value, target } = e {
+            return self.cast_expression(value, target);
+        }
+        self.expr_without_cast(e, expectation)
+    }
+    fn cast_expression(&mut self, value: &Expr, target: &Type) -> Result<ir::ExprId, String> {
+        let target = checked_local_ty(target, self.signatures)?;
+        let ir::Ty::Int(to) = target else {
+            return Err("noninteger cast endpoints are unsupported".into());
+        };
+        let value = self.expr_with_expectation(value, Expectation::CastableToInt(to))?;
+        let source = self.flow(value);
+        if source.ty == ir::Ty::Never {
+            return Err("casts from semantic Never are unsupported".into());
+        }
+        if !matches!(source.ty, ir::Ty::Int(_)) {
+            return Err("noninteger cast endpoints are unsupported".into());
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            kind: ir::ExprKind::IntCast { value, to },
+            ty: ir::Ty::Int(to),
+            completion: if source.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+        });
+        Ok(id)
+    }
+    fn expr_without_cast(
+        &mut self,
+        e: &Expr,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
+        // A castable hint is not a hard result constraint or reference coercion site.
+        let expected = expectation.hard();
         if let Some(ir::Ty::Ref { kind, referent }) = expected {
             if let Expr::Var(name) = e {
                 let local = self.lookup(name)?;
@@ -3973,6 +4095,7 @@ impl<'a> Checker<'a> {
             }
         }
         let (kind, flow) = match e {
+            Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
                 Self::reject_aggregate_ref(&referent)?;
@@ -4468,7 +4591,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Integer(literal) => {
-                let value = resolve_integer(literal, false, expected)?;
+                let value = expectation.literal(literal, false)?;
                 (ir::ExprKind::Int(value), Flow::value(ir::Ty::Int(value.ty)))
             }
             Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(ir::Ty::Bool)),
@@ -4491,7 +4614,7 @@ impl<'a> Checker<'a> {
                 if matches!(op, UnaryOp::Neg)
                     && let Expr::Integer(literal) = value.as_ref()
                 {
-                    let value = resolve_integer(literal, true, expected)?;
+                    let value = expectation.literal(literal, true)?;
                     let id = ir::ExprId(self.exprs.len());
                     self.exprs.push(ir::TypedExpr {
                         kind: ir::ExprKind::Int(value),
@@ -4504,7 +4627,11 @@ impl<'a> Checker<'a> {
                     .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Bool))
                     .cloned()
                     .or_else(|| self.scalar_hint(value));
-                let value = self.expr_expected(value, hint.as_ref())?;
+                let value = if matches!(expectation, Expectation::CastableToInt(_)) {
+                    self.expr_with_expectation(value, expectation)?
+                } else {
+                    self.expr_expected(value, hint.as_ref())?
+                };
                 let f = self.flow(value);
                 let t = match op {
                     UnaryOp::Neg => match &f.ty {
@@ -4711,7 +4838,7 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Continue { target }, Flow::never())
             }
             Expr::Block(b) => {
-                let (block, flow) = self.block_expected(b, expected)?;
+                let (block, flow) = self.block_with_expectation(b, expectation)?;
                 (ir::ExprKind::Block(block), flow)
             }
         };
@@ -4823,6 +4950,152 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn cast_soft_expectations_preserve_concrete_sources_and_drop_at_operators() {
+        use ir::IntTy::*;
+        for (body, source_ty) in [
+            ("300i32 as u8", I32),
+            ("{let x=300;x} as u8", I32),
+            ("(200+100) as u8", I32),
+            ("(if true{300}else{301}) as u8", I32),
+            ("(match true{true=>300,false=>301}) as u8", I32),
+            ("(loop{break 300;}) as u8", I32),
+            ("!0 as u8", U8),
+            ("-128i8 as u8", I8),
+        ] {
+            // Parenthesize the outer operand when the body begins a naked block.
+            let body = if body.starts_with('{') {
+                format!("({body})")
+            } else {
+                body.to_string()
+            };
+            let source = format!("fn f()->u8{{{body}}}fn main(){{}}");
+            let p = parse(&source).unwrap();
+            check(&p).unwrap();
+            let env = signature_table(&p).unwrap();
+            let f = type_function_with_signatures(&p, 0, &env).unwrap();
+            let ir::ExprKind::IntCast { value, to } = f.exprs[f.body.tail.unwrap().0].kind else {
+                panic!("not a cast: {source}")
+            };
+            assert_eq!(to, U8);
+            assert_eq!(f.exprs[value.0].ty, ir::Ty::Int(source_ty), "{source}");
+        }
+        for source in [
+            "fn main(){let x=300 as u8;}",
+            "fn main(){let x=({300}) as u8;}",
+            "fn main(){let x=(-1) as u8;}",
+            "fn main(){let x=300 as u8 as u16;}",
+            "fn main(){let x=(1u8+300i32) as u16;}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        check(&parse("fn wide()->u64{18446744073709551615 as u64}fn f()->u16{(-1i8) as u16}fn main(){let x:u16=300i32 as u8 as u16;}").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn cast_parser_preserves_precedence_statement_boundaries_and_typed_tokens() {
+        let p=parse("fn main(){let x=-1i16 as u8*2;let y=1i32 as u8 as u16;let z=1+2i32 as u8;let b=(1i32 as u8)<2;}").unwrap();
+        let Stmt::Let {
+            value:
+                Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left,
+                    ..
+                },
+            ..
+        } = &p.functions[0].body.statements[0]
+        else {
+            panic!("multiplication precedence")
+        };
+        assert!(
+            matches!(left.as_ref(),Expr::Cast{value,..} if matches!(value.as_ref(),Expr::Unary{op:UnaryOp::Neg,..}))
+        );
+        let Stmt::Let {
+            value: Expr::Cast { value, .. },
+            ..
+        } = &p.functions[0].body.statements[1]
+        else {
+            panic!("cast chain")
+        };
+        assert!(matches!(value.as_ref(), Expr::Cast { .. }));
+        let Stmt::Let {
+            value:
+                Expr::Binary {
+                    op: BinaryOp::Add,
+                    right,
+                    ..
+                },
+            ..
+        } = &p.functions[0].body.statements[2]
+        else {
+            panic!("addition precedence")
+        };
+        assert!(matches!(right.as_ref(), Expr::Cast { .. }));
+        for source in [
+            "fn main(){let x=1 \"as\" u8;}",
+            "fn main(){let x=1 as \"u8\";}",
+            "fn main(){let x:\"u8\"=1;}",
+            "fn main(){let x=1i32 as u8<2;}",
+            "fn main(){let x=1i32 as u8.0;}",
+            "fn main(){let x=1i32 as u8[0];}",
+            "fn main(){let x=1i32 as u8();}",
+            "fn f()->u8{{1} as u8}fn main(){}",
+            "fn f()->u8{if true{1}else{2} as u8}fn main(){}",
+            "fn f()->u8{match true{_=>1} as u8}fn main(){}",
+        ] {
+            assert!(parse(source).is_err(), "accepted {source}");
+        }
+        assert!(
+            parse("fn main(){let x=1i32 as (u8);}")
+                .unwrap_err()
+                .contains("unsupported")
+        );
+        check(&parse("fn f()->u8{({1}) as u8}fn g()->u8{(if true{1}else{2}) as u8}fn main(){let b=(1i32 as u8)<2;}").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn cast_completion_and_once_only_operands_do_not_create_values_or_origins() {
+        let p=parse("fn source()->i64{300}fn once()->u8{source() as u8}fn typed_dead()->u8{({return 1u8;300i32}) as u8}fn read(r:&i16)->u8{*r as u8}fn main(){}").unwrap();
+        check(&p).unwrap();
+        let env = signature_table(&p).unwrap();
+        let once = type_function_with_signatures(&p, 1, &env).unwrap();
+        assert_eq!(
+            once.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            1
+        );
+        let dead = type_function_with_signatures(&p, 2, &env).unwrap();
+        let cast = &dead.exprs[dead.body.tail.unwrap().0];
+        assert_eq!(cast.ty, ir::Ty::Int(ir::IntTy::U8));
+        assert_eq!(cast.completion, ir::Completion::Never);
+        let ir::ExprKind::IntCast { value, .. } = cast.kind else {
+            panic!("expected typed dead cast")
+        };
+        assert_eq!(dead.exprs[value.0].ty, ir::Ty::Int(ir::IntTy::I32));
+        assert_eq!(dead.exprs[value.0].completion, ir::Completion::Never);
+        for source in [
+            "fn main(){let x=(loop{}) as u8;}",
+            "fn main(){let x=true as u8;}",
+            "fn main(){let x=1i32;let r=&x;let n=r as usize;}",
+        ] {
+            assert!(
+                parse(source)
+                    .and_then(|p| check(&p))
+                    .unwrap_err()
+                    .contains("unsupported")
+            );
+        }
+        let within = format!("fn main(){{let x=1i32{};}}", " as u8".repeat(120));
+        check(&parse(&within).unwrap()).unwrap();
+        let source = format!("fn main(){{let x=1i32{};}}", " as u8".repeat(140));
+        assert!(parse(&source).unwrap_err().contains("nesting"));
+    }
 
     #[test]
     fn integer_literal_bounds_contexts_and_grouped_minima_are_exact() {
