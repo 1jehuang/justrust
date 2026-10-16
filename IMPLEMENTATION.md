@@ -60,7 +60,9 @@ analysis retention. `DEFERRED.md` records the contract. The exact historical
 wildcard/uninitialized match fixture is now accepted rather than unsupported.
 The dedicated differential corpus contains 10 accepted cases, seven invalid
 programs and three explicit inference/pattern boundaries. Payload enums remain
-the next design/implementation slice, not a completed capability.
+the next design/implementation slice, not a completed capability. The M8a run
+passed 431 fixtures across nine corpora: 274 accepted parity cases, 122 invalid
+rejections and 35 explicitly unsupported legal programs, with raw receipts retained.
 
 Fieldless enums and scalar/enum match now pass 434 hosted tests. `ENUMS.md`
 records nonconsuming variant inspection, selected binding moves, finite coverage

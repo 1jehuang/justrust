@@ -23,6 +23,14 @@ Final hosted gates: check `20261015-232901274-1612259`, test
 profiles are in `data/runs/prototype-bootstrap/2026-10-deferred.jsonl`. This is
 correctness evidence, not a speedup or full inference/borrow-checking claim.
 
+Tracked M8a run `compiler-deferred-20261016-0632` on source `573b1dc6b`
+passed all **431 fixtures** across nine corpora: 274 accepted parity cases,
+122 invalid rejections and 35 legal-unsupported boundaries. Full raw receipts
+are in `experiments/results/20261016-m8a-deferred-*.jsonl`. The real native
+example ran successfully with 96 workers, 14 once-evaluated nodes, no failures
+or dropped events and complete capture. Its 10,068,017 ns total is explicitly
+contended/uncontrolled, not a cold measurement or performance claim.
+
 ## 2026-10-16: Fieldless enums and match preserve static ownership paths
 
 Implemented nonempty unit-variant nominal enums and native match expressions over
