@@ -9655,3 +9655,43 @@ nominals and derived inner nominal-reference executable actuals remain bounded
 exclusions. No stock delegation, raised cap, compiler installation, pinned
 before/after speedup or full-Rust claim is made. Independent committed-revision
 runtime validation follows separately.
+
+### Generic carriers: independent committed-revision validation, 2026-10-16
+
+Metered run `compiler-generic-carriers-20261016-2313` independently fetched and
+built revision `2a3b022ff24b8f3246af96381dce99058a93e768` on the signed-in
+m8a.24xlarge host. The lifecycle completed successfully with exit 0 and 96 workers.
+Its release compiler SHA256 is
+`661081771eb14e72e4d32ea1e6e42e030d3ac540203f2c44dc53ea636188b3eb`.
+The run took 106.47 seconds under contended/uncontrolled conditions. This is
+functional acceptance evidence, not a speed measurement or before/after claim.
+
+All 33 corpora passed, totaling **1,148 cases**: 690 accepted parity, 35 declared
+trap-101 cases, 336 semantic-invalid rejections, 86 explicit unsupported boundaries
+and one resource rejection. The aggregate includes 128 generated scalar/loop
+compile-and-runtime comparisons, 1,124 successful worker-1/8 runtime comparisons,
+and 70 worker-1/8 declared-trap runtime comparisons. All raw environment, case and
+summary receipts are committed as
+`experiments/results/20261016-m8a-generic-carriers-*.jsonl`.
+The six historical promotions above passed again on this exact revision; the
+remaining excluded cases were not silently promoted.
+
+After fetching all raw receipts, a separate coordinator verifier checked every
+case source SHA256, every recorded process stream SHA256, worker modes, statuses,
+timeouts/truncation, successful complete build/check graphs, absence of CHECK
+executables, summary counts and the single shared compiler hash. The immutable
+new32 were additionally compared byte-for-byte with the frozen full sources,
+names and literal expected stdout. Their 16 positive cases passed native runtime,
+12 negative cases were semantic rejections rather than Unsupported/parser/panic
+substitutes, and four legal exclusions remained explicit Unsupported. No frozen
+source, expected result, stock classification or group was repaired.
+
+The independent real `examples/compiler/generic_carriers.rs` build and runtime
+also passed: exit 0, exact `generic carriers ok\n`, empty stderr, no timeout or
+truncation. Its actual Debug trace was independently parsed: all **72 nodes**
+evaluated exactly once, **162 dependency edges**, no node errors, complete capture
+and zero dropped events. The example receipt retains the lifecycle, source hash,
+compiler hash, stream hashes, observation and trace hash in
+`experiments/results/20261016-m8a-generic-carriers-example.jsonl`.
+This closes the independent native acceptance gate for the stated bounded domain,
+not full Rust support. The stable installed toolchain remains unchanged.
