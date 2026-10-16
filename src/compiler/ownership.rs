@@ -124,6 +124,9 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         if let Operand::Copy(p) | Operand::Move(p) = op {
             place_type(f, p, budget)?;
         }
+        if let Operand::Constant(cfg::Constant::Enum { ty, .. }) = op {
+            preflight_ty(&Ty::Enum(ty.clone()), 0, budget)?;
+        }
         Ok(())
     };
     for block in &f.blocks {
@@ -133,6 +136,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
             if let Statement::Assign { destination, value } = &item.value {
                 place_type(f, destination, &mut budget)?;
                 match value {
+                    Rvalue::Discriminant(place) => place_type(f, place, &mut budget)?,
                     Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => operand(op, &mut budget)?,
                     Rvalue::Binary { left, right, .. } => {
                         operand(left, &mut budget)?;
@@ -180,6 +184,11 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
     budget.spend(depth + 1)?;
     if depth > 128 {
         return Err(Exhausted);
+    }
+    if let Ty::Enum(ty) = ty {
+        // Enums have no move-path children, but validation examines their
+        // variant metadata, including when supplied only by a constant.
+        budget.spend(ty.def().variants.len())?;
     }
     if let Some(count) = ty.field_count() {
         for index in 0..count {
@@ -470,6 +479,9 @@ impl Transfer<'_> {
     }
     fn rvalue(&mut self, state: &mut State, value: &Rvalue) -> Result<(), Exhausted> {
         match value {
+            // Reading a tag does not copy or move the non-Copy enum. Unit
+            // enums still require their root to be definitely initialized.
+            Rvalue::Discriminant(place) => self.read(state, place)?,
             Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => self.operand(state, op)?,
             Rvalue::Binary { left, right, .. } => {
                 self.operand(state, left)?;
@@ -713,7 +725,9 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
 
 #[cfg(test)]
 mod tests {
-    use super::super::ir::{DefId, FieldDef, LocalDecl, SnapshotId, StructDef, StructTy};
+    use super::super::ir::{
+        DefId, EnumDef, EnumTy, FieldDef, LocalDecl, SnapshotId, StructDef, StructTy,
+    };
     use super::*;
     use cfg::{BasicBlock, Constant, Located};
 
@@ -776,6 +790,215 @@ mod tests {
                 terminator: located(Terminator::Return),
             }],
         }
+    }
+
+    fn unit_enum() -> EnumTy {
+        EnumTy::new(EnumDef {
+            id: DefId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "Tag".into(),
+            module: String::new(),
+            public: false,
+            variants: vec!["A".into(), "B".into()].into(),
+        })
+    }
+
+    fn enum_fixture() -> cfg::Function {
+        let mut f = fixture();
+        let ty = Ty::Enum(unit_enum());
+        f.locals
+            .extend([local(ty.clone()), local(Ty::I32), local(ty)]);
+        f.params.push(LocalId(1));
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+        ]);
+        f
+    }
+
+    fn discriminant() -> Located<Statement> {
+        located(Statement::Assign {
+            destination: place(2),
+            value: Rvalue::Discriminant(place(1)),
+        })
+    }
+
+    #[test]
+    fn enum_discriminant_reads_do_not_consume_noncopy_root() {
+        let mut f = enum_fixture();
+        f.blocks[0].statements.extend([
+            discriminant(),
+            discriminant(),
+            located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }),
+        ]);
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        assert_eq!(result.stats.moves, 1);
+        assert_eq!(result.stats.move_paths, 4);
+    }
+
+    #[test]
+    fn enum_discriminant_requires_live_initialized_root() {
+        for (setup, expected) in [
+            (
+                Statement::Assign {
+                    destination: place(3),
+                    value: Rvalue::Use(Operand::Move(place(1))),
+                },
+                ErrorKind::ReadNotDefinitelyInitialized,
+            ),
+            (
+                Statement::StorageDead(LocalId(1)),
+                ErrorKind::StorageNotDefinitelyLive,
+            ),
+        ] {
+            let mut f = enum_fixture();
+            f.blocks[0].statements.push(located(setup));
+            f.blocks[0].statements.push(discriminant());
+            let result = analyze(&f);
+            assert!(result.complete);
+            assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+            assert_eq!(result.diagnostics[0].kind, expected);
+            assert_eq!(result.diagnostics[0].place, Some(place(1)));
+        }
+
+        let mut f = enum_fixture();
+        f.params.clear();
+        f.blocks[0]
+            .statements
+            .push(located(Statement::StorageLive(LocalId(1))));
+        f.blocks[0].statements.push(discriminant());
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+    }
+
+    #[test]
+    fn unreachable_discriminant_does_not_read_moved_enum() {
+        let mut f = enum_fixture();
+        f.blocks[0].statements.push(located(Statement::Assign {
+            destination: place(3),
+            value: Rvalue::Use(Operand::Move(place(1))),
+        }));
+        f.blocks.push(BasicBlock {
+            statements: vec![discriminant()],
+            terminator: located(Terminator::Unreachable),
+        });
+        assert!(analyze(&f).passed());
+    }
+
+    #[test]
+    fn enum_metadata_is_budgeted_without_adding_child_paths() {
+        let ty = Ty::Enum(unit_enum());
+        assert!(preflight_ty(&ty, 0, &mut Budget(2)).is_err());
+        assert!(preflight_ty(&ty, 0, &mut Budget(3)).is_ok());
+        let f = enum_fixture();
+        let paths = Paths::new(&f, 4).unwrap();
+        assert!(paths.nodes[paths.roots[1]].children.is_empty());
+    }
+
+    #[test]
+    fn constant_switch_false_edge_still_checks_moved_enum_reads() {
+        let mut f = enum_fixture();
+        f.blocks[0].statements.push(located(Statement::Assign {
+            destination: place(3),
+            value: Rvalue::Use(Operand::Move(place(1))),
+        }));
+        f.blocks[0].terminator = located(Terminator::Switch {
+            condition: Operand::Constant(Constant::Bool(true)),
+            then_block: BlockId(1),
+            else_block: BlockId(2),
+        });
+        f.blocks.extend([
+            BasicBlock {
+                statements: vec![],
+                terminator: located(Terminator::Return),
+            },
+            BasicBlock {
+                statements: vec![discriminant()],
+                terminator: located(Terminator::Return),
+            },
+        ]);
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert_eq!(result.stats.blocks_reachable, 3);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].block, BlockId(2));
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+    }
+
+    #[test]
+    fn enum_constant_initializes_root_for_discriminant() {
+        let mut f = enum_fixture();
+        f.params.clear();
+        let Ty::Enum(ty) = &f.locals[1].ty else {
+            unreachable!()
+        };
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(1))),
+            located(Statement::Assign {
+                destination: place(1),
+                value: Rvalue::Use(Operand::Constant(Constant::Enum {
+                    ty: ty.clone(),
+                    variant: 0,
+                })),
+            }),
+            discriminant(),
+        ]);
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn projected_enum_discriminant_checks_its_own_initialization() {
+        let mut f = fixture();
+        let ty = Ty::Enum(unit_enum());
+        f.locals.extend([
+            local(Ty::Tuple(vec![ty.clone(), ty.clone()].into())),
+            local(Ty::I32),
+            local(ty),
+        ]);
+        f.params.push(LocalId(1));
+        let field = |index| Place {
+            local: LocalId(1),
+            fields: vec![index],
+        };
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::Use(Operand::Move(field(0))),
+            }),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Discriminant(field(1)),
+            }),
+        ]);
+        assert!(analyze(&f).passed());
+        f.blocks[0].statements.push(located(Statement::Assign {
+            destination: place(2),
+            value: Rvalue::Discriminant(field(0)),
+        }));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+        assert_eq!(result.diagnostics[0].place, Some(field(0)));
     }
 
     #[test]

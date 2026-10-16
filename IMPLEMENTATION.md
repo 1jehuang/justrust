@@ -18,6 +18,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Cached storage/initialization/move-path dataflow shared by check and emission.
 - [x] Nonempty nominal structs, field privacy and source-level whole/partial moves.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
+- [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -51,6 +52,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       libraries, real projects and self-hosting. Self-hosting alone is not enough.
 
 ## Active slice
+
+Fieldless enums and scalar/enum match now pass 434 hosted tests. `ENUMS.md`
+records nonconsuming variant inspection, selected binding moves, finite coverage
+and static ownership checks for unreachable arms. Payload variants, sum-aware
+move paths, guards, or/range/nested refutable patterns and broader enum features
+remain open. The 59-case independent corpus separates 26 accepted cases,
+20 invalid programs and 13 legal-unsupported boundaries.
 
 Named nonempty structs now extend the cached initialization foundation with
 nominal identity, field privacy, whole/partial moves and native aggregate calls.

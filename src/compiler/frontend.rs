@@ -5,9 +5,11 @@
 //! Explicit semicolons discard expression values, while omitted-semicolon
 //! blocklike statements require unit. While loops do not establish return flow.
 //! Numeric literals are decimal i32 only. Unsupported syntax is rejected.
-//! Inline modules, named nonempty braced structs, ordinary visibility, and
+//! Inline modules, named nonempty braced structs, nonempty fieldless enums, ordinary visibility, and
 //! simple module-level imports have separate type/value namespaces. Named
-//! structs are nominal and non-Copy. Move checking belongs to CFG analysis, not
+//! structs and enums are nominal and non-Copy. Match admits scalar literals,
+//! unit variants and whole-value bindings/wildcards with finite exhaustiveness.
+//! Move checking belongs to CFG analysis, not
 //! this semantic checker. External modules, restricted
 //! visibility, reexports, grouped/glob imports, and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
@@ -18,6 +20,7 @@ use std::collections::HashMap;
 pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDecl>,
+    pub enums: Vec<EnumDecl>,
 }
 /// Syntax-only result. Resolve this once before publishing callable signatures.
 #[derive(Clone, Debug)]
@@ -35,6 +38,8 @@ enum ItemKind {
     Module,
     Function,
     Struct,
+    Enum,
+    Variant,
     Import(String),
 }
 
@@ -60,6 +65,12 @@ pub struct StructDecl {
     pub name: String,
     pub public: bool,
     pub fields: Vec<FieldDecl>,
+}
+#[derive(Clone, Debug)]
+pub struct EnumDecl {
+    pub name: String,
+    pub public: bool,
+    pub variants: Vec<String>,
 }
 #[derive(Clone, Debug)]
 pub struct FieldDecl {
@@ -96,6 +107,9 @@ pub struct Place {
 }
 #[derive(Clone, Debug)]
 pub enum Pattern {
+    Path(String),
+    Bool(bool),
+    Int(i32),
     Wildcard,
     Binding {
         name: String,
@@ -140,6 +154,11 @@ pub enum Stmt {
 }
 #[derive(Clone, Debug)]
 pub enum Expr {
+    EnumVariant(String),
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     Tuple(Vec<Expr>),
     Struct {
         name: String,
@@ -179,6 +198,11 @@ pub enum Expr {
     },
     Continue,
     Println(String),
+}
+#[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
 }
 #[derive(Clone, Copy, Debug)]
 pub enum UnaryOp {
@@ -386,6 +410,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         | ('>', '=')
                         | ('&', '&')
                         | ('|', '|')
+                        | ('=', '>')
                         | ('.', '.')
                 )
             {
@@ -404,6 +429,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | "."
                     | ".."
                     | "->"
+                    | "=>"
                     | "+"
                     | "-"
                     | "*"
@@ -601,6 +627,47 @@ impl Parser {
                 };
                 self.expect(";")?;
                 (name, ItemKind::Import(path))
+            } else if self.eat("enum") {
+                let name = self.ident()?;
+                if self.is("<") {
+                    return Err(self.error("generic enums are unsupported"));
+                }
+                self.expect("{")?;
+                let mut variants = Vec::new();
+                while !self.is("}") {
+                    let variant = self.ident()?;
+                    if self.is("(") || self.is("{") || self.is("=") {
+                        return Err(
+                            self.error("enum payloads and explicit discriminants are unsupported")
+                        );
+                    }
+                    if variants.contains(&variant) {
+                        return Err(self.error("duplicate enum variant"));
+                    }
+                    if variants.len() >= 4096 {
+                        return Err(self.error("enum variant count exceeds limit 4096"));
+                    }
+                    self.insert_item(
+                        parsed,
+                        &qualify(&qualify(module, &name), &variant),
+                        true,
+                        ItemKind::Variant,
+                    )?;
+                    variants.push(variant);
+                    if !self.eat(",") {
+                        break;
+                    }
+                }
+                self.expect("}")?;
+                if variants.is_empty() {
+                    return Err(self.error("empty enums are unsupported"));
+                }
+                parsed.program.enums.push(EnumDecl {
+                    name: qualify(module, &name),
+                    public,
+                    variants,
+                });
+                (name, ItemKind::Enum)
             } else if self.eat("struct") {
                 let name = self.ident()?;
                 self.expect("{")?;
@@ -654,6 +721,16 @@ impl Parser {
     ) -> Result<(), String> {
         let bindings = parsed.items.entry(path.to_owned()).or_default();
         if bindings.iter().any(|item| {
+            if matches!(kind, ItemKind::Enum)
+                && matches!(
+                    item.kind,
+                    ItemKind::Module | ItemKind::Struct | ItemKind::Enum
+                )
+                || matches!(item.kind, ItemKind::Enum)
+                    && matches!(kind, ItemKind::Module | ItemKind::Struct)
+            {
+                return true;
+            }
             matches!(
                 (&item.kind, &kind),
                 (ItemKind::Module, ItemKind::Module)
@@ -718,6 +795,25 @@ impl Parser {
         result
     }
     fn pattern_inner(&mut self) -> Result<Pattern, String> {
+        if self.eat("true") {
+            return Ok(Pattern::Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(Pattern::Bool(false));
+        }
+        if self.is("-") || self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
+            let negative = self.eat("-");
+            let text = if negative {
+                format!("-{}", self.token().text)
+            } else {
+                self.token().text.clone()
+            };
+            let value = text
+                .parse::<i32>()
+                .map_err(|_| self.error("invalid or out-of-range i32 pattern literal"))?;
+            self.at += 1;
+            return Ok(Pattern::Int(value));
+        }
         if self.eat("_") {
             return Ok(Pattern::Wildcard);
         }
@@ -752,7 +848,7 @@ impl Parser {
         let name = self.path()?;
         if !self.eat("{") {
             if name.contains("::") || matches!(name.as_str(), "self" | "super" | "crate") {
-                return Err(self.error("qualified patterns require named struct braces"));
+                return Ok(Pattern::Path(name));
             }
             return Ok(Pattern::Binding {
                 name,
@@ -806,6 +902,9 @@ impl Parser {
             }
             if self.eat("let") {
                 let pattern = self.pattern()?;
+                if matches!(pattern, Pattern::Bool(_) | Pattern::Int(_)) {
+                    return Err(self.error("refutable literal pattern in let binding"));
+                }
                 // Local inference is performed by each independent function checker.
                 let annotation = if self.eat(":") {
                     Some(self.ty()?)
@@ -859,7 +958,10 @@ impl Parser {
                 } else if self.is("}") {
                     tail = Some(Box::new(expr));
                     break;
-                } else if matches!(expr, Expr::If { .. } | Expr::Block(_) | Expr::Loop { .. }) {
+                } else if matches!(
+                    expr,
+                    Expr::If { .. } | Expr::Block(_) | Expr::Loop { .. } | Expr::Match { .. }
+                ) {
                     statements.push(Stmt::ImplicitExpr(expr));
                 } else {
                     return Err(self.error("expected semicolon or block end"));
@@ -935,6 +1037,47 @@ impl Parser {
             Expr::Break { value }
         } else if self.eat("continue") {
             Expr::Continue
+        } else if self.eat("match") {
+            let scrutinee = Box::new(self.condition()?);
+            self.expect("{")?;
+            let mut arms = Vec::new();
+            while !self.is("}") {
+                if arms.len() >= 4096 {
+                    return Err(self.error("match arm count exceeds limit 4096"));
+                }
+                let pattern = self.pattern()?;
+                if self.is("if") || self.is("|") || self.is("@") {
+                    return Err(
+                        self.error("match guards, or-patterns and @ patterns are unsupported")
+                    );
+                }
+                self.expect("=>")?;
+                let direct_return = self.eat("return");
+                let body = if direct_return {
+                    let value = if self.is(",") || self.is("}") {
+                        None
+                    } else {
+                        Some(self.nested_expr()?)
+                    };
+                    Expr::Block(Block {
+                        statements: vec![Stmt::Return(value)],
+                        tail: None,
+                    })
+                } else {
+                    self.nested_expr()?
+                };
+                let blocklike = !direct_return
+                    && matches!(
+                        body,
+                        Expr::Block(_) | Expr::If { .. } | Expr::Loop { .. } | Expr::Match { .. }
+                    );
+                arms.push(MatchArm { pattern, body });
+                if !self.eat(",") && !self.is("}") && !blocklike {
+                    return Err(self.error("expected comma after match arm"));
+                }
+            }
+            self.expect("}")?;
+            Expr::Match { scrutinee, arms }
         } else if self.eat("if") {
             let condition = Box::new(self.condition()?);
             let then_block = self.block()?;
@@ -1038,9 +1181,6 @@ impl Parser {
                 self.expect("}")?;
                 Expr::Struct { name, fields }
             } else {
-                if name.contains("::") || matches!(name.as_str(), "crate" | "self" | "super") {
-                    return Err(self.error("qualified paths are supported only as function calls"));
-                }
                 Expr::Var(name)
             }
         };
@@ -1136,6 +1276,7 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
         program: Program {
             functions: Vec::new(),
             structs: Vec::new(),
+            enums: Vec::new(),
         },
         items: HashMap::new(),
     };
@@ -1159,7 +1300,15 @@ pub fn parse(source: &str) -> Result<Program, String> {
 struct ResolvedItem {
     path: String,
     module: bool,
-    structure: bool,
+    kind: ResolvedKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResolvedKind {
+    Module,
+    Function,
+    Struct,
+    Enum,
+    Variant,
 }
 struct Resolver<'a> {
     items: &'a HashMap<String, Vec<Item>>,
@@ -1189,17 +1338,27 @@ impl Resolver<'_> {
                 ItemKind::Module if module => Some(ResolvedItem {
                     path: path.into(),
                     module: true,
-                    structure: false,
+                    kind: ResolvedKind::Module,
                 }),
                 ItemKind::Function if !module => Some(ResolvedItem {
                     path: path.into(),
                     module: false,
-                    structure: false,
+                    kind: ResolvedKind::Function,
                 }),
                 ItemKind::Struct if module => Some(ResolvedItem {
                     path: path.into(),
                     module: true,
-                    structure: true,
+                    kind: ResolvedKind::Struct,
+                }),
+                ItemKind::Enum if module => Some(ResolvedItem {
+                    path: path.into(),
+                    module: true,
+                    kind: ResolvedKind::Enum,
+                }),
+                ItemKind::Variant if !module => Some(ResolvedItem {
+                    path: path.into(),
+                    module: false,
+                    kind: ResolvedKind::Variant,
                 }),
                 ItemKind::Import(_) => self.import(path, index, module)?,
                 _ => None,
@@ -1265,7 +1424,7 @@ impl Resolver<'_> {
                 ResolvedItem {
                     path: String::new(),
                     module: true,
-                    structure: false,
+                    kind: ResolvedKind::Module,
                 }
             }
             "self" => {
@@ -1273,7 +1432,7 @@ impl Resolver<'_> {
                 ResolvedItem {
                     path: from.into(),
                     module: true,
-                    structure: false,
+                    kind: ResolvedKind::Module,
                 }
             }
             "super" => {
@@ -1288,7 +1447,7 @@ impl Resolver<'_> {
                 ResolvedItem {
                     path: module.into(),
                     module: true,
-                    structure: false,
+                    kind: ResolvedKind::Module,
                 }
             }
             name => {
@@ -1306,8 +1465,12 @@ impl Resolver<'_> {
             }
         };
         while let Some(name) = parts.get(at) {
-            if !current.module || current.structure {
+            if !matches!(current.kind, ResolvedKind::Module | ResolvedKind::Enum) {
                 return Err(format!("{} is not a module in path {path}", current.path));
+            }
+            // Enums expose only variant values, never a nested module/type scope.
+            if current.kind == ResolvedKind::Enum && (at + 1 != parts.len() || module) {
+                return Ok(None);
             }
             let Some(item) = self.item(
                 &qualify(&current.path, name),
@@ -1329,8 +1492,8 @@ impl Resolver<'_> {
                 let item = self
                     .path(name, module, true, false)?
                     .ok_or_else(|| format!("unresolved type {name}"))?;
-                if !item.structure {
-                    return Err(format!("{} is a module, not a struct type", item.path));
+                if !matches!(item.kind, ResolvedKind::Struct | ResolvedKind::Enum) {
+                    return Err(format!("{} is a module, not a nominal type", item.path));
                 }
                 *name = item.path;
             }
@@ -1351,7 +1514,26 @@ impl Resolver<'_> {
     ) -> Result<(), String> {
         match pattern {
             Pattern::Wildcard => {}
-            Pattern::Binding { name, .. } => {
+            Pattern::Bool(_) | Pattern::Int(_) => {}
+            Pattern::Path(name) => {
+                let item = self
+                    .path(name, module, false, false)?
+                    .ok_or_else(|| format!("unresolved variant pattern {name}"))?;
+                if item.kind != ResolvedKind::Variant {
+                    return Err(format!("{} is not an enum variant pattern", item.path));
+                }
+                *name = item.path;
+            }
+            Pattern::Binding { name, mutable } => {
+                if let Some(item) = self.path(name, module, false, false)?
+                    && item.kind == ResolvedKind::Variant
+                {
+                    if *mutable {
+                        return Err(format!("binding {name} cannot shadow an enum variant"));
+                    }
+                    *pattern = Pattern::Path(item.path);
+                    return Ok(());
+                }
                 if !names.insert(name.clone()) {
                     return Err(format!("duplicate pattern binding {name}"));
                 }
@@ -1362,10 +1544,19 @@ impl Resolver<'_> {
                 }
             }
             Pattern::Struct { name, fields, .. } => {
+                if let Some(item) = self.path(name, module, false, false)?
+                    && item.kind == ResolvedKind::Variant
+                {
+                    if !fields.is_empty() {
+                        return Err(format!("unit enum variant {} has no fields", item.path));
+                    }
+                    *pattern = Pattern::Path(item.path);
+                    return Ok(());
+                }
                 let item = self
                     .path(name, module, true, false)?
                     .ok_or_else(|| format!("unresolved struct pattern {name}"))?;
-                if !item.structure {
+                if item.kind != ResolvedKind::Struct {
                     return Err(format!("{} is not a struct pattern", item.path));
                 }
                 *name = item.path;
@@ -1384,6 +1575,24 @@ impl Resolver<'_> {
     ) -> Result<(), String> {
         locals.push(std::collections::HashSet::new());
         for stmt in &mut block.statements {
+            if let Stmt::Let {
+                name,
+                mutable,
+                ty,
+                value,
+            } = stmt
+                && let Some(item) = self.path(name, module, false, false)?
+                && item.kind == ResolvedKind::Variant
+            {
+                if *mutable {
+                    return Err(format!("binding {name} cannot shadow an enum variant"));
+                }
+                *stmt = Stmt::LetPattern {
+                    pattern: Pattern::Path(item.path),
+                    ty: ty.clone(),
+                    value: value.clone(),
+                };
+            }
             match stmt {
                 Stmt::Let {
                     name, ty, value, ..
@@ -1426,6 +1635,26 @@ impl Resolver<'_> {
         locals: &mut Vec<std::collections::HashSet<String>>,
     ) -> Result<(), String> {
         match expr {
+            Expr::Var(name) => {
+                if !name.contains("::") && locals.iter().rev().any(|scope| scope.contains(name)) {
+                    return Ok(());
+                }
+                if let Some(item) = self.path(name, module, false, false)?
+                    && item.kind == ResolvedKind::Variant
+                {
+                    *expr = Expr::EnumVariant(item.path);
+                }
+            }
+            Expr::Match { scrutinee, arms } => {
+                self.expr(scrutinee, module, locals)?;
+                for arm in arms {
+                    let mut names = std::collections::HashSet::new();
+                    self.pattern(&mut arm.pattern, module, &mut names)?;
+                    locals.push(names);
+                    self.expr(&mut arm.body, module, locals)?;
+                    locals.pop();
+                }
+            }
             Expr::Call { name, args } => {
                 // Check the source spelling, not its eventual canonical name:
                 // `let f=1; crate::f()` must not be shadowed by the local f.
@@ -1435,6 +1664,9 @@ impl Resolver<'_> {
                 let resolved = self
                     .path(name, module, false, false)?
                     .ok_or_else(|| format!("unresolved function {name}"))?;
+                if resolved.kind != ResolvedKind::Function {
+                    return Err(format!("{} is not callable", resolved.path));
+                }
                 *name = resolved.path;
                 for arg in args {
                     self.expr(arg, module, locals)?;
@@ -1446,10 +1678,19 @@ impl Resolver<'_> {
                 }
             }
             Expr::Struct { name, fields } => {
+                if let Some(item) = self.path(name, module, false, false)?
+                    && item.kind == ResolvedKind::Variant
+                {
+                    if !fields.is_empty() {
+                        return Err(format!("unit enum variant {} has no fields", item.path));
+                    }
+                    *expr = Expr::EnumVariant(item.path);
+                    return Ok(());
+                }
                 let item = self
                     .path(name, module, true, false)?
                     .ok_or_else(|| format!("unresolved struct {name}"))?;
-                if !item.structure {
+                if item.kind != ResolvedKind::Struct {
                     return Err(format!("{} is not a struct", item.path));
                 }
                 *name = item.path;
@@ -1516,8 +1757,15 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     for function in &mut program.functions {
         resolver.ty(&mut function.result, parent(&function.name))?;
-        for (_, ty) in &mut function.params {
+        for (name, ty) in &mut function.params {
             resolver.ty(ty, parent(&function.name))?;
+            if let Some(item) = resolver.path(name, parent(&function.name), false, false)?
+                && item.kind == ResolvedKind::Variant
+            {
+                return Err(format!(
+                    "enum variant patterns in function parameters are unsupported: {name}"
+                ));
+            }
         }
         validate_depth(DepthNode::Block(&function.body))?;
         let mut locals = vec![function.params.iter().map(|(n, _)| n.clone()).collect()];
@@ -1568,6 +1816,13 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 }
             }
             DepthNode::Expr(expr) => match expr {
+                Expr::Match { scrutinee, arms } => {
+                    push(DepthNode::Expr(scrutinee));
+                    for arm in arms {
+                        push(DepthNode::Pattern(&arm.pattern));
+                        push(DepthNode::Expr(&arm.body));
+                    }
+                }
                 Expr::Tuple(fields) => {
                     for field in fields {
                         push(DepthNode::Expr(field));
@@ -1638,6 +1893,7 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
 #[derive(Clone, Debug)]
 pub struct TypeEnv {
     pub structs: HashMap<String, ir::StructTy>,
+    pub enums: HashMap<String, ir::EnumTy>,
     pub functions: HashMap<String, ir::Signature>,
 }
 pub type Signatures = TypeEnv;
@@ -1652,8 +1908,32 @@ fn visible_from(owner: &str, requester: &str) -> bool {
 
 /// Validate every declaration, including unused types, before creating any Arc DAG.
 pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
+    let mut enum_declarations = HashMap::new();
+    for declaration in &program.enums {
+        if enum_declarations
+            .insert(declaration.name.clone(), declaration)
+            .is_some()
+        {
+            return Err(format!("duplicate enum {}", declaration.name));
+        }
+        if declaration.variants.is_empty() {
+            return Err("empty enums are unsupported".into());
+        }
+        if declaration.variants.len() > 4096 {
+            return Err("enum variant count exceeds limit 4096".into());
+        }
+        let mut variants = std::collections::HashSet::new();
+        for variant in &declaration.variants {
+            if !variants.insert(variant) {
+                return Err(format!("duplicate enum variant {variant}"));
+            }
+        }
+    }
     let mut declarations = HashMap::new();
     for (index, declaration) in program.structs.iter().enumerate() {
+        if enum_declarations.contains_key(&declaration.name) {
+            return Err(format!("duplicate nominal type {}", declaration.name));
+        }
         if declarations
             .insert(declaration.name.clone(), index)
             .is_some()
@@ -1677,6 +1957,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         ty: &Type,
         declarations: &HashMap<String, usize>,
         structs: &[StructDecl],
+        enums: &HashMap<String, &EnumDecl>,
         module: &str,
     ) -> Result<Vec<usize>, String> {
         validate_depth(DepthNode::Type(ty))?;
@@ -1685,6 +1966,12 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         while let Some(ty) = work.pop() {
             match ty {
                 Type::Named(name) => {
+                    if let Some(declaration) = enums.get(name) {
+                        if !declaration.public && !visible_from(parent(name), module) {
+                            return Err(format!("private enum type {name}"));
+                        }
+                        continue;
+                    }
                     let index = *declarations
                         .get(name)
                         .ok_or_else(|| format!("unknown struct type {name}"))?;
@@ -1713,6 +2000,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
                 &field.ty,
                 &declarations,
                 &program.structs,
+                &enum_declarations,
                 parent(&declaration.name),
             )?);
         }
@@ -1733,7 +2021,13 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         }
         for ty in std::iter::once(&function.result).chain(function.params.iter().map(|(_, ty)| ty))
         {
-            dependencies(ty, &declarations, &program.structs, parent(&function.name))?;
+            dependencies(
+                ty,
+                &declarations,
+                &program.structs,
+                &enum_declarations,
+                parent(&function.name),
+            )?;
         }
     }
     if !program
@@ -1778,7 +2072,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
     // Declaration order must not bypass the expanded semantic nesting limit.
     fn type_height(ty: &Type, declarations: &HashMap<String, usize>, heights: &[usize]) -> usize {
         match ty {
-            Type::Named(name) => heights[declarations[name]],
+            Type::Named(name) => declarations.get(name).map_or(1, |index| heights[*index]),
             Type::Tuple(fields) => {
                 1 + fields
                     .iter()
@@ -1804,8 +2098,22 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
     let snapshot = ir::SnapshotId::allocate()?;
     let mut env = TypeEnv {
         structs: HashMap::new(),
+        enums: HashMap::new(),
         functions: HashMap::new(),
     };
+    for (index, declaration) in program.enums.iter().enumerate() {
+        let ty = ir::EnumTy::new(ir::EnumDef {
+            id: ir::DefId {
+                snapshot,
+                index: program.structs.len() + index,
+            },
+            name: declaration.name.clone(),
+            module: parent(&declaration.name).into(),
+            public: declaration.public,
+            variants: declaration.variants.clone().into(),
+        });
+        env.enums.insert(declaration.name.clone(), ty);
+    }
     for index in order {
         let declaration = &program.structs[index];
         let fields = declaration
@@ -1904,7 +2212,8 @@ fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
             .get(name)
             .cloned()
             .map(ir::Ty::Struct)
-            .ok_or_else(|| format!("unknown struct type {name}")),
+            .or_else(|| env.enums.get(name).cloned().map(ir::Ty::Enum))
+            .ok_or_else(|| format!("unknown nominal type {name}")),
         Type::Infer => Err("signature types cannot be inferred".into()),
     }
 }
@@ -2037,6 +2346,15 @@ impl<'a> Checker<'a> {
         while let Some(ty) = work.pop() {
             match ty {
                 ir::Ty::Tuple(fields) => work.extend(fields.iter()),
+                ir::Ty::Enum(ty)
+                    if !ty.def().public && !visible_from(&ty.def().module, &self.module) =>
+                {
+                    return Err(format!(
+                        "private type {} is inaccessible from module {}",
+                        ty.def().name,
+                        self.module
+                    ));
+                }
                 ir::Ty::Struct(ty)
                     if !ty.def().public && !visible_from(&ty.def().module, &self.module) =>
                 {
@@ -2092,6 +2410,13 @@ impl<'a> Checker<'a> {
     /// Recover only concrete pattern shape, without a general inference engine.
     fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
         match pattern {
+            Pattern::Path(name) => {
+                let (enumeration, _) = self.enum_variant(name)?;
+                let expected = ir::Ty::Enum(enumeration);
+                if !coerces(ty,&expected) { return Err(format!("enum pattern {name} does not match {ty:?}")); }
+                Ok(expected)
+            }
+            Pattern::Bool(_) | Pattern::Int(_) => Err("refutable literal pattern in let binding".into()),
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
                 ir::Ty::Unit if patterns.is_empty() => Ok(ir::Ty::Unit),
@@ -2126,6 +2451,18 @@ impl<'a> Checker<'a> {
         }
         match pattern {
             Pattern::Wildcard => {}
+            Pattern::Path(name) => {
+                let (enumeration, _) = self.enum_variant(name)?;
+                if *ty != ir::Ty::Enum(enumeration.clone()) {
+                    return Err(format!("enum pattern {name} does not match {ty:?}"));
+                }
+                if enumeration.def().variants.len() != 1 {
+                    return Err(format!("refutable enum pattern {name} in let binding"));
+                }
+            }
+            Pattern::Bool(_) | Pattern::Int(_) => {
+                return Err("refutable literal pattern in let binding".into());
+            }
             Pattern::Binding { name, mutable } => {
                 if name == "_" {
                     return Err("underscore is a wildcard, not a binding name".into());
@@ -2202,6 +2539,25 @@ impl<'a> Checker<'a> {
         let result = self.expr(e);
         self.reachable = previous;
         result
+    }
+    fn enum_variant(&self, name: &str) -> Result<(ir::EnumTy, usize), String> {
+        let (owner, variant) = name
+            .rsplit_once("::")
+            .ok_or_else(|| format!("unresolved enum variant {name}"))?;
+        let ty = self
+            .signatures
+            .enums
+            .get(owner)
+            .cloned()
+            .ok_or_else(|| format!("unknown enum {owner}"))?;
+        self.accessible(&ir::Ty::Enum(ty.clone()))?;
+        let index = ty
+            .def()
+            .variants
+            .iter()
+            .position(|name| name == variant)
+            .ok_or_else(|| format!("unknown enum variant {name}"))?;
+        Ok((ty, index))
     }
     fn block_when(&mut self, b: &Block, reachable: bool) -> Result<(ir::Block, Flow), String> {
         let previous = self.reachable;
@@ -2371,6 +2727,143 @@ impl<'a> Checker<'a> {
     }
     fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
         let (kind, flow) = match e {
+            Expr::EnumVariant(name) => {
+                let (ty, variant) = self.enum_variant(name)?;
+                (
+                    ir::ExprKind::EnumVariant {
+                        ty: ty.clone(),
+                        variant,
+                    },
+                    Flow::value(ir::Ty::Enum(ty)),
+                )
+            }
+            Expr::Match { scrutinee, arms } => {
+                if arms.len() > 4096 {
+                    return Err("match arm count exceeds limit 4096".into());
+                }
+                let scrutinee = self.expr(scrutinee)?;
+                let source = self.flow(scrutinee);
+                let mut domain = source.ty.clone();
+                // A divergent operand can coerce to the concrete type named by
+                // a pattern without inventing a general inference variable.
+                if domain == ir::Ty::Never {
+                    for arm in arms {
+                        let hint = match &arm.pattern {
+                            Pattern::Path(name) => Some(ir::Ty::Enum(self.enum_variant(name)?.0)),
+                            Pattern::Bool(_) => Some(ir::Ty::Bool),
+                            Pattern::Int(_) => Some(ir::Ty::I32),
+                            Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
+                            _ => None,
+                        };
+                        if let Some(hint) = hint {
+                            domain = hint;
+                            break;
+                        }
+                    }
+                }
+                self.accessible(&domain)?;
+                let mut catchall = false;
+                let mut covered = std::collections::HashSet::<i64>::new();
+                let mut checked = Vec::with_capacity(arms.len());
+                let mut result = ir::Ty::Never;
+                let mut completes = false;
+                for arm in arms {
+                    self.scopes.push(HashMap::new());
+                    let (pattern, key) = match &arm.pattern {
+                        Pattern::Wildcard => (ir::MatchPattern::Wildcard, None),
+                        Pattern::Binding { name, mutable } => {
+                            let local = self.local(name, domain.clone(), *mutable)?;
+                            (ir::MatchPattern::Binding(local), None)
+                        }
+                        Pattern::Bool(value) => {
+                            if domain != ir::Ty::Bool {
+                                return Err(format!(
+                                    "bool match pattern does not match {domain:?}"
+                                ));
+                            }
+                            (ir::MatchPattern::Bool(*value), Some(i64::from(*value)))
+                        }
+                        Pattern::Int(value) => {
+                            if domain != ir::Ty::I32 {
+                                return Err(format!(
+                                    "integer match pattern does not match {domain:?}"
+                                ));
+                            }
+                            (ir::MatchPattern::Int(*value), Some(i64::from(*value)))
+                        }
+                        Pattern::Tuple(fields) if fields.is_empty() => {
+                            if domain != ir::Ty::Unit {
+                                return Err(format!(
+                                    "unit match pattern does not match {domain:?}"
+                                ));
+                            }
+                            (ir::MatchPattern::Unit, Some(0))
+                        }
+                        Pattern::Path(name) => {
+                            let (ty, variant) = self.enum_variant(name)?;
+                            if domain != ir::Ty::Enum(ty.clone()) {
+                                return Err(format!(
+                                    "enum match pattern {name} does not match {domain:?}"
+                                ));
+                            }
+                            (
+                                ir::MatchPattern::EnumVariant { ty, variant },
+                                Some(variant as i64),
+                            )
+                        }
+                        Pattern::Tuple(_) | Pattern::Struct { .. } => {
+                            return Err(
+                                "aggregate destructuring match patterns are unsupported".into()
+                            );
+                        }
+                    };
+                    let fully_covered = match &domain {
+                        ir::Ty::Bool => covered.len() == 2,
+                        ir::Ty::Unit => covered.len() == 1,
+                        ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
+                        ir::Ty::I32 => covered.len() as u64 == (1u64 << 32),
+                        _ => false,
+                    };
+                    let useful = !catchall
+                        && !fully_covered
+                        && key.is_none_or(|key| !covered.contains(&key));
+                    let body =
+                        self.expr_when(&arm.body, self.reachable && source.completes && useful)?;
+                    self.scopes.pop();
+                    let arm_flow = self.flow(body);
+                    // Even unreachable arms impose their source type obligation.
+                    result = self.join(&result, &arm_flow.ty, "match arms")?;
+                    completes |= useful && arm_flow.completes;
+                    if let Some(key) = key {
+                        covered.insert(key);
+                    } else {
+                        catchall = true;
+                    }
+                    checked.push(ir::MatchArm { pattern, body });
+                }
+                let exhaustive = catchall
+                    || match &domain {
+                        ir::Ty::Never => true,
+                        ir::Ty::Bool => covered.len() == 2,
+                        ir::Ty::Unit => covered.len() == 1,
+                        ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
+                        ir::Ty::I32 => covered.len() as u64 == (1u64 << 32),
+                        _ => false,
+                    };
+                if !exhaustive {
+                    return Err(format!("non-exhaustive match on {domain:?}"));
+                }
+                (
+                    ir::ExprKind::Match {
+                        scrutinee,
+                        arms: checked,
+                    },
+                    Flow {
+                        ty: result,
+                        completes: source.completes && completes,
+                    },
+                )
+            }
             Expr::Tuple(fields) => {
                 if fields.is_empty() {
                     return Err("empty tuples must use ()".into());
@@ -2730,6 +3223,60 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn enum_match_types_paths_scopes_and_nominal_identity() {
+        let source = "mod m{pub enum E{A,B} pub fn make()->E{E::A}} use m::E as Alias; use Alias::A as First; struct S{e:Alias} fn f(x:Alias)->i32{match x{First=>1,Alias::B=>2}} fn main(){let s=S{e:First};let n=f(s.e);match true{true=>{},false=>{}} match (){()=>{}} let n=match n{-2147483648=>0,x=>x};let _=m::make();}";
+        let program = parse(source).unwrap();
+        let env = type_env(&program).unwrap();
+        assert_ne!(env.structs["S"].def().id, env.enums["m::E"].def().id);
+        assert!(!ir::Ty::Enum(env.enums["m::E"].clone()).is_copy());
+        check(&program).unwrap();
+        let checked = type_function_with_env(&program, 1, &env).unwrap();
+        assert!(
+            checked
+                .exprs
+                .iter()
+                .any(|expr| matches!(&expr.kind,ir::ExprKind::Match{arms,..} if arms.len()==2))
+        );
+    }
+
+    #[test]
+    fn enum_match_exhaustiveness_and_dead_arm_obligations() {
+        for source in [
+            "enum E{A,B} fn main(){match E::A{E::A=>()};}",
+            "fn main(){match true{true=>()};}",
+            "fn main(){match 0{0=>()};}",
+            "enum E{A} enum F{A} fn main(){match E::A{F::A=>()};}",
+            "fn main(){match true{_=>1,true=>false};}",
+            "fn main(){match true{_=>(),false=>{let x:bool=1;}};}",
+            "fn main(){match 1{x=>x};x;}",
+            "enum E{A,B} fn main(){let E::A=E::A;}",
+            "fn f()->i32{loop{match true{_=>break 1,true=>break false}}} fn main(){}",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "accepted {source}");
+        }
+        assert!(parse("enum E{A} use E::A; fn main(){match E::A{mut A=>()};}").is_err());
+        for source in [
+            "enum E{A,B} fn main(){match E::A{E::A=>(),E::A=>(),E::B=>(),_=>()};}",
+            "enum E{A} use E::A; fn main(){let A=E::A;match A{A=>()};}",
+            "fn f()->i32{match loop{} {}} fn main(){}",
+            "enum E{A,B} fn f(e:E)->i32{match e{E::A{}=>return 1,E::B{}=>return 2}} fn main(){let e=E::A{};let n=f(e);}",
+            "fn f()->i32{loop {match true{true=>{break 1;},false=>{break 2;},_=>{break 3;}}}} fn main(){}",
+        ] {
+            check(&parse(source).unwrap()).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "enum E{A,B}use E::A;fn f(A:E){}fn main(){}",
+            "enum E{A}use E::A;fn f(A:E)->E{A}fn main(){}",
+        ] {
+            assert!(
+                parse(source)
+                    .unwrap_err()
+                    .contains("parameters are unsupported")
+            );
+        }
+    }
 
     fn typed(source: &str, index: usize) -> ir::CheckedFunction {
         let program = parse(source).unwrap();

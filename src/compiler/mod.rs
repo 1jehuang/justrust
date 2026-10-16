@@ -276,6 +276,7 @@ pub struct Compilation {
     pub report: Report,
     pub functions: usize,
     pub structs: usize,
+    pub enums: usize,
     /// Explicit control-flow graph counts, distinct from the work dependency graph.
     pub cfg_blocks: usize,
     pub cfg_edges: usize,
@@ -428,6 +429,10 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
             .program
             .get()
             .map_or(0, |program| program.structs.len()),
+        enums: snapshot
+            .program
+            .get()
+            .map_or(0, |program| program.enums.len()),
         cfg_blocks,
         cfg_edges,
         cfg_locals,

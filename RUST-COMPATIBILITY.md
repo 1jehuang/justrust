@@ -83,7 +83,7 @@ of inferred and intermediate projected types, not only field names.
 
 The private aggregate ABI is not a platform representation contract. Empty/unit/
 tuple structs, struct update/shorthand, derives, references, loans,
-lifetimes, destructors, enums and general Rust data/abstraction features remain
+lifetimes, destructors, payload enums and general Rust data/abstraction features remain
 open. Compact shared declaration DAGs and diagnostics have explicit resource
 bounds. This slice does not complete ownership or full Rust compatibility.
 
@@ -94,6 +94,17 @@ mutability. Lowering consumes only selected projected places and preserves RHS
 effects once. This remains distinct from match/exhaustiveness, refutable patterns,
 borrowing, destructors and full inference. Historical legal destructuring boundary
 fixtures are promoted to accepted cases only with native execution evidence.
+
+## Current follow-on: fieldless enums and match
+
+`ENUMS.md` defines nominal unit-variant enums, finite enum/bool/unit exhaustiveness,
+i32 literal matches with a catchall, wildcard and whole-binding arm semantics.
+Enums remain non-Copy. Runtime selection and static ownership reachability are
+separate: dead arms remain checked, while wildcard-only and singleton patterns
+avoid unnecessary discriminant reads. Payload variants, sum-aware projections,
+guards, or/range patterns, general nested refutable patterns, derives, explicit
+discriminants and empty enums remain open. This does not complete Rust enums,
+match, ownership or the full language.
 
 ## Completed source slice: inline modules and item resolution
 

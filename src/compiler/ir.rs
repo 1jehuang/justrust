@@ -40,6 +40,64 @@ pub struct DefId {
     pub index: usize,
 }
 
+pub const MAX_ENUM_VARIANTS: usize = 4096;
+pub const MAX_MATCH_ARMS: usize = 4096;
+
+#[derive(Clone)]
+pub struct EnumTy(Arc<EnumDef>);
+
+impl EnumTy {
+    pub(super) fn new(def: EnumDef) -> Self {
+        Self(Arc::new(def))
+    }
+
+    pub fn def(&self) -> &EnumDef {
+        &self.0
+    }
+
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.0.variants.is_empty() || self.0.variants.len() > MAX_ENUM_VARIANTS {
+            return Err("enum variant count must be between 1 and 4096".into());
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for EnumTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = &self.0.name;
+        let end = name
+            .char_indices()
+            .nth(128)
+            .map_or(name.len(), |(at, _)| at);
+        f.debug_struct("EnumTy")
+            .field("id", &self.0.id)
+            .field("name", &&name[..end])
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for EnumTy {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id == other.0.id
+    }
+}
+impl Eq for EnumTy {}
+impl Hash for EnumTy {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.id.hash(state);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EnumDef {
+    pub id: DefId,
+    pub name: String,
+    pub module: String,
+    pub public: bool,
+    pub variants: Arc<[String]>,
+}
+
 /// Immutable nominal handle. Equality and hashing use declaration identity,
 /// never field shape, names or Arc's structural pointee equality.
 #[derive(Clone)]
@@ -131,6 +189,7 @@ pub enum Ty {
     Tuple(Arc<[Ty]>),
     /// Nominal and always non-Copy in this slice, even with only scalar fields.
     Struct(StructTy),
+    Enum(EnumTy),
     /// The semantic never type, distinct from runtime completion information.
     Never,
 }
@@ -155,13 +214,13 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             Self::I32 | Self::Bool | Self::Unit | Self::Never => true,
-            Self::Struct(_) => false,
+            Self::Struct(_) | Self::Enum(_) => false,
             Self::Tuple(_) => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
                 while let Some(ty) = pending.pop() {
                     match ty {
-                        Self::Struct(_) => return false,
+                        Self::Struct(_) | Self::Enum(_) => return false,
                         Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
                             pending.extend(fields.iter());
                         }
@@ -275,6 +334,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             | (Ty::Unit, Ty::Unit)
             | (Ty::Never, Ty::Never) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a == b => {}
+            (Ty::Enum(a), Ty::Enum(b)) if a == b => {}
             (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
                 if Arc::ptr_eq(a, b) {
                     continue;
@@ -325,7 +385,31 @@ pub enum Stmt {
 }
 
 #[derive(Clone, Debug)]
+pub enum MatchPattern {
+    Wildcard,
+    Binding(LocalId),
+    Bool(bool),
+    Int(i32),
+    Unit,
+    EnumVariant { ty: EnumTy, variant: usize },
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: ExprId,
+}
+
+#[derive(Clone, Debug)]
 pub enum ExprKind {
+    EnumVariant {
+        ty: EnumTy,
+        variant: usize,
+    },
+    Match {
+        scrutinee: ExprId,
+        arms: Vec<MatchArm>,
+    },
     Int(i32),
     Bool(bool),
     /// Read a resolved local into this expression's independent value snapshot.
@@ -383,6 +467,58 @@ pub enum ExprKind {
 }
 
 impl CheckedFunction {
+    pub(super) fn validate_match(
+        &self,
+        scrutinee: ExprId,
+        arms: &[MatchArm],
+        parameters: &std::collections::HashSet<LocalId>,
+    ) -> Result<(), String> {
+        if arms.is_empty() || arms.len() > MAX_MATCH_ARMS {
+            return Err("match arm count must be between 1 and 4096".into());
+        }
+        let ty = &self
+            .exprs
+            .get(scrutinee.0)
+            .ok_or("invalid match scrutinee")?
+            .ty;
+        if let Ty::Enum(ty) = ty {
+            ty.validate()?;
+        }
+        let mut bindings = std::collections::HashSet::new();
+        for arm in arms {
+            self.exprs.get(arm.body.0).ok_or("invalid match arm body")?;
+            let valid = match &arm.pattern {
+                MatchPattern::Wildcard => true,
+                MatchPattern::Binding(local) => {
+                    let decl = self
+                        .locals
+                        .get(local.0)
+                        .ok_or("invalid match binding local")?;
+                    if parameters.contains(local) || !bindings.insert(*local) {
+                        return Err("match bindings must be distinct fresh locals".into());
+                    }
+                    let mut work = 0;
+                    *ty == Ty::Never || pattern_types_equal(ty, &decl.ty, &mut work)?
+                }
+                MatchPattern::Bool(_) => matches!(ty, Ty::Bool | Ty::Never),
+                MatchPattern::Int(_) => matches!(ty, Ty::I32 | Ty::Never),
+                MatchPattern::Unit => matches!(ty, Ty::Unit | Ty::Never),
+                MatchPattern::EnumVariant {
+                    ty: pattern_ty,
+                    variant,
+                } => {
+                    pattern_ty.validate()?;
+                    *variant < pattern_ty.def().variants.len()
+                        && (*ty == Ty::Never || *ty == Ty::Enum(pattern_ty.clone()))
+                }
+            };
+            if !valid {
+                return Err("match pattern type or variant mismatch".into());
+            }
+        }
+        Ok(())
+    }
+
     /// Bound and check the flattened plan without revisiting source patterns,
     /// visibility, names or inference. No overlapping bindings are admitted by
     /// this slice, which deliberately excludes `@` patterns.
@@ -485,6 +621,19 @@ impl CheckedFunction {
         let mut blocks = vec![&self.body];
         for value in &self.exprs {
             match &value.kind {
+                ExprKind::EnumVariant { ty, variant } => {
+                    ty.validate()?;
+                    if *variant >= ty.def().variants.len() || value.ty != Ty::Enum(ty.clone()) {
+                        return Err("invalid enum variant expression".into());
+                    }
+                }
+                ExprKind::Match { scrutinee, arms } => {
+                    expr(*scrutinee)?;
+                    self.validate_match(*scrutinee, arms, &parameters)?;
+                    for arm in arms {
+                        expr(arm.body)?;
+                    }
+                }
                 ExprKind::Local(id) => local(*id)?,
                 ExprKind::Tuple(elements) => {
                     for &id in elements {
@@ -571,6 +720,100 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enum_identity_copy_debug_and_variant_bounds() {
+        let id = DefId {
+            snapshot: SnapshotId::allocate().unwrap(),
+            index: 0,
+        };
+        let handle = EnumTy::new(EnumDef {
+            id,
+            name: "é".repeat(1000),
+            module: String::new(),
+            public: false,
+            variants: vec!["A".into()].into(),
+        });
+        let same_id = EnumTy::new(EnumDef {
+            id,
+            name: "Other".into(),
+            module: String::new(),
+            public: true,
+            variants: vec!["B".into()].into(),
+        });
+        assert_eq!(handle, same_id);
+        let mut set = std::collections::HashSet::new();
+        assert!(set.insert(handle.clone()));
+        assert!(!set.insert(same_id));
+        let ty = Ty::Enum(handle.clone());
+        assert!(!ty.is_copy());
+        assert!(!Ty::Tuple(vec![ty.clone()].into()).is_copy());
+        assert_eq!(ty.field_count(), None);
+        assert_eq!(ty.field_ty(0), None);
+        assert!(format!("{handle:?}").len() < 512);
+        let mut function = fixture();
+        function.exprs.push(TypedExpr {
+            ty,
+            completion: Completion::Returns,
+            kind: ExprKind::EnumVariant {
+                ty: handle,
+                variant: 1,
+            },
+        });
+        assert!(function.validate().unwrap_err().contains("enum variant"));
+        for count in [0, MAX_ENUM_VARIANTS + 1] {
+            let invalid = EnumTy::new(EnumDef {
+                id,
+                name: "Invalid".into(),
+                module: String::new(),
+                public: false,
+                variants: vec![String::new(); count].into(),
+            });
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn match_validation_bounds_and_checks_dead_patterns() {
+        let function = fixture();
+        let parameters = function.params.iter().copied().collect();
+        let arm = MatchArm {
+            pattern: MatchPattern::Wildcard,
+            body: ExprId(0),
+        };
+        assert!(
+            function
+                .validate_match(ExprId(0), &[], &parameters)
+                .is_err()
+        );
+        assert!(
+            function
+                .validate_match(
+                    ExprId(0),
+                    &vec![arm.clone(); MAX_MATCH_ARMS + 1],
+                    &parameters
+                )
+                .is_err()
+        );
+        let invalid = MatchArm {
+            pattern: MatchPattern::Binding(LocalId(usize::MAX)),
+            body: ExprId(0),
+        };
+        assert!(
+            function
+                .validate_match(ExprId(0), &[arm.clone(), invalid], &parameters)
+                .is_err()
+        );
+        let invalid = MatchArm {
+            pattern: MatchPattern::Wildcard,
+            body: ExprId(usize::MAX),
+        };
+        assert!(
+            function
+                .validate_match(ExprId(0), &[arm, invalid], &parameters)
+                .is_err()
+        );
+    }
 
     #[test]
     fn flattened_pattern_plan_validates_types_and_disjoint_fresh_bindings() {

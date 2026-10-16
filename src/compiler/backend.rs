@@ -162,6 +162,8 @@ impl<'a> Emitter<'a> {
                 cfg::Constant::I32(value) => *value,
                 cfg::Constant::Bool(value) => i32::from(*value),
                 cfg::Constant::Unit => 0,
+                cfg::Constant::Enum { variant, .. } => i32::try_from(*variant)
+                    .map_err(|_| "enum tag exceeds private scalar representation")?,
             }),
             cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
                 self.load_place(place)?;
@@ -256,6 +258,13 @@ impl<'a> Emitter<'a> {
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::Discriminant(place) => {
+                // Observing a tag is not a semantic Copy or Move of its enum.
+                // Fieldless enums occupy a private scalar slot, even when the
+                // source place is nested inside a tuple or nominal struct.
+                let (offset, _) = self.place(place)?;
+                self.load(offset);
+            }
             cfg::Rvalue::Unary { op, value } => {
                 self.operand(value)?;
                 match op {
@@ -643,6 +652,7 @@ mod tests {
         Program {
             functions: others,
             structs: vec![],
+            enums: vec![],
         }
     }
     fn executable(program: &Program) -> std::path::PathBuf {
@@ -732,6 +742,77 @@ mod tests {
             }
         }
         panic!("native executable remained busy after bounded retries");
+    }
+
+    #[test]
+    fn fieldless_enum_tags_calls_returns_and_nonconsuming_matches() {
+        let p = frontend::parse(
+            r#"
+            enum Color { Red, Green, Blue }
+            fn identity(value: Color) -> Color { value }
+            fn code(value: Color) -> i32 {
+                let first = match value {
+                    Color::Red => 11,
+                    Color::Green => 22,
+                    Color::Blue => 33,
+                };
+                let second = match value {
+                    Color::Blue => 33,
+                    Color::Red => 11,
+                    Color::Green => 22,
+                };
+                if first != second { 1 / 0; }
+                first
+            }
+            fn main() {
+                if code(identity(Color::Red)) != 11 { 1 / 0; }
+                if code(identity(Color::Green)) != 22 { 1 / 0; }
+                if code(identity(Color::Blue)) != 33 { 1 / 0; }
+                println!("enum-tags");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"enum-tags\n");
+    }
+
+    #[test]
+    fn fieldless_enum_nested_projection_and_aggregate_transport() {
+        let p = frontend::parse(
+            r#"
+            enum State { Off, On, Unknown }
+            struct Packet { before: i32, state: State, after: i32 }
+            fn relay(value: Packet) -> Packet { value }
+            fn main() {
+                let packet = relay(Packet { before: 17, state: State::On, after: 29 });
+                let first = match packet.state {
+                    State::Off => 0,
+                    State::On => 1,
+                    State::Unknown => 2,
+                };
+                if first != 1 { 1 / 0; }
+                if packet.before != 17 { 1 / 0; }
+                if packet.after != 29 { 1 / 0; }
+                let state = packet.state;
+                let second = match state { State::On => 7, _ => 9 };
+                if second != 7 { 1 / 0; }
+                let pair = (31, State::Unknown);
+                let third = match pair.1 {
+                    State::Unknown => 5,
+                    _ => 6,
+                };
+                if pair.0 != 31 { 1 / 0; }
+                if third != 5 { 1 / 0; }
+                println!("enum-aggregate");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"enum-aggregate\n");
     }
 
     #[test]

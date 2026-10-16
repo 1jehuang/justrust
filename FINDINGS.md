@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-16: Fieldless enums and match preserve static ownership paths
+
+Implemented nonempty unit-variant nominal enums and native match expressions over
+enums, bool, unit and i32, including simple variant imports, catchall bindings,
+arm-local scopes and finite exhaustiveness checking. Enums remain non-Copy even
+though this first private representation is one word. `ENUMS.md` defines the
+exact first-slice contract and explicitly deferred payload/guard/pattern features.
+
+Variant tests lower to nonconsuming discriminant reads, not fabricated Copy
+operations. Scrutinee places are addressed without eagerly moving them, while
+rvalue effects occur once. Native emission consumes the existing cached CFG and
+analysis 109 without a second lowering or analysis pass. JSON/retained accounting
+now includes enum declarations.
+
+Independent stock probes caught two subtle correctness obligations: singleton
+variant matches need no read even after a move, and unreachable pattern arms
+still affect ownership checks and post-match initialization joins. Constant-true
+CFG switches preserve the latter semantic paths while execution selects only the
+real arm. Later unreachable constructor tests retain their required tag reads.
+Imported variant spellings in unsupported parameter-pattern positions no longer
+silently become local bindings. All arm types remain checked, including dead
+break types. The differential corpus preserves existing type-alias/grouped-use/
+uninitialized-let sources as legal-unsupported boundaries, rather than counting
+their rejection as language support.
+
+Final hosted gates, nightly-2026-10-08 on the 96-core host:
+- check `20261015-231940165-1535781`, passed.
+- test `20261015-231941164-1535880`, **434 passed**, no failures.
+- strict all-target clippy `20261015-231942944-1535725`, no warnings.
+- `cargo fmt --check` and `git diff --check`, passed.
+Profiles are retained in `data/runs/prototype-bootstrap/2026-10-match.jsonl`.
+The new source corpus has 59 independently stock-classified fixtures: 26 accepted
+parity cases, 20 invalid programs and 13 explicit legal-unsupported boundaries.
+These gates are not proof of full Rust support or a performance improvement.
+
 ## 2026-10-15: Irrefutable let patterns consume only selected places
 
 Implemented nested tuple/struct let patterns, wildcard, per-binding mutability,

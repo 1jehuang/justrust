@@ -43,6 +43,7 @@ pub enum Statement {
 
 #[derive(Clone, Debug)]
 pub enum Constant {
+    Enum { ty: ir::EnumTy, variant: usize },
     I32(i32),
     Bool(bool),
     Unit,
@@ -57,6 +58,8 @@ pub enum Operand {
 
 #[derive(Clone, Debug)]
 pub enum Rvalue {
+    /// Reads an initialized enum tag without moving the enum value.
+    Discriminant(Place),
     Use(Operand),
     Unary {
         op: UnaryOp,
@@ -107,6 +110,9 @@ fn coerces(got: &Ty, want: &Ty) -> bool {
 }
 
 fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
+    if let Ty::Enum(ty) = ty {
+        ty.validate()?;
+    }
     if depth > 128 {
         return Err("CFG type nesting exceeds limit 128".into());
     }
@@ -147,6 +153,13 @@ impl Function {
             Operand::Constant(Constant::I32(_)) => Ok(Ty::I32),
             Operand::Constant(Constant::Bool(_)) => Ok(Ty::Bool),
             Operand::Constant(Constant::Unit) => Ok(Ty::Unit),
+            Operand::Constant(Constant::Enum { ty, variant }) => {
+                ty.validate()?;
+                if *variant >= ty.def().variants.len() {
+                    return Err("invalid CFG enum variant".into());
+                }
+                Ok(Ty::Enum(ty.clone()))
+            }
             Operand::Copy(place) => {
                 let ty = self.place_ty(place)?;
                 if !ty.is_copy() {
@@ -169,6 +182,13 @@ impl Function {
 
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         match value {
+            Rvalue::Discriminant(place) => {
+                let Ty::Enum(ty) = self.place_ty(place)? else {
+                    return Err("CFG discriminant requires enum place".into());
+                };
+                ty.validate()?;
+                Ok(Ty::I32)
+            }
             Rvalue::Use(operand) => self.operand_ty(operand),
             Rvalue::Println(_) => Ok(Ty::Unit),
             Rvalue::Unary { op, value } => {
@@ -210,7 +230,7 @@ impl Function {
                 } else {
                     Ty::I32
                 };
-                if operand_ty.field_count().is_some() {
+                if operand_ty.field_count().is_some() || matches!(operand_ty, Ty::Enum(_)) {
                     return Err("CFG aggregate comparison is unsupported".into());
                 }
                 self.require_operand(left, &operand_ty)?;
@@ -353,6 +373,114 @@ struct Lowerer<'a> {
 }
 
 impl Lowerer<'_> {
+    fn temporary(&mut self, ty: Ty, origin: Option<ExprId>) -> Place {
+        let local = LocalId(self.result.locals.len());
+        self.result.locals.push(ir::LocalDecl {
+            name: format!("$match{}", local.0),
+            ty,
+            mutable: true,
+        });
+        self.live(local, origin);
+        place(local)
+    }
+
+    fn match_expression(
+        &mut self,
+        id: ExprId,
+        scrutinee: ExprId,
+        arms: &[ir::MatchArm],
+        destination: Place,
+    ) -> Result<(), String> {
+        self.source
+            .validate_match(scrutinee, arms, &self.parameters)?;
+        let source = self.pattern_source(scrutinee)?;
+        let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
+        let join = self.block();
+        for arm in arms {
+            let selected = self.block();
+            let next = self.block();
+            self.scopes.push(Vec::new());
+            let comparison = match &arm.pattern {
+                ir::MatchPattern::Bool(value) => {
+                    Some((Operand::Copy(source.clone()), Constant::Bool(*value)))
+                }
+                ir::MatchPattern::Int(value) => {
+                    Some((Operand::Copy(source.clone()), Constant::I32(*value)))
+                }
+                ir::MatchPattern::EnumVariant { ty, variant, .. }
+                    if completes && ty.def().variants.len() > 1 =>
+                {
+                    let tag = self.temporary(Ty::I32, Some(id));
+                    self.assign(tag.clone(), Rvalue::Discriminant(source.clone()), Some(id));
+                    Some((Operand::Copy(tag), Constant::I32(*variant as i32)))
+                }
+                _ => None,
+            };
+            if let Some((left, right)) = comparison.filter(|_| completes) {
+                let condition = self.temporary(Ty::Bool, Some(id));
+                self.assign(
+                    condition.clone(),
+                    Rvalue::Binary {
+                        op: BinaryOp::Eq,
+                        left,
+                        right: Operand::Constant(right),
+                    },
+                    Some(id),
+                );
+                self.terminate(
+                    Terminator::Switch {
+                        condition: Operand::Copy(condition),
+                        then_block: selected,
+                        else_block: next,
+                    },
+                    Some(id),
+                )?;
+            } else {
+                // Keep dead arm bodies visible to conservative ownership
+                // checking without introducing a runtime edge or tag read.
+                self.terminate(
+                    Terminator::Switch {
+                        condition: Operand::Constant(Constant::Bool(true)),
+                        then_block: selected,
+                        else_block: next,
+                    },
+                    Some(id),
+                )?;
+            }
+            let test_scope = self.scopes.pop().unwrap();
+            self.current = selected;
+            for local in test_scope.iter().rev() {
+                self.statement(Statement::StorageDead(*local), Some(id));
+            }
+            self.scopes.push(Vec::new());
+            if let ir::MatchPattern::Binding(local) = arm.pattern {
+                if local == source.local {
+                    return Err("match binding aliases scrutinee storage".into());
+                }
+                self.live(local, Some(id));
+                if completes {
+                    self.assign(
+                        place(local),
+                        Rvalue::Use(self.consume(source.clone())?),
+                        Some(id),
+                    );
+                }
+            }
+            let value = self.expression(arm.body)?;
+            self.assign(destination.clone(), Rvalue::Use(value), Some(id));
+            self.cleanup(self.scopes.len() - 1, Some(id));
+            self.scopes.pop();
+            self.terminate(Terminator::Goto(join), Some(id))?;
+            self.current = next;
+            for local in test_scope.iter().rev() {
+                self.statement(Statement::StorageDead(*local), Some(id));
+            }
+        }
+        self.terminate(Terminator::Unreachable, Some(id))?;
+        self.current = join;
+        Ok(())
+    }
+
     fn block(&mut self) -> BlockId {
         let id = BlockId(self.blocks.len());
         self.blocks.push(PendingBlock {
@@ -615,6 +743,23 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
+            ir::ExprKind::EnumVariant { ty, variant } => {
+                ty.validate()?;
+                if expression.ty != Ty::Enum(ty.clone()) || *variant >= ty.def().variants.len() {
+                    return Err("invalid checked enum variant expression".into());
+                }
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Use(Operand::Constant(Constant::Enum {
+                        ty: ty.clone(),
+                        variant: *variant,
+                    })),
+                    origin,
+                );
+            }
+            ir::ExprKind::Match { scrutinee, arms } => {
+                self.match_expression(id, *scrutinee, arms, destination.clone())?;
+            }
             ir::ExprKind::Int(value) => self.assign(
                 destination.clone(),
                 Rvalue::Use(Operand::Constant(Constant::I32(*value))),
@@ -1215,6 +1360,70 @@ mod tests {
     }
 
     #[test]
+    fn enum_match_wildcard_and_singleton_do_not_read_scrutinee() {
+        for source in [
+            "enum E{A,B} fn f(e:E){let moved=e;match e{_=>()};} fn main(){}",
+            "enum E{A} fn f(e:E){let moved=e;match e{E::A=>()};} fn main(){}",
+        ] {
+            let function = nominal_lowered(&checked(source, 0));
+            assert!(
+                !function
+                    .blocks
+                    .iter()
+                    .flat_map(|b| &b.statements)
+                    .any(|s| matches!(
+                        s.value,
+                        Statement::Assign {
+                            value: Rvalue::Discriminant(_),
+                            ..
+                        }
+                    ))
+            );
+            assert_storage_paths(&function);
+        }
+    }
+
+    #[test]
+    fn enum_match_tests_read_tags_but_only_selected_binding_moves() {
+        let function = nominal_lowered(&checked(
+            "enum E{A,B} fn f(e:E)->E{match e{E::A=>E::B,other=>other}} fn main(){}",
+            0,
+        ));
+        assert_storage_paths(&function);
+        let tags = function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .filter(|s| {
+                matches!(
+                    s.value,
+                    Statement::Assign {
+                        value: Rvalue::Discriminant(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(tags, 1);
+    }
+
+    #[test]
+    fn dead_match_arms_preserve_ownership_reads_and_postmatch_joins() {
+        for source in [
+            "enum E{A,B} fn f(e:E){let moved=e;match e{_=>(),E::A=>()};} fn main(){}",
+            "enum E{A,B} fn f(e:E){match true{_=>(),true=>{let moved=e;}};let after=e;} fn main(){}",
+        ] {
+            let function = lower(&checked(source, 0)).unwrap();
+            function.validate().unwrap();
+            assert!(
+                !super::super::ownership::analyze(&function)
+                    .diagnostics
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn nominal_branch_and_loop_results_transfer_ownership_without_copy() {
         for source in [
             "struct S{x:i32} fn f(p:S,flag:bool)->S{if flag{p}else{p}} fn main(){}",
@@ -1442,6 +1651,9 @@ mod tests {
                                 for value in fields {
                                     live_operand(value, &live);
                                 }
+                            }
+                            Rvalue::Discriminant(place) => {
+                                assert!(live[place.local.0], "discriminant reads dead storage");
                             }
                             Rvalue::Println(_) => {}
                         }

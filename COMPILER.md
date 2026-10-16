@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with nominal structs and moves,
+Status: executable Rust-subset implementation with nominal structs, fieldless enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -22,13 +22,16 @@ overwritten. Invalid and unsupported programs fail explicitly. Output is not
 published until every required check and code generation operation succeeds.
 
 Initial supported syntax: free functions with `i32`, `bool`, unit, nested tuples
-and nonempty braced named structs as parameters/results, aggregate literals and
+and nonempty braced named structs or fieldless enums as parameters/results, aggregate literals and
 numeric/named field projections,
 local bindings and shadowing, irrefutable tuple/struct let patterns, wildcard,
 per-binding `mut`, struct-pattern `..`, whole-value and local-rooted field assignment,
 integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`else`,
 `while`, unlabelled `loop` expressions, `break` with supported value types,
-`continue`, `return`, calls including recursion, and `println!("literal")`.
+`continue`, `return`, fieldless-enum/scalar `match`, calls including recursion,
+and `println!("literal")`. Match supports variant/literal, wildcard and whole-value
+binding arms, with exhaustive bool/unit/enum coverage and an i32 catchall. Guards,
+or/range and nested refutable patterns remain following work. See `ENUMS.md`.
 `main` takes no arguments and returns unit. Arithmetic has overflow checks,
 matching Rust debug behavior. Runtime arithmetic failure exits 101. This first
 runtime does not yet reproduce Rust panic text or unwind behavior.
@@ -51,7 +54,8 @@ Canonical paths detect active inclusion cycles, not enforce a filesystem sandbox
 Not supported: crates/manifests, grouped or
 glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
 standard-library APIs beyond the documented print form, general macros, traits,
-generics, enums, empty/unit/tuple structs, derives, struct update/shorthand,
+generics, payload/empty enums, explicit discriminants, empty/unit/tuple structs,
+derives, struct update/shorthand,
 references/borrowing, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
 positions, or other targets.
@@ -134,7 +138,12 @@ Joins and backedges use a worklist fixed point. Diagnostics are produced from
 converged reachable states, with block, statement, expression-origin and place
 provenance. Structural validation includes unreachable blocks. Resource exhaustion
 fails closed rather than publishing a successful analysis of partial work.
-Source-level named structs are non-Copy, including scalar-only structs. Tuples
+Source-level named structs and fieldless enums are non-Copy, including scalar-only
+representations. Enum discriminant inspection does not grant Copy permission.
+Wildcard-only and singleton matches do not require a place read. Unreachable
+match arms still participate in ownership checks and post-match joins through
+constant-true CFG switches whose imaginary successor is analysis-reachable but
+never executed. Tuples
 are Copy exactly when every component is Copy. Source consumption lowers to
 Copy or Move of the projected place, never an accidental move of its parent.
 This is not loan, reference, lifetime, destructor or borrow checking.
@@ -198,6 +207,7 @@ Use the resulting binary on the machine holding that build artifact:
 /new/path/external
 ```
 
+`enums` counts retained enum declarations alongside `functions` and `structs`.
 `cfg_blocks`, `cfg_edges` and `cfg_locals` count explicit control-flow work,
 separately from scheduling dependency `nodes` and `edges`. Counts include retained
 blocks and generated temporary locals, not just source declarations.
