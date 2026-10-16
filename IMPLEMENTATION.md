@@ -24,12 +24,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
 - [x] Genuine 64-bit usize and ordered, bounds-checked runtime array operations.
 - [x] Nonescaping local references, canonical provenance and last-use loan analysis.
+- [x] Noescape reference parameters and genuine expected-site carrier reborrows.
+- [x] Shared/mutable static input-path returns with explicit or elided regions.
+- [x] Builtin reference field projections and capability-sensitive mixed inputs.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
 
-- [ ] Source organization: external modules, source maps, grouped/glob imports,
+- [ ] Source organization: complete source maps, grouped/glob imports,
       reexports, restricted visibility, item identities and edition behavior.
+      Bounded external module loading is implemented, not the whole category.
 - [ ] Typed IR and data: all numeric primitives/literals, tuples, arrays, slices,
       structs/enums, layouts, construction, projections, casts and coercions.
 - [ ] Patterns and control flow: destructuring, exhaustiveness, match, loop,
@@ -56,7 +60,22 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [ ] Completion: validate the explicit edition/version/target contract, standard
       libraries, real projects and self-hosting. Self-hosting alone is not enough.
 
-## Active slice
+## Active work and evidence limits
+
+The full requested outcome is not reached. Latest evidence is 975 hosted tests
+and 752 native cases for bounded Linux x86-64 features. There is no successful
+core/alloc/std build, broad existing-project acceptance or representative full-Rust
+performance comparison. The next substantive foundation under investigation is
+all signed/unsigned integer primitives up to 64 bits, their literals/operators and
+casts. No numeric implementation is authorized before the exact contract and
+owner feasibility review. Integer128, floats, generics/traits/methods, Drop,
+reference-containing values, libraries and project integration remain open.
+
+## Delivered milestones, newest first
+
+Numbers below are evidence at each checkpoint, not cumulative full-Rust coverage.
+Earlier boundary statements describe that historical slice; the newest contracts
+and the remaining implementation checklist determine current support.
 
 Mixed-capability reference-result inputs are implemented under
 `MIXED-REFERENCE-RETURNS.md`. Shared outputs derive from shared or mutable input
@@ -113,8 +132,8 @@ parent freeze/resume and failed unused-callee publication. Tracked M8a run
 `compiler-mutable-reference-returns-20261016-0843` at `49a1ae343` passed all 662
 cases across sixteen corpora: 394 accepted, 196 invalid rejected, nine declared
 runtime-101 traps and 63 legal-unsupported boundaries. All raw receipts and the
-96-worker example are retained. Projected/mixed-kind results,
-general lifetime inference and full Rust remain open.
+96-worker example are retained. Later delivered milestones above add static
+projected/mixed-kind results. General lifetime inference and full Rust remain open.
 
 Noescape reference parameters and expected-site reborrows are implemented under
 `REFERENCE-CALLS.md`. All 748 hosted tests, strict all-target lint, formatting and
@@ -135,8 +154,9 @@ formatting and bounded resource/provenance review. Tracked fifteen-corpus native
 verification passed all 632 cases at bb3bc5613: 378 successful parity cases, 186
 invalid rejections, nine declared runtime-101 traps and 59 legal-unsupported
 boundaries. Raw receipts and the executed 96-worker example are retained under
-`experiments/results/20261016-m8a-reference-returns-*`. Mutable/projected returns,
-general regions and full Rust remain open.
+`experiments/results/20261016-m8a-reference-returns-*`. Mutable and projected
+results are delivered by later milestones above; general regions and full Rust
+remain open.
 
 Genuine nonescaping local references are implemented under `BORROWING.md`, with
 canonical issuance-time loan origins, explicit reborrows, backward carrier
@@ -148,8 +168,9 @@ corpora: 343 accepted parity, 170 invalid rejections, nine declared runtime-101
 cases and 50 legal-unsupported boundaries. Raw receipts and the successful
 96-worker native borrowing example are retained. That B1 checkpoint left
 reference parameters and implicit expected-site reborrows for the B2 slice above.
-Escaping/reference results, general regions and reference-containing aggregates
-remain open. This does not close the ownership or full-Rust checklist.
+General escaping-reference behavior, general regions and reference-containing
+aggregates remain open. Later milestones above add bounded input-path reference
+results. This does not close the ownership or full-Rust checklist.
 
 Genuine unsigned 64-bit `usize` and runtime array indexing now pass 647 hosted
 tests and strict all-target lint. `USIZE.md` records ordered index/readiness
