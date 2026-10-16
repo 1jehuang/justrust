@@ -9514,3 +9514,48 @@ receipts are distinct from the native acceptance above. No install, full-Rust
 compatibility or speedup claim is made. Destructor execution, general executable
 reference-valued parameters, deeper/mixed nested carriers, general default bodies,
 macros, core/alloc/std and existing-project acceptance remain open.
+
+### Independent canonical Copy/Clone campaign: committed1e6061f74
+
+Tracked metered run `compiler-canonical-copy-20261016-1738` completed on the
+account's m8a.24xlarge host with lifecycle_ok=true and exit0. The first attempt
+`compiler-canonical-copy-20261016-1737` had an SSH connection timeout before guest
+execution. Its charged lifecycle receipt is preserved separately; refreshing the
+signed-in `justrust remote env` endpoint and starting a new tracked run fixed the
+stale connection without billing or isolation bypass.
+
+Fetched and independently parsed every raw case and final summary across
+**32 corpora,1116 cases**:
+- 668 accepted parity,35 declared runtime101 traps,
+- 324 semantic-invalid rejections,88 explicit unsupported boundaries,
+- 1 deliberate expanding-generic resource rejection.
+
+Verified128 generated compile/runtime exit-check sets,1080 accepted worker1/8
+runtime comparisons and70 declared-trap worker comparisons. Every normal runtime
+has exact stock stdout/stderr/status parity. Every source hash and successful
+native graph has complete capture, zero dropped events and no failures. The
+frozen canonical32 names/full sources/stdout remain exact, and all12 native
+negatives reject semantically rather than parser error, panic or Unsupported.
+All corpus receipts identify actual release binary SHA256
+cba3ee403fa6350ff55d33de9f4c0f9124d54c9607b390f137e17f9f2fa90c81.
+The release binary differs from the earlier local debug bootstrap as expected.
+
+The committed formatted example actually executes at96 workers with exit0 and
+exact `canonical copy oracle ok\n`, sourceSHA
+5071538e8f734a5a8dc8e9070bb7c4724e20e762eabfbd34073de9c820c1ed20.
+All61 trace node evaluations equal1, all136 dependency edges are retained, and
+there are no node errors, dropped events or failed publications. Observed
+18,657,621ns total and5,425,626ns engine time are contended functional evidence,
+not pinned before/after performance results. The32 raw corpora plus example
+receipt are retained as33 files under
+`experiments/results/20261016-m8a-canonical-copy-*`.
+
+Precision correction to the preceding implementation paragraph: ALL source
+bodies receive checking, GENERIC source bodies and EVERY available recipe receive
+universal lowering/analysis, including zero-arity recipes. Nongeneric source
+bodies retain the ordinary closed-analysis path. No universal lowering claim is
+intended for those nongeneric source bodies. The common concrete-proof barrier
+still joins every admitted instance before any native object. No installation or
+full-Rust/speed claim is made. The next executable generic-reference foundation
+remains design-only, with indirect reference-bearing stores and call effects an
+explicit unresolved soundness requirement before lifting the actual-type fence.

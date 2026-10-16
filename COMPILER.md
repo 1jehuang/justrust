@@ -123,9 +123,10 @@ Canonical Clone recipes are genuine universally checked typed bodies. Tuple and
 array recipes call each child's Clone implementation, including observable manual
 Clone on Copy types. Shared-reference Clone loads the original inner carrier,
 with world-certified declaration-bound topology transport rather than a fresh
-contract derived from coincident concrete types. Every source body and admitted
-recipe passes universal gates, and demanded instances pass closed analysis before
-native publication. Logical Copy/Clone membership on two shared layers does not
+contract derived from coincident concrete types. Every source body is checked,
+and generic source bodies plus every admitted recipe pass universal lowering and
+analysis. Demanded instances pass closed analysis before native publication.
+Logical Copy/Clone membership on two shared layers does not
 authorize a depth-three Clone receiver. A real source clone_from override runs
 normally, while its unavailable canonical default fails before instance admission.
 General default bodies, trait or trait-method generics, associated types, trait
