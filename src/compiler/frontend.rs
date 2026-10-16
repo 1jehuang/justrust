@@ -59,6 +59,7 @@ fn parent(path: &str) -> &str {
 pub struct Function {
     pub name: String,
     pub regions: RegionDecls,
+    pub type_params: Vec<String>,
     pub params: Vec<(String, Type)>,
     pub result: Type,
     pub body: Block,
@@ -70,12 +71,14 @@ pub struct RegionDecls {
 }
 #[derive(Clone, Debug)]
 pub struct StructDecl {
+    pub type_params: Vec<String>,
     pub name: String,
     pub public: bool,
     pub fields: Vec<FieldDecl>,
 }
 #[derive(Clone, Debug)]
 pub struct EnumDecl {
+    pub type_params: Vec<String>,
     pub name: String,
     pub public: bool,
     pub variants: Vec<VariantDecl>,
@@ -99,8 +102,39 @@ pub enum FieldSelector {
     Tuple(usize),
     Named(String),
 }
+/// Structured source path. Arguments belong to their declaration segment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenericPath {
+    pub segments: Vec<PathSegment>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathSegment {
+    pub name: String,
+    pub args: Vec<Type>,
+}
+impl GenericPath {
+    fn spelling(&self) -> String {
+        self.segments
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+    fn application(&self) -> Result<(&str, &[Type]), String> {
+        let mut applications = self.segments.iter().filter(|s| !s.args.is_empty());
+        let segment = applications
+            .next()
+            .ok_or("missing explicit generic arguments")?;
+        if applications.next().is_some() {
+            return Err("multiple generic declaration segments in a path are unsupported".into());
+        }
+        Ok((&segment.name, &segment.args))
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
+    Apply(GenericPath),
+    Param(String),
     Ref {
         kind: ir::BorrowKind,
         region: Option<String>,
@@ -129,6 +163,10 @@ pub struct Place {
 }
 #[derive(Clone, Debug)]
 pub enum Pattern {
+    Apply {
+        path: GenericPath,
+        pattern: Box<Pattern>,
+    },
     Variant {
         name: String,
         shape: ir::VariantShape,
@@ -326,6 +364,10 @@ impl Expr {
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    Apply {
+        path: GenericPath,
+        value: Box<Expr>,
+    },
     Cast {
         value: Box<Expr>,
         target: Type,
@@ -729,6 +771,7 @@ struct Parser {
     at: usize,
     nesting: usize,
     allow_struct: bool,
+    type_params: Vec<String>,
 }
 impl Parser {
     fn token(&self) -> &Token {
@@ -763,12 +806,12 @@ impl Parser {
     fn ident(&mut self) -> Result<String, String> {
         let t = self.token();
         let reserved = [
-            "fn", "let", "mut", "if", "else", "while", "return", "true", "false", "i32", "bool",
-            "pub", "const", "static", "loop", "break", "continue", "for", "in", "match", "struct",
-            "enum", "use", "mod", "impl", "trait", "self", "Self", "as", "async", "await", "move",
-            "unsafe", "where", "type", "ref", "extern", "crate", "super", "dyn", "abstract",
-            "become", "box", "do", "final", "macro", "override", "priv", "typeof", "unsized",
-            "virtual", "yield", "try", "gen",
+            "fn", "let", "mut", "if", "else", "while", "return", "true", "false", "pub", "const",
+            "static", "loop", "break", "continue", "for", "in", "match", "struct", "enum", "use",
+            "mod", "impl", "trait", "self", "Self", "as", "async", "await", "move", "unsafe",
+            "where", "type", "ref", "extern", "crate", "super", "dyn", "abstract", "become", "box",
+            "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield",
+            "try", "gen",
         ];
         if !t.string
             && t.text != "_"
@@ -827,6 +870,8 @@ impl Parser {
             let len = self.array_number("array length")?;
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
+        } else if self.type_params.contains(&self.token().text) {
+            Ok(Type::Param(self.ident()?))
         } else if let Some(ty) = integer_type(&self.token().text) {
             self.at += 1;
             Ok(Type::Int(ty))
@@ -851,8 +896,104 @@ impl Parser {
             self.expect(")")?;
             Ok(Type::Tuple(fields))
         } else {
-            self.path().map(Type::Named)
+            let path = self.generic_path(true)?;
+            if path.segments.iter().any(|s| !s.args.is_empty()) {
+                Ok(Type::Apply(path))
+            } else {
+                Ok(Type::Named(path.spelling()))
+            }
         }
+    }
+    /// Split closing angle tokens only while parsing types, never expressions.
+    fn close_angle(&mut self) -> Result<(), String> {
+        if self.eat(">") {
+            return Ok(());
+        }
+        let remainder = match self.token().text.as_str() {
+            ">>" => ">",
+            ">=" => "=",
+            ">>=" => ">=",
+            _ => return Err(self.error("expected generic closing >")),
+        };
+        self.tokens[self.at].text = remainder.into();
+        self.tokens[self.at].column += 1;
+        Ok(())
+    }
+    fn type_arguments(&mut self) -> Result<Vec<Type>, String> {
+        self.expect("<")?;
+        let mut args = Vec::new();
+        loop {
+            if args.len() >= 32 {
+                return Err(self.error("generic argument resource limit 32"));
+            }
+            args.push(self.ty()?);
+            if !self.eat(",") || self.token().text.starts_with('>') {
+                break;
+            }
+        }
+        self.close_angle()?;
+        Ok(args)
+    }
+    fn generic_path(&mut self, type_context: bool) -> Result<GenericPath, String> {
+        let mut segments = Vec::new();
+        loop {
+            if segments.len() >= 128 {
+                return Err(self.error("path depth resource limit 128"));
+            }
+            let name = if matches!(self.token().text.as_str(), "crate" | "self" | "super")
+                && !self.token().string
+            {
+                let name = self.token().text.clone();
+                self.at += 1;
+                name
+            } else {
+                self.ident()?
+            };
+            let args = if type_context && self.is("<") {
+                self.type_arguments()?
+            } else {
+                Vec::new()
+            };
+            segments.push(PathSegment { name, args });
+            if !self.eat("::") {
+                break;
+            }
+            if self.is("<") {
+                let args = self.type_arguments()?;
+                if !segments.last().unwrap().args.is_empty() {
+                    return Err(self.error("duplicate generic arguments"));
+                }
+                segments.last_mut().unwrap().args = args;
+                if !self.eat("::") {
+                    break;
+                }
+            }
+        }
+        Ok(GenericPath { segments })
+    }
+    fn type_parameters(&mut self) -> Result<Vec<String>, String> {
+        if !self.eat("<") {
+            return Ok(Vec::new());
+        }
+        let mut params = Vec::new();
+        loop {
+            if params.len() >= 32 {
+                return Err(self.error("generic parameter resource limit 32"));
+            }
+            let name = self.ident()?;
+            if params.contains(&name) {
+                return Err(self.error("duplicate type parameter"));
+            }
+            params.push(name);
+            if self.is(":") || self.is("=") {
+                return Err(self.error("generic bounds/defaults are unsupported"));
+            }
+            if !self.eat(",") || self.token().text.starts_with('>') {
+                break;
+            }
+        }
+        self.close_angle()?;
+        Ok(params)
     }
     fn path(&mut self) -> Result<String, String> {
         let mut parts = Vec::new();
@@ -942,9 +1083,8 @@ impl Parser {
                 (name, ItemKind::Import(path))
             } else if self.eat("enum") {
                 let name = self.ident()?;
-                if self.is("<") {
-                    return Err(self.error("generic enums are unsupported"));
-                }
+                let type_params = self.type_parameters()?;
+                self.type_params = type_params.clone();
                 self.expect("{")?;
                 let mut variants: Vec<VariantDecl> = Vec::new();
                 while !self.is("}") {
@@ -1024,6 +1164,7 @@ impl Parser {
                     return Err(self.error("empty enums are unsupported"));
                 }
                 parsed.program.enums.push(EnumDecl {
+                    type_params,
                     name: qualify(module, &name),
                     public,
                     variants,
@@ -1031,6 +1172,8 @@ impl Parser {
                 (name, ItemKind::Enum)
             } else if self.eat("struct") {
                 let name = self.ident()?;
+                let type_params = self.type_parameters()?;
+                self.type_params = type_params.clone();
                 self.expect("{")?;
                 let mut fields = Vec::new();
                 while !self.is("}") {
@@ -1054,6 +1197,7 @@ impl Parser {
                     return Err(self.error("empty structs are unsupported"));
                 }
                 parsed.program.structs.push(StructDecl {
+                    type_params,
                     name: qualify(module, &name),
                     public,
                     fields,
@@ -1068,6 +1212,7 @@ impl Parser {
             } else {
                 return Err(self.error("expected fn, inline mod or simple use item"));
             };
+            self.type_params.clear();
             self.insert_item(parsed, &qualify(module, &name), public, kind)?;
         }
         self.nesting -= 1;
@@ -1157,6 +1302,16 @@ impl Parser {
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
+        let mut type_params = Vec::new();
+        if self.is("<")
+            && !self
+                .tokens
+                .get(self.at + 1)
+                .is_some_and(|t| t.text.starts_with('\''))
+        {
+            type_params = self.type_parameters()?;
+        }
+        self.type_params = type_params.clone();
         if self.eat("<") {
             if self.is(">") {
                 return Err(self.error("empty generic parameter lists are unsupported"));
@@ -1210,6 +1365,7 @@ impl Parser {
         Ok(Function {
             name,
             regions,
+            type_params,
             params,
             result,
             body: self.block()?,
@@ -1289,7 +1445,18 @@ impl Parser {
                 mutable: true,
             });
         }
-        let name = self.path()?;
+        let generic_path = self.generic_path(false)?;
+        let name = generic_path.spelling();
+        let wrap = |pattern| {
+            if generic_path.segments.iter().any(|s| !s.args.is_empty()) {
+                Pattern::Apply {
+                    path: generic_path.clone(),
+                    pattern: Box::new(pattern),
+                }
+            } else {
+                pattern
+            }
+        };
         if self.eat("(") {
             let mut fields = Vec::new();
             while !self.is(")") {
@@ -1302,16 +1469,16 @@ impl Parser {
                 }
             }
             self.expect(")")?;
-            return Ok(Pattern::Variant {
+            return Ok(wrap(Pattern::Variant {
                 name,
                 shape: ir::VariantShape::Tuple,
                 fields,
                 rest: false,
-            });
+            }));
         }
         if !self.eat("{") {
             if name.contains("::") || matches!(name.as_str(), "self" | "super" | "crate") {
-                return Ok(Pattern::Path(name));
+                return Ok(wrap(Pattern::Path(name)));
             }
             return Ok(Pattern::Binding {
                 name,
@@ -1347,7 +1514,7 @@ impl Parser {
             }
         }
         self.expect("}")?;
-        Ok(Pattern::Struct { name, fields, rest })
+        Ok(wrap(Pattern::Struct { name, fields, rest }))
     }
     fn compound_statement(&mut self, target: Expr, op: BinaryOp) -> Result<Stmt, String> {
         let value = self.expr(0)?;
@@ -1536,6 +1703,65 @@ impl Parser {
         validate_depth(DepthNode::Expr(&expr)).map_err(|e| self.error(&e))?;
         Ok(expr)
     }
+    fn named_expr(&mut self) -> Result<Expr, String> {
+        let generic_path = self.generic_path(false)?;
+        let name = generic_path.spelling();
+        let value = if self.eat("!") {
+            if name != "println" {
+                return Err(self.error("only println! is supported"));
+            }
+            self.expect("(")?;
+            if !self.token().string {
+                return Err(self.error("println! requires one literal string"));
+            }
+            let text = self.token().text.clone();
+            self.at += 1;
+            let text = literal_format(&text).map_err(|e| self.error(&e))?;
+            self.eat(",");
+            self.expect(")")?;
+            Expr::Println(text)
+        } else if self.eat("(") {
+            let mut args = Vec::new();
+            if !self.is(")") {
+                loop {
+                    args.push(self.nested_expr()?);
+                    if !self.eat(",") || self.is(")") {
+                        break;
+                    }
+                }
+            }
+            self.expect(")")?;
+            Expr::Call { name, args }
+        } else if self.allow_struct && self.eat("{") {
+            let mut fields = Vec::new();
+            while !self.is("}") {
+                let field = self.ident()?;
+                let value = if self.eat(":") {
+                    self.expr(0)?
+                } else {
+                    Expr::Var(field.clone())
+                };
+                fields.push((field, value));
+                if !self.eat(",") {
+                    break;
+                }
+            }
+            self.expect("}")?;
+            Expr::Struct { name, fields }
+        } else {
+            Expr::Var(name)
+        };
+        Ok(
+            if generic_path.segments.iter().any(|s| !s.args.is_empty()) {
+                Expr::Apply {
+                    path: generic_path,
+                    value: Box::new(value),
+                }
+            } else {
+                value
+            },
+        )
+    }
     fn expr_inner(&mut self, min: u8) -> Result<Expr, String> {
         self.expr_inner_mode(min, false)
     }
@@ -1712,52 +1938,7 @@ impl Parser {
             self.at += 1;
             Expr::Integer(literal)
         } else {
-            let name = self.path()?;
-            if self.eat("!") {
-                if name != "println" {
-                    return Err(self.error("only println! is supported"));
-                }
-                self.expect("(")?;
-                if !self.token().string {
-                    return Err(self.error("println! requires one literal string"));
-                }
-                let text = self.token().text.clone();
-                self.at += 1;
-                let text = literal_format(&text).map_err(|e| self.error(&e))?;
-                self.eat(",");
-                self.expect(")")?;
-                Expr::Println(text)
-            } else if self.eat("(") {
-                let mut args = Vec::new();
-                if !self.is(")") {
-                    loop {
-                        args.push(self.nested_expr()?);
-                        if !self.eat(",") || self.is(")") {
-                            break;
-                        }
-                    }
-                }
-                self.expect(")")?;
-                Expr::Call { name, args }
-            } else if self.allow_struct && self.eat("{") {
-                let mut fields = Vec::new();
-                while !self.is("}") {
-                    let field = self.ident()?;
-                    let value = if self.eat(":") {
-                        self.expr(0)?
-                    } else {
-                        Expr::Var(field.clone())
-                    };
-                    fields.push((field, value));
-                    if !self.eat(",") {
-                        break;
-                    }
-                }
-                self.expect("}")?;
-                Expr::Struct { name, fields }
-            } else {
-                Expr::Var(name)
-            }
+            self.named_expr()?
         };
         let mut compared = false;
         loop {
@@ -1921,6 +2102,7 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
         at: 0,
         nesting: 0,
         allow_struct: true,
+        type_params: Vec::new(),
     };
     let mut parsed = ParsedProgram {
         program: Program {
@@ -1964,6 +2146,7 @@ struct Resolver<'a> {
     items: &'a HashMap<String, Vec<Item>>,
     imports: HashMap<(String, usize, bool), Option<ResolvedItem>>,
     active: std::collections::HashSet<(String, usize, bool)>,
+    type_params: Vec<String>,
 }
 impl Resolver<'_> {
     fn item(
@@ -2139,8 +2322,47 @@ impl Resolver<'_> {
         }
         Ok((current.module == module).then_some(current))
     }
+    fn generic_path(&mut self, path: &mut GenericPath, module: &str) -> Result<(), String> {
+        let (at, _) = path
+            .segments
+            .iter()
+            .enumerate()
+            .find(|(_, s)| !s.args.is_empty())
+            .ok_or("missing explicit type arguments")?;
+        let spelling = path.segments[..=at]
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join("::");
+        let item = self
+            .path(&spelling, module, true, false)?
+            .or(self.path(&spelling, module, false, false)?)
+            .ok_or_else(|| format!("unresolved generic declaration {spelling}"))?;
+        let mut args = std::mem::take(&mut path.segments[at].args);
+        for arg in &mut args {
+            self.ty(arg, module)?;
+        }
+        let suffix = path.segments[at + 1..].to_vec();
+        path.segments = item
+            .path
+            .split("::")
+            .map(|name| PathSegment {
+                name: name.into(),
+                args: Vec::new(),
+            })
+            .collect();
+        path.segments.last_mut().unwrap().args = args;
+        path.segments.extend(suffix);
+        Ok(())
+    }
     fn ty(&mut self, ty: &mut Type, module: &str) -> Result<(), String> {
         match ty {
+            Type::Apply(path) => self.generic_path(path, module)?,
+            Type::Param(name) => {
+                if !self.type_params.contains(name) {
+                    return Err(format!("unknown type parameter {name}"));
+                }
+            }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
             Type::Array(element, _) => self.ty(element, module)?,
             Type::Named(name) => {
@@ -2168,6 +2390,10 @@ impl Resolver<'_> {
         names: &mut std::collections::HashSet<String>,
     ) -> Result<(), String> {
         match pattern {
+            Pattern::Apply { path, pattern } => {
+                self.generic_path(path, module)?;
+                self.pattern(pattern, module, names)?;
+            }
             Pattern::Variant { name, fields, .. } => {
                 let item = self
                     .path(name, module, false, false)?
@@ -2327,6 +2553,10 @@ impl Resolver<'_> {
         locals: &mut Vec<std::collections::HashSet<String>>,
     ) -> Result<(), String> {
         match expr {
+            Expr::Apply { path, value } => {
+                self.generic_path(path, module)?;
+                self.expr(value, module, locals)?;
+            }
             Expr::Array(elements) => {
                 for e in elements {
                     self.expr(e, module, locals)?;
@@ -2466,6 +2696,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         items: &parsed.items,
         imports: HashMap::new(),
         active: std::collections::HashSet::new(),
+        type_params: Vec::new(),
     };
     // Validate unused imports too, deterministically, including cycles/privacy.
     let mut paths: Vec<_> = parsed.items.keys().cloned().collect();
@@ -2485,6 +2716,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     let mut program = parsed.program.clone();
     for enumeration in &mut program.enums {
+        resolver.type_params = enumeration.type_params.clone();
         for variant in &mut enumeration.variants {
             for field in &mut variant.fields {
                 validate_depth(DepthNode::Type(&field.ty))?;
@@ -2493,12 +2725,14 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         }
     }
     for structure in &mut program.structs {
+        resolver.type_params = structure.type_params.clone();
         for field in &mut structure.fields {
             validate_depth(DepthNode::Type(&field.ty))?;
             resolver.ty(&mut field.ty, parent(&structure.name))?;
         }
     }
     for function in &mut program.functions {
+        resolver.type_params = function.type_params.clone();
         resolver.ty(&mut function.result, parent(&function.name))?;
         for (name, ty) in &mut function.params {
             resolver.ty(ty, parent(&function.name))?;
@@ -2540,6 +2774,13 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                     push(DepthNode::Type(field));
                 }
             }
+            DepthNode::Type(Type::Apply(path)) => {
+                for segment in &path.segments {
+                    for arg in &segment.args {
+                        push(DepthNode::Type(arg));
+                    }
+                }
+            }
             DepthNode::Type(_) => {}
             DepthNode::Pattern(pattern) => {
                 pattern_nodes += 1;
@@ -2547,6 +2788,14 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                     return Err("pattern node count exceeds limit".into());
                 }
                 match pattern {
+                    Pattern::Apply { path, pattern } => {
+                        push(DepthNode::Pattern(pattern));
+                        for segment in &path.segments {
+                            for arg in &segment.args {
+                                push(DepthNode::Type(arg));
+                            }
+                        }
+                    }
                     Pattern::Variant { fields, .. } => {
                         for (_, p) in fields {
                             push(DepthNode::Pattern(p));
@@ -2566,6 +2815,14 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 }
             }
             DepthNode::Expr(expr) => match expr {
+                Expr::Apply { path, value } => {
+                    push(DepthNode::Expr(value));
+                    for segment in &path.segments {
+                        for arg in &segment.args {
+                            push(DepthNode::Type(arg));
+                        }
+                    }
+                }
                 Expr::Cast { value, target } => {
                     push(DepthNode::Expr(value));
                     push(DepthNode::Type(target));
@@ -2667,15 +2924,1020 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
     }
     Ok(())
 }
-/// One immutable semantic environment shared by every checked function.
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Debug)]
+pub struct DeclSemanticPath {
+    pub module: Arc<[String]>,
+    pub item: String,
+    pub kind: ir::DeclKind,
+}
+#[derive(Clone, Debug)]
+pub struct DeclInfo {
+    pub id: ir::DeclId,
+    pub kind: ir::DeclKind,
+    pub name: String,
+    pub path: DeclSemanticPath,
+    pub source_index: usize,
+    pub param_env: Arc<ir::ParamEnv>,
+    pub type_params: Arc<[String]>,
+}
+#[derive(Debug)]
+pub struct DeclRegistry {
+    declarations: Vec<DeclInfo>,
+    functions: HashMap<String, ir::DeclId>,
+    nominals: HashMap<String, ir::DeclId>,
+    function_ids: Vec<ir::DeclId>,
+}
+impl DeclRegistry {
+    pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
+        self.declarations
+            .get(id.index as usize)
+            .filter(|d| d.id == id)
+            .ok_or_else(|| "foreign generic declaration identity".into())
+    }
+}
+#[derive(Clone, Debug)]
+enum NominalSchema {
+    Struct(StructDecl),
+    Enum(EnumDecl),
+}
+#[derive(Debug, Default)]
+pub struct NominalInterner {
+    applications: HashMap<(ir::DeclId, Vec<ir::Ty>), ir::Ty>,
+    ordered: Vec<ir::Ty>,
+    active: Vec<ir::DeclId>,
+}
+#[derive(Debug)]
+struct PlanState {
+    schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
+    functions: HashMap<ir::DeclId, ir::GenericSignature>,
+    nominals: NominalInterner,
+    reservations: Vec<ir::PlanReservation>,
+}
+#[derive(Clone, Debug)]
+pub struct PlanCtx {
+    registry: Arc<DeclRegistry>,
+    state: Arc<Mutex<PlanState>>,
+    pub budget: ir::PlanBudget,
+}
+fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Result<usize, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    let mut bytes = std::mem::size_of::<Type>();
+    let mut add = |n: usize| -> Result<(), String> {
+        bytes = bytes
+            .checked_add(n)
+            .ok_or("generic schema allocation overflow")?;
+        Ok(())
+    };
+    match ty {
+        Type::Named(name) | Type::Param(name) => add(name.len())?,
+        Type::Apply(path) => {
+            for segment in &path.segments {
+                add(std::mem::size_of::<PathSegment>() + segment.name.len())?;
+                for arg in &segment.args {
+                    add(source_type_storage(arg, budget, depth + 1)?)?;
+                }
+            }
+        }
+        Type::Tuple(fields) => {
+            for field in fields {
+                add(source_type_storage(field, budget, depth + 1)?)?;
+            }
+        }
+        Type::Array(element, _)
+        | Type::Ref {
+            referent: element, ..
+        } => add(source_type_storage(element, budget, depth + 1)?)?,
+        _ => {}
+    }
+    Ok(bytes)
+}
+fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Result<usize, String> {
+    let mut bytes = fields
+        .len()
+        .checked_mul(std::mem::size_of::<FieldDecl>() + 64)
+        .ok_or("generic schema allocation overflow")?;
+    for field in fields {
+        bytes = bytes
+            .checked_add(field.name.len())
+            .and_then(|n| n.checked_add(source_type_storage(&field.ty, budget, 0).ok()?))
+            .ok_or("generic schema allocation overflow")?;
+    }
+    Ok(bytes)
+}
+impl PlanCtx {
+    pub fn from_program(program: &Program, budget: &ir::PlanBudget) -> Result<Self, String> {
+        let snapshot = ir::SnapshotId::allocate()?;
+        let mut registry = DeclRegistry {
+            declarations: Vec::new(),
+            functions: HashMap::new(),
+            nominals: HashMap::new(),
+            function_ids: Vec::new(),
+        };
+        let mut state = PlanState {
+            schemas: HashMap::new(),
+            functions: HashMap::new(),
+            nominals: NominalInterner::default(),
+            reservations: Vec::new(),
+        };
+        let declarations = program
+            .functions
+            .len()
+            .checked_add(program.structs.len())
+            .and_then(|n| n.checked_add(program.enums.len()))
+            .ok_or("generic declaration resource overflow")?;
+        budget.charge_nodes(declarations)?;
+        state.reservations.push(
+            budget.reserve_bytes(
+                declarations
+                    .checked_mul(512)
+                    .ok_or("generic declaration resource overflow")?,
+            )?,
+        );
+        let mut source_storage = 0usize;
+        for d in &program.structs {
+            source_storage = source_storage
+                .checked_add(schema_fields_storage(&d.fields, budget)?)
+                .ok_or("generic schema allocation overflow")?;
+        }
+        for d in &program.enums {
+            source_storage = source_storage
+                .checked_add(
+                    d.variants
+                        .len()
+                        .checked_mul(std::mem::size_of::<VariantDecl>() + 64)
+                        .ok_or("generic schema allocation overflow")?,
+                )
+                .ok_or("generic schema allocation overflow")?;
+            for variant in &d.variants {
+                source_storage = source_storage
+                    .checked_add(variant.name.len())
+                    .and_then(|n| {
+                        n.checked_add(schema_fields_storage(&variant.fields, budget).ok()?)
+                    })
+                    .ok_or("generic schema allocation overflow")?;
+            }
+        }
+        state.retain(budget, source_storage)?;
+        let mut insert = |name: &str,
+                          params: &[String],
+                          kind: ir::DeclKind,
+                          source_index: usize|
+         -> Result<ir::DeclId, String> {
+            budget.charge_work(1 + name.len() + params.len())?;
+            if params.len() > budget.limits().params {
+                return Err("generic parameter resource limit exceeded".into());
+            }
+            budget.retain_bytes(
+                name.len()
+                    .checked_mul(5)
+                    .and_then(|n| {
+                        params
+                            .iter()
+                            .try_fold(n, |n, p| n.checked_add(p.len().checked_mul(3)? + 64))
+                    })
+                    .ok_or("generic declaration allocation overflow")?,
+            )?;
+            let mut names = std::collections::HashSet::new();
+            for p in params {
+                if !names.insert(p) {
+                    return Err(format!("duplicate generic parameter {p}"));
+                }
+            }
+            let id = ir::DeclId {
+                snapshot,
+                index: u32::try_from(registry.declarations.len())
+                    .map_err(|_| "generic declaration count overflow")?,
+            };
+            let param_env = Arc::new(ir::ParamEnv::new(
+                ir::BinderId { declaration: id },
+                params.len(),
+            )?);
+            let path = DeclSemanticPath {
+                module: parent(name)
+                    .split("::")
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+                    .into(),
+                item: name.rsplit("::").next().unwrap_or(name).into(),
+                kind,
+            };
+            let table = if kind == ir::DeclKind::Function {
+                &mut registry.functions
+            } else {
+                &mut registry.nominals
+            };
+            if table.insert(name.into(), id).is_some() {
+                return Err(format!("duplicate declaration {name}"));
+            }
+            registry.declarations.push(DeclInfo {
+                id,
+                kind,
+                name: name.into(),
+                path,
+                source_index,
+                param_env,
+                type_params: params.to_vec().into(),
+            });
+            Ok(id)
+        };
+        for (index, d) in program.structs.iter().enumerate() {
+            let id = insert(&d.name, &d.type_params, ir::DeclKind::Struct, index)?;
+            state
+                .schemas
+                .insert(id, Arc::new(NominalSchema::Struct(d.clone())));
+        }
+        for (index, d) in program.enums.iter().enumerate() {
+            let id = insert(&d.name, &d.type_params, ir::DeclKind::Enum, index)?;
+            state
+                .schemas
+                .insert(id, Arc::new(NominalSchema::Enum(d.clone())));
+        }
+        for (index, f) in program.functions.iter().enumerate() {
+            let id = insert(&f.name, &f.type_params, ir::DeclKind::Function, index)?;
+            registry.function_ids.push(id);
+        }
+        let registry = Arc::new(registry);
+        // Every schema, including unused generic declarations, gets authoritative symbolic arguments.
+        for info in &registry.declarations {
+            if info.kind == ir::DeclKind::Function {
+                continue;
+            }
+            let args = symbolic_args(&info.param_env, budget)?;
+            let caller = if args.is_empty() {
+                ir::FactsCtx::Concrete
+            } else {
+                ir::FactsCtx::Universal(&info.param_env)
+            };
+            state.intern(&registry, info.id, &args, caller, budget, 0)?;
+            let schema = state
+                .schemas
+                .get(&info.id)
+                .ok_or("missing nominal schema")?;
+            let mut used = std::collections::HashSet::new();
+            let fields: Vec<_> = match schema.as_ref() {
+                NominalSchema::Struct(d) => d.fields.iter().collect(),
+                NominalSchema::Enum(d) => d.variants.iter().flat_map(|v| v.fields.iter()).collect(),
+            };
+            for field in fields {
+                collect_source_params(&field.ty, &mut used, budget, 0)?;
+            }
+            if info.type_params.iter().any(|p| !used.contains(p)) {
+                return Err(format!("unused nominal type parameter in {}", info.name));
+            }
+        }
+        for (index, f) in program.functions.iter().enumerate() {
+            let id = registry.function_ids[index];
+            let info = registry.declaration(id)?;
+            let bindings = param_bindings(info, &symbolic_args(&info.param_env, budget)?)?;
+            let caller = if info.param_env.arity() == 0 {
+                ir::FactsCtx::Concrete
+            } else {
+                ir::FactsCtx::Universal(&info.param_env)
+            };
+            let mut names = std::collections::HashSet::new();
+            for (name, _) in &f.params {
+                if !names.insert(name) {
+                    return Err(format!("duplicate parameter {name}"));
+                }
+            }
+            let params = f
+                .params
+                .iter()
+                .map(|(_, ty)| state.source_ty(&registry, ty, &bindings, caller, budget, 0, true))
+                .collect::<Result<Vec<_>, _>>()?;
+            let result =
+                state.source_ty(&registry, &f.result, &bindings, caller, budget, 0, true)?;
+            if info.param_env.arity() > 0 {
+                if !f.regions.params.is_empty() {
+                    return Err("references in generic declarations are unsupported".into());
+                }
+                for ty in params.iter().chain(std::iter::once(&result)) {
+                    validate_argument(ty, caller, budget, 0)?;
+                }
+            }
+            let signature = ir::Signature {
+                ref_contract: canonical_ref_contract(f, &params, &result)?,
+                params,
+                result,
+            };
+            state.functions.insert(
+                id,
+                ir::GenericSignature {
+                    param_env: info.param_env.clone(),
+                    signature,
+                },
+            );
+        }
+        if !program.functions.iter().any(|f| {
+            f.name == "main"
+                && f.type_params.is_empty()
+                && f.params.is_empty()
+                && f.result == Type::Unit
+        }) {
+            return Err("main must exist, take no arguments and return ()".into());
+        }
+        Ok(Self {
+            registry,
+            state: Arc::new(Mutex::new(state)),
+            budget: budget.clone(),
+        })
+    }
+    fn check_budget(&self, budget: &ir::PlanBudget) -> Result<(), String> {
+        if !self.budget.same_authority(budget) {
+            return Err("generic planning budget authority mismatch".into());
+        }
+        Ok(())
+    }
+    pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
+        self.registry.declaration(id)
+    }
+    pub fn function_decl(&self, index: usize) -> Result<ir::DeclId, String> {
+        self.registry
+            .function_ids
+            .get(index)
+            .copied()
+            .ok_or_else(|| "invalid function declaration index".into())
+    }
+    pub fn semantic_path(&self, id: ir::DeclId) -> Result<&DeclSemanticPath, String> {
+        Ok(&self.declaration(id)?.path)
+    }
+    pub fn param_env(&self, id: ir::DeclId) -> Result<Arc<ir::ParamEnv>, String> {
+        Ok(self.declaration(id)?.param_env.clone())
+    }
+    pub fn function_schema(&self, id: ir::DeclId) -> Result<ir::GenericSignature, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?;
+        let schema = state
+            .functions
+            .get(&id)
+            .ok_or("unknown function declaration")?;
+        self.budget.retain_bytes(
+            schema
+                .signature
+                .params
+                .len()
+                .checked_mul(4 * std::mem::size_of::<ir::Ty>() + 64)
+                .ok_or("signature allocation overflow")?,
+        )?;
+        Ok(schema.clone())
+    }
+    pub fn signature(&self, id: ir::DeclId) -> Result<ir::GenericSignature, String> {
+        self.function_schema(id)
+    }
+    pub fn binder(&self, id: ir::DeclId) -> Result<Arc<ir::ParamEnv>, String> {
+        self.param_env(id)
+    }
+    fn source_ty(
+        &self,
+        ty: &Type,
+        bindings: &HashMap<String, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        self.check_budget(budget)?;
+        self.state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?
+            .source_ty(&self.registry, ty, bindings, caller, budget, 0, true)
+    }
+    fn application(
+        &self,
+        path: &GenericPath,
+        bindings: &HashMap<String, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(String, Vec<ir::Ty>), String> {
+        let (at, segment) = path
+            .segments
+            .iter()
+            .enumerate()
+            .find(|(_, s)| !s.args.is_empty())
+            .ok_or("missing generic arguments")?;
+        if path.segments[at + 1..].iter().any(|s| !s.args.is_empty()) {
+            return Err(
+                "multiple generic declaration applications in one path are unsupported".into(),
+            );
+        }
+        let name = path.segments[..=at]
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join("::");
+        let args = segment
+            .args
+            .iter()
+            .map(|t| self.source_ty(t, bindings, caller, budget))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((name, args))
+    }
+    pub fn intern_nominal(
+        &self,
+        decl: ir::DeclId,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        self.check_budget(budget)?;
+        self.state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?
+            .intern(&self.registry, decl, args, caller, budget, 0)
+    }
+    pub fn instantiate_signature(
+        &self,
+        target: &ir::CallTarget,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Signature, String> {
+        self.check_budget(budget)?;
+        let info = self.declaration(target.declaration)?;
+        let schema = self.function_schema(target.declaration)?;
+        let bindings = param_bindings(info, &target.type_args)?;
+        for arg in target.type_args.iter() {
+            validate_argument(arg, caller, budget, 0)?;
+        }
+        let mut cx = self.clone();
+        let params = schema
+            .signature
+            .params
+            .iter()
+            .map(|ty| {
+                ir::substitute_ty(
+                    ty,
+                    info.param_env.binder(),
+                    &target.type_args,
+                    caller,
+                    &mut cx,
+                    budget,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = ir::substitute_ty(
+            &schema.signature.result,
+            info.param_env.binder(),
+            &target.type_args,
+            caller,
+            &mut cx,
+            budget,
+        )?;
+        let _ = bindings;
+        Ok(ir::Signature {
+            params,
+            result,
+            ref_contract: schema.signature.ref_contract.clone(),
+        })
+    }
+    fn environment(&self, decl: Option<ir::DeclId>) -> Result<TypeEnv, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?;
+        let mut environment_bytes = 0usize;
+        for info in &self.registry.declarations {
+            self.budget.charge_work(1)?;
+            let params = state
+                .functions
+                .get(&info.id)
+                .map_or(0, |s| s.signature.params.len());
+            let bytes = info
+                .name
+                .len()
+                .checked_mul(3)
+                .and_then(|n| n.checked_add(512))
+                .and_then(|n| {
+                    n.checked_add(params.checked_mul(4 * std::mem::size_of::<ir::Ty>() + 64)?)
+                })
+                .ok_or("body environment allocation overflow")?;
+            environment_bytes = environment_bytes
+                .checked_add(bytes)
+                .ok_or("body environment allocation overflow")?;
+        }
+        self.budget.retain_bytes(environment_bytes)?;
+        let mut env = TypeEnv {
+            structs: HashMap::new(),
+            enums: HashMap::new(),
+            functions: HashMap::new(),
+            plan: Some(self.clone()),
+            params: HashMap::new(),
+            param_env: None,
+        };
+        for info in &self.registry.declarations {
+            if info.kind == ir::DeclKind::Function {
+                env.functions.insert(
+                    info.name.clone(),
+                    state
+                        .functions
+                        .get(&info.id)
+                        .ok_or("missing function schema")?
+                        .signature
+                        .clone(),
+                );
+            } else if info.param_env.arity() == 0 {
+                match state.nominals.applications.get(&(info.id, Vec::new())) {
+                    Some(ir::Ty::Struct(ty)) => {
+                        env.structs.insert(info.name.clone(), ty.clone());
+                    }
+                    Some(ir::Ty::Enum(ty)) => {
+                        env.enums.insert(info.name.clone(), ty.clone());
+                    }
+                    _ => return Err("missing nominal application".into()),
+                }
+            }
+        }
+        if let Some(decl) = decl {
+            let info = self.declaration(decl)?;
+            env.params = param_bindings(info, &symbolic_args(&info.param_env, &self.budget)?)?;
+            if info.param_env.arity() > 0 {
+                env.param_env = Some(info.param_env.clone());
+            }
+        }
+        Ok(env)
+    }
+}
+impl ir::SubstitutionCx for PlanCtx {
+    fn nominal_application(&self, id: ir::NominalAppId) -> Result<ir::NominalAppInfo, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?;
+        let ty = state
+            .nominals
+            .ordered
+            .get(id.index)
+            .ok_or("unknown nominal application")?;
+        match ty {
+            ir::Ty::Struct(t) if t.def().id == id => Ok(ir::NominalAppInfo {
+                source_decl: t.def().source_decl,
+                type_args: t.def().type_args.clone(),
+            }),
+            ir::Ty::Enum(t) if t.def().id == id => Ok(ir::NominalAppInfo {
+                source_decl: t.def().source_decl,
+                type_args: t.def().type_args.clone(),
+            }),
+            _ => Err("foreign nominal application identity".into()),
+        }
+    }
+    fn intern_nominal(
+        &mut self,
+        decl: ir::DeclId,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        PlanCtx::intern_nominal(self, decl, args, caller, budget)
+    }
+    fn instantiate_signature(
+        &mut self,
+        target: &ir::CallTarget,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Signature, String> {
+        PlanCtx::instantiate_signature(self, target, caller, budget)
+    }
+}
+fn symbolic_args(env: &ir::ParamEnv, budget: &ir::PlanBudget) -> Result<Vec<ir::Ty>, String> {
+    budget.charge_work(env.arity())?;
+    Ok((0..env.arity())
+        .map(|index| {
+            ir::Ty::Param(ir::ParamId {
+                owner: env.binder(),
+                index: index as u16,
+            })
+        })
+        .collect())
+}
+fn param_bindings(info: &DeclInfo, args: &[ir::Ty]) -> Result<HashMap<String, ir::Ty>, String> {
+    if info.type_params.len() != args.len() {
+        return Err(format!(
+            "wrong generic arity for {}; omitted generic inference is unsupported",
+            info.name
+        ));
+    }
+    Ok(info
+        .type_params
+        .iter()
+        .cloned()
+        .zip(args.iter().cloned())
+        .collect())
+}
+
+fn validate_argument(
+    ty: &ir::Ty,
+    caller: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    let _scratch = budget.reserve_bytes(4096 * (std::mem::size_of::<ir::NominalAppId>() + 128))?;
+    let mut memo = HashMap::new();
+    argument_height(ty, caller, budget, depth, &mut memo).map(|_| ())
+}
+fn argument_height(
+    ty: &ir::Ty,
+    caller: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+    memo: &mut HashMap<ir::NominalAppId, usize>,
+) -> Result<usize, String> {
+    budget
+        .check_depth(depth)
+        .map_err(|e| format!("generic type nesting resource limit: {e}"))?;
+    budget.charge_work(1)?;
+    let id = match ty {
+        ir::Ty::Struct(t) => Some(t.def().id),
+        ir::Ty::Enum(t) => Some(t.def().id),
+        _ => None,
+    };
+    if let Some(height) = id.and_then(|id| memo.get(&id).copied()) {
+        budget
+            .check_depth(depth + height)
+            .map_err(|e| format!("generic type nesting resource limit: {e}"))?;
+        return Ok(height);
+    }
+    let mut height = 0;
+    let mut child = |ty: &ir::Ty| -> Result<(), String> {
+        height = height.max(argument_height(ty, caller, budget, depth + 1, memo)? + 1);
+        Ok(())
+    };
+    match ty {
+        ir::Ty::Param(p) => match caller {
+            ir::FactsCtx::Universal(env) if env.contains(*p) => {}
+            _ => return Err("foreign or unresolved generic parameter".into()),
+        },
+        ir::Ty::Ref { .. } => {
+            return Err("reference-containing generic arguments are unsupported".into());
+        }
+        ir::Ty::Tuple(fields) => {
+            for field in fields.iter() {
+                child(field)?;
+            }
+        }
+        ir::Ty::Array { element, .. } => child(element)?,
+        ir::Ty::Struct(t) => {
+            for arg in t.def().type_args.iter() {
+                child(arg)?;
+            }
+            for field in t.def().fields.iter() {
+                child(&field.ty)?;
+            }
+        }
+        ir::Ty::Enum(t) => {
+            for arg in t.def().type_args.iter() {
+                child(arg)?;
+            }
+            for variant in t.def().variants.iter() {
+                for field in variant.fields.iter() {
+                    child(&field.ty)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some(id) = id {
+        if memo.len() >= 4096 {
+            return Err("generic argument memo resource limit exceeded".into());
+        }
+        memo.insert(id, height);
+    }
+    Ok(height)
+}
+fn collect_source_params(
+    ty: &Type,
+    used: &mut std::collections::HashSet<String>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match ty {
+        Type::Param(p) => {
+            used.insert(p.clone());
+        }
+        Type::Apply(path) => {
+            for s in &path.segments {
+                for a in &s.args {
+                    collect_source_params(a, used, budget, depth + 1)?;
+                }
+            }
+        }
+        Type::Tuple(fields) => {
+            for f in fields {
+                collect_source_params(f, used, budget, depth + 1)?;
+            }
+        }
+        Type::Array(t, _) | Type::Ref { referent: t, .. } => {
+            collect_source_params(t, used, budget, depth + 1)?
+        }
+        _ => {}
+    }
+    Ok(())
+}
+impl PlanState {
+    fn retain(&mut self, budget: &ir::PlanBudget, bytes: usize) -> Result<(), String> {
+        self.reservations.push(
+            budget.reserve_bytes(
+                bytes
+                    .checked_add(4 * std::mem::size_of::<ir::PlanReservation>() + 64)
+                    .ok_or("planning reservation allocation overflow")?,
+            )?,
+        );
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn source_ty(
+        &mut self,
+        registry: &DeclRegistry,
+        ty: &Type,
+        bindings: &HashMap<String, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        allow_ref: bool,
+    ) -> Result<ir::Ty, String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        budget.charge_nodes(1)?;
+        Ok(match ty {
+            Type::Param(p) => bindings
+                .get(p)
+                .cloned()
+                .ok_or_else(|| format!("unknown generic parameter {p}"))?,
+            Type::Apply(path) => {
+                let (at, segment) = path
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .find(|(_, s)| !s.args.is_empty())
+                    .ok_or("missing type arguments")?;
+                if at + 1 != path.segments.len() {
+                    return Err("generic associated types are unsupported".into());
+                }
+                let name = path.spelling();
+                let decl = *registry
+                    .nominals
+                    .get(&name)
+                    .ok_or_else(|| format!("unknown nominal type {name}"))?;
+                let args = segment
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        self.source_ty(registry, arg, bindings, caller, budget, depth + 1, false)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.intern(registry, decl, &args, caller, budget, depth + 1)?
+            }
+            Type::Named(name) => {
+                let decl = *registry
+                    .nominals
+                    .get(name)
+                    .ok_or_else(|| format!("unknown nominal type {name}"))?;
+                self.intern(registry, decl, &[], caller, budget, depth + 1)?
+            }
+            Type::Ref { kind, referent, .. } => {
+                if !allow_ref || matches!(caller, ir::FactsCtx::Universal(_)) {
+                    return Err("references in generic or aggregate types are unsupported".into());
+                }
+                ir::Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(self.source_ty(
+                        registry,
+                        referent,
+                        bindings,
+                        caller,
+                        budget,
+                        depth + 1,
+                        false,
+                    )?),
+                }
+            }
+            Type::Array(element, len) => {
+                if *len > ir::MAX_ARRAY_LEN {
+                    return Err("array length exceeds supported limit".into());
+                }
+                ir::Ty::Array {
+                    element: Arc::new(self.source_ty(
+                        registry,
+                        element,
+                        bindings,
+                        caller,
+                        budget,
+                        depth + 1,
+                        false,
+                    )?),
+                    len: *len,
+                }
+            }
+            Type::Tuple(fields) => {
+                if fields.is_empty() {
+                    return Err("empty tuple types must use ()".into());
+                }
+                ir::Ty::Tuple(
+                    fields
+                        .iter()
+                        .map(|t| {
+                            self.source_ty(registry, t, bindings, caller, budget, depth + 1, false)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            Type::Int(i) => ir::Ty::Int(*i),
+            Type::Bool => ir::Ty::Bool,
+            Type::Unit => ir::Ty::Unit,
+            Type::Never => ir::Ty::Never,
+            Type::Infer => {
+                return Err(
+                    "signature types cannot be inferred; generic argument inference is unsupported"
+                        .into(),
+                );
+            }
+        })
+    }
+    fn intern(
+        &mut self,
+        registry: &DeclRegistry,
+        decl: ir::DeclId,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<ir::Ty, String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1 + args.len())?;
+        let info = registry.declaration(decl)?;
+        let bindings = param_bindings(info, args)?;
+        for arg in args {
+            validate_argument(arg, caller, budget, depth + 1)?;
+        }
+        let key_bytes = args
+            .len()
+            .checked_mul(std::mem::size_of::<ir::Ty>())
+            .ok_or("generic key allocation overflow")?;
+        let _key_scratch = budget.reserve_bytes(key_bytes)?;
+        if let Some(ty) = self.nominals.applications.get(&(decl, args.to_vec())) {
+            return Ok(ty.clone());
+        }
+        if self.nominals.active.contains(&decl) {
+            return Err(format!("by-value nominal cycle involving {}", info.name));
+        }
+        budget.charge_application()?;
+        self.retain(budget, 512 + std::mem::size_of_val(args))?;
+        let active_len = self.nominals.active.len();
+        self.nominals.active.push(decl);
+        let result = (|| -> Result<ir::Ty, String> {
+            let schema = self
+                .schemas
+                .get(&decl)
+                .cloned()
+                .ok_or("declaration is not a nominal schema")?;
+            let make_fields =
+                |state: &mut Self, fields: &[FieldDecl]| -> Result<Arc<[ir::FieldDef]>, String> {
+                    if fields.len() > 4096 {
+                        return Err("nominal field resource limit exceeded".into());
+                    }
+                    state.retain(
+                        budget,
+                        fields
+                            .len()
+                            .checked_mul(4 * std::mem::size_of::<ir::FieldDef>() + 128)
+                            .ok_or("nominal field allocation overflow")?,
+                    )?;
+                    let mut names = std::collections::HashSet::new();
+                    let mut result = Vec::new();
+                    for field in fields {
+                        state.retain(budget, field.name.len())?;
+                        if !names.insert(&field.name) {
+                            return Err(format!("duplicate field {}", field.name));
+                        }
+                        let ty = state.source_ty(
+                            registry,
+                            &field.ty,
+                            &bindings,
+                            caller,
+                            budget,
+                            depth + 1,
+                            false,
+                        )?;
+                        result.push(ir::FieldDef {
+                            name: field.name.clone(),
+                            ty,
+                            public: field.public,
+                        });
+                    }
+                    Ok(result.into())
+                };
+            // Descendant applications are completed first, so every published Arc is acyclic.
+            self.retain(
+                budget,
+                info.name
+                    .len()
+                    .checked_mul(2)
+                    .ok_or("nominal name allocation overflow")?,
+            )?;
+            let ty = match schema.as_ref() {
+                NominalSchema::Struct(d) => {
+                    if d.fields.is_empty() {
+                        return Err("empty structs are unsupported".into());
+                    }
+                    let fields = make_fields(self, &d.fields)?;
+                    let id = ir::NominalAppId {
+                        snapshot: decl.snapshot,
+                        index: self.nominals.ordered.len(),
+                    };
+                    ir::Ty::Struct(ir::StructTy::new(ir::StructDef {
+                        id,
+                        source_decl: decl,
+                        type_args: args.to_vec().into(),
+                        name: d.name.clone(),
+                        module: parent(&d.name).into(),
+                        public: d.public,
+                        fields,
+                    }))
+                }
+                NominalSchema::Enum(d) => {
+                    if d.variants.is_empty() || d.variants.len() > 4096 {
+                        return Err("enum variant count exceeds supported limits".into());
+                    }
+                    self.retain(
+                        budget,
+                        d.variants
+                            .len()
+                            .checked_mul(std::mem::size_of::<ir::VariantDef>() * 4 + 128)
+                            .ok_or("enum allocation overflow")?,
+                    )?;
+                    let mut names = std::collections::HashSet::new();
+                    let mut variants = Vec::new();
+                    for v in &d.variants {
+                        self.retain(
+                            budget,
+                            v.name
+                                .len()
+                                .checked_mul(2)
+                                .ok_or("variant name allocation overflow")?,
+                        )?;
+                        if !names.insert(v.name.clone()) {
+                            return Err("duplicate enum variant".into());
+                        }
+                        if v.shape == ir::VariantShape::Unit && !v.fields.is_empty() {
+                            return Err("unit variant cannot have fields".into());
+                        }
+                        if v.shape == ir::VariantShape::Tuple
+                            && v.fields
+                                .iter()
+                                .enumerate()
+                                .any(|(i, f)| f.name != i.to_string())
+                        {
+                            return Err("tuple variant fields require positional names".into());
+                        }
+                        variants.push(ir::VariantDef {
+                            name: v.name.clone(),
+                            shape: v.shape,
+                            fields: make_fields(self, &v.fields)?,
+                        });
+                    }
+                    let id = ir::NominalAppId {
+                        snapshot: decl.snapshot,
+                        index: self.nominals.ordered.len(),
+                    };
+                    ir::Ty::Enum(ir::EnumTy::new(ir::EnumDef {
+                        id,
+                        source_decl: decl,
+                        type_args: args.to_vec().into(),
+                        name: d.name.clone(),
+                        module: parent(&d.name).into(),
+                        public: d.public,
+                        variants: variants.into(),
+                    }))
+                }
+            };
+            validate_argument(&ty, caller, budget, 0)?;
+            self.nominals.active.pop();
+            self.nominals.ordered.push(ty.clone());
+            self.nominals
+                .applications
+                .insert((decl, args.to_vec()), ty.clone());
+            Ok(ty)
+        })();
+        self.nominals.active.truncate(active_len);
+        result
+    }
+}
+/// One immutable per-body view with a shared canonical application service.
 #[derive(Clone, Debug)]
 pub struct TypeEnv {
     pub structs: HashMap<String, ir::StructTy>,
     pub enums: HashMap<String, ir::EnumTy>,
     pub functions: HashMap<String, ir::Signature>,
+    plan: Option<PlanCtx>,
+    params: HashMap<String, ir::Ty>,
+    param_env: Option<Arc<ir::ParamEnv>>,
 }
 pub type Signatures = TypeEnv;
-
 fn visible_from(owner: &str, requester: &str) -> bool {
     owner.is_empty()
         || requester == owner
@@ -2683,313 +3945,9 @@ fn visible_from(owner: &str, requester: &str) -> bool {
             .strip_prefix(owner)
             .is_some_and(|s| s.starts_with("::"))
 }
-
-/// Validate every declaration, including unused types, before creating any Arc DAG.
 pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
-    enum Decl<'a> {
-        Struct(&'a StructDecl),
-        Enum(&'a EnumDecl),
-    }
-    impl Decl<'_> {
-        fn name(&self) -> &str {
-            match self {
-                Self::Struct(d) => &d.name,
-                Self::Enum(d) => &d.name,
-            }
-        }
-        fn public(&self) -> bool {
-            match self {
-                Self::Struct(d) => d.public,
-                Self::Enum(d) => d.public,
-            }
-        }
-        fn fields(&self) -> Vec<&FieldDecl> {
-            match self {
-                Self::Struct(d) => d.fields.iter().collect(),
-                Self::Enum(d) => d.variants.iter().flat_map(|v| v.fields.iter()).collect(),
-            }
-        }
-    }
-    let all: Vec<_> = program
-        .structs
-        .iter()
-        .map(Decl::Struct)
-        .chain(program.enums.iter().map(Decl::Enum))
-        .collect();
-    let mut indices = HashMap::new();
-    for (index, decl) in all.iter().enumerate() {
-        if indices.insert(decl.name().to_owned(), index).is_some() {
-            return Err(format!("duplicate nominal type {}", decl.name()));
-        }
-        match decl {
-            Decl::Struct(d) => {
-                if d.fields.is_empty() {
-                    return Err(format!("empty struct {} is unsupported", d.name));
-                }
-            }
-            Decl::Enum(d) => {
-                if d.variants.is_empty() {
-                    return Err("empty enums are unsupported".into());
-                }
-                if d.variants.len() > 4096 {
-                    return Err("enum variant count exceeds limit 4096".into());
-                }
-                let mut names = std::collections::HashSet::new();
-                for variant in &d.variants {
-                    if !names.insert(&variant.name) {
-                        return Err(format!("duplicate enum variant {}", variant.name));
-                    }
-                    if variant.fields.len() > 4096 {
-                        return Err("variant field count exceeds limit 4096".into());
-                    }
-                    if variant.shape == ir::VariantShape::Unit && !variant.fields.is_empty() {
-                        return Err("unit variant cannot have fields".into());
-                    }
-                    if variant.shape == ir::VariantShape::Tuple
-                        && variant
-                            .fields
-                            .iter()
-                            .enumerate()
-                            .any(|(i, f)| f.name != i.to_string())
-                    {
-                        return Err("tuple variant fields require positional names".into());
-                    }
-                }
-            }
-        }
-        let groups = match decl {
-            Decl::Struct(d) => vec![d.fields.as_slice()],
-            Decl::Enum(d) => d.variants.iter().map(|v| v.fields.as_slice()).collect(),
-        };
-        for fields in groups {
-            let mut names = std::collections::HashSet::new();
-            for field in fields {
-                if !names.insert(&field.name) {
-                    return Err(format!("duplicate field {} in {}", field.name, decl.name()));
-                }
-            }
-        }
-    }
-    fn dependencies(
-        ty: &Type,
-        indices: &HashMap<String, usize>,
-        all: &[Decl<'_>],
-        module: &str,
-    ) -> Result<Vec<usize>, String> {
-        validate_depth(DepthNode::Type(ty))?;
-        let mut pending = vec![ty];
-        let mut deps = Vec::new();
-        while let Some(ty) = pending.pop() {
-            match ty {
-                Type::Ref{..}=>return Err("reference results and reference-containing aggregate/nested types are unsupported".into()),
-                Type::Array(element, len) => {
-                    if *len > ir::MAX_ARRAY_LEN {
-                        return Err("array length exceeds supported limit".into());
-                    }
-                    pending.push(element);
-                }
-                Type::Named(name) => {
-                    let index = *indices
-                        .get(name)
-                        .ok_or_else(|| format!("unknown nominal type {name}"))?;
-                    if !all[index].public() && !visible_from(parent(name), module) {
-                        return Err(format!("private nominal type {name}"));
-                    }
-                    deps.push(index);
-                }
-                Type::Tuple(fields) => {
-                    if fields.is_empty() {
-                        return Err("empty tuple types must use ()".into());
-                    }
-                    pending.extend(fields);
-                }
-                Type::Infer => return Err("signature types cannot be inferred".into()),
-                _ => {}
-            }
-        }
-        Ok(deps)
-    }
-    let mut edges = vec![Vec::new(); all.len()];
-    for (index, decl) in all.iter().enumerate() {
-        for field in decl.fields() {
-            edges[index].extend(dependencies(
-                &field.ty,
-                &indices,
-                &all,
-                parent(decl.name()),
-            )?);
-        }
-    }
-    let mut functions = std::collections::HashSet::new();
-    for function in &program.functions {
-        if !functions.insert(&function.name) {
-            return Err(format!("duplicate function {}", function.name));
-        }
-        let mut params = std::collections::HashSet::new();
-        for (name, _) in &function.params {
-            if !params.insert(name) {
-                return Err(format!(
-                    "in function {}: duplicate parameter {name}",
-                    function.name
-                ));
-            }
-        }
-        let result_ty = if let Type::Ref { referent, .. } = &function.result {
-            referent.as_ref()
-        } else {
-            &function.result
-        };
-        dependencies(result_ty, &indices, &all, parent(&function.name))?;
-        for (_, ty) in &function.params {
-            validate_depth(DepthNode::Type(ty))?;
-            let referent = if let Type::Ref { referent, .. } = ty {
-                referent.as_ref()
-            } else {
-                ty
-            };
-            dependencies(referent, &indices, &all, parent(&function.name))?;
-        }
-    }
-    if !program
-        .functions
-        .iter()
-        .any(|f| f.name == "main" && f.params.is_empty() && f.result == Type::Unit)
-    {
-        return Err("main must exist, take no arguments and return ()".into());
-    }
-    let mut state = vec![0u8; all.len()];
-    let mut order = Vec::new();
-    for root in 0..all.len() {
-        if state[root] != 0 {
-            continue;
-        }
-        let mut pending = vec![(root, false, 0usize)];
-        while let Some((index, exit, depth)) = pending.pop() {
-            if exit {
-                state[index] = 2;
-                order.push(index);
-                continue;
-            }
-            if state[index] == 2 {
-                continue;
-            }
-            if state[index] == 1 {
-                return Err(format!(
-                    "by-value nominal cycle involving {}",
-                    all[index].name()
-                ));
-            }
-            if depth > 128 {
-                return Err("nominal dependency nesting exceeds limit 128".into());
-            }
-            state[index] = 1;
-            pending.push((index, true, depth));
-            for &dep in edges[index].iter().rev() {
-                pending.push((dep, false, depth + 1));
-            }
-        }
-    }
-    fn height(ty: &Type, indices: &HashMap<String, usize>, heights: &[usize]) -> usize {
-        match ty {
-            Type::Array(element, _) => 1 + height(element, indices, heights),
-            Type::Named(n) => heights[indices[n]],
-            Type::Tuple(f) => {
-                1 + f
-                    .iter()
-                    .map(|t| height(t, indices, heights))
-                    .max()
-                    .unwrap_or(0)
-            }
-            _ => 1,
-        }
-    }
-    let mut heights = vec![0usize; all.len()];
-    for &index in &order {
-        heights[index] = 1 + all[index]
-            .fields()
-            .iter()
-            .map(|f| height(&f.ty, &indices, &heights))
-            .max()
-            .unwrap_or(0);
-        if heights[index] > 128 {
-            return Err("expanded nominal type nesting exceeds limit 128".into());
-        }
-    }
-    // No nominal Arc is allocated until every declaration and the entire mixed
-    // by-value graph has been validated, including unused declarations.
-    let snapshot = ir::SnapshotId::allocate()?;
-    let mut env = TypeEnv {
-        structs: HashMap::new(),
-        enums: HashMap::new(),
-        functions: HashMap::new(),
-    };
-    for index in order {
-        let fields = |fields: &[FieldDecl],
-                      env: &TypeEnv|
-         -> Result<std::sync::Arc<[ir::FieldDef]>, String> {
-            fields
-                .iter()
-                .map(|f| {
-                    Ok(ir::FieldDef {
-                        name: f.name.clone(),
-                        ty: checked_ty(&f.ty, env)?,
-                        public: f.public,
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()
-                .map(Into::into)
-        };
-        let id = ir::DefId { snapshot, index };
-        match &all[index] {
-            Decl::Struct(d) => {
-                let ty = ir::StructTy::new(ir::StructDef {
-                    id,
-                    name: d.name.clone(),
-                    module: parent(&d.name).into(),
-                    public: d.public,
-                    fields: fields(&d.fields, &env)?,
-                });
-                env.structs.insert(d.name.clone(), ty);
-            }
-            Decl::Enum(d) => {
-                let variants = d
-                    .variants
-                    .iter()
-                    .map(|v| {
-                        Ok(ir::VariantDef {
-                            name: v.name.clone(),
-                            shape: v.shape,
-                            fields: fields(&v.fields, &env)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                let ty = ir::EnumTy::new(ir::EnumDef {
-                    id,
-                    name: d.name.clone(),
-                    module: parent(&d.name).into(),
-                    public: d.public,
-                    variants: variants.into(),
-                });
-                env.enums.insert(d.name.clone(), ty);
-            }
-        }
-    }
-    for function in &program.functions {
-        let params = function
-            .params
-            .iter()
-            .map(|(_, ty)| checked_ty(ty, &env))
-            .collect::<Result<Vec<_>, _>>()?;
-        let result = checked_ty(&function.result, &env)?;
-        let ref_contract = canonical_ref_contract(function, &params, &result)?;
-        let signature = ir::Signature {
-            params,
-            result,
-            ref_contract,
-        };
-        env.functions.insert(function.name.clone(), signature);
-    }
-    Ok(env)
+    let budget = ir::PlanBudget::default();
+    PlanCtx::from_program(program, &budget)?.environment(None)
 }
 struct LoopFrame {
     id: ir::LoopId,
@@ -3348,7 +4306,8 @@ struct Checker<'a> {
     result: ir::Ty,
     module: String,
     count_queries: Vec<(ir::IntTy, ir::ExprId)>,
-    field_indices: std::cell::RefCell<HashMap<ir::DefId, HashMap<String, usize>>>,
+    field_indices: std::cell::RefCell<HashMap<ir::NominalAppId, HashMap<String, usize>>>,
+    applications: std::cell::RefCell<Vec<(String, Vec<ir::Ty>)>>,
 }
 #[derive(Clone, Copy)]
 enum Expectation<'a> {
@@ -3534,7 +4493,20 @@ fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
     checked_ty_at(ty, env, true)
 }
 fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, String> {
+    if let Some(plan) = &env.plan {
+        if !allow_ref && matches!(ty, Type::Ref { .. }) {
+            return Err("nested or aggregate references are unsupported".into());
+        }
+        let caller = env
+            .param_env
+            .as_deref()
+            .map_or(ir::FactsCtx::Concrete, ir::FactsCtx::Universal);
+        return plan.source_ty(ty, &env.params, caller, &plan.budget);
+    }
     match ty {
+        Type::Apply(_) | Type::Param(_) => {
+            Err("generic types require authoritative declaration environment".into())
+        }
         Type::Ref { kind, referent, .. } => {
             if !allow_ref || matches!(referent.as_ref(), Type::Never | Type::Infer) {
                 return Err("nested or aggregate reference types are unsupported in B1".into());
@@ -3628,6 +4600,101 @@ impl<'a> Checker<'a> {
             module,
             count_queries: Vec::new(),
             field_indices: std::cell::RefCell::new(HashMap::new()),
+            applications: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+    fn charge_node(&self, bytes: usize) -> Result<(), String> {
+        if let Some(plan) = &self.signatures.plan {
+            plan.budget.charge_nodes(1)?;
+            plan.budget.charge_work(1)?;
+            plan.state
+                .lock()
+                .map_err(|_| "generic plan context poisoned")?
+                .retain(&plan.budget, bytes)?;
+        }
+        Ok(())
+    }
+    fn facts(&self) -> ir::FactsCtx<'_> {
+        self.signatures
+            .param_env
+            .as_deref()
+            .map_or(ir::FactsCtx::Concrete, ir::FactsCtx::Universal)
+    }
+    fn push_application(&self, path: &GenericPath) -> Result<(), String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("generic application requires declaration registry")?;
+        let app = plan.application(path, &self.signatures.params, self.facts(), &plan.budget)?;
+        self.applications.borrow_mut().push(app);
+        Ok(())
+    }
+    fn nominal(&self, name: &str, hint: Option<&ir::Ty>) -> Result<ir::Ty, String> {
+        if let Some(ty) = hint {
+            let matches = match ty {
+                ir::Ty::Struct(t) => t.def().name == name,
+                ir::Ty::Enum(t) => t.def().name == name,
+                _ => false,
+            };
+            if matches {
+                return Ok(ty.clone());
+            }
+        }
+        if let Some(plan) = &self.signatures.plan {
+            let decl = *plan
+                .registry
+                .nominals
+                .get(name)
+                .ok_or_else(|| format!("unknown nominal type {name}"))?;
+            let args = if self
+                .applications
+                .borrow()
+                .last()
+                .is_some_and(|(owner, _)| owner == name)
+            {
+                self.applications.borrow_mut().pop().unwrap().1
+            } else {
+                Vec::new()
+            };
+            return plan.intern_nominal(decl, &args, self.facts(), &plan.budget);
+        }
+        self.signatures
+            .structs
+            .get(name)
+            .cloned()
+            .map(ir::Ty::Struct)
+            .or_else(|| self.signatures.enums.get(name).cloned().map(ir::Ty::Enum))
+            .ok_or_else(|| format!("unknown nominal type {name}"))
+    }
+    fn pattern_source<'p>(
+        &self,
+        pattern: &'p Pattern,
+        expected: &ir::Ty,
+    ) -> Result<&'p Pattern, String> {
+        if let Pattern::Apply { path, pattern } = pattern {
+            self.push_application(path)?;
+            let result = (|| {
+                let (name, _) = path.application()?;
+                let _ = name;
+                let plan = self.signatures.plan.as_ref().ok_or("missing plan")?;
+                let (owner, args) =
+                    plan.application(path, &self.signatures.params, self.facts(), &plan.budget)?;
+                let decl = *plan
+                    .registry
+                    .nominals
+                    .get(&owner)
+                    .ok_or("generic pattern is not nominal")?;
+                let actual = plan.intern_nominal(decl, &args, self.facts(), &plan.budget)?;
+                if !coerces(expected, &actual) {
+                    return Err("generic pattern application does not match scrutinee".into());
+                }
+                self.pattern_source(pattern, expected)
+            })();
+            self.applications.borrow_mut().pop();
+            result
+        } else {
+            Ok(pattern)
         }
     }
     fn enter_loop(&mut self, accepts_value: bool) -> ir::LoopId {
@@ -3656,6 +4723,7 @@ impl<'a> Checker<'a> {
     }
     fn local(&mut self, name: &str, ty: ir::Ty, mutable: bool) -> Result<ir::LocalId, String> {
         let local = ir::LocalId(self.locals.len());
+        self.charge_node(std::mem::size_of::<ir::LocalDecl>() + name.len())?;
         self.locals.push(ir::LocalDecl {
             name: name.to_owned(),
             ty,
@@ -3840,6 +4908,26 @@ impl<'a> Checker<'a> {
     }
     fn scalar_hint(&self, e: &Expr) -> Option<ir::Ty> {
         match e {
+            Expr::Apply { path, value } => {
+                let Expr::Call { name, .. } = value.as_ref() else {
+                    return None;
+                };
+                let plan = self.signatures.plan.as_ref()?;
+                let (_, type_args) = plan
+                    .application(path, &self.signatures.params, self.facts(), &plan.budget)
+                    .ok()?;
+                let declaration = *plan.registry.functions.get(name)?;
+                plan.instantiate_signature(
+                    &ir::CallTarget {
+                        declaration,
+                        type_args: type_args.into(),
+                    },
+                    self.facts(),
+                    &plan.budget,
+                )
+                .ok()
+                .map(|s| s.result)
+            }
             Expr::Cast { target, .. } => checked_local_ty(target, self.signatures).ok(),
             Expr::Deref { value } => self.scalar_hint(value).and_then(|ty| {
                 if let ir::Ty::Ref { referent, .. } = ty {
@@ -3985,11 +5073,13 @@ impl<'a> Checker<'a> {
         }
         match pattern {
             Pattern::Path(name) | Pattern::Variant { name,.. } => {
-                let (enumeration, _) = self.enum_variant(name)?;
-                let expected = ir::Ty::Enum(enumeration);
+                let expected = if let ir::Ty::Enum(enumeration)=ty {
+                    if name.rsplit_once("::").is_some_and(|(owner,_)|owner==enumeration.def().name){ty.clone()}else{return Err("enum pattern owner mismatch".into());}
+                }else{ir::Ty::Enum(self.enum_variant(name)?.0)};
                 if !coerces(ty,&expected) { return Err(format!("enum pattern {name} does not match {ty:?}")); }
                 Ok(expected)
             }
+            Pattern::Apply {..} => self.pattern_ty(self.pattern_source(pattern,ty)?,ty),
             Pattern::Bool(_) | Pattern::Int { .. } => Err("refutable literal pattern in let binding".into()),
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
@@ -4004,7 +5094,7 @@ impl<'a> Checker<'a> {
                 _ => Err(format!("tuple pattern with {} fields does not match {ty:?}", patterns.len())),
             },
             Pattern::Struct { name, .. } => {
-                let expected = self.signatures.structs.get(name).cloned().map(ir::Ty::Struct).ok_or_else(|| format!("unknown struct pattern {name}"))?;
+                let expected = self.nominal(name,Some(ty))?;
                 self.accessible(&expected)?;
                 if !coerces(ty, &expected) { return Err(format!("struct pattern {name} does not match {ty:?}")); }
                 Ok(expected)
@@ -4024,6 +5114,16 @@ impl<'a> Checker<'a> {
             return Err("pattern projection depth exceeds limit".into());
         }
         match pattern {
+            Pattern::Apply { .. } => {
+                return self.pattern_locals(
+                    self.pattern_source(pattern, ty)?,
+                    ty,
+                    path,
+                    names,
+                    pending,
+                    work,
+                );
+            }
             Pattern::Wildcard => {}
             Pattern::Path(_) | Pattern::Variant { .. } => {
                 let (enumeration, variant, fields) = self.variant_pattern(pattern, ty)?;
@@ -4139,12 +5239,9 @@ impl<'a> Checker<'a> {
         let (owner, variant) = name
             .rsplit_once("::")
             .ok_or_else(|| format!("unresolved enum variant {name}"))?;
-        let ty = self
-            .signatures
-            .enums
-            .get(owner)
-            .cloned()
-            .ok_or_else(|| format!("unknown enum {owner}"))?;
+        let ir::Ty::Enum(ty) = self.nominal(owner, None)? else {
+            return Err(format!("unknown enum {owner}"));
+        };
         self.accessible(&ir::Ty::Enum(ty.clone()))?;
         let index = ty
             .def()
@@ -4169,7 +5266,21 @@ impl<'a> Checker<'a> {
             } => (name, *shape, fields.as_slice(), *rest),
             _ => return Err("expected enum variant pattern".into()),
         };
-        let (ty, variant) = self.enum_variant(name)?;
+        let (ty, variant) = if let ir::Ty::Enum(ty) = expected {
+            let (owner, variant) = name.rsplit_once("::").ok_or("unresolved variant pattern")?;
+            if owner != ty.def().name {
+                return Err("variant pattern owner mismatch".into());
+            }
+            let index = ty
+                .def()
+                .variants
+                .iter()
+                .position(|v| v.name == variant)
+                .ok_or("unknown enum variant")?;
+            (ty.clone(), index)
+        } else {
+            self.enum_variant(name)?
+        };
         if *expected != ir::Ty::Enum(ty.clone()) {
             return Err(format!(
                 "variant pattern {name} does not match {expected:?}"
@@ -4570,6 +5681,13 @@ impl<'a> Checker<'a> {
         e: &Expr,
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
+        if let Expr::Apply { path, value } = e {
+            let previous = self.applications.borrow().len();
+            self.push_application(path)?;
+            let result = self.expr_with_expectation(value, expectation);
+            self.applications.borrow_mut().truncate(previous);
+            return result;
+        }
         if let Expr::Cast { value, target } = e {
             return self.cast_expression(value, target);
         }
@@ -4589,6 +5707,7 @@ impl<'a> Checker<'a> {
             return Err("noninteger cast endpoints are unsupported".into());
         }
         let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
             kind: ir::ExprKind::IntCast { value, to },
             ty: ir::Ty::Int(to),
@@ -4636,6 +5755,9 @@ impl<'a> Checker<'a> {
         let (kind, flow) = match e {
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
+                if self.signatures.param_env.is_some() {
+                    return Err("references in generic bodies are unsupported".into());
+                }
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
                 Self::reject_aggregate_ref(&referent)?;
                 (
@@ -4897,7 +6019,8 @@ impl<'a> Checker<'a> {
                 let mut completes = false;
                 for arm in arms {
                     self.scopes.push(HashMap::new());
-                    let (pattern, key) = match &arm.pattern {
+                    let arm_pattern = self.pattern_source(&arm.pattern, &domain)?;
+                    let (pattern, key) = match arm_pattern {
                         Pattern::Wildcard => (ir::MatchPattern::Wildcard, None),
                         Pattern::Binding { name, mutable } => {
                             let local = self.local(name, domain.clone(), *mutable)?;
@@ -4930,7 +6053,7 @@ impl<'a> Checker<'a> {
                         }
                         Pattern::Path(_) | Pattern::Variant { .. } => {
                             let (ty, variant, fields) =
-                                self.variant_pattern(&arm.pattern, &domain)?;
+                                self.variant_pattern(arm_pattern, &domain)?;
                             let mut names = std::collections::HashSet::new();
                             let mut pending = Vec::new();
                             let mut work = 0;
@@ -4968,6 +6091,9 @@ impl<'a> Checker<'a> {
                                 },
                                 Some(variant as u64),
                             )
+                        }
+                        Pattern::Apply { .. } => {
+                            return Err("pattern application normalization invariant".into());
                         }
                         Pattern::Tuple(_) | Pattern::Struct { .. } => {
                             return Err(
@@ -5056,13 +6182,11 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
+            Expr::Apply { .. } => return Err("generic application dispatcher invariant".into()),
             Expr::Struct { name, fields } => {
-                let ty = self
-                    .signatures
-                    .structs
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| format!("unknown struct {name}"))?;
+                let ir::Ty::Struct(ty) = self.nominal(name, None)? else {
+                    return Err("expected struct constructor".into());
+                };
                 if !ty.def().public && !visible_from(&ty.def().module, &self.module) {
                     return Err(format!("private struct {name}"));
                 }
@@ -5112,6 +6236,7 @@ impl<'a> Checker<'a> {
                     let ty = referent.as_ref().clone();
                     self.accessible(&ty)?;
                     let deref = ir::ExprId(self.exprs.len());
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
                     self.exprs.push(ir::TypedExpr {
                         ty: ty.clone(),
                         completion: self.exprs[base.0].completion,
@@ -5155,6 +6280,7 @@ impl<'a> Checker<'a> {
                 {
                     let value = expectation.literal(literal, true)?;
                     let id = ir::ExprId(self.exprs.len());
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
                     self.exprs.push(ir::TypedExpr {
                         kind: ir::ExprKind::Int(value),
                         ty: ir::Ty::Int(value.ty),
@@ -5304,12 +6430,49 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Call { name, args } => {
-                let signature = self
+                let plan = self
                     .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("call requires authoritative declaration registry")?;
+                let declaration = *plan
+                    .registry
                     .functions
                     .get(name)
-                    .cloned()
                     .ok_or_else(|| format!("unresolved function {name}"))?;
+                let type_args = if self
+                    .applications
+                    .borrow()
+                    .last()
+                    .is_some_and(|(owner, _)| owner == name)
+                {
+                    self.applications.borrow_mut().pop().unwrap().1
+                } else {
+                    Vec::new()
+                };
+                let target = ir::CallTarget {
+                    declaration,
+                    type_args: type_args.into(),
+                };
+                let signature =
+                    if plan.param_env(declaration)?.arity() == 0 && target.type_args.is_empty() {
+                        self.signatures
+                            .functions
+                            .get(name)
+                            .cloned()
+                            .ok_or("missing function signature")?
+                    } else {
+                        plan.instantiate_signature(&target, self.facts(), &plan.budget)?
+                    };
+                if self.signatures.param_env.is_some() {
+                    for ty in signature
+                        .params
+                        .iter()
+                        .chain(std::iter::once(&signature.result))
+                    {
+                        validate_argument(ty, self.facts(), &plan.budget, 0)?;
+                    }
+                }
                 for ty in signature
                     .params
                     .iter()
@@ -5336,6 +6499,7 @@ impl<'a> Checker<'a> {
                 let result_ty = signature.result.clone();
                 (
                     ir::ExprKind::Call {
+                        target,
                         name: name.clone(),
                         args: arguments,
                         signature,
@@ -5417,6 +6581,7 @@ impl<'a> Checker<'a> {
             Self::reject_aggregate_ref(&flow.ty)?;
         }
         let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
             ty: flow.ty,
             completion: if flow.completes {
@@ -5449,6 +6614,22 @@ pub fn check_function_with_signatures(
     signatures: &Signatures,
 ) -> Result<(), String> {
     let typed = type_function_with_signatures(program, index, signatures)?;
+    if !program.functions[index].type_params.is_empty() {
+        let plan = signatures
+            .plan
+            .as_ref()
+            .ok_or("generic checking requires planning context")?;
+        let env = plan.param_env(plan.function_decl(index)?)?;
+        let template = super::cfg::lower_template(Arc::new(typed), env, &plan.budget)?;
+        return super::ownership::verify_template(template)
+            .map(|_| ())
+            .map_err(|analysis| {
+                format!(
+                    "universal initialization/move analysis (complete={}): {:?}",
+                    analysis.complete, analysis.diagnostics
+                )
+            });
+    }
     let lowered = super::cfg::lower(&typed)?;
     let analysis = super::ownership::analyze(&lowered);
     if !analysis.passed() {
@@ -5468,6 +6649,18 @@ pub fn type_function_with_signatures(
 ) -> Result<ir::CheckedFunction, String> {
     type_function_with_env(program, index, signatures)
 }
+pub fn type_function_with_plan(
+    program: &Program,
+    index: usize,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<ir::CheckedFunction, String> {
+    plan.check_budget(budget)?;
+    budget.charge_work(1)?;
+    let decl = plan.function_decl(index)?;
+    let env = plan.environment(Some(decl))?;
+    type_function_with_env(program, index, &env)
+}
 /// Check one body with the same nominal environment used for all signatures.
 pub fn type_function_with_env(
     program: &Program,
@@ -5478,6 +6671,13 @@ pub fn type_function_with_env(
         .functions
         .get(index)
         .ok_or_else(|| format!("invalid function index {index}"))?;
+    if !f.type_params.is_empty() && signatures.param_env.is_none() {
+        let plan = signatures
+            .plan
+            .as_ref()
+            .ok_or("generic body requires authoritative planning context")?;
+        return type_function_with_plan(program, index, plan, &plan.budget);
+    }
     validate_depth(DepthNode::Block(&f.body))?;
     let signature = signatures
         .functions
@@ -5522,6 +6722,121 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn generic_paths_are_structured_and_binders_are_rigid() {
+        let p=parse("struct W<T>{v:T}fn id<T>(x:T)->T{x}fn forward<U>(x:U)->U{id::<U>(x)}fn shadow<i32>(x:i32)->i32{x}fn main(){let w:W<W<u8>>=W::<W<u8>>{v:W::<u8>{v:7}};let n=1+id::<u8>(w.v.v);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let a = plan
+            .function_schema(plan.function_decl(0).unwrap())
+            .unwrap();
+        let b = plan
+            .function_schema(plan.function_decl(1).unwrap())
+            .unwrap();
+        assert_ne!(a.signature.params[0], b.signature.params[0]);
+        assert!(matches!(a.signature.params[0], ir::Ty::Param(_)));
+        assert!(matches!(p.functions[2].params[0].1, Type::Param(_)));
+        for index in 0..p.functions.len() {
+            type_function_with_plan(&p, index, &plan, &budget).unwrap();
+        }
+        check(&p).unwrap();
+    }
+
+    #[test]
+    fn generic_all_body_semantics_do_not_specialize_away_invalid_templates() {
+        for source in [
+            "fn bad<T>(x:T)->(T,T){(x,x)}fn main(){}",
+            "fn bad<T>(x:T)->(T,T){(x,x)}fn main(){let n=bad::<i32>(7);}",
+            "fn bad<T>(x:T)->T{x+1}fn main(){}",
+            "fn bad<T>(x:T)->T{7i32}fn main(){}",
+            "fn id<T>(x:T)->T{x}fn main(){let n=id::<i32>(id(1));}",
+            "fn id<T>(x:T)->T{x}fn main(){let n=id::<i32,u8>(1);}",
+            "struct W<T>{v:T}fn main(){let x=1;let w=W::<&i32>{v:&x};}",
+            "fn bad<T>(x:T){return;let r=&x;}fn main(){}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        check(&parse("struct P<T>{a:T,b:T}fn split<T>(p:P<T>)->(T,T){let a=p.a;let b=p.b;(a,b)}fn main(){let p=split::<u8>(P::<u8>{a:3,b:4});}").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn generic_nominal_applications_are_canonical_and_share_resource_authority() {
+        let p = parse("struct W<T>{v:T}enum E<T>{A(T),B}fn id<T>(x:T)->T{x}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let id = *plan.registry.nominals.get("W").unwrap();
+        let a = plan
+            .intern_nominal(
+                id,
+                &[ir::Ty::Int(ir::IntTy::U8)],
+                ir::FactsCtx::Concrete,
+                &budget,
+            )
+            .unwrap();
+        let b = plan
+            .clone()
+            .intern_nominal(
+                id,
+                &[ir::Ty::Int(ir::IntTy::U8)],
+                ir::FactsCtx::Concrete,
+                &budget.clone(),
+            )
+            .unwrap();
+        let c = plan
+            .intern_nominal(
+                id,
+                &[ir::Ty::Int(ir::IntTy::I32)],
+                ir::FactsCtx::Concrete,
+                &budget,
+            )
+            .unwrap();
+        assert_eq!(a, b);
+        assert!(
+            plan.intern_nominal(
+                id,
+                &[ir::Ty::Int(ir::IntTy::U8)],
+                ir::FactsCtx::Concrete,
+                &ir::PlanBudget::default()
+            )
+            .unwrap_err()
+            .contains("authority")
+        );
+        assert_ne!(a, c);
+        let foreign = ir::ParamId {
+            owner: ir::BinderId {
+                declaration: plan.function_decl(0).unwrap(),
+            },
+            index: 0,
+        };
+        assert!(
+            plan.intern_nominal(
+                id,
+                &[ir::Ty::Param(foreign)],
+                ir::FactsCtx::Concrete,
+                &budget
+            )
+            .is_err()
+        );
+        let limited = ir::PlanBudget::new(ir::PlanLimits {
+            applications: 0,
+            ..Default::default()
+        });
+        assert!(
+            PlanCtx::from_program(&p, &limited)
+                .unwrap_err()
+                .contains("resource")
+        );
+        for source in [
+            "struct Bad<T>{x:i32}fn main(){}",
+            "struct Bad<T>{x:Bad<(T,)>}fn main(){}",
+        ] {
+            assert!(parse(source).and_then(|p| type_env(&p)).is_err());
+        }
+    }
 
     #[test]
     fn compound_statement_tokens_types_and_expression_boundaries() {
@@ -7557,11 +8872,13 @@ mod typed_tests {
             name,
             args,
             signature,
+            target,
         } = &call.kind
         else {
             unreachable!()
         };
         assert_eq!(name, "m::f");
+        assert!(target.type_args.is_empty());
         assert_eq!(signature.params, vec![ir::Ty::Bool]);
         assert_eq!(signature.result, ir::Ty::Int(ir::IntTy::I32));
         assert_eq!(f.exprs[args[0].0].ty, ir::Ty::Bool);

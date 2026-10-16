@@ -5,8 +5,9 @@
 //! move-path analysis can be tested before non-Copy syntax is supported.
 use super::borrow::{self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target};
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{ExprId, LocalId, Place, Projection, Ty};
+use super::ir::{CheckedFunction, ExprId, FactsCtx, LocalId, ParamEnv, Place, Projection, Ty};
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Default)]
 pub struct AnalysisStats {
@@ -69,6 +70,133 @@ impl Analysis {
     }
 }
 
+/// Successful universal analysis of the exact checked source and its lowering.
+/// There is deliberately no constructor accepting a caller-provided proof.
+#[derive(Clone, Debug)]
+pub struct VerifiedTemplateCfg {
+    template: cfg::TemplateCfg,
+    analysis: Arc<Analysis>,
+    _reservation: Arc<super::ir::PlanReservation>,
+}
+impl VerifiedTemplateCfg {
+    pub fn source(&self) -> &Arc<CheckedFunction> {
+        self.template.source()
+    }
+    pub fn param_env(&self) -> &Arc<ParamEnv> {
+        self.template.param_env()
+    }
+    pub fn function(&self) -> &Arc<cfg::Function> {
+        self.template.function()
+    }
+    pub fn analysis(&self) -> &Arc<Analysis> {
+        &self.analysis
+    }
+    pub fn budget(&self) -> &super::ir::PlanBudget {
+        self.template.budget()
+    }
+}
+
+/// Only this successful, exact closed-CFG proof permits native work.
+#[derive(Clone, Debug)]
+pub struct ConcreteCfg {
+    closed: cfg::ClosedCfg,
+    analysis: Arc<Analysis>,
+    _reservation: Arc<super::ir::PlanReservation>,
+}
+impl ConcreteCfg {
+    pub fn function(&self) -> &Arc<cfg::Function> {
+        self.closed.function()
+    }
+    pub fn analysis(&self) -> &Arc<Analysis> {
+        &self.analysis
+    }
+    pub fn budget(&self) -> &super::ir::PlanBudget {
+        self.closed.budget()
+    }
+}
+
+// Failed verification deliberately returns the full existing report, not a
+// lossy error summary or a second allocation on the failure path.
+#[allow(clippy::result_large_err)]
+pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg, Analysis> {
+    let analysis = analyze_with_facts(
+        template.function(),
+        Limits::default(),
+        FactsCtx::Universal(template.param_env()),
+        Some(template.budget()),
+    );
+    if !analysis.passed() {
+        return Err(analysis);
+    }
+    let (analysis, reservation) = bind_proof(
+        analysis,
+        template.function(),
+        template.budget(),
+        std::mem::size_of::<VerifiedTemplateCfg>(),
+    )?;
+    Ok(VerifiedTemplateCfg {
+        template,
+        analysis,
+        _reservation: reservation,
+    })
+}
+
+#[allow(clippy::result_large_err)]
+pub fn analyze_closed(closed: cfg::ClosedCfg) -> Result<ConcreteCfg, Analysis> {
+    let analysis = analyze_with_facts(
+        closed.function(),
+        Limits::default(),
+        FactsCtx::Concrete,
+        Some(closed.budget()),
+    );
+    if !analysis.passed() {
+        return Err(analysis);
+    }
+    let (analysis, reservation) = bind_proof(
+        analysis,
+        closed.function(),
+        closed.budget(),
+        std::mem::size_of::<ConcreteCfg>(),
+    )?;
+    Ok(ConcreteCfg {
+        closed,
+        analysis,
+        _reservation: reservation,
+    })
+}
+
+#[allow(clippy::result_large_err)]
+fn bind_proof(
+    mut analysis: Analysis,
+    function: &cfg::Function,
+    budget: &super::ir::PlanBudget,
+    wrapper_bytes: usize,
+) -> Result<(Arc<Analysis>, Arc<super::ir::PlanReservation>), Analysis> {
+    let reservation = budget.charge_nodes(1).and_then(|()| {
+        budget.reserve_bytes(
+            wrapper_bytes
+                + std::mem::size_of::<Analysis>()
+                + std::mem::size_of::<super::ir::PlanReservation>()
+                + 128,
+        )
+    });
+    match reservation {
+        Ok(reservation) => Ok((Arc::new(analysis), Arc::new(reservation))),
+        Err(_) => {
+            analysis.complete = false;
+            analysis.diagnostics = vec![Diagnostic {
+                kind: ErrorKind::ResourceLimit,
+                block: function.entry,
+                statement: None,
+                origin: None,
+                place: None,
+            }]
+            .into_boxed_slice();
+            Err(analysis)
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Limits {
     blocks: usize,
@@ -94,17 +222,75 @@ impl Default for Limits {
 }
 #[derive(Debug)]
 pub(super) struct Exhausted;
-pub(super) struct Budget(pub(super) usize);
+pub(super) struct Budget {
+    remaining: usize,
+    plan: Option<super::ir::PlanBudget>,
+    reservations: Vec<super::ir::PlanReservation>,
+    peak_scratch: usize,
+}
 impl Budget {
+    #[cfg(test)]
+    fn new(remaining: usize) -> Self {
+        Self {
+            remaining,
+            plan: None,
+            reservations: Vec::new(),
+            peak_scratch: 0,
+        }
+    }
+    fn for_plan(remaining: usize, plan: Option<&super::ir::PlanBudget>) -> Self {
+        Self {
+            remaining,
+            plan: plan.cloned(),
+            reservations: Vec::new(),
+            peak_scratch: 0,
+        }
+    }
     pub(super) fn spend(&mut self, amount: usize) -> Result<(), Exhausted> {
-        self.0 = self.0.checked_sub(amount).ok_or(Exhausted)?;
+        let remaining = self.remaining.checked_sub(amount).ok_or(Exhausted)?;
+        if let Some(plan) = &self.plan {
+            plan.charge_work(amount).map_err(|_| Exhausted)?;
+        }
+        self.remaining = remaining;
         Ok(())
+    }
+    pub(super) fn reserve_bytes(&mut self, amount: usize) -> Result<(), Exhausted> {
+        if let Some(plan) = &self.plan {
+            // Each retained token also pays for its Vec growth before push.
+            let amount = amount
+                .checked_add(2 * std::mem::size_of::<super::ir::PlanReservation>())
+                .ok_or(Exhausted)?;
+            self.reservations
+                .push(plan.reserve_bytes(amount).map_err(|_| Exhausted)?);
+        }
+        Ok(())
+    }
+    fn nodes(&mut self, count: usize) -> Result<(), Exhausted> {
+        if let Some(plan) = &self.plan {
+            plan.charge_nodes(count).map_err(|_| Exhausted)?;
+        }
+        Ok(())
+    }
+    fn scratch(&mut self, amount: usize) -> Result<Option<super::ir::PlanReservation>, Exhausted> {
+        self.peak_scratch = self.peak_scratch.max(amount);
+        self.plan
+            .as_ref()
+            .map(|plan| plan.reserve_bytes(amount).map_err(|_| Exhausted))
+            .transpose()
     }
 }
 
 /// Bound type traversal before calling the full structural verifier, including
 /// repeated shared aggregate types that could otherwise expand exponentially.
+#[cfg(test)]
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
+    preflight_with_plan(f, limits, None).map(|_| ())
+}
+fn preflight_with_plan(
+    f: &cfg::Function,
+    limits: Limits,
+    plan: Option<&super::ir::PlanBudget>,
+) -> Result<usize, Exhausted> {
     fn contract_scratch(
         type_work: usize,
         arity: usize,
@@ -112,7 +298,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         max_bytes: usize,
         contract: &super::ir::RefContract,
         budget: &mut Budget,
-    ) -> Result<(), Exhausted> {
+    ) -> Result<Option<super::ir::PlanReservation>, Exhausted> {
         let candidates = match &contract.returns {
             super::ir::ReturnContract::NoReference => &[][..],
             super::ir::ReturnContract::SharedInputPaths(paths)
@@ -175,7 +361,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         if bytes > max_bytes {
             return Err(Exhausted);
         }
-        Ok(())
+        budget.scratch(bytes)
     }
     fn charge_contract(
         result: Result<usize, String>,
@@ -202,7 +388,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     {
         return Err(Exhausted);
     }
-    let mut budget = Budget(limits.operations);
+    let mut budget = Budget::for_plan(limits.operations, plan);
     budget.spend(f.params.len())?;
     budget.spend(f.blocks.len())?;
     let call_origins = f
@@ -286,7 +472,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         }
         preflight_ty(ty, 0, budget)
     }
-    let before_types = budget.0;
+    let before_types = budget.remaining;
     for local in &f.locals {
         preflight_ty(&local.ty, 0, &mut budget)?;
     }
@@ -299,8 +485,8 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         }
     }
     preflight_ty(&f.result, 0, &mut budget)?;
-    contract_scratch(
-        before_types - budget.0,
+    let own_scratch = contract_scratch(
+        before_types - budget.remaining,
         f.params.len(),
         f.loan_sites.len(),
         limits.state_bytes,
@@ -310,7 +496,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     let mut param_types = Vec::with_capacity(f.params.len());
     for param in &f.params {
         let Some(local) = f.locals.get(param.0) else {
-            return Ok(());
+            return Ok(budget.peak_scratch);
         };
         param_types.push(local.ty.clone());
     }
@@ -318,9 +504,10 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         f.ref_contract.validation_work(&param_types, &f.result),
         &mut budget,
     )? {
-        return Ok(()); // Full verifier owns malformed-contract diagnostics.
+        return Ok(budget.peak_scratch); // Full verifier owns malformed-contract diagnostics.
     }
     drop(param_types);
+    drop(own_scratch);
     for site in &f.loan_sites {
         place_type(f, &site.place, &mut budget)?;
     }
@@ -412,18 +599,23 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
             Terminator::Switch { condition, .. } => operand(condition, &mut budget)?,
             Terminator::SwitchVariant { place, .. } => place_type(f, place, &mut budget)?,
             Terminator::Call {
+                target,
                 signature,
                 args,
                 destination,
                 ..
             } => {
-                let before_types = budget.0;
+                let before_types = budget.remaining;
+                budget.spend(target.type_args.len())?;
+                for argument in target.type_args.iter() {
+                    preflight_ty(argument, 0, &mut budget)?;
+                }
                 for param in &signature.params {
                     preflight_ty(param, 0, &mut budget)?;
                 }
                 preflight_ty(&signature.result, 0, &mut budget)?;
-                contract_scratch(
-                    before_types - budget.0,
+                let _call_scratch = contract_scratch(
+                    before_types - budget.remaining,
                     signature.params.len(),
                     f.loan_sites.len(),
                     limits.state_bytes,
@@ -436,7 +628,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                         .validation_work(&signature.params, &signature.result),
                     &mut budget,
                 )? {
-                    return Ok(());
+                    return Ok(budget.peak_scratch);
                 }
                 for arg in args {
                     operand(arg, &mut budget)?;
@@ -446,7 +638,7 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
             _ => {}
         }
     }
-    Ok(())
+    Ok(budget.peak_scratch)
 }
 fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhausted> {
     // Recursive coercion verification can compare each enclosing subtree
@@ -471,11 +663,19 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
         }
     }
     if let Ty::Enum(ty) = ty {
+        for argument in ty.def().type_args.iter() {
+            preflight_ty(argument, depth + 1, budget)?;
+        }
         budget.spend(ty.def().variants.len())?;
         for variant in ty.def().variants.iter() {
             for field in variant.fields.iter() {
                 preflight_ty(&field.ty, depth + 1, budget)?;
             }
+        }
+    }
+    if let Ty::Struct(ty) = ty {
+        for argument in ty.def().type_args.iter() {
+            preflight_ty(argument, depth + 1, budget)?;
         }
     }
     if let Some(count) = ty.field_count() {
@@ -484,6 +684,42 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
         }
     }
     Ok(())
+}
+
+/// A borrowed ownership shape, never a native layout or a concrete witness.
+/// Repeated DAG occurrences are expanded by Paths, not deduplicated by type.
+enum MoveShape<'a> {
+    Scalar,
+    OpaqueParam,
+    Never,
+    Product { ty: &'a Ty, fields: usize },
+    Array { element: &'a Ty, len: usize },
+    Sum(&'a super::ir::EnumDef),
+}
+impl<'a> MoveShape<'a> {
+    fn of(ty: &'a Ty, facts: FactsCtx<'_>, budget: &mut Budget) -> Result<Self, Exhausted> {
+        budget.spend(1)?;
+        Ok(match ty {
+            Ty::Param(param) => {
+                if !matches!(facts, FactsCtx::Universal(env) if env.contains(*param)) {
+                    return Err(Exhausted);
+                }
+                Self::OpaqueParam
+            }
+            Ty::Never => Self::Never,
+            Ty::Tuple(fields) => Self::Product {
+                ty,
+                fields: fields.len(),
+            },
+            Ty::Struct(definition) => Self::Product {
+                ty,
+                fields: definition.def().fields.len(),
+            },
+            Ty::Array { element, len } => Self::Array { element, len: *len },
+            Ty::Enum(definition) => Self::Sum(definition.def()),
+            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Ref { .. } => Self::Scalar,
+        })
+    }
 }
 
 struct PathNode {
@@ -500,12 +736,102 @@ struct Paths {
     nodes: Vec<PathNode>,
 }
 impl Paths {
+    #[cfg(test)]
     fn new(f: &cfg::Function, limit: usize) -> Result<Self, Exhausted> {
+        Self::with_facts(
+            f,
+            limit,
+            FactsCtx::Concrete,
+            &mut Budget::new(32 * 1024 * 1024),
+        )
+    }
+    fn with_facts(
+        f: &cfg::Function,
+        limit: usize,
+        facts: FactsCtx<'_>,
+        budget: &mut Budget,
+    ) -> Result<Self, Exhausted> {
+        fn count(
+            ty: &Ty,
+            facts: FactsCtx<'_>,
+            budget: &mut Budget,
+            limit: usize,
+            depth: usize,
+            counts: &mut (usize, usize),
+        ) -> Result<(), Exhausted> {
+            if depth > 128 || counts.0 >= limit {
+                return Err(Exhausted);
+            }
+            counts.0 += 1;
+            match MoveShape::of(ty, facts, budget)? {
+                MoveShape::Product { ty, fields } => {
+                    for index in 0..fields {
+                        count(
+                            ty.field_ty(index).ok_or(Exhausted)?,
+                            facts,
+                            budget,
+                            limit,
+                            depth + 1,
+                            counts,
+                        )?;
+                    }
+                }
+                MoveShape::Array { element, len } => {
+                    if len > super::ir::MAX_ARRAY_LEN || len > limit - counts.0 {
+                        return Err(Exhausted);
+                    }
+                    for _ in 0..len {
+                        count(element, facts, budget, limit, depth + 1, counts)?;
+                    }
+                }
+                MoveShape::Sum(definition) => {
+                    counts.1 = counts
+                        .1
+                        .checked_add(definition.variants.len())
+                        .ok_or(Exhausted)?;
+                    for variant in definition.variants.iter() {
+                        budget.spend(1)?;
+                        for field in variant.fields.iter() {
+                            count(&field.ty, facts, budget, limit, depth + 1, counts)?;
+                        }
+                    }
+                }
+                MoveShape::Scalar | MoveShape::OpaqueParam | MoveShape::Never => {}
+            }
+            Ok(())
+        }
+        let mut counts = (0, 0);
+        for local in &f.locals {
+            count(&local.ty, facts, budget, limit, 0, &mut counts)?;
+        }
+        for local in &f.params {
+            if let Ty::Ref { referent, .. } = &f.locals[local.0].ty {
+                count(referent, facts, budget, limit, 0, &mut counts)?;
+            }
+        }
+        let (node_count, variant_count) = counts;
+        budget.nodes(node_count)?;
+        // Small Vec allocations start at four slots, so a one-field product
+        // needs more than a two-times logical-edge allowance.
+        let bytes = node_count
+            .checked_mul(4 * std::mem::size_of::<PathNode>() + 4 * std::mem::size_of::<usize>())
+            .and_then(|n| {
+                n.checked_add(variant_count.checked_mul(4 * std::mem::size_of::<usize>())?)
+            })
+            .and_then(|n| {
+                n.checked_add(f.locals.len().checked_mul(
+                    4 * std::mem::size_of::<usize>() + std::mem::size_of::<Option<usize>>(),
+                )?)
+            })
+            .ok_or(Exhausted)?;
+        budget.reserve_bytes(bytes)?;
         fn add(
             paths: &mut Paths,
             ty: &Ty,
             parent: Option<usize>,
             limit: usize,
+            facts: FactsCtx<'_>,
+            budget: &mut Budget,
         ) -> Result<usize, Exhausted> {
             if paths.nodes.len() >= limit {
                 return Err(Exhausted);
@@ -517,30 +843,41 @@ impl Paths {
                 variant_offsets: Vec::new(),
                 end: 0,
             });
-            if let Some(count) = ty.field_count() {
-                for index in 0..count {
-                    let child = add(paths, ty.field_ty(index).ok_or(Exhausted)?, Some(id), limit)?;
-                    paths.nodes[id].children.push(child);
-                }
-            }
-            if let Ty::Array { element, len } = ty {
-                if *len > super::ir::MAX_ARRAY_LEN || *len > limit - paths.nodes.len() {
-                    return Err(Exhausted);
-                }
-                for _ in 0..*len {
-                    let child = add(paths, element, Some(id), limit)?;
-                    paths.nodes[id].children.push(child);
-                }
-            }
-            if let Ty::Enum(enumeration) = ty {
-                for variant in enumeration.def().variants.iter() {
-                    let offset = paths.nodes[id].children.len();
-                    paths.nodes[id].variant_offsets.push(offset);
-                    for field in variant.fields.iter() {
-                        let child = add(paths, &field.ty, Some(id), limit)?;
+            match MoveShape::of(ty, facts, budget)? {
+                MoveShape::Product { ty, fields } => {
+                    for index in 0..fields {
+                        let child = add(
+                            paths,
+                            ty.field_ty(index).ok_or(Exhausted)?,
+                            Some(id),
+                            limit,
+                            facts,
+                            budget,
+                        )?;
                         paths.nodes[id].children.push(child);
                     }
                 }
+                MoveShape::Array { element, len } => {
+                    if len > super::ir::MAX_ARRAY_LEN || len > limit - paths.nodes.len() {
+                        return Err(Exhausted);
+                    }
+                    for _ in 0..len {
+                        let child = add(paths, element, Some(id), limit, facts, budget)?;
+                        paths.nodes[id].children.push(child);
+                    }
+                }
+                MoveShape::Sum(enumeration) => {
+                    for variant in enumeration.variants.iter() {
+                        budget.spend(1)?;
+                        let offset = paths.nodes[id].children.len();
+                        paths.nodes[id].variant_offsets.push(offset);
+                        for field in variant.fields.iter() {
+                            let child = add(paths, &field.ty, Some(id), limit, facts, budget)?;
+                            paths.nodes[id].children.push(child);
+                        }
+                    }
+                }
+                MoveShape::Scalar | MoveShape::OpaqueParam | MoveShape::Never => {}
             }
             paths.nodes[id].end = paths.nodes.len();
             Ok(id)
@@ -551,12 +888,12 @@ impl Paths {
             nodes: Vec::new(),
         };
         for local in &f.locals {
-            let root = add(&mut result, &local.ty, None, limit)?;
+            let root = add(&mut result, &local.ty, None, limit, facts, budget)?;
             result.roots.push(root);
         }
         for local in &f.params {
             if let Ty::Ref { referent, .. } = &f.locals[local.0].ty {
-                let root = add(&mut result, referent, None, limit)?;
+                let root = add(&mut result, referent, None, limit, facts, budget)?;
                 result.external[local.0] = Some(root);
             }
         }
@@ -725,6 +1062,7 @@ impl State {
 }
 
 struct Transfer<'a> {
+    facts: FactsCtx<'a>,
     f: &'a cfg::Function,
     paths: &'a Paths,
     budget: &'a mut Budget,
@@ -982,7 +1320,7 @@ impl Transfer<'_> {
                 // element Copy checks rather than recursively walking for free.
                 let ty = self.f.place_ty(place).expect("structurally verified place");
                 preflight_ty(ty, 0, self.budget)?;
-                if !ty.is_copy() {
+                if !self.facts.must_copy(ty).map_err(|_| Exhausted)? {
                     self.diagnostic(
                         ErrorKind::InvalidCfg(
                             "non-Copy move through array indexing is unsupported".into(),
@@ -1369,6 +1707,14 @@ pub fn analyze(function: &cfg::Function) -> Analysis {
 }
 
 fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
+    analyze_with_facts(f, limits, FactsCtx::Concrete, None)
+}
+fn analyze_with_facts(
+    f: &cfg::Function,
+    limits: Limits,
+    facts: FactsCtx<'_>,
+    plan: Option<&super::ir::PlanBudget>,
+) -> Analysis {
     let mut report = Report {
         stats: AnalysisStats {
             blocks_total: f.blocks.len(),
@@ -1379,8 +1725,13 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
         complete: true,
     };
     let result = (|| -> Result<(), Exhausted> {
-        preflight(f, limits)?;
-        if let Err(error) = f.validate() {
+        let scratch = preflight_with_plan(f, limits, plan)?;
+        let mut budget = Budget::for_plan(limits.work, plan);
+        let verification_scratch = budget.scratch(scratch)?;
+        if let Err(error) = f.validate_with_facts(facts) {
+            if error.contains("limit") || error.contains("exhaust") {
+                return Err(Exhausted);
+            }
             report.diagnostics.push(Diagnostic {
                 kind: ErrorKind::InvalidCfg(error),
                 block: f.entry,
@@ -1390,15 +1741,20 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
             });
             return Ok(());
         }
-        let paths = Paths::new(f, limits.paths)?;
+        drop(verification_scratch);
+        let paths = Paths::with_facts(f, limits.paths, facts, &mut budget)?;
         report.stats.move_paths = paths.nodes.len();
-        let mut budget = Budget(limits.work);
-        let mut seed = State::new(f.locals.len(), paths.nodes.len());
         // Account for dense retained entry states and transient states as well
         // as Vec headers. No allocation proportional to blocks*paths precedes
         // this checked bound.
-        let per_state = seed
-            .words()
+        let per_state = f
+            .locals
+            .len()
+            .div_ceil(64)
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(paths.nodes.len().div_ceil(64).checked_mul(3)?))
+            .and_then(|n| n.checked_add(paths.nodes.len()))
+            .ok_or(Exhausted)?
             .checked_mul(8)
             .and_then(|n| n.checked_add(std::mem::size_of::<State>()))
             .ok_or(Exhausted)?;
@@ -1412,6 +1768,8 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
         if bytes > limits.state_bytes {
             return Err(Exhausted);
         }
+        budget.reserve_bytes(bytes)?;
+        let mut seed = State::new(f.locals.len(), paths.nodes.len());
         let loans = if !f.loan_sites.is_empty()
             || f.locals
                 .iter()
@@ -1482,6 +1840,7 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
             budget.spend(input.words())?;
             let mut output = input.clone();
             Transfer {
+                facts,
                 f,
                 paths: &paths,
                 budget: &mut budget,
@@ -1546,6 +1905,7 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
                 budget.spend(entry.words())?;
                 let mut state = entry.clone();
                 Transfer {
+                    facts,
                     f,
                     paths: &paths,
                     budget: &mut budget,
@@ -1592,8 +1952,8 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
 #[cfg(test)]
 mod tests {
     use super::super::ir::{
-        DefId, EnumDef, EnumTy, FieldDef, IntTy, IntValue, LocalDecl, SnapshotId, StructDef,
-        StructTy, VariantDef, VariantId, VariantShape,
+        DeclId, EnumDef, EnumTy, FieldDef, IntTy, IntValue, LocalDecl, NominalAppId, SnapshotId,
+        StructDef, StructTy, VariantDef, VariantId, VariantShape,
     };
     use super::*;
     use cfg::{BasicBlock, Constant, Located};
@@ -1605,6 +1965,264 @@ mod tests {
             super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
                 .unwrap();
         cfg::lower(&checked).unwrap()
+    }
+
+    fn symbolic_parameter() -> (Arc<ParamEnv>, Ty) {
+        use super::super::ir::{BinderId, ParamId};
+        let binder = BinderId {
+            declaration: DeclId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+        };
+        let env = Arc::new(ParamEnv::new(binder, 1).unwrap());
+        (
+            env,
+            Ty::Param(ParamId {
+                owner: binder,
+                index: 0,
+            }),
+        )
+    }
+
+    #[test]
+    fn universal_parameter_moves_partial_paths_and_joins_use_the_same_solver() {
+        let (env, parameter) = symbolic_parameter();
+        let facts = FactsCtx::Universal(&env);
+        let mut f = fixture();
+        f.locals.extend([
+            local(parameter.clone()),
+            local(parameter.clone()),
+            local(parameter.clone()),
+        ]);
+        f.params.push(LocalId(1));
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }),
+        ]);
+        let result = analyze_with_facts(&f, Limits::default(), facts, None);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        assert_eq!(result.stats.move_paths, 4);
+        f.blocks[0].statements.push(located(Statement::Assign {
+            destination: place(3),
+            value: Rvalue::Use(Operand::Move(place(1))),
+        }));
+        assert!(!analyze_with_facts(&f, Limits::default(), facts, None).passed());
+        f.blocks[0].statements.pop();
+        f.locals[1].ty = Ty::Tuple(vec![parameter.clone(), parameter.clone()].into());
+        let field = |index| Place {
+            local: LocalId(1),
+            projection: vec![Projection::Field(index)],
+        };
+        f.blocks[0].statements.last_mut().unwrap().value = Statement::Assign {
+            destination: place(2),
+            value: Rvalue::Use(Operand::Move(field(0))),
+        };
+        f.blocks[0].statements.push(located(Statement::Assign {
+            destination: place(3),
+            value: Rvalue::Use(Operand::Move(field(1))),
+        }));
+        assert!(analyze_with_facts(&f, Limits::default(), facts, None).passed());
+        f.blocks[0]
+            .statements
+            .push(located(Statement::Inspect(place(1))));
+        assert!(!analyze_with_facts(&f, Limits::default(), facts, None).passed());
+        f.locals[1].ty = parameter;
+        f.blocks[0].statements.truncate(4);
+        f.blocks[0].terminator = located(Terminator::Switch {
+            condition: Operand::Constant(Constant::Bool(true)),
+            then_block: BlockId(1),
+            else_block: BlockId(2),
+        });
+        f.blocks.extend([
+            BasicBlock {
+                statements: vec![located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::Use(Operand::Move(place(1))),
+                })],
+                terminator: located(Terminator::Goto(BlockId(3))),
+            },
+            BasicBlock {
+                statements: vec![],
+                terminator: located(Terminator::Goto(BlockId(3))),
+            },
+            BasicBlock {
+                statements: vec![located(Statement::Assign {
+                    destination: place(3),
+                    value: Rvalue::Use(Operand::Move(place(1))),
+                })],
+                terminator: located(Terminator::Return),
+            },
+        ]);
+        assert!(!analyze_with_facts(&f, Limits::default(), facts, None).passed());
+        f.blocks[3].statements[0].value = Statement::Assign {
+            destination: place(3),
+            value: Rvalue::Use(Operand::Copy(place(1))),
+        };
+        assert!(
+            analyze_with_facts(&f, Limits::default(), facts, None)
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::InvalidCfg(_)))
+        );
+    }
+
+    #[test]
+    fn generic_capabilities_bind_exact_source_and_cfg_and_refuse_failed_or_open_native_input() {
+        use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
+        let (env, parameter) = symbolic_parameter();
+        let source = Arc::new(CheckedFunction {
+            ref_contract: Default::default(),
+            name: "identity".into(),
+            params: vec![LocalId(0)],
+            result: parameter.clone(),
+            locals: vec![local(parameter.clone())],
+            exprs: vec![TypedExpr {
+                ty: parameter.clone(),
+                completion: Completion::Returns,
+                kind: ExprKind::Local(LocalId(0)),
+            }],
+            body: Block {
+                statements: vec![],
+                tail: Some(ExprId(0)),
+            },
+        });
+        let budget = PlanBudget::default();
+        let structural = cfg::lower_template(source.clone(), env.clone(), &budget).unwrap();
+        let exact_cfg = structural.function().clone();
+        let verified = verify_template(structural).unwrap();
+        assert!(Arc::ptr_eq(verified.source(), &source));
+        assert!(Arc::ptr_eq(verified.function(), &exact_cfg));
+        assert!(verified.analysis().passed());
+        assert!(cfg::close(exact_cfg, &budget).is_err());
+        let mut duplicated = source.as_ref().clone();
+        duplicated.result = Ty::Tuple(vec![parameter.clone(), parameter.clone()].into());
+        duplicated.exprs.push(TypedExpr {
+            ty: duplicated.result.clone(),
+            completion: Completion::Returns,
+            kind: ExprKind::Tuple(vec![ExprId(0), ExprId(0)]),
+        });
+        duplicated.body.tail = Some(ExprId(1));
+        let structural = cfg::lower_template(Arc::new(duplicated), env.clone(), &budget).unwrap();
+        assert!(verify_template(structural).is_err());
+        let exact_closed = Arc::new(fixture());
+        let concrete = analyze_closed(cfg::close(exact_closed.clone(), &budget).unwrap()).unwrap();
+        assert!(Arc::ptr_eq(concrete.function(), &exact_closed));
+        assert!(concrete.analysis().passed());
+        let mut invalid = fixture();
+        invalid.locals.push(local(Ty::Int(IntTy::I32)));
+        invalid.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(1))),
+            located(Statement::Inspect(place(1))),
+        ]);
+        assert!(analyze_closed(cfg::close(Arc::new(invalid), &budget).unwrap()).is_err());
+        let (foreign_env, _) = symbolic_parameter();
+        assert!(cfg::lower_template(source, foreign_env, &budget).is_err());
+        let mut hidden = fixture();
+        hidden.locals.push(local(array(
+            Ty::Ref {
+                kind: super::super::ir::BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(IntTy::I32)),
+            },
+            0,
+        )));
+        assert!(
+            !analyze_with_facts(&hidden, Limits::default(), FactsCtx::Universal(&env), None)
+                .passed()
+        );
+        // Application identity alone cannot hide an open or foreign-binder
+        // type argument inside a constant in a disconnected aggregate.
+        let closed_enum = unit_enum();
+        let (_, foreign_parameter) = symbolic_parameter();
+        let mut forged_definition = closed_enum.def().clone();
+        forged_definition.type_args = Arc::from([foreign_parameter]);
+        let forged_enum = EnumTy::new(forged_definition);
+        let aggregate_ty = Ty::Tuple(vec![Ty::Enum(closed_enum)].into());
+        let mut forged = fixture();
+        forged.locals.push(local(aggregate_ty.clone()));
+        forged.blocks.push(BasicBlock {
+            statements: vec![located(Statement::Assign {
+                destination: place(1),
+                value: Rvalue::Aggregate {
+                    ty: aggregate_ty,
+                    fields: vec![Operand::Constant(Constant::Enum {
+                        ty: forged_enum,
+                        variant: 0,
+                    })],
+                },
+            })],
+            terminator: located(Terminator::Unreachable),
+        });
+        assert!(cfg::close(Arc::new(forged.clone()), &budget).is_err());
+        assert!(
+            !analyze_with_facts(&forged, Limits::default(), FactsCtx::Universal(&env), None)
+                .passed()
+        );
+    }
+
+    #[test]
+    fn generic_shared_work_memory_and_expanded_shape_caps_fail_incomplete() {
+        use super::super::ir::{PlanBudget, PlanLimits};
+        let f = fixture();
+        for limits in [
+            PlanLimits {
+                work: 1,
+                ..PlanLimits::default()
+            },
+            PlanLimits {
+                bytes: 1,
+                ..PlanLimits::default()
+            },
+            PlanLimits {
+                nodes: 0,
+                ..PlanLimits::default()
+            },
+        ] {
+            let budget = PlanBudget::new(limits);
+            let result =
+                analyze_with_facts(&f, Limits::default(), FactsCtx::Concrete, Some(&budget));
+            assert!(!result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == ErrorKind::ResourceLimit)
+            );
+        }
+        let budget = PlanBudget::new(PlanLimits {
+            work: 100000,
+            ..PlanLimits::default()
+        });
+        budget.clone().charge_work(99999).unwrap();
+        assert!(
+            !analyze_with_facts(&f, Limits::default(), FactsCtx::Concrete, Some(&budget)).complete
+        );
+        let (env, parameter) = symbolic_parameter();
+        let mut expanded = fixture();
+        expanded.locals.push(local(array(parameter.clone(), 4)));
+        let result = analyze_with_facts(
+            &expanded,
+            Limits {
+                paths: 3,
+                ..Limits::default()
+            },
+            FactsCtx::Universal(&env),
+            None,
+        );
+        assert!(!result.complete);
+        expanded.locals[1].ty = array(parameter, 0);
+        let result = analyze_with_facts(
+            &expanded,
+            Limits::default(),
+            FactsCtx::Universal(&env),
+            None,
+        );
+        assert!(result.passed());
+        assert_eq!(result.stats.move_paths, 2);
     }
 
     #[test]
@@ -2087,7 +2705,7 @@ mod tests {
         ] {
             let ty = Ty::Int(kind);
             assert!(ty.is_copy());
-            assert!(preflight_ty(&ty, 0, &mut Budget(1)).is_ok());
+            assert!(preflight_ty(&ty, 0, &mut Budget::new(1)).is_ok());
             let mut f = dynamic_fixture(ty);
             f.blocks[0].statements.extend([
                 located(Statement::Assign {
@@ -2266,6 +2884,7 @@ mod tests {
             }));
         }
         f.blocks[1].terminator = located(Terminator::Call {
+            target: synthetic_call_target(),
             name: "mixed".into(),
             signature: Signature {
                 ref_contract: std::sync::Arc::new(RefContract {
@@ -2336,7 +2955,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
         let targets = plan
             .resolve(
@@ -2370,7 +2989,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
         let targets = plan
             .resolve(
@@ -2435,9 +3054,9 @@ mod tests {
             "fn f(p:&[i32;32])->i32{*get(p)} fn get<'a>(p:&'a [i32;32])->&'a i32{&(*p)[0]}",
         );
         assert!(analyze(&f).passed());
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
         let result = analyze_with_limits(
             &f,
@@ -2484,9 +3103,9 @@ mod tests {
         let f = borrowed_source(
             "fn f(p:&mut i32)->i32{*id(p)} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
         );
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
         for limits in [
             Limits {
@@ -2571,7 +3190,7 @@ mod tests {
             })
             .unwrap();
         let paths = Paths::new(&f, 131072).unwrap();
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
         let targets = plan
             .resolve(
@@ -2611,6 +3230,7 @@ mod tests {
             let must = state.must_init.clone();
             let may = state.may_init.clone();
             Transfer {
+                facts: FactsCtx::Concrete,
                 f: &f,
                 paths: &paths,
                 budget: &mut budget,
@@ -2708,7 +3328,7 @@ mod tests {
             local: destination.local,
             projection: vec![Projection::Deref],
         };
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
         assert!(
             plan.resolve(&deref, block, None, Phase::Read, &mut budget)
@@ -2724,7 +3344,7 @@ mod tests {
             after[0].place.root,
             CanonicalRoot::ParameterReferent(f.params[0])
         );
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
         assert!(analyze(&f).passed());
     }
@@ -2826,10 +3446,10 @@ mod tests {
             assert!(result.passed(), "{source}: {:?}", result.diagnostics);
             let paths = Paths::new(&f, 131072).unwrap();
             assert!(paths.nodes.len() > f.locals.len());
-            let mut budget = Budget(32 * 1024 * 1024);
+            let mut budget = Budget::new(32 * 1024 * 1024);
             let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
             assert!(plan.bytes > 0);
-            let mut budget = Budget(32 * 1024 * 1024);
+            let mut budget = Budget::new(32 * 1024 * 1024);
             assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
         }
     }
@@ -2959,10 +3579,10 @@ mod tests {
     #[test]
     fn borrowing_preflight_and_scratch_caps_fail_closed() {
         let f = borrowed_source("fn f()->i32{let mut x=1;let r=&mut x;let c=&mut *r;*c=2;x}");
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
         assert!(plan.bytes > 4096);
-        let mut budget = Budget(32 * 1024 * 1024);
+        let mut budget = Budget::new(32 * 1024 * 1024);
         assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
         let result = analyze_with_limits(
             &f,
@@ -3003,12 +3623,21 @@ mod tests {
             mutable: true,
         }
     }
-    fn nominal(fields: Vec<Ty>) -> Ty {
-        Ty::Struct(StructTy::new(StructDef {
-            id: DefId {
+    fn synthetic_call_target() -> super::super::ir::CallTarget {
+        super::super::ir::CallTarget {
+            declaration: DeclId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
             },
+            type_args: Arc::from([]),
+        }
+    }
+    fn nominal(fields: Vec<Ty>) -> Ty {
+        let snapshot = SnapshotId::allocate().unwrap();
+        Ty::Struct(StructTy::new(StructDef {
+            id: NominalAppId { snapshot, index: 0 },
+            source_decl: DeclId { snapshot, index: 0 },
+            type_args: Arc::from([]),
             name: "Paths".into(),
             module: String::new(),
             public: false,
@@ -3048,11 +3677,11 @@ mod tests {
     }
 
     fn unit_enum() -> EnumTy {
+        let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
-            id: DefId {
-                snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
-            },
+            id: NominalAppId { snapshot, index: 0 },
+            source_decl: DeclId { snapshot, index: 0 },
+            type_args: Arc::from([]),
             name: "Tag".into(),
             module: String::new(),
             public: false,
@@ -3089,11 +3718,11 @@ mod tests {
     }
 
     fn payload_enum(variants: Vec<Vec<Ty>>) -> EnumTy {
+        let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
-            id: DefId {
-                snapshot: SnapshotId::allocate().unwrap(),
-                index: 0,
-            },
+            id: NominalAppId { snapshot, index: 0 },
+            source_decl: DeclId { snapshot, index: 0 },
+            type_args: Arc::from([]),
             name: "Payload".into(),
             module: String::new(),
             public: false,
@@ -3198,6 +3827,7 @@ mod tests {
                 }),
             ]);
             f.blocks[1].terminator = located(Terminator::Call {
+                target: synthetic_call_target(),
                 name: "callee".into(),
                 signature: super::super::ir::Signature {
                     ref_contract: Default::default(),
@@ -3305,6 +3935,7 @@ mod tests {
         f.blocks.push(BasicBlock {
             statements: vec![],
             terminator: located(Terminator::Call {
+                target: synthetic_call_target(),
                 name: "callee".into(),
                 signature: super::super::ir::Signature {
                     ref_contract: Default::default(),
@@ -3454,8 +4085,9 @@ mod tests {
             state.may_init.set(paths.resolve(&indexed(1, 1)), true);
             let must = state.must_init.clone();
             let may = state.may_init.clone();
-            let mut budget = Budget(10000);
+            let mut budget = Budget::new(10000);
             Transfer {
+                facts: FactsCtx::Concrete,
                 f: &f,
                 paths: &paths,
                 budget: &mut budget,
@@ -3777,8 +4409,9 @@ mod tests {
         state.may_init.set(paths.resolve(&indexed(1, 0)), true);
         let must = state.must_init.clone();
         let may = state.may_init.clone();
-        let mut budget = Budget(1000);
+        let mut budget = Budget::new(1000);
         Transfer {
+            facts: FactsCtx::Concrete,
             f: &f,
             paths: &paths,
             budget: &mut budget,
@@ -3895,7 +4528,7 @@ mod tests {
         // failure remains the runtime operation's responsibility, even at MAX.
         assert!(result.passed(), "{:?}", result.diagnostics);
         assert_eq!(result.stats.move_paths, 6);
-        assert!(preflight_ty(&Ty::Int(IntTy::Usize), 0, &mut Budget(1)).is_ok());
+        assert!(preflight_ty(&Ty::Int(IntTy::Usize), 0, &mut Budget::new(1)).is_ok());
         f.locals[1].ty = array(Ty::Int(IntTy::Usize), 0);
         assert!(analyze(&f).passed());
     }
@@ -4402,13 +5035,13 @@ mod tests {
     #[test]
     fn array_preflight_bounds_expansion_and_checks_zero_element_types() {
         let ty = array(Ty::Int(IntTy::I32), super::super::ir::MAX_ARRAY_LEN);
-        assert!(preflight_ty(&ty, 0, &mut Budget(8192)).is_err());
-        assert!(preflight_ty(&ty, 0, &mut Budget(8193)).is_ok());
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(8192)).is_err());
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(8193)).is_ok());
         assert!(
             preflight_ty(
                 &array(Ty::Int(IntTy::I32), super::super::ir::MAX_ARRAY_LEN + 1),
                 0,
-                &mut Budget(1_000_000)
+                &mut Budget::new(1_000_000)
             )
             .is_err()
         );
@@ -4426,7 +5059,7 @@ mod tests {
         for _ in 0..130 {
             deep = array(deep, 0);
         }
-        assert!(preflight_ty(&deep, 0, &mut Budget(1_000_000)).is_err());
+        assert!(preflight_ty(&deep, 0, &mut Budget::new(1_000_000)).is_err());
     }
 
     #[test]
@@ -4643,8 +5276,9 @@ mod tests {
         let mut state = State::new(f.locals.len(), paths.nodes.len());
         state.selected[outer_node] = 0;
         state.selected[inner_node] = 0;
-        let mut budget = Budget(1000);
+        let mut budget = Budget::new(1000);
         let mut transfer = Transfer {
+            facts: FactsCtx::Concrete,
             f: &f,
             paths: &paths,
             budget: &mut budget,
@@ -4674,7 +5308,7 @@ mod tests {
             vec![Ty::Int(IntTy::I32); 10],
             vec![Ty::Int(IntTy::I32); 10],
         ]);
-        assert!(preflight_ty(&Ty::Enum(ty.clone()), 0, &mut Budget(40)).is_err());
+        assert!(preflight_ty(&Ty::Enum(ty.clone()), 0, &mut Budget::new(40)).is_err());
         let f = payload_fixture(&ty);
         let paths = Paths::new(&f, 23).unwrap();
         assert_eq!(paths.nodes.len(), 23);
@@ -4768,8 +5402,8 @@ mod tests {
     #[test]
     fn enum_metadata_is_budgeted_without_adding_child_paths() {
         let ty = Ty::Enum(unit_enum());
-        assert!(preflight_ty(&ty, 0, &mut Budget(2)).is_err());
-        assert!(preflight_ty(&ty, 0, &mut Budget(3)).is_ok());
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(2)).is_err());
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(3)).is_ok());
         let f = enum_fixture();
         let paths = Paths::new(&f, 4).unwrap();
         assert!(paths.nodes[paths.roots[1]].children.is_empty());
@@ -4875,7 +5509,7 @@ mod tests {
         for start in 0..=131 {
             for end in start..=131 {
                 let mut bits = Bits::new(131);
-                let mut budget = Budget(1000);
+                let mut budget = Budget::new(1000);
                 bits.range(start, end, true, &mut budget).unwrap();
                 for index in 0..131 {
                     assert_eq!(bits.get(index), (start..end).contains(&index));
@@ -5045,8 +5679,8 @@ mod tests {
         for _ in 0..64 {
             ty = Ty::Tuple(vec![ty].into());
         }
-        assert!(preflight_ty(&ty, 0, &mut Budget(1000)).is_err());
-        assert!(preflight_ty(&ty, 0, &mut Budget(3000)).is_ok());
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(1000)).is_err());
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(3000)).is_ok());
     }
 
     #[test]
@@ -5069,8 +5703,8 @@ mod tests {
         assert_eq!(paths.resolve(&projected(vec![1, 1, 0])), 8);
         assert_eq!(paths.nodes[8].parent, Some(7));
         assert_eq!(paths.nodes[7].end, 10);
-        assert!(preflight_ty(&outer, 0, &mut Budget(15)).is_err());
-        assert!(preflight_ty(&outer, 0, &mut Budget(30)).is_ok());
+        assert!(preflight_ty(&outer, 0, &mut Budget::new(15)).is_err());
+        assert!(preflight_ty(&outer, 0, &mut Budget::new(30)).is_ok());
     }
 
     #[test]

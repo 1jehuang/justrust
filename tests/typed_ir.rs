@@ -285,6 +285,7 @@ fn checked_ir_calls_retain_canonical_targets_and_validated_signatures() {
                         name,
                         args,
                         signature,
+                        target: _,
                     } => Some((expr, name, args, signature)),
                     _ => None,
                 })
@@ -357,22 +358,26 @@ fn checked_ir_native_lowering_and_cli_preserve_shadow_calls_and_return_execution
             let source = "fn choose(flag:bool,x:i32)->i32 { let x=x+1; if flag { let x=x+2; return x; } x } fn main() { let x=10; let x=x+1; let flag=choose(true,x)==14 && choose(false,x)==12; if flag { println!(\"typed native ok\"); } }";
             let program = frontend::parse(source).unwrap();
             let signatures = frontend::signature_table(&program).unwrap();
-            let objects = program
-                .functions
-                .iter()
-                .enumerate()
-                .map(|(index, function)| {
-                    let checked =
-                        frontend::type_function_with_signatures(&program, index, &signatures)
-                            .unwrap();
-                    checked.validate().unwrap();
-                    (
-                        function.name.clone(),
-                        backend::emit_checked_function(&checked).unwrap(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let linked = backend::link(&objects).unwrap();
+            for index in 0..program.functions.len() {
+                let checked =
+                    frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
+                checked.validate().unwrap();
+                if checked
+                    .exprs
+                    .iter()
+                    .any(|expr| matches!(expr.kind, ExprKind::Call { .. }))
+                {
+                    assert!(
+                        backend::emit_checked_function(&checked)
+                            .unwrap_err()
+                            .contains("instance plan")
+                    );
+                }
+            }
+            let linked = justrust_engine::compiler::compile(source.to_owned(), 1, false)
+                .unwrap()
+                .executable
+                .unwrap();
             let compatibility = backend::emit(&program).unwrap();
             assert_eq!(
                 linked, compatibility,

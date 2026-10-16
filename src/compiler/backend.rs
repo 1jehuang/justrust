@@ -18,7 +18,7 @@
 //! Aggregate arguments carry snapshot pointers. Aggregate results use a
 //! caller-owned destination, passed last at rbp+16, even for a one-field aggregate.
 use super::cfg;
-use super::frontend::{self, BinaryOp, Program, UnaryOp};
+use super::frontend::{BinaryOp, Program, UnaryOp};
 use super::ir::{self, LocalId};
 use super::ownership;
 use std::collections::HashMap;
@@ -28,18 +28,28 @@ const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
 
-fn indirect(ty: &ir::Ty) -> bool {
-    ty.field_count().is_some()
-        || matches!(ty, ir::Ty::Array { .. })
-        || matches!(ty, ir::Ty::Enum(ty) if ty.has_payload())
+fn indirect(ty: &ir::Ty) -> Result<bool, String> {
+    match ty {
+        ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. } => Ok(true),
+        ir::Ty::Enum(ty) => Ok(ty.has_payload()),
+        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit | ir::Ty::Never | ir::Ty::Ref { .. } => {
+            Ok(false)
+        }
+        ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
+    }
 }
 
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
+    if matches!(ty, ir::Ty::Param(_)) {
+        return Err("type parameter has no native layout".into());
+    }
     if let ir::Ty::Array { element, len } = ty {
         if *len > ir::MAX_ARRAY_LEN {
             return Err("array length exceeds private backend limit".into());
         }
         if *len == 0 {
+            // ConcreteCfg's exhaustive metadata walk validated the element,
+            // even though no element storage or stride is needed at runtime.
             return Ok(8);
         }
         // Empty arrays still own an initialized dummy word. This rule also
@@ -76,7 +86,12 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
                 .filter(|size| *size <= MAX_FRAME_BYTES)
                 .ok_or_else(|| "aggregate exceeds private frame limit".to_string())
         }),
-        None => Ok(8),
+        None => match ty {
+            ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit | ir::Ty::Never | ir::Ty::Ref { .. } => {
+                Ok(8)
+            }
+            _ => Err("unknown concrete native layout shape".into()),
+        },
     }
 }
 
@@ -128,7 +143,8 @@ pub struct Object {
 
 struct Emitter<'a> {
     object: Object,
-    function: &'a cfg::Function,
+    concrete: &'a ownership::ConcreteCfg,
+    resolve: &'a dyn Fn(&ir::CallTarget) -> Result<String, String>,
     locals: Vec<i32>,
     aggregate_scratch: i32,
     returns: Vec<usize>,
@@ -136,6 +152,9 @@ struct Emitter<'a> {
     edges: Vec<(usize, cfg::BlockId)>,
 }
 impl<'a> Emitter<'a> {
+    fn function(&self) -> &'a cfg::Function {
+        self.concrete.function().as_ref()
+    }
     fn bytes(&mut self, bytes: &[u8]) {
         self.object.code.extend_from_slice(bytes);
     }
@@ -199,7 +218,7 @@ impl<'a> Emitter<'a> {
     // Only rax is clobbered, allowing stores to preserve their RHS in r9.
     fn place_address(&mut self, place: &ir::Place) -> Result<&'a ir::Ty, String> {
         let mut offset = self.local_offset(place.local)?;
-        let mut ty: &'a ir::Ty = &self.function.locals[place.local.0].ty;
+        let mut ty: &'a ir::Ty = &self.function().locals[place.local.0].ty;
         let mut indirect_base = false;
         let mut projections = place.projection.iter();
         while let Some(projection) = projections.next() {
@@ -294,7 +313,7 @@ impl<'a> Emitter<'a> {
         }
     }
     fn store_value(&mut self, offset: i32, ty: &ir::Ty) -> Result<(), String> {
-        if indirect(ty) {
+        if indirect(ty)? {
             self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
             self.i32(offset);
             self.copy_pointer_value(value_size(ty)?);
@@ -310,7 +329,7 @@ impl<'a> Emitter<'a> {
     }
     // rax holds the value/snapshot pointer and rdi the destination address.
     fn store_address_value(&mut self, ty: &ir::Ty) -> Result<(), String> {
-        if indirect(ty) {
+        if indirect(ty)? {
             self.bytes(&[0x48, 0x89, 0xc6]);
             self.copy_pointer_value(value_size(ty)?);
             self.bytes(&[0x48, 0x89, 0xf8]);
@@ -361,7 +380,7 @@ impl<'a> Emitter<'a> {
     // so returning a non-Copy aggregate must not invent a Copy operand.
     fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
         let ty = self.place_address(place)?;
-        if !indirect(ty) {
+        if !indirect(ty)? {
             self.bytes(&[0x48, 0x8b, 0x00]);
             if let ir::Ty::Int(integer) = ty {
                 self.normalize_integer(*integer);
@@ -374,11 +393,11 @@ impl<'a> Emitter<'a> {
         array: &ir::Place,
         index: &cfg::Operand,
     ) -> Result<&'a ir::Ty, String> {
-        let ty = self.function.place_ty(array)?;
+        let ty = self.function().place_ty(array)?;
         let ir::Ty::Array { element, len } = ty else {
             return Err("runtime index requires array storage".into());
         };
-        if self.function.operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
+        if self.function().operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
             return Err("runtime index requires genuine usize operand".into());
         }
         self.operand(index)?;
@@ -459,7 +478,7 @@ impl<'a> Emitter<'a> {
         } else {
             self.bytes(&[0x48, 0x8d, 0xbd]); // rdi = backing destination
             self.i32(self.aggregate_scratch);
-            if indirect(element) {
+            if indirect(element)? {
                 self.bytes(&[0x48, 0x89, 0xc2, 0x41, 0xb8]); // rdx = source, r8d = len
                 self.i32(i32::try_from(*len).map_err(|_| "repeat length exceeds limit")?);
                 let again = self.position();
@@ -639,7 +658,7 @@ impl<'a> Emitter<'a> {
             }
             cfg::Rvalue::Borrow(loan) => {
                 let site = self
-                    .function
+                    .function()
                     .loan_sites
                     .get(loan.0)
                     .ok_or("invalid checked loan site")?;
@@ -647,7 +666,7 @@ impl<'a> Emitter<'a> {
             }
             cfg::Rvalue::IndexCopy { array, index } => {
                 let element = self.index_address(array, index)?;
-                if !indirect(element) {
+                if !indirect(element)? {
                     self.bytes(&[0x48, 0x8b, 0x00]);
                     if let ir::Ty::Int(integer) = element {
                         self.normalize_integer(*integer);
@@ -670,7 +689,7 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x8b, 0x00]);
             }
             cfg::Rvalue::Unary { op, value } => {
-                let ty = self.function.operand_ty(value)?;
+                let ty = self.function().operand_ty(value)?;
                 if ty == ir::Ty::Never {
                     // The operand diverged, so this dead CFG operation has no
                     // runtime value to load and no concrete integer width.
@@ -692,8 +711,8 @@ impl<'a> Emitter<'a> {
                 }
             }
             cfg::Rvalue::Binary { op, left, right } => {
-                let ty = self.function.operand_ty(left)?;
-                if ty == ir::Ty::Never || self.function.operand_ty(right)? == ir::Ty::Never {
+                let ty = self.function().operand_ty(left)?;
+                if ty == ir::Ty::Never || self.function().operand_ty(right)? == ir::Ty::Never {
                     // Operand effects already occurred in earlier CFG steps.
                     // Divergence leaves no value to load or arithmetic to run.
                     return Ok(());
@@ -797,7 +816,7 @@ impl<'a> Emitter<'a> {
                 // Raw discriminant inspection grants no semantic Copy of the
                 // enum. The true edge's selected-variant proof is established
                 // by CFG validation and ownership analysis, not by codegen.
-                let ty = self.function.place_ty(place)?;
+                let ty = self.function().place_ty(place)?;
                 let ir::Ty::Enum(enum_ty) = ty else {
                     return Err("variant switch requires enum storage".into());
                 };
@@ -834,11 +853,12 @@ impl<'a> Emitter<'a> {
                 self.edge(&[0xe9], *else_block);
             }
             cfg::Terminator::Call {
-                name,
+                target,
                 signature,
                 args,
                 destination,
                 next,
+                ..
             } => {
                 if args.len() > MAX_ARGS {
                     return Err(format!("at most {MAX_ARGS} arguments are supported"));
@@ -847,13 +867,13 @@ impl<'a> Emitter<'a> {
                     self.operand(operand)?;
                     self.bytes(&[0x50]);
                 }
-                let aggregate = indirect(&signature.result);
+                let aggregate = indirect(&signature.result)?;
                 if aggregate {
                     self.place_address(destination)?;
                     self.bytes(&[0x50]);
                 }
                 let at = self.jump(&[0xe8]);
-                self.object.calls.push((at, name.clone()));
+                self.object.calls.push((at, (self.resolve)(target)?));
                 let words = args.len() + usize::from(aggregate);
                 if words != 0 {
                     self.bytes(&[0x48, 0x81, 0xc4]);
@@ -866,7 +886,7 @@ impl<'a> Emitter<'a> {
             }
             cfg::Terminator::Return => {
                 self.load_place(&ir::Place {
-                    local: self.function.return_local,
+                    local: self.function().return_local,
                     projection: Vec::new(),
                 })?;
                 let at = self.jump(&[0xe9]);
@@ -878,11 +898,11 @@ impl<'a> Emitter<'a> {
     }
 }
 
-/// Trusted, unchecked code-generation entry point for an immutable CFG.
-/// The caller must obtain a successful `ownership::analyze` result for this
-/// exact CFG and leave it unchanged afterward. No structural or ownership
-/// validation is repeated here. Graph callers satisfy this through fact 109,
-/// while standalone checked-body callers should use `emit_checked_function`.
+/// Native entry point for an exact closed CFG with successful concrete analysis.
+/// Only the private successful-analysis capability authorizes native layout.
+/// Universal template proofs, unsealed CFGs and caller-supplied analysis reports
+/// are not native capabilities. Graph callers retain this fact immutably, while
+/// standalone checked-body callers should use `emit_checked_function`.
 /// Reference calls additionally require whole-program noescape and exact callee
 /// signature evidence. Reference returns require the exact canonical RefContract
 /// and successful read-phase return-provenance/region verification as part of
@@ -892,7 +912,11 @@ impl<'a> Emitter<'a> {
 /// and candidate-to-actual-origin correlation, never layout offsets in summaries.
 /// Local analysis alone cannot establish the whole-program call contract.
 /// Every local and lowering temporary has stable invocation-owned frame storage.
-pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
+pub fn emit_cfg_function(
+    concrete: &ownership::ConcreteCfg,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+) -> Result<Object, String> {
+    let function = concrete.function().as_ref();
     if function.params.len() > MAX_ARGS {
         return Err(format!("at most {MAX_ARGS} parameters are supported"));
     }
@@ -922,7 +946,7 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     let aggregate_scratch = -frame_bytes;
-    let aggregate_result = indirect(&function.result);
+    let aggregate_result = indirect(&function.result)?;
     let result_size = value_size(&function.result)?;
     let mut emitter = Emitter {
         object: Object {
@@ -930,7 +954,8 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
             calls: Vec::new(),
             strings: Vec::new(),
         },
-        function,
+        concrete,
+        resolve,
         locals,
         aggregate_scratch,
         returns: Vec::new(),
@@ -979,9 +1004,23 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     Ok(emitter.object)
 }
 
-/// Compatibility entry point for direct checked-body callers, lowering and
-/// analyzing once. Graph compilation owns both facts and calls the
-/// raw emit_cfg_function without lowering or analyzing again.
+fn seal_concrete_cfg(
+    function: cfg::Function,
+    budget: &ir::PlanBudget,
+) -> Result<ownership::ConcreteCfg, String> {
+    let name = function.name.clone();
+    let closed = cfg::close(std::sync::Arc::new(function), budget)?;
+    ownership::analyze_closed(closed).map_err(|analysis| {
+        format!(
+            "{name}: initialization/move analysis (complete={}): {:?}",
+            analysis.complete, analysis.diagnostics
+        )
+    })
+}
+
+/// Standalone call-free checked-body entry point. Close all metadata and bind
+/// concrete analysis to that exact immutable CFG before requesting layout.
+/// Calls require the common sealed instance plan, available through `emit`.
 pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
     let lowered = cfg::lower(function)?;
     if lowered.blocks.iter().any(|block| {
@@ -993,14 +1032,17 @@ pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, S
             "reference calls require whole-program noescape and callee-signature evidence".into(),
         );
     }
-    let analysis = ownership::analyze(&lowered);
-    if !analysis.passed() {
-        return Err(format!(
-            "{}: initialization/move analysis (complete={}): {:?}",
-            lowered.name, analysis.complete, analysis.diagnostics
-        ));
+    let has_calls = lowered
+        .blocks
+        .iter()
+        .any(|block| matches!(block.terminator.value, cfg::Terminator::Call { .. }));
+    let concrete = seal_concrete_cfg(lowered, &ir::PlanBudget::default())?;
+    if has_calls {
+        return Err("unsupported standalone call target requires an instance plan".into());
     }
-    emit_cfg_function(&lowered)
+    emit_cfg_function(&concrete, &|_| {
+        Err("unsupported standalone call target requires an instance plan".into())
+    })
 }
 
 fn put16(bytes: &mut [u8], at: usize, n: u16) {
@@ -1093,43 +1135,39 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
     Ok(elf)
 }
 
-/// Compatibility entry point for AST callers. Build signatures once and lower
-/// each body once. Analyze every body before any raw emission, establishing the
-/// whole-program noescape evidence required for reference calls.
+/// Compatibility entry point for AST callers. Use the same declaration,
+/// instance-plan and all-body gates as graph compilation without reparsing.
+/// The provider calls only `emit_cfg_function`, so this does not recurse.
 pub fn emit(program: &Program) -> Result<Vec<u8>, String> {
-    let signatures = frontend::signature_table(program)?;
-    let functions = program
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(index, f)| {
-            let checked = frontend::type_function_with_signatures(program, index, &signatures)?;
-            let lowered = cfg::lower(&checked)?;
-            let analysis = ownership::analyze(&lowered);
-            if !analysis.passed() {
-                return Err(format!(
-                    "{}: initialization/move analysis (complete={}): {:?}",
-                    lowered.name, analysis.complete, analysis.diagnostics
-                ));
-            }
-            Ok((f.name.clone(), lowered))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let objects = functions
-        .iter()
-        .map(|(name, function)| Ok((name.clone(), emit_cfg_function(function)?)))
-        .collect::<Result<Vec<_>, String>>()?;
-    link(&objects)
+    super::compile_program_observed(program.clone(), 1, false)
+        .map_err(|failure| failure.to_string())?
+        .executable
+        .ok_or_else(|| "common instance plan did not publish an executable".into())
 }
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
+    use super::super::frontend;
     use super::super::frontend::{Block, Expr, Function, Stmt, Type};
     use super::*;
     use std::io::{Read, Write};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn emit_test_cfg(function: &cfg::Function) -> Result<Object, String> {
+        let concrete = seal_concrete_cfg(function.clone(), &ir::PlanBudget::default())?;
+        emit_cfg_function(&concrete, &|_| {
+            Err("test CFG calls require a sealed instance plan".into())
+        })
+    }
+
+    fn unit_concrete_fixture() -> ownership::ConcreteCfg {
+        let program = frontend::parse("fn main() {}").unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let checked = frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+        seal_concrete_cfg(cfg::lower(&checked).unwrap(), &ir::PlanBudget::default()).unwrap()
+    }
 
     fn block(statements: Vec<Stmt>, tail: Option<Expr>) -> Block {
         Block {
@@ -1141,6 +1179,7 @@ mod tests {
         Function {
             name: name.into(),
             regions: Default::default(),
+            type_params: vec![],
             params,
             result,
             body,
@@ -1352,6 +1391,119 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn generic_native_instances_payload_owners_recursion_and_aggregate_abi() {
+        let program = frontend::parse(
+            r#"
+            struct Wrap<T> { value:T }
+            enum Maybe<T> { None, Some(T) }
+            fn identity<T>(value:T)->T { value }
+            fn forward<T>(value:T)->T { identity::<T>(value) }
+            fn packed<T>(value:T)->Wrap<T> { Wrap::<T> { value } }
+            fn unpack<T>(value:Wrap<T>)->T { value.value }
+            fn recur<T>(value:T, count:i32)->T {
+                if count == 0 { value } else { recur::<T>(value,count-1) }
+            }
+            fn even<T>(value:T, count:i32)->T {
+                if count == 0 { value } else { odd::<T>(value,count-1) }
+            }
+            fn odd<T>(value:T, count:i32)->T {
+                if count == 0 { value } else { even::<T>(value,count-1) }
+            }
+            fn main() {
+                if identity::<i8>(-127i8) != -127i8 { 1/0; }
+                if identity::<u64>(18446744073709551615u64) != 18446744073709551615u64 { 1/0; }
+                let narrow=packed::<u8>(255u8);
+                if unpack::<u8>(narrow) != 255u8 { 1/0; }
+                let wide=packed::<u64>(18446744073709551615u64);
+                let selected=Maybe::<Wrap<u64>>::Some(wide);
+                let number=match selected {
+                    Maybe::<Wrap<u64>>::None => 0u64,
+                    Maybe::<Wrap<u64>>::Some(inner) => unpack::<u64>(inner),
+                };
+                if number != 18446744073709551615u64 { 1/0; }
+                let tuple=forward::<(u64,bool)>((18446744073709551615u64,true));
+                if tuple.0 != 18446744073709551615u64 { 1/0; }
+                if !tuple.1 { 1/0; }
+                let array=unpack::<[u64;9]>(packed::<[u64;9]>([18446744073709551615u64;9]));
+                let array=recur::<[u64;9]>(array,3);
+                let array=even::<[u64;9]>(array,4);
+                if array[0] != 18446744073709551615u64 { 1/0; }
+                if array[8] != 18446744073709551615u64 { 1/0; }
+                println!("generic-native");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"generic-native\n");
+    }
+
+    #[test]
+    fn generic_native_closedness_standalone_gate_and_deterministic_symbols() {
+        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let parameter = ir::Ty::Param(ir::ParamId {
+            owner: ir::BinderId {
+                declaration: ir::DeclId { snapshot, index: 0 },
+            },
+            index: 0,
+        });
+        assert!(indirect(&parameter).unwrap_err().contains("no native ABI"));
+        assert!(
+            value_size(&parameter)
+                .unwrap_err()
+                .contains("no native layout")
+        );
+        let mut forged = unit_concrete_fixture().function().as_ref().clone();
+        forged.locals.push(ir::LocalDecl {
+            name: "dead_hidden_parameter".into(),
+            ty: ir::Ty::Array {
+                element: std::sync::Arc::new(parameter),
+                len: 0,
+            },
+            mutable: false,
+        });
+        assert!(cfg::close(std::sync::Arc::new(forged), &ir::PlanBudget::default()).is_err());
+
+        let program = frontend::parse(
+            r#"
+            fn identity<T>(value:T)->T { value }
+            fn helper()->u64 { identity::<u64>(18446744073709551615u64) }
+            fn main() {
+                if identity::<u8>(255u8) != 255u8 { 1/0; }
+                if helper() != 18446744073709551615u64 { 1/0; }
+            }
+            "#,
+        )
+        .unwrap();
+        let env = frontend::signature_table(&program).unwrap();
+        let index = program
+            .functions
+            .iter()
+            .position(|function| function.name == "main")
+            .unwrap();
+        let checked = frontend::type_function_with_signatures(&program, index, &env).unwrap();
+        assert!(
+            emit_checked_function(&checked)
+                .unwrap_err()
+                .contains("instance plan")
+        );
+        let first = emit(&program).unwrap();
+        let parallel = super::super::compile_program_observed(program, 4, false)
+            .unwrap()
+            .executable
+            .unwrap();
+        assert_eq!(
+            first, parallel,
+            "instance symbols and layout must not depend on worker order"
+        );
+        let path = executable_bytes(&first);
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
     }
 
     #[test]
@@ -2648,17 +2800,7 @@ mod tests {
             element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::I32)),
             len: 0,
         };
-        let function = cfg::Function {
-            ref_contract: Default::default(),
-            loan_sites: vec![],
-            name: "main".into(),
-            params: vec![],
-            result: ir::Ty::Unit,
-            locals: vec![],
-            blocks: vec![],
-            entry: cfg::BlockId(0),
-            return_local: LocalId(0),
-        };
+        let concrete = unit_concrete_fixture();
         // The initialized dummy is a private ABI invariant, not observable
         // through source indexing because an empty array has no valid index.
         let mut emitter = Emitter {
@@ -2667,7 +2809,8 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
             },
-            function: &function,
+            concrete: &concrete,
+            resolve: &|_| Err("physical fixture has no instance calls".into()),
             locals: vec![],
             aggregate_scratch: -8,
             returns: vec![],
@@ -2739,7 +2882,7 @@ mod tests {
             element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::I32)),
             len: 0,
         };
-        assert!(indirect(&empty));
+        assert!(indirect(&empty).unwrap());
         assert_eq!(value_size(&empty).unwrap(), 8);
         assert!(array_offset(&empty, 0).is_err());
         let nested = ir::Ty::Array {
@@ -2800,11 +2943,11 @@ mod tests {
                 projection: vec![],
             }
         }
+        let snapshot = ir::SnapshotId::allocate().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
-            id: ir::DefId {
-                snapshot: ir::SnapshotId::allocate().unwrap(),
-                index: 0,
-            },
+            id: ir::NominalAppId { snapshot, index: 0 },
+            source_decl: ir::DeclId { snapshot, index: 0 },
+            type_args: [].into(),
             name: "Singleton".into(),
             module: String::new(),
             public: false,
@@ -2896,13 +3039,15 @@ mod tests {
                 "moved={moved}: {:?}",
                 analysis.diagnostics
             );
+            let concrete = seal_concrete_cfg(function.clone(), &ir::PlanBudget::default()).unwrap();
             let mut branch = Emitter {
                 object: Object {
                     code: vec![],
                     calls: vec![],
                     strings: vec![],
                 },
-                function: &function,
+                concrete: &concrete,
+                resolve: &|_| Err("physical fixture has no instance calls".into()),
                 locals: vec![],
                 aggregate_scratch: 0,
                 returns: vec![],
@@ -2914,7 +3059,7 @@ mod tests {
                 .unwrap();
             assert_eq!(branch.object.code, [0xe9, 0, 0, 0, 0]);
             assert_eq!(branch.edges, [(1, cfg::BlockId(1))]);
-            let object = emit_cfg_function(&function).unwrap();
+            let object = emit_test_cfg(&function).unwrap();
             // The root follows the eight-byte unit return slot in the frame.
             // Aggregate moves address it but must never load its tag into eax.
             let root_offset = -(8 + value_size(&ir::Ty::Enum(ty.clone())).unwrap());
@@ -2943,11 +3088,11 @@ mod tests {
             ty: ir::Ty::Int(ir::IntTy::I32),
             public: true,
         };
+        let snapshot = ir::SnapshotId::allocate().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
-            id: ir::DefId {
-                snapshot: ir::SnapshotId::allocate().unwrap(),
-                index: 0,
-            },
+            id: ir::NominalAppId { snapshot, index: 0 },
+            source_decl: ir::DeclId { snapshot, index: 0 },
+            type_args: [].into(),
             name: "Backing".into(),
             module: String::new(),
             public: false,
@@ -2970,19 +3115,9 @@ mod tests {
             ]
             .into(),
         });
-        assert!(indirect(&ir::Ty::Enum(ty.clone())));
+        assert!(indirect(&ir::Ty::Enum(ty.clone())).unwrap());
         assert_eq!(value_size(&ir::Ty::Enum(ty.clone())).unwrap(), 32);
-        let function = cfg::Function {
-            ref_contract: Default::default(),
-            loan_sites: vec![],
-            name: "main".into(),
-            params: vec![],
-            result: ir::Ty::Unit,
-            locals: vec![],
-            blocks: vec![],
-            entry: cfg::BlockId(0),
-            return_local: LocalId(0),
-        };
+        let concrete = unit_concrete_fixture();
         // This test exercises the private constructor emitter directly so it
         // can inspect inactive physical storage, which source Rust cannot read.
         let mut emitter = Emitter {
@@ -2991,7 +3126,8 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
             },
-            function: &function,
+            concrete: &concrete,
+            resolve: &|_| Err("physical fixture has no instance calls".into()),
             locals: vec![],
             aggregate_scratch: -32,
             returns: vec![],
@@ -3747,11 +3883,8 @@ mod tests {
                 tail: None,
             },
         };
-        assert!(
-            emit_cfg_function(&cfg::lower(&checked).unwrap())
-                .unwrap_err()
-                .contains("limit")
-        );
+        let error = emit_test_cfg(&cfg::lower(&checked).unwrap()).unwrap_err();
+        assert!(error.contains("ResourceLimit"), "{error}");
     }
 
     #[test]
@@ -3875,7 +4008,7 @@ mod tests {
             ],
         };
         assert!(ownership::analyze(&function).passed());
-        let object = emit_cfg_function(&function).unwrap();
+        let object = emit_test_cfg(&function).unwrap();
         let bytes = link(&[("main".into(), object.clone())]).unwrap();
         let path = executable_bytes(&bytes);
         let output = execute(Command::new(&path).stdout(Stdio::piped()));
@@ -3891,7 +4024,7 @@ mod tests {
             }
         }
         assert!(ownership::analyze(&function).passed());
-        assert_eq!(emit_cfg_function(&function).unwrap().code, object.code);
+        assert_eq!(emit_test_cfg(&function).unwrap().code, object.code);
     }
 
     #[test]

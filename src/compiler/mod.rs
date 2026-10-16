@@ -3,13 +3,13 @@ pub mod backend;
 mod borrow;
 pub mod cfg;
 pub mod frontend;
+mod instances;
 pub mod ir;
 pub mod ownership;
 pub mod source;
 
-use std::path::PathBuf;
-
 use crate::{Context, Engine, Error, Key, Provider, Report, TaskFuture};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 const PARSE: u32 = 100;
@@ -22,246 +22,449 @@ const RESOLVE: u32 = 106;
 const SOURCE: u32 = 107;
 const LOWER: u32 = 108;
 const ANALYZE: u32 = 109;
+const TEMPLATE_BODY: u32 = 110;
+const UNIVERSAL_LOWER: u32 = 111;
+const UNIVERSAL_ANALYZE: u32 = 112;
+const MONO_PLAN: u32 = 113;
 
 enum Input {
     Text(String),
     File(PathBuf),
+    Program(frontend::Program),
 }
-
+struct DeclarationFacts {
+    checked: OnceLock<Arc<ir::CheckedFunction>>,
+    lowered: OnceLock<cfg::TemplateCfg>,
+    verified: OnceLock<ownership::VerifiedTemplateCfg>,
+    analysis: OnceLock<Arc<ownership::Analysis>>,
+}
+impl DeclarationFacts {
+    fn new() -> Self {
+        Self {
+            checked: OnceLock::new(),
+            lowered: OnceLock::new(),
+            verified: OnceLock::new(),
+            analysis: OnceLock::new(),
+        }
+    }
+}
+struct NativeFacts {
+    checked: OnceLock<Arc<ir::CheckedFunction>>,
+    lowered: OnceLock<Arc<cfg::Function>>,
+    concrete: OnceLock<ownership::ConcreteCfg>,
+    analysis: OnceLock<Arc<ownership::Analysis>>,
+    object: OnceLock<backend::Object>,
+}
+impl NativeFacts {
+    fn new() -> Self {
+        Self {
+            checked: OnceLock::new(),
+            lowered: OnceLock::new(),
+            concrete: OnceLock::new(),
+            analysis: OnceLock::new(),
+            object: OnceLock::new(),
+        }
+    }
+}
 struct Snapshot {
     input: Input,
+    budget: ir::PlanBudget,
+    reservations: std::sync::Mutex<Vec<ir::PlanReservation>>,
     source: OnceLock<source::LoadedSource>,
     parsed: OnceLock<frontend::ParsedProgram>,
     program: OnceLock<frontend::Program>,
-    types: OnceLock<frontend::TypeEnv>,
-    checked: OnceLock<Vec<OnceLock<ir::CheckedFunction>>>,
-    lowered: OnceLock<Vec<OnceLock<Arc<cfg::Function>>>>,
-    analyses: OnceLock<Vec<OnceLock<Arc<ownership::Analysis>>>>,
-    objects: OnceLock<Vec<OnceLock<backend::Object>>>,
+    types: OnceLock<frontend::PlanCtx>,
+    declarations: OnceLock<Vec<DeclarationFacts>>,
+    plan: OnceLock<instances::Plan>,
+    native: OnceLock<Vec<NativeFacts>>,
     executable: OnceLock<Vec<u8>>,
 }
-
 #[derive(Clone)]
 struct CompilerProvider(Arc<Snapshot>);
-
 impl CompilerProvider {
+    fn scratch_vec<T>(&self, count: usize) -> Result<(Vec<T>, ir::PlanReservation), Error> {
+        self.0.budget.charge_work(count).map_err(Error::new)?;
+        let bytes = count
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| Error::new("generic frontier byte limit exceeded"))?;
+        let reservation = self.0.budget.reserve_bytes(bytes).map_err(Error::new)?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| Error::new("generic frontier allocation limit exceeded"))?;
+        Ok((values, reservation))
+    }
     fn program(&self) -> Result<&frontend::Program, Error> {
         self.0
             .program
             .get()
-            .ok_or_else(|| Error::new("missing parsed program"))
+            .ok_or_else(|| Error::new("missing resolved program"))
+    }
+    fn types(&self) -> Result<&frontend::PlanCtx, Error> {
+        self.0
+            .types
+            .get()
+            .ok_or_else(|| Error::new("missing declaration registry"))
+    }
+    fn declaration(&self, index: usize) -> Result<&DeclarationFacts, Error> {
+        self.0
+            .declarations
+            .get()
+            .and_then(|v| v.get(index))
+            .ok_or_else(|| Error::new("missing declaration slot"))
+    }
+    fn native(&self, index: usize) -> Result<&NativeFacts, Error> {
+        self.0
+            .native
+            .get()
+            .and_then(|v| v.get(index))
+            .ok_or_else(|| Error::new("missing native instance slot"))
+    }
+    fn reserve(&self, bytes: usize) -> Result<(), Error> {
+        let reservation = self.0.budget.reserve_bytes(bytes).map_err(Error::new)?;
+        let mut reservations = self
+            .0
+            .reservations
+            .lock()
+            .map_err(|_| Error::new("generic reservation lock poisoned"))?;
+        reservations
+            .try_reserve(1)
+            .map_err(|_| Error::new("generic reservation allocation limit exceeded"))?;
+        reservations.push(reservation);
+        Ok(())
     }
 }
-
+fn publish<T>(slot: &OnceLock<T>, value: T) -> Result<(), Error> {
+    slot.set(value)
+        .map_err(|_| Error::new("duplicate compiler fact"))
+}
 impl Provider for CompilerProvider {
-    fn outputs(&self, _key: &Key) -> usize {
+    fn outputs(&self, _: &Key) -> usize {
         1
     }
-
     fn start(&self, cx: Context, key: Key) -> TaskFuture {
         let this = self.clone();
         Box::pin(async move {
             let root = |kind| Key::new(kind, vec![]);
-            let function = |kind, index| Key::new(kind, vec![index as u64]);
+            let function = |kind, index: usize| Key::new(kind, vec![index as u64]);
             match key.kind {
                 SOURCE => {
                     let Input::File(path) = &this.0.input else {
                         return Err(Error::new("source loading requires file input"));
                     };
-                    let loaded = source::load(path).map_err(Error::new)?;
-                    this.0
-                        .source
-                        .set(loaded)
-                        .map_err(|_| Error::new("duplicate source snapshot"))?;
+                    publish(&this.0.source, source::load(path).map_err(Error::new)?)?;
                 }
                 PARSE => {
-                    let text = match &this.0.input {
-                        Input::Text(text) => text,
-                        Input::File(_) => {
-                            cx.read(cx.request(root(SOURCE)).get(0)).await?;
-                            &this
-                                .0
-                                .source
-                                .get()
-                                .ok_or_else(|| Error::new("missing source snapshot"))?
-                                .text
-                        }
-                    };
-                    let parsed = frontend::parse_unresolved(text).map_err(Error::new)?;
-                    let objects = (0..parsed.program.functions.len())
-                        .map(|_| OnceLock::new())
-                        .collect();
-                    let checked = (0..parsed.program.functions.len())
-                        .map(|_| OnceLock::new())
-                        .collect();
-                    let lowered = (0..parsed.program.functions.len())
-                        .map(|_| OnceLock::new())
-                        .collect();
-                    this.0
-                        .analyses
-                        .set(
-                            (0..parsed.program.functions.len())
-                                .map(|_| OnceLock::new())
-                                .collect(),
-                        )
-                        .map_err(|_| Error::new("duplicate analysis arena"))?;
-                    this.0
-                        .lowered
-                        .set(lowered)
-                        .map_err(|_| Error::new("duplicate CFG arena"))?;
-                    this.0
-                        .checked
-                        .set(checked)
-                        .map_err(|_| Error::new("duplicate checked function arena"))?;
-                    this.0
-                        .objects
-                        .set(objects)
-                        .map_err(|_| Error::new("duplicate object arena"))?;
-                    this.0
-                        .parsed
-                        .set(parsed)
-                        .map_err(|_| Error::new("duplicate parsed snapshot"))?;
+                    if !matches!(this.0.input, Input::Program(_)) {
+                        let text = match &this.0.input {
+                            Input::Text(text) => text,
+                            Input::File(_) => {
+                                cx.read(cx.request(root(SOURCE)).get(0)).await?;
+                                &this
+                                    .0
+                                    .source
+                                    .get()
+                                    .ok_or_else(|| Error::new("missing source snapshot"))?
+                                    .text
+                            }
+                            Input::Program(_) => unreachable!(),
+                        };
+                        publish(
+                            &this.0.parsed,
+                            frontend::parse_unresolved(text).map_err(Error::new)?,
+                        )?;
+                    }
                 }
                 RESOLVE => {
                     cx.read(cx.request(root(PARSE)).get(0)).await?;
-                    let parsed = this
-                        .0
-                        .parsed
-                        .get()
-                        .ok_or_else(|| Error::new("missing parsed snapshot"))?;
-                    let program = frontend::resolve(parsed).map_err(Error::new)?;
-                    this.0
-                        .program
-                        .set(program)
-                        .map_err(|_| Error::new("duplicate resolved program"))?;
+                    let program = match &this.0.input {
+                        Input::Program(program) => program.clone(),
+                        _ => frontend::resolve(
+                            this.0
+                                .parsed
+                                .get()
+                                .ok_or_else(|| Error::new("missing parsed snapshot"))?,
+                        )
+                        .map_err(Error::new)?,
+                    };
+                    let count = program.functions.len();
+                    this.reserve(
+                        count
+                            .checked_mul(std::mem::size_of::<DeclarationFacts>())
+                            .ok_or_else(|| Error::new("generic declaration byte limit exceeded"))?,
+                    )?;
+                    let mut declarations = Vec::new();
+                    declarations
+                        .try_reserve_exact(count)
+                        .map_err(|_| Error::new("generic declaration allocation limit exceeded"))?;
+                    declarations.extend((0..count).map(|_| DeclarationFacts::new()));
+                    publish(&this.0.declarations, declarations)?;
+                    publish(&this.0.program, program)?;
                 }
                 SIGNATURES => {
                     cx.read(cx.request(root(RESOLVE)).get(0)).await?;
-                    let types = frontend::type_env(this.program()?).map_err(Error::new)?;
-                    this.0
-                        .types
-                        .set(types)
-                        .map_err(|_| Error::new("duplicate type environment"))?;
+                    publish(
+                        &this.0.types,
+                        frontend::PlanCtx::from_program(this.program()?, &this.0.budget)
+                            .map_err(Error::new)?,
+                    )?;
+                }
+                TEMPLATE_BODY | UNIVERSAL_LOWER | UNIVERSAL_ANALYZE => {
+                    let [index] = key.params.as_slice() else {
+                        return Err(Error::new("missing declaration index"));
+                    };
+                    let index = usize::try_from(*index)
+                        .map_err(|_| Error::new("invalid declaration index"))?;
+                    cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
+                    let slot = this.declaration(index)?;
+                    if key.kind == TEMPLATE_BODY {
+                        let checked = frontend::type_function_with_plan(
+                            this.program()?,
+                            index,
+                            this.types()?,
+                            &this.0.budget,
+                        )
+                        .map_err(Error::new)?;
+                        publish(&slot.checked, Arc::new(checked))?;
+                    } else if key.kind == UNIVERSAL_LOWER {
+                        cx.read(cx.request(function(TEMPLATE_BODY, index)).get(0))
+                            .await?;
+                        let env = this
+                            .types()?
+                            .param_env(this.types()?.function_decl(index).map_err(Error::new)?)
+                            .map_err(Error::new)?;
+                        if env.arity() == 0 {
+                            return Err(Error::new(
+                                "universal lowering requires generic declaration",
+                            ));
+                        }
+                        let source = slot
+                            .checked
+                            .get()
+                            .ok_or_else(|| Error::new("missing template body"))?
+                            .clone();
+                        publish(
+                            &slot.lowered,
+                            cfg::lower_template(source, env, &this.0.budget).map_err(Error::new)?,
+                        )?;
+                    } else {
+                        cx.read(cx.request(function(UNIVERSAL_LOWER, index)).get(0))
+                            .await?;
+                        let lowered = slot
+                            .lowered
+                            .get()
+                            .ok_or_else(|| Error::new("missing universal CFG"))?
+                            .clone();
+                        match ownership::verify_template(lowered) {
+                            Ok(proof) => {
+                                publish(&slot.analysis, proof.analysis().clone())?;
+                                publish(&slot.verified, proof)?;
+                            }
+                            Err(analysis) => {
+                                let message = format!(
+                                    "universal generic declaration {index}: initialization/move analysis (complete={}): {:?}",
+                                    analysis.complete, analysis.diagnostics
+                                );
+                                publish(&slot.analysis, Arc::new(analysis))?;
+                                return Err(Error::new(message));
+                            }
+                        }
+                    }
+                }
+                MONO_PLAN => {
+                    cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
+                    let program = this.program()?;
+                    // No concrete work is exposed until every declaration is universally valid.
+                    let count =
+                        program.functions.len().checked_mul(2).ok_or_else(|| {
+                            Error::new("generic declaration frontier limit exceeded")
+                        })?;
+                    let (mut handles, _handles_reservation) = this.scratch_vec(count)?;
+                    for (index, item) in program.functions.iter().enumerate() {
+                        handles.push(cx.request(function(TEMPLATE_BODY, index)).get(0));
+                        if !item.type_params.is_empty() {
+                            handles.push(cx.request(function(UNIVERSAL_ANALYZE, index)).get(0));
+                        }
+                    }
+                    for handle in handles {
+                        cx.read(handle).await?;
+                    }
+                    let (mut sources, _sources_reservation) =
+                        this.scratch_vec(program.functions.len())?;
+                    for slot in this
+                        .0
+                        .declarations
+                        .get()
+                        .ok_or_else(|| Error::new("missing declaration facts"))?
+                    {
+                        sources.push(
+                            slot.checked
+                                .get()
+                                .cloned()
+                                .ok_or_else(|| Error::new("missing universal checked body"))?,
+                        );
+                    }
+                    let mut context = this.types()?.clone();
+                    let plan = instances::build(program, &mut context, &sources, &this.0.budget)
+                        .map_err(Error::new)?;
+                    this.reserve(
+                        plan.entries
+                            .len()
+                            .checked_mul(std::mem::size_of::<NativeFacts>())
+                            .ok_or_else(|| Error::new("generic native fact byte limit exceeded"))?,
+                    )?;
+                    let mut native = Vec::new();
+                    native
+                        .try_reserve_exact(plan.entries.len())
+                        .map_err(|_| Error::new("generic native fact allocation limit exceeded"))?;
+                    native.extend(plan.entries.iter().map(|_| NativeFacts::new()));
+                    publish(&this.0.native, native)?;
+                    publish(&this.0.plan, plan)?;
                 }
                 BODY | LOWER | ANALYZE | OBJECT => {
                     let [index] = key.params.as_slice() else {
-                        return Err(Error::new("missing function index"));
+                        return Err(Error::new("missing instance index"));
                     };
                     let index = usize::try_from(*index)
-                        .map_err(|_| Error::new("invalid function index"))?;
+                        .map_err(|_| Error::new("invalid instance index"))?;
+                    cx.read(cx.request(root(MONO_PLAN)).get(0)).await?;
+                    let plan = this
+                        .0
+                        .plan
+                        .get()
+                        .ok_or_else(|| Error::new("missing sealed instance plan"))?;
+                    let instance = plan
+                        .entries
+                        .get(index)
+                        .ok_or_else(|| Error::new("invalid instance slot"))?;
+                    let slot = this.native(index)?;
                     if key.kind == BODY {
-                        cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
-                        let types = this
-                            .0
-                            .types
-                            .get()
-                            .ok_or_else(|| Error::new("missing type environment"))?;
-                        let checked =
-                            frontend::type_function_with_env(this.program()?, index, types)
-                                .map_err(Error::new)?;
-                        this.0
-                            .checked
-                            .get()
-                            .and_then(|v| v.get(index))
-                            .ok_or_else(|| Error::new("missing checked function slot"))?
-                            .set(checked)
-                            .map_err(|_| Error::new("duplicate checked function"))?;
+                        let declaration = this.declaration(instance.source_index)?;
+                        let checked = if instance.target.type_args.is_empty() {
+                            declaration
+                                .checked
+                                .get()
+                                .ok_or_else(|| Error::new("missing checked body"))?
+                                .clone()
+                        } else {
+                            let verified = declaration.verified.get().ok_or_else(|| {
+                                Error::new("missing exact universal template proof")
+                            })?;
+                            let mut context = this.types()?.clone();
+                            Arc::new(
+                                ir::instantiate_checked(
+                                    verified,
+                                    &instance.target.type_args,
+                                    &mut context,
+                                    &this.0.budget,
+                                )
+                                .map_err(Error::new)?,
+                            )
+                        };
+                        publish(&slot.checked, checked)?;
                     } else if key.kind == LOWER {
                         cx.read(cx.request(function(BODY, index)).get(0)).await?;
-                        let item = this
-                            .0
+                        let checked = slot
                             .checked
                             .get()
-                            .and_then(|v| v.get(index))
-                            .and_then(OnceLock::get)
-                            .ok_or_else(|| Error::new("missing checked function"))?;
-                        let lowered = cfg::lower(item).map_err(Error::new)?;
-
-                        this.0
-                            .lowered
-                            .get()
-                            .and_then(|v| v.get(index))
-                            .ok_or_else(|| Error::new("missing CFG slot"))?
-                            .set(Arc::new(lowered))
-                            .map_err(|_| Error::new("duplicate CFG fact"))?;
+                            .ok_or_else(|| Error::new("missing instantiated body"))?;
+                        publish(
+                            &slot.lowered,
+                            Arc::new(
+                                cfg::lower_with_budget(checked, &this.0.budget)
+                                    .map_err(Error::new)?,
+                            ),
+                        )?;
                     } else if key.kind == ANALYZE {
                         cx.read(cx.request(function(LOWER, index)).get(0)).await?;
-                        let item = this
-                            .0
+                        let lowered = slot
                             .lowered
                             .get()
-                            .and_then(|v| v.get(index))
-                            .and_then(OnceLock::get)
-                            .ok_or_else(|| Error::new("missing CFG fact"))?;
-                        let analysis = Arc::new(ownership::analyze(item));
-                        let passed = analysis.passed();
-                        let diagnostics = (!passed).then(|| {
-                            format!(
-                                "{}: initialization/move analysis (complete={}): {:?}",
-                                item.name, analysis.complete, analysis.diagnostics
-                            )
-                        });
-                        this.0
-                            .analyses
-                            .get()
-                            .and_then(|v| v.get(index))
-                            .ok_or_else(|| Error::new("missing analysis slot"))?
-                            .set(analysis)
-                            .map_err(|_| Error::new("duplicate analysis fact"))?;
-                        if let Some(diagnostics) = diagnostics {
-                            return Err(Error::new(diagnostics));
+                            .ok_or_else(|| Error::new("missing concrete CFG"))?
+                            .clone();
+                        let closed = cfg::close(lowered, &this.0.budget).map_err(Error::new)?;
+                        match ownership::analyze_closed(closed) {
+                            Ok(proof) => {
+                                publish(&slot.analysis, proof.analysis().clone())?;
+                                publish(&slot.concrete, proof)?;
+                            }
+                            Err(analysis) => {
+                                let message = format!(
+                                    "instance {index}: initialization/move analysis (complete={}): {:?}",
+                                    analysis.complete, analysis.diagnostics
+                                );
+                                publish(&slot.analysis, Arc::new(analysis))?;
+                                return Err(Error::new(message));
+                            }
                         }
                     } else {
                         cx.read(cx.request(function(ANALYZE, index)).get(0)).await?;
-                        let item = this
-                            .0
-                            .lowered
+                        let concrete = slot
+                            .concrete
                             .get()
-                            .and_then(|v| v.get(index))
-                            .and_then(OnceLock::get)
-                            .ok_or_else(|| Error::new("missing CFG fact"))?;
-                        let object = backend::emit_cfg_function(item).map_err(Error::new)?;
-                        this.0
-                            .objects
-                            .get()
-                            .and_then(|v| v.get(index))
-                            .ok_or_else(|| Error::new("missing object slot"))?
-                            .set(object)
-                            .map_err(|_| Error::new("duplicate object"))?;
+                            .ok_or_else(|| Error::new("missing exact concrete analysis seal"))?;
+                        let object =
+                            backend::emit_cfg_function(concrete, &|target| plan.symbol(target))
+                                .map_err(Error::new)?;
+                        publish(&slot.object, object)?;
                     }
                 }
                 CHECK | BUILD => {
-                    cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
-                    let program = this.program()?;
-                    // Expose the entire independent function frontier before awaiting.
+                    cx.read(cx.request(root(MONO_PLAN)).get(0)).await?;
+                    let plan = this
+                        .0
+                        .plan
+                        .get()
+                        .ok_or_else(|| Error::new("missing instance plan"))?;
                     let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
-                    let inputs: Vec<_> = (0..program.functions.len())
-                        .map(|i| cx.request(function(kind, i)).get(0))
-                        .collect();
-                    for handle in inputs {
+                    let (mut handles, _handles_reservation) =
+                        this.scratch_vec(plan.entries.len())?;
+                    for index in 0..plan.entries.len() {
+                        handles.push(cx.request(function(kind, index)).get(0));
+                    }
+                    for handle in handles {
                         cx.read(handle).await?;
                     }
                     if key.kind == BUILD {
-                        let objects = this
-                            .0
-                            .objects
-                            .get()
-                            .ok_or_else(|| Error::new("missing objects"))?;
-                        let objects: Vec<_> = program
-                            .functions
-                            .iter()
-                            .zip(objects)
-                            .map(|(f, o)| {
-                                o.get()
-                                    .map(|o| (f.name.clone(), o.clone()))
-                                    .ok_or_else(|| Error::new("unpublished function object"))
-                            })
-                            .collect::<Result<_, _>>()?;
-                        let bytes = backend::link(&objects).map_err(Error::new)?;
-                        this.0
-                            .executable
-                            .set(bytes)
-                            .map_err(|_| Error::new("duplicate executable"))?;
+                        let (mut objects, _objects_reservation) =
+                            this.scratch_vec(plan.entries.len())?;
+                        for (index, instance) in plan.entries.iter().enumerate() {
+                            let object =
+                                this.native(index)?.object.get().ok_or_else(|| {
+                                    Error::new("unpublished native instance object")
+                                })?;
+                            let mut bytes = object.code.len();
+                            for (_, name) in &object.calls {
+                                bytes = bytes
+                                    .checked_add(name.len())
+                                    .and_then(|n| {
+                                        n.checked_add(std::mem::size_of::<(usize, String)>())
+                                    })
+                                    .ok_or_else(|| {
+                                        Error::new("generic link input byte limit exceeded")
+                                    })?;
+                            }
+                            for (_, value) in &object.strings {
+                                bytes = bytes
+                                    .checked_add(value.len())
+                                    .and_then(|n| {
+                                        n.checked_add(std::mem::size_of::<(usize, Vec<u8>)>())
+                                    })
+                                    .ok_or_else(|| {
+                                        Error::new("generic link input byte limit exceeded")
+                                    })?;
+                            }
+                            this.0.budget.retain_bytes(bytes).map_err(Error::new)?;
+                            this.0.budget.charge_work(bytes).map_err(Error::new)?;
+                            objects.push((
+                                plan.symbol(&instance.target).map_err(Error::new)?,
+                                object.clone(),
+                            ));
+                        }
+                        publish(
+                            &this.0.executable,
+                            backend::link(&objects).map_err(Error::new)?,
+                        )?;
                     }
                 }
                 _ => return Err(Error::new("unknown compiler operation")),
@@ -332,14 +535,22 @@ pub fn compile_file_observed(
 }
 
 fn retained_analyses(snapshot: &Snapshot) -> Vec<(usize, Arc<ownership::Analysis>)> {
-    snapshot
-        .analyses
-        .get()
-        .into_iter()
-        .flatten()
-        .enumerate()
-        .filter_map(|(index, slot)| slot.get().map(|analysis| (index, analysis.clone())))
-        .collect()
+    let mut analyses = Vec::new();
+    if let Some(slots) = snapshot.declarations.get() {
+        for (index, slot) in slots.iter().enumerate() {
+            if let Some(analysis) = slot.analysis.get() {
+                analyses.push((index, analysis.clone()));
+            }
+        }
+    }
+    if let Some(slots) = snapshot.native.get() {
+        for (index, slot) in slots.iter().enumerate() {
+            if let Some(analysis) = slot.analysis.get() {
+                analyses.push((index, analysis.clone()));
+            }
+        }
+    }
+    analyses
 }
 
 fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compilation, Failure> {
@@ -349,10 +560,11 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         parsed: OnceLock::new(),
         program: OnceLock::new(),
         types: OnceLock::new(),
-        checked: OnceLock::new(),
-        lowered: OnceLock::new(),
-        analyses: OnceLock::new(),
-        objects: OnceLock::new(),
+        budget: ir::PlanBudget::default(),
+        reservations: std::sync::Mutex::new(Vec::new()),
+        declarations: OnceLock::new(),
+        plan: OnceLock::new(),
+        native: OnceLock::new(),
         executable: OnceLock::new(),
     });
     let engine = Engine::new(CompilerProvider(snapshot.clone()));
@@ -389,6 +601,7 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
     let executable = snapshot.executable.get().cloned();
     let (source_bytes, source_files) = match &snapshot.input {
         Input::Text(text) => (text.len(), 1),
+        Input::Program(_) => (0, 0),
         Input::File(_) => {
             let loaded = snapshot.source.get().ok_or_else(|| Failure {
                 error: Error::new("missing loaded source accounting"),
@@ -399,11 +612,11 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         }
     };
     let control_flow: Vec<_> = snapshot
-        .lowered
+        .native
         .get()
         .into_iter()
         .flatten()
-        .filter_map(OnceLock::get)
+        .filter_map(|slot| slot.lowered.get())
         .cloned()
         .collect();
     let mut cfg_blocks = 0;
@@ -438,15 +651,23 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
         cfg_edges,
         cfg_locals,
         analyses: snapshot
-            .analyses
+            .native
             .get()
             .into_iter()
             .flatten()
-            .filter_map(OnceLock::get)
+            .filter_map(|slot| slot.analysis.get())
             .cloned()
             .collect(),
         control_flow,
         source_bytes,
         source_files,
     })
+}
+
+pub(super) fn compile_program_observed(
+    program: frontend::Program,
+    workers: usize,
+    check_only: bool,
+) -> Result<Compilation, Failure> {
+    compile_input(Input::Program(program), workers, check_only)
 }

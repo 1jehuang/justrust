@@ -262,3 +262,13 @@ no OBJECT during CHECK, no publication after any declaration/instance failure,
 resource limits/cycles and current reference/numeric regression suites. Retain
 exact raw receipts, redacted run profiles and actual native runtime outcomes.
 No speedup claim without the pinned comprehensive before/after benchmark.
+
+## Implementation checkpoint (October 16, 2026)
+
+The explicit reference-free foundation is implemented with one universal move
+solver, capture-free checked-IR substitution, application-qualified nominal
+identity and sealed concrete native instances. All 1,235 hosted tests, strict
+all-target lint, the exact 28 source cases and four graph gates pass. The actual
+native example runs successfully with eight workers. Independent whole-corpus
+follow-through on the committed revision remains pending. This is not full Rust
+compatibility or a measured performance improvement.

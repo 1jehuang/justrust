@@ -491,16 +491,10 @@ fn cfg_native_emission_preserves_order_snapshots_recursion_and_control_edges() {
                 .map(|block| edges(&block.terminator.value).len())
                 .sum();
             assert!(cfg_blocks > 0 && cfg_edges > 0 && cfg_locals > 0);
-            let objects = functions
-                .iter()
-                .map(|function| {
-                    (
-                        function.name.clone(),
-                        backend::emit_cfg_function(function).unwrap(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let direct = backend::link(&objects).unwrap();
+            let direct = justrust_engine::compiler::compile(NATIVE.to_owned(), 1, false)
+                .unwrap()
+                .executable
+                .unwrap();
             let compatibility = backend::emit(&program).unwrap();
             let scratch = Scratch::new();
             for (name, bytes) in [("cfg", direct), ("compatibility", compatibility)] {

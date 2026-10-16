@@ -27,6 +27,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Noescape reference parameters and genuine expected-site carrier reborrows.
 - [x] Shared/mutable static input-path returns with explicit or elided regions.
 - [x] Builtin reference field projections and capability-sensitive mixed inputs.
+- [x] Explicit reference-free generic templates with universal move checking,
+      application-qualified nominal identity and sealed concrete native instances.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -62,8 +64,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active work and evidence limits
 
-The full requested outcome is not reached. Latest hosted evidence is 1,067 tests
-and 816 independently verified native cases for bounded Linux x86-64 features. There is no successful
+The full requested outcome is not reached. The generic foundation passes 1,235
+hosted tests, strict all-target lint, its 28 exact source cases and four
+instance/trust graph tests. The last retained independent campaign covers 900
+native cases before this foundation. Its expanded independent campaign remains
+open until exact-revision receipts are retained. There is no successful
 core/alloc/std build, broad existing-project acceptance or representative full-Rust
 performance comparison. INTEGER-TYPES.md now records delivered signed/unsigned
 primitives through64 bits, typed literals/patterns and existing checked operations.
@@ -72,7 +77,7 @@ four graph tests, with soft source inference grounded in primary semantics.
 The tracked22corpus native campaign verifies all816cases.
 Additional operators remain separate follow-through work.
 Full Rust completion remains the goal, not this bounded milestone.
-Integer128, floats, generics/traits/methods, Drop,
+Integer128, floats, generic inference/traits/methods, Drop,
 reference-containing values, libraries and project integration remain open.
 
 ## Delivered milestones, newest first

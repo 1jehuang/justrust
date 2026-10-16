@@ -143,6 +143,7 @@ pub enum Terminator {
         else_block: BlockId,
     },
     Call {
+        target: ir::CallTarget,
         name: String,
         signature: ir::Signature,
         args: Vec<Operand>,
@@ -152,6 +153,66 @@ pub enum Terminator {
     /// Consumes the value held in Function::return_local.
     Return,
     Unreachable,
+}
+
+impl Rvalue {
+    fn visit_operands(
+        &self,
+        visit: &mut impl FnMut(&Operand) -> Result<(), String>,
+    ) -> Result<(), String> {
+        match self {
+            Self::Use(value)
+            | Self::IntCast { value, .. }
+            | Self::Unary { value, .. }
+            | Self::Repeat { value, .. } => visit(value)?,
+            Self::Binary { left, right, .. } => {
+                visit(left)?;
+                visit(right)?;
+            }
+            Self::Aggregate { fields, .. } | Self::EnumVariant { fields, .. } => {
+                for value in fields {
+                    visit(value)?;
+                }
+            }
+            Self::IndexCopy { index, .. } => visit(index)?,
+            Self::Borrow(_) | Self::Discriminant(_) | Self::Println(_) => {}
+        }
+        Ok(())
+    }
+}
+impl Statement {
+    fn visit_operands(
+        &self,
+        visit: &mut impl FnMut(&Operand) -> Result<(), String>,
+    ) -> Result<(), String> {
+        match self {
+            Self::Assign { value, .. } => value.visit_operands(visit)?,
+            Self::IndexAssignOp { index, value, .. } | Self::IndexAssign { index, value, .. } => {
+                visit(index)?;
+                visit(value)?;
+            }
+            Self::IndexInspect { index, .. } => visit(index)?,
+            Self::Inspect(_) | Self::StorageLive(_) | Self::StorageDead(_) => {}
+        }
+        Ok(())
+    }
+}
+impl Terminator {
+    fn visit_operands(
+        &self,
+        visit: &mut impl FnMut(&Operand) -> Result<(), String>,
+    ) -> Result<(), String> {
+        match self {
+            Self::Call { args, .. } => {
+                for value in args {
+                    visit(value)?;
+                }
+            }
+            Self::Switch { condition, .. } => visit(condition)?,
+            Self::SwitchVariant { .. } | Self::Goto(_) | Self::Return | Self::Unreachable => {}
+        }
+        Ok(())
+    }
 }
 
 fn coerces(got: &Ty, want: &Ty) -> bool {
@@ -174,6 +235,69 @@ fn coerces(got: &Ty, want: &Ty) -> bool {
         }
         _ => false,
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct TemplateCfg {
+    source: std::sync::Arc<ir::CheckedFunction>,
+    param_env: std::sync::Arc<ir::ParamEnv>,
+    function: std::sync::Arc<Function>,
+    budget: ir::PlanBudget,
+}
+impl TemplateCfg {
+    pub fn source(&self) -> &std::sync::Arc<ir::CheckedFunction> {
+        &self.source
+    }
+    pub fn param_env(&self) -> &std::sync::Arc<ir::ParamEnv> {
+        &self.param_env
+    }
+    pub fn function(&self) -> &std::sync::Arc<Function> {
+        &self.function
+    }
+    pub fn budget(&self) -> &ir::PlanBudget {
+        &self.budget
+    }
+}
+#[derive(Clone, Debug)]
+pub struct ClosedCfg {
+    function: std::sync::Arc<Function>,
+    budget: ir::PlanBudget,
+}
+impl ClosedCfg {
+    pub fn function(&self) -> &std::sync::Arc<Function> {
+        &self.function
+    }
+    pub fn budget(&self) -> &ir::PlanBudget {
+        &self.budget
+    }
+}
+pub fn close(
+    function: std::sync::Arc<Function>,
+    budget: &ir::PlanBudget,
+) -> Result<ClosedCfg, String> {
+    function.preflight_plan(ir::FactsCtx::Concrete, budget)?;
+    function.validate_with_facts(ir::FactsCtx::Concrete)?;
+    Ok(ClosedCfg {
+        function,
+        budget: budget.clone(),
+    })
+}
+pub fn lower_template(
+    source: std::sync::Arc<ir::CheckedFunction>,
+    param_env: std::sync::Arc<ir::ParamEnv>,
+    budget: &ir::PlanBudget,
+) -> Result<TemplateCfg, String> {
+    budget.charge_nodes(source.exprs.len().saturating_add(source.locals.len()))?;
+    let facts = ir::FactsCtx::Universal(&param_env);
+    let function = std::sync::Arc::new(lower_with_facts(&source, facts, Some(budget))?);
+    function.preflight_plan(facts, budget)?;
+    function.validate_with_facts(facts)?;
+    Ok(TemplateCfg {
+        source,
+        param_env,
+        function,
+        budget: budget.clone(),
+    })
 }
 
 fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
@@ -241,6 +365,131 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
 }
 
 impl Function {
+    fn preflight_plan(
+        &self,
+        facts: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        fn path(place: &Place, budget: &ir::PlanBudget) -> Result<(), String> {
+            budget.check_depth(place.projection.len())?;
+            budget.charge_work(place.projection.len() + 1)
+        }
+        fn operand(
+            value: &Operand,
+            budget: &ir::PlanBudget,
+            facts: ir::FactsCtx<'_>,
+        ) -> Result<(), String> {
+            budget.charge_work(1)?;
+            match value {
+                Operand::Constant(Constant::Enum { ty, .. }) => {
+                    facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?
+                }
+                Operand::Copy(place) | Operand::Move(place) => path(place, budget)?,
+                Operand::Constant(Constant::Int(_) | Constant::Bool(_) | Constant::Unit) => {}
+            }
+            Ok(())
+        }
+        budget.charge_work(self.locals.len())?;
+        for local in &self.locals {
+            facts.validate_ty_with_budget(&local.ty, budget)?;
+        }
+        facts.validate_ty_with_budget(&self.result, budget)?;
+        for site in &self.loan_sites {
+            path(&site.place, budget)?;
+        }
+        for block in &self.blocks {
+            budget.charge_work(1)?;
+            for located in &block.statements {
+                budget.charge_work(1)?;
+                match &located.value {
+                    Statement::IndexAssignOp {
+                        array,
+                        index,
+                        value,
+                        ..
+                    }
+                    | Statement::IndexAssign {
+                        array,
+                        index,
+                        value,
+                    } => {
+                        path(array, budget)?;
+                        operand(index, budget, facts)?;
+                        operand(value, budget, facts)?;
+                    }
+                    Statement::IndexInspect { array, index } => {
+                        path(array, budget)?;
+                        operand(index, budget, facts)?;
+                    }
+                    Statement::Inspect(place) => path(place, budget)?,
+                    Statement::StorageLive(_) | Statement::StorageDead(_) => {}
+                    Statement::Assign { destination, value } => {
+                        path(destination, budget)?;
+                        match value {
+                            Rvalue::Use(value)
+                            | Rvalue::IntCast { value, .. }
+                            | Rvalue::Unary { value, .. } => operand(value, budget, facts)?,
+                            Rvalue::Repeat { ty, value } => {
+                                facts.validate_ty_with_budget(ty, budget)?;
+                                operand(value, budget, facts)?;
+                            }
+                            Rvalue::Binary { left, right, .. } => {
+                                operand(left, budget, facts)?;
+                                operand(right, budget, facts)?;
+                            }
+                            Rvalue::Aggregate { ty, fields } => {
+                                facts.validate_ty_with_budget(ty, budget)?;
+                                for value in fields {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
+                            Rvalue::EnumVariant { ty, fields, .. } => {
+                                facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                                for value in fields {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
+                            Rvalue::IndexCopy { array, index } => {
+                                path(array, budget)?;
+                                operand(index, budget, facts)?;
+                            }
+                            Rvalue::Discriminant(place) => path(place, budget)?,
+                            Rvalue::Borrow(_) | Rvalue::Println(_) => {}
+                        }
+                    }
+                }
+            }
+            match &block.terminator.value {
+                Terminator::Call {
+                    target,
+                    signature,
+                    args,
+                    destination,
+                    ..
+                } => {
+                    if target.type_args.len() > 32 {
+                        return Err("generic call argument limit exceeded".into());
+                    }
+                    for ty in target
+                        .type_args
+                        .iter()
+                        .chain(signature.params.iter())
+                        .chain(std::iter::once(&signature.result))
+                    {
+                        facts.validate_ty_with_budget(ty, budget)?;
+                    }
+                    for value in args {
+                        operand(value, budget, facts)?;
+                    }
+                    path(destination, budget)?;
+                }
+                Terminator::Switch { condition, .. } => operand(condition, budget, facts)?,
+                Terminator::SwitchVariant { place, .. } => path(place, budget)?,
+                Terminator::Goto(_) | Terminator::Return | Terminator::Unreachable => {}
+            }
+        }
+        Ok(())
+    }
     pub fn place_ty(&self, place: &Place) -> Result<&Ty, String> {
         let ty = &self
             .locals
@@ -498,6 +747,13 @@ impl Function {
     /// Reference calls additionally require whole-program noescape and matching
     /// callee-signature evidence at the trusted emission boundary.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with_facts(ir::FactsCtx::Concrete)
+    }
+    pub fn validate_with_facts(&self, facts: ir::FactsCtx<'_>) -> Result<(), String> {
+        for local in &self.locals {
+            facts.validate_ty(&local.ty)?;
+        }
+        facts.validate_ty(&self.result)?;
         let block = |id: BlockId| -> Result<(), String> {
             if id.0 < self.blocks.len() {
                 Ok(())
@@ -561,6 +817,12 @@ impl Function {
         drop(params);
         for item in &self.blocks {
             for statement in &item.statements {
+                statement.value.visit_operands(&mut |operand| {
+                    if let Operand::Constant(Constant::Enum { ty, .. }) = operand {
+                        facts.validate_ty(&Ty::Enum(ty.clone()))?;
+                    }
+                    Ok(())
+                })?;
                 match &statement.value {
                     Statement::IndexAssignOp {
                         array,
@@ -603,6 +865,7 @@ impl Function {
                             }
                         }
                         let got = self.rvalue_ty(value)?;
+                        facts.validate_ty(&got)?;
                         let want = self.place_ty(destination)?;
                         if !coerces(&got, want) {
                             return Err("CFG assignment type mismatch".into());
@@ -610,6 +873,12 @@ impl Function {
                     }
                 }
             }
+            item.terminator.value.visit_operands(&mut |operand| {
+                if let Operand::Constant(Constant::Enum { ty, .. }) = operand {
+                    facts.validate_ty(&Ty::Enum(ty.clone()))?;
+                }
+                Ok(())
+            })?;
             match &item.terminator.value {
                 Terminator::SwitchVariant {
                     place,
@@ -641,12 +910,24 @@ impl Function {
                     block(*else_block)?;
                 }
                 Terminator::Call {
+                    target,
                     signature,
                     args,
                     destination,
                     next,
                     ..
                 } => {
+                    if target.type_args.len() > 32 {
+                        return Err("generic call argument limit exceeded".into());
+                    }
+                    for ty in target
+                        .type_args
+                        .iter()
+                        .chain(signature.params.iter())
+                        .chain(std::iter::once(&signature.result))
+                    {
+                        facts.validate_ty(ty)?;
+                    }
                     if signature.params.len() != args.len() {
                         return Err("CFG call arity mismatch".into());
                     }
@@ -697,6 +978,8 @@ struct LoopTarget {
 }
 
 struct Lowerer<'a> {
+    budget: Option<&'a ir::PlanBudget>,
+    resource_error: Option<String>,
     lowering_depth: usize,
     lowering_work: usize,
     origins: usize,
@@ -713,7 +996,25 @@ struct Lowerer<'a> {
 }
 
 impl Lowerer<'_> {
+    fn allocate(&mut self, nodes: usize, bytes: usize) -> bool {
+        if self.resource_error.is_some() {
+            return false;
+        }
+        if let Some(budget) = self.budget
+            && let Err(error) = budget
+                .charge_nodes(nodes)
+                .and_then(|()| budget.charge_work(nodes))
+                .and_then(|()| budget.retain_bytes(bytes))
+        {
+            self.resource_error = Some(error);
+            return false;
+        }
+        true
+    }
     fn enter_lowering(&mut self) -> Result<(), String> {
+        if let Some(error) = &self.resource_error {
+            return Err(error.clone());
+        }
         if self.lowering_depth >= ir::MAX_PATTERN_PROJECTION_DEPTH {
             return Err("CFG lowering depth resource limit exceeded (128)".into());
         }
@@ -726,6 +1027,9 @@ impl Lowerer<'_> {
     }
 
     fn temporary(&mut self, ty: Ty, origin: Option<ExprId>) -> Place {
+        if !self.allocate(1, std::mem::size_of::<ir::LocalDecl>() + 32) {
+            return place(self.result.return_local);
+        }
         let local = LocalId(self.result.locals.len());
         self.result.locals.push(ir::LocalDecl {
             name: format!("$match{}", local.0),
@@ -867,6 +1171,9 @@ impl Lowerer<'_> {
     }
 
     fn block(&mut self) -> BlockId {
+        if !self.allocate(1, std::mem::size_of::<PendingBlock>()) {
+            return BlockId(0);
+        }
         let id = BlockId(self.blocks.len());
         self.blocks.push(PendingBlock {
             statements: Vec::new(),
@@ -876,12 +1183,18 @@ impl Lowerer<'_> {
     }
 
     fn statement(&mut self, value: Statement, origin: Option<ExprId>) {
+        if !self.allocate(1, std::mem::size_of::<Located<Statement>>()) {
+            return;
+        }
         self.blocks[self.current.0]
             .statements
             .push(Located { value, origin });
     }
 
     fn terminate(&mut self, value: Terminator, origin: Option<ExprId>) -> Result<(), String> {
+        if let Some(error) = &self.resource_error {
+            return Err(error.clone());
+        }
         let slot = &mut self.blocks[self.current.0].terminator;
         if slot.is_some() {
             return Err("CFG block already terminated".into());
@@ -1251,9 +1564,27 @@ impl Lowerer<'_> {
     /// snapshot. Projection can address it before selecting a field to consume.
     fn materialize_expression(&mut self, id: ExprId) -> Result<Place, String> {
         self.enter_lowering()?;
-        let result = self.materialize_expression_inner(id);
+        // Keep long admitted cast chains out of the large aggregate/control
+        // lowering frame. The same depth/work guard still covers every cast.
+        let result = match self.source.exprs.get(id.0).map(|expr| &expr.kind) {
+            Some(ir::ExprKind::IntCast { value, to }) => self.materialize_cast(id, *value, *to),
+            _ => self.materialize_expression_inner(id),
+        };
         self.lowering_depth -= 1;
         result
+    }
+
+    fn materialize_cast(&mut self, id: ExprId, value: ExprId, to: IntTy) -> Result<Place, String> {
+        let destination = place(
+            *self
+                .expressions
+                .get(id.0)
+                .ok_or("missing expression local")?,
+        );
+        self.live(destination.local, Some(id));
+        let value = self.expression(value)?;
+        self.assign(destination.clone(), Rvalue::IntCast { value, to }, Some(id));
+        Ok(destination)
     }
 
     fn materialize_expression_inner(&mut self, id: ExprId) -> Result<Place, String> {
@@ -1508,6 +1839,7 @@ impl Lowerer<'_> {
                 );
             }
             ir::ExprKind::Call {
+                target,
                 name,
                 args,
                 signature,
@@ -1525,6 +1857,7 @@ impl Lowerer<'_> {
                 let next = self.block();
                 self.terminate(
                     Terminator::Call {
+                        target: target.clone(),
                         name: name.clone(),
                         signature: signature.clone(),
                         args,
@@ -1621,6 +1954,34 @@ impl Lowerer<'_> {
 /// Lower without modifying the checked input. Each value transfer selects Copy
 /// or Move from its projected type. The result still requires ownership analysis.
 pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
+    lower_with_facts(source, ir::FactsCtx::Concrete, None)
+}
+pub fn lower_with_budget(
+    source: &ir::CheckedFunction,
+    budget: &ir::PlanBudget,
+) -> Result<Function, String> {
+    lower_with_facts(source, ir::FactsCtx::Concrete, Some(budget))
+}
+fn lower_with_facts(
+    source: &ir::CheckedFunction,
+    facts: ir::FactsCtx<'_>,
+    budget: Option<&ir::PlanBudget>,
+) -> Result<Function, String> {
+    if let Some(budget) = budget {
+        source.preflight_plan(facts, budget)?;
+        budget.retain_bytes(
+            source
+                .exprs
+                .len()
+                .checked_add(source.locals.len())
+                .and_then(|n| n.checked_add(1))
+                .and_then(|n| n.checked_mul(std::mem::size_of::<ir::LocalDecl>() + 32))
+                .ok_or("CFG allocation overflow")?,
+        )?;
+        budget.charge_nodes(1)?;
+        budget.retain_bytes(std::mem::size_of::<PendingBlock>())?;
+    }
+    source.validate_with_facts(facts)?;
     let arena_size = source
         .exprs
         .len()
@@ -1692,6 +2053,8 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
         mutable: true,
     });
     let mut lowerer = Lowerer {
+        budget,
+        resource_error: None,
         lowering_depth: 0,
         lowering_work: 0,
         origins: formal_parameter_origins + loan_sites.len(),
@@ -1711,12 +2074,14 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
         },
         expressions,
         parameters: source.params.iter().copied().collect(),
-        blocks: Vec::new(),
+        blocks: vec![PendingBlock {
+            statements: Vec::new(),
+            terminator: None,
+        }],
         current: BlockId(0),
         scopes: vec![source.params.clone()],
         loops: Vec::new(),
     };
-    lowerer.current = lowerer.block();
     lowerer.statement(Statement::StorageLive(return_local), None);
     if source.result == Ty::Unit {
         lowerer.assign(
@@ -1725,7 +2090,11 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
             None,
         );
     }
-    lowerer.body(&source.body, Some(place(return_local)))?;
+    let body_result = lowerer.body(&source.body, Some(place(return_local)));
+    if let Some(error) = lowerer.resource_error.take() {
+        return Err(error);
+    }
+    body_result?;
     lowerer.cleanup(0, None);
     lowerer.terminate(Terminator::Return, None)?;
     lowerer.result.blocks = lowerer
@@ -1744,6 +2113,405 @@ pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
 
 #[cfg(test)]
 mod tests {
+    struct NoNominals;
+    impl ir::SubstitutionCx for NoNominals {
+        fn nominal_application(&self, _: ir::NominalAppId) -> Result<ir::NominalAppInfo, String> {
+            Err("unexpected nominal".into())
+        }
+        fn intern_nominal(
+            &mut self,
+            _: ir::DeclId,
+            _: &[Ty],
+            _: ir::FactsCtx<'_>,
+            _: &ir::PlanBudget,
+        ) -> Result<Ty, String> {
+            Err("unexpected nominal".into())
+        }
+        fn instantiate_signature(
+            &mut self,
+            _: &ir::CallTarget,
+            _: ir::FactsCtx<'_>,
+            _: &ir::PlanBudget,
+        ) -> Result<ir::Signature, String> {
+            Err("unexpected call".into())
+        }
+    }
+    #[test]
+    fn generic_templates_prove_moves_before_relowering_concrete_copy_instances() {
+        let budget = ir::PlanBudget::default();
+        let env = std::sync::Arc::new(
+            ir::ParamEnv::new(
+                ir::BinderId {
+                    declaration: test_decl(),
+                },
+                1,
+            )
+            .unwrap(),
+        );
+        let ty = Ty::Param(ir::ParamId {
+            owner: env.binder(),
+            index: 0,
+        });
+        let source = ir::CheckedFunction {
+            ref_contract: Default::default(),
+            name: "id".into(),
+            params: vec![LocalId(0)],
+            result: ty.clone(),
+            locals: vec![ir::LocalDecl {
+                name: "x".into(),
+                ty: ty.clone(),
+                mutable: false,
+            }],
+            exprs: vec![expr(ty.clone(), ir::ExprKind::Local(LocalId(0)))],
+            body: ir::Block {
+                statements: vec![],
+                tail: Some(ExprId(0)),
+            },
+        };
+        assert!(lower(&source).is_err());
+        let template =
+            lower_template(std::sync::Arc::new(source.clone()), env.clone(), &budget).unwrap();
+        assert!(template.function().blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value,Statement::Assign { value:Rvalue::Use(Operand::Move(place)),.. } if place.local==LocalId(0))));
+        let verified = super::super::ownership::verify_template(template).unwrap();
+        assert!(
+            ir::instantiate_checked(
+                &verified,
+                &[Ty::Int(IntTy::I32)],
+                &mut NoNominals,
+                &ir::PlanBudget::default()
+            )
+            .is_err()
+        );
+        let instance =
+            ir::instantiate_checked(&verified, &[Ty::Int(IntTy::I32)], &mut NoNominals, &budget)
+                .unwrap();
+        let concrete = lower_with_budget(&instance, &budget).unwrap();
+        assert!(concrete.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value,Statement::Assign { value:Rvalue::Use(Operand::Copy(place)),.. } if place.local==LocalId(0))));
+        assert!(
+            super::super::ownership::analyze_closed(
+                close(std::sync::Arc::new(concrete), &budget).unwrap()
+            )
+            .is_ok()
+        );
+        let mut duplicate = source;
+        duplicate.result = Ty::Tuple(std::sync::Arc::from([ty.clone(), ty.clone()]));
+        duplicate
+            .exprs
+            .push(expr(ty, ir::ExprKind::Local(LocalId(0))));
+        duplicate.exprs.push(expr(
+            duplicate.result.clone(),
+            ir::ExprKind::Tuple(vec![ExprId(0), ExprId(1)]),
+        ));
+        duplicate.body.tail = Some(ExprId(2));
+        let invalid = lower_template(std::sync::Arc::new(duplicate), env, &budget).unwrap();
+        assert!(super::super::ownership::verify_template(invalid).is_err());
+        let app = ir::NominalAppId {
+            snapshot: ir::SnapshotId::allocate().unwrap(),
+            index: 0,
+        };
+        let declaration = test_decl();
+        let enumeration = |arguments: std::sync::Arc<[Ty]>| {
+            ir::EnumTy::new(ir::EnumDef {
+                id: app,
+                source_decl: declaration,
+                type_args: arguments,
+                name: "UnitEnum".into(),
+                module: String::new(),
+                public: false,
+                variants: vec![ir::VariantDef {
+                    name: "A".into(),
+                    shape: ir::VariantShape::Unit,
+                    fields: std::sync::Arc::from([]),
+                }]
+                .into(),
+            })
+        };
+        let closed_enum = enumeration(std::sync::Arc::from([]));
+        let forged = enumeration(std::sync::Arc::from([Ty::Param(ir::ParamId {
+            owner: ir::BinderId {
+                declaration: test_decl(),
+            },
+            index: 0,
+        })]));
+        let aggregate = Ty::Tuple(std::sync::Arc::from([Ty::Enum(closed_enum)]));
+        let malformed = Function {
+            ref_contract: Default::default(),
+            loan_sites: vec![],
+            name: "forged".into(),
+            params: vec![],
+            result: Ty::Unit,
+            locals: vec![
+                ir::LocalDecl {
+                    name: "ret".into(),
+                    ty: Ty::Unit,
+                    mutable: true,
+                },
+                ir::LocalDecl {
+                    name: "aggregate".into(),
+                    ty: aggregate.clone(),
+                    mutable: true,
+                },
+            ],
+            entry: BlockId(0),
+            return_local: LocalId(0),
+            blocks: vec![
+                BasicBlock {
+                    statements: vec![],
+                    terminator: Located {
+                        value: Terminator::Return,
+                        origin: None,
+                    },
+                },
+                BasicBlock {
+                    statements: vec![Located {
+                        value: Statement::Assign {
+                            destination: place(LocalId(1)),
+                            value: Rvalue::Aggregate {
+                                ty: aggregate,
+                                fields: vec![Operand::Constant(Constant::Enum {
+                                    ty: forged,
+                                    variant: 0,
+                                })],
+                            },
+                        },
+                        origin: None,
+                    }],
+                    terminator: Located {
+                        value: Terminator::Unreachable,
+                        origin: None,
+                    },
+                },
+            ],
+        };
+        assert!(
+            malformed
+                .validate_with_facts(ir::FactsCtx::Concrete)
+                .unwrap_err()
+                .contains("authoritative binder")
+        );
+        assert!(close(std::sync::Arc::new(malformed), &budget).is_err());
+    }
+    #[test]
+    fn generic_instantiation_reinterns_variant_owners_and_resolved_call_metadata() {
+        let budget = ir::PlanBudget::default();
+        let declaration = test_decl();
+        let callee = test_decl();
+        let env = std::sync::Arc::new(
+            ir::ParamEnv::new(
+                ir::BinderId {
+                    declaration: test_decl(),
+                },
+                1,
+            )
+            .unwrap(),
+        );
+        let param = Ty::Param(ir::ParamId {
+            owner: env.binder(),
+            index: 0,
+        });
+        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let make = |index, element: Ty| {
+            ir::EnumTy::new(ir::EnumDef {
+                id: ir::NominalAppId { snapshot, index },
+                source_decl: declaration,
+                type_args: std::sync::Arc::from([element.clone()]),
+                name: "E".into(),
+                module: String::new(),
+                public: false,
+                variants: vec![ir::VariantDef {
+                    name: "A".into(),
+                    shape: ir::VariantShape::Tuple,
+                    fields: vec![ir::FieldDef {
+                        name: "0".into(),
+                        ty: element,
+                        public: false,
+                    }]
+                    .into(),
+                }]
+                .into(),
+            })
+        };
+        let symbolic = make(0, param.clone());
+        let concrete = make(1, Ty::Int(IntTy::I32));
+        struct Nominals {
+            symbolic: ir::EnumTy,
+            concrete: ir::EnumTy,
+            callee: ir::DeclId,
+        }
+        impl ir::SubstitutionCx for Nominals {
+            fn nominal_application(
+                &self,
+                id: ir::NominalAppId,
+            ) -> Result<ir::NominalAppInfo, String> {
+                let value = if id == self.symbolic.def().id {
+                    &self.symbolic
+                } else if id == self.concrete.def().id {
+                    &self.concrete
+                } else {
+                    return Err("unknown application".into());
+                };
+                Ok(ir::NominalAppInfo {
+                    source_decl: value.def().source_decl,
+                    type_args: value.def().type_args.clone(),
+                })
+            }
+            fn intern_nominal(
+                &mut self,
+                declaration: ir::DeclId,
+                args: &[Ty],
+                caller: ir::FactsCtx<'_>,
+                budget: &ir::PlanBudget,
+            ) -> Result<Ty, String> {
+                budget.charge_work(1)?;
+                if declaration != self.concrete.def().source_decl || args != [Ty::Int(IntTy::I32)] {
+                    return Err("unexpected nominal arguments".into());
+                }
+                caller.validate_ty(&args[0])?;
+                Ok(Ty::Enum(self.concrete.clone()))
+            }
+            fn instantiate_signature(
+                &mut self,
+                target: &ir::CallTarget,
+                _: ir::FactsCtx<'_>,
+                budget: &ir::PlanBudget,
+            ) -> Result<ir::Signature, String> {
+                budget.charge_work(1)?;
+                if target.declaration != self.callee || target.type_args.len() != 1 {
+                    return Err("unknown callee".into());
+                }
+                Ok(ir::Signature {
+                    ref_contract: Default::default(),
+                    params: target.type_args.to_vec(),
+                    result: target.type_args[0].clone(),
+                })
+            }
+        }
+        let source = ir::CheckedFunction {
+            ref_contract: Default::default(),
+            name: "extract".into(),
+            params: vec![LocalId(0)],
+            result: param.clone(),
+            locals: vec![
+                ir::LocalDecl {
+                    name: "e".into(),
+                    ty: Ty::Enum(symbolic.clone()),
+                    mutable: false,
+                },
+                ir::LocalDecl {
+                    name: "x".into(),
+                    ty: param.clone(),
+                    mutable: false,
+                },
+            ],
+            exprs: vec![
+                expr(Ty::Enum(symbolic.clone()), ir::ExprKind::Local(LocalId(0))),
+                expr(param.clone(), ir::ExprKind::Local(LocalId(1))),
+                expr(
+                    param.clone(),
+                    ir::ExprKind::Call {
+                        target: ir::CallTarget {
+                            declaration: callee,
+                            type_args: std::sync::Arc::from([param.clone()]),
+                        },
+                        name: "identity".into(),
+                        args: vec![ExprId(1)],
+                        signature: ir::Signature {
+                            ref_contract: Default::default(),
+                            params: vec![param.clone()],
+                            result: param.clone(),
+                        },
+                    },
+                ),
+                expr(
+                    param,
+                    ir::ExprKind::Match {
+                        scrutinee: ExprId(0),
+                        arms: vec![ir::MatchArm {
+                            pattern: ir::MatchPattern::EnumVariant {
+                                ty: symbolic.clone(),
+                                variant: 0,
+                                bindings: vec![ir::PatternBinding {
+                                    local: LocalId(1),
+                                    projection: vec![
+                                        Projection::Downcast(ir::VariantId {
+                                            owner: symbolic.def().id,
+                                            index: 0,
+                                        }),
+                                        Projection::Field(0),
+                                    ],
+                                }],
+                            },
+                            body: ExprId(2),
+                        }],
+                    },
+                ),
+            ],
+            body: ir::Block {
+                statements: vec![],
+                tail: Some(ExprId(3)),
+            },
+        };
+        let verified = super::super::ownership::verify_template(
+            lower_template(std::sync::Arc::new(source), env, &budget).unwrap(),
+        )
+        .unwrap();
+        let mut cx = Nominals {
+            symbolic,
+            concrete: concrete.clone(),
+            callee,
+        };
+        let mut instance =
+            ir::instantiate_checked(&verified, &[Ty::Int(IntTy::I32)], &mut cx, &budget).unwrap();
+        let ir::ExprKind::Call {
+            target, signature, ..
+        } = &instance.exprs[2].kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(target.type_args.as_ref(), [Ty::Int(IntTy::I32)]);
+        assert_eq!(signature.result, Ty::Int(IntTy::I32));
+        let ir::ExprKind::Match { arms, .. } = &instance.exprs[3].kind else {
+            unreachable!()
+        };
+        let ir::MatchPattern::EnumVariant { ty, bindings, .. } = &arms[0].pattern else {
+            unreachable!()
+        };
+        assert_eq!(ty.def().id, concrete.def().id);
+        assert_eq!(
+            bindings[0].projection[0],
+            Projection::Downcast(ir::VariantId {
+                owner: concrete.def().id,
+                index: 0
+            })
+        );
+        assert!(
+            super::super::ownership::analyze(&lower_with_budget(&instance, &budget).unwrap())
+                .passed()
+        );
+        let ir::ExprKind::Match { arms, .. } = &mut instance.exprs[3].kind else {
+            unreachable!()
+        };
+        let ir::MatchPattern::EnumVariant { bindings, .. } = &mut arms[0].pattern else {
+            unreachable!()
+        };
+        bindings[0].projection[0] = Projection::Downcast(ir::VariantId {
+            owner: cx.symbolic.def().id,
+            index: 0,
+        });
+        assert!(instance.validate().is_err());
+    }
+    fn test_decl() -> ir::DeclId {
+        ir::DeclId {
+            snapshot: ir::SnapshotId::allocate().unwrap(),
+            index: 0,
+        }
+    }
+    fn test_target() -> ir::CallTarget {
+        ir::CallTarget {
+            declaration: test_decl(),
+            type_args: std::sync::Arc::from([]),
+        }
+    }
     use super::*;
     use std::collections::HashSet;
 
@@ -1960,6 +2728,7 @@ mod tests {
                     expr(
                         Ty::Unit,
                         ir::ExprKind::Call {
+                            target: test_target(),
                             name: "callee".into(),
                             args: vec![ExprId(0)],
                             signature: ir::Signature {
@@ -2216,7 +2985,9 @@ mod tests {
 
     fn nominal(fields: Vec<Ty>) -> ir::StructTy {
         ir::StructTy::new(ir::StructDef {
-            id: ir::DefId {
+            source_decl: test_decl(),
+            type_args: std::sync::Arc::from([]),
+            id: ir::NominalAppId {
                 snapshot: ir::SnapshotId::allocate().unwrap(),
                 index: 0,
             },
@@ -2395,6 +3166,7 @@ mod tests {
                 expr(
                     Ty::Int(IntTy::I32),
                     ir::ExprKind::Call {
+                        target: test_target(),
                         name: "rhs".into(),
                         args: vec![],
                         signature: ir::Signature {
@@ -2407,6 +3179,7 @@ mod tests {
                 expr(
                     Ty::Int(IntTy::Usize),
                     ir::ExprKind::Call {
+                        target: test_target(),
                         name: "index".into(),
                         args: vec![],
                         signature: ir::Signature {
@@ -2605,6 +3378,7 @@ mod tests {
                     expr(
                         Ty::Int(IntTy::I8),
                         ir::ExprKind::Call {
+                            target: test_target(),
                             name: "left".into(),
                             args: vec![],
                             signature: ir::Signature {
@@ -2617,6 +3391,7 @@ mod tests {
                     expr(
                         Ty::Int(IntTy::U64),
                         ir::ExprKind::Call {
+                            target: test_target(),
                             name: "right".into(),
                             args: vec![],
                             signature: ir::Signature {
@@ -2785,6 +3560,7 @@ mod tests {
                     expr(
                         Ty::Bool,
                         ir::ExprKind::Call {
+                            target: test_target(),
                             name: "left".into(),
                             args: vec![],
                             signature: ir::Signature {
@@ -2797,6 +3573,7 @@ mod tests {
                     expr(
                         Ty::Bool,
                         ir::ExprKind::Call {
+                            target: test_target(),
                             name: "right".into(),
                             args: vec![],
                             signature: ir::Signature {
@@ -2924,6 +3701,7 @@ mod tests {
                 expr(
                     Ty::Int(IntTy::I64),
                     ir::ExprKind::Call {
+                        target: test_target(),
                         name: "once".into(),
                         args: vec![],
                         signature: ir::Signature {
@@ -2994,6 +3772,8 @@ mod tests {
                 .contains("lowering depth resource")
         );
         let mut budget = Lowerer {
+            budget: None,
+            resource_error: None,
             lowering_depth: 0,
             lowering_work: ir::MAX_PATTERN_PROJECTION_WORK,
             origins: 0,
@@ -3450,6 +4230,7 @@ mod tests {
                 expr(
                     Ty::Int(IntTy::Usize),
                     ir::ExprKind::Call {
+                        target: test_target(),
                         name: "index".into(),
                         args: vec![],
                         signature: ir::Signature {
@@ -3883,6 +4664,7 @@ mod tests {
             expr(
                 Ty::Int(IntTy::I32),
                 ir::ExprKind::Call {
+                    target: test_target(),
                     name: name.into(),
                     args: vec![],
                     signature: ir::Signature {
@@ -3942,7 +4724,9 @@ mod tests {
     #[test]
     fn payload_constructor_evaluates_source_order_then_permutates_snapshots() {
         let ty = ir::EnumTy::new(ir::EnumDef {
-            id: ir::DefId {
+            source_decl: test_decl(),
+            type_args: std::sync::Arc::from([]),
+            id: ir::NominalAppId {
                 snapshot: ir::SnapshotId::allocate().unwrap(),
                 index: 0,
             },
@@ -3979,6 +4763,7 @@ mod tests {
             expr(
                 Ty::Int(IntTy::I32),
                 ir::ExprKind::Call {
+                    target: test_target(),
                     name: name.into(),
                     args: vec![],
                     signature: ir::Signature {

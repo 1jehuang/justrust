@@ -118,7 +118,7 @@ fn implicit_field_runtime_index_is_a_typed_unsupported_boundary() {
                 report
                     .node_evaluations
                     .iter()
-                    .any(|(key, _)| key.kind == 102)
+                    .any(|(key, _)| key.kind == 110)
             );
             if check {
                 assert!(

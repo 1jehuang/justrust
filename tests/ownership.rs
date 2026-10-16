@@ -392,6 +392,13 @@ fn call_arguments_move_before_destination_is_initialized() {
             block(
                 vec![],
                 Terminator::Call {
+                    target: ir::CallTarget {
+                        declaration: ir::DeclId {
+                            snapshot: ir::SnapshotId::allocate().unwrap(),
+                            index: 0,
+                        },
+                        type_args: std::sync::Arc::from([]),
+                    },
                     name: "identity".into(),
                     signature: Signature {
                         ref_contract: Default::default(),
@@ -428,6 +435,13 @@ fn call_cannot_move_the_same_argument_twice() {
             block(
                 vec![],
                 Terminator::Call {
+                    target: ir::CallTarget {
+                        declaration: ir::DeclId {
+                            snapshot: ir::SnapshotId::allocate().unwrap(),
+                            index: 0,
+                        },
+                        type_args: std::sync::Arc::from([]),
+                    },
                     name: "pair".into(),
                     signature: Signature {
                         ref_contract: Default::default(),

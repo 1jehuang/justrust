@@ -48,6 +48,20 @@ Overloaded trait assignments, compound expressions outside statement contexts,
 128-bit integers, floats and noninteger casts remain unsupported. Parenthesized
 cast target types are an explicit boundary.
 
+Explicit type-parameter functions, braced structs and payload enums use rigid
+declaration-qualified parameters and canonical nominal applications. Calls and
+constructors require explicit ordered type arguments, for example `id::<u64>(x)`
+and `Wrap::<u8>{value:x}`. Every generic body, including unused declarations,
+receives universal type and move analysis with parameters treated as opaque
+non-Copy values. Demanded concrete instances substitute checked typed metadata,
+then lower and analyze again before sealed native emission. Exact instance
+recursion is deduplicated, while growing instantiations fail boundedly. Generic
+bodies and their recursively expanded type arguments cannot contain references
+in this milestone. Inference, traits, bounds, methods, const generics and generic
+function values remain unsupported. Ordinary nongeneric reference support is
+unchanged. See `GENERICS.md` for the universal/concrete trust boundary and shared
+planning limits. This foundation is not full Rust generic compatibility.
+
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and
 numeric/named field projections,
@@ -132,7 +146,7 @@ Canonical paths detect active inclusion cycles, not enforce a filesystem sandbox
 Not supported: crates/manifests, grouped or
 glob imports, public re-exports, restricted `pub(...)`, block-local items/imports,
 standard-library APIs beyond the documented print form, general macros, traits,
-generics, empty enums, explicit discriminants, empty/unit/tuple structs,
+generic inference/bounds beyond the explicit slice above, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
 general reference results and escaping references beyond bounded static input paths,
 general lifetimes, strings as values, closures, async,
@@ -150,17 +164,23 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 - Resolve paths, imports and visibility once, publishing canonical item identities.
 - Validate declarations, reject recursive by-value types and publish one immutable
   nominal type environment with callable signatures (operation 101).
-- Check and lower each function body independently against those signatures,
-  publishing an immutable typed-function fact (operation 102).
-- Lower each checked function once into an explicit control-flow graph
+- Check every declaration body against authoritative signatures (operation 110).
+  Generic declarations lower universally (111) and pass the same move/dataflow
+  solver (112), including unused declarations, before instance planning (113).
+- Seal a bounded deduplicated instance frontier seeded by every nongeneric
+  function. Concrete bodies (102) reuse nongeneric facts or instantiate verified
+  typed templates, never source text. Calls and nominal applications use resolved
+  declaration identities and ordered type arguments, not display names.
+- Lower each concrete checked instance once into an explicit control-flow graph
   (operation 108), with ordered value snapshots, branches, loop edges and calls.
   Publishing the CFG does not imply it passed initialization analysis.
 - Analyze each CFG once (operation 109), validating structure and running bounded
   definite-initialization, storage-lifetime, move-path, loan-origin and bounded
   signature-region dataflow to fixed points.
   Both check and emission require this successful immutable analysis fact.
-- Emit each function from that exact cached CFG fact without repeating lowering
-  or waiting for other bodies.
+- Emit each instance only from a privately constructed `ConcreteCfg` tied to that
+  exact immutable closed CFG and its successful analysis, resolving call symbols
+  exclusively through the sealed plan. Parameter-bearing types have no layout.
 - Link emitted functions and resolve relocations into one executable.
 - A check root joins all required semantic checks but demands no code generation.
 - A build root joins emitted objects, then executable publication.
@@ -175,8 +195,8 @@ Output facts contain typed-arena handles because
 the prototype runtime currently stores u64 slots. Arenas remain owned by the
 compilation snapshot and are not persistent cache keys.
 
-Checked functions now retain resolved local and expression IDs, concrete
-inferred types, validated call signatures and explicit normal-completion versus
+Checked functions retain resolved local and expression IDs, concrete or rigid
+declaration-parameter types, validated call signatures and explicit normal-completion versus
 divergence information. Every shadowed binding has its own LocalId. The native
 emitter consumes these facts directly, without source-name lookup or inference.
 This structured typed IR feeds explicit CFG lowering before native generation.

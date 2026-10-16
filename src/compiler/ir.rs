@@ -37,9 +37,590 @@ impl SnapshotId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DefId {
+pub struct NominalAppId {
     pub snapshot: SnapshotId,
     pub index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DeclId {
+    pub snapshot: SnapshotId,
+    pub index: u32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DeclKind {
+    Function,
+    Struct,
+    Enum,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BinderId {
+    pub declaration: DeclId,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ParamId {
+    pub owner: BinderId,
+    pub index: u16,
+}
+#[derive(Clone, Debug)]
+pub struct ParamEnv {
+    binder: BinderId,
+    arity: usize,
+}
+impl ParamEnv {
+    pub(super) fn new(binder: BinderId, arity: usize) -> Result<Self, String> {
+        if arity > 32 {
+            return Err("generic parameter limit exceeded".into());
+        }
+        Ok(Self { binder, arity })
+    }
+    pub fn binder(&self) -> BinderId {
+        self.binder
+    }
+    pub fn arity(&self) -> usize {
+        self.arity
+    }
+    pub fn contains(&self, param: ParamId) -> bool {
+        param.owner == self.binder && usize::from(param.index) < self.arity
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub enum FactsCtx<'a> {
+    Concrete,
+    Universal(&'a ParamEnv),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CallTarget {
+    pub declaration: DeclId,
+    pub type_args: Arc<[Ty]>,
+}
+#[derive(Clone, Debug)]
+pub struct GenericSignature {
+    pub param_env: Arc<ParamEnv>,
+    pub signature: Signature,
+}
+#[derive(Clone, Debug)]
+pub struct NominalAppInfo {
+    pub source_decl: DeclId,
+    pub type_args: Arc<[Ty]>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct PlanLimits {
+    pub params: usize,
+    pub applications: usize,
+    pub depth: usize,
+    pub nodes: usize,
+    pub work: usize,
+    pub bytes: usize,
+}
+impl Default for PlanLimits {
+    fn default() -> Self {
+        Self {
+            params: 32,
+            applications: 4096,
+            depth: 128,
+            nodes: 1_000_000,
+            work: 32_000_000,
+            bytes: 128 * 1024 * 1024,
+        }
+    }
+}
+#[derive(Debug, Default)]
+struct PlanUsage {
+    applications: usize,
+    nodes: usize,
+    work: usize,
+    bytes: usize,
+}
+#[derive(Clone, Debug)]
+pub struct PlanBudget {
+    limits: PlanLimits,
+    usage: Arc<std::sync::Mutex<PlanUsage>>,
+}
+#[derive(Debug)]
+pub struct PlanReservation {
+    usage: Arc<std::sync::Mutex<PlanUsage>>,
+    bytes: usize,
+}
+impl Drop for PlanReservation {
+    fn drop(&mut self) {
+        if let Ok(mut usage) = self.usage.lock() {
+            usage.bytes -= self.bytes;
+        }
+    }
+}
+impl Default for PlanBudget {
+    fn default() -> Self {
+        Self::new(PlanLimits::default())
+    }
+}
+impl PlanBudget {
+    pub fn new(limits: PlanLimits) -> Self {
+        let defaults = PlanLimits::default();
+        let limits = PlanLimits {
+            params: limits.params.min(defaults.params),
+            applications: limits.applications.min(defaults.applications),
+            depth: limits.depth.min(defaults.depth),
+            nodes: limits.nodes.min(defaults.nodes),
+            work: limits.work.min(defaults.work),
+            bytes: limits.bytes.min(defaults.bytes),
+        };
+        Self {
+            limits,
+            usage: Arc::new(std::sync::Mutex::new(PlanUsage::default())),
+        }
+    }
+    pub fn limits(&self) -> PlanLimits {
+        self.limits
+    }
+    pub fn same_authority(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.usage, &other.usage)
+    }
+    fn charge(
+        &self,
+        amount: usize,
+        select: fn(&mut PlanUsage) -> &mut usize,
+        limit: usize,
+    ) -> Result<(), String> {
+        let mut usage = self
+            .usage
+            .lock()
+            .map_err(|_| "generic planning budget poisoned")?;
+        let counter = select(&mut usage);
+        let next = counter
+            .checked_add(amount)
+            .ok_or("generic planning resource limit exceeded")?;
+        if next > limit {
+            return Err("generic planning resource limit exceeded".into());
+        }
+        *counter = next;
+        Ok(())
+    }
+    pub fn charge_work(&self, amount: usize) -> Result<(), String> {
+        self.charge(amount, |u| &mut u.work, self.limits.work)
+    }
+    pub fn charge_nodes(&self, amount: usize) -> Result<(), String> {
+        self.charge(amount, |u| &mut u.nodes, self.limits.nodes)
+    }
+    pub fn charge_application(&self) -> Result<(), String> {
+        self.charge(1, |u| &mut u.applications, self.limits.applications)
+    }
+    pub fn reserve_bytes(&self, bytes: usize) -> Result<PlanReservation, String> {
+        self.charge(bytes, |u| &mut u.bytes, self.limits.bytes)?;
+        Ok(PlanReservation {
+            usage: self.usage.clone(),
+            bytes,
+        })
+    }
+    /// Conservatively retain generated semantic storage until this plan ends.
+    pub fn retain_bytes(&self, bytes: usize) -> Result<(), String> {
+        self.charge(bytes, |u| &mut u.bytes, self.limits.bytes)
+    }
+    pub fn check_depth(&self, depth: usize) -> Result<(), String> {
+        if depth > self.limits.depth {
+            Err("generic planning depth limit exceeded".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+pub trait SubstitutionCx {
+    fn nominal_application(&self, id: NominalAppId) -> Result<NominalAppInfo, String>;
+    fn intern_nominal(
+        &mut self,
+        declaration: DeclId,
+        args: &[Ty],
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<Ty, String>;
+    fn instantiate_signature(
+        &mut self,
+        target: &CallTarget,
+        caller: FactsCtx<'_>,
+        budget: &PlanBudget,
+    ) -> Result<Signature, String>;
+}
+
+pub fn substitute_ty(
+    ty: &Ty,
+    binder: BinderId,
+    args: &[Ty],
+    caller: FactsCtx<'_>,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+) -> Result<Ty, String> {
+    fn walk(
+        ty: &Ty,
+        binder: BinderId,
+        args: &[Ty],
+        caller: FactsCtx<'_>,
+        cx: &mut impl SubstitutionCx,
+        budget: &PlanBudget,
+        depth: usize,
+    ) -> Result<Ty, String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        budget.charge_nodes(1)?;
+        Ok(match ty {
+            Ty::Param(param) if param.owner == binder => args
+                .get(usize::from(param.index))
+                .ok_or("type parameter substitution index out of bounds")?
+                .clone(),
+            Ty::Param(param) => {
+                caller.validate_ty(ty)?;
+                Ty::Param(*param)
+            }
+            Ty::Tuple(fields) => {
+                budget.retain_bytes(
+                    fields
+                        .len()
+                        .checked_mul(std::mem::size_of::<Ty>())
+                        .ok_or("substitution size overflow")?,
+                )?;
+                Ty::Tuple(
+                    fields
+                        .iter()
+                        .map(|ty| walk(ty, binder, args, caller, cx, budget, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            Ty::Array { element, len } => {
+                budget
+                    .retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
+                Ty::Array {
+                    element: Arc::new(walk(element, binder, args, caller, cx, budget, depth + 1)?),
+                    len: *len,
+                }
+            }
+            Ty::Ref { kind, referent } => {
+                budget
+                    .retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
+                Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(walk(
+                        referent,
+                        binder,
+                        args,
+                        caller,
+                        cx,
+                        budget,
+                        depth + 1,
+                    )?),
+                }
+            }
+            Ty::Struct(value) => {
+                let app = cx.nominal_application(value.def().id)?;
+                if app.type_args.len() > 32 {
+                    return Err("nominal argument limit exceeded".into());
+                }
+                let _scratch =
+                    budget.reserve_bytes(app.type_args.len() * std::mem::size_of::<Ty>())?;
+                let arguments = app
+                    .type_args
+                    .iter()
+                    .map(|ty| walk(ty, binder, args, caller, cx, budget, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()?;
+                cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
+            }
+            Ty::Enum(value) => {
+                let app = cx.nominal_application(value.def().id)?;
+                if app.type_args.len() > 32 {
+                    return Err("nominal argument limit exceeded".into());
+                }
+                let _scratch =
+                    budget.reserve_bytes(app.type_args.len() * std::mem::size_of::<Ty>())?;
+                let arguments = app
+                    .type_args
+                    .iter()
+                    .map(|ty| walk(ty, binder, args, caller, cx, budget, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()?;
+                cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
+            }
+            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
+        })
+    }
+    if args.len() > 32 {
+        return Err("generic argument limit exceeded".into());
+    }
+    for argument in args {
+        caller.validate_ty_with_budget(argument, budget)?;
+        reject_references(argument)?;
+    }
+    walk(ty, binder, args, caller, cx, budget, 0)
+}
+
+/// Instantiate only a universally checked exact source, then lower the returned
+/// checked body anew so concrete Copy/Move decisions cannot reuse template tags.
+pub fn instantiate_checked(
+    template: &super::ownership::VerifiedTemplateCfg,
+    args: &[Ty],
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+) -> Result<CheckedFunction, String> {
+    let env = template.param_env();
+    if !template.budget().same_authority(budget) {
+        return Err("generic instance changed planning budget authority".into());
+    }
+    if args.len() != env.arity() {
+        return Err("generic instance argument arity mismatch".into());
+    }
+    for ty in args {
+        FactsCtx::Concrete.validate_ty(ty)?;
+        reject_references(ty)?;
+    }
+    let source = template.source();
+    source.preflight_plan(FactsCtx::Universal(env), budget)?;
+    let mut output = source.as_ref().clone();
+    let mut visitor = Instantiate {
+        binder: env.binder(),
+        args,
+        cx,
+        budget,
+    };
+    output.result = visitor.ty(&output.result)?;
+    for local in &mut output.locals {
+        local.ty = visitor.ty(&local.ty)?;
+    }
+    for expression in &mut output.exprs {
+        budget.charge_work(1)?;
+        expression.ty = visitor.ty(&expression.ty)?;
+        match &mut expression.kind {
+            ExprKind::Borrow { place, .. } => visitor.path(&mut place.projection)?,
+            ExprKind::Struct { ty, .. } => {
+                let Ty::Struct(value) = visitor.ty(&Ty::Struct(ty.clone()))? else {
+                    return Err("struct application changed kind".into());
+                };
+                *ty = value;
+            }
+            ExprKind::EnumVariant { ty, .. } => visitor.enum_ty(ty)?,
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    match &mut arm.pattern {
+                        MatchPattern::EnumVariant { ty, bindings, .. } => {
+                            visitor.enum_ty(ty)?;
+                            visitor.bindings(bindings)?;
+                        }
+                        MatchPattern::Wildcard
+                        | MatchPattern::Binding(_)
+                        | MatchPattern::Bool(_)
+                        | MatchPattern::Int(_)
+                        | MatchPattern::Unit => {}
+                    }
+                }
+            }
+            ExprKind::Call {
+                target, signature, ..
+            } => {
+                let expected = visitor.signature(signature)?;
+                if target.type_args.len() > 32 {
+                    return Err("generic call argument limit exceeded".into());
+                }
+                budget.retain_bytes(target.type_args.len() * std::mem::size_of::<Ty>())?;
+                target.type_args = target
+                    .type_args
+                    .iter()
+                    .map(|ty| visitor.ty(ty))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into();
+                let actual =
+                    visitor
+                        .cx
+                        .instantiate_signature(target, FactsCtx::Concrete, budget)?;
+                if actual.params.len() > MAX_PATTERN_PROJECTION_WORK {
+                    return Err("generic call signature resource limit exceeded".into());
+                }
+                for ty in actual.params.iter().chain(std::iter::once(&actual.result)) {
+                    FactsCtx::Concrete.validate_ty_with_budget(ty, budget)?;
+                }
+                if actual != expected {
+                    return Err("substituted call signature disagrees with declaration".into());
+                }
+                *signature = actual;
+            }
+            ExprKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                visitor.block(then_block, 0)?;
+                visitor.block(else_block, 0)?;
+            }
+            ExprKind::Block(block) | ExprKind::Loop { body: block, .. } => {
+                visitor.block(block, 0)?
+            }
+            ExprKind::IntCast { .. }
+            | ExprKind::Deref { .. }
+            | ExprKind::DynamicIndex { .. }
+            | ExprKind::Array(_)
+            | ExprKind::Repeat { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Int(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Local(_)
+            | ExprKind::Tuple(_)
+            | ExprKind::Field { .. }
+            | ExprKind::Unary { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Break { .. }
+            | ExprKind::Continue { .. }
+            | ExprKind::Println(_) => {}
+        }
+    }
+    visitor.block(&mut output.body, 0)?;
+    output.validate_with_facts(FactsCtx::Concrete)?;
+    Ok(output)
+}
+
+fn reject_references(root: &Ty) -> Result<(), String> {
+    let mut pending = vec![root];
+    let mut work = 0usize;
+    while let Some(ty) = pending.pop() {
+        work += 1;
+        if work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("generic argument type work limit exceeded".into());
+        }
+        match ty {
+            Ty::Ref { .. } => return Err("reference generic arguments are unsupported".into()),
+            Ty::Tuple(fields) => pending.extend(fields.iter()),
+            Ty::Array { element, .. } => pending.push(element),
+            Ty::Struct(value) => {
+                if value
+                    .def()
+                    .fields
+                    .len()
+                    .saturating_add(value.def().type_args.len())
+                    .saturating_add(pending.len())
+                    > MAX_PATTERN_PROJECTION_WORK - work
+                {
+                    return Err("generic argument type work limit exceeded".into());
+                }
+                pending.extend(value.def().type_args.iter());
+                pending.extend(value.def().fields.iter().map(|field| &field.ty));
+            }
+            Ty::Enum(value) => {
+                if value.def().type_args.len().saturating_add(pending.len())
+                    > MAX_PATTERN_PROJECTION_WORK - work
+                {
+                    return Err("generic argument type work limit exceeded".into());
+                }
+                pending.extend(value.def().type_args.iter());
+                for variant in value.def().variants.iter() {
+                    if variant.fields.len().saturating_add(pending.len())
+                        > MAX_PATTERN_PROJECTION_WORK - work
+                    {
+                        return Err("generic argument type work limit exceeded".into());
+                    }
+                    pending.extend(variant.fields.iter().map(|field| &field.ty));
+                }
+            }
+            Ty::Param(_) | Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+        }
+        if pending.len() > MAX_PATTERN_PROJECTION_WORK - work {
+            return Err("generic argument type work limit exceeded".into());
+        }
+    }
+    Ok(())
+}
+struct Instantiate<'a, C> {
+    binder: BinderId,
+    args: &'a [Ty],
+    cx: &'a mut C,
+    budget: &'a PlanBudget,
+}
+impl<C: SubstitutionCx> Instantiate<'_, C> {
+    fn ty(&mut self, ty: &Ty) -> Result<Ty, String> {
+        substitute_ty(
+            ty,
+            self.binder,
+            self.args,
+            FactsCtx::Concrete,
+            self.cx,
+            self.budget,
+        )
+    }
+    fn enum_ty(&mut self, ty: &mut EnumTy) -> Result<(), String> {
+        let Ty::Enum(value) = self.ty(&Ty::Enum(ty.clone()))? else {
+            return Err("enum application changed kind".into());
+        };
+        *ty = value;
+        Ok(())
+    }
+    fn signature(&mut self, signature: &Signature) -> Result<Signature, String> {
+        Ok(Signature {
+            ref_contract: signature.ref_contract.clone(),
+            params: signature
+                .params
+                .iter()
+                .map(|ty| self.ty(ty))
+                .collect::<Result<Vec<_>, _>>()?,
+            result: self.ty(&signature.result)?,
+        })
+    }
+    fn path(&mut self, path: &mut [Projection]) -> Result<(), String> {
+        self.budget.charge_work(path.len())?;
+        for projection in path {
+            if let Projection::Downcast(variant) = projection {
+                let application = self.cx.nominal_application(variant.owner)?;
+                if application.type_args.len() > 32 {
+                    return Err("nominal argument limit exceeded".into());
+                }
+                let _scratch = self
+                    .budget
+                    .reserve_bytes(application.type_args.len() * std::mem::size_of::<Ty>())?;
+                let args = application
+                    .type_args
+                    .iter()
+                    .map(|ty| self.ty(ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let Ty::Enum(value) = self.cx.intern_nominal(
+                    application.source_decl,
+                    &args,
+                    FactsCtx::Concrete,
+                    self.budget,
+                )?
+                else {
+                    return Err("downcast application is not enum".into());
+                };
+                variant.owner = value.def().id;
+                if variant.index >= value.def().variants.len() {
+                    return Err("instantiated variant index out of bounds".into());
+                }
+            }
+        }
+        Ok(())
+    }
+    fn bindings(&mut self, bindings: &mut [PatternBinding]) -> Result<(), String> {
+        for binding in bindings {
+            self.path(&mut binding.projection)?;
+        }
+        Ok(())
+    }
+    fn block(&mut self, block: &mut Block, depth: usize) -> Result<(), String> {
+        self.budget.check_depth(depth)?;
+        self.budget.charge_work(block.statements.len())?;
+        for statement in &mut block.statements {
+            match statement {
+                Stmt::AssignOp { place, .. } | Stmt::AssignPlace { place, .. } => {
+                    self.path(&mut place.projection)?
+                }
+                Stmt::AssignIndexOp { array, .. } | Stmt::AssignIndex { array, .. } => {
+                    self.path(&mut array.projection)?
+                }
+                Stmt::LetPattern { ty, bindings, .. } => {
+                    *ty = self.ty(ty)?;
+                    self.bindings(bindings)?;
+                }
+                Stmt::While { body, .. } => self.block(body, depth + 1)?,
+                Stmt::Declare { .. }
+                | Stmt::Let { .. }
+                | Stmt::Assign { .. }
+                | Stmt::Expr(_)
+                | Stmt::Return(_) => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 pub const MAX_ENUM_VARIANTS: usize = 4096;
@@ -194,7 +775,9 @@ impl Hash for EnumTy {
 
 #[derive(Clone, Debug)]
 pub struct EnumDef {
-    pub id: DefId,
+    pub id: NominalAppId,
+    pub source_decl: DeclId,
+    pub type_args: Arc<[Ty]>,
     pub name: String,
     pub module: String,
     pub public: bool,
@@ -217,7 +800,7 @@ pub struct VariantDef {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VariantId {
-    pub owner: DefId,
+    pub owner: NominalAppId,
     pub index: usize,
 }
 
@@ -351,7 +934,9 @@ impl Hash for StructTy {
 
 #[derive(Clone, Debug)]
 pub struct StructDef {
-    pub id: DefId,
+    pub id: NominalAppId,
+    pub source_decl: DeclId,
+    pub type_args: Arc<[Ty]>,
     /// Canonical module-qualified name, used for diagnostics, not identity.
     pub name: String,
     /// Defining module, used for owner/descendant field visibility checks.
@@ -381,6 +966,7 @@ pub struct LoopId(pub usize);
 /// Tuple structure is immutable and shared cheaply across checked facts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
+    Param(ParamId),
     Int(IntTy),
     Ref {
         kind: BorrowKind,
@@ -423,7 +1009,7 @@ impl Ty {
         match self {
             Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
             Self::Int(_) | Self::Bool | Self::Unit | Self::Never => true,
-            Self::Struct(_) | Self::Enum(_) => false,
+            Self::Struct(_) | Self::Enum(_) | Self::Param(_) => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
@@ -434,7 +1020,7 @@ impl Ty {
                             kind: BorrowKind::Mut,
                             ..
                         } => return false,
-                        Self::Struct(_) | Self::Enum(_) => return false,
+                        Self::Struct(_) | Self::Enum(_) | Self::Param(_) => return false,
                         Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
                             pending.extend(fields.iter());
                         }
@@ -448,6 +1034,100 @@ impl Ty {
                 true
             }
         }
+    }
+}
+
+impl FactsCtx<'_> {
+    pub fn validate_ty(self, root: &Ty) -> Result<(), String> {
+        self.validate_ty_inner(root, None)
+    }
+    pub fn validate_ty_with_budget(self, root: &Ty, budget: &PlanBudget) -> Result<(), String> {
+        self.validate_ty_inner(root, Some(budget))
+    }
+    fn validate_ty_inner(self, root: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
+        fn walk(
+            facts: FactsCtx<'_>,
+            ty: &Ty,
+            depth: usize,
+            work: &mut usize,
+            budget: Option<&PlanBudget>,
+        ) -> Result<(), String> {
+            *work += 1;
+            if *work > MAX_PATTERN_PROJECTION_WORK || depth > 128 {
+                return Err("type facts resource limit exceeded".into());
+            }
+            if let Some(budget) = budget {
+                budget.check_depth(depth)?;
+                budget.charge_work(1)?;
+            }
+            match ty {
+                Ty::Param(param) => match facts {
+                    FactsCtx::Universal(env) if env.contains(*param) => {}
+                    _ => return Err("type parameter is outside its authoritative binder".into()),
+                },
+                Ty::Ref { referent, .. } => {
+                    if matches!(facts, FactsCtx::Universal(_)) {
+                        return Err("references in generic bodies are unsupported".into());
+                    }
+                    walk(facts, referent, depth + 1, work, budget)?;
+                }
+                Ty::Tuple(fields) => {
+                    for child in fields.iter() {
+                        walk(facts, child, depth + 1, work, budget)?;
+                    }
+                }
+                Ty::Array { element, len } => {
+                    if *len > MAX_ARRAY_LEN {
+                        return Err("array length limit exceeded".into());
+                    }
+                    walk(facts, element, depth + 1, work, budget)?;
+                }
+                Ty::Struct(value) => {
+                    if value.def().type_args.len() > 32 {
+                        return Err("nominal argument limit exceeded".into());
+                    }
+                    for child in value.def().type_args.iter() {
+                        walk(facts, child, depth + 1, work, budget)?;
+                    }
+                    for field in value.def().fields.iter() {
+                        walk(facts, &field.ty, depth + 1, work, budget)?;
+                    }
+                }
+                Ty::Enum(value) => {
+                    if value.def().type_args.len() > 32
+                        || value.def().variants.len() > MAX_ENUM_VARIANTS
+                    {
+                        return Err("nominal metadata limit exceeded".into());
+                    }
+                    for child in value.def().type_args.iter() {
+                        walk(facts, child, depth + 1, work, budget)?;
+                    }
+                    for variant in value.def().variants.iter() {
+                        *work += 1;
+                        if *work > MAX_PATTERN_PROJECTION_WORK {
+                            return Err("type facts resource limit exceeded".into());
+                        }
+                        if let Some(budget) = budget {
+                            budget.charge_work(1)?;
+                        }
+                        for field in variant.fields.iter() {
+                            walk(facts, &field.ty, depth + 1, work, budget)?;
+                        }
+                    }
+                }
+                Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            }
+            Ok(())
+        }
+        walk(self, root, 0, &mut 0, budget)
+    }
+    pub fn must_copy(self, ty: &Ty) -> Result<bool, String> {
+        self.validate_ty(ty)?;
+        Ok(ty.is_copy())
+    }
+    pub fn projected_ty<'a>(self, root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
+        self.validate_ty(root)?;
+        projected_ty(root, path)
     }
 }
 
@@ -940,6 +1620,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
                 }
             }
             (Ty::Int(a), Ty::Int(b)) if a == b => {}
+            (Ty::Param(a), Ty::Param(b)) if a == b => {}
             (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a == b => {}
             (Ty::Enum(a), Ty::Enum(b)) if a == b => {}
@@ -1137,6 +1818,7 @@ pub enum ExprKind {
         right: ExprId,
     },
     Call {
+        target: CallTarget,
         name: String,
         args: Vec<ExprId>,
         /// Validated at typing time, shared by call lowering and ABI selection.
@@ -1167,6 +1849,159 @@ pub enum ExprKind {
 }
 
 impl CheckedFunction {
+    pub fn preflight_plan(&self, facts: FactsCtx<'_>, budget: &PlanBudget) -> Result<(), String> {
+        fn storage(budget: &PlanBudget, count: usize, width: usize) -> Result<(), String> {
+            budget.charge_work(count)?;
+            budget.retain_bytes(
+                count
+                    .checked_mul(width)
+                    .ok_or("generic planning allocation overflow")?,
+            )
+        }
+        fn path(path: &[Projection], budget: &PlanBudget) -> Result<(), String> {
+            budget.check_depth(path.len())?;
+            storage(budget, path.len(), std::mem::size_of::<Projection>())
+        }
+        fn bindings(bindings: &[PatternBinding], budget: &PlanBudget) -> Result<(), String> {
+            storage(
+                budget,
+                bindings.len(),
+                std::mem::size_of::<PatternBinding>(),
+            )?;
+            for binding in bindings {
+                path(&binding.projection, budget)?;
+            }
+            Ok(())
+        }
+        fn block(
+            value: &Block,
+            facts: FactsCtx<'_>,
+            budget: &PlanBudget,
+            depth: usize,
+        ) -> Result<(), String> {
+            budget.check_depth(depth)?;
+            budget.charge_nodes(value.statements.len())?;
+            storage(budget, value.statements.len(), std::mem::size_of::<Stmt>())?;
+            for statement in &value.statements {
+                match statement {
+                    Stmt::AssignOp { place, .. } | Stmt::AssignPlace { place, .. } => {
+                        path(&place.projection, budget)?
+                    }
+                    Stmt::AssignIndexOp { array, .. } | Stmt::AssignIndex { array, .. } => {
+                        path(&array.projection, budget)?
+                    }
+                    Stmt::LetPattern {
+                        ty,
+                        bindings: values,
+                        ..
+                    } => {
+                        facts.validate_ty_with_budget(ty, budget)?;
+                        bindings(values, budget)?;
+                    }
+                    Stmt::While { body, .. } => block(body, facts, budget, depth + 1)?,
+                    Stmt::Declare { .. }
+                    | Stmt::Let { .. }
+                    | Stmt::Assign { .. }
+                    | Stmt::Expr(_)
+                    | Stmt::Return(_) => {}
+                }
+            }
+            Ok(())
+        }
+        facts.validate_ty_with_budget(&self.result, budget)?;
+        budget.charge_nodes(
+            self.locals
+                .len()
+                .checked_add(self.exprs.len())
+                .ok_or("generic planning node overflow")?,
+        )?;
+        storage(budget, self.locals.len(), std::mem::size_of::<LocalDecl>())?;
+        storage(budget, self.exprs.len(), std::mem::size_of::<TypedExpr>())?;
+        storage(budget, self.params.len(), std::mem::size_of::<LocalId>())?;
+        storage(budget, self.name.len(), 1)?;
+        for local in &self.locals {
+            facts.validate_ty_with_budget(&local.ty, budget)?;
+            storage(budget, local.name.len(), 1)?;
+        }
+        for expression in &self.exprs {
+            facts.validate_ty_with_budget(&expression.ty, budget)?;
+            match &expression.kind {
+                ExprKind::Borrow { place, .. } => path(&place.projection, budget)?,
+                ExprKind::Struct { ty, fields } => {
+                    facts.validate_ty_with_budget(&Ty::Struct(ty.clone()), budget)?;
+                    storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
+                }
+                ExprKind::EnumVariant { ty, fields, .. } => {
+                    facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                    storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
+                }
+                ExprKind::Match { arms, .. } => {
+                    storage(budget, arms.len(), std::mem::size_of::<MatchArm>())?;
+                    for arm in arms {
+                        if let MatchPattern::EnumVariant {
+                            ty,
+                            bindings: values,
+                            ..
+                        } = &arm.pattern
+                        {
+                            facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                            bindings(values, budget)?;
+                        }
+                    }
+                }
+                ExprKind::Call {
+                    target,
+                    signature,
+                    args,
+                    name,
+                } => {
+                    storage(budget, name.len(), 1)?;
+                    storage(budget, args.len(), std::mem::size_of::<ExprId>())?;
+                    storage(budget, signature.params.len(), std::mem::size_of::<Ty>())?;
+                    if target.type_args.len() > 32 {
+                        return Err("generic call argument limit exceeded".into());
+                    }
+                    for ty in target
+                        .type_args
+                        .iter()
+                        .chain(signature.params.iter())
+                        .chain(std::iter::once(&signature.result))
+                    {
+                        facts.validate_ty_with_budget(ty, budget)?;
+                    }
+                }
+                ExprKind::If {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    block(then_block, facts, budget, 0)?;
+                    block(else_block, facts, budget, 0)?;
+                }
+                ExprKind::Block(value) | ExprKind::Loop { body: value, .. } => {
+                    block(value, facts, budget, 0)?
+                }
+                ExprKind::Tuple(values) | ExprKind::Array(values) => {
+                    storage(budget, values.len(), std::mem::size_of::<ExprId>())?
+                }
+                ExprKind::Println(text) => storage(budget, text.len(), 1)?,
+                ExprKind::IntCast { .. }
+                | ExprKind::Deref { .. }
+                | ExprKind::DynamicIndex { .. }
+                | ExprKind::Repeat { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Int(_)
+                | ExprKind::Bool(_)
+                | ExprKind::Local(_)
+                | ExprKind::Field { .. }
+                | ExprKind::Unary { .. }
+                | ExprKind::Binary { .. }
+                | ExprKind::Break { .. }
+                | ExprKind::Continue { .. } => {}
+            }
+        }
+        block(&self.body, facts, budget, 0)
+    }
     pub(super) fn validate_match(
         &self,
         scrutinee: ExprId,
@@ -1309,6 +2144,16 @@ impl CheckedFunction {
     /// target validity or projection typing. Those are established once by
     /// semantic analysis.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with_facts(FactsCtx::Concrete)
+    }
+    pub fn validate_with_facts(&self, facts: FactsCtx<'_>) -> Result<(), String> {
+        facts.validate_ty(&self.result)?;
+        for local in &self.locals {
+            facts.validate_ty(&local.ty)?;
+        }
+        for expression in &self.exprs {
+            facts.validate_ty(&expression.ty)?;
+        }
         let local = |id: LocalId| {
             if id.0 < self.locals.len() {
                 Ok(())
@@ -1468,7 +2313,11 @@ impl CheckedFunction {
                         expr(id)?;
                     }
                 }
-                ExprKind::Struct { fields, .. } => {
+                ExprKind::Struct { ty, fields } => {
+                    facts.validate_ty(&Ty::Struct(ty.clone()))?;
+                    if value.ty != Ty::Struct(ty.clone()) {
+                        return Err("struct expression type mismatch".into());
+                    }
                     for &(_, id) in fields {
                         expr(id)?;
                     }
@@ -1524,10 +2373,22 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Call {
+                    target,
                     name,
                     args,
                     signature,
                 } => {
+                    if target.type_args.len() > 32 {
+                        return Err("generic call argument limit exceeded".into());
+                    }
+                    for ty in target
+                        .type_args
+                        .iter()
+                        .chain(signature.params.iter())
+                        .chain(std::iter::once(&signature.result))
+                    {
+                        facts.validate_ty(ty)?;
+                    }
                     signature
                         .ref_contract
                         .validate(&signature.params, &signature.result)?;
@@ -1657,6 +2518,82 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_facts_are_rigid_noncopy_and_planning_limits_share_authority() {
+        let binder = BinderId {
+            declaration: test_decl(),
+        };
+        let env = ParamEnv::new(binder, 1).unwrap();
+        let param = Ty::Param(ParamId {
+            owner: binder,
+            index: 0,
+        });
+        assert!(FactsCtx::Universal(&env).validate_ty(&param).is_ok());
+        assert!(FactsCtx::Concrete.validate_ty(&param).is_err());
+        assert!(!FactsCtx::Universal(&env).must_copy(&param).unwrap());
+        assert!(
+            !Ty::Array {
+                element: Arc::new(param.clone()),
+                len: 0
+            }
+            .is_copy()
+        );
+        let other = ParamEnv::new(
+            BinderId {
+                declaration: test_decl(),
+            },
+            1,
+        )
+        .unwrap();
+        assert!(FactsCtx::Universal(&other).validate_ty(&param).is_err());
+        let hidden = Ty::Array {
+            element: Arc::new(Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(IntTy::I32)),
+            }),
+            len: 0,
+        };
+        assert!(FactsCtx::Universal(&env).validate_ty(&hidden).is_err());
+        let budget = PlanBudget::new(PlanLimits {
+            applications: 4,
+            bytes: 16,
+            ..PlanLimits::default()
+        });
+        let clone = budget.clone();
+        assert!(budget.same_authority(&clone));
+        assert!(!budget.same_authority(&PlanBudget::default()));
+        let workers = (0..8)
+            .map(|_| {
+                let budget = budget.clone();
+                std::thread::spawn(move || budget.charge_application().is_ok())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .filter(|success| *success)
+                .count(),
+            4
+        );
+        let reservation = budget.reserve_bytes(16).unwrap();
+        assert!(clone.reserve_bytes(1).is_err());
+        drop(reservation);
+        assert!(clone.reserve_bytes(16).is_ok());
+        assert!(budget.check_depth(129).is_err());
+    }
+    fn test_decl() -> super::DeclId {
+        super::DeclId {
+            snapshot: super::SnapshotId::allocate().unwrap(),
+            index: 0,
+        }
+    }
+    fn test_target() -> super::CallTarget {
+        super::CallTarget {
+            declaration: test_decl(),
+            type_args: std::sync::Arc::from([]),
+        }
+    }
     #[test]
     fn compounds_validate_closed_domains_dead_statements_and_indices() {
         let ops = [
@@ -2176,7 +3113,9 @@ mod tests {
         let snapshot = SnapshotId::allocate().unwrap();
         let pair = Ty::Tuple(Arc::from([Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]));
         let enumeration = EnumTy::new(EnumDef {
-            id: DefId { snapshot, index: 7 },
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
+            id: NominalAppId { snapshot, index: 7 },
             name: "E".into(),
             module: String::new(),
             public: false,
@@ -2191,7 +3130,7 @@ mod tests {
             }]),
         });
         let root = Ty::Struct(nominal(
-            DefId { snapshot, index: 0 },
+            NominalAppId { snapshot, index: 0 },
             "Private",
             vec![
                 pair.clone(),
@@ -2303,7 +3242,7 @@ mod tests {
             unreachable!()
         };
         let other = Ty::Struct(nominal(
-            DefId { snapshot, index: 1 },
+            NominalAppId { snapshot, index: 1 },
             "Private",
             root_type
                 .def()
@@ -2722,7 +3661,7 @@ mod tests {
         };
         assert!(projected_ty(&empty, &[Projection::ConstantIndex(0)]).is_err());
         let noncopy = Ty::Struct(nominal(
-            DefId {
+            NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
             },
@@ -2792,11 +3731,13 @@ mod tests {
 
     #[test]
     fn payload_projection_requires_owner_bound_downcast_field_pair() {
-        let id = DefId {
+        let id = NominalAppId {
             snapshot: SnapshotId::allocate().unwrap(),
             index: 0,
         };
         let ty = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
             id,
             name: "E".into(),
             module: String::new(),
@@ -2847,7 +3788,7 @@ mod tests {
             ],
             vec![
                 Projection::Downcast(VariantId {
-                    owner: DefId { index: 1, ..id },
+                    owner: NominalAppId { index: 1, ..id },
                     ..variant
                 }),
                 Projection::Field(0),
@@ -2856,6 +3797,8 @@ mod tests {
             assert!(projected_ty(&root, &projection).is_err(), "{projection:?}");
         }
         let empty_payload = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
             id,
             name: "Empty".into(),
             module: String::new(),
@@ -2895,11 +3838,13 @@ mod tests {
 
     #[test]
     fn enum_identity_copy_debug_and_variant_bounds() {
-        let id = DefId {
+        let id = NominalAppId {
             snapshot: SnapshotId::allocate().unwrap(),
             index: 0,
         };
         let handle = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
             id,
             name: "é".repeat(1000),
             module: String::new(),
@@ -2907,6 +3852,8 @@ mod tests {
             variants: vec![unit_variant("A")].into(),
         });
         let same_id = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
             id,
             name: "Other".into(),
             module: String::new(),
@@ -2936,6 +3883,8 @@ mod tests {
         assert!(function.validate().unwrap_err().contains("enum variant"));
         for count in [0, MAX_ENUM_VARIANTS + 1] {
             let invalid = EnumTy::new(EnumDef {
+                source_decl: test_decl(),
+                type_args: Arc::from([]),
                 id,
                 name: "Invalid".into(),
                 module: String::new(),
@@ -3143,8 +4092,10 @@ mod tests {
         );
     }
 
-    fn nominal(id: DefId, name: &str, fields: Vec<Ty>) -> StructTy {
+    fn nominal(id: NominalAppId, name: &str, fields: Vec<Ty>) -> StructTy {
         StructTy::new(StructDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
             id,
             name: name.into(),
             module: String::new(),
@@ -3165,10 +4116,18 @@ mod tests {
     #[test]
     fn nominal_identity_is_not_name_shape_or_declaration_index_alone() {
         let snapshot = SnapshotId::allocate().unwrap();
-        let first = nominal(DefId { snapshot, index: 0 }, "S", vec![Ty::Int(IntTy::I32)]);
-        let same_shape = nominal(DefId { snapshot, index: 1 }, "S", vec![Ty::Int(IntTy::I32)]);
+        let first = nominal(
+            NominalAppId { snapshot, index: 0 },
+            "S",
+            vec![Ty::Int(IntTy::I32)],
+        );
+        let same_shape = nominal(
+            NominalAppId { snapshot, index: 1 },
+            "S",
+            vec![Ty::Int(IntTy::I32)],
+        );
         let next_snapshot = nominal(
-            DefId {
+            NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
             },
@@ -3188,7 +4147,7 @@ mod tests {
     #[test]
     fn aggregate_helpers_preserve_nominal_non_copy_and_projected_copy() {
         let handle = nominal(
-            DefId {
+            NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
             },
@@ -3245,7 +4204,7 @@ mod tests {
         let mut ty = Ty::Int(IntTy::I32);
         for index in 0..16 {
             ty = Ty::Struct(nominal(
-                DefId { snapshot, index },
+                NominalAppId { snapshot, index },
                 &"é".repeat(1000),
                 vec![ty.clone(), ty],
             ));
@@ -3253,7 +4212,7 @@ mod tests {
         let diagnostic = format!("{ty:?}");
         assert!(diagnostic.len() < 512, "unbounded nominal diagnostic");
         assert!(!diagnostic.contains("fields"));
-        assert!(diagnostic.contains("DefId"));
+        assert!(diagnostic.contains("NominalAppId"));
     }
 
     #[test]
@@ -3464,6 +4423,7 @@ mod tests {
             ty: Ty::Unit,
             completion: Completion::Returns,
             kind: ExprKind::Call {
+                target: test_target(),
                 name: "g".into(),
                 args: vec![],
                 signature: Signature {

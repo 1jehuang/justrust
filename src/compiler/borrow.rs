@@ -392,11 +392,13 @@ fn append_target(
             mul(target.authority.len() + 3, size_of::<usize>())?,
         )?,
     )?;
-    *bytes = add(*bytes, mul(4, size)?)?;
+    let added_bytes = mul(4, size)?;
+    *bytes = add(*bytes, added_bytes)?;
     *memberships = add(*memberships, target.authority.len() + 2)?;
     if *bytes > max_bytes || *memberships > MAX_MEMBERSHIPS {
         return Err(Exhausted);
     }
+    budget.reserve_bytes(added_bytes)?;
     let mut candidate = target.clone();
     candidate.place.projection.extend_from_slice(suffix);
     if let Err(position) = candidate.authority.binary_search(&parent) {
@@ -418,6 +420,7 @@ impl Plan {
         budget: &mut Budget,
         max_bytes: usize,
     ) -> Result<Self, Exhausted> {
+        budget.reserve_bytes(add(mul(f.locals.len(), 32)?, mul(f.blocks.len() + 1, 64)?)?)?;
         let parameter_origins: Vec<_> = f
             .params
             .iter()
@@ -493,6 +496,7 @@ impl Plan {
         if bytes > max_bytes {
             return Err(Exhausted);
         }
+        budget.reserve_bytes(bytes)?;
         budget.spend(add(
             mul(add(p, b)?, mul(r, loans.div_ceil(64))?)?,
             mul(add(mul(p, 3)?, mul(b, 2)?)?, r.div_ceil(64))?,
@@ -748,6 +752,7 @@ impl Plan {
         }
         for (index, local) in parameter_origins.iter().enumerate() {
             let row = f.loan_sites.len() + index;
+            let old_bytes = bytes;
             bytes = add(
                 bytes,
                 4 * (size_of::<Target>() + 128 * size_of::<Projection>() + 2 * size_of::<usize>()),
@@ -756,6 +761,7 @@ impl Plan {
             if bytes > max_bytes || memberships > MAX_MEMBERSHIPS {
                 return Err(Exhausted);
             }
+            budget.reserve_bytes(bytes - old_bytes)?;
             targets[row].push(Target {
                 place: CanonicalPlace {
                     root: CanonicalRoot::ParameterReferent(*local),
@@ -803,6 +809,7 @@ impl Plan {
                             )?;
                             // Include Vec growth and peak resolved/issued clones,
                             // allowing the longest legal projection at access time.
+                            let old_bytes = bytes;
                             bytes = add(
                                 bytes,
                                 mul(
@@ -817,6 +824,7 @@ impl Plan {
                             if bytes > max_bytes || memberships > MAX_MEMBERSHIPS {
                                 return Err(Exhausted);
                             }
+                            budget.reserve_bytes(bytes - old_bytes)?;
                             let mut place = target.place.clone();
                             place
                                 .projection
@@ -840,6 +848,7 @@ impl Plan {
                         }
                     }
                 } else {
+                    let old_bytes = bytes;
                     bytes = add(
                         bytes,
                         mul(
@@ -856,6 +865,7 @@ impl Plan {
                     if bytes > max_bytes || memberships > MAX_MEMBERSHIPS {
                         return Err(Exhausted);
                     }
+                    budget.reserve_bytes(bytes - old_bytes)?;
                     next.push(Target {
                         place: CanonicalPlace::owned(&site.place),
                         authority: vec![],
