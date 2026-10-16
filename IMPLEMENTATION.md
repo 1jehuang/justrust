@@ -321,5 +321,7 @@ updates reuse existing Binary read/write phases, and compound counts share the
 same per-function bounded diagnostic evaluator as ordinary shifts. All1191
 hosted tests, strict all-target lint, exact32 stock/native plus four graph gates
 and the actual real native example pass. Two unchanged historical boundaries
-were promoted after native execution. Independent25corpus receipts remain
-pending. Overloaded assignments, full Rust and performance acceptance stay open.
+were promoted after native execution. Independent25corpus receipts pass900cases,
+including832normal worker comparisons,70declared trap runs,128generated exit
+sets and actual96worker example execution, retained in26raw receipts. Overloaded
+assignments, full Rust and performance acceptance stay open.

@@ -153,6 +153,12 @@ both independent actual-code reviews pass. The1451-byte real example executes
 with stock/native stdout parity, including RHS initialization, carrier retarget,
 index once, full-width shifts and dynamic division address preservation.
 Exactly two historical compound boundaries were promoted only after unchanged
-source native execution, preserving stdout/value7. Tracked25corpus native
-follow-through follows the implementation commit. Full Rust and comprehensive
+source native execution, preserving stdout/value7. Tracked25corpus run
+compiler-compound-assignments-20261016-1108 on4048173fb passes900cases:
+544accepted parity,250invalid rejected,35declared trap101 and71unsupported.
+Independent parsing verifies832normal worker comparisons,70declared trap runs,
+128generated compile/runtime exit sets, source/process hashes and complete
+successful graphs. Twenty-six raw corpus/example receipts are retained under
+experiments/results/20261016-m8a-compound-assignments-*. The real example
+actually executed at96workers, not merely built. Full Rust and comprehensive
 performance acceptance remain open, with no experimental installation.

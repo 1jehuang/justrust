@@ -8932,3 +8932,25 @@ checks pass768324ovpc. Exact check/test/lint summaries20261016-040609216-3829885
 tracked25corpus native evidence follows the implementation commit. These are
 bounded correctness receipts, not a full Rust or speedup claim. The experimental
 compiler was never installed over stable justrust.
+
+### Independent builtin compound follow-through, 2026-10-16
+
+Tracked run `compiler-compound-assignments-20261016-1108` on exact revision
+`4048173fbb98be6ee735e37995b4c81b345a35f9` passed all900cases across25corpora:
+544accepted parity,250invalid rejected,35declared runtime101 and71unsupported
+boundaries. Independent parsing checks source/process hashes, summaries,
+failure-free complete graphs, zero CHECK executable bytes,832normal workers1/8
+runtime comparisons,70declared trap worker runs and128generated compile/runtime
+exit sets. Prior static shift metadata0/build-error distinctions remain verified.
+All receipts share binary SHA256
+`b3c8a7ba5f1484c23085c3b0bfcc30a84590551d94d2a1b5783322684c4bb4e5`.
+
+The unchanged1451-byte example actually executes at96workers, exit0 and exact
+`compound assignments compiled correctly` stdout. Graph22nodes/29edges,
+46CFGblocks/125locals/146analysis paths,12328-byte ELF, no failures or dropped
+events and complete capture. Observed27.57ms wall/4.43ms engine is uncontrolled
+and contended, not a speedup comparison. Twenty-six raw receipts are retained as
+`experiments/results/20261016-m8a-compound-assignments-*`. Together with1191hosted
+tests and strict lint, these close the declared builtin compound milestone only.
+Full Rust, generic abstraction, core/std/Cargo projects and representative
+performance acceptance remain open.
