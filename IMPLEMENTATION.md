@@ -63,13 +63,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 ## Active work and evidence limits
 
 The full requested outcome is not reached. Latest hosted evidence is 1,067 tests
-and the previous 784 independently verified native cases for bounded Linux x86-64 features. There is no successful
+and 816 independently verified native cases for bounded Linux x86-64 features. There is no successful
 core/alloc/std build, broad existing-project acceptance or representative full-Rust
 performance comparison. INTEGER-TYPES.md now records delivered signed/unsigned
 primitives through64 bits, typed literals/patterns and existing checked operations.
 Integer casts under INTEGER-CASTS.md now pass exact32 stock/native cases and
 four graph tests, with soft source inference grounded in primary semantics.
-The complete tracked native campaign follows the implementation commit.
+The tracked22corpus native campaign verifies all816cases.
 Additional operators remain separate follow-through work.
 Full Rust completion remains the goal, not this bounded milestone.
 Integer128, floats, generics/traits/methods, Drop,
@@ -87,7 +87,8 @@ literal diagnostics. All 1,067 hosted tests, strict all-target lint, formatting,
 exact32 stock/native and four graph tests pass. The unchanged historical cast
 fixture and real native example execute. Admitted120cast chains pass native
 lowering/execution on the normal stack, with over-cap and cyclic private IR
-rejected by bounded lowering. Full tracked native evidence follows.
+rejected by bounded lowering. All816tracked22corpus outcomes pass, with23raw
+corpus/example receipts retained and the96worker example executed.
 
 Integer foundation through 64 bits is implemented under `INTEGER-TYPES.md`.
 All ten integer types preserve exact identity, canonical typed constants and

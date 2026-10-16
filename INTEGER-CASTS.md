@@ -3,7 +3,8 @@
 Status: implemented and hosted-validated, 2026-10-16. All component owners
 and both read-only reviewers cleared the actual patch. Exact32 stock/native
 plus four graph gates, 1,067 hosted tests, strict all-target lint and formatting
-pass. The tracked full native campaign follows the implementation commit. Integer
+pass. The tracked22corpus campaign verifies all816native cases, with23 raw
+corpus/example receipts retained. Implementation4c66021f0. Integer
 foundation source 4957a0e7d and evidence
 5004e9bdd delivered 1,021 hosted tests and 784 tracked native differential cases.
 Full Rust remains the requested goal, not a claim made by these bounded gates.
@@ -133,7 +134,8 @@ runtime source parameters and mathematical low-bit expected values;16 focused
 positive cases cover soft source hints, control flow, precedence and once-only
 reference operand effects. There are no expected runtime-overflow cases because
 integer casts themselves never overflow-panic. Exact native32 plus four graph
-tests now pass as well, with full tracked native campaign still pending.
+tests pass as well. Tracked run compiler-integer-casts-20261016-1028 verifies
+all816cases across22corpora and executes the96worker example.
 
 ## Required acceptance and ownership
 

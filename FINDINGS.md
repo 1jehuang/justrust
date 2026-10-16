@@ -8785,3 +8785,22 @@ Malformed checked-IR cycles now fail bounded lowering depth/work before unbounde
 recursion. Repeated legal DAG occurrences remain independently lowered.
 Tracked full native campaign follows the source commit. No performance or full
 Rust completion claim follows from these bounded correctness gates.
+
+### Independent twenty-two-corpus cast native evidence
+
+Tracked run `compiler-integer-casts-20261016-1028` verified revision
+`4c66021f047eb87b90c28a7b04200ada3403588b`. All816cases pass:497accepted
+parity,234invalid rejections,18declared runtime101 and67legalunsupported
+boundaries. Root independently parsed every case/summary, source/process hashes,
+128generated compile/runtime exit sets,738accepted worker runtime comparisons
+and36declared trap worker runs. Successful check/build observations retain
+complete capture, zero failed facts and zero dropped events. Twenty-three raw
+corpus/example receipts are retained under
+`experiments/results/20261016-m8a-integer-casts-*`.
+
+The actual96worker example printed `integer casts compiled correctly`. Its
+1,035byte source produced a12,321byte ELF, five functions,39CFG blocks,93locals,
+107move paths,26graph nodes and35edges. Complete capture has zero failures or
+dropped events. Observed total19,449,689ns and engine3,691,388ns are
+contended/uncontrolled, not a speedup comparison. FullRust, additional operators,
+wider numerics, libraries and existing-project acceptance remain open.
