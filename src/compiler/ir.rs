@@ -52,6 +52,8 @@ pub enum DeclKind {
     Function,
     Struct,
     Enum,
+    Impl,
+    AssociatedFunction,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BinderId {
@@ -84,10 +86,74 @@ impl ParamEnv {
         param.owner == self.binder && usize::from(param.index) < self.arity
     }
 }
+/// Authoritative ordered binder scopes visible in a callable body.
+#[derive(Clone, Debug)]
+pub struct GenericEnv {
+    scopes: Arc<[Arc<ParamEnv>]>,
+    total_arity: usize,
+}
+impl GenericEnv {
+    pub(super) fn new(scopes: &[Arc<ParamEnv>], budget: &PlanBudget) -> Result<Self, String> {
+        if scopes.len() > 32 {
+            return Err("generic scope limit exceeded".into());
+        }
+        budget.charge_work(scopes.len().saturating_mul(scopes.len() + 1))?;
+        let mut total_arity = 0usize;
+        for (index, scope) in scopes.iter().enumerate() {
+            if scopes[..index]
+                .iter()
+                .any(|prior| prior.binder() == scope.binder())
+            {
+                return Err("duplicate generic binder scope".into());
+            }
+            total_arity = total_arity
+                .checked_add(scope.arity())
+                .ok_or("generic arity overflow")?;
+            if total_arity > budget.limits().params {
+                return Err("generic parameter limit exceeded".into());
+            }
+        }
+        budget.retain_bytes(std::mem::size_of::<Self>() + std::mem::size_of_val(scopes))?;
+        Ok(Self {
+            scopes: scopes.into(),
+            total_arity,
+        })
+    }
+    pub fn scopes(&self) -> &[Arc<ParamEnv>] {
+        &self.scopes
+    }
+    pub fn contains(&self, param: ParamId) -> bool {
+        self.scopes.iter().any(|scope| scope.contains(param))
+    }
+    pub fn total_arity(&self) -> usize {
+        self.total_arity
+    }
+    pub fn is_generic(&self) -> bool {
+        self.total_arity != 0
+    }
+    pub fn ordered_params(&self) -> impl Iterator<Item = ParamId> + '_ {
+        self.scopes.iter().flat_map(|scope| {
+            (0..scope.arity()).map(move |index| ParamId {
+                owner: scope.binder(),
+                index: index as u16,
+            })
+        })
+    }
+    fn argument_index(&self, param: ParamId) -> Option<usize> {
+        let mut offset = 0;
+        for scope in self.scopes.iter() {
+            if scope.contains(param) {
+                return Some(offset + usize::from(param.index));
+            }
+            offset += scope.arity();
+        }
+        None
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub enum FactsCtx<'a> {
     Concrete,
-    Universal(&'a ParamEnv),
+    Universal(&'a GenericEnv),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CallTarget {
@@ -96,7 +162,7 @@ pub struct CallTarget {
 }
 #[derive(Clone, Debug)]
 pub struct GenericSignature {
-    pub param_env: Arc<ParamEnv>,
+    pub env: Arc<GenericEnv>,
     pub signature: Signature,
 }
 #[derive(Clone, Debug)]
@@ -243,7 +309,7 @@ pub trait SubstitutionCx {
 
 pub fn substitute_ty(
     ty: &Ty,
-    binder: BinderId,
+    env: &GenericEnv,
     args: &[Ty],
     caller: FactsCtx<'_>,
     cx: &mut impl SubstitutionCx,
@@ -251,7 +317,7 @@ pub fn substitute_ty(
 ) -> Result<Ty, String> {
     fn walk(
         ty: &Ty,
-        binder: BinderId,
+        env: &GenericEnv,
         args: &[Ty],
         caller: FactsCtx<'_>,
         cx: &mut impl SubstitutionCx,
@@ -262,13 +328,25 @@ pub fn substitute_ty(
         budget.charge_work(1)?;
         budget.charge_nodes(1)?;
         Ok(match ty {
-            Ty::Param(param) if param.owner == binder => args
-                .get(usize::from(param.index))
-                .ok_or("type parameter substitution index out of bounds")?
-                .clone(),
             Ty::Param(param) => {
-                caller.validate_ty(ty)?;
-                Ty::Param(*param)
+                budget.charge_work(env.scopes().len())?;
+                if let Some(index) = env.argument_index(*param) {
+                    // Simultaneous substitution: caller arguments are rigid and
+                    // are never visited again under the callee environment.
+                    args.get(index)
+                        .ok_or("type parameter substitution index out of bounds")?
+                        .clone()
+                } else {
+                    if env
+                        .scopes()
+                        .iter()
+                        .any(|scope| scope.binder() == param.owner)
+                    {
+                        return Err("type parameter substitution index out of bounds".into());
+                    }
+                    caller.validate_ty_with_budget(ty, budget)?;
+                    Ty::Param(*param)
+                }
             }
             Ty::Tuple(fields) => {
                 budget.retain_bytes(
@@ -280,7 +358,7 @@ pub fn substitute_ty(
                 Ty::Tuple(
                     fields
                         .iter()
-                        .map(|ty| walk(ty, binder, args, caller, cx, budget, depth + 1))
+                        .map(|ty| walk(ty, env, args, caller, cx, budget, depth + 1))
                         .collect::<Result<Vec<_>, _>>()?
                         .into(),
                 )
@@ -289,7 +367,7 @@ pub fn substitute_ty(
                 budget
                     .retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
                 Ty::Array {
-                    element: Arc::new(walk(element, binder, args, caller, cx, budget, depth + 1)?),
+                    element: Arc::new(walk(element, env, args, caller, cx, budget, depth + 1)?),
                     len: *len,
                 }
             }
@@ -298,15 +376,7 @@ pub fn substitute_ty(
                     .retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
                 Ty::Ref {
                     kind: *kind,
-                    referent: Arc::new(walk(
-                        referent,
-                        binder,
-                        args,
-                        caller,
-                        cx,
-                        budget,
-                        depth + 1,
-                    )?),
+                    referent: Arc::new(walk(referent, env, args, caller, cx, budget, depth + 1)?),
                 }
             }
             Ty::Struct(value) => {
@@ -319,7 +389,7 @@ pub fn substitute_ty(
                 let arguments = app
                     .type_args
                     .iter()
-                    .map(|ty| walk(ty, binder, args, caller, cx, budget, depth + 1))
+                    .map(|ty| walk(ty, env, args, caller, cx, budget, depth + 1))
                     .collect::<Result<Vec<_>, _>>()?;
                 cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
             }
@@ -333,21 +403,21 @@ pub fn substitute_ty(
                 let arguments = app
                     .type_args
                     .iter()
-                    .map(|ty| walk(ty, binder, args, caller, cx, budget, depth + 1))
+                    .map(|ty| walk(ty, env, args, caller, cx, budget, depth + 1))
                     .collect::<Result<Vec<_>, _>>()?;
                 cx.intern_nominal(app.source_decl, &arguments, caller, budget)?
             }
             Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
         })
     }
-    if args.len() > 32 {
-        return Err("generic argument limit exceeded".into());
+    if args.len() != env.total_arity() {
+        return Err("generic argument arity mismatch".into());
     }
     for argument in args {
         caller.validate_ty_with_budget(argument, budget)?;
-        reject_references(argument)?;
+        reject_references(argument, budget)?;
     }
-    walk(ty, binder, args, caller, cx, budget, 0)
+    walk(ty, env, args, caller, cx, budget, 0)
 }
 
 /// Instantiate only a universally checked exact source, then lower the returned
@@ -358,22 +428,22 @@ pub fn instantiate_checked(
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, String> {
-    let env = template.param_env();
+    let env = template.env();
     if !template.budget().same_authority(budget) {
         return Err("generic instance changed planning budget authority".into());
     }
-    if args.len() != env.arity() {
+    if args.len() != env.total_arity() {
         return Err("generic instance argument arity mismatch".into());
     }
     for ty in args {
-        FactsCtx::Concrete.validate_ty(ty)?;
-        reject_references(ty)?;
+        FactsCtx::Concrete.validate_ty_with_budget(ty, budget)?;
+        reject_references(ty, budget)?;
     }
     let source = template.source();
     source.preflight_plan(FactsCtx::Universal(env), budget)?;
     let mut output = source.as_ref().clone();
     let mut visitor = Instantiate {
-        binder: env.binder(),
+        env,
         args,
         cx,
         budget,
@@ -472,58 +542,45 @@ pub fn instantiate_checked(
     Ok(output)
 }
 
-fn reject_references(root: &Ty) -> Result<(), String> {
-    let mut pending = vec![root];
-    let mut work = 0usize;
-    while let Some(ty) = pending.pop() {
-        work += 1;
-        if work > MAX_PATTERN_PROJECTION_WORK {
-            return Err("generic argument type work limit exceeded".into());
-        }
+fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
+    fn walk(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
         match ty {
             Ty::Ref { .. } => return Err("reference generic arguments are unsupported".into()),
-            Ty::Tuple(fields) => pending.extend(fields.iter()),
-            Ty::Array { element, .. } => pending.push(element),
-            Ty::Struct(value) => {
-                if value
-                    .def()
-                    .fields
-                    .len()
-                    .saturating_add(value.def().type_args.len())
-                    .saturating_add(pending.len())
-                    > MAX_PATTERN_PROJECTION_WORK - work
-                {
-                    return Err("generic argument type work limit exceeded".into());
+            Ty::Tuple(fields) => {
+                for field in fields.iter() {
+                    walk(field, budget, depth + 1)?;
                 }
-                pending.extend(value.def().type_args.iter());
-                pending.extend(value.def().fields.iter().map(|field| &field.ty));
+            }
+            Ty::Array { element, .. } => walk(element, budget, depth + 1)?,
+            Ty::Struct(value) => {
+                for argument in value.def().type_args.iter() {
+                    walk(argument, budget, depth + 1)?;
+                }
+                for field in value.def().fields.iter() {
+                    walk(&field.ty, budget, depth + 1)?;
+                }
             }
             Ty::Enum(value) => {
-                if value.def().type_args.len().saturating_add(pending.len())
-                    > MAX_PATTERN_PROJECTION_WORK - work
-                {
-                    return Err("generic argument type work limit exceeded".into());
+                for argument in value.def().type_args.iter() {
+                    walk(argument, budget, depth + 1)?;
                 }
-                pending.extend(value.def().type_args.iter());
                 for variant in value.def().variants.iter() {
-                    if variant.fields.len().saturating_add(pending.len())
-                        > MAX_PATTERN_PROJECTION_WORK - work
-                    {
-                        return Err("generic argument type work limit exceeded".into());
+                    budget.charge_work(1)?;
+                    for field in variant.fields.iter() {
+                        walk(&field.ty, budget, depth + 1)?;
                     }
-                    pending.extend(variant.fields.iter().map(|field| &field.ty));
                 }
             }
             Ty::Param(_) | Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
-        if pending.len() > MAX_PATTERN_PROJECTION_WORK - work {
-            return Err("generic argument type work limit exceeded".into());
-        }
+        Ok(())
     }
-    Ok(())
+    walk(root, budget, 0)
 }
 struct Instantiate<'a, C> {
-    binder: BinderId,
+    env: &'a GenericEnv,
     args: &'a [Ty],
     cx: &'a mut C,
     budget: &'a PlanBudget,
@@ -532,7 +589,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
     fn ty(&mut self, ty: &Ty) -> Result<Ty, String> {
         substitute_ty(
             ty,
-            self.binder,
+            self.env,
             self.args,
             FactsCtx::Concrete,
             self.cx,
@@ -1061,10 +1118,21 @@ impl FactsCtx<'_> {
                 budget.charge_work(1)?;
             }
             match ty {
-                Ty::Param(param) => match facts {
-                    FactsCtx::Universal(env) if env.contains(*param) => {}
-                    _ => return Err("type parameter is outside its authoritative binder".into()),
-                },
+                Ty::Param(param) => {
+                    let FactsCtx::Universal(env) = facts else {
+                        return Err("type parameter is outside its authoritative binder".into());
+                    };
+                    *work += env.scopes().len();
+                    if *work > MAX_PATTERN_PROJECTION_WORK {
+                        return Err("type facts resource limit exceeded".into());
+                    }
+                    if let Some(budget) = budget {
+                        budget.charge_work(env.scopes().len())?;
+                    }
+                    if !env.contains(*param) {
+                        return Err("type parameter is outside its authoritative binder".into());
+                    }
+                }
                 Ty::Ref { referent, .. } => {
                     if matches!(facts, FactsCtx::Universal(_)) {
                         return Err("references in generic bodies are unsupported".into());
@@ -2519,11 +2587,168 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn associated_generic_environments_preserve_scope_authority_and_total_limits() {
+        let budget = PlanBudget::default();
+        let scope = |arity| {
+            Arc::new(
+                ParamEnv::new(
+                    BinderId {
+                        declaration: test_decl(),
+                    },
+                    arity,
+                )
+                .unwrap(),
+            )
+        };
+        let implementation = scope(1);
+        let method = scope(0);
+        let env = GenericEnv::new(&[implementation.clone(), method.clone()], &budget).unwrap();
+        assert_eq!(env.scopes().len(), 2);
+        assert_eq!(env.total_arity(), 1);
+        assert!(env.is_generic());
+        let params = env.ordered_params().collect::<Vec<_>>();
+        assert_eq!(
+            params,
+            vec![ParamId {
+                owner: implementation.binder(),
+                index: 0
+            }]
+        );
+        assert!(!env.contains(ParamId {
+            owner: method.binder(),
+            index: 0
+        }));
+        assert!(GenericEnv::new(&[implementation.clone(), implementation], &budget).is_err());
+        assert!(GenericEnv::new(&[scope(16), scope(17)], &budget).is_err());
+        assert_eq!(
+            GenericEnv::new(&[scope(16), scope(16)], &budget)
+                .unwrap()
+                .total_arity(),
+            32
+        );
+        let nongeneric = GenericEnv::new(&[scope(0), scope(0)], &budget).unwrap();
+        assert!(!nongeneric.is_generic());
+        assert_eq!(nongeneric.scopes().len(), 2);
+        let tiny = PlanBudget::new(PlanLimits {
+            bytes: 0,
+            ..PlanLimits::default()
+        });
+        assert!(GenericEnv::new(&[method], &tiny).is_err());
+        assert!(GenericEnv::new(&(0..33).map(|_| scope(0)).collect::<Vec<_>>(), &budget).is_err());
+    }
+
+    #[test]
+    fn associated_substitution_is_simultaneous_across_rigid_impl_and_method_binders() {
+        struct NoNominals;
+        impl SubstitutionCx for NoNominals {
+            fn nominal_application(&self, _: NominalAppId) -> Result<NominalAppInfo, String> {
+                Err("unexpected nominal".into())
+            }
+            fn intern_nominal(
+                &mut self,
+                _: DeclId,
+                _: &[Ty],
+                _: FactsCtx<'_>,
+                _: &PlanBudget,
+            ) -> Result<Ty, String> {
+                Err("unexpected nominal".into())
+            }
+            fn instantiate_signature(
+                &mut self,
+                _: &CallTarget,
+                _: FactsCtx<'_>,
+                _: &PlanBudget,
+            ) -> Result<Signature, String> {
+                Err("unexpected call".into())
+            }
+        }
+        let budget = PlanBudget::default();
+        let scopes = [test_decl(), test_decl()]
+            .map(|declaration| Arc::new(ParamEnv::new(BinderId { declaration }, 1).unwrap()));
+        let env = GenericEnv::new(&scopes, &budget).unwrap();
+        let params = env.ordered_params().map(Ty::Param).collect::<Vec<_>>();
+        let input = Ty::Tuple(
+            vec![
+                params[0].clone(),
+                Ty::Array {
+                    element: Arc::new(params[1].clone()),
+                    len: 0,
+                },
+            ]
+            .into(),
+        );
+        let actuals = [params[1].clone(), params[0].clone()];
+        let result = substitute_ty(
+            &input,
+            &env,
+            &actuals,
+            FactsCtx::Universal(&env),
+            &mut NoNominals,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            Ty::Tuple(
+                vec![
+                    params[1].clone(),
+                    Ty::Array {
+                        element: Arc::new(params[0].clone()),
+                        len: 0
+                    }
+                ]
+                .into()
+            )
+        );
+        assert!(FactsCtx::Concrete.validate_ty(&result).is_err());
+        assert!(
+            substitute_ty(
+                &input,
+                &env,
+                &actuals[..1],
+                FactsCtx::Universal(&env),
+                &mut NoNominals,
+                &budget
+            )
+            .is_err()
+        );
+        let invalid = Ty::Param(ParamId {
+            owner: scopes[0].binder(),
+            index: 1,
+        });
+        assert!(
+            substitute_ty(
+                &invalid,
+                &env,
+                &actuals,
+                FactsCtx::Universal(&env),
+                &mut NoNominals,
+                &budget
+            )
+            .is_err()
+        );
+        let concrete = substitute_ty(
+            &input,
+            &env,
+            &[Ty::Int(IntTy::U64), Ty::Bool],
+            FactsCtx::Concrete,
+            &mut NoNominals,
+            &budget,
+        )
+        .unwrap();
+        assert!(FactsCtx::Concrete.validate_ty(&concrete).is_ok());
+    }
+
+    #[test]
     fn generic_facts_are_rigid_noncopy_and_planning_limits_share_authority() {
         let binder = BinderId {
             declaration: test_decl(),
         };
-        let env = ParamEnv::new(binder, 1).unwrap();
+        let env = GenericEnv::new(
+            &[Arc::new(ParamEnv::new(binder, 1).unwrap())],
+            &PlanBudget::default(),
+        )
+        .unwrap();
         let param = Ty::Param(ParamId {
             owner: binder,
             index: 0,
@@ -2538,13 +2763,14 @@ mod tests {
             }
             .is_copy()
         );
-        let other = ParamEnv::new(
+        let other_scope = ParamEnv::new(
             BinderId {
                 declaration: test_decl(),
             },
             1,
         )
         .unwrap();
+        let other = GenericEnv::new(&[Arc::new(other_scope)], &PlanBudget::default()).unwrap();
         assert!(FactsCtx::Universal(&other).validate_ty(&param).is_err());
         let hidden = Ty::Array {
             element: Arc::new(Ty::Ref {

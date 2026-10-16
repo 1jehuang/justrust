@@ -121,6 +121,9 @@ impl CompilerProvider {
             .ok_or_else(|| Error::new("missing native instance slot"))
     }
     fn reserve(&self, bytes: usize) -> Result<(), Error> {
+        let bytes = bytes
+            .checked_add(4 * std::mem::size_of::<ir::PlanReservation>())
+            .ok_or_else(|| Error::new("generic reservation byte limit exceeded"))?;
         let reservation = self.0.budget.reserve_bytes(bytes).map_err(Error::new)?;
         let mut reservations = self
             .0
@@ -187,7 +190,13 @@ impl Provider for CompilerProvider {
                         )
                         .map_err(Error::new)?,
                     };
-                    let count = program.functions.len();
+                    publish(&this.0.program, program)?;
+                }
+                SIGNATURES => {
+                    cx.read(cx.request(root(RESOLVE)).get(0)).await?;
+                    let context = frontend::PlanCtx::from_program(this.program()?, &this.0.budget)
+                        .map_err(Error::new)?;
+                    let count = context.callable_count();
                     this.reserve(
                         count
                             .checked_mul(std::mem::size_of::<DeclarationFacts>())
@@ -199,15 +208,7 @@ impl Provider for CompilerProvider {
                         .map_err(|_| Error::new("generic declaration allocation limit exceeded"))?;
                     declarations.extend((0..count).map(|_| DeclarationFacts::new()));
                     publish(&this.0.declarations, declarations)?;
-                    publish(&this.0.program, program)?;
-                }
-                SIGNATURES => {
-                    cx.read(cx.request(root(RESOLVE)).get(0)).await?;
-                    publish(
-                        &this.0.types,
-                        frontend::PlanCtx::from_program(this.program()?, &this.0.budget)
-                            .map_err(Error::new)?,
-                    )?;
+                    publish(&this.0.types, context)?;
                 }
                 TEMPLATE_BODY | UNIVERSAL_LOWER | UNIVERSAL_ANALYZE => {
                     let [index] = key.params.as_slice() else {
@@ -218,9 +219,10 @@ impl Provider for CompilerProvider {
                     cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
                     let slot = this.declaration(index)?;
                     if key.kind == TEMPLATE_BODY {
-                        let checked = frontend::type_function_with_plan(
+                        let declaration = this.types()?.callable_decl(index).map_err(Error::new)?;
+                        let checked = frontend::type_callable_with_plan(
                             this.program()?,
-                            index,
+                            declaration,
                             this.types()?,
                             &this.0.budget,
                         )
@@ -231,9 +233,9 @@ impl Provider for CompilerProvider {
                             .await?;
                         let env = this
                             .types()?
-                            .param_env(this.types()?.function_decl(index).map_err(Error::new)?)
+                            .callable_env(this.types()?.callable_decl(index).map_err(Error::new)?)
                             .map_err(Error::new)?;
-                        if env.arity() == 0 {
+                        if !env.is_generic() {
                             return Err(Error::new(
                                 "universal lowering requires generic declaration",
                             ));
@@ -273,24 +275,28 @@ impl Provider for CompilerProvider {
                 }
                 MONO_PLAN => {
                     cx.read(cx.request(root(SIGNATURES)).get(0)).await?;
-                    let program = this.program()?;
-                    // No concrete work is exposed until every declaration is universally valid.
-                    let count =
-                        program.functions.len().checked_mul(2).ok_or_else(|| {
-                            Error::new("generic declaration frontier limit exceeded")
-                        })?;
+                    // No concrete work is exposed until every callable is universally valid.
+                    let callable_count = this.types()?.callable_count();
+                    let count = callable_count
+                        .checked_mul(2)
+                        .ok_or_else(|| Error::new("generic declaration frontier limit exceeded"))?;
                     let (mut handles, _handles_reservation) = this.scratch_vec(count)?;
-                    for (index, item) in program.functions.iter().enumerate() {
+                    for index in 0..callable_count {
                         handles.push(cx.request(function(TEMPLATE_BODY, index)).get(0));
-                        if !item.type_params.is_empty() {
+                        let declaration = this.types()?.callable_decl(index).map_err(Error::new)?;
+                        if this
+                            .types()?
+                            .callable_env(declaration)
+                            .map_err(Error::new)?
+                            .is_generic()
+                        {
                             handles.push(cx.request(function(UNIVERSAL_ANALYZE, index)).get(0));
                         }
                     }
                     for handle in handles {
                         cx.read(handle).await?;
                     }
-                    let (mut sources, _sources_reservation) =
-                        this.scratch_vec(program.functions.len())?;
+                    let (mut sources, _sources_reservation) = this.scratch_vec(callable_count)?;
                     for slot in this
                         .0
                         .declarations
@@ -305,7 +311,7 @@ impl Provider for CompilerProvider {
                         );
                     }
                     let mut context = this.types()?.clone();
-                    let plan = instances::build(program, &mut context, &sources, &this.0.budget)
+                    let plan = instances::build(&mut context, &sources, &this.0.budget)
                         .map_err(Error::new)?;
                     this.reserve(
                         plan.entries
@@ -597,7 +603,10 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
             analyses: retained_analyses(&snapshot),
         });
     }
-    let functions = snapshot.program.get().map_or(0, |p| p.functions.len());
+    let functions = snapshot
+        .types
+        .get()
+        .map_or(0, frontend::PlanCtx::callable_count);
     let executable = snapshot.executable.get().cloned();
     let (source_bytes, source_files) = match &snapshot.input {
         Input::Text(text) => (text.len(), 1),

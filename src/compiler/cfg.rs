@@ -240,7 +240,7 @@ fn coerces(got: &Ty, want: &Ty) -> bool {
 #[derive(Clone, Debug)]
 pub struct TemplateCfg {
     source: std::sync::Arc<ir::CheckedFunction>,
-    param_env: std::sync::Arc<ir::ParamEnv>,
+    env: std::sync::Arc<ir::GenericEnv>,
     function: std::sync::Arc<Function>,
     budget: ir::PlanBudget,
 }
@@ -248,8 +248,8 @@ impl TemplateCfg {
     pub fn source(&self) -> &std::sync::Arc<ir::CheckedFunction> {
         &self.source
     }
-    pub fn param_env(&self) -> &std::sync::Arc<ir::ParamEnv> {
-        &self.param_env
+    pub fn env(&self) -> &std::sync::Arc<ir::GenericEnv> {
+        &self.env
     }
     pub fn function(&self) -> &std::sync::Arc<Function> {
         &self.function
@@ -284,17 +284,17 @@ pub fn close(
 }
 pub fn lower_template(
     source: std::sync::Arc<ir::CheckedFunction>,
-    param_env: std::sync::Arc<ir::ParamEnv>,
+    env: std::sync::Arc<ir::GenericEnv>,
     budget: &ir::PlanBudget,
 ) -> Result<TemplateCfg, String> {
     budget.charge_nodes(source.exprs.len().saturating_add(source.locals.len()))?;
-    let facts = ir::FactsCtx::Universal(&param_env);
+    let facts = ir::FactsCtx::Universal(&env);
     let function = std::sync::Arc::new(lower_with_facts(&source, facts, Some(budget))?);
     function.preflight_plan(facts, budget)?;
     function.validate_with_facts(facts)?;
     Ok(TemplateCfg {
         source,
-        param_env,
+        env,
         function,
         budget: budget.clone(),
     })
@@ -2137,9 +2137,79 @@ mod tests {
         }
     }
     #[test]
+    fn associated_template_proof_covers_impl_and_method_parameters_before_closed_emission() {
+        let budget = ir::PlanBudget::default();
+        let scopes = [test_decl(), test_decl()].map(|declaration| {
+            std::sync::Arc::new(ir::ParamEnv::new(ir::BinderId { declaration }, 1).unwrap())
+        });
+        let env = std::sync::Arc::new(ir::GenericEnv::new(&scopes, &budget).unwrap());
+        let types = env.ordered_params().map(Ty::Param).collect::<Vec<_>>();
+        let result = Ty::Tuple(types.clone().into());
+        let source = ir::CheckedFunction {
+            ref_contract: Default::default(),
+            name: "associated".into(),
+            params: vec![LocalId(0), LocalId(1)],
+            result: result.clone(),
+            locals: types
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| ir::LocalDecl {
+                    name: format!("arg{index}"),
+                    ty: ty.clone(),
+                    mutable: false,
+                })
+                .collect(),
+            exprs: vec![
+                expr(types[0].clone(), ir::ExprKind::Local(LocalId(0))),
+                expr(types[1].clone(), ir::ExprKind::Local(LocalId(1))),
+                expr(result, ir::ExprKind::Tuple(vec![ExprId(0), ExprId(1)])),
+            ],
+            body: ir::Block {
+                statements: vec![],
+                tail: Some(ExprId(2)),
+            },
+        };
+        assert!(lower(&source).is_err());
+        let template =
+            lower_template(std::sync::Arc::new(source.clone()), env.clone(), &budget).unwrap();
+        assert!(std::sync::Arc::ptr_eq(template.env(), &env));
+        let verified = super::super::ownership::verify_template(template).unwrap();
+        let instance = ir::instantiate_checked(
+            &verified,
+            &[Ty::Int(IntTy::I32), Ty::Bool],
+            &mut NoNominals,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(
+            instance.result,
+            Ty::Tuple(vec![Ty::Int(IntTy::I32), Ty::Bool].into())
+        );
+        let function = lower_with_budget(&instance, &budget).unwrap();
+        assert!(
+            super::super::ownership::analyze_closed(
+                close(std::sync::Arc::new(function), &budget).unwrap()
+            )
+            .is_ok()
+        );
+        let incomplete = std::sync::Arc::new(ir::GenericEnv::new(&scopes[..1], &budget).unwrap());
+        assert!(lower_template(std::sync::Arc::new(source.clone()), incomplete, &budget).is_err());
+        let mut duplicate = source;
+        duplicate.exprs[1] = expr(types[0].clone(), ir::ExprKind::Local(LocalId(0)));
+        duplicate.result = Ty::Tuple(vec![types[0].clone(), types[0].clone()].into());
+        duplicate.exprs[2].ty = duplicate.result.clone();
+        assert!(
+            super::super::ownership::verify_template(
+                lower_template(std::sync::Arc::new(duplicate), env, &budget).unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn generic_templates_prove_moves_before_relowering_concrete_copy_instances() {
         let budget = ir::PlanBudget::default();
-        let env = std::sync::Arc::new(
+        let scope = std::sync::Arc::new(
             ir::ParamEnv::new(
                 ir::BinderId {
                     declaration: test_decl(),
@@ -2149,9 +2219,10 @@ mod tests {
             .unwrap(),
         );
         let ty = Ty::Param(ir::ParamId {
-            owner: env.binder(),
+            owner: scope.binder(),
             index: 0,
         });
+        let env = std::sync::Arc::new(ir::GenericEnv::new(&[scope], &budget).unwrap());
         let source = ir::CheckedFunction {
             ref_contract: Default::default(),
             name: "id".into(),
@@ -2296,7 +2367,7 @@ mod tests {
         let budget = ir::PlanBudget::default();
         let declaration = test_decl();
         let callee = test_decl();
-        let env = std::sync::Arc::new(
+        let scope = std::sync::Arc::new(
             ir::ParamEnv::new(
                 ir::BinderId {
                     declaration: test_decl(),
@@ -2306,9 +2377,10 @@ mod tests {
             .unwrap(),
         );
         let param = Ty::Param(ir::ParamId {
-            owner: env.binder(),
+            owner: scope.binder(),
             index: 0,
         });
+        let env = std::sync::Arc::new(ir::GenericEnv::new(&[scope], &budget).unwrap());
         let snapshot = ir::SnapshotId::allocate().unwrap();
         let make = |index, element: Ty| {
             ir::EnumTy::new(ir::EnumDef {

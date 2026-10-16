@@ -105,13 +105,13 @@ fn bounded(name: &str, run: impl FnOnce()) {
 }
 fn checked_function(source: &str, name: &str) -> ir::CheckedFunction {
     let program = frontend::parse(source).unwrap();
-    let signatures = frontend::signature_table(&program).unwrap();
-    let index = program
-        .functions
-        .iter()
-        .position(|function| function.name == name)
+    let budget = ir::PlanBudget::default();
+    let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let declaration = (0..plan.callable_count())
+        .map(|index| plan.callable_decl(index).unwrap())
+        .find(|declaration| plan.callable_body(&program, *declaration).unwrap().name == name)
         .unwrap();
-    frontend::type_function_with_signatures(&program, index, &signatures).unwrap()
+    frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap()
 }
 fn lowered(source: &str, name: &str) -> cfg::Function {
     let result = cfg::lower(&checked_function(source, name)).unwrap();
@@ -469,14 +469,13 @@ fn cfg_native_emission_preserves_order_snapshots_recursion_and_control_edges() {
         || {
             use std::os::unix::fs::PermissionsExt;
             let program = frontend::parse(NATIVE).unwrap();
-            let signatures = frontend::signature_table(&program).unwrap();
-            let functions = program
-                .functions
-                .iter()
-                .enumerate()
-                .map(|(index, _)| {
+            let budget = ir::PlanBudget::default();
+            let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let functions = (0..plan.callable_count())
+                .map(|index| {
+                    let declaration = plan.callable_decl(index).unwrap();
                     let checked =
-                        frontend::type_function_with_signatures(&program, index, &signatures)
+                        frontend::type_callable_with_plan(&program, declaration, &plan, &budget)
                             .unwrap();
                     let lowered = cfg::lower(&checked).unwrap();
                     lowered.validate().unwrap();

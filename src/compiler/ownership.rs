@@ -5,7 +5,7 @@
 //! move-path analysis can be tested before non-Copy syntax is supported.
 use super::borrow::{self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target};
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
-use super::ir::{CheckedFunction, ExprId, FactsCtx, LocalId, ParamEnv, Place, Projection, Ty};
+use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, Projection, Ty};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -82,8 +82,8 @@ impl VerifiedTemplateCfg {
     pub fn source(&self) -> &Arc<CheckedFunction> {
         self.template.source()
     }
-    pub fn param_env(&self) -> &Arc<ParamEnv> {
-        self.template.param_env()
+    pub fn env(&self) -> &Arc<GenericEnv> {
+        self.template.env()
     }
     pub fn function(&self) -> &Arc<cfg::Function> {
         self.template.function()
@@ -122,7 +122,7 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
     let analysis = analyze_with_facts(
         template.function(),
         Limits::default(),
-        FactsCtx::Universal(template.param_env()),
+        FactsCtx::Universal(template.env()),
         Some(template.budget()),
     );
     if !analysis.passed() {
@@ -1967,15 +1967,16 @@ mod tests {
         cfg::lower(&checked).unwrap()
     }
 
-    fn symbolic_parameter() -> (Arc<ParamEnv>, Ty) {
-        use super::super::ir::{BinderId, ParamId};
+    fn symbolic_parameter() -> (Arc<GenericEnv>, Ty) {
+        use super::super::ir::{BinderId, ParamEnv, ParamId, PlanBudget};
         let binder = BinderId {
             declaration: DeclId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
             },
         };
-        let env = Arc::new(ParamEnv::new(binder, 1).unwrap());
+        let scope = Arc::new(ParamEnv::new(binder, 1).unwrap());
+        let env = Arc::new(GenericEnv::new(&[scope], &PlanBudget::default()).unwrap());
         (
             env,
             Ty::Param(ParamId {
@@ -1983,6 +1984,163 @@ mod tests {
                 index: 0,
             }),
         )
+    }
+
+    fn symbolic_pair() -> (Arc<GenericEnv>, [Ty; 2]) {
+        let (first, a) = symbolic_parameter();
+        let (second, b) = symbolic_parameter();
+        let scopes = [first.scopes()[0].clone(), second.scopes()[0].clone()];
+        let env = GenericEnv::new(&scopes, &super::super::ir::PlanBudget::default()).unwrap();
+        (Arc::new(env), [a, b])
+    }
+
+    #[test]
+    fn multi_binder_membership_validates_both_scopes_and_dead_metadata() {
+        let (env, parameters) = symbolic_pair();
+        let facts = FactsCtx::Universal(&env);
+        let mut f = fixture();
+        for parameter in &parameters {
+            let Ty::Param(id) = parameter else {
+                panic!("parameter fixture")
+            };
+            assert!(env.contains(*id));
+            f.locals.push(local(array(parameter.clone(), 0)));
+        }
+        assert!(analyze_with_facts(&f, Limits::default(), facts, None).passed());
+        for index in 0..2 {
+            let other = GenericEnv::new(
+                &[env.scopes()[1 - index].clone()],
+                &super::super::ir::PlanBudget::default(),
+            )
+            .unwrap();
+            assert!(
+                !analyze_with_facts(&f, Limits::default(), FactsCtx::Universal(&other), None)
+                    .passed()
+            );
+        }
+        let (_, foreign) = symbolic_parameter();
+        f.locals.push(local(array(foreign, 0)));
+        assert!(!analyze_with_facts(&f, Limits::default(), facts, None).passed());
+    }
+
+    #[test]
+    fn multi_binder_universal_parameters_remain_noncopy_in_the_same_solver() {
+        let (env, parameters) = symbolic_pair();
+        for parameter in parameters {
+            let facts = FactsCtx::Universal(&env);
+            let mut f = fixture();
+            f.locals.extend([
+                local(parameter.clone()),
+                local(parameter.clone()),
+                local(parameter),
+            ]);
+            f.params.push(LocalId(1));
+            f.blocks[0].statements.extend([
+                located(Statement::StorageLive(LocalId(2))),
+                located(Statement::StorageLive(LocalId(3))),
+                located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::Use(Operand::Move(place(1))),
+                }),
+            ]);
+            assert!(analyze_with_facts(&f, Limits::default(), facts, None).passed());
+            f.blocks[0].statements.push(located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }));
+            assert!(
+                analyze_with_facts(&f, Limits::default(), facts, None)
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+            );
+            f.blocks[0].statements.pop();
+            f.blocks[0].statements.last_mut().unwrap().value = Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Copy(place(1))),
+            };
+            assert!(
+                analyze_with_facts(&f, Limits::default(), facts, None)
+                    .diagnostics
+                    .iter()
+                    .any(|d| matches!(d.kind, ErrorKind::InvalidCfg(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn multi_binder_template_proof_binds_full_environment_source_cfg_and_analysis() {
+        use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
+        let (env, parameters) = symbolic_pair();
+        let ty = Ty::Tuple(Vec::from(parameters).into());
+        let source = Arc::new(CheckedFunction {
+            ref_contract: Default::default(),
+            name: "both_binders".into(),
+            params: vec![LocalId(0)],
+            result: ty.clone(),
+            locals: vec![local(ty.clone())],
+            exprs: vec![TypedExpr {
+                ty,
+                completion: Completion::Returns,
+                kind: ExprKind::Local(LocalId(0)),
+            }],
+            body: Block {
+                statements: vec![],
+                tail: Some(ExprId(0)),
+            },
+        });
+        let budget = PlanBudget::default();
+        let template = cfg::lower_template(source.clone(), env.clone(), &budget).unwrap();
+        let exact_cfg = template.function().clone();
+        let proof = verify_template(template).unwrap();
+        assert!(Arc::ptr_eq(proof.env(), &env));
+        assert!(Arc::ptr_eq(proof.source(), &source));
+        assert!(Arc::ptr_eq(proof.function(), &exact_cfg));
+        assert!(proof.analysis().passed());
+        assert!(cfg::close(exact_cfg, &budget).is_err());
+        for scope in env.scopes() {
+            let partial = Arc::new(GenericEnv::new(std::slice::from_ref(scope), &budget).unwrap());
+            assert!(cfg::lower_template(source.clone(), partial, &budget).is_err());
+        }
+        let program = super::super::frontend::parse("fn main() {}").unwrap();
+        let mut cx = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let actuals = [Ty::Int(IntTy::I32), Ty::Bool];
+        let instance =
+            super::super::ir::instantiate_checked(&proof, &actuals, &mut cx, &budget).unwrap();
+        assert_eq!(instance.result, Ty::Tuple(actuals.to_vec().into()));
+        let concrete =
+            analyze_closed(cfg::close(Arc::new(cfg::lower(&instance).unwrap()), &budget).unwrap())
+                .unwrap();
+        assert!(concrete.analysis().passed());
+        assert!(
+            super::super::ir::instantiate_checked(
+                &proof,
+                &actuals,
+                &mut cx,
+                &PlanBudget::default()
+            )
+            .is_err()
+        );
+        // Swapping caller parameters in the same environment must insert each
+        // actual once, not recursively capture it through the other scope.
+        let Ty::Tuple(parameters) = &source.result else {
+            panic!("tuple fixture")
+        };
+        let swapped = [parameters[1].clone(), parameters[0].clone()];
+        let symbolic = super::super::ir::substitute_ty(
+            &source.result,
+            &env,
+            &swapped,
+            FactsCtx::Universal(&env),
+            &mut cx,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(symbolic, Ty::Tuple(swapped.to_vec().into()));
+        let (_, foreign) = symbolic_parameter();
+        let mut forged = source.as_ref().clone();
+        forged.locals.push(local(array(foreign, 0)));
+        assert!(cfg::lower_template(Arc::new(forged), env, &budget).is_err());
     }
 
     #[test]

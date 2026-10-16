@@ -62,12 +62,23 @@ non-Copy values. Demanded concrete instances substitute checked typed metadata,
 then lower and analyze again before sealed native emission. Exact instance
 recursion is deduplicated, while growing instantiations fail boundedly. Generic
 bodies and their recursively expanded type arguments cannot contain references
-in this milestone. Traits, bounds, methods, const generics and generic
-function values remain unsupported. Ordinary nongeneric reference support is
+in this milestone. Traits, bounds, const generics and generic function values
+remain unsupported. Ordinary nongeneric reference support is
 unchanged. See `GENERICS.md` for the universal/concrete trust boundary and shared
 planning limits, and `GENERIC-INFERENCE.md` for the private evidence grammar,
 fallible no-fallback hints and exactly-once ordinary elaboration. This foundation
 is not full Rust generic compatibility.
+
+Local nominal inherent impls support associated functions and consuming `self`
+or `mut self` methods, including generic impls and explicit method type arguments.
+Canonical `Self` types, constructors, variants and qualified associated paths
+share the existing checked-call ABI. Ordered impl/method binder environments,
+simultaneous substitution and one authoritative callable enumeration preserve
+universal validation of every unused associated body. Receiver selection matches
+impl parameters against rigid actual types, while a separate bounded overlap
+check rejects conflicting same-name items. Receiver and arguments are checked
+once in source order. Borrowed receivers, autoref/autoderef, traits and omitted
+method type arguments remain unsupported. See `ASSOCIATED-ITEMS.md`.
 
 Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and

@@ -271,3 +271,33 @@ all-target lint/format, actual native example and independent cumulative campaig
 remain gates. Export only selected path-redacted runs. Commit/push implementation
 and raw campaign receipts separately. Do not reinstall experimental justrust or
 claim performance without the pinned comprehensive before/after workload.
+
+## Implemented and hosted validation, October 16, 2026
+
+The native inherent associated slice is implemented with the common callable
+registry and ordered `GenericEnv`, not rewritten free-function names. Every
+combined-env generic body is universally analyzed before concrete planning.
+Canonical self-pattern matching and separately metered overlap unification,
+impl-site privacy and simultaneous capture-free substitution feed unchanged
+sealed native calls. Shared work/metadata accounting covers rejected candidates,
+recursive equality, inherited names and instance-key Hash/Eq work.
+
+The frozen32 CLI fixtures and4 graph tests pass unchanged. Final hosted
+`justrust test --no-fail-fast` passes1318 tests, with `cargo fmt --check`,
+`justrust check` and strict all-target Clippy also passing. Selected redacted
+profiles are in `data/runs/prototype-bootstrap/2026-10-associated-items.jsonl`:
+check `20261016-060407167-570915`, test `20261016-060408148-571094` and
+lint `20261016-060410698-570906`. Independent actual-source soundness/resource
+reviews cleared the corrected patch. No historical source was promoted.
+
+The1547-byte actual example executes successfully with8 workers and exact
+`associated items compiled correctly` output. Its complete trace has64 nodes,
+134 edges,45 CFG blocks,43 CFG edges and137 locals, with zero failures/drops.
+Initial gates caught Self parsing and canonical enum-pattern identity, a missing
+injected-self reference-contract offset, normal-stack parser-frame regressions
+and unmetered lookup/equality/name allocation. These were fixed in production
+without weakening frozen sources, nesting limits or expected outcomes.
+
+Independent cumulative candidate validation is a separate subsequent gate.
+This is bounded inherent value dispatch, not traits, borrowed receiver lookup,
+full Rust/project compatibility or evidence of a performance improvement.

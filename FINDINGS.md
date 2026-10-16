@@ -9083,3 +9083,38 @@ was used. The observed 33,019,700ns end-to-end and 5,083,259ns engine timings
 are contended/uncontrolled functional evidence, not a speedup comparison.
 Broader inference, traits/methods, generic references, Drop, full libraries and
 existing-project acceptance remain open.
+
+## 2026-10-16: inherent associated declarations and ordered binder environments
+
+Implemented local nominal associated functions and consuming value methods on
+the common callable registry, with canonical Self, exact impl selection and
+separate bounded overlap unification. GenericEnv retains impl/method scopes,
+including zero-arity rows, and simultaneous substitution never recaptures caller
+parameters. All unused combined-env generic methods receive the same universal
+move analysis before native planning. No trait/name shim or backend dispatch
+fallback was introduced.
+
+Final hosted check `20261016-060407167-570915`, all1318 tests
+`20261016-060408148-571094` and strict all-target lint
+`20261016-060410698-570906` pass, with formatting clean. Exactly these three
+redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-associated-items.jsonl`. The independently
+stock-classified frozen32 sources and4 graph tests pass unchanged, alongside
+the alpha-stable associated-key regression. Both actual-source reviewers clear
+the corrected soundness/resource paths. No historical unsupported source was
+promoted.
+
+Real acceptance caught Self parser/variant/let-pattern ownership, the injected
+self offset in reference-result contracts, enlarged Pratt stack frames and
+unmetered lookup/equality/name storage. Narrow production fixes preserved exact
+source bytes, normal-stack nesting limits and all expected outcomes. Shared
+accounting now also covers target structural Hash/Eq walks and canonical key
+comparisons before lookup.
+
+The1547-byte example compiles and actually executes with8 workers and exact
+associated-items success stdout. Complete capture records9 concrete functions,
+64 graph nodes/134 edges,45 CFG blocks/43 edges/137 locals, zero failures and
+zero dropped events. These contended functional timings are not a speed claim.
+Independent cumulative native campaign remains a separate next gate. Full Rust,
+traits, borrowed receivers, Drop, standard libraries and existing-project
+compatibility remain open.

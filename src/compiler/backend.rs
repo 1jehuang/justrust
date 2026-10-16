@@ -1231,6 +1231,7 @@ mod tests {
             functions: others,
             structs: vec![],
             enums: vec![],
+            impls: vec![],
         }
     }
     fn executable(program: &Program) -> std::path::PathBuf {
@@ -1440,6 +1441,108 @@ mod tests {
         let output = run(&program);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"generic-native\n");
+    }
+
+    #[test]
+    fn associated_native_scalar_large_aggregate_and_method_generics_preserve_abi() {
+        let program = frontend::parse(
+            r#"
+            enum ScalarTag { First, Second }
+            impl ScalarTag {
+                fn code(self) -> u8 {
+                    match self { ScalarTag::First => 1u8, ScalarTag::Second => 2u8 }
+                }
+            }
+            struct Scalar { value: u64 }
+            impl Scalar {
+                fn new(value: u64) -> Self { Self { value } }
+                fn increment(mut self) -> Self {
+                    self.value = self.value + 1u64;
+                    self
+                }
+                fn get(self) -> u64 { self.value }
+            }
+            struct Packet<T> { value: T }
+            impl<T> Packet<T> {
+                fn new(value: T) -> Self { Self { value } }
+                fn relay(self) -> Self { self }
+                fn pair<U>(self, extra: U) -> (T, U) { (self.value, extra) }
+            }
+            fn main() {
+                if ScalarTag::First.code() != 1u8 { 1/0; }
+                if ScalarTag::code(ScalarTag::Second) != 2u8 { 1/0; }
+                if Scalar::new(40u64).increment().get() != 41u64 { 1/0; }
+                let scalar = Packet::<u64>::new(18446744073709551615u64)
+                    .pair::<bool>(true);
+                if scalar.0 != 18446744073709551615u64 { 1/0; }
+                if !scalar.1 { 1/0; }
+                let large = Packet::<[u64;9]>::new([18446744073709551615u64;9])
+                    .relay().pair::<Scalar>(Scalar::new(6u64));
+                if large.0[0] != 18446744073709551615u64 { 1/0; }
+                if large.0[8] != 18446744073709551615u64 { 1/0; }
+                if large.1.get() != 6u64 { 1/0; }
+                let qualified = Scalar::get(Scalar::new(9u64));
+                if qualified != 9u64 { 1/0; }
+                println!("associated-abi");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"associated-abi\n");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+
+    #[test]
+    fn associated_native_disjoint_symbols_and_receiver_effects_are_stable() {
+        let program = frontend::parse(
+            r#"
+            struct Token<T> { value: T }
+            impl Token<u8> {
+                fn get(self) -> u8 { self.value }
+            }
+            impl Token<u64> {
+                fn get(self) -> u64 { self.value }
+                fn with(self, extra: u64) -> u64 {
+                    println!("callee");
+                    self.value + extra
+                }
+            }
+            fn receiver() -> Token<u64> {
+                println!("receiver");
+                Token::<u64> { value: 40u64 }
+            }
+            fn argument() -> u64 { println!("argument"); 2u64 }
+            fn main() {
+                if (Token::<u8> { value: 255u8 }).get() != 255u8 { 1/0; }
+                if (Token::<u64> { value: 18446744073709551615u64 }).get()
+                    != 18446744073709551615u64 { 1/0; }
+                if receiver().with(argument()) != 42u64 { 1/0; }
+                println!("associated-stable");
+            }
+            "#,
+        )
+        .unwrap();
+        let serial = emit(&program).unwrap();
+        let parallel = super::super::compile_program_observed(program, 4, false)
+            .unwrap()
+            .executable
+            .unwrap();
+        assert_eq!(
+            serial, parallel,
+            "associated symbols depend on worker order"
+        );
+        let path = executable_bytes(&serial);
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(
+            output.stdout,
+            b"receiver\nargument\ncallee\nassociated-stable\n"
+        );
+        assert!(output.stderr.is_empty(), "{output:?}");
     }
 
     #[test]

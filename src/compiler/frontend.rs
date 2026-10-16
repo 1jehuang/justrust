@@ -23,6 +23,7 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
+    pub impls: Vec<ImplDecl>,
 }
 /// Syntax-only result. Resolve this once before publishing callable signatures.
 #[derive(Clone, Debug)]
@@ -63,6 +64,38 @@ pub struct Function {
     pub params: Vec<(String, Type)>,
     pub result: Type,
     pub body: Block,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiverKind {
+    None,
+    Value { mutable: bool },
+}
+#[derive(Clone, Debug)]
+pub struct ImplDecl {
+    pub module: String,
+    pub type_params: Vec<String>,
+    pub self_ty: Type,
+    pub items: Vec<AssociatedFunction>,
+}
+#[derive(Clone, Debug)]
+pub struct AssociatedFunction {
+    pub function: Function,
+    pub receiver: ReceiverKind,
+    pub public: bool,
+}
+#[derive(Clone, Debug)]
+pub struct CallableContext {
+    pub module: Arc<[String]>,
+    pub self_ty: Option<ir::Ty>,
+    pub associated_owner: Option<ir::DeclId>,
+    pub receiver: ReceiverKind,
+}
+#[derive(Clone, Debug)]
+pub struct AssociatedSemanticOwner {
+    pub nominal: ir::DeclId,
+    pub impl_decl: ir::DeclId,
+    pub self_pattern: ir::Ty,
+    pub receiver: ReceiverKind,
 }
 #[derive(Clone, Debug, Default)]
 pub struct RegionDecls {
@@ -133,6 +166,7 @@ impl GenericPath {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
+    SelfType,
     Apply(GenericPath),
     Param(String),
     Ref {
@@ -364,6 +398,18 @@ impl Expr {
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    MethodCall {
+        receiver: Box<Expr>,
+        name: String,
+        type_args: Vec<Type>,
+        args: Vec<Expr>,
+    },
+    AssociatedCall {
+        owner: Type,
+        name: String,
+        type_args: Vec<Type>,
+        args: Vec<Expr>,
+    },
     Apply {
         path: GenericPath,
         value: Box<Expr>,
@@ -870,6 +916,8 @@ impl Parser {
             let len = self.array_number("array length")?;
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
+        } else if self.eat("Self") {
+            Ok(Type::SelfType)
         } else if self.type_params.contains(&self.token().text) {
             Ok(Type::Param(self.ident()?))
         } else if let Some(ty) = integer_type(&self.token().text) {
@@ -940,8 +988,10 @@ impl Parser {
             if segments.len() >= 128 {
                 return Err(self.error("path depth resource limit 128"));
             }
-            let name = if matches!(self.token().text.as_str(), "crate" | "self" | "super")
-                && !self.token().string
+            let name = if matches!(
+                self.token().text.as_str(),
+                "crate" | "self" | "super" | "Self"
+            ) && !self.token().string
             {
                 let name = self.token().text.clone();
                 self.at += 1;
@@ -1012,6 +1062,8 @@ impl Parser {
                     parts.push("super".into());
                 }
             }
+        } else if self.eat("Self") {
+            parts.push("Self".into());
         } else {
             parts.push(self.ident()?);
         }
@@ -1203,6 +1255,39 @@ impl Parser {
                     fields,
                 });
                 (name, ItemKind::Struct)
+            } else if self.eat("impl") {
+                if public {
+                    return Err(self.error("pub impl is invalid"));
+                }
+                let type_params = self.type_parameters()?;
+                self.type_params = type_params.clone();
+                let self_ty = self.ty()?;
+                if self.is("for") {
+                    return Err(self.error("trait impls are unsupported"));
+                }
+                self.expect("{")?;
+                let mut items = Vec::new();
+                while !self.is("}") {
+                    if items.len() >= 4096 {
+                        return Err(self.error("associated item limit exceeded"));
+                    }
+                    let public = self.eat("pub");
+                    let (function, receiver) = self.function_scoped(&type_params, true)?;
+                    items.push(AssociatedFunction {
+                        function,
+                        receiver,
+                        public,
+                    });
+                }
+                self.expect("}")?;
+                parsed.program.impls.push(ImplDecl {
+                    module: module.into(),
+                    type_params,
+                    self_ty,
+                    items,
+                });
+                self.type_params.clear();
+                continue;
             } else if self.is("fn") {
                 let mut function = self.function()?;
                 let name = function.name.clone();
@@ -1299,6 +1384,13 @@ impl Parser {
         Ok(())
     }
     fn function(&mut self) -> Result<Function, String> {
+        self.function_scoped(&[], false).map(|(f, _)| f)
+    }
+    fn function_scoped(
+        &mut self,
+        inherited: &[String],
+        associated: bool,
+    ) -> Result<(Function, ReceiverKind), String> {
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
@@ -1311,7 +1403,13 @@ impl Parser {
         {
             type_params = self.type_parameters()?;
         }
-        self.type_params = type_params.clone();
+        self.type_params = inherited.to_vec();
+        for name in &type_params {
+            if self.type_params.contains(name) {
+                return Err(self.error("duplicate visible generic parameter"));
+            }
+            self.type_params.push(name.clone());
+        }
         if self.eat("<") {
             if self.is(">") {
                 return Err(self.error("empty generic parameter lists are unsupported"));
@@ -1334,6 +1432,18 @@ impl Parser {
         }
         self.expect("(")?;
         let mut params = Vec::new();
+        let mut receiver = ReceiverKind::None;
+        if associated && (self.is("self") || self.is("mut")) {
+            let mutable = self.eat("mut");
+            self.expect("self")?;
+            if self.is(":") {
+                return Err(self.error("typed receivers are unsupported"));
+            }
+            receiver = ReceiverKind::Value { mutable };
+            if !self.is(")") {
+                self.expect(",")?;
+            }
+        }
         if !self.is(")") {
             loop {
                 let n = self.ident()?;
@@ -1362,14 +1472,17 @@ impl Parser {
                 }
             }
         }
-        Ok(Function {
-            name,
-            regions,
-            type_params,
-            params,
-            result,
-            body: self.block()?,
-        })
+        Ok((
+            Function {
+                name,
+                regions,
+                type_params,
+                params,
+                result,
+                body: self.block()?,
+            },
+            receiver,
+        ))
     }
     fn block(&mut self) -> Result<Block, String> {
         if self.nesting >= 128 {
@@ -1762,6 +1875,62 @@ impl Parser {
             },
         )
     }
+    fn field_or_method_after_dot(&mut self, left: Expr) -> Result<Expr, String> {
+        Ok({
+            let field = if self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
+                let token = self.token();
+                if token.string
+                    || !token.text.bytes().all(|c| c.is_ascii_digit())
+                    || (token.text.len() > 1 && token.text.starts_with('0'))
+                {
+                    return Err(self
+                        .error("tuple field index must be a canonical unsigned decimal integer"));
+                }
+                let index = token
+                    .text
+                    .parse::<usize>()
+                    .map_err(|_| self.error("tuple field index is out of range"))?;
+                self.at += 1;
+                FieldSelector::Tuple(index)
+            } else {
+                FieldSelector::Named(self.ident()?)
+            };
+            let type_args =
+                if self.is("::") && self.tokens.get(self.at + 1).is_some_and(|t| t.text == "<") {
+                    self.expect("::")?;
+                    self.type_arguments()?
+                } else {
+                    Vec::new()
+                };
+            if self.eat("(") {
+                let FieldSelector::Named(name) = field else {
+                    return Err(self.error("tuple fields are not methods"));
+                };
+                let mut args = Vec::new();
+                while !self.is(")") {
+                    args.push(self.nested_expr()?);
+                    if !self.eat(",") {
+                        break;
+                    }
+                }
+                self.expect(")")?;
+                Expr::MethodCall {
+                    receiver: Box::new(left),
+                    name,
+                    type_args,
+                    args,
+                }
+            } else {
+                if !type_args.is_empty() {
+                    return Err(self.error("method type arguments require a call"));
+                }
+                Expr::Field {
+                    base: Box::new(left),
+                    field,
+                }
+            }
+        })
+    }
     fn expr_inner(&mut self, min: u8) -> Result<Expr, String> {
         self.expr_inner_mode(min, false)
     }
@@ -1774,7 +1943,11 @@ impl Parser {
         if self.is("&&") {
             return Err(self.error("nested reference borrows are unsupported in B1"));
         }
-        let mut left = if self.eat("&") {
+        let left = self.expr_prefix(statement)?;
+        self.expr_continuation(left, min, statement_blocklike)
+    }
+    fn expr_prefix(&mut self, statement: bool) -> Result<Expr, String> {
+        let left = if self.eat("&") {
             let kind = if self.eat("mut") {
                 ir::BorrowKind::Mut
             } else {
@@ -1940,6 +2113,14 @@ impl Parser {
         } else {
             self.named_expr()?
         };
+        Ok(left)
+    }
+    fn expr_continuation(
+        &mut self,
+        mut left: Expr,
+        min: u8,
+        statement_blocklike: bool,
+    ) -> Result<Expr, String> {
         let mut compared = false;
         loop {
             if statement_blocklike
@@ -1984,29 +2165,7 @@ impl Parser {
                 continue;
             }
             if self.eat(".") {
-                let field = if self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
-                    let token = self.token();
-                    if token.string
-                        || !token.text.bytes().all(|c| c.is_ascii_digit())
-                        || (token.text.len() > 1 && token.text.starts_with('0'))
-                    {
-                        return Err(self.error(
-                            "tuple field index must be a canonical unsigned decimal integer",
-                        ));
-                    }
-                    let index = token
-                        .text
-                        .parse::<usize>()
-                        .map_err(|_| self.error("tuple field index is out of range"))?;
-                    self.at += 1;
-                    FieldSelector::Tuple(index)
-                } else {
-                    FieldSelector::Named(self.ident()?)
-                };
-                left = Expr::Field {
-                    base: Box::new(left),
-                    field,
-                };
+                left = self.field_or_method_after_dot(left)?;
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
                 continue;
             }
@@ -2109,6 +2268,7 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
             functions: Vec::new(),
             structs: Vec::new(),
             enums: Vec::new(),
+            impls: Vec::new(),
         },
         items: HashMap::new(),
     };
@@ -2143,6 +2303,7 @@ enum ResolvedKind {
     Variant,
 }
 struct Resolver<'a> {
+    self_nominal: Option<String>,
     items: &'a HashMap<String, Vec<Item>>,
     imports: HashMap<(String, usize, bool), Option<ResolvedItem>>,
     active: std::collections::HashSet<(String, usize, bool)>,
@@ -2323,6 +2484,17 @@ impl Resolver<'_> {
         Ok((current.module == module).then_some(current))
     }
     fn generic_path(&mut self, path: &mut GenericPath, module: &str) -> Result<(), String> {
+        if path.segments.first().is_some_and(|s| s.name == "Self") {
+            if self.self_nominal.is_none() {
+                return Err("Self outside impl".into());
+            }
+            for segment in &mut path.segments {
+                for arg in &mut segment.args {
+                    self.ty(arg, module)?;
+                }
+            }
+            return Ok(());
+        }
         let (at, _) = path
             .segments
             .iter()
@@ -2354,6 +2526,59 @@ impl Resolver<'_> {
         path.segments.last_mut().unwrap().args = args;
         path.segments.extend(suffix);
         Ok(())
+    }
+    fn associated_path(
+        &mut self,
+        path: &GenericPath,
+        module: &str,
+    ) -> Result<Option<(Type, String, Vec<Type>)>, String> {
+        if path.segments.len() < 2 {
+            return Ok(None);
+        }
+        let mut prefix = GenericPath {
+            segments: path.segments[..path.segments.len() - 1].to_vec(),
+        };
+        let item = path.segments.last().unwrap();
+        let owner_name = prefix.spelling();
+        let mut owner = if owner_name == "Self" {
+            if let Some(nominal) = &self.self_nominal
+                && self
+                    .items
+                    .get(&qualify(nominal, &item.name))
+                    .is_some_and(|items| {
+                        items.iter().any(|i| matches!(i.kind, ItemKind::Variant(_)))
+                    })
+            {
+                return Ok(None);
+            }
+            Type::SelfType
+        } else {
+            let Some(resolved) = self.path(&owner_name, module, true, false)? else {
+                return Ok(None);
+            };
+            if !matches!(resolved.kind, ResolvedKind::Struct | ResolvedKind::Enum) {
+                return Ok(None);
+            }
+            if resolved.kind == ResolvedKind::Enum
+                && self
+                    .item(&qualify(&resolved.path, &item.name), module, false, false)?
+                    .is_some_and(|i| i.kind == ResolvedKind::Variant)
+            {
+                return Ok(None);
+            }
+            if prefix.segments.iter().any(|s| !s.args.is_empty()) {
+                self.generic_path(&mut prefix, module)?;
+                Type::Apply(prefix)
+            } else {
+                Type::Named(resolved.path)
+            }
+        };
+        self.ty(&mut owner, module)?;
+        let mut args = item.args.clone();
+        for arg in &mut args {
+            self.ty(arg, module)?;
+        }
+        Ok(Some((owner, item.name.clone(), args)))
     }
     fn ty(&mut self, ty: &mut Type, module: &str) -> Result<(), String> {
         match ty {
@@ -2394,6 +2619,14 @@ impl Resolver<'_> {
                 self.generic_path(path, module)?;
                 self.pattern(pattern, module, names)?;
             }
+            Pattern::Variant { name, fields, .. } if name.starts_with("Self::") => {
+                if self.self_nominal.is_none() {
+                    return Err("Self outside impl".into());
+                }
+                for (_, p) in fields {
+                    self.pattern(p, module, names)?;
+                }
+            }
             Pattern::Variant { name, fields, .. } => {
                 let item = self
                     .path(name, module, false, false)?
@@ -2408,6 +2641,7 @@ impl Resolver<'_> {
             }
             Pattern::Wildcard => {}
             Pattern::Bool(_) | Pattern::Int { .. } => {}
+            Pattern::Path(name) if name.starts_with("Self::") && self.self_nominal.is_some() => {}
             Pattern::Path(name) => {
                 let item = self
                     .path(name, module, false, false)?
@@ -2554,8 +2788,50 @@ impl Resolver<'_> {
     ) -> Result<(), String> {
         match expr {
             Expr::Apply { path, value } => {
+                if matches!(value.as_ref(), Expr::Call { .. })
+                    && let Some((owner, name, type_args)) = self.associated_path(path, module)?
+                {
+                    let Expr::Call { args, .. } = value.as_mut() else {
+                        unreachable!()
+                    };
+                    *expr = Expr::AssociatedCall {
+                        owner,
+                        name,
+                        type_args,
+                        args: std::mem::take(args),
+                    };
+                    return self.expr(expr, module, locals);
+                }
                 self.generic_path(path, module)?;
                 self.expr(value, module, locals)?;
+            }
+            Expr::MethodCall {
+                receiver,
+                type_args,
+                args,
+                ..
+            } => {
+                self.expr(receiver, module, locals)?;
+                for ty in type_args {
+                    self.ty(ty, module)?;
+                }
+                for arg in args {
+                    self.expr(arg, module, locals)?;
+                }
+            }
+            Expr::AssociatedCall {
+                owner,
+                type_args,
+                args,
+                ..
+            } => {
+                self.ty(owner, module)?;
+                for ty in type_args {
+                    self.ty(ty, module)?;
+                }
+                for arg in args {
+                    self.expr(arg, module, locals)?;
+                }
             }
             Expr::Array(elements) => {
                 for e in elements {
@@ -2599,6 +2875,41 @@ impl Resolver<'_> {
                 }
             }
             Expr::Call { name, args } => {
+                let path = GenericPath {
+                    segments: name
+                        .split("::")
+                        .map(|s| PathSegment {
+                            name: s.into(),
+                            args: Vec::new(),
+                        })
+                        .collect(),
+                };
+                if let Some((owner, item, type_args)) = self.associated_path(&path, module)? {
+                    let args = std::mem::take(args);
+                    *expr = Expr::AssociatedCall {
+                        owner,
+                        name: item,
+                        type_args,
+                        args,
+                    };
+                    return self.expr(expr, module, locals);
+                }
+                if name.starts_with("Self::") && self.self_nominal.is_some() {
+                    let variant = name.clone();
+                    for arg in args.iter_mut() {
+                        self.expr(arg, module, locals)?;
+                    }
+                    *expr = Expr::EnumVariant {
+                        name: variant,
+                        shape: ir::VariantShape::Tuple,
+                        fields: std::mem::take(args)
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, e)| (FieldSelector::Tuple(i), e))
+                            .collect(),
+                    };
+                    return Ok(());
+                }
                 // Check the source spelling, not its eventual canonical name:
                 // `let f=1; crate::f()` must not be shadowed by the local f.
                 if !name.contains("::") && locals.iter().rev().any(|s| s.contains(name)) {
@@ -2633,6 +2944,14 @@ impl Resolver<'_> {
             Expr::Tuple(fields) => {
                 for field in fields {
                     self.expr(field, module, locals)?;
+                }
+            }
+            Expr::Struct { name, fields } if name == "Self" => {
+                if self.self_nominal.is_none() {
+                    return Err("Self outside impl".into());
+                }
+                for (_, value) in fields {
+                    self.expr(value, module, locals)?;
                 }
             }
             Expr::Struct { name, fields } => {
@@ -2694,6 +3013,7 @@ impl Resolver<'_> {
 pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     let mut resolver = Resolver {
         items: &parsed.items,
+        self_nominal: None,
         imports: HashMap::new(),
         active: std::collections::HashSet::new(),
         type_params: Vec::new(),
@@ -2749,6 +3069,40 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver
             .block(&mut function.body, parent(&function.name), &mut locals)
             .map_err(|e| format!("in function {}: {e}", function.name))?;
+    }
+    for block in &mut program.impls {
+        resolver.type_params = block.type_params.clone();
+        resolver.ty(&mut block.self_ty, &block.module)?;
+        resolver.self_nominal = Some(match &block.self_ty {
+            Type::Named(n) => n.clone(),
+            Type::Apply(p) => p.spelling(),
+            _ => return Err("impl requires a nominal self pattern".into()),
+        });
+        for item in &mut block.items {
+            let f = &mut item.function;
+            resolver.type_params = block.type_params.clone();
+            for name in &f.type_params {
+                if resolver.type_params.contains(name) {
+                    return Err("duplicate visible generic parameter".into());
+                }
+                resolver.type_params.push(name.clone());
+            }
+            resolver.ty(&mut f.result, &block.module)?;
+            for (_, ty) in &mut f.params {
+                resolver.ty(ty, &block.module)?;
+            }
+            let mut names = f
+                .params
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect::<std::collections::HashSet<_>>();
+            if item.receiver != ReceiverKind::None {
+                names.insert("self".into());
+            }
+            validate_depth(DepthNode::Block(&f.body))?;
+            resolver.block(&mut f.body, &block.module, &mut vec![names])?;
+        }
+        resolver.self_nominal = None;
     }
     Ok(program)
 }
@@ -2815,6 +3169,34 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 }
             }
             DepthNode::Expr(expr) => match expr {
+                Expr::MethodCall {
+                    receiver,
+                    type_args,
+                    args,
+                    ..
+                } => {
+                    push(DepthNode::Expr(receiver));
+                    for ty in type_args {
+                        push(DepthNode::Type(ty));
+                    }
+                    for arg in args {
+                        push(DepthNode::Expr(arg));
+                    }
+                }
+                Expr::AssociatedCall {
+                    owner,
+                    type_args,
+                    args,
+                    ..
+                } => {
+                    push(DepthNode::Type(owner));
+                    for ty in type_args {
+                        push(DepthNode::Type(ty));
+                    }
+                    for arg in args {
+                        push(DepthNode::Expr(arg));
+                    }
+                }
                 Expr::Apply { path, value } => {
                     push(DepthNode::Expr(value));
                     for segment in &path.segments {
@@ -2931,6 +3313,7 @@ pub struct DeclSemanticPath {
     pub module: Arc<[String]>,
     pub item: String,
     pub kind: ir::DeclKind,
+    pub associated: Option<AssociatedSemanticOwner>,
 }
 #[derive(Clone, Debug)]
 pub struct DeclInfo {
@@ -2941,6 +3324,8 @@ pub struct DeclInfo {
     pub source_index: usize,
     pub param_env: Arc<ir::ParamEnv>,
     pub type_params: Arc<[String]>,
+    pub env: Arc<ir::GenericEnv>,
+    pub public: bool,
 }
 #[derive(Debug)]
 pub struct DeclRegistry {
@@ -2948,6 +3333,14 @@ pub struct DeclRegistry {
     functions: HashMap<String, ir::DeclId>,
     nominals: HashMap<String, ir::DeclId>,
     function_ids: Vec<ir::DeclId>,
+    callable_sources: Vec<CallableSource>,
+    impl_ids: Vec<ir::DeclId>,
+    associated_ids: Vec<Vec<ir::DeclId>>,
+}
+#[derive(Clone, Copy, Debug)]
+enum CallableSource {
+    Free(usize),
+    Associated { implementation: usize, item: usize },
 }
 impl DeclRegistry {
     pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
@@ -2973,6 +3366,7 @@ struct PlanState {
     schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
     functions: HashMap<ir::DeclId, ir::GenericSignature>,
     nominals: NominalInterner,
+    contexts: HashMap<ir::DeclId, CallableContext>,
     reservations: Vec<ir::PlanReservation>,
 }
 #[derive(Clone, Debug)]
@@ -3035,11 +3429,15 @@ impl PlanCtx {
             functions: HashMap::new(),
             nominals: HashMap::new(),
             function_ids: Vec::new(),
+            callable_sources: Vec::new(),
+            impl_ids: Vec::new(),
+            associated_ids: Vec::new(),
         };
         let mut state = PlanState {
             schemas: HashMap::new(),
             functions: HashMap::new(),
             nominals: NominalInterner::default(),
+            contexts: HashMap::new(),
             reservations: Vec::new(),
         };
         let declarations = program
@@ -3047,6 +3445,12 @@ impl PlanCtx {
             .len()
             .checked_add(program.structs.len())
             .and_then(|n| n.checked_add(program.enums.len()))
+            .and_then(|n| {
+                program
+                    .impls
+                    .iter()
+                    .try_fold(n, |n, b| n.checked_add(1 + b.items.len()))
+            })
             .ok_or("generic declaration resource overflow")?;
         budget.charge_nodes(declarations)?;
         state.reservations.push(
@@ -3124,15 +3528,25 @@ impl PlanCtx {
                     .into(),
                 item: name.rsplit("::").next().unwrap_or(name).into(),
                 kind,
+                associated: None,
             };
-            let table = if kind == ir::DeclKind::Function {
-                &mut registry.functions
-            } else {
-                &mut registry.nominals
-            };
-            if table.insert(name.into(), id).is_some() {
-                return Err(format!("duplicate declaration {name}"));
+            if matches!(
+                kind,
+                ir::DeclKind::Function | ir::DeclKind::Struct | ir::DeclKind::Enum
+            ) {
+                let table = if kind == ir::DeclKind::Function {
+                    &mut registry.functions
+                } else {
+                    &mut registry.nominals
+                };
+                if table.insert(name.into(), id).is_some() {
+                    return Err(format!("duplicate declaration {name}"));
+                }
             }
+            let env = Arc::new(ir::GenericEnv::new(
+                std::slice::from_ref(&param_env),
+                budget,
+            )?);
             registry.declarations.push(DeclInfo {
                 id,
                 kind,
@@ -3140,6 +3554,8 @@ impl PlanCtx {
                 path,
                 source_index,
                 param_env,
+                env,
+                public: true,
                 type_params: params.to_vec().into(),
             });
             Ok(id)
@@ -3159,18 +3575,68 @@ impl PlanCtx {
         for (index, f) in program.functions.iter().enumerate() {
             let id = insert(&f.name, &f.type_params, ir::DeclKind::Function, index)?;
             registry.function_ids.push(id);
+            registry.callable_sources.push(CallableSource::Free(index));
         }
-        let registry = Arc::new(registry);
+        for (implementation, block) in program.impls.iter().enumerate() {
+            let impl_id = insert(
+                &block.module,
+                &block.type_params,
+                ir::DeclKind::Impl,
+                implementation,
+            )?;
+            registry.impl_ids.push(impl_id);
+            let mut ids = Vec::new();
+            for (item, method) in block.items.iter().enumerate() {
+                let id = insert(
+                    &qualify(&block.module, &method.function.name),
+                    &method.function.type_params,
+                    ir::DeclKind::AssociatedFunction,
+                    item,
+                )?;
+                registry.function_ids.push(id);
+                registry.callable_sources.push(CallableSource::Associated {
+                    implementation,
+                    item,
+                });
+                ids.push(id);
+            }
+            registry.associated_ids.push(ids);
+        }
+        for (implementation, block) in program.impls.iter().enumerate() {
+            let id = registry.impl_ids[implementation];
+            budget.retain_bytes(block.module.len() + 128)?;
+            registry.declarations[id.index as usize].path.module = block
+                .module
+                .split("::")
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+                .into();
+        }
+        for (implementation, ids) in registry.associated_ids.iter().enumerate() {
+            let impl_env = registry.declarations[registry.impl_ids[implementation].index as usize]
+                .param_env
+                .clone();
+            for id in ids {
+                let info = &mut registry.declarations[id.index as usize];
+                info.env = Arc::new(ir::GenericEnv::new(
+                    &[impl_env.clone(), info.param_env.clone()],
+                    budget,
+                )?);
+                info.public = program.impls[implementation].items[info.source_index].public;
+            }
+        }
+        let mut registry = Arc::new(registry);
         // Every schema, including unused generic declarations, gets authoritative symbolic arguments.
         for info in &registry.declarations {
-            if info.kind == ir::DeclKind::Function {
+            if !matches!(info.kind, ir::DeclKind::Struct | ir::DeclKind::Enum) {
                 continue;
             }
             let args = symbolic_args(&info.param_env, budget)?;
             let caller = if args.is_empty() {
                 ir::FactsCtx::Concrete
             } else {
-                ir::FactsCtx::Universal(&info.param_env)
+                ir::FactsCtx::Universal(&info.env)
             };
             state.intern(&registry, info.id, &args, caller, budget, 0)?;
             let schema = state
@@ -3189,14 +3655,93 @@ impl PlanCtx {
                 return Err(format!("unused nominal type parameter in {}", info.name));
             }
         }
-        for (index, f) in program.functions.iter().enumerate() {
-            let id = registry.function_ids[index];
+        for (implementation, block) in program.impls.iter().enumerate() {
+            let impl_id = registry.impl_ids[implementation];
+            let info = registry.declaration(impl_id)?;
+            let bindings = generic_bindings(&registry, &info.env, budget)?;
+            let caller = if info.env.is_generic() {
+                ir::FactsCtx::Universal(&info.env)
+            } else {
+                ir::FactsCtx::Concrete
+            };
+            let self_ty = state.source_ty(
+                &registry,
+                &block.self_ty,
+                &bindings,
+                caller,
+                budget,
+                0,
+                false,
+            )?;
+            let nominal = match &self_ty {
+                ir::Ty::Struct(t) => t.def().source_decl,
+                ir::Ty::Enum(t) => t.def().source_decl,
+                _ => return Err("inherent impl requires a local nominal self type".into()),
+            };
+            let mut used = std::collections::HashSet::new();
+            collect_source_params(&block.self_ty, &mut used, budget, 0)?;
+            if block.type_params.iter().any(|p| !used.contains(p)) {
+                return Err("unconstrained impl parameter".into());
+            }
+            let ids = registry.associated_ids[implementation].clone();
+            for (item, id) in ids.iter().enumerate() {
+                let method = &block.items[item];
+                let owner = AssociatedSemanticOwner {
+                    nominal,
+                    impl_decl: impl_id,
+                    self_pattern: self_ty.clone(),
+                    receiver: method.receiver,
+                };
+                Arc::get_mut(&mut registry)
+                    .ok_or("registry unexpectedly shared before seal")?
+                    .declarations[id.index as usize]
+                    .path
+                    .associated = Some(owner);
+                budget.retain_bytes(512 + block.module.len())?;
+                state.contexts.insert(
+                    *id,
+                    CallableContext {
+                        module: block
+                            .module
+                            .split("::")
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                            .into(),
+                        self_ty: Some(self_ty.clone()),
+                        associated_owner: Some(impl_id),
+                        receiver: method.receiver,
+                    },
+                );
+            }
+        }
+        for (index, id) in registry.function_ids.iter().copied().enumerate() {
+            let f = match registry.callable_sources[index] {
+                CallableSource::Free(i) => &program.functions[i],
+                CallableSource::Associated {
+                    implementation,
+                    item,
+                } => &program.impls[implementation].items[item].function,
+            };
             let info = registry.declaration(id)?;
-            let bindings = param_bindings(info, &symbolic_args(&info.param_env, budget)?)?;
-            let caller = if info.param_env.arity() == 0 {
+            let mut bindings = generic_bindings(&registry, &info.env, budget)?;
+            let context = state
+                .contexts
+                .entry(id)
+                .or_insert_with(|| CallableContext {
+                    module: info.path.module.clone(),
+                    self_ty: None,
+                    associated_owner: None,
+                    receiver: ReceiverKind::None,
+                })
+                .clone();
+            if let Some(ty) = &context.self_ty {
+                bindings.insert("Self".into(), ty.clone());
+            }
+            let caller = if !info.env.is_generic() {
                 ir::FactsCtx::Concrete
             } else {
-                ir::FactsCtx::Universal(&info.param_env)
+                ir::FactsCtx::Universal(&info.env)
             };
             let mut names = std::collections::HashSet::new();
             for (name, _) in &f.params {
@@ -3204,14 +3749,23 @@ impl PlanCtx {
                     return Err(format!("duplicate parameter {name}"));
                 }
             }
-            let params = f
+            let mut params = f
                 .params
                 .iter()
                 .map(|(_, ty)| state.source_ty(&registry, ty, &bindings, caller, budget, 0, true))
                 .collect::<Result<Vec<_>, _>>()?;
+            if matches!(context.receiver, ReceiverKind::Value { .. }) {
+                params.insert(
+                    0,
+                    context
+                        .self_ty
+                        .clone()
+                        .ok_or("receiver without Self type")?,
+                );
+            }
             let result =
                 state.source_ty(&registry, &f.result, &bindings, caller, budget, 0, true)?;
-            if info.param_env.arity() > 0 {
+            if info.env.is_generic() {
                 if !f.regions.params.is_empty() {
                     return Err("references in generic declarations are unsupported".into());
                 }
@@ -3227,7 +3781,7 @@ impl PlanCtx {
             state.functions.insert(
                 id,
                 ir::GenericSignature {
-                    param_env: info.param_env.clone(),
+                    env: info.env.clone(),
                     signature,
                 },
             );
@@ -3240,11 +3794,13 @@ impl PlanCtx {
         }) {
             return Err("main must exist, take no arguments and return ()".into());
         }
-        Ok(Self {
+        let plan = Self {
             registry,
             state: Arc::new(Mutex::new(state)),
             budget: budget.clone(),
-        })
+        };
+        plan.validate_inherent_overlaps(budget)?;
+        Ok(plan)
     }
     fn check_budget(&self, budget: &ir::PlanBudget) -> Result<(), String> {
         if !self.budget.same_authority(budget) {
@@ -3254,6 +3810,53 @@ impl PlanCtx {
     }
     pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
         self.registry.declaration(id)
+    }
+    pub fn callable_count(&self) -> usize {
+        self.registry.function_ids.len()
+    }
+    pub fn callable_decl(&self, index: usize) -> Result<ir::DeclId, String> {
+        self.function_decl(index)
+    }
+    pub fn callable_index(&self, decl: ir::DeclId) -> Result<usize, String> {
+        self.declaration(decl)?;
+        for (index, id) in self.registry.function_ids.iter().enumerate() {
+            self.budget.charge_work(1)?;
+            if *id == decl {
+                return Ok(index);
+            }
+        }
+        Err("declaration is not callable".into())
+    }
+    pub fn callable_body<'p>(
+        &self,
+        program: &'p Program,
+        decl: ir::DeclId,
+    ) -> Result<&'p Function, String> {
+        let index = self.callable_index(decl)?;
+        match self.registry.callable_sources[index] {
+            CallableSource::Free(i) => program.functions.get(i),
+            CallableSource::Associated {
+                implementation,
+                item,
+            } => program
+                .impls
+                .get(implementation)
+                .and_then(|b| b.items.get(item))
+                .map(|m| &m.function),
+        }
+        .ok_or_else(|| "callable source does not belong to program".into())
+    }
+    pub fn callable_env(&self, decl: ir::DeclId) -> Result<Arc<ir::GenericEnv>, String> {
+        Ok(self.declaration(decl)?.env.clone())
+    }
+    pub fn callable_context(&self, decl: ir::DeclId) -> Result<CallableContext, String> {
+        self.state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?
+            .contexts
+            .get(&decl)
+            .cloned()
+            .ok_or_else(|| "missing callable context".into())
     }
     pub fn function_decl(&self, index: usize) -> Result<ir::DeclId, String> {
         self.registry
@@ -3389,7 +3992,9 @@ impl PlanCtx {
         self.check_budget(budget)?;
         let info = self.declaration(target.declaration)?;
         let schema = self.function_schema(target.declaration)?;
-        let bindings = param_bindings(info, &target.type_args)?;
+        if info.env.total_arity() != target.type_args.len() {
+            return Err("wrong callable generic arity".into());
+        }
         for arg in target.type_args.iter() {
             validate_argument(arg, caller, budget, 0)?;
         }
@@ -3398,26 +4003,16 @@ impl PlanCtx {
             .signature
             .params
             .iter()
-            .map(|ty| {
-                ir::substitute_ty(
-                    ty,
-                    info.param_env.binder(),
-                    &target.type_args,
-                    caller,
-                    &mut cx,
-                    budget,
-                )
-            })
+            .map(|ty| ir::substitute_ty(ty, &info.env, &target.type_args, caller, &mut cx, budget))
             .collect::<Result<Vec<_>, _>>()?;
         let result = ir::substitute_ty(
             &schema.signature.result,
-            info.param_env.binder(),
+            &info.env,
             &target.type_args,
             caller,
             &mut cx,
             budget,
         )?;
-        let _ = bindings;
         Ok(ir::Signature {
             params,
             result,
@@ -3457,6 +4052,7 @@ impl PlanCtx {
             plan: Some(self.clone()),
             params: HashMap::new(),
             param_env: None,
+            self_ty: None,
         };
         for info in &self.registry.declarations {
             if info.kind == ir::DeclKind::Function {
@@ -3469,7 +4065,9 @@ impl PlanCtx {
                         .signature
                         .clone(),
                 );
-            } else if info.param_env.arity() == 0 {
+            } else if matches!(info.kind, ir::DeclKind::Struct | ir::DeclKind::Enum)
+                && info.param_env.arity() == 0
+            {
                 match state.nominals.applications.get(&(info.id, Vec::new())) {
                     Some(ir::Ty::Struct(ty)) => {
                         env.structs.insert(info.name.clone(), ty.clone());
@@ -3483,9 +4081,13 @@ impl PlanCtx {
         }
         if let Some(decl) = decl {
             let info = self.declaration(decl)?;
-            env.params = param_bindings(info, &symbolic_args(&info.param_env, &self.budget)?)?;
-            if info.param_env.arity() > 0 {
-                env.param_env = Some(info.param_env.clone());
+            env.params = generic_bindings(&self.registry, &info.env, &self.budget)?;
+            env.self_ty = state.contexts.get(&decl).and_then(|c| c.self_ty.clone());
+            if let Some(ty) = &env.self_ty {
+                env.params.insert("Self".into(), ty.clone());
+            }
+            if info.env.is_generic() {
+                env.param_env = Some(info.env.clone());
             }
         }
         Ok(env)
@@ -3531,6 +4133,368 @@ impl ir::SubstitutionCx for PlanCtx {
     ) -> Result<ir::Signature, String> {
         PlanCtx::instantiate_signature(self, target, caller, budget)
     }
+}
+
+fn nominal_parts(ty: &ir::Ty) -> Option<(ir::DeclId, &[ir::Ty])> {
+    match ty {
+        ir::Ty::Struct(t) => Some((t.def().source_decl, &t.def().type_args)),
+        ir::Ty::Enum(t) => Some((t.def().source_decl, &t.def().type_args)),
+        _ => None,
+    }
+}
+fn metered_type_equal(
+    a: &ir::Ty,
+    b: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match (a, b) {
+        (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) => {
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            for (a, b) in a.iter().zip(b.iter()) {
+                if !metered_type_equal(a, b, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (ir::Ty::Array { element: a, len: n }, ir::Ty::Array { element: b, len: m }) => {
+            Ok(n == m && metered_type_equal(a, b, budget, depth + 1)?)
+        }
+        (
+            ir::Ty::Ref {
+                kind: a,
+                referent: x,
+            },
+            ir::Ty::Ref {
+                kind: b,
+                referent: y,
+            },
+        ) => Ok(a == b && metered_type_equal(x, y, budget, depth + 1)?),
+        (ir::Ty::Struct(a), ir::Ty::Struct(b)) => Ok(a.def().id == b.def().id),
+        (ir::Ty::Enum(a), ir::Ty::Enum(b)) => Ok(a.def().id == b.def().id),
+        (
+            ir::Ty::Tuple(_)
+            | ir::Ty::Array { .. }
+            | ir::Ty::Ref { .. }
+            | ir::Ty::Struct(_)
+            | ir::Ty::Enum(_),
+            _,
+        )
+        | (
+            _,
+            ir::Ty::Tuple(_)
+            | ir::Ty::Array { .. }
+            | ir::Ty::Ref { .. }
+            | ir::Ty::Struct(_)
+            | ir::Ty::Enum(_),
+        ) => Ok(false),
+        _ => Ok(a == b),
+    }
+}
+fn match_impl_type(
+    pattern: &ir::Ty,
+    actual: &ir::Ty,
+    env: &ir::ParamEnv,
+    bindings: &mut HashMap<ir::ParamId, ir::Ty>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    if let ir::Ty::Param(param) = pattern
+        && env.contains(*param)
+    {
+        if let Some(old) = bindings.get(param) {
+            return metered_type_equal(old, actual, budget, depth + 1);
+        }
+        budget.retain_bytes(256)?;
+        bindings.insert(*param, actual.clone());
+        return Ok(true);
+    }
+    match (pattern, actual) {
+        (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) if a.len() == b.len() => {
+            for (a, b) in a.iter().zip(b.iter()) {
+                if !match_impl_type(a, b, env, bindings, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (ir::Ty::Array { element: a, len: n }, ir::Ty::Array { element: b, len: m }) if n == m => {
+            match_impl_type(a, b, env, bindings, budget, depth + 1)
+        }
+        _ => {
+            if let (Some((a, aa)), Some((b, bb))) = (nominal_parts(pattern), nominal_parts(actual))
+            {
+                if a != b || aa.len() != bb.len() {
+                    return Ok(false);
+                }
+                for (a, b) in aa.iter().zip(bb) {
+                    if !match_impl_type(a, b, env, bindings, budget, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            } else {
+                metered_type_equal(pattern, actual, budget, depth + 1)
+            }
+        }
+    }
+}
+fn overlap_resolve(
+    ty: &ir::Ty,
+    bindings: &HashMap<ir::ParamId, ir::Ty>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<ir::Ty, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    if let ir::Ty::Param(p) = ty
+        && let Some(value) = bindings.get(p)
+    {
+        return overlap_resolve(value, bindings, budget, depth + 1);
+    }
+    Ok(ty.clone())
+}
+fn overlap_occurs(
+    param: ir::ParamId,
+    ty: &ir::Ty,
+    bindings: &HashMap<ir::ParamId, ir::Ty>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    let ty = overlap_resolve(ty, bindings, budget, depth)?;
+    match &ty {
+        ir::Ty::Param(p) => Ok(*p == param),
+        ir::Ty::Tuple(fields) => {
+            for field in fields.iter() {
+                if overlap_occurs(param, field, bindings, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        ir::Ty::Array { element, .. } => {
+            overlap_occurs(param, element, bindings, budget, depth + 1)
+        }
+        _ => {
+            if let Some((_, args)) = nominal_parts(&ty) {
+                for arg in args {
+                    if overlap_occurs(param, arg, bindings, budget, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+fn overlap_types(
+    a: &ir::Ty,
+    b: &ir::Ty,
+    bindings: &mut HashMap<ir::ParamId, ir::Ty>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    let a = overlap_resolve(a, bindings, budget, depth)?;
+    let b = overlap_resolve(b, bindings, budget, depth)?;
+    if metered_type_equal(&a, &b, budget, depth + 1)? {
+        return Ok(true);
+    }
+    if let ir::Ty::Param(p) = a {
+        if overlap_occurs(p, &b, bindings, budget, depth + 1)? {
+            return Ok(false);
+        }
+        budget.retain_bytes(256)?;
+        bindings.insert(p, b);
+        return Ok(true);
+    }
+    if let ir::Ty::Param(p) = b {
+        if overlap_occurs(p, &a, bindings, budget, depth + 1)? {
+            return Ok(false);
+        }
+        budget.retain_bytes(256)?;
+        bindings.insert(p, a);
+        return Ok(true);
+    }
+    match (&a, &b) {
+        (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) if a.len() == b.len() => {
+            for (a, b) in a.iter().zip(b.iter()) {
+                if !overlap_types(a, b, bindings, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (ir::Ty::Array { element: a, len: n }, ir::Ty::Array { element: b, len: m }) if n == m => {
+            overlap_types(a, b, bindings, budget, depth + 1)
+        }
+        _ => {
+            if let (Some((ad, aa)), Some((bd, bb))) = (nominal_parts(&a), nominal_parts(&b)) {
+                if ad != bd || aa.len() != bb.len() {
+                    return Ok(false);
+                }
+                for (a, b) in aa.iter().zip(bb) {
+                    if !overlap_types(a, b, bindings, budget, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+}
+impl PlanCtx {
+    fn validate_inherent_overlaps(&self, budget: &ir::PlanBudget) -> Result<(), String> {
+        self.check_budget(budget)?;
+        for (index, a) in self.registry.function_ids.iter().enumerate() {
+            budget.charge_work(1)?;
+            let a = self.declaration(*a)?;
+            let Some(ao) = &a.path.associated else {
+                continue;
+            };
+            for b in &self.registry.function_ids[index + 1..] {
+                budget.charge_work(1)?;
+                let b = self.declaration(*b)?;
+                let Some(bo) = &b.path.associated else {
+                    continue;
+                };
+                budget.charge_work(1 + a.path.item.len().min(b.path.item.len()))?;
+                if a.path.item != b.path.item || ao.nominal != bo.nominal {
+                    continue;
+                }
+                let _scratch = budget.reserve_bytes(32 * 512 + 128)?;
+                if overlap_types(
+                    &ao.self_pattern,
+                    &bo.self_pattern,
+                    &mut HashMap::new(),
+                    budget,
+                    0,
+                )? {
+                    return Err(format!(
+                        "duplicate overlapping associated item {}",
+                        a.path.item
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn select_associated(
+        &self,
+        owner: &ir::Ty,
+        name: &str,
+        method_args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        module: &str,
+        dot: bool,
+        budget: &ir::PlanBudget,
+    ) -> Result<(ir::CallTarget, ir::Signature, ReceiverKind), String> {
+        self.check_budget(budget)?;
+        let Some((nominal, _)) = nominal_parts(owner) else {
+            return Err(
+                "method receiver requires a nominal value; receiver adjustments are unsupported"
+                    .into(),
+            );
+        };
+        let mut selected = None;
+        for id in &self.registry.function_ids {
+            budget.charge_work(1)?;
+            let info = self.declaration(*id)?;
+            let Some(associated) = &info.path.associated else {
+                continue;
+            };
+            budget.charge_work(1 + info.path.item.len().min(name.len()))?;
+            if associated.nominal != nominal || info.path.item != name {
+                continue;
+            }
+            let impl_env = self.param_env(associated.impl_decl)?;
+            let _scratch = budget.reserve_bytes(32 * 512 + 128)?;
+            let mut bindings = HashMap::new();
+            if !match_impl_type(
+                &associated.self_pattern,
+                owner,
+                &impl_env,
+                &mut bindings,
+                budget,
+                0,
+            )? {
+                continue;
+            }
+            if selected.is_some() {
+                return Err("ambiguous inherent associated item".into());
+            }
+            if dot && associated.receiver == ReceiverKind::None {
+                return Err("associated function without self is not dot-callable".into());
+            }
+            if info.param_env.arity() != method_args.len() {
+                return Err("unsupported omitted or partial method type arguments; use all explicit method arguments".into());
+            }
+            let definition_module = info.path.module.join("::");
+            if !info.public && !visible_from(&definition_module, module) {
+                return Err(format!("private associated item {name}"));
+            }
+            budget.retain_bytes(32 * std::mem::size_of::<ir::Ty>() + 128)?;
+            let mut args = Vec::with_capacity(impl_env.arity() + method_args.len());
+            for index in 0..impl_env.arity() {
+                args.push(
+                    bindings
+                        .get(&ir::ParamId {
+                            owner: impl_env.binder(),
+                            index: index as u16,
+                        })
+                        .cloned()
+                        .ok_or("unconstrained impl parameter")?,
+                );
+            }
+            args.extend_from_slice(method_args);
+            let target = ir::CallTarget {
+                declaration: *id,
+                type_args: args.into(),
+            };
+            let signature = self.instantiate_signature(&target, caller, budget)?;
+            selected = Some((target, signature, associated.receiver));
+        }
+        selected.ok_or_else(|| format!("no applicable inherent associated item {name}"))
+    }
+}
+fn generic_bindings(
+    registry: &DeclRegistry,
+    env: &ir::GenericEnv,
+    budget: &ir::PlanBudget,
+) -> Result<HashMap<String, ir::Ty>, String> {
+    budget.retain_bytes(env.total_arity() * 256 + 128)?;
+    let mut bindings = HashMap::new();
+    for scope in env.scopes() {
+        let info = registry.declaration(scope.binder().declaration)?;
+        for name in info.type_params.iter() {
+            budget.retain_bytes(name.len())?;
+        }
+        for (name, ty) in info
+            .type_params
+            .iter()
+            .cloned()
+            .zip(symbolic_args(scope, budget)?)
+        {
+            budget.charge_work(1 + name.len())?;
+            if bindings.insert(name, ty).is_some() {
+                return Err("duplicate visible generic parameter".into());
+            }
+        }
+    }
+    Ok(bindings)
 }
 fn symbolic_args(env: &ir::ParamEnv, budget: &ir::PlanBudget) -> Result<Vec<ir::Ty>, String> {
     budget.charge_work(env.arity())?;
@@ -3722,6 +4686,10 @@ impl PlanState {
                     .collect::<Result<Vec<_>, _>>()?;
                 self.intern(registry, decl, &args, caller, budget, depth + 1)?
             }
+            Type::SelfType => bindings
+                .get("Self")
+                .cloned()
+                .ok_or("Self is not in an impl scope")?,
             Type::Named(name) => {
                 let decl = *registry
                     .nominals
@@ -3966,7 +4934,8 @@ pub struct TypeEnv {
     pub functions: HashMap<String, ir::Signature>,
     plan: Option<PlanCtx>,
     params: HashMap<String, ir::Ty>,
-    param_env: Option<Arc<ir::ParamEnv>>,
+    param_env: Option<Arc<ir::GenericEnv>>,
+    self_ty: Option<ir::Ty>,
 }
 pub type Signatures = TypeEnv;
 fn visible_from(owner: &str, requester: &str) -> bool {
@@ -4791,8 +5760,23 @@ impl Checker<'_> {
                     .get(name)
                     .ok_or("unresolved function declaration in inference")?;
                 let schema = plan.function_schema(declaration)?;
-                if schema.param_env.arity() == 0 {
+                if !schema.env.is_generic() {
                     self.infer_type_term(&schema.signature.result, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Struct { name, .. } if name == "Self" => self.infer_type_term(
+                self.signatures
+                    .self_ty
+                    .as_ref()
+                    .ok_or("Self outside impl")?,
+                None,
+                depth + 1,
+            )?,
+            Expr::AssociatedCall { .. } | Expr::MethodCall { .. } => {
+                if let Some(ty) = self.scalar_hint(expr)? {
+                    self.infer_type_term(&ty, None, depth + 1)?
                 } else {
                     self.infer_node(InferKind::Unknown(false))?
                 }
@@ -4907,7 +5891,7 @@ impl Checker<'_> {
         if schema.signature.params.len() != args.len() {
             return Err("generic function argument count mismatch".into());
         }
-        let mut solver = Inference::new(self, schema.param_env)?;
+        let mut solver = Inference::new(self, schema.env.scopes()[0].clone())?;
         if let Some(expected) = expected {
             let formal = solver.schema(&schema.signature.result, 0)?;
             let evidence = self.infer_type_term(expected, None, 0)?;
@@ -5133,6 +6117,11 @@ fn canonical_ref_contract(
     let mut input_positions = 0usize;
     let mut input_region = None;
     let mut param_regions = Vec::with_capacity(params.len());
+    let injected = params
+        .len()
+        .checked_sub(function.params.len())
+        .ok_or("source parameter arity mismatch")?;
+    param_regions.resize(injected, None);
     for (_, ty) in &function.params {
         let region = match ty {
             Type::Ref { region, .. } => {
@@ -5203,6 +6192,10 @@ fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, St
         return plan.source_ty(ty, &env.params, caller, &plan.budget);
     }
     match ty {
+        Type::SelfType => env
+            .self_ty
+            .clone()
+            .ok_or_else(|| "Self outside impl".into()),
         Type::Apply(_) | Type::Param(_) => {
             Err("generic types require authoritative declaration environment".into())
         }
@@ -5331,6 +6324,13 @@ impl<'a> Checker<'a> {
         Ok(())
     }
     fn nominal(&self, name: &str, hint: Option<&ir::Ty>) -> Result<ir::Ty, String> {
+        if name == "Self" {
+            return self
+                .signatures
+                .self_ty
+                .clone()
+                .ok_or_else(|| "Self outside impl".into());
+        }
         if let Some(ty) = hint {
             let matches = match ty {
                 ir::Ty::Struct(t) => t.def().name == name,
@@ -5617,6 +6617,77 @@ impl<'a> Checker<'a> {
                 }
                 .resolve(&evidence, false, 0)?
             }
+            Expr::AssociatedCall {
+                owner,
+                name,
+                type_args,
+                ..
+            } => {
+                let plan = self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("missing associated registry")?;
+                self.infer_storage(type_args.len())?;
+                let args = type_args
+                    .iter()
+                    .map(|t| checked_local_ty(t, self.signatures))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let owner = checked_local_ty(owner, self.signatures)?;
+                Some(
+                    plan.select_associated(
+                        &owner,
+                        name,
+                        &args,
+                        self.facts(),
+                        &self.module,
+                        false,
+                        &plan.budget,
+                    )?
+                    .1
+                    .result,
+                )
+            }
+            Expr::MethodCall {
+                receiver,
+                name,
+                type_args,
+                ..
+            } => {
+                let evidence = self.inference_evidence(receiver, 0)?;
+                let solver = Inference {
+                    checker: self,
+                    env: None,
+                    slots: Vec::new(),
+                };
+                if let Some(owner) = solver.resolve(&evidence, false, 0)? {
+                    let plan = self
+                        .signatures
+                        .plan
+                        .as_ref()
+                        .ok_or("missing associated registry")?;
+                    self.infer_storage(type_args.len())?;
+                    let args = type_args
+                        .iter()
+                        .map(|t| checked_local_ty(t, self.signatures))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Some(
+                        plan.select_associated(
+                            &owner,
+                            name,
+                            &args,
+                            self.facts(),
+                            &self.module,
+                            true,
+                            &plan.budget,
+                        )?
+                        .1
+                        .result,
+                    )
+                } else {
+                    None
+                }
+            }
             Expr::Cast { target, .. } => Some(checked_local_ty(target, self.signatures)?),
             Expr::Deref { value } => match self.scalar_hint(value)? {
                 Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
@@ -5799,7 +6870,7 @@ impl<'a> Checker<'a> {
         match pattern {
             Pattern::Path(name) | Pattern::Variant { name,.. } => {
                 let expected = if let ir::Ty::Enum(enumeration)=ty {
-                    if name.rsplit_once("::").is_some_and(|(owner,_)|owner==enumeration.def().name){ty.clone()}else{return Err("enum pattern owner mismatch".into());}
+                    if name.rsplit_once("::").is_some_and(|(owner,_)| if owner == "Self" { matches!(self.signatures.self_ty.as_ref(), Some(ir::Ty::Enum(own)) if own == enumeration) } else { owner==enumeration.def().name }) {ty.clone()}else{return Err("enum pattern owner mismatch".into());}
                 }else{ir::Ty::Enum(self.enum_variant(name)?.0)};
                 if !coerces(ty,&expected) { return Err(format!("enum pattern {name} does not match {ty:?}")); }
                 Ok(expected)
@@ -5972,6 +7043,9 @@ impl<'a> Checker<'a> {
             .plan
             .as_ref()
             .ok_or("constructor requires planning context")?;
+        if name == "Self" {
+            return self.nominal(name, None);
+        }
         let decl = *plan
             .registry
             .nominals
@@ -6021,7 +7095,12 @@ impl<'a> Checker<'a> {
         };
         let (ty, variant) = if let ir::Ty::Enum(ty) = expected {
             let (owner, variant) = name.rsplit_once("::").ok_or("unresolved variant pattern")?;
-            if owner != ty.def().name {
+            let owner_matches = if owner == "Self" {
+                matches!(self.signatures.self_ty.as_ref(), Some(ir::Ty::Enum(own)) if own == ty)
+            } else {
+                owner == ty.def().name
+            };
+            if !owner_matches {
                 return Err("variant pattern owner mismatch".into());
             }
             let index = ty
@@ -6444,7 +7523,98 @@ impl<'a> Checker<'a> {
         if let Expr::Cast { value, target } = e {
             return self.cast_expression(value, target);
         }
+        if matches!(e, Expr::MethodCall { .. } | Expr::AssociatedCall { .. }) {
+            return self.associated_expression(e);
+        }
         self.expr_without_cast(e, expectation)
+    }
+    fn associated_expression(&mut self, expression: &Expr) -> Result<ir::ExprId, String> {
+        let plan = self
+            .signatures
+            .plan
+            .clone()
+            .ok_or("associated call requires registry")?;
+        let (owner, name, type_args, args, receiver) = match expression {
+            Expr::MethodCall {
+                receiver,
+                name,
+                type_args,
+                args,
+            } => {
+                let id = self.expr(receiver)?;
+                (self.flow(id).ty, name, type_args, args, Some(id))
+            }
+            Expr::AssociatedCall {
+                owner,
+                name,
+                type_args,
+                args,
+            } => (
+                checked_local_ty(owner, self.signatures)?,
+                name,
+                type_args,
+                args,
+                None,
+            ),
+            _ => return Err("not an associated call".into()),
+        };
+        self.infer_storage(type_args.len() + args.len() + 1)?;
+        let actuals = type_args
+            .iter()
+            .map(|t| checked_local_ty(t, self.signatures))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (target, signature, _) = plan.select_associated(
+            &owner,
+            name,
+            &actuals,
+            self.facts(),
+            &self.module,
+            receiver.is_some(),
+            &plan.budget,
+        )?;
+        let offset = usize::from(receiver.is_some());
+        if signature.params.len() != args.len() + offset {
+            return Err(format!("wrong arity for associated item {name}"));
+        }
+        let mut arguments = Vec::with_capacity(args.len() + offset);
+        let mut completes = true;
+        if let Some(id) = receiver {
+            let flow = self.flow(id);
+            self.require(&flow, &signature.params[0])?;
+            completes = flow.completes;
+            arguments.push(id);
+        }
+        for (arg, ty) in args.iter().zip(&signature.params[offset..]) {
+            let id = self.expr_expected_when(arg, self.reachable && completes, Some(ty))?;
+            let flow = self.flow(id);
+            self.require(&flow, ty)?;
+            completes &= flow.completes;
+            arguments.push(id);
+        }
+        for ty in signature
+            .params
+            .iter()
+            .chain(std::iter::once(&signature.result))
+        {
+            self.accessible(ty)?;
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: signature.result.clone(),
+            completion: if completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::Call {
+                target,
+                name: name.clone(),
+                args: arguments,
+                signature,
+            },
+        });
+        Ok(id)
     }
     fn cast_expression(&mut self, value: &Expr, target: &Type) -> Result<ir::ExprId, String> {
         let target = checked_local_ty(target, self.signatures)?;
@@ -6973,7 +8143,9 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Apply { .. } => return Err("generic application dispatcher invariant".into()),
+            Expr::Apply { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. } => {
+                return Err("application dispatcher invariant".into());
+            }
             Expr::Struct { name, fields } => {
                 self.infer_storage(fields.len())?;
                 let evidence_fields = fields
@@ -7413,12 +8585,14 @@ pub fn check_function_with_signatures(
     signatures: &Signatures,
 ) -> Result<(), String> {
     let typed = type_function_with_signatures(program, index, signatures)?;
-    if !program.functions[index].type_params.is_empty() {
+    if let Some(plan) = &signatures.plan
+        && plan.callable_env(plan.callable_decl(index)?)?.is_generic()
+    {
         let plan = signatures
             .plan
             .as_ref()
             .ok_or("generic checking requires planning context")?;
-        let env = plan.param_env(plan.function_decl(index)?)?;
+        let env = plan.callable_env(plan.callable_decl(index)?)?;
         let template = super::cfg::lower_template(Arc::new(typed), env, &plan.budget)?;
         return super::ownership::verify_template(template)
             .map(|_| ())
@@ -7448,6 +8622,51 @@ pub fn type_function_with_signatures(
 ) -> Result<ir::CheckedFunction, String> {
     type_function_with_env(program, index, signatures)
 }
+pub fn type_callable_with_plan(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<ir::CheckedFunction, String> {
+    plan.check_budget(budget)?;
+    budget.charge_work(1)?;
+    let f = plan.callable_body(program, declaration)?;
+    let signatures = plan.environment(Some(declaration))?;
+    let signature = plan.function_schema(declaration)?.signature;
+    let context = plan.callable_context(declaration)?;
+    validate_depth(DepthNode::Block(&f.body))?;
+    let module = context.module.join("::");
+    let mut c = Checker::new(&signatures, signature.result.clone(), module);
+    let mut params = Vec::new();
+    let offset = if let ReceiverKind::Value { mutable } = context.receiver {
+        let local = c.bind("self", signature.params[0].clone())?;
+        c.locals[local.0].mutable = mutable;
+        params.push(local);
+        1
+    } else {
+        0
+    };
+    if signature.params.len() != f.params.len() + offset {
+        return Err("callable parameter count mismatch".into());
+    }
+    for ((name, _), ty) in f.params.iter().zip(&signature.params[offset..]) {
+        params.push(c.bind(name, ty.clone())?);
+    }
+    let (body, flow) = c
+        .block_expected(&f.body, Some(&signature.result))
+        .map_err(|e| format!("in callable {}: {e}", f.name))?;
+    c.require(&flow, &c.result)?;
+    validate_shift_counts(&c.exprs, &c.count_queries)?;
+    Ok(ir::CheckedFunction {
+        name: f.name.clone(),
+        ref_contract: signature.ref_contract.clone(),
+        params,
+        result: c.result,
+        locals: c.locals,
+        exprs: c.exprs,
+        body,
+    })
+}
 pub fn type_function_with_plan(
     program: &Program,
     index: usize,
@@ -7457,8 +8676,7 @@ pub fn type_function_with_plan(
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
     let decl = plan.function_decl(index)?;
-    let env = plan.environment(Some(decl))?;
-    type_function_with_env(program, index, &env)
+    type_callable_with_plan(program, decl, plan, budget)
 }
 /// Check one body with the same nominal environment used for all signatures.
 pub fn type_function_with_env(
@@ -7466,6 +8684,9 @@ pub fn type_function_with_env(
     index: usize,
     signatures: &TypeEnv,
 ) -> Result<ir::CheckedFunction, String> {
+    if let Some(plan) = &signatures.plan {
+        return type_callable_with_plan(program, plan.callable_decl(index)?, plan, &plan.budget);
+    }
     let f = program
         .functions
         .get(index)
@@ -7512,7 +8733,11 @@ pub fn type_function_with_env(
 }
 pub fn check(program: &Program) -> Result<(), String> {
     let signatures = signature_table(program)?;
-    for i in 0..program.functions.len() {
+    let count = signatures
+        .plan
+        .as_ref()
+        .map_or(program.functions.len(), PlanCtx::callable_count);
+    for i in 0..count {
         check_function_with_signatures(program, i, &signatures)?;
     }
     Ok(())
@@ -7540,6 +8765,102 @@ mod typed_tests {
             type_function_with_plan(&p, index, &plan, &budget).unwrap();
         }
         check(&p).unwrap();
+    }
+
+    #[test]
+    fn associated_callable_registry_preserves_impl_method_binders_and_self() {
+        let p=parse("struct W<T>{x:T}impl<T> W<T>{fn make(x:T)->Self{Self{x}}fn pair<U>(self,u:U)->(T,U){(self.x,u)}fn forward<U>(self,u:U)->(T,U){self.pair::<U>(u)}}fn main(){let p=W::<i32>::make(3).forward::<u8>(4u8);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        assert_eq!(p.functions.len(), 1);
+        assert_eq!(plan.callable_count(), 4);
+        for index in 0..plan.callable_count() {
+            let decl = plan.callable_decl(index).unwrap();
+            assert_eq!(plan.callable_index(decl).unwrap(), index);
+            let f = type_callable_with_plan(&p, decl, &plan, &budget).unwrap();
+            let context = plan.callable_context(decl).unwrap();
+            if context.receiver != ReceiverKind::None {
+                assert_eq!(
+                    f.params.len(),
+                    plan.callable_body(&p, decl).unwrap().params.len() + 1
+                );
+                assert_eq!(f.locals[f.params[0].0].name, "self");
+            }
+            if plan.callable_body(&p, decl).unwrap().name == "pair" {
+                let env = plan.callable_env(decl).unwrap();
+                assert_eq!(env.scopes().len(), 2);
+                assert_eq!(env.total_arity(), 2);
+                assert_ne!(env.scopes()[0].binder(), env.scopes()[1].binder());
+            }
+        }
+        check(&p).unwrap();
+        let singleton = parse("enum E{Item(i32)}impl E{fn take(self)->i32{let Self::Item(x)=self;x}}fn main(){let n=E::Item(7).take();}").unwrap();
+        check(&singleton).unwrap();
+    }
+
+    #[test]
+    fn inherent_coherence_and_definition_privacy_do_not_depend_on_demand() {
+        for source in [
+            "struct W<T>{x:T}impl W<u8>{fn take(self)->u8{self.x}}impl W<u16>{fn take(self)->u16{self.x}}fn main(){let a=W::<u8>{x:1u8}.take();}",
+            "struct P<T,U>{a:T,b:U}impl<T>P<T,T>{fn score(self)->i32{1}}impl P<i32,u8>{fn score(self)->i32{2}}fn main(){}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+        for source in [
+            "struct W<T>{x:T}impl<T> W<T>{fn clash(self){}}impl W<i32>{fn clash(self){}}fn main(){}",
+            "struct W<T>{x:T}impl<T> W<T>{fn bad<U>(self,u:U)->(U,U){(u,u)}}fn main(){}",
+            "struct S{x:i32}impl<T>S{fn unused(self){}}fn main(){}",
+            "mod a{pub struct S{x:i32}}mod b{impl super::a::S{pub fn leak(self)->i32{self.x}}}fn main(){}",
+            "mod a{pub struct S{pub x:i32}impl S{fn take(self)->i32{self.x}}}fn main(){let n=a::S{x:1}.take();}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn associated_receivers_are_checked_once_and_owning_calls_stay_direct() {
+        let p=parse("struct S{x:i32}impl S{fn add(mut self,n:i32)->i32{self.x=self.x+n;self.x}}fn make()->S{S{x:3}}fn arg()->i32{4}fn main(){let n=make().add(arg());}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let decl = plan.callable_decl(2).unwrap();
+        let function = type_callable_with_plan(&p, decl, &plan, &budget).unwrap();
+        let calls = function
+            .exprs
+            .iter()
+            .filter_map(|e| {
+                if let ir::ExprKind::Call { target, args, .. } = &e.kind {
+                    Some((target, args))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(
+                    |(target, _)| plan.declaration(target.declaration).unwrap().path.item == "make"
+                )
+                .count(),
+            1
+        );
+        let (target, args) = calls.last().unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(
+            plan.declaration(target.declaration).unwrap().kind,
+            ir::DeclKind::AssociatedFunction
+        );
+        check(&p).unwrap();
+        for source in [
+            "struct S{x:i32}impl S{fn take(self)->i32{self.x}}fn main(){let s=S{x:1};let n=s.take();let x=s.x;}",
+            "struct S{x:i32}impl S{fn choose<U>(self,u:U)->U{u}}fn main(){let n=S{x:1}.choose(2);}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err());
+        }
     }
 
     #[test]

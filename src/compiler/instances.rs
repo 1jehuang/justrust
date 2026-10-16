@@ -3,7 +3,7 @@
 use super::{frontend, ir};
 use std::sync::Arc;
 
-const SEMANTICS: &[u8] = b"jr-native-generics-v1/linux-x86_64/checked/private-leaf8";
+const SEMANTICS: &[u8] = b"jr-native-associated-v2/linux-x86_64/checked/private-leaf8";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -57,12 +57,89 @@ impl Encoder<'_> {
             ir::DeclKind::Function => 0,
             ir::DeclKind::Struct => 1,
             ir::DeclKind::Enum => 2,
+            ir::DeclKind::Impl => 3,
+            ir::DeclKind::AssociatedFunction => 4,
         }])?;
         self.count(path.module.len())?;
         for component in path.module.iter() {
             self.text(component)?;
         }
-        self.text(&path.item)
+        self.text(&path.item)?;
+        if let Some(owner) = &path.associated {
+            self.append(b"A")?;
+            let impl_path = self.context.semantic_path(owner.impl_decl)?;
+            self.count(impl_path.module.len())?;
+            for component in impl_path.module.iter() {
+                self.text(component)?;
+            }
+            self.declaration(owner.nominal)?;
+            let env = self.context.param_env(owner.impl_decl)?;
+            self.count(env.arity())?;
+            self.pattern(&owner.self_pattern, &env, 0)?;
+            self.append(&[match owner.receiver {
+                frontend::ReceiverKind::None => 0,
+                frontend::ReceiverKind::Value { mutable: false } => 1,
+                frontend::ReceiverKind::Value { mutable: true } => 2,
+            }])
+        } else {
+            self.append(b"F")
+        }
+    }
+
+    /// Pattern parameters are alpha ordinals in the authoritative impl scope,
+    /// never process-local binder IDs. Concrete instance arguments use `ty`.
+    fn pattern(&mut self, ty: &ir::Ty, env: &ir::ParamEnv, depth: usize) -> Result<(), String> {
+        self.budget.check_depth(depth)?;
+        self.budget.charge_work(1)?;
+        match ty {
+            ir::Ty::Param(param) => {
+                if !env.contains(*param) {
+                    return Err("associated instance pattern has foreign parameter".into());
+                }
+                self.append(b"p")?;
+                self.count(usize::from(param.index))
+            }
+            ir::Ty::Int(integer) => {
+                self.append(b"i")?;
+                self.text(integer.name())
+            }
+            ir::Ty::Bool => self.append(b"b"),
+            ir::Ty::Unit => self.append(b"u"),
+            ir::Ty::Tuple(fields) => {
+                self.append(b"t")?;
+                self.count(fields.len())?;
+                for field in fields.iter() {
+                    self.pattern(field, env, depth + 1)?;
+                }
+                Ok(())
+            }
+            ir::Ty::Array { element, len } => {
+                self.append(b"a")?;
+                self.count(*len)?;
+                self.pattern(element, env, depth + 1)
+            }
+            ir::Ty::Struct(structure) => {
+                self.append(b"s")?;
+                self.declaration(structure.def().source_decl)?;
+                self.count(structure.def().type_args.len())?;
+                for argument in structure.def().type_args.iter() {
+                    self.pattern(argument, env, depth + 1)?;
+                }
+                Ok(())
+            }
+            ir::Ty::Enum(enumeration) => {
+                self.append(b"e")?;
+                self.declaration(enumeration.def().source_decl)?;
+                self.count(enumeration.def().type_args.len())?;
+                for argument in enumeration.def().type_args.iter() {
+                    self.pattern(argument, env, depth + 1)?;
+                }
+                Ok(())
+            }
+            ir::Ty::Never | ir::Ty::Ref { .. } => {
+                Err("unsupported associated instance self pattern".into())
+            }
+        }
     }
 
     fn ty(&mut self, ty: &ir::Ty, depth: usize) -> Result<(), String> {
@@ -138,7 +215,13 @@ pub(super) fn identity(
         .and_then(|n| n.checked_add(4))
         .ok_or("generic instance symbol byte limit exceeded")?;
     let symbol_reservation = budget.reserve_bytes(symbol_bytes)?;
-    let canonical_reservation = budget.reserve_bytes(encoder.bytes.len())?;
+    let canonical_reservation = budget.reserve_bytes(
+        encoder
+            .bytes
+            .len()
+            .checked_add(2 * std::mem::size_of::<usize>())
+            .ok_or("generic canonical key byte limit exceeded")?,
+    )?;
     budget.charge_work(encoder.bytes.len())?;
     let mut symbol = String::new();
     symbol
@@ -151,8 +234,14 @@ pub(super) fn identity(
         symbol.push(char::from(HEX[usize::from(byte >> 4)]));
         symbol.push(char::from(HEX[usize::from(byte & 15)]));
     }
+    let bookkeeping = budget.reserve_bytes(6 * std::mem::size_of::<ir::PlanReservation>())?;
+    encoder
+        .reservations
+        .try_reserve_exact(3)
+        .map_err(|_| "generic instance reservation allocation limit exceeded")?;
     encoder.reservations.push(symbol_reservation);
     encoder.reservations.push(canonical_reservation);
+    encoder.reservations.push(bookkeeping);
     Ok(InstanceIdentity {
         symbol,
         canonical: Arc::from(encoder.bytes),
@@ -161,6 +250,39 @@ pub(super) fn identity(
 }
 
 use std::collections::HashMap;
+
+fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Result<(), String> {
+    fn walk(value: &ir::Ty, depth: usize, budget: &ir::PlanBudget) -> Result<(), String> {
+        budget.check_depth(depth)?;
+        // Cover the bounded group of Hash/Eq operations following this walk.
+        budget.charge_work(5)?;
+        match value {
+            ir::Ty::Tuple(fields) => {
+                for field in fields.iter() {
+                    walk(field, depth + 1, budget)?;
+                }
+            }
+            ir::Ty::Array { element, .. } => walk(element, depth + 1, budget)?,
+            ir::Ty::Struct(_)
+            | ir::Ty::Enum(_)
+            | ir::Ty::Int(_)
+            | ir::Ty::Bool
+            | ir::Ty::Unit
+            | ir::Ty::Never => {}
+            ir::Ty::Param(_) | ir::Ty::Ref { .. } => {
+                return Err(
+                    "generic instance has non-closed or reference-containing argument".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+    budget.charge_work(1)?;
+    for argument in target.type_args.iter() {
+        walk(argument, 0, budget)?;
+    }
+    Ok(())
+}
 
 pub(super) struct Instance {
     pub target: ir::CallTarget,
@@ -177,13 +299,21 @@ pub(super) struct Plan {
 
 impl Plan {
     pub fn symbol(&self, target: &ir::CallTarget) -> Result<String, String> {
+        charge_target_lookup(target, &self.budget)?;
         let index = self
             .lookup
             .get(target)
             .ok_or("call target is not in the sealed generic instance plan")?;
         let symbol = &self.entries[*index].identity.symbol;
         self.budget.charge_work(symbol.len())?;
-        self.budget.retain_bytes(symbol.len())?;
+        // Also cover the retained Object.calls slot and its geometric growth
+        // peak before the backend appends the returned owning string.
+        self.budget.retain_bytes(
+            symbol
+                .len()
+                .checked_add(4 * std::mem::size_of::<(usize, String)>())
+                .ok_or("generic relocation metadata byte limit exceeded")?,
+        )?;
         let mut copy = String::new();
         copy.try_reserve_exact(symbol.len())
             .map_err(|_| "generic relocation symbol allocation limit exceeded")?;
@@ -193,7 +323,6 @@ impl Plan {
 }
 
 pub(super) fn build(
-    program: &frontend::Program,
     context: &mut frontend::PlanCtx,
     sources: &[Arc<ir::CheckedFunction>],
     budget: &ir::PlanBudget,
@@ -205,18 +334,17 @@ pub(super) fn build(
     let mut reservations = Vec::new();
     let mut canonical_keys = HashMap::new();
     let registry_reservation = budget.reserve_bytes(
-        program
-            .functions
-            .len()
+        context
+            .callable_count()
             .checked_mul(4 * (std::mem::size_of::<ir::DeclId>() + std::mem::size_of::<usize>()))
             .ok_or("generic declaration lookup byte limit exceeded")?,
     )?;
     declarations
-        .try_reserve(program.functions.len())
+        .try_reserve(context.callable_count())
         .map_err(|_| "generic declaration lookup allocation limit exceeded")?;
-    for index in 0..program.functions.len() {
+    for index in 0..context.callable_count() {
         budget.charge_work(1)?;
-        let declaration = context.function_decl(index)?;
+        let declaration = context.callable_decl(index)?;
         if declarations.insert(declaration, index).is_some() {
             return Err("duplicate function declaration identity".into());
         }
@@ -239,40 +367,7 @@ pub(super) fn build(
             context: &mut frontend::PlanCtx,
             budget: &ir::PlanBudget,
         ) -> Result<(), String> {
-            fn charge_type(
-                ty: &ir::Ty,
-                depth: usize,
-                budget: &ir::PlanBudget,
-            ) -> Result<(), String> {
-                budget.check_depth(depth)?;
-                budget.charge_work(1)?;
-                match ty {
-                    ir::Ty::Tuple(fields) => {
-                        for field in fields.iter() {
-                            charge_type(field, depth + 1, budget)?;
-                        }
-                    }
-                    ir::Ty::Array { element, .. } => charge_type(element, depth + 1, budget)?,
-                    // Nominal Eq/Hash use canonical application identity, not fields.
-                    ir::Ty::Struct(_)
-                    | ir::Ty::Enum(_)
-                    | ir::Ty::Int(_)
-                    | ir::Ty::Bool
-                    | ir::Ty::Unit
-                    | ir::Ty::Never => {}
-                    ir::Ty::Param(_) | ir::Ty::Ref { .. } => {
-                        return Err(
-                            "generic instance has non-closed or reference-containing argument"
-                                .into(),
-                        );
-                    }
-                }
-                Ok(())
-            }
-            budget.charge_work(1)?;
-            for argument in target.type_args.iter() {
-                charge_type(argument, 0, budget)?;
-            }
+            charge_target_lookup(&target, budget)?;
             // Exact recursive instances are already finite, regardless of call depth.
             if self.seen.contains_key(&target) {
                 return Ok(());
@@ -313,10 +408,22 @@ pub(super) fn build(
                 .map_err(|_| "generic plan reservation allocation limit exceeded")?;
             let mut identity = identity(&target, context, budget)?;
             let path = context.semantic_path(target.declaration)?;
-            if path.module.is_empty() && path.item == "main" && target.type_args.is_empty() {
+            if path.kind == ir::DeclKind::Function
+                && path.associated.is_none()
+                && path.module.is_empty()
+                && path.item == "main"
+                && target.type_args.is_empty()
+            {
                 identity.symbol.clear();
                 identity.symbol.push_str("main");
             }
+            budget.charge_work(
+                identity
+                    .canonical
+                    .len()
+                    .checked_mul(3)
+                    .ok_or("generic canonical lookup work limit exceeded")?,
+            )?;
             if let Some(previous) = self.canonical_keys.get(&identity.canonical)
                 && previous != &target
             {
@@ -345,11 +452,12 @@ pub(super) fn build(
     };
     // Preserve legacy source-order telemetry for nongeneric roots. These indices
     // are local slots only. Canonical identity never contains this ordering.
-    for (index, function) in program.functions.iter().enumerate() {
-        if function.type_params.is_empty() {
+    for index in 0..context.callable_count() {
+        let declaration = context.callable_decl(index)?;
+        if !context.callable_env(declaration)?.is_generic() {
             queue.add(
                 ir::CallTarget {
-                    declaration: context.function_decl(index)?,
+                    declaration,
                     type_args: Arc::from([]),
                 },
                 0,
@@ -366,7 +474,7 @@ pub(super) fn build(
         let target = queue.entries[cursor].target.clone();
         let depth = queue.depths[cursor];
         let schema = context.function_schema(target.declaration)?;
-        let binder = schema.param_env.binder();
+        let env = schema.env;
         let source = sources
             .get(source_index)
             .ok_or("missing universally checked declaration body")?;
@@ -386,7 +494,7 @@ pub(super) fn build(
                 for argument in callee.type_args.iter() {
                     arguments.push(ir::substitute_ty(
                         argument,
-                        binder,
+                        &env,
                         &target.type_args,
                         ir::FactsCtx::Concrete,
                         context,
@@ -437,7 +545,7 @@ pub(super) fn build(
         .try_reserve(entries.len())
         .map_err(|_| "generic sealed lookup allocation limit exceeded")?;
     for (index, instance) in entries.iter().enumerate() {
-        budget.charge_work(1)?;
+        charge_target_lookup(&instance.target, budget)?;
         lookup.insert(instance.target.clone(), index);
     }
     reservations.push(lookup_reservation);
@@ -454,9 +562,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn associated_keys_are_alpha_normalized_and_specialized_owners_are_distinct() {
+        fn context(source: &str) -> (frontend::PlanCtx, ir::PlanBudget) {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            (context, budget)
+        }
+        fn methods(context: &frontend::PlanCtx, name: &str) -> Vec<ir::DeclId> {
+            (0..context.callable_count())
+                .map(|index| context.callable_decl(index).unwrap())
+                .filter(|declaration| {
+                    let path = context.semantic_path(*declaration).unwrap();
+                    path.associated.is_some() && path.item == name
+                })
+                .collect()
+        }
+        let (first, first_budget) =
+            context("struct W<T>{x:T}impl<T> W<T>{fn pick<U>(self,u:U)->U{u}}fn main(){}");
+        let (second, second_budget) = context(
+            "fn unrelated(){}fn main(){}struct W<A>{x:A}impl<A> W<A>{fn pick<B>(self,u:B)->B{u}}",
+        );
+        let first_decl = methods(&first, "pick")[0];
+        let second_decl = methods(&second, "pick")[0];
+        assert_ne!(first_decl, second_decl);
+        let target = |declaration| ir::CallTarget {
+            declaration,
+            type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32), ir::Ty::Int(ir::IntTy::U8)]),
+        };
+        let first_key = identity(&target(first_decl), &first, &first_budget).unwrap();
+        let second_key = identity(&target(second_decl), &second, &second_budget).unwrap();
+        assert_eq!(first_key.canonical, second_key.canonical);
+        assert_eq!(first_key.symbol, second_key.symbol);
+
+        let (specialized, budget) = context(
+            "struct W<T>{x:T}impl W<u8>{fn score(self)->i32{1}}impl W<u16>{fn score(self)->i32{2}}fn main(){}",
+        );
+        let owners = methods(&specialized, "score");
+        assert_eq!(owners.len(), 2);
+        let empty_target = |declaration| ir::CallTarget {
+            declaration,
+            type_args: Arc::from([]),
+        };
+        let small = identity(&empty_target(owners[0]), &specialized, &budget).unwrap();
+        let wide = identity(&empty_target(owners[1]), &specialized, &budget).unwrap();
+        assert_ne!(small.canonical, wide.canonical);
+        assert_ne!(small.symbol, wide.symbol);
+    }
+
+    #[test]
     fn relocation_symbol_copies_share_the_plan_byte_limit() {
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: 12,
+            bytes: 12 + 4 * std::mem::size_of::<(usize, String)>(),
             ..Default::default()
         });
         let target = ir::CallTarget {
