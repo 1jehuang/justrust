@@ -32,6 +32,8 @@ class Case:
 
 
 def valid_cases(rng, count):
+    yield Case("external_module", "valid", 'mod external; fn main() { external::f(); }',
+               files={"external.rs": "pub fn f() {}"})
     for index in range(count):
         a, b, c = (rng.randint(1, 31) for _ in range(3))
         depth = rng.randint(4, 14) * 2
@@ -169,8 +171,6 @@ def invalid_cases():
 
 
 def boundary_cases():
-    yield Case("external_module", "boundary", 'mod external; fn main() { external::f(); }',
-               files={"external.rs": "pub fn f() {}"})
     for name, text in [
         ("imported_main_only", "mod a { pub fn entry() {} } use a::entry as main;"),
         ("grouped_use", "mod a { pub fn f() {} pub fn g() {} } use a::{f, g}; fn main() { f(); g(); }"),
