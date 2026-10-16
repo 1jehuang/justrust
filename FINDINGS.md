@@ -8291,4 +8291,16 @@ six invalid programs, nine declared runtime exit-101 cases and two legal
 unsupported boundaries. Trap checks require successful source compilation,
 exact effect stdout and status101, with no claim of native panic-text parity.
 The exact historical array runtime-usize fixture is promoted unchanged.
+
+Tracked M8a run `compiler-usize-20261016-0718` at revision
+`f58789cc904ca4b08d7304649151df3412bfb56b` passed all 537 cases across twelve
+corpora: 326 accepted parity, 156 invalid rejections, nine explicitly declared
+runtime exit-101 cases and 46 legal-unsupported boundaries. Every raw summary
+reports passed with zero failures. Generated scalar/loop cases independently
+show 64 matched successful compile/execution outcomes each. Raw receipts are
+retained under `experiments/results/20261016-m8a-usize-*.jsonl`.
+The 409-byte, three-function native example executed successfully at 96 workers
+with complete capture and zero failures/dropped events, producing the expected
+full-width indexing marker. Its observed total was 10,003,467 ns and engine
+2,925,755 ns, explicitly contended/uncontrolled, not a cold benchmark.
 No speedup, fully cold timing or full Rust compatibility claim is made.

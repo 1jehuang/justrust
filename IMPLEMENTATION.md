@@ -65,7 +65,10 @@ non-Copy indexing and conservative selection-proof invalidation. The dedicated
 explicit exit-101 runtime cases and two legal-unsupported boundaries. The exact
 prior array runtime-index boundary is promoted unchanged to accepted. Backward
 numeric inference, chained dynamic places, slices, broader primitives and
-references/borrowing remain open. Tracked twelve-corpus native validation follows.
+references/borrowing remain open. Tracked M8a validation passed 537 cases across
+twelve corpora: 326 accepted parity, 156 invalid rejections, nine declared runtime
+exit-101 cases and 46 explicit legal-unsupported boundaries. The full-width native
+example executed at 96 workers with complete capture; raw receipts are retained.
 
 Fixed arrays and decimal literal indexing now pass 591 hosted tests and strict
 all-target lint under `ARRAYS.md`. The bound is 4096 elements, with independent
