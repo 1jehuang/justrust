@@ -15,6 +15,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Separate semantic Never typing from completion, including typed dead tails.
 - [x] Nested Copy tuples, field projections/mutation and by-value aggregate calls.
 - [x] Explicit cached CFG facts shared by check and native emission, with provenance.
+- [x] Cached storage/initialization/move-path dataflow shared by check and emission.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -49,11 +50,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
-Definite-initialization and move-path analysis over the cached CFG: fixed-point
-states at joins/backedges, storage lifetime, whole/partial moves and aggregate
-ancestor initialization. Validate this internal analysis before exposing non-Copy
-structs, then integrate its fact into both check and build. This is not a borrow
-checker and must not be described as full ownership or Rust support.
+Named nonempty structs with nominal identity, field visibility, construction,
+projections and move-aware CFG lowering. Extend the validated initialization
+analysis to nominal aggregates before permitting source-level non-Copy values.
+References, loans, lifetimes and destructors remain separate future work.
+
+The internal initialization/move-analysis foundation passed 209 hosted tests and
+all 254 existing M8a source fixtures. Both check and emission require the same
+cached analysis fact, with resource exhaustion failing closed. This is not a
+borrow checker or full Rust support.
 
 Explicit CFG lowering passed 178 hosted tests and 254 M8a differential fixtures:
 186 accepted parity cases, 55 invalid rejections and 13 legal-unsupported boundaries.

@@ -28,8 +28,18 @@ boundaries. No speedup is claimed from adding this correctness gate.
 Hosted check `20261015-223750587-1164403`, all 209 tests
 `20261015-223820066-1171340` and strict all-target Clippy
 `20261015-223824005-1172230` passed. Profiles are retained in
-`data/runs/prototype-bootstrap/2026-10-analysis.jsonl`. Real source-to-ELF
-regression validation on the dedicated M8a follows this implementation commit.
+`data/runs/prototype-bootstrap/2026-10-analysis.jsonl`.
+
+Charged experiment `compiler-analysis-20261016-0540` tested exact revision
+`9bc87da47194e2d989f51a57aad778a6cf088f0c` on the dedicated 96-core M8a.
+All 254 fixtures passed: 186 accepted parity, 55 invalid rejections and 13
+explicit legal-unsupported boundaries. The 96-worker tuple example ran correctly
+with 35 CFG blocks, 39 CFG edges, 100 CFG locals, 192 analysis move paths and
+39 worklist pops. Its source values remain Copy, so analysis_moves was zero.
+Complete corpus receipts are `experiments/results/20261016-m8a-analysis-*.jsonl`.
+An earlier attempt `compiler-analysis-20261016-0539` failed connecting to a stale
+SSH host address before workload execution. Refreshing the authenticated remote
+environment fixed it. These are correctness regressions, not speed measurements.
 
 ## 2026-10-15: Cached explicit control-flow facts replace structured native lowering
 
