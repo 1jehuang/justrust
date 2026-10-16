@@ -693,7 +693,9 @@ impl Plan {
             )?;
             let closure = contract.closure().expect("validated reference contract");
             let result = contract.result_region.expect("reference result region");
-            let ReturnContract::SharedWholeParams(candidates) = &contract.returns else {
+            let (ReturnContract::SharedWholeParams(candidates)
+            | ReturnContract::MutWholeParams(candidates)) = &contract.returns
+            else {
                 unreachable!()
             };
             for (index, arg) in args.iter().enumerate() {
@@ -892,6 +894,8 @@ impl Plan {
                 ));
             }
         }
+        // Deriving CallReturn kinds visits all blocks, including no-result calls.
+        budget.spend(f.blocks.len())?;
         let mut plan = Self {
             refs,
             offsets,
@@ -910,7 +914,15 @@ impl Plan {
                     };
                     kind
                 }))
-                .chain(std::iter::repeat_n(BorrowKind::Shared, call_count))
+                .chain(f.blocks.iter().filter_map(|block| {
+                    let Terminator::Call { signature, .. } = &block.terminator.value else {
+                        return None;
+                    };
+                    let Ty::Ref { kind, .. } = &signature.result else {
+                        return None;
+                    };
+                    Some(*kind)
+                }))
                 .collect(),
             problems,
             bytes,
@@ -1100,7 +1112,9 @@ impl Plan {
         block: BlockId,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
-        let ReturnContract::SharedWholeParams(allowed) = &f.ref_contract.returns else {
+        let (ReturnContract::SharedWholeParams(allowed) | ReturnContract::MutWholeParams(allowed)) =
+            &f.ref_contract.returns
+        else {
             return Ok(None);
         };
         let regions = usize::from(f.ref_contract.region_count);
@@ -1114,7 +1128,10 @@ impl Plan {
             .ref_contract
             .closure()
             .expect("validated universal contract");
-        let result = f.ref_contract.result_region.expect("shared result region");
+        let result = f
+            .ref_contract
+            .result_region
+            .expect("reference result region");
         let (origins, _) = self.point(block, None, Phase::Read);
         let carrier = self.refs[f.return_local.0].expect("reference return carrier");
         budget.spend(origins[carrier].0.len())?;
@@ -1165,7 +1182,7 @@ impl Plan {
                     .position(|param| *param == local)
                     .expect("formal canonical root");
                 let region =
-                    f.ref_contract.param_regions[position].expect("named shared input region");
+                    f.ref_contract.param_regions[position].expect("named reference input region");
                 if closure[region.0 as usize] & (1u64 << result.0) == 0 {
                     return Ok(Some(Problem::Invalid(
                         "reference return requires an undeclared universal outlives bound".into(),

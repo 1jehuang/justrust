@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with bounded shared reference returns, noescape reference calls, local borrowing, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
+Status: executable Rust-subset implementation with bounded shared/mutable reference returns, noescape reference calls, local borrowing, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -55,12 +55,16 @@ referents have separate invocation-lived canonical roots. Mutable calls invalida
 all candidate referent selection proofs without inventing initialization. Every
 body must pass analysis before executable publication. Standalone checked-function
 emission rejects reference calls without whole-program signature/noescape evidence.
-Shared reference results may point to whole shared-reference parameter referents
-under explicit named lifetime contracts. Declaration-derived candidates, rigid
-body outlives obligations and separate transitive lifetime dependencies gate
-returned pointers. Mutable/projected reference results, general elision and
+Shared or mutable reference results may point to whole same-kind reference
+parameter referents under explicit named lifetime contracts. Declaration-derived
+candidates, rigid body outlives obligations and separate transitive lifetime
+dependencies gate returned pointers. Mutable results are consumed unique handles,
+not copied capabilities, and keep overlapping parent authority frozen until their
+last use. Returning functions currently require all reference inputs to match the
+result kind. Projected results, mixed-kind returning inputs, general elision and
 reference-containing aggregates remain unsupported.
-See `BORROWING.md`, `REFERENCE-CALLS.md` and `REFERENCE-RETURNS.md`.
+See `BORROWING.md`, `REFERENCE-CALLS.md`, `REFERENCE-RETURNS.md` and
+`MUTABLE-REFERENCE-RETURNS.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.
@@ -88,7 +92,7 @@ glob imports, public re-exports, restricted `pub(...)`, block-local items/import
 standard-library APIs beyond the documented print form, general macros, traits,
 generics, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
-general reference results and escaping references beyond the bounded shared whole-parameter slice,
+general reference results and escaping references beyond the bounded same-kind whole-parameter slice,
 general lifetimes, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
 positions, or other targets.
@@ -186,8 +190,9 @@ frozen at issuance, so reassigning a carrier does not retarget existing children
 Shared aliases, mutable-handle moves, explicit reborrows and last-use permission
 checks operate on canonical storage places. An immutable binding holding a mutable
 reference may write its referent. Thin native addresses are emitted only after
-the exact CFG passes initialization and loan checks. Reference parameters/results,
-reference-containing aggregates, temporary lifetime extension and general Rust
+the exact CFG passes initialization and loan checks. Parameters and bounded
+whole-parameter results use the follow-on contracts above. Reference-containing
+aggregates, temporary lifetime extension and general Rust
 regions remain unsupported. See `BORROWING.md` for B1 boundaries and B2/B3 work.
 
 ## Aggregate implementation boundary

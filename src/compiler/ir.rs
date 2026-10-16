@@ -416,6 +416,7 @@ pub enum ReturnContract {
     #[default]
     NoReference,
     SharedWholeParams(Arc<[usize]>),
+    MutWholeParams(Arc<[usize]>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -569,11 +570,11 @@ impl RefContract {
             return Err("reference contract parameter arity mismatch".into());
         }
         let Ty::Ref {
-            kind: BorrowKind::Shared,
+            kind: result_kind,
             referent: output,
         } = result
         else {
-            return Err("shared return contract requires shared reference result".into());
+            return Err("reference return contract requires reference result".into());
         };
         let region = self
             .result_region
@@ -583,10 +584,7 @@ impl RefContract {
         for (index, (ty, param_region)) in params.iter().zip(self.param_regions.iter()).enumerate()
         {
             match ty {
-                Ty::Ref {
-                    kind: BorrowKind::Shared,
-                    referent,
-                } => {
+                Ty::Ref { kind, referent } if kind == result_kind => {
                     let input = param_region.ok_or("missing reference parameter region")?;
                     if rows[usize::from(input.0)] & (1u64 << region.0) != 0
                         && pattern_types_equal(referent, output, &mut work)?
@@ -599,7 +597,8 @@ impl RefContract {
                 }
                 Ty::Ref { .. } => {
                     return Err(
-                        "unsupported: mutable input to shared reference-return function".into(),
+                        "unsupported: reference input kind differs from reference result kind"
+                            .into(),
                     );
                 }
                 _ if param_region.is_some() => {
@@ -636,7 +635,16 @@ impl RefContract {
                     return Err("invalid noescape reference contract".into());
                 }
             }
-            ReturnContract::SharedWholeParams(candidates) => {
+            ReturnContract::SharedWholeParams(candidates)
+            | ReturnContract::MutWholeParams(candidates) => {
+                let expected_kind = if matches!(self.returns, ReturnContract::MutWholeParams(_)) {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                if !matches!(result, Ty::Ref { kind, .. } if *kind == expected_kind) {
+                    return Err("reference return contract/result kind mismatch".into());
+                }
                 if candidates.len() > MAX_LOAN_SITES {
                     return Err("reference return candidate limit exceeded".into());
                 }
@@ -1312,6 +1320,92 @@ impl CheckedFunction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mutable_reference_contracts_require_exact_kinds_and_complete_candidates() {
+        let mutable = |ty| Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(ty),
+        };
+        let params = vec![
+            Ty::Bool,
+            mutable(Ty::Bool),
+            mutable(Ty::I32),
+            mutable(Ty::I32),
+        ];
+        let result = mutable(Ty::I32);
+        let contract = RefContract {
+            region_count: 2,
+            param_regions: Arc::from([
+                None,
+                Some(RegionParamId(0)),
+                Some(RegionParamId(0)),
+                Some(RegionParamId(1)),
+            ]),
+            result_region: Some(RegionParamId(1)),
+            outlives: Arc::from([(RegionParamId(0), RegionParamId(1))]),
+            returns: ReturnContract::MutWholeParams(Arc::from([2, 3])),
+        };
+        contract.validate(&params, &result).unwrap();
+        assert_eq!(
+            contract.eligible_params(&params, &result).unwrap(),
+            vec![2, 3]
+        );
+        assert!(contract.validation_work(&params, &result).unwrap() > params.len());
+        for candidates in [
+            vec![2],
+            vec![1, 2, 3],
+            vec![3, 2],
+            vec![2, 2, 3],
+            vec![usize::MAX],
+        ] {
+            let malformed = RefContract {
+                returns: ReturnContract::MutWholeParams(candidates.into()),
+                ..contract.clone()
+            };
+            assert!(malformed.validate(&params, &result).is_err());
+        }
+        let forged = RefContract {
+            returns: ReturnContract::SharedWholeParams(Arc::from([2, 3])),
+            ..contract.clone()
+        };
+        assert!(
+            forged
+                .validate(&params, &result)
+                .unwrap_err()
+                .contains("kind mismatch")
+        );
+        let shared_result = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::I32),
+        };
+        assert!(
+            contract
+                .validate(&params, &shared_result)
+                .unwrap_err()
+                .contains("kind mismatch")
+        );
+        let mut mixed = params.clone();
+        mixed[1] = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Bool),
+        };
+        assert!(
+            contract
+                .validate(&mixed, &result)
+                .unwrap_err()
+                .contains("input kind differs")
+        );
+        RefContract::default().validate(&mixed, &Ty::Unit).unwrap();
+        let divergent = RefContract {
+            region_count: 1,
+            param_regions: Arc::from([]),
+            result_region: Some(RegionParamId(0)),
+            outlives: Arc::from([]),
+            returns: ReturnContract::MutWholeParams(Arc::from([])),
+        };
+        divergent.validate(&[], &result).unwrap();
+    }
+
     #[test]
     fn reference_contract_closure_candidates_and_malformed_metadata() {
         use super::*;

@@ -1,8 +1,11 @@
 # B3b design checkpoint: mutable whole-parameter reference returns
 
-Status: read-only next-slice proposal. No implementation authorization follows
-from this document. Shared-return B3a native evidence must finish first. Full Rust,
-projected reference results and aggregate reference provenance remain open.
+Status: implemented with 844 hosted tests, strict all-target lint, formatting
+and independent soundness/resource reviews passing. The exact frozen 30-case
+stock corpus and four retained graph acceptance tests pass: 16 supported, ten
+invalid and four legal-unsupported programs. Tracked sixteen-corpus native
+verification remains the delivery gate. Full Rust, projected reference results
+and aggregate reference provenance remain open.
 
 ## Bounded scope and exact contract delta
 
@@ -86,5 +89,5 @@ evidence. Mutable source/result kinds must match exact declaration contracts.
   128 MiB peak-state and 32-million work caps include all new mutable effects.
 
 Projected summaries, mutable-input shared returns, reference-containing
-aggregates and general lifetime inference remain following slices. This is not
-an implementation or a full-Rust completion claim.
+aggregates and general lifetime inference remain following slices. This bounded
+implementation is not a full-Rust completion claim.

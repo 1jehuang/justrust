@@ -1222,11 +1222,23 @@ impl Transfer<'_> {
                 self.write(state, destination)?;
             }
             Terminator::Return => {
-                self.operand(state, &Operand::Copy(root_place(self.f.return_local)))?;
+                let mutable_reference = matches!(
+                    self.f.result,
+                    Ty::Ref {
+                        kind: super::ir::BorrowKind::Mut,
+                        ..
+                    }
+                );
+                if !mutable_reference {
+                    self.operand(state, &Operand::Copy(root_place(self.f.return_local)))?;
+                }
                 if let Some(loans) = self.loans
                     && let Some(problem) = loans.check_return(self.f, self.block, self.budget)?
                 {
                     self.problem(problem, root_place(self.f.return_local));
+                }
+                if mutable_reference {
+                    self.operand(state, &Operand::Move(root_place(self.f.return_local)))?;
                 }
             }
             Terminator::Goto(_) | Terminator::Unreachable => {}
@@ -1501,6 +1513,188 @@ mod tests {
             super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
                 .unwrap();
         cfg::lower(&checked).unwrap()
+    }
+
+    #[test]
+    fn mutable_returns_transfer_unique_authority_and_resume_after_last_use() {
+        for source in [
+            "fn f<'a>(p:&'a mut i32)->&'a mut i32{p}",
+            "fn f()->i32{let mut x=1;let r=&mut x;let q=id(r);*q=2;*r=3;x} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+            "fn f()->i32{let mut x=1;let q=id(id(&mut x));let moved=q;*moved=3;x} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+            "fn f()->i32{let mut x=1;let q=id(&mut x);let s=&*q;let n=*s;*q=3;n+x} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+            "fn f()->i32{let mut x=1;*id(&mut x)} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn mutable_return_freezes_parent_and_preserves_lifetime_dependencies() {
+        for source in [
+            "fn f()->i32{let mut x=1;let r=&mut x;let q=id(r);let n=*r;*q+n} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+            "fn f()->i32{let mut x=1;let r=&mut x;let q=id(r);*r=2;*q} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+            "fn f()->i32{let mut x=1;let q=id(&mut x);let moved=q;let n=*q;*moved+n} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+            "fn f<'a,'b>(s:&'a mut bool,x:&'b mut i32)->&'b mut i32{pick(s,x)} fn pick<'a>(s:&'a mut bool,x:&'a mut i32)->&'a mut i32{x}",
+            "fn f()->i32{let mut x=7;let r:&mut i32;{let mut s=true;r=pick(&mut s,&mut x);}*r} fn pick<'a>(s:&'a mut bool,x:&'a mut i32)->&'a mut i32{x}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete, "{source}: {:?}", result.diagnostics);
+            assert!(!result.passed(), "accepted {source}");
+        }
+    }
+
+    #[test]
+    fn mutable_return_origins_keep_existing_memory_and_work_caps() {
+        let f = borrowed_source(
+            "fn f(p:&mut i32)->i32{*id(p)} fn id<'a>(p:&'a mut i32)->&'a mut i32{p}",
+        );
+        let mut budget = Budget(32 * 1024 * 1024);
+        let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+        let mut budget = Budget(32 * 1024 * 1024);
+        assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
+        for limits in [
+            Limits {
+                state_bytes: 1024,
+                ..Limits::default()
+            },
+            Limits {
+                work: 1,
+                ..Limits::default()
+            },
+        ] {
+            let result = analyze_with_limits(&f, limits);
+            assert!(!result.complete);
+            assert!(!result.passed());
+        }
+        assert!(analyze(&f).passed());
+    }
+
+    #[test]
+    fn mutable_normal_return_moves_handle_and_rejects_forged_copy() {
+        let f = borrowed_source("fn f<'a>(p:&'a mut i32)->&'a mut i32{p}");
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        let explicit_moves = f
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|item| {
+                matches!(
+                    item.value,
+                    Statement::Assign {
+                        value: Rvalue::Use(Operand::Move(_)),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(result.stats.moves, explicit_moves + 1);
+        let mut forged = f.clone();
+        let value = forged
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|item| match &mut item.value {
+                Statement::Assign {
+                    value: Rvalue::Use(op @ Operand::Move(_)),
+                    ..
+                } => Some(op),
+                _ => None,
+            })
+            .unwrap();
+        let Operand::Move(source) = value else {
+            unreachable!()
+        };
+        *value = Operand::Copy(source.clone());
+        assert!(forged.validate().is_err());
+        assert!(!analyze(&forged).passed());
+    }
+
+    #[test]
+    fn mutable_result_union_write_kills_all_proofs_without_restoring_init() {
+        let f = borrowed_source(
+            "enum E{A(i32),B(i32)} fn f(b:bool){let mut x=E::A(1);let mut y=E::A(2);let q=pick(b,&mut x,&mut y);*q=E::A(3);} fn pick<'a>(b:bool,x:&'a mut E,y:&'a mut E)->&'a mut E{if b{x}else{y}}",
+        );
+        assert!(analyze(&f).passed());
+        let (block, statement, destination) = f
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block, bb)| {
+                bb.statements
+                    .iter()
+                    .enumerate()
+                    .find_map(|(statement, item)| match &item.value {
+                        Statement::Assign { destination, .. }
+                            if destination.projection.first() == Some(&Projection::Deref) =>
+                        {
+                            Some((BlockId(block), statement, destination.clone()))
+                        }
+                        _ => None,
+                    })
+            })
+            .unwrap();
+        let paths = Paths::new(&f, 131072).unwrap();
+        let mut budget = Budget(32 * 1024 * 1024);
+        let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+        let targets = plan
+            .resolve(
+                &destination,
+                block,
+                Some(statement),
+                Phase::Write,
+                &mut budget,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(targets.len(), 2);
+        let nodes: Vec<_> = targets
+            .iter()
+            .map(|target| paths.resolve_canonical(&target.place))
+            .collect();
+        for initialized in [true, false] {
+            let mut state = State::new(f.locals.len(), paths.nodes.len());
+            for local in 0..f.locals.len() {
+                state.must_live.set(local, true);
+                state.may_live.set(local, true);
+            }
+            state
+                .must_init
+                .range(0, paths.nodes.len(), true, &mut budget)
+                .unwrap();
+            state
+                .may_init
+                .range(0, paths.nodes.len(), true, &mut budget)
+                .unwrap();
+            for node in &nodes {
+                state.selected[*node] = 0;
+            }
+            if !initialized {
+                state.must_init.set(nodes[0] + 1, false);
+            }
+            let must = state.must_init.clone();
+            let may = state.may_init.clone();
+            Transfer {
+                f: &f,
+                paths: &paths,
+                budget: &mut budget,
+                report: None,
+                block,
+                statement: Some(statement),
+                origin: None,
+                diagnostic_limit: 10,
+                loans: Some(&plan),
+                phase: Phase::Write,
+            }
+            .write(&mut state, &destination)
+            .unwrap();
+            assert_eq!(state.must_init, must);
+            assert_eq!(state.may_init, may);
+            for node in &nodes {
+                assert_eq!(state.selected[*node], usize::MAX);
+            }
+        }
     }
 
     #[test]

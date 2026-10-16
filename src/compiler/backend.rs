@@ -783,10 +783,11 @@ impl<'a> Emitter<'a> {
 /// validation is repeated here. Graph callers satisfy this through fact 109,
 /// while standalone checked-body callers should use `emit_checked_function`.
 /// Reference calls additionally require whole-program noescape and exact callee
-/// signature evidence. Shared reference returns require the exact canonical
-/// RefContract and successful return-provenance/region verification as part of
-/// that analysis. Mutable reference results remain unsupported. Local analysis
-/// alone cannot establish the whole-program reference-call contract.
+/// signature evidence. Reference returns require the exact canonical RefContract
+/// and successful read-phase return-provenance/region verification as part of
+/// that analysis. Mutable returns additionally consume the unique handle with
+/// Move. The pointer load below is physical transport, not semantic Copy.
+/// Local analysis alone cannot establish the whole-program call contract.
 /// Every local and lowering temporary has stable invocation-owned frame storage.
 pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     if function.params.len() > MAX_ARGS {
@@ -1251,6 +1252,114 @@ mod tests {
     }
 
     #[test]
+    fn mutable_reference_return_standalone_consuming_body_requires_call_evidence() {
+        let p = frontend::parse(
+            r#"
+            fn identity<'a>(value: &'a mut usize) -> &'a mut usize { value }
+            fn main() { let mut value = 7usize; let observed = *identity(&mut value); }
+        "#,
+        )
+        .unwrap();
+        let env = frontend::signature_table(&p).unwrap();
+        let identity = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
+        assert!(emit_checked_function(&identity).is_ok());
+        let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
+        assert!(
+            emit_checked_function(&main)
+                .unwrap_err()
+                .contains("whole-program noescape")
+        );
+        let moved = frontend::parse(
+            r#"
+            fn identity<'a>(value: &'a mut usize) -> &'a mut usize { value }
+            fn main() {
+                let mut value = 1usize;
+                let returned = identity(&mut value);
+                let moved = returned;
+                *moved = 2usize;
+                *returned = 3usize;
+            }
+        "#,
+        )
+        .unwrap();
+        assert!(emit(&moved).is_err());
+    }
+
+    #[test]
+    fn mutable_reference_returns_native_unique_selection_recursion_and_parent_resume() {
+        let p = frontend::parse(
+            r#"
+            fn identity<'a>(value: &'a mut usize) -> &'a mut usize { value }
+            fn recurse<'a>(value: &'a mut usize, depth: i32) -> &'a mut usize {
+                if depth == 0 { value } else { recurse(value, depth - 1) }
+            }
+            fn forward<'a>(value: &'a mut usize) -> &'a mut usize { recurse(value, 3) }
+            fn choose<'a>(a: &'a mut usize, b: &'a mut usize, first: bool) -> &'a mut usize {
+                if first { a } else { b }
+            }
+            fn main() {
+                let mut a = 9223372036854775808usize;
+                let mut b = 17usize;
+                if *identity(&mut a) != 9223372036854775808usize { 1 / 0; }
+                let returned = forward(&mut a);
+                let moved = returned;
+                *moved = 18446744073709551615usize;
+                if *moved != 18446744073709551615usize { 1 / 0; }
+                if a != 18446744073709551615usize { 1 / 0; }
+                let first = choose(&mut a, &mut b, true);
+                *first = 29usize;
+                let second = choose(&mut a, &mut b, false);
+                *second = 9223372036854775808usize;
+                if a != 29usize { 1 / 0; }
+                if b != 9223372036854775808usize { 1 / 0; }
+                a = 41usize;
+                if a != 41usize { 1 / 0; }
+                println!("mutable-return");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"mutable-return\n");
+    }
+
+    #[test]
+    fn mutable_reference_returns_native_aggregate_storage_children_and_lifetime_inputs() {
+        let p = frontend::parse(
+            r#"
+            struct Record { before: usize, items: [usize; 9], after: usize }
+            fn identity<'a>(value: &'a mut Record) -> &'a mut Record { value }
+            fn independent<'a, 'b>(flag: &'b mut bool, value: &'a mut usize) -> &'a mut usize { value }
+            fn large() -> [usize; 9] { [9223372036854775808usize; 9] }
+            fn main() {
+                let mut record = Record { before: 17usize, items: [0usize; 9], after: 29usize };
+                let returned = identity(&mut record);
+                (*returned).items = large();
+                let child = &mut (*returned).items;
+                (*child)[8] = 18446744073709551615usize;
+                let copy = *child;
+                if copy[0] != 9223372036854775808usize { 1 / 0; }
+                if copy[8] != 18446744073709551615usize { 1 / 0; }
+                if (*returned).before != 17usize { 1 / 0; }
+                if (*returned).after != 29usize { 1 / 0; }
+                if record.items[8] != 18446744073709551615usize { 1 / 0; }
+                let mut value = 3usize;
+                let independent_result: &mut usize;
+                { let mut flag = true; independent_result = independent(&mut flag, &mut value); }
+                *independent_result = 18446744073709551615usize;
+                if value != 18446744073709551615usize { 1 / 0; }
+                println!("mutable-return-aggregate");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"mutable-return-aggregate\n");
+    }
+
+    #[test]
     fn shared_reference_return_standalone_requires_provenance_and_call_evidence() {
         let p = frontend::parse(
             r#"
@@ -1270,7 +1379,7 @@ mod tests {
         );
         for source in [
             "fn bad<'a>(value: &'a usize) -> &'a usize { let local = 1usize; &local } fn main() {}",
-            "fn bad<'a>(value: &'a mut usize) -> &'a mut usize { value } fn main() {}",
+            "fn bad<'a>(value: &'a usize) -> &'a mut usize { value } fn main() {}",
         ] {
             let invalid = frontend::parse(source).unwrap();
             assert!(emit(&invalid).is_err(), "{source}");

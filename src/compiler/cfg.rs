@@ -1605,6 +1605,66 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn mutable_returns_move_handles_and_reject_dead_copy_mut() {
+        let program = super::super::frontend::parse(
+            "fn id<'a>(x:&'a mut i32)->&'a mut i32{x} fn main(){let mut x=7;let n=*id(&mut x);}",
+        )
+        .unwrap();
+        let signatures = super::super::frontend::signature_table(&program).unwrap();
+        let source =
+            super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
+                .unwrap();
+        let callee = nominal_lowered(&source);
+        assert!(std::sync::Arc::ptr_eq(
+            &source.ref_contract,
+            &callee.ref_contract
+        ));
+        assert!(matches!(
+            callee.ref_contract.returns,
+            ir::ReturnContract::MutWholeParams(_)
+        ));
+        assert!(callee.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { destination, value: Rvalue::Use(Operand::Move(_)) } if destination.local == callee.return_local)));
+        let mut malformed = callee.clone();
+        malformed.blocks.push(BasicBlock {
+            statements: vec![Located {
+                value: Statement::Assign {
+                    destination: place(callee.return_local),
+                    value: Rvalue::Use(Operand::Copy(place(callee.params[0]))),
+                },
+                origin: None,
+            }],
+            terminator: Located {
+                value: Terminator::Unreachable,
+                origin: None,
+            },
+        });
+        assert!(malformed.validate().unwrap_err().contains("Copy type"));
+        let mut forged = callee.clone();
+        let mut contract = forged.ref_contract.as_ref().clone();
+        contract.returns = ir::ReturnContract::SharedWholeParams(std::sync::Arc::from([0]));
+        forged.ref_contract = std::sync::Arc::new(contract);
+        assert!(forged.validate().unwrap_err().contains("kind mismatch"));
+        let source =
+            super::super::frontend::type_function_with_signatures(&program, 1, &signatures)
+                .unwrap();
+        let caller = nominal_lowered(&source);
+        let call = source
+            .exprs
+            .iter()
+            .find_map(|expr| {
+                if let ir::ExprKind::Deref { value } = expr.kind {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let carrier = LocalId(source.locals.len() + call.0);
+        assert!(caller.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { value: Rvalue::Use(Operand::Copy(place)), .. } if place.local == carrier && place.projection == [Projection::Deref])));
+        assert!(!caller.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { value: Rvalue::Use(Operand::Copy(place)), .. } if place.local == carrier && place.projection.is_empty())));
+    }
+
+    #[test]
     fn shared_return_contracts_keep_canonical_arcs_and_real_call_carriers() {
         let program = super::super::frontend::parse(
             "fn id<'a>(x:&'a i32)->&'a i32{x} fn main(){let x=7;let r=id(&x);let n=*id(&x);}",

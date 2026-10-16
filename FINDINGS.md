@@ -8447,3 +8447,47 @@ The 96-worker shared-return example executed successfully with complete capture,
 and 3.354 ms engine times are contended/uncontrolled observations, not speedup
 or cold-build claims. Mutable/projected returns, general lifetimes and full Rust
 remain open.
+
+## Mutable whole-parameter reference returns: implementation (2026-10-16)
+
+Implemented the bounded `MUTABLE-REFERENCE-RETURNS.md` contract by adding
+MutWholeParams to the canonical reference sidecar, without new CFG opcodes,
+native pointer layouts or call ABI. Returning mutable functions initially require
+all reference inputs mutable, with explicit named regions and whole-input targets.
+Shared-return and mixed-input noescape contracts retain their existing behavior.
+
+Returned references are one unique handle with conservative alternative targets,
+not one independent capability per candidate. CallReturn kind comes from the
+actual result, and each target retains only its own source authority. Lifetime
+activity dependencies remain separate, including different-pointee inputs.
+Normal mutable returns prove rigid universal lifetime/provenance obligations in
+the read phase before consuming the return carrier with Move. Shared returns
+remain Copy. Live returned children freeze parent access until their last use.
+
+Calls still invalidate selection proofs below every mutable actual, including
+nonreturned inputs. Writes through returned unions require every possible target
+initialized and authorized, preserve initialization and kill all may-target proofs.
+No aliases are initialized as if every possible referent had been written.
+Genuine mutable Call-result temporaries support Copy pointee reads, without
+copying the unique carrier. Computed call assignment places and borrowing call
+rvalues remain explicit boundaries. Both independent actual-code reviewers found
+no concrete soundness or resource blocker.
+
+The exact frozen 30-case stock corpus passes: 16 supported programs, ten invalid
+programs and four legal-unsupported boundaries. The unchanged source bytes also
+pass hosted CLI checking/build/runtime at one and eight workers. Four retained
+graph tests share exact checked-body/CFG/analysis facts and preserve failures for
+parent conflicts, invalid unused callees and missing universal outlives. Full Rust,
+projected results and broader lifetime semantics remain open.
+
+Final hosted check `20261016-014146643-2668527`, full test
+`20261016-014147987-2668731` (844 passed) and strict all-target clippy
+`20261016-014149820-2668515` passed. Formatting/diff checks are clean. The new
+block scan deriving returned-origin kinds is explicitly charged to shared work.
+Focused analyzer tests prove exact unique Return moves, parent freeze/resume,
+non-target lifetime dependencies, resource fail-closed behavior and union writes
+that invalidate every possible proof without restoring initialization. Exact
+redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-mutable-reference-returns.jsonl`. Tracked
+sixteen-corpus native verification follows after commit. These are correctness
+gates, not speedup or cold-build claims.

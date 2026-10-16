@@ -6,7 +6,8 @@ and four graph acceptance tests pass. Tracked fifteen-corpus native verification
 passed all 632 cases at revision bb3bc5613: 378 successful parity cases, 186 invalid
 rejections, nine declared runtime-101 traps and 59 legal-unsupported boundaries.
 Raw receipts and the executed 96-worker example are retained under
-`experiments/results/20261016-m8a-reference-returns-*`. Full Rust, mutable escaping
+`experiments/results/20261016-m8a-reference-returns-*`. The mutable whole-parameter
+follow-on is tracked in `MUTABLE-REFERENCE-RETURNS.md`. Full Rust, projected
 references and general regions remain open.
 
 ## Proposed bounded first slice

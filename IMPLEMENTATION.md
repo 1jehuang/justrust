@@ -58,6 +58,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Mutable whole-parameter reference returns are implemented under
+`MUTABLE-REFERENCE-RETURNS.md`, with exact kind contracts, one unique returned
+handle, candidate-specific authority and transitive lifetime dependencies. Normal
+returns prove universal provenance before consuming a mutable carrier. All 844
+hosted tests, strict all-target lint, formatting and both independent actual-code
+reviews pass. The exact 30-case stock corpus and four graph tests pass, including
+parent freeze/resume and failed unused-callee publication. Tracked sixteen-corpus
+native verification remains the delivery gate. Projected/mixed-kind results,
+general lifetime inference and full Rust remain open.
+
 Noescape reference parameters and expected-site reborrows are implemented under
 `REFERENCE-CALLS.md`. All 748 hosted tests, strict all-target lint, formatting and
 independent resource/soundness review pass. The unchanged 30-case stock corpus

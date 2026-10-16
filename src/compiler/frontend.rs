@@ -2864,18 +2864,21 @@ fn canonical_ref_contract(
         }));
     }
     let Type::Ref {
-        kind: ir::BorrowKind::Shared,
+        kind: result_kind,
         region: Some(output),
         ..
     } = &function.result
     else {
-        return Err("reference returns require an explicit named shared lifetime; mutable results and lifetime elision are unsupported".into());
+        return Err(
+            "reference returns require an explicit named lifetime; lifetime elision is unsupported"
+                .into(),
+        );
     };
     let mut param_regions = Vec::with_capacity(params.len());
     for (_, ty) in &function.params {
         param_regions.push(match ty {
-            Type::Ref { kind:ir::BorrowKind::Shared, region:Some(name), .. }=>Some(id(name)?),
-            Type::Ref { .. }=>return Err("reference-return functions require explicitly named shared reference inputs; mutable inputs and elision are unsupported".into()),
+            Type::Ref { kind, region:Some(name), .. } if kind == result_kind =>Some(id(name)?),
+            Type::Ref { .. }=>return Err("reference-return functions require explicitly named same-kind reference inputs; mixed kinds and elision are unsupported".into()),
             _=>None,
         });
     }
@@ -2886,8 +2889,11 @@ fn canonical_ref_contract(
         outlives: edges.into(),
         returns: ir::ReturnContract::NoReference,
     };
-    contract.returns =
-        ir::ReturnContract::SharedWholeParams(contract.eligible_params(params, result)?.into());
+    let candidates = contract.eligible_params(params, result)?.into();
+    contract.returns = match result_kind {
+        ir::BorrowKind::Shared => ir::ReturnContract::SharedWholeParams(candidates),
+        ir::BorrowKind::Mut => ir::ReturnContract::MutWholeParams(candidates),
+    };
     contract.validate(params, result)?;
     Ok(std::sync::Arc::new(contract))
 }
@@ -3834,17 +3840,13 @@ impl<'a> Checker<'a> {
             }
             Expr::Deref { value } => {
                 if !matches!(value.as_ref(), Expr::Var(_) | Expr::Call { .. }) {
-                    return Err("non-local-root dereference carriers are unsupported except genuine shared reference call results".into());
+                    return Err("non-local-root dereference carriers are unsupported except genuine reference call results".into());
                 }
-                let call_carrier = matches!(value.as_ref(), Expr::Call { .. });
                 let value = self.expr(value)?;
                 let flow = self.flow(value);
-                let ir::Ty::Ref { kind, referent } = &flow.ty else {
+                let ir::Ty::Ref { referent, .. } = &flow.ty else {
                     return Err("dereference requires a reference".into());
                 };
-                if call_carrier && *kind != ir::BorrowKind::Shared {
-                    return Err("mutable reference call-result carriers are unsupported".into());
-                }
                 let ty = referent.as_ref().clone();
                 self.accessible(&ty)?;
                 (
@@ -4638,6 +4640,75 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn b3b_mutable_contracts_keep_complete_original_indices_and_return_reborrows() {
+        let p=parse("fn pick<'a>(flag:bool,s:&'a mut bool,x:&'a mut i32,y:&'a mut i32)->&'a mut i32{if flag{x}else{y}}fn moved<'a>(r:&'a mut i32)->&'a mut i32{let moved=r;moved}fn main(){}").unwrap();
+        let env = signature_table(&p).unwrap();
+        assert_eq!(
+            env.functions["pick"].ref_contract.returns,
+            ir::ReturnContract::MutWholeParams(vec![2, 3].into())
+        );
+        let pick = type_function_with_signatures(&p, 0, &env).unwrap();
+        assert_eq!(
+            pick.exprs
+                .iter()
+                .filter(|e| matches!(
+                    e.kind,
+                    ir::ExprKind::Borrow {
+                        kind: ir::BorrowKind::Mut,
+                        ..
+                    }
+                ))
+                .count(),
+            2
+        );
+        let moved = type_function_with_signatures(&p, 1, &env).unwrap();
+        let ir::Stmt::Let { local, value } = moved.body.statements[0] else {
+            panic!("expected genuine untyped handle let")
+        };
+        assert!(matches!(moved.exprs[value.0].kind,ir::ExprKind::Local(id) if id==moved.params[0]));
+        assert!(
+            matches!(&moved.exprs[moved.body.tail.unwrap().0].kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Mut,place} if place.local==local && place.projection==vec![ir::Projection::Deref])
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &moved.ref_contract,
+            &env.functions["moved"].ref_contract
+        ));
+    }
+
+    #[test]
+    fn b3b_mutable_call_temp_copy_reads_preserve_computed_place_boundaries() {
+        let p=parse("struct S{x:i32}fn id<'a>(r:&'a mut S)->&'a mut S{r}fn main(){let mut s=S{x:7};let n=(*id(&mut s)).x;}").unwrap();
+        let env = signature_table(&p).unwrap();
+        let main = type_function_with_signatures(&p, 1, &env).unwrap();
+        assert_eq!(
+            main.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            main.exprs
+                .iter()
+                .any(|e| matches!(e.kind, ir::ExprKind::Deref { .. }))
+        );
+        for source in [
+            "fn id<'a>(r:&'a mut i32)->&'a mut i32{r}fn main(){let mut x=1;*id(&mut x)=2;}",
+            "fn id<'a>(r:&'a mut i32)->&'a mut i32{r}fn main(){let mut x=1;let q=&mut *id(&mut x);}",
+        ] {
+            assert!(parse(source).unwrap_err().contains("unsupported"));
+        }
+        for source in [
+            "fn bad<'a>(x:&'a i32)->&'a mut i32{loop{}}fn main(){}",
+            "fn bad<'a>(x:&'a mut i32,y:&'a i32)->&'a mut i32{x}fn main(){}",
+            "fn bad<'a>(x:&'a mut i32)->&'a i32{&*x}fn main(){}",
+        ] {
+            let p = parse(source).unwrap();
+            assert!(signature_table(&p).unwrap_err().contains("unsupported"));
+        }
+    }
 
     #[test]
     fn b3a_contracts_are_alpha_canonical_and_keep_original_parameter_indices() {
