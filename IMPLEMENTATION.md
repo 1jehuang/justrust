@@ -64,8 +64,10 @@ places and scalar hints, preserving original receiver, authority and privacy.
 Typed guards keep dynamic reference indexing and enum downcasts unsupported.
 All 942 hosted tests, strict all-target lint, formatting and both independent
 actual-code reviews pass. The new 20-case stock/CLI corpus and four graph tests
-pass. Three historical implicit getter sources are promoted unchanged. Tracked
-nineteen-corpus native verification follows. Full Rust remains open.
+pass. Three historical implicit getter sources and the historical tuple-reference
+fixture are promoted with exact source/output bytes unchanged. All 732 tracked
+nineteen-corpus native cases pass, with raw receipts and the executed 96-worker
+example retained. Full Rust remains open.
 
 Free-function lifetime elision is implemented under `LIFETIME-ELISION.md`.
 Stock E0106 probes corrected the initial distinct-ID proposal before release:

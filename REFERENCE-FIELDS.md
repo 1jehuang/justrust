@@ -2,8 +2,10 @@
 
 Status: implemented. All 942 hosted tests, strict all-target lint, formatting
 and both independent actual-code reviews pass. The frozen 20-case stock/native
-CLI corpus and four retained graph tests pass. Tracked nineteen-corpus native
-verification follows. This is one Rust correctness slice, not full Rust.
+CLI corpus and four retained graph tests pass. All 732 cases in the tracked
+nineteen-corpus native run pass: 439 accepted, 219 invalid rejections, nine
+runtime-101 cases and 65 explicit unsupported boundaries. Raw receipts and the
+executed 96-worker example are retained. This is one correctness slice, not full Rust.
 
 ## One real dereference, not a field-type shortcut
 

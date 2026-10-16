@@ -8634,3 +8634,26 @@ Three exact redacted gate profiles are retained in
 `data/runs/prototype-bootstrap/2026-10-reference-fields.jsonl`. Tracked
 nineteen-corpus native verification follows after commit. Full Rust remains open;
 these correctness checks do not establish a speedup.
+
+### Independent nineteen-corpus reference-field native evidence
+
+Tracked run `compiler-reference-fields-20261016-0930` verified pushed revision
+`deccabe564cbcc2b0a1d1fb0d4bb8d96a65c9270` on the M8a host. All 732 cases
+passed: 439 accepted parity, 219 invalid rejections, nine explicit runtime-101
+cases and 65 legal unsupported boundaries. Independently parsed every case and
+summary, plus all 128 generated scalar/loop cases with stock/native compile and
+runtime exits zero. Twenty raw corpus/example receipts are retained under
+`experiments/results/20261016-m8a-reference-fields-*`.
+
+The first tracked attempt, `compiler-reference-fields-20261016-0927`, stopped
+at the historical tuple_reference fixture because builtin p.0/p.1 access now
+correctly compiled and ran. Promoted only its harness classification in
+`deccabe56`, preserving its exact source and expected output. The full rerun
+then passed. This is a capability promotion, not a hidden compiler failure.
+
+The actual example printed `reference fields compiled correctly` with 96 workers,
+complete capture, zero failed facts and zero dropped events. Its 836-byte source
+produced an 8,228-byte ELF: five functions, 19 CFG blocks, 51 locals, 95 move paths,
+26 graph nodes and 35 edges. Observed total 14,349,635 ns and engine 3,126,518 ns
+are contended/uncontrolled observations, not a speedup claim. Full Rust remains
+open, including mixed reference-result capabilities and general autoderef.
