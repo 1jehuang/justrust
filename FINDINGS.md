@@ -9695,3 +9695,38 @@ compiler hash, stream hashes, observation and trace hash in
 `experiments/results/20261016-m8a-generic-carriers-example.jsonl`.
 This closes the independent native acceptance gate for the stated bounded domain,
 not full Rust support. The stable installed toolchain remains unchanged.
+
+### Next Full Rust hypothesis: source-ordered reference inference, 2026-10-16
+
+Continued beyond the accepted explicit carrier slice with six separate public
+stock/native CLI source-order witnesses, without touching the frozen32. The five
+initial sources were hashed before execution. Stock BUILD and genuine
+metadata-only CHECK show that `take(r); *r=2` moves r (E0382), while explicit
+`take::<&mut i32>(r); *r=2` reborrows and actually executes. Within `pair(a,b)`,
+using a after the call is E0382, but using b afterwards is legal and executes.
+A sixth source with `let returned: &mut i32 = id(reference)` proves that a result
+expectation can establish firmness before checking the first argument. Shared
+`id(&value)` is legal stock too. All legal stock witnesses return 0 with exact
+`inference witness ok\n`. The explicit native contrast also executes correctly
+at workers 1/8. All inferred native witnesses remain explicit Unsupported, not
+claimed semantic-negative parity or new acceptance.
+
+Raw source hashes, compiler identity, primary stock diagnostics and native
+worker results are preserved in
+`experiments/results/20261016-reference-inference-source-order.jsonl` and
+`experiments/results/20261016-reference-inference-result-expectation.jsonl`.
+The latter transparently records a coordinator JSON-formatting retry with
+unchanged source and distinct output artifacts. Every recorded source/stream
+hash and no-timeout/no-truncation flag was checked after collection.
+
+This concretely rejects removing the inference fence while classifying arguments
+from a final solved signature, a blanket all-arguments reborrow rule, and ignoring
+expected-result constraints. Read-only peer review converged on one next
+architecture: metered original-call inference frontier/result-context retention,
+validated against authoritative original schemas, then sealed through existing
+call evidence/template/closed proof lifecycles. An expectation enum waiver or
+caller bool is not sufficient. The missing original boundary metadata/schema
+accessor are concrete implementation prerequisites, not external blockers.
+Details and exact observed requirement mapping are in
+`docs/reference-inference-source-order-20261016.md`. No source admission, old
+classification, stable installation, budget cap or full-Rust claim changed.
